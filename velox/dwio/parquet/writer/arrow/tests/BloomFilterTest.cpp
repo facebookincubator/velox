@@ -43,21 +43,21 @@ namespace facebook::velox::parquet::arrow {
 namespace test {
 
 TEST(ConstructorTest, TestBloomFilter) {
-  BlockSplitBloomFilter bloom_filter;
-  EXPECT_NO_THROW(bloom_filter.Init(1000));
+  BlockSplitBloomFilter BloomFilter;
+  EXPECT_NO_THROW(BloomFilter.init(1000));
 
-  // It throws because the length cannot be zero
+  // It throws because the length cannot be zero.
   std::unique_ptr<uint8_t[]> bitset1(new uint8_t[1024]());
-  EXPECT_THROW(bloom_filter.Init(bitset1.get(), 0), ParquetException);
+  EXPECT_THROW(BloomFilter.init(bitset1.get(), 0), ParquetException);
 
-  // It throws because the number of bytes of Bloom filter bitset must be a
-  // power of 2.
+  // It throws because the number of bytes of Bloom filter bitset must be a.
+  // Power of 2.
   std::unique_ptr<uint8_t[]> bitset2(new uint8_t[1024]());
-  EXPECT_THROW(bloom_filter.Init(bitset2.get(), 1023), ParquetException);
+  EXPECT_THROW(BloomFilter.init(bitset2.get(), 1023), ParquetException);
 }
 
-// The BasicTest is used to test basic operations including InsertHash, FindHash
-// and serializing and de-serializing.
+// The BasicTest is used to test basic operations including InsertHash,
+// FindHash. And serializing and de-serializing.
 TEST(BasicTest, TestBloomFilter) {
   const std::vector<uint32_t> kBloomFilterSizes = {
       32, 64, 128, 256, 512, 1024, 2048};
@@ -68,72 +68,72 @@ TEST(BasicTest, TestBloomFilter) {
   const std::vector<int32_t> kNegativeIntLookups = {
       0, 11, 12, 13, -2, -3, 43, 1 << 27, 1 << 28};
 
-  for (const auto bloom_filter_bytes : kBloomFilterSizes) {
-    BlockSplitBloomFilter bloom_filter;
-    bloom_filter.Init(bloom_filter_bytes);
+  for (const auto bloomFilterBytes : kBloomFilterSizes) {
+    BlockSplitBloomFilter BloomFilter;
+    BloomFilter.init(bloomFilterBytes);
 
-    // Empty bloom filter deterministically returns false
+    // Empty bloom filter deterministically returns false.
     for (const auto v : kIntInserts) {
-      EXPECT_FALSE(bloom_filter.FindHash(bloom_filter.Hash(v)));
+      EXPECT_FALSE(BloomFilter.findHash(BloomFilter.hash(v)));
     }
     for (const auto v : kFloatInserts) {
-      EXPECT_FALSE(bloom_filter.FindHash(bloom_filter.Hash(v)));
+      EXPECT_FALSE(BloomFilter.findHash(BloomFilter.hash(v)));
     }
 
-    // Insert all values
+    // Insert all values.
     for (const auto v : kIntInserts) {
-      bloom_filter.InsertHash(bloom_filter.Hash(v));
+      BloomFilter.insertHash(BloomFilter.hash(v));
     }
     for (const auto v : kFloatInserts) {
-      bloom_filter.InsertHash(bloom_filter.Hash(v));
+      BloomFilter.insertHash(BloomFilter.hash(v));
     }
 
-    // They should always lookup successfully
+    // They should always lookup successfully.
     for (const auto v : kIntInserts) {
-      EXPECT_TRUE(bloom_filter.FindHash(bloom_filter.Hash(v)));
+      EXPECT_TRUE(BloomFilter.findHash(BloomFilter.hash(v)));
     }
     for (const auto v : kFloatInserts) {
-      EXPECT_TRUE(bloom_filter.FindHash(bloom_filter.Hash(v)));
+      EXPECT_TRUE(BloomFilter.findHash(BloomFilter.hash(v)));
     }
 
-    // Values not inserted in the filter should only rarely lookup successfully
-    int false_positives = 0;
+    // Values not inserted in the filter should only rarely lookup successfully.
+    int falsePositives = 0;
     for (const auto v : kNegativeIntLookups) {
-      false_positives += bloom_filter.FindHash(bloom_filter.Hash(v));
+      falsePositives += BloomFilter.findHash(BloomFilter.hash(v));
     }
     // (this is a crude check, see FPPTest below for a more rigorous formula)
-    EXPECT_LE(false_positives, 2);
+    EXPECT_LE(falsePositives, 2);
 
-    // Serialize Bloom filter to memory output stream
-    auto sink = CreateOutputStream();
-    bloom_filter.WriteTo(sink.get());
+    // Serialize Bloom filter to memory output stream.
+    auto sink = createOutputStream();
+    BloomFilter.writeTo(sink.get());
 
-    // Deserialize Bloom filter from memory
+    // Deserialize Bloom filter from memory.
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
     ::arrow::io::BufferReader source(buffer);
 
-    ReaderProperties reader_properties;
-    BlockSplitBloomFilter de_bloom =
-        BlockSplitBloomFilter::Deserialize(reader_properties, &source);
+    ReaderProperties ReaderProperties;
+    BlockSplitBloomFilter deBloom =
+        BlockSplitBloomFilter::deserialize(ReaderProperties, &source);
 
-    // Lookup previously inserted values
+    // Lookup previously inserted values.
     for (const auto v : kIntInserts) {
-      EXPECT_TRUE(de_bloom.FindHash(de_bloom.Hash(v)));
+      EXPECT_TRUE(deBloom.findHash(deBloom.hash(v)));
     }
     for (const auto v : kFloatInserts) {
-      EXPECT_TRUE(de_bloom.FindHash(de_bloom.Hash(v)));
+      EXPECT_TRUE(deBloom.findHash(deBloom.hash(v)));
     }
-    false_positives = 0;
+    falsePositives = 0;
     for (const auto v : kNegativeIntLookups) {
-      false_positives += de_bloom.FindHash(de_bloom.Hash(v));
+      falsePositives += deBloom.findHash(deBloom.hash(v));
     }
-    EXPECT_LE(false_positives, 2);
+    EXPECT_LE(falsePositives, 2);
   }
 }
 
 // Helper function to generate random string.
-std::string GetRandomString(uint32_t length) {
-  // Character set used to generate random string
+std::string getRandomString(uint32_t length) {
+  // Character set used to generate random string.
   const std::string charset =
       "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -152,51 +152,50 @@ TEST(FPPTest, TestBloomFilter) {
   // It counts the number of times FindHash returns true.
   int exist = 0;
 
-  // Total count of elements that will be used
+  // Total count of elements that will be used.
 #ifdef PARQUET_VALGRIND
-  const int total_count = 5000;
+  const int totalCount = 5000;
 #else
-  const int total_count = 100000;
+  const int totalCount = 100000;
 #endif
 
-  // Bloom filter fpp parameter
+  // Bloom filter fpp parameter.
   const double fpp = 0.01;
 
   std::vector<std::string> members;
-  BlockSplitBloomFilter bloom_filter;
-  bloom_filter.Init(BlockSplitBloomFilter::OptimalNumOfBytes(total_count, fpp));
+  BlockSplitBloomFilter BloomFilter;
+  BloomFilter.init(BlockSplitBloomFilter::optimalNumOfBytes(totalCount, fpp));
 
-  // Insert elements into the Bloom filter
-  for (int i = 0; i < total_count; i++) {
-    // Insert random string which length is 8
-    std::string tmp = GetRandomString(8);
-    const ByteArray byte_array(
-        8, reinterpret_cast<const uint8_t*>(tmp.c_str()));
+  // Insert elements into the Bloom filter.
+  for (int i = 0; i < totalCount; i++) {
+    // Insert random string which length is 8.
+    std::string tmp = getRandomString(8);
+    const ByteArray ByteArray(8, reinterpret_cast<const uint8_t*>(tmp.c_str()));
     members.push_back(tmp);
-    bloom_filter.InsertHash(bloom_filter.Hash(&byte_array));
+    BloomFilter.insertHash(BloomFilter.hash(&ByteArray));
   }
 
-  for (int i = 0; i < total_count; i++) {
-    const ByteArray byte_array1(
+  for (int i = 0; i < totalCount; i++) {
+    const ByteArray byteArray1(
         8, reinterpret_cast<const uint8_t*>(members[i].c_str()));
-    ASSERT_TRUE(bloom_filter.FindHash(bloom_filter.Hash(&byte_array1)));
-    std::string tmp = GetRandomString(7);
-    const ByteArray byte_array2(
+    ASSERT_TRUE(BloomFilter.findHash(BloomFilter.hash(&byteArray1)));
+    std::string tmp = getRandomString(7);
+    const ByteArray byteArray2(
         7, reinterpret_cast<const uint8_t*>(tmp.c_str()));
 
-    if (bloom_filter.FindHash(bloom_filter.Hash(&byte_array2))) {
+    if (BloomFilter.findHash(BloomFilter.hash(&byteArray2))) {
       exist++;
     }
   }
 
   // The exist should be probably less than 1000 according default FPP 0.01.
-  EXPECT_LT(exist, total_count * fpp);
+  EXPECT_LT(exist, totalCount * fpp);
 }
 
-// The CompatibilityTest is used to test cross compatibility with parquet-mr, it
-// reads the Bloom filter binary generated by the Bloom filter class in the
-// parquet-mr project and tests whether the values inserted before could be
-// filtered or not.
+// The CompatibilityTest is used to test cross compatibility with parquet-mr,
+// it. Reads the Bloom filter binary generated by the Bloom filter class in the.
+// Parquet-mr project and tests whether the values inserted before could be.
+// Filtered or not.
 
 // TODO: disabled as it requires Arrow parquet data dir.
 // The Bloom filter binary is generated by three steps in from Parquet-mr.
@@ -231,11 +230,11 @@ uint8_t*>(test_string[i].c_str()));
     EXPECT_TRUE(bloom_filter1.FindHash(bloom_filter1.Hash(&tmp)));
   }
 
-  // The following is used to check whether the new created Bloom filter in
+  // The following is used to check whether the new created Bloom filter in.
 parquet-cpp is
-  // byte-for-byte identical to file at bloom_data_path which is created from
+  // Byte-for-byte identical to file at bloom_data_path which is created from.
 parquet-mr
-  // with same inserted hashes.
+  // With same inserted hashes.
   BlockSplitBloomFilter bloom_filter2;
   bloom_filter2.Init(bloom_filter1.GetBitsetSize());
   for (int i = 0; i < 4; i++) {
@@ -245,7 +244,7 @@ uint8_t*>(test_string[i].c_str()));
     bloom_filter2.InsertHash(bloom_filter2.Hash(&byte_array));
   }
 
-  // Serialize Bloom filter to memory output stream
+  // Serialize Bloom filter to memory output stream.
   auto sink = CreateOutputStream();
   bloom_filter2.WriteTo(sink.get());
   PARQUET_ASSIGN_OR_THROW(auto buffer1, sink->Finish());
@@ -258,18 +257,18 @@ uint8_t*>(test_string[i].c_str()));
 }
 */
 
-// OptimalValueTest is used to test whether OptimalNumOfBits returns expected
-// numbers according to formula:
+// OptimalValueTest is used to test whether OptimalNumOfBits returns expected.
+// Numbers according to formula:
 //     num_of_bits = -8.0 * ndv / log(1 - pow(fpp, 1.0 / 8.0))
-// where ndv is the number of distinct values and fpp is the false positive
-// probability. Also it is used to test whether OptimalNumOfBits returns value
-// between [MINIMUM_BLOOM_FILTER_SIZE, MAXIMUM_BLOOM_FILTER_SIZE].
+// Where ndv is the number of distinct values and fpp is the false positive.
+// Probability. Also it is used to test whether OptimalNumOfBits returns value.
+// Between [MINIMUM_BLOOM_FILTER_SIZE, MAXIMUM_BLOOM_FILTER_SIZE].
 TEST(OptimalValueTest, TestBloomFilter) {
   auto testOptimalNumEstimation = [](uint32_t ndv,
                                      double fpp,
-                                     uint32_t num_bits) {
-    EXPECT_EQ(BlockSplitBloomFilter::OptimalNumOfBits(ndv, fpp), num_bits);
-    EXPECT_EQ(BlockSplitBloomFilter::OptimalNumOfBytes(ndv, fpp), num_bits / 8);
+                                     uint32_t numBits) {
+    EXPECT_EQ(BlockSplitBloomFilter::optimalNumOfBits(ndv, fpp), numBits);
+    EXPECT_EQ(BlockSplitBloomFilter::optimalNumOfBytes(ndv, fpp), numBits / 8);
   };
 
   testOptimalNumEstimation(256, 0.01, UINT32_C(4096));
@@ -292,7 +291,7 @@ TEST(OptimalValueTest, TestBloomFilter) {
   testOptimalNumEstimation(700, 0.05, UINT32_C(8192));
   testOptimalNumEstimation(1500, 0.05, UINT32_C(16384));
 
-  // Boundary check
+  // Boundary check.
   testOptimalNumEstimation(
       4, 0.01, BlockSplitBloomFilter::kMinimumBloomFilterBytes * 8);
   testOptimalNumEstimation(
@@ -308,8 +307,8 @@ TEST(OptimalValueTest, TestBloomFilter) {
       BlockSplitBloomFilter::kMaximumBloomFilterBytes * 8);
 }
 
-// The test below is plainly copied from parquet-mr and serves as a basic sanity
-// check of our XXH64 wrapper.
+// The test below is plainly copied from parquet-mr and serves as a basic
+// sanity. Check of our XXH64 wrapper.
 const int64_t HASHES_OF_LOOPING_BYTES_WITH_SEED_0[32] = {
     -1205034819632174695L, -1642502924627794072L, 5216751715308240086L,
     -1889335612763511331L, -13835840860730338L,   -2521325055659080948L,
@@ -351,33 +350,32 @@ TEST(XxHashTest, TestBloomFilter) {
   uint8_t bytes[kNumValues] = {};
 
   for (int i = 0; i < kNumValues; i++) {
-    ByteArray byte_array(i, bytes);
+    ByteArray ByteArray(i, bytes);
     bytes[i] = i;
 
-    auto hasher_seed_0 = std::make_unique<XxHasher>();
+    auto hasherSeed0 = std::make_unique<XxHasher>();
     EXPECT_EQ(
-        HASHES_OF_LOOPING_BYTES_WITH_SEED_0[i],
-        hasher_seed_0->Hash(&byte_array))
+        HASHES_OF_LOOPING_BYTES_WITH_SEED_0[i], hasherSeed0->hash(&ByteArray))
         << "Hash with seed 0 Error: " << i;
   }
 }
 
-// Same as TestBloomFilter but using Batch interface
+// Same as TestBloomFilter but using Batch interface.
 TEST(XxHashTest, TestBloomFilterHashes) {
   constexpr int kNumValues = 32;
   uint8_t bytes[kNumValues] = {};
 
-  std::vector<ByteArray> byte_array_vector;
+  std::vector<ByteArray> byteArrayVector;
   for (int i = 0; i < kNumValues; i++) {
     bytes[i] = i;
-    byte_array_vector.emplace_back(i, bytes);
+    byteArrayVector.emplace_back(i, bytes);
   }
-  auto hasher_seed_0 = std::make_unique<XxHasher>();
+  auto hasherSeed0 = std::make_unique<XxHasher>();
   std::vector<uint64_t> hashes;
   hashes.resize(kNumValues);
-  hasher_seed_0->Hashes(
-      byte_array_vector.data(),
-      static_cast<int>(byte_array_vector.size()),
+  hasherSeed0->hashes(
+      byteArrayVector.data(),
+      static_cast<int>(byteArrayVector.size()),
       hashes.data());
   for (int i = 0; i < kNumValues; i++) {
     EXPECT_EQ(HASHES_OF_LOOPING_BYTES_WITH_SEED_0[i], hashes[i])
@@ -391,17 +389,17 @@ class TestBatchBloomFilter : public testing::Test {
   constexpr static int kTestDataSize = 64;
 
   // GenerateTestData with size 64.
-  std::vector<typename DType::c_type> GenerateTestData();
+  std::vector<typename DType::CType> generateTestData();
 
-  // The Lifetime owner for Test data
+  // The Lifetime owner for Test data.
   std::vector<uint8_t> members;
 };
 
 template <typename DType>
-std::vector<typename DType::c_type>
-TestBatchBloomFilter<DType>::GenerateTestData() {
-  std::vector<typename DType::c_type> values(kTestDataSize);
-  GenerateData(kTestDataSize, values.data(), &members);
+std::vector<typename DType::CType>
+TestBatchBloomFilter<DType>::generateTestData() {
+  std::vector<typename DType::CType> values(kTestDataSize);
+  generateData(kTestDataSize, values.data(), &members);
   return values;
 }
 
@@ -418,60 +416,58 @@ using BloomFilterTestTypes = ::testing::Types<
 TYPED_TEST_SUITE(TestBatchBloomFilter, BloomFilterTestTypes);
 
 TYPED_TEST(TestBatchBloomFilter, Basic) {
-  using Type = typename TypeParam::c_type;
-  std::vector<Type> test_data = TestFixture::GenerateTestData();
-  BlockSplitBloomFilter batch_insert_filter;
+  using Type = typename TypeParam::CType;
+  std::vector<Type> testData = TestFixture::generateTestData();
+  BlockSplitBloomFilter batchInsertFilter;
   BlockSplitBloomFilter filter;
 
-  // Bloom filter fpp parameter
+  // Bloom filter fpp parameter.
   const double fpp = 0.05;
-  filter.Init(
-      BlockSplitBloomFilter::OptimalNumOfBytes(
+  filter.init(
+      BlockSplitBloomFilter::optimalNumOfBytes(
           TestFixture::kTestDataSize, fpp));
-  batch_insert_filter.Init(
-      BlockSplitBloomFilter::OptimalNumOfBytes(
+  batchInsertFilter.init(
+      BlockSplitBloomFilter::optimalNumOfBytes(
           TestFixture::kTestDataSize, fpp));
 
   std::vector<uint64_t> hashes;
-  for (const Type& value : test_data) {
+  for (const Type& value : testData) {
     uint64_t hash = 0;
     if constexpr (std::is_same_v<Type, FLBA>) {
-      hash = filter.Hash(&value, kGenerateDataFLBALength);
+      hash = filter.hash(&value, kGenerateDataFLBALength);
     } else {
-      hash = filter.Hash(&value);
+      hash = filter.hash(&value);
     }
     hashes.push_back(hash);
   }
 
-  std::vector<uint64_t> batch_hashes(test_data.size());
+  std::vector<uint64_t> batchHashes(testData.size());
   if constexpr (std::is_same_v<Type, FLBA>) {
-    batch_insert_filter.Hashes(
-        test_data.data(),
+    batchInsertFilter.hashes(
+        testData.data(),
         kGenerateDataFLBALength,
-        static_cast<int>(test_data.size()),
-        batch_hashes.data());
+        static_cast<int>(testData.size()),
+        batchHashes.data());
   } else {
-    batch_insert_filter.Hashes(
-        test_data.data(),
-        static_cast<int>(test_data.size()),
-        batch_hashes.data());
+    batchInsertFilter.hashes(
+        testData.data(), static_cast<int>(testData.size()), batchHashes.data());
   }
 
-  EXPECT_EQ(hashes, batch_hashes);
+  EXPECT_EQ(hashes, batchHashes);
 
   std::shared_ptr<Buffer> buffer;
-  std::shared_ptr<Buffer> batch_insert_buffer;
+  std::shared_ptr<Buffer> batchInsertBuffer;
   {
-    auto sink = CreateOutputStream();
-    filter.WriteTo(sink.get());
+    auto sink = createOutputStream();
+    filter.writeTo(sink.get());
     ASSERT_OK_AND_ASSIGN(buffer, sink->Finish());
   }
   {
-    auto sink = CreateOutputStream();
-    batch_insert_filter.WriteTo(sink.get());
-    ASSERT_OK_AND_ASSIGN(batch_insert_buffer, sink->Finish());
+    auto sink = createOutputStream();
+    batchInsertFilter.writeTo(sink.get());
+    ASSERT_OK_AND_ASSIGN(batchInsertBuffer, sink->Finish());
   }
-  AssertBufferEqual(*buffer, *batch_insert_buffer);
+  ::arrow::AssertBufferEqual(*buffer, *batchInsertBuffer);
 }
 
 } // namespace test

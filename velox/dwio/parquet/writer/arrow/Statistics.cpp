@@ -57,21 +57,21 @@ inline std::enable_if_t<
     std::is_trivially_copyable_v<T> && std::is_trivially_copyable_v<U> &&
         sizeof(T) == sizeof(U),
     U>
-SafeCopy(T value) {
+safeCopy(T value) {
   std::remove_const_t<U> ret;
   std::memcpy(&ret, &value, sizeof(T));
   return ret;
 }
 
 template <typename T>
-inline std::enable_if_t<std::is_trivially_copyable_v<T>, T> SafeLoad(
+inline std::enable_if_t<std::is_trivially_copyable_v<T>, T> safeLoad(
     const T* unaligned) {
   std::remove_const_t<T> ret;
   std::memcpy(&ret, unaligned, sizeof(T));
   return ret;
 }
 
-std::shared_ptr<ResizableBuffer> AllocateBuffer(
+std::shared_ptr<ResizableBuffer> allocateBuffer(
     MemoryPool* pool,
     int64_t size) {
   PARQUET_ASSIGN_OR_THROW(
@@ -79,101 +79,101 @@ std::shared_ptr<ResizableBuffer> AllocateBuffer(
   return std::move(result);
 }
 
-// ----------------------------------------------------------------------
-// Comparator implementations
+// ----------------------------------------------------------------------.
+// Comparator implementations.
 
-constexpr int value_length(int value_length, const ByteArray& value) {
+constexpr int valueLength(int valueLength, const ByteArray& value) {
   return value.len;
 }
-constexpr int value_length(int type_length, const FLBA& value) {
-  return type_length;
+constexpr int valueLength(int typeLength, const FLBA& value) {
+  return typeLength;
 }
 
-template <typename DType, bool is_signed>
+template <typename DType, bool isSigned>
 struct CompareHelper {
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   static_assert(
       !std::is_unsigned<T>::value || std::is_same<T, bool>::value,
       "T is an unsigned numeric");
 
-  constexpr static T DefaultMin() {
+  constexpr static T defaultMin() {
     if constexpr (std::is_floating_point_v<T>) {
       return std::numeric_limits<T>::infinity();
     }
     return std::numeric_limits<T>::max();
   }
-  constexpr static T DefaultMax() {
+  constexpr static T defaultMax() {
     if constexpr (std::is_floating_point_v<T>) {
       return -std::numeric_limits<T>::infinity();
     }
     return std::numeric_limits<T>::min();
   }
 
-  // MSVC17 fix, isnan is not overloaded for IntegralType as per C++11
-  // standard requirements.
+  // MSVC17 fix, isnan is not overloaded for IntegralType as per C++11.
+  // Standard requirements.
   template <typename T1 = T>
-  static ::arrow::enable_if_t<std::is_floating_point<T1>::value, T> Coalesce(
+  static ::arrow::enable_if_t<std::is_floating_point<T1>::value, T> coalesce(
       T val,
       T fallback) {
     return std::isnan(val) ? fallback : val;
   }
 
   template <typename T1 = T>
-  static ::arrow::enable_if_t<!std::is_floating_point<T1>::value, T> Coalesce(
+  static ::arrow::enable_if_t<!std::is_floating_point<T1>::value, T> coalesce(
       T val,
       T fallback) {
     return val;
   }
 
-  static inline bool Compare(int type_length, const T& a, const T& b) {
+  static inline bool compare(int typeLength, const T& a, const T& b) {
     return a < b;
   }
 
-  static T Min(int type_length, T a, T b) {
+  static T min(int typeLength, T a, T b) {
     return a < b ? a : b;
   }
-  static T Max(int type_length, T a, T b) {
+  static T max(int typeLength, T a, T b) {
     return a < b ? b : a;
   }
 };
 
 template <typename DType>
 struct UnsignedCompareHelperBase {
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
   using UCType = typename std::make_unsigned<T>::type;
 
   static_assert(!std::is_same<T, UCType>::value, "T is unsigned");
   static_assert(sizeof(T) == sizeof(UCType), "T and UCType not the same size");
 
-  // NOTE: according to the C++ spec, unsigned-to-signed conversion is
-  // implementation-defined if the original value does not fit in the signed
-  // type (i.e., two's complement cannot be assumed even on mainstream machines,
-  // because the compiler may decide otherwise).  Hence the use of `SafeCopy`
-  // below for deterministic bit-casting.
-  // (see "Integer conversions" in
+  // NOTE: according to the C++ spec, unsigned-to-signed conversion is.
+  // Implementation-defined if the original value does not fit in the signed.
+  // Type (i.e., two's complement cannot be assumed even on mainstream
+  // machines,. Because the compiler may decide otherwise).  Hence the use of
+  // `SafeCopy`. Below for deterministic bit-casting. (See "Integer conversions"
+  // in.
   //  https://en.cppreference.com/w/cpp/language/implicit_conversion)
 
-  static const T DefaultMin() {
-    return SafeCopy<T>(std::numeric_limits<UCType>::max());
+  static const T defaultMin() {
+    return safeCopy<T>(std::numeric_limits<UCType>::max());
   }
-  static const T DefaultMax() {
+  static const T defaultMax() {
     return 0;
   }
 
-  static T Coalesce(T val, T fallback) {
+  static T coalesce(T val, T fallback) {
     return val;
   }
 
-  static bool Compare(int type_length, T a, T b) {
-    return SafeCopy<UCType>(a) < SafeCopy<UCType>(b);
+  static bool compare(int typeLength, T a, T b) {
+    return safeCopy<UCType>(a) < safeCopy<UCType>(b);
   }
 
-  static T Min(int type_length, T a, T b) {
-    return Compare(type_length, a, b) ? a : b;
+  static T min(int typeLength, T a, T b) {
+    return compare(typeLength, a, b) ? a : b;
   }
-  static T Max(int type_length, T a, T b) {
-    return Compare(type_length, a, b) ? b : a;
+  static T max(int typeLength, T a, T b) {
+    return compare(typeLength, a, b) ? b : a;
   }
 };
 
@@ -185,201 +185,199 @@ template <>
 struct CompareHelper<Int64Type, false>
     : public UnsignedCompareHelperBase<Int64Type> {};
 
-template <bool is_signed>
-struct CompareHelper<Int96Type, is_signed> {
-  using T = typename Int96Type::c_type;
-  using msb_type =
-      typename std::conditional<is_signed, int32_t, uint32_t>::type;
+template <bool isSigned>
+struct CompareHelper<Int96Type, isSigned> {
+  using T = typename Int96Type::CType;
+  using MsbType = typename std::conditional<isSigned, int32_t, uint32_t>::type;
 
-  static T DefaultMin() {
-    uint32_t kMsbMax = SafeCopy<uint32_t>(std::numeric_limits<msb_type>::max());
+  static T defaultMin() {
+    uint32_t kMsbMax = safeCopy<uint32_t>(std::numeric_limits<MsbType>::max());
     uint32_t kMax = std::numeric_limits<uint32_t>::max();
     return {kMax, kMax, kMsbMax};
   }
-  static T DefaultMax() {
-    uint32_t kMsbMin = SafeCopy<uint32_t>(std::numeric_limits<msb_type>::min());
+  static T defaultMax() {
+    uint32_t kMsbMin = safeCopy<uint32_t>(std::numeric_limits<MsbType>::min());
     uint32_t kMin = std::numeric_limits<uint32_t>::min();
     return {kMin, kMin, kMsbMin};
   }
-  static T Coalesce(T val, T fallback) {
+  static T coalesce(T val, T fallback) {
     return val;
   }
 
-  static inline bool Compare(int type_length, const T& a, const T& b) {
+  static inline bool compare(int typeLength, const T& a, const T& b) {
     if (a.value[2] != b.value[2]) {
-      // Only the MSB bit is by Signed comparison. For little-endian, this is
-      // the last bit of Int96 type.
-      return SafeCopy<msb_type>(a.value[2]) < SafeCopy<msb_type>(b.value[2]);
+      // Only the MSB bit is by Signed comparison. For little-endian, this is.
+      // The last bit of Int96 type.
+      return safeCopy<MsbType>(a.value[2]) < safeCopy<MsbType>(b.value[2]);
     } else if (a.value[1] != b.value[1]) {
       return (a.value[1] < b.value[1]);
     }
     return (a.value[0] < b.value[0]);
   }
 
-  static T Min(int type_length, const T& a, const T& b) {
-    return Compare(0, a, b) ? a : b;
+  static T min(int typeLength, const T& a, const T& b) {
+    return compare(0, a, b) ? a : b;
   }
-  static T Max(int type_length, const T& a, const T& b) {
-    return Compare(0, a, b) ? b : a;
+  static T max(int typeLength, const T& a, const T& b) {
+    return compare(0, a, b) ? b : a;
   }
 };
 
-template <typename T, bool is_signed>
+template <typename T, bool isSigned>
 struct BinaryLikeComparer {};
 
 template <typename T>
 struct BinaryLikeComparer<T, /*is_signed=*/false> {
-  static bool Compare(int type_length, const T& a, const T& b) {
-    int a_length = value_length(type_length, a);
-    int b_length = value_length(type_length, b);
-    // Unsigned comparison is used for non-numeric types so straight
-    // lexicographic comparison makes sense. (a.ptr is always unsigned)....
+  static bool compare(int typeLength, const T& a, const T& b) {
+    int aLength = valueLength(typeLength, a);
+    int bLength = valueLength(typeLength, b);
+    // Unsigned comparison is used for non-numeric types so straight.
+    // Lexicographic comparison makes sense. (a.ptr is always unsigned)....
     return std::lexicographical_compare(
-        a.ptr, a.ptr + a_length, b.ptr, b.ptr + b_length);
+        a.ptr, a.ptr + aLength, b.ptr, b.ptr + bLength);
   }
 };
 
 template <typename T>
 struct BinaryLikeComparer<T, /*is_signed=*/true> {
-  static bool Compare(int type_length, const T& a, const T& b) {
-    // Is signed is used for integers encoded as big-endian twos
-    // complement integers. (e.g. decimals).
-    int a_length = value_length(type_length, a);
-    int b_length = value_length(type_length, b);
+  static bool compare(int typeLength, const T& a, const T& b) {
+    // Is signed is used for integers encoded as big-endian twos.
+    // Complement integers. (e.g. decimals).
+    int aLength = valueLength(typeLength, a);
+    int bLength = valueLength(typeLength, b);
 
     // At least of the lengths is zero.
-    if (a_length == 0 || b_length == 0) {
-      return a_length == 0 && b_length > 0;
+    if (aLength == 0 || bLength == 0) {
+      return aLength == 0 && bLength > 0;
     }
 
-    int8_t first_a = *a.ptr;
-    int8_t first_b = *b.ptr;
-    // We can short circuit for different signed numbers or
-    // for equal length bytes arrays that have different first bytes.
+    int8_t firstA = *a.ptr;
+    int8_t firstB = *b.ptr;
+    // We can short circuit for different signed numbers or.
+    // For equal length bytes arrays that have different first bytes.
     // The equality requirement is necessary for sign extension cases.
-    // 0xFF10 should be equal to 0x10 (due to big endian sign extension).
-    if ((0x80 & first_a) != (0x80 & first_b) ||
-        (a_length == b_length && first_a != first_b)) {
-      return first_a < first_b;
+    // 0XFF10 should be equal to 0x10 (due to big endian sign extension).
+    if ((0x80 & firstA) != (0x80 & firstB) ||
+        (aLength == bLength && firstA != firstB)) {
+      return firstA < firstB;
     }
-    // When the lengths are unequal and the numbers are of the same
-    // sign we need to do comparison by sign extending the shorter
-    // value first, and once we get to equal sized arrays, lexicographical
-    // unsigned comparison of everything but the first byte is sufficient.
-    const uint8_t* a_start = a.ptr;
-    const uint8_t* b_start = b.ptr;
-    if (a_length != b_length) {
-      const uint8_t* lead_start = nullptr;
-      const uint8_t* lead_end = nullptr;
-      if (a_length > b_length) {
-        int lead_length = a_length - b_length;
-        lead_start = a.ptr;
-        lead_end = a.ptr + lead_length;
-        a_start += lead_length;
+    // When the lengths are unequal and the numbers are of the same.
+    // Sign we need to do comparison by sign extending the shorter.
+    // Value first, and once we get to equal sized arrays, lexicographical.
+    // Unsigned comparison of everything but the first byte is sufficient.
+    const uint8_t* aStart = a.ptr;
+    const uint8_t* bStart = b.ptr;
+    if (aLength != bLength) {
+      const uint8_t* leadStart = nullptr;
+      const uint8_t* leadEnd = nullptr;
+      if (aLength > bLength) {
+        int leadLength = aLength - bLength;
+        leadStart = a.ptr;
+        leadEnd = a.ptr + leadLength;
+        aStart += leadLength;
       } else {
-        VELOX_DCHECK_LT(a_length, b_length);
-        int lead_length = b_length - a_length;
-        lead_start = b.ptr;
-        lead_end = b.ptr + lead_length;
-        b_start += lead_length;
+        VELOX_DCHECK_LT(aLength, bLength);
+        int leadLength = bLength - aLength;
+        leadStart = b.ptr;
+        leadEnd = b.ptr + leadLength;
+        bStart += leadLength;
       }
-      // Compare extra bytes to the sign extension of the first
-      // byte of the other number.
-      uint8_t extension = first_a < 0 ? 0xFF : 0;
-      bool not_equal =
-          std::any_of(lead_start, lead_end, [extension](uint8_t a) {
-            return extension != a;
-          });
-      if (not_equal) {
+      // Compare extra bytes to the sign extension of the first.
+      // Byte of the other number.
+      uint8_t extension = firstA < 0 ? 0xFF : 0;
+      bool notEqual = std::any_of(leadStart, leadEnd, [extension](uint8_t a) {
+        return extension != a;
+      });
+      if (notEqual) {
         // Since sign extension are extrema values for unsigned bytes:
         //
         // Four cases exist:
-        //    negative values:
-        //      b is the longer value.
-        //        b must be the lesser value: return false
-        //      else:
-        //        a must be the lesser value: return true
+        //    Negative values:
+        //      B is the longer value.
+        //        B must be the lesser value: return false.
+        //      Else:
+        //        A must be the lesser value: return true.
         //
-        //    positive values:
-        //      b is the longer value.
-        //        values in b must be greater than a: return true
-        //      else:
-        //        values in a must be greater than b: return false
-        bool negative_values = first_a < 0;
-        bool b_longer = a_length < b_length;
-        return negative_values != b_longer;
+        //    Positive values:
+        //      B is the longer value.
+        //        Values in b must be greater than a: return true.
+        //      Else:
+        //        Values in a must be greater than b: return false.
+        bool negativeValues = firstA < 0;
+        bool bLonger = aLength < bLength;
+        return negativeValues != bLonger;
       }
     } else {
-      a_start++;
-      b_start++;
+      aStart++;
+      bStart++;
     }
     return std::lexicographical_compare(
-        a_start, a.ptr + a_length, b_start, b.ptr + b_length);
+        aStart, a.ptr + aLength, bStart, b.ptr + bLength);
   }
 };
 
-template <typename DType, bool is_signed>
+template <typename DType, bool isSigned>
 struct BinaryLikeCompareHelperBase {
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
-  static T DefaultMin() {
+  static T defaultMin() {
     return {};
   }
-  static T DefaultMax() {
+  static T defaultMax() {
     return {};
   }
-  static T Coalesce(T val, T fallback) {
+  static T coalesce(T val, T fallback) {
     return val;
   }
 
-  static inline bool Compare(int type_length, const T& a, const T& b) {
-    return BinaryLikeComparer<T, is_signed>::Compare(type_length, a, b);
+  static inline bool compare(int typeLength, const T& a, const T& b) {
+    return BinaryLikeComparer<T, isSigned>::compare(typeLength, a, b);
   }
-  static T Min(int type_length, const T& a, const T& b) {
+  static T min(int typeLength, const T& a, const T& b) {
     if (a.ptr == nullptr)
       return b;
     if (b.ptr == nullptr)
       return a;
-    return Compare(type_length, a, b) ? a : b;
+    return compare(typeLength, a, b) ? a : b;
   }
 
-  static T Max(int type_length, const T& a, const T& b) {
+  static T max(int typeLength, const T& a, const T& b) {
     if (a.ptr == nullptr)
       return b;
     if (b.ptr == nullptr)
       return a;
-    return Compare(type_length, a, b) ? b : a;
+    return compare(typeLength, a, b) ? b : a;
   }
 };
 
-template <bool is_signed>
-struct CompareHelper<ByteArrayType, is_signed>
-    : public BinaryLikeCompareHelperBase<ByteArrayType, is_signed> {};
+template <bool isSigned>
+struct CompareHelper<ByteArrayType, isSigned>
+    : public BinaryLikeCompareHelperBase<ByteArrayType, isSigned> {};
 
-template <bool is_signed>
-struct CompareHelper<FLBAType, is_signed>
-    : public BinaryLikeCompareHelperBase<FLBAType, is_signed> {};
+template <bool isSigned>
+struct CompareHelper<FLBAType, isSigned>
+    : public BinaryLikeCompareHelperBase<FLBAType, isSigned> {};
 
 using ::std::optional;
 
 template <typename T>
 ::arrow::enable_if_t<std::is_integral<T>::value, optional<std::pair<T, T>>>
-CleanStatistic(std::pair<T, T> min_max) {
-  return min_max;
+cleanStatistic(std::pair<T, T> minMax) {
+  return minMax;
 }
 
-// In case of floating point types, the following rules are applied (as per
-// upstream parquet-mr):
+// In case of floating point types, the following rules are applied (as per.
+// Upstream parquet-mr):
 // - If any of min/max is NaN, return nothing.
 // - If min is infinity and max is -infinity, return nothing.
-// - If min is 0.0f, replace with -0.0f
-// - If max is -0.0f, replace with 0.0f
+// - If min is 0.0f, replace with -0.0f.
+// - If max is -0.0f, replace with 0.0f.
 template <typename T>
 ::arrow::
     enable_if_t<std::is_floating_point<T>::value, optional<std::pair<T, T>>>
-    CleanStatistic(std::pair<T, T> min_max) {
-  T min = min_max.first;
-  T max = min_max.second;
+    cleanStatistic(std::pair<T, T> minMax) {
+  T min = minMax.first;
+  T max = minMax.second;
 
   // Ignore if one of the value is nan.
   if (std::isnan(min) || std::isnan(max)) {
@@ -404,141 +402,140 @@ template <typename T>
   return {{min, max}};
 }
 
-optional<std::pair<FLBA, FLBA>> CleanStatistic(std::pair<FLBA, FLBA> min_max) {
-  if (min_max.first.ptr == nullptr || min_max.second.ptr == nullptr) {
+optional<std::pair<FLBA, FLBA>> cleanStatistic(std::pair<FLBA, FLBA> minMax) {
+  if (minMax.first.ptr == nullptr || minMax.second.ptr == nullptr) {
     return ::std::nullopt;
   }
-  return min_max;
+  return minMax;
 }
 
-optional<std::pair<ByteArray, ByteArray>> CleanStatistic(
-    std::pair<ByteArray, ByteArray> min_max) {
-  if (min_max.first.ptr == nullptr || min_max.second.ptr == nullptr) {
+optional<std::pair<ByteArray, ByteArray>> cleanStatistic(
+    std::pair<ByteArray, ByteArray> minMax) {
+  if (minMax.first.ptr == nullptr || minMax.second.ptr == nullptr) {
     return ::std::nullopt;
   }
-  return min_max;
+  return minMax;
 }
 
-template <bool is_signed, typename DType>
+template <bool isSigned, typename DType>
 class TypedComparatorImpl : virtual public TypedComparator<DType> {
  public:
-  using T = typename DType::c_type;
-  using Helper = CompareHelper<DType, is_signed>;
+  using T = typename DType::CType;
+  using Helper = CompareHelper<DType, isSigned>;
 
-  explicit TypedComparatorImpl(int type_length = -1)
-      : type_length_(type_length) {}
+  explicit TypedComparatorImpl(int typeLength = -1) : typeLength_(typeLength) {}
 
-  bool CompareInline(const T& a, const T& b) const {
-    return Helper::Compare(type_length_, a, b);
+  bool compareInline(const T& a, const T& b) const {
+    return Helper::compare(typeLength_, a, b);
   }
 
-  bool Compare(const T& a, const T& b) override {
-    return CompareInline(a, b);
+  bool compare(const T& a, const T& b) override {
+    return compareInline(a, b);
   }
 
-  std::pair<T, T> GetMinMax(const T* values, int64_t length) override {
+  std::pair<T, T> getMinMax(const T* values, int64_t length) override {
     VELOX_DCHECK_GT(length, 0);
 
-    T min = Helper::DefaultMin();
-    T max = Helper::DefaultMax();
+    T min = Helper::defaultMin();
+    T max = Helper::defaultMax();
 
     for (int64_t i = 0; i < length; i++) {
-      const auto val = SafeLoad(values + i);
-      min = Helper::Min(
-          type_length_, min, Helper::Coalesce(val, Helper::DefaultMin()));
-      max = Helper::Max(
-          type_length_, max, Helper::Coalesce(val, Helper::DefaultMax()));
+      const auto val = safeLoad(values + i);
+      min = Helper::min(
+          typeLength_, min, Helper::coalesce(val, Helper::defaultMin()));
+      max = Helper::max(
+          typeLength_, max, Helper::coalesce(val, Helper::defaultMax()));
     }
 
     return {min, max};
   }
 
-  std::pair<T, T> GetMinMaxSpaced(
+  std::pair<T, T> getMinMaxSpaced(
       const T* values,
       int64_t length,
-      const uint8_t* valid_bits,
-      int64_t valid_bits_offset) override {
+      const uint8_t* validBits,
+      int64_t validBitsOffset) override {
     VELOX_DCHECK_GT(length, 0);
 
-    T min = Helper::DefaultMin();
-    T max = Helper::DefaultMax();
+    T min = Helper::defaultMin();
+    T max = Helper::defaultMax();
 
     ::arrow::internal::VisitSetBitRunsVoid(
-        valid_bits,
-        valid_bits_offset,
+        validBits,
+        validBitsOffset,
         length,
         [&](int64_t position, int64_t length) {
           for (int64_t i = 0; i < length; i++) {
-            const auto val = SafeLoad(values + i + position);
-            min = Helper::Min(
-                type_length_, min, Helper::Coalesce(val, Helper::DefaultMin()));
-            max = Helper::Max(
-                type_length_, max, Helper::Coalesce(val, Helper::DefaultMax()));
+            const auto val = safeLoad(values + i + position);
+            min = Helper::min(
+                typeLength_, min, Helper::coalesce(val, Helper::defaultMin()));
+            max = Helper::max(
+                typeLength_, max, Helper::coalesce(val, Helper::defaultMax()));
           }
         });
 
     return {min, max};
   }
 
-  std::pair<T, T> GetMinMax(const ::arrow::Array& values) override;
+  std::pair<T, T> getMinMax(const ::arrow::Array& values) override;
 
  private:
-  int type_length_;
+  int typeLength_;
 };
 
-// ARROW-11675: A hand-written version of GetMinMax(), to work around
-// what looks like a MSVC code generation bug.
+// ARROW-11675: A hand-written version of GetMinMax(), to work around.
+// What looks like a MSVC code generation bug.
 // This does not seem to be required for GetMinMaxSpaced().
 template <>
 std::pair<int32_t, int32_t>
-TypedComparatorImpl</*is_signed=*/false, Int32Type>::GetMinMax(
+TypedComparatorImpl</*is_signed=*/false, Int32Type>::getMinMax(
     const int32_t* values,
     int64_t length) {
   VELOX_DCHECK_GT(length, 0);
 
-  const uint32_t* unsigned_values = reinterpret_cast<const uint32_t*>(values);
+  const uint32_t* unsignedValues = reinterpret_cast<const uint32_t*>(values);
   uint32_t min = std::numeric_limits<uint32_t>::max();
   uint32_t max = std::numeric_limits<uint32_t>::lowest();
 
   for (int64_t i = 0; i < length; i++) {
-    const auto val = unsigned_values[i];
+    const auto val = unsignedValues[i];
     min = std::min<uint32_t>(min, val);
     max = std::max<uint32_t>(max, val);
   }
 
-  return {SafeCopy<int32_t>(min), SafeCopy<int32_t>(max)};
+  return {safeCopy<int32_t>(min), safeCopy<int32_t>(max)};
 }
 
-template <bool is_signed, typename DType>
-std::pair<typename DType::c_type, typename DType::c_type>
-TypedComparatorImpl<is_signed, DType>::GetMinMax(const ::arrow::Array& values) {
+template <bool isSigned, typename DType>
+std::pair<typename DType::CType, typename DType::CType>
+TypedComparatorImpl<isSigned, DType>::getMinMax(const ::arrow::Array& values) {
   ParquetException::NYI(values.type()->ToString());
 }
 
-template <bool is_signed>
-std::pair<ByteArray, ByteArray> GetMinMaxBinaryHelper(
-    const TypedComparatorImpl<is_signed, ByteArrayType>& comparator,
+template <bool isSigned>
+std::pair<ByteArray, ByteArray> getMinMaxBinaryHelper(
+    const TypedComparatorImpl<isSigned, ByteArrayType>& Comparator,
     const ::arrow::Array& values) {
-  using Helper = CompareHelper<ByteArrayType, is_signed>;
+  using Helper = CompareHelper<ByteArrayType, isSigned>;
 
-  ByteArray min = Helper::DefaultMin();
-  ByteArray max = Helper::DefaultMax();
-  constexpr int type_length = -1;
+  ByteArray min = Helper::defaultMin();
+  ByteArray max = Helper::defaultMax();
+  constexpr int typeLength = -1;
 
-  const auto valid_func = [&](std::string_view val) {
+  const auto validFunc = [&](std::string_view val) {
     ByteArray ba{std::string_view(val.data(), val.size())};
-    min = Helper::Min(type_length, ba, min);
-    max = Helper::Max(type_length, ba, max);
+    min = Helper::min(typeLength, ba, min);
+    max = Helper::max(typeLength, ba, max);
   };
-  const auto null_func = [&]() {};
+  const auto nullFunc = [&]() {};
 
   if (::arrow::is_binary_like(values.type_id())) {
     ::arrow::VisitArraySpanInline<::arrow::BinaryType>(
-        *values.data(), std::move(valid_func), std::move(null_func));
+        *values.data(), std::move(validFunc), std::move(nullFunc));
   } else {
     VELOX_DCHECK(::arrow::is_large_binary_like(values.type_id()));
     ::arrow::VisitArraySpanInline<::arrow::LargeBinaryType>(
-        *values.data(), std::move(valid_func), std::move(null_func));
+        *values.data(), std::move(validFunc), std::move(nullFunc));
   }
 
   return {min, max};
@@ -546,16 +543,16 @@ std::pair<ByteArray, ByteArray> GetMinMaxBinaryHelper(
 
 template <>
 std::pair<ByteArray, ByteArray>
-TypedComparatorImpl<true, ByteArrayType>::GetMinMax(
+TypedComparatorImpl<true, ByteArrayType>::getMinMax(
     const ::arrow::Array& values) {
-  return GetMinMaxBinaryHelper<true>(*this, values);
+  return getMinMaxBinaryHelper<true>(*this, values);
 }
 
 template <>
 std::pair<ByteArray, ByteArray>
-TypedComparatorImpl<false, ByteArrayType>::GetMinMax(
+TypedComparatorImpl<false, ByteArrayType>::getMinMax(
     const ::arrow::Array& values) {
-  return GetMinMaxBinaryHelper<false>(*this, values);
+  return getMinMaxBinaryHelper<false>(*this, values);
 }
 
 template <typename T>
@@ -572,189 +569,189 @@ std::string encodeDecimalToBigEndian(T value) {
 template <typename DType>
 class TypedStatisticsImpl : public TypedStatistics<DType> {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   // Create an empty stats.
   TypedStatisticsImpl(const ColumnDescriptor* descr, MemoryPool* pool)
       : descr_(descr),
         pool_(pool),
-        min_buffer_(AllocateBuffer(pool_, 0)),
-        max_buffer_(AllocateBuffer(pool_, 0)) {
-    auto comp = Comparator::Make(descr);
+        minBuffer_(allocateBuffer(pool_, 0)),
+        maxBuffer_(allocateBuffer(pool_, 0)) {
+    auto comp = Comparator::make(descr);
     comparator_ = std::static_pointer_cast<TypedComparator<DType>>(comp);
-    TypedStatisticsImpl::Reset();
+    TypedStatisticsImpl::reset();
   }
 
   // Create stats from provided values.
   TypedStatisticsImpl(
       const T& min,
       const T& max,
-      int64_t num_values,
-      int64_t null_count,
-      int64_t distinct_count)
+      int64_t numValues,
+      int64_t nullCount,
+      int64_t distinctCount)
       : pool_(default_memory_pool()),
-        min_buffer_(AllocateBuffer(pool_, 0)),
-        max_buffer_(AllocateBuffer(pool_, 0)) {
-    TypedStatisticsImpl::IncrementNumValues(num_values);
-    TypedStatisticsImpl::IncrementNullCount(null_count);
-    SetDistinctCount(distinct_count);
+        minBuffer_(allocateBuffer(pool_, 0)),
+        maxBuffer_(allocateBuffer(pool_, 0)) {
+    TypedStatisticsImpl::incrementNumValues(numValues);
+    TypedStatisticsImpl::incrementNullCount(nullCount);
+    setDistinctCount(distinctCount);
 
-    Copy(min, &min_, min_buffer_.get());
-    Copy(max, &max_, max_buffer_.get());
-    has_min_max_ = true;
+    copy(min, &min_, minBuffer_.get());
+    copy(max, &max_, maxBuffer_.get());
+    hasMinMax_ = true;
   }
 
   // Create stats from a thrift Statistics object.
   TypedStatisticsImpl(
       const ColumnDescriptor* descr,
-      const std::string& encoded_min,
-      const std::string& encoded_max,
-      int64_t num_values,
-      int64_t null_count,
-      int64_t distinct_count,
-      int64_t nan_count,
-      bool has_min_max,
-      bool has_null_count,
-      bool has_distinct_count,
-      bool has_nan_count,
+      const std::string& encodedMin,
+      const std::string& encodedMax,
+      int64_t numValues,
+      int64_t nullCount,
+      int64_t distinctCount,
+      bool hasMinMax,
+      bool hasNullCount,
+      bool hasDistinctCount,
+      bool hasNaNCount,
+      int64_t nanCount,
       MemoryPool* pool)
       : TypedStatisticsImpl(descr, pool) {
-    TypedStatisticsImpl::IncrementNumValues(num_values);
-    if (has_null_count) {
-      TypedStatisticsImpl::IncrementNullCount(null_count);
+    TypedStatisticsImpl::incrementNumValues(numValues);
+    if (hasNullCount) {
+      TypedStatisticsImpl::incrementNullCount(nullCount);
     } else {
-      has_null_count_ = false;
+      hasNullCount_ = false;
     }
-    if (has_distinct_count) {
-      SetDistinctCount(distinct_count);
+    if (hasDistinctCount) {
+      setDistinctCount(distinctCount);
     } else {
-      has_distinct_count_ = false;
+      hasDistinctCount_ = false;
     }
 
-    if (has_nan_count) {
-      IncrementNaNValues(nan_count);
+    if (hasNaNCount) {
+      incrementNaNValues(nanCount);
     } else {
-      has_nan_count_ = false;
+      hasNanCount_ = false;
     }
 
-    if (!encoded_min.empty()) {
-      PlainDecode(encoded_min, &min_);
+    if (!encodedMin.empty()) {
+      plainDecode(encodedMin, &min_);
     }
-    if (!encoded_max.empty()) {
-      PlainDecode(encoded_max, &max_);
+    if (!encodedMax.empty()) {
+      plainDecode(encodedMax, &max_);
     }
-    has_min_max_ = has_min_max;
+    hasMinMax_ = hasMinMax;
   }
 
-  bool HasDistinctCount() const override {
-    return has_distinct_count_;
+  bool hasDistinctCount() const override {
+    return hasDistinctCount_;
   };
-  bool HasMinMax() const override {
-    return has_min_max_;
+  bool hasMinMax() const override {
+    return hasMinMax_;
   }
-  bool HasNullCount() const override {
-    return has_null_count_;
+  bool hasNullCount() const override {
+    return hasNullCount_;
   };
 
-  bool HasNaNCount() const override {
-    return has_nan_count_;
+  bool hasNaNCount() const override {
+    return hasNanCount_;
   }
 
-  void IncrementNullCount(int64_t n) override {
-    statistics_.null_count += n;
-    has_null_count_ = true;
+  void incrementNullCount(int64_t n) override {
+    statistics_.nullCount += n;
+    hasNullCount_ = true;
   }
 
-  void IncrementNumValues(int64_t n) override {
-    num_values_ += n;
+  void incrementNumValues(int64_t n) override {
+    numValues_ += n;
   }
 
-  void IncrementNaNValues(int64_t n) override {
+  void incrementNaNValues(int64_t n) override {
     if (n > 0) {
-      nan_count_ += n;
-      has_nan_count_ = true;
+      nanCount_ += n;
+      hasNanCount_ = true;
     }
   }
 
-  bool Equals(const Statistics& raw_other) const override {
-    if (physical_type() != raw_other.physical_type())
+  bool equals(const Statistics& rawOther) const override {
+    if (physicalType() != rawOther.physicalType())
       return false;
 
-    const auto& other = checked_cast<const TypedStatisticsImpl&>(raw_other);
+    const auto& other = checked_cast<const TypedStatisticsImpl&>(rawOther);
 
-    if (has_min_max_ != other.has_min_max_)
+    if (hasMinMax_ != other.hasMinMax_)
       return false;
-    if (has_min_max_) {
-      if (!MinMaxEqual(other))
+    if (hasMinMax_) {
+      if (!minMaxEqual(other))
         return false;
     }
 
-    return null_count() == other.null_count() &&
-        distinct_count() == other.distinct_count() &&
-        num_values() == other.num_values();
+    return nullCount() == other.nullCount() &&
+        distinctCount() == other.distinctCount() &&
+        numValues() == other.numValues();
   }
 
-  bool MinMaxEqual(const TypedStatisticsImpl& other) const;
+  bool minMaxEqual(const TypedStatisticsImpl& other) const;
 
-  void Reset() override {
-    ResetCounts();
-    ResetHasFlags();
+  void reset() override {
+    resetCounts();
+    resetHasFlags();
   }
 
-  void SetMinMax(const T& arg_min, const T& arg_max) override {
-    SetMinMaxPair({arg_min, arg_max});
+  void setMinMax(const T& argMin, const T& argMax) override {
+    setMinMaxPair({argMin, argMax});
   }
 
-  void Merge(const TypedStatistics<DType>& other) override {
-    this->num_values_ += other.num_values();
-    // null_count is always valid when merging page statistics into
-    // column chunk statistics.
-    if (other.HasNullCount()) {
-      this->statistics_.null_count += other.null_count();
+  void merge(const TypedStatistics<DType>& other) override {
+    this->numValues_ += other.numValues();
+    // Null_count is always valid when merging page statistics into.
+    // Column chunk statistics.
+    if (other.hasNullCount()) {
+      this->statistics_.nullCount += other.nullCount();
     } else {
-      this->has_null_count_ = false;
+      this->hasNullCount_ = false;
     }
-    if (other.HasNaNCount()) {
-      this->nan_count_ += other.nan_count();
-      this->has_nan_count_ = true;
+    if (other.hasNaNCount()) {
+      this->nanCount_ += other.nanCount();
+      this->hasNanCount_ = true;
     }
-    if (has_distinct_count_ && other.HasDistinctCount() &&
-        (distinct_count() == 0 || other.distinct_count() == 0)) {
+    if (hasDistinctCount_ && other.hasDistinctCount() &&
+        (distinctCount() == 0 || other.distinctCount() == 0)) {
       // We can merge distinct counts if either side is zero.
-      statistics_.distinct_count =
-          std::max(statistics_.distinct_count, other.distinct_count());
+      statistics_.distinctCount =
+          std::max(statistics_.distinctCount, other.distinctCount());
     } else {
       // Otherwise clear has_distinct_count_ as distinct count cannot be merged.
-      this->has_distinct_count_ = false;
+      this->hasDistinctCount_ = false;
     }
-    // Do not clear min/max here if the other side does not provide
-    // min/max which may happen when other is an empty stats or all
-    // its values are null and/or NaN.
-    if (other.HasMinMax()) {
-      SetMinMax(other.min(), other.max());
+    // Do not clear min/max here if the other side does not provide.
+    // Min/max which may happen when other is an empty stats or all.
+    // Its values are null and/or NaN.
+    if (other.hasMinMax()) {
+      setMinMax(other.min(), other.max());
     }
   }
 
-  void Update(const T* values, int64_t num_values, int64_t null_count) override;
-  void UpdateSpaced(
+  void update(const T* values, int64_t numValues, int64_t nullCount) override;
+  void updateSpaced(
       const T* values,
-      const uint8_t* valid_bits,
-      int64_t valid_bits_offset,
-      int64_t num_spaced_values,
-      int64_t num_values,
-      int64_t null_count) override;
+      const uint8_t* validBits,
+      int64_t validBitsOffset,
+      int64_t numSpacedValues,
+      int64_t numValues,
+      int64_t nullCount) override;
 
-  void Update(const ::arrow::Array& values, bool update_counts) override {
-    if (update_counts) {
-      IncrementNullCount(values.null_count());
-      IncrementNumValues(values.length() - values.null_count());
+  void update(const ::arrow::Array& values, bool updateCounts) override {
+    if (updateCounts) {
+      incrementNullCount(values.null_count());
+      incrementNumValues(values.length() - values.null_count());
     }
 
     if (values.null_count() == values.length()) {
       return;
     }
 
-    SetMinMaxPair(comparator_->GetMinMax(values));
+    setMinMaxPair(comparator_->getMinMax(values));
   }
 
   const T& min() const override {
@@ -765,31 +762,31 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     return max_;
   }
 
-  Type::type physical_type() const override {
-    return descr_->physical_type();
+  Type::type physicalType() const override {
+    return descr_->physicalType();
   }
 
   const ColumnDescriptor* descr() const override {
     return descr_;
   }
 
-  std::string EncodeMin() const override {
+  std::string encodeMin() const override {
     std::string s;
-    if (HasMinMax())
-      this->PlainEncode(min_, &s);
+    if (hasMinMax())
+      this->plainEncode(min_, &s);
     return s;
   }
 
-  std::string EncodeMax() const override {
+  std::string encodeMax() const override {
     std::string s;
-    if (HasMinMax())
-      this->PlainEncode(max_, &s);
+    if (hasMinMax())
+      this->plainEncode(max_, &s);
     return s;
   }
 
-  std::string IcebergLowerBoundInclusive(int32_t truncateTo) const override {
+  std::string icebergLowerBoundInclusive(int32_t truncateTo) const override {
     if constexpr (std::is_same_v<T, int64_t>) {
-      if (descr_->logical_type()->is_decimal()) {
+      if (descr_->logicalType()->isDecimal()) {
         return encodeDecimalToBigEndian(min_);
       }
     }
@@ -800,20 +797,20 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       const auto truncatedMin = functions::stringImpl::truncateUtf8(
           std::string_view(min_), truncateTo);
       std::string s;
-      this->PlainEncode(
+      this->plainEncode(
           ByteArray(
               truncatedMin.size(),
               reinterpret_cast<const uint8_t*>(truncatedMin.data())),
           &s);
       return s;
     }
-    return EncodeMin();
+    return encodeMin();
   }
 
-  std::optional<std::string> IcebergUpperBoundExclusive(
+  std::optional<std::string> icebergUpperBoundExclusive(
       int32_t truncateTo) const override {
     if constexpr (std::is_same_v<T, int64_t>) {
-      if (descr_->logical_type()->is_decimal()) {
+      if (descr_->logicalType()->isDecimal()) {
         return encodeDecimalToBigEndian(max_);
       }
     }
@@ -827,147 +824,148 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
         return std::nullopt;
       }
       std::string s;
-      this->PlainEncode(
+      this->plainEncode(
           ByteArray(
               truncatedMax->size(),
               reinterpret_cast<const uint8_t*>(truncatedMax->data())),
           &s);
       return s;
     }
-    return EncodeMax();
+    return encodeMax();
   }
 
-  EncodedStatistics Encode() override {
+  EncodedStatistics encode() override {
     EncodedStatistics s;
-    if (HasMinMax()) {
-      s.set_min(this->EncodeMin());
-      s.set_max(this->EncodeMax());
+    if (hasMinMax()) {
+      s.setMin(this->encodeMin());
+      s.setMax(this->encodeMax());
     }
-    if (HasNullCount()) {
-      s.set_null_count(this->null_count());
-      // num_values_ is reliable and it means number of non-null values.
-      s.all_null_value = num_values_ == 0;
+    if (hasNullCount()) {
+      s.setNullCount(this->nullCount());
+      // Num_values_ is reliable and it means number of non-null values.
+      s.allNullValue = numValues_ == 0;
     }
-    if (HasDistinctCount()) {
-      s.set_distinct_count(this->distinct_count());
+    if (hasDistinctCount()) {
+      s.setDistinctCount(this->distinctCount());
     }
-    if (has_nan_count_) {
-      s.set_nan_count(nan_count_);
+    if (hasNanCount_) {
+      s.set_nan_count(nanCount_);
     }
     return s;
   }
 
-  int64_t null_count() const override {
-    return statistics_.null_count;
+  int64_t nullCount() const override {
+    return statistics_.nullCount;
   }
-  int64_t distinct_count() const override {
-    return statistics_.distinct_count;
+  int64_t distinctCount() const override {
+    return statistics_.distinctCount;
   }
-  int64_t num_values() const override {
-    return num_values_;
-  }
-
-  int64_t nan_count() const override {
-    return nan_count_;
+  int64_t numValues() const override {
+    return numValues_;
   }
 
-  bool MaxGreaterThan(const Statistics& other) const override {
+  int64_t nanCount() const override {
+    return nanCount_;
+  }
+
+  bool maxGreaterThan(const Statistics& other) const override {
     const auto* typedOther =
         dynamic_cast<const TypedStatisticsImpl<DType>*>(&other);
-    return comparator_->Compare(max_, typedOther->max_) ? false : true;
+    return comparator_->compare(max_, typedOther->max_) ? false : true;
   }
 
-  bool MinLessThan(const Statistics& other) const override {
+  bool minLessThan(const Statistics& other) const override {
     const auto* typedOther =
         dynamic_cast<const TypedStatisticsImpl<DType>*>(&other);
-    return comparator_->Compare(min_, typedOther->min_) ? true : false;
+    return comparator_->compare(min_, typedOther->min_) ? true : false;
   }
 
  private:
   const ColumnDescriptor* descr_;
-  bool has_min_max_ = false;
-  bool has_null_count_ = false;
-  bool has_distinct_count_ = false;
-  bool has_nan_count_ = false;
+  bool hasMinMax_ = false;
+  bool hasNullCount_ = false;
+  bool hasDistinctCount_ = false;
+  bool hasNanCount_ = false;
   T min_;
   T max_;
   ::arrow::MemoryPool* pool_;
   // Number of non-null values.
   // Please note that num_values_ is reliable when has_null_count_ is set.
-  // When has_null_count_ is not set, e.g. a page statistics created from
-  // a statistics thrift message which doesn't have the optional null_count,
+  // When has_null_count_ is not set, e.g. a page statistics created from.
+  // a statistics thrift message which doesn't have the optional null_count,.
   // `num_values_` may include null values.
-  int64_t num_values_ = 0;
+  int64_t numValues_ = 0;
   // NaN count is tracked separately since it's not written to the parquet file.
-  int64_t nan_count_ = 0;
+  int64_t nanCount_ = 0;
   EncodedStatistics statistics_;
   std::shared_ptr<TypedComparator<DType>> comparator_;
-  std::shared_ptr<ResizableBuffer> min_buffer_, max_buffer_;
+  std::shared_ptr<ResizableBuffer> minBuffer_, maxBuffer_;
 
-  void PlainEncode(const T& src, std::string* dst) const;
-  void PlainDecode(const std::string& src, T* dst) const;
+  void plainEncode(const T& src, std::string* dst) const;
+  void plainDecode(const std::string& src, T* dst) const;
 
-  void Copy(const T& src, T* dst, ResizableBuffer*) {
+  void copy(const T& src, T* dst, ResizableBuffer*) {
     *dst = src;
   }
 
-  void SetDistinctCount(int64_t n) {
-    // distinct count can only be "set", and cannot be incremented.
-    statistics_.distinct_count = n;
-    has_distinct_count_ = true;
+  void setDistinctCount(int64_t n) {
+    // Distinct count can only be "set", and cannot be incremented.
+    statistics_.distinctCount = n;
+    hasDistinctCount_ = true;
   }
 
-  void ResetCounts() {
-    this->statistics_.null_count = 0;
-    this->statistics_.distinct_count = 0;
-    this->nan_count_ = 0;
-    this->num_values_ = 0;
+  void resetCounts() {
+    this->statistics_.nullCount = 0;
+    this->statistics_.distinctCount = 0;
+    this->numValues_ = 0;
+    this->nanCount_ = 0;
   }
 
-  void ResetHasFlags() {
-    // has_min_max_ will only be set when it meets any valid value.
-    this->has_min_max_ = false;
+  void resetHasFlags() {
+    // Has_min_max_ will only be set when it meets any valid value.
+    this->hasMinMax_ = false;
     // has_distinct_count_ will only be set once SetDistinctCount()
-    // is called because distinct count calculation is not cheap and
-    // disabled by default.
-    this->has_distinct_count_ = false;
+    // Is called because distinct count calculation is not cheap and.
+    // Disabled by default.
+    this->hasDistinctCount_ = false;
     // Null count calculation is cheap and enabled by default.
-    this->has_null_count_ = true;
-    this->has_nan_count_ = false;
+    this->hasNullCount_ = true;
+    this->hasNanCount_ = false;
   }
 
-  void SetMinMaxPair(std::pair<T, T> min_max) {
-    // CleanStatistic can return a nullopt in case of erroneous values, e.g. NaN
-    auto maybe_min_max = CleanStatistic(min_max);
-    if (!maybe_min_max)
+  void setMinMaxPair(std::pair<T, T> minMax) {
+    // CleanStatistic can return a nullopt in case of erroneous values, e.g.
+    // NaN.
+    auto maybeMinMax = cleanStatistic(minMax);
+    if (!maybeMinMax)
       return;
 
-    auto min = maybe_min_max.value().first;
-    auto max = maybe_min_max.value().second;
+    auto min = maybeMinMax.value().first;
+    auto max = maybeMinMax.value().second;
 
-    if (!has_min_max_) {
-      has_min_max_ = true;
-      Copy(min, &min_, min_buffer_.get());
-      Copy(max, &max_, max_buffer_.get());
+    if (!hasMinMax_) {
+      hasMinMax_ = true;
+      copy(min, &min_, minBuffer_.get());
+      copy(max, &max_, maxBuffer_.get());
     } else {
-      Copy(
-          comparator_->Compare(min_, min) ? min_ : min,
+      copy(
+          comparator_->compare(min_, min) ? min_ : min,
           &min_,
-          min_buffer_.get());
-      Copy(
-          comparator_->Compare(max_, max) ? max : max_,
+          minBuffer_.get());
+      copy(
+          comparator_->compare(max_, max) ? max : max_,
           &max_,
-          max_buffer_.get());
+          maxBuffer_.get());
     }
   }
 
-  int64_t CountNaN(const T* values, int64_t length) {
+  int64_t countNaN(const T* values, int64_t length) {
     if constexpr (!std::is_floating_point_v<T>) {
       return 0;
     } else {
       int64_t count = 0;
       for (auto i = 0; i < length; i++) {
-        const auto val = SafeLoad(values + i);
+        const auto val = safeLoad(values + i);
         if (std::isnan(val)) {
           count++;
         }
@@ -976,7 +974,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     }
   }
 
-  int64_t CountNaNSpaced(
+  int64_t countNaNSpaced(
       const T* values,
       int64_t length,
       const uint8_t* valid_bits,
@@ -991,7 +989,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
           length,
           [&](int64_t position, int64_t run_length) {
             for (auto i = 0; i < run_length; i++) {
-              const auto val = SafeLoad(values + i + position);
+              const auto val = safeLoad(values + i + position);
               if (std::isnan(val)) {
                 count++;
               }
@@ -1003,34 +1001,34 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
 };
 
 template <>
-inline bool TypedStatisticsImpl<FLBAType>::MinMaxEqual(
+inline bool TypedStatisticsImpl<FLBAType>::minMaxEqual(
     const TypedStatisticsImpl<FLBAType>& other) const {
-  uint32_t len = descr_->type_length();
+  uint32_t len = descr_->typeLength();
   return std::memcmp(min_.ptr, other.min_.ptr, len) == 0 &&
       std::memcmp(max_.ptr, other.max_.ptr, len) == 0;
 }
 
 template <typename DType>
-bool TypedStatisticsImpl<DType>::MinMaxEqual(
+bool TypedStatisticsImpl<DType>::minMaxEqual(
     const TypedStatisticsImpl<DType>& other) const {
   return min_ == other.min_ && max_ == other.max_;
 }
 
 template <>
-inline void TypedStatisticsImpl<FLBAType>::Copy(
+inline void TypedStatisticsImpl<FLBAType>::copy(
     const FLBA& src,
     FLBA* dst,
     ResizableBuffer* buffer) {
   if (dst->ptr == src.ptr)
     return;
-  uint32_t len = descr_->type_length();
+  uint32_t len = descr_->typeLength();
   PARQUET_THROW_NOT_OK(buffer->Resize(len, false));
   std::memcpy(buffer->mutable_data(), src.ptr, len);
   *dst = FLBA(buffer->data());
 }
 
 template <>
-inline void TypedStatisticsImpl<ByteArrayType>::Copy(
+inline void TypedStatisticsImpl<ByteArrayType>::copy(
     const ByteArray& src,
     ByteArray* dst,
     ResizableBuffer* buffer) {
@@ -1042,74 +1040,75 @@ inline void TypedStatisticsImpl<ByteArrayType>::Copy(
 }
 
 template <typename DType>
-void TypedStatisticsImpl<DType>::Update(
+void TypedStatisticsImpl<DType>::update(
     const T* values,
-    int64_t num_values,
-    int64_t null_count) {
-  VELOX_DCHECK_GE(num_values, 0);
-  VELOX_DCHECK_GE(null_count, 0);
+    int64_t numValues,
+    int64_t nullCount) {
+  VELOX_DCHECK_GE(numValues, 0);
+  VELOX_DCHECK_GE(nullCount, 0);
 
-  IncrementNullCount(null_count);
-  IncrementNumValues(num_values);
+  incrementNullCount(nullCount);
+  incrementNumValues(numValues);
 
-  if (num_values == 0)
+  if (numValues == 0)
     return;
-  SetMinMaxPair(comparator_->GetMinMax(values, num_values));
-  IncrementNaNValues(CountNaN(values, num_values));
+  setMinMaxPair(comparator_->getMinMax(values, numValues));
+  incrementNaNValues(countNaN(values, numValues));
 }
 
 template <typename DType>
-void TypedStatisticsImpl<DType>::UpdateSpaced(
+void TypedStatisticsImpl<DType>::updateSpaced(
     const T* values,
-    const uint8_t* valid_bits,
-    int64_t valid_bits_offset,
-    int64_t num_spaced_values,
-    int64_t num_values,
-    int64_t null_count) {
-  VELOX_DCHECK_GE(num_values, 0);
-  VELOX_DCHECK_GE(null_count, 0);
+    const uint8_t* validBits,
+    int64_t validBitsOffset,
+    int64_t numSpacedValues,
+    int64_t numValues,
+    int64_t nullCount) {
+  VELOX_DCHECK_GE(numValues, 0);
+  VELOX_DCHECK_GE(nullCount, 0);
 
-  IncrementNullCount(null_count);
-  IncrementNumValues(num_values);
+  incrementNullCount(nullCount);
+  incrementNumValues(numValues);
 
-  if (num_values == 0)
+  if (numValues == 0)
     return;
-  SetMinMaxPair(comparator_->GetMinMaxSpaced(
-      values, num_spaced_values, valid_bits, valid_bits_offset));
-  IncrementNaNValues(
-      CountNaNSpaced(values, num_spaced_values, valid_bits, valid_bits_offset));
+  setMinMaxPair(comparator_->getMinMaxSpaced(
+      values, numSpacedValues, validBits, validBitsOffset));
+  incrementNaNValues(
+      countNaNSpaced(values, numSpacedValues, validBits, validBitsOffset));
 }
 
 template <typename DType>
-void TypedStatisticsImpl<DType>::PlainEncode(const T& src, std::string* dst)
+void TypedStatisticsImpl<DType>::plainEncode(const T& src, std::string* dst)
     const {
-  auto encoder = MakeTypedEncoder<DType>(Encoding::PLAIN, false, descr_, pool_);
-  encoder->Put(&src, 1);
-  auto buffer = encoder->FlushValues();
+  auto encoder =
+      makeTypedEncoder<DType>(Encoding::kPlain, false, descr_, pool_);
+  encoder->put(&src, 1);
+  auto buffer = encoder->flushValues();
   auto ptr = reinterpret_cast<const char*>(buffer->data());
   dst->assign(ptr, buffer->size());
 }
 
 template <typename DType>
-void TypedStatisticsImpl<DType>::PlainDecode(const std::string& src, T* dst)
+void TypedStatisticsImpl<DType>::plainDecode(const std::string& src, T* dst)
     const {
-  auto decoder = MakeTypedDecoder<DType>(Encoding::PLAIN, descr_);
-  decoder->SetData(
+  auto decoder = makeTypedDecoder<DType>(Encoding::kPlain, descr_);
+  decoder->setData(
       1,
       reinterpret_cast<const uint8_t*>(src.c_str()),
       static_cast<int>(src.size()));
-  decoder->Decode(dst, 1);
+  decoder->decode(dst, 1);
 }
 
 template <>
-void TypedStatisticsImpl<ByteArrayType>::PlainEncode(
+void TypedStatisticsImpl<ByteArrayType>::plainEncode(
     const T& src,
     std::string* dst) const {
   dst->assign(reinterpret_cast<const char*>(src.ptr), src.len);
 }
 
 template <>
-void TypedStatisticsImpl<ByteArrayType>::PlainDecode(
+void TypedStatisticsImpl<ByteArrayType>::plainDecode(
     const std::string& src,
     T* dst) const {
   dst->len = static_cast<uint32_t>(src.size());
@@ -1118,48 +1117,48 @@ void TypedStatisticsImpl<ByteArrayType>::PlainDecode(
 
 } // namespace
 
-// ----------------------------------------------------------------------
-// Public factory functions
+// ----------------------------------------------------------------------.
+// Public factory functions.
 
-std::shared_ptr<Comparator> Comparator::Make(
-    Type::type physical_type,
-    SortOrder::type sort_order,
-    int type_length) {
-  if (SortOrder::SIGNED == sort_order) {
-    switch (physical_type) {
-      case Type::BOOLEAN:
+std::shared_ptr<Comparator> Comparator::make(
+    Type::type physicalType,
+    SortOrder::type sortOrder,
+    int typeLength) {
+  if (SortOrder::kSigned == sortOrder) {
+    switch (physicalType) {
+      case Type::kBoolean:
         return std::make_shared<TypedComparatorImpl<true, BooleanType>>();
-      case Type::INT32:
+      case Type::kInt32:
         return std::make_shared<TypedComparatorImpl<true, Int32Type>>();
-      case Type::INT64:
+      case Type::kInt64:
         return std::make_shared<TypedComparatorImpl<true, Int64Type>>();
-      case Type::INT96:
+      case Type::kInt96:
         return std::make_shared<TypedComparatorImpl<true, Int96Type>>();
-      case Type::FLOAT:
+      case Type::kFloat:
         return std::make_shared<TypedComparatorImpl<true, FloatType>>();
-      case Type::DOUBLE:
+      case Type::kDouble:
         return std::make_shared<TypedComparatorImpl<true, DoubleType>>();
-      case Type::BYTE_ARRAY:
+      case Type::kByteArray:
         return std::make_shared<TypedComparatorImpl<true, ByteArrayType>>();
-      case Type::FIXED_LEN_BYTE_ARRAY:
+      case Type::kFixedLenByteArray:
         return std::make_shared<TypedComparatorImpl<true, FLBAType>>(
-            type_length);
+            typeLength);
       default:
         ParquetException::NYI("Signed Compare not implemented");
     }
-  } else if (SortOrder::UNSIGNED == sort_order) {
-    switch (physical_type) {
-      case Type::INT32:
+  } else if (SortOrder::kUnsigned == sortOrder) {
+    switch (physicalType) {
+      case Type::kInt32:
         return std::make_shared<TypedComparatorImpl<false, Int32Type>>();
-      case Type::INT64:
+      case Type::kInt64:
         return std::make_shared<TypedComparatorImpl<false, Int64Type>>();
-      case Type::INT96:
+      case Type::kInt96:
         return std::make_shared<TypedComparatorImpl<false, Int96Type>>();
-      case Type::BYTE_ARRAY:
+      case Type::kByteArray:
         return std::make_shared<TypedComparatorImpl<false, ByteArrayType>>();
-      case Type::FIXED_LEN_BYTE_ARRAY:
+      case Type::kFixedLenByteArray:
         return std::make_shared<TypedComparatorImpl<false, FLBAType>>(
-            type_length);
+            typeLength);
       default:
         ParquetException::NYI("Unsigned Compare not implemented");
     }
@@ -1169,58 +1168,57 @@ std::shared_ptr<Comparator> Comparator::Make(
   return nullptr;
 }
 
-std::shared_ptr<Comparator> Comparator::Make(const ColumnDescriptor* descr) {
-  return Make(
-      descr->physical_type(), descr->sort_order(), descr->type_length());
+std::shared_ptr<Comparator> Comparator::make(const ColumnDescriptor* descr) {
+  return make(descr->physicalType(), descr->sortOrder(), descr->typeLength());
 }
 
-std::shared_ptr<Statistics> Statistics::Make(
+std::shared_ptr<Statistics> Statistics::make(
     const ColumnDescriptor* descr,
     ::arrow::MemoryPool* pool) {
-  switch (descr->physical_type()) {
-    case Type::BOOLEAN:
+  switch (descr->physicalType()) {
+    case Type::kBoolean:
       return std::make_shared<TypedStatisticsImpl<BooleanType>>(descr, pool);
-    case Type::INT32:
+    case Type::kInt32:
       return std::make_shared<TypedStatisticsImpl<Int32Type>>(descr, pool);
-    case Type::INT64:
+    case Type::kInt64:
       return std::make_shared<TypedStatisticsImpl<Int64Type>>(descr, pool);
-    case Type::FLOAT:
+    case Type::kFloat:
       return std::make_shared<TypedStatisticsImpl<FloatType>>(descr, pool);
-    case Type::DOUBLE:
+    case Type::kDouble:
       return std::make_shared<TypedStatisticsImpl<DoubleType>>(descr, pool);
-    case Type::BYTE_ARRAY:
+    case Type::kByteArray:
       return std::make_shared<TypedStatisticsImpl<ByteArrayType>>(descr, pool);
-    case Type::FIXED_LEN_BYTE_ARRAY:
+    case Type::kFixedLenByteArray:
       return std::make_shared<TypedStatisticsImpl<FLBAType>>(descr, pool);
     default:
       ParquetException::NYI("Statistics not implemented");
   }
 }
 
-std::shared_ptr<Statistics> Statistics::Make(
-    Type::type physical_type,
+std::shared_ptr<Statistics> Statistics::make(
+    Type::type physicalType,
     const void* min,
     const void* max,
-    int64_t num_values,
-    int64_t null_count,
-    int64_t distinct_count) {
-#define MAKE_STATS(CAP_TYPE, KLASS)                            \
-  case Type::CAP_TYPE:                                         \
-    return std::make_shared<TypedStatisticsImpl<KLASS>>(       \
-        *reinterpret_cast<const typename KLASS::c_type*>(min), \
-        *reinterpret_cast<const typename KLASS::c_type*>(max), \
-        num_values,                                            \
-        null_count,                                            \
-        distinct_count)
+    int64_t numValues,
+    int64_t nullCount,
+    int64_t distinctCount) {
+#define MAKE_STATS(CAP_TYPE, KLASS)                           \
+  case Type::CAP_TYPE:                                        \
+    return std::make_shared<TypedStatisticsImpl<KLASS>>(      \
+        *reinterpret_cast<const typename KLASS::CType*>(min), \
+        *reinterpret_cast<const typename KLASS::CType*>(max), \
+        numValues,                                            \
+        nullCount,                                            \
+        distinctCount)
 
-  switch (physical_type) {
-    MAKE_STATS(BOOLEAN, BooleanType);
-    MAKE_STATS(INT32, Int32Type);
-    MAKE_STATS(INT64, Int64Type);
-    MAKE_STATS(FLOAT, FloatType);
-    MAKE_STATS(DOUBLE, DoubleType);
-    MAKE_STATS(BYTE_ARRAY, ByteArrayType);
-    MAKE_STATS(FIXED_LEN_BYTE_ARRAY, FLBAType);
+  switch (physicalType) {
+    MAKE_STATS(kBoolean, BooleanType);
+    MAKE_STATS(kInt32, Int32Type);
+    MAKE_STATS(kInt64, Int64Type);
+    MAKE_STATS(kFloat, FloatType);
+    MAKE_STATS(kDouble, DoubleType);
+    MAKE_STATS(kByteArray, ByteArrayType);
+    MAKE_STATS(kFixedLenByteArray, FLBAType);
     default:
       break;
   }
@@ -1229,64 +1227,64 @@ std::shared_ptr<Statistics> Statistics::Make(
   return nullptr;
 }
 
-std::shared_ptr<Statistics> Statistics::Make(
+std::shared_ptr<Statistics> Statistics::make(
     const ColumnDescriptor* descr,
-    const EncodedStatistics* encoded_stats,
-    int64_t num_values,
+    const EncodedStatistics* encodedStats,
+    int64_t numValues,
     ::arrow::MemoryPool* pool) {
-  VELOX_DCHECK(encoded_stats != nullptr);
-  return Make(
+  VELOX_DCHECK(encodedStats != nullptr);
+  return make(
       descr,
-      encoded_stats->min(),
-      encoded_stats->max(),
-      num_values,
-      encoded_stats->null_count,
-      encoded_stats->distinct_count,
-      encoded_stats->nan_count,
-      encoded_stats->has_min && encoded_stats->has_max,
-      encoded_stats->has_null_count,
-      encoded_stats->has_distinct_count,
-      encoded_stats->has_nan_count,
+      encodedStats->min(),
+      encodedStats->max(),
+      numValues,
+      encodedStats->nullCount,
+      encodedStats->distinctCount,
+      encodedStats->hasMin && encodedStats->hasMax,
+      encodedStats->hasNullCount,
+      encodedStats->hasDistinctCount,
+      encodedStats->hasNanCount,
+      encodedStats->nanCount,
       pool);
 }
 
-std::shared_ptr<Statistics> Statistics::Make(
+std::shared_ptr<Statistics> Statistics::make(
     const ColumnDescriptor* descr,
-    const std::string& encoded_min,
-    const std::string& encoded_max,
-    int64_t num_values,
-    int64_t null_count,
-    int64_t distinct_count,
-    int64_t nan_count,
-    bool has_min_max,
-    bool has_null_count,
-    bool has_distinct_count,
-    bool has_nan_count,
+    const std::string& encodedMin,
+    const std::string& encodedMax,
+    int64_t numValues,
+    int64_t nullCount,
+    int64_t distinctCount,
+    bool hasMinMax,
+    bool hasNullCount,
+    bool hasDistinctCount,
+    bool hasNaNCount,
+    int64_t nanCount,
     ::arrow::MemoryPool* pool) {
 #define MAKE_STATS(CAP_TYPE, KLASS)                      \
   case Type::CAP_TYPE:                                   \
     return std::make_shared<TypedStatisticsImpl<KLASS>>( \
         descr,                                           \
-        encoded_min,                                     \
-        encoded_max,                                     \
-        num_values,                                      \
-        null_count,                                      \
-        distinct_count,                                  \
-        nan_count,                                       \
-        has_min_max,                                     \
-        has_null_count,                                  \
-        has_distinct_count,                              \
-        has_nan_count,                                   \
+        encodedMin,                                      \
+        encodedMax,                                      \
+        numValues,                                       \
+        nullCount,                                       \
+        distinctCount,                                   \
+        hasMinMax,                                       \
+        hasNullCount,                                    \
+        hasDistinctCount,                                \
+        hasNaNCount,                                     \
+        nanCount,                                        \
         pool)
 
-  switch (descr->physical_type()) {
-    MAKE_STATS(BOOLEAN, BooleanType);
-    MAKE_STATS(INT32, Int32Type);
-    MAKE_STATS(INT64, Int64Type);
-    MAKE_STATS(FLOAT, FloatType);
-    MAKE_STATS(DOUBLE, DoubleType);
-    MAKE_STATS(BYTE_ARRAY, ByteArrayType);
-    MAKE_STATS(FIXED_LEN_BYTE_ARRAY, FLBAType);
+  switch (descr->physicalType()) {
+    MAKE_STATS(kBoolean, BooleanType);
+    MAKE_STATS(kInt32, Int32Type);
+    MAKE_STATS(kInt64, Int64Type);
+    MAKE_STATS(kFloat, FloatType);
+    MAKE_STATS(kDouble, DoubleType);
+    MAKE_STATS(kByteArray, ByteArrayType);
+    MAKE_STATS(kFixedLenByteArray, FLBAType);
     default:
       break;
   }

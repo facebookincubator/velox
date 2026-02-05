@@ -39,25 +39,25 @@ namespace {
 
 constexpr int kLz4MinCompressionLevel = 1;
 
-static Status LZ4Error(LZ4F_errorCode_t ret, const char* prefix_msg) {
-  return Status::IOError(prefix_msg, LZ4F_getErrorName(ret));
+static Status lZ4Error(LZ4F_errorCode_t ret, const char* prefixMsg) {
+  return Status::IOError(prefixMsg, LZ4F_getErrorName(ret));
 }
 
-static LZ4F_preferences_t DefaultPreferences() {
+static LZ4F_preferences_t defaultPreferences() {
   LZ4F_preferences_t prefs;
   memset(&prefs, 0, sizeof(prefs));
   return prefs;
 }
 
-static LZ4F_preferences_t PreferencesWithCompressionLevel(
-    int compression_level) {
-  LZ4F_preferences_t prefs = DefaultPreferences();
-  prefs.compressionLevel = compression_level;
+static LZ4F_preferences_t preferencesWithCompressionLevel(
+    int compressionLevel) {
+  LZ4F_preferences_t prefs = defaultPreferences();
+  prefs.compressionLevel = compressionLevel;
   return prefs;
 }
 
-// ----------------------------------------------------------------------
-// Lz4 frame decompressor implementation
+// ----------------------------------------------------------------------.
+// Lz4 frame Decompressor implementation.
 
 class LZ4Decompressor : public Decompressor {
  public:
@@ -69,21 +69,21 @@ class LZ4Decompressor : public Decompressor {
     }
   }
 
-  Status Init() {
+  Status init() {
     LZ4F_errorCode_t ret;
     finished_ = false;
 
     ret = LZ4F_createDecompressionContext(&ctx_, LZ4F_VERSION);
     if (LZ4F_isError(ret)) {
-      return LZ4Error(ret, "LZ4 init failed: ");
+      return lZ4Error(ret, "LZ4 init failed: ");
     } else {
       return Status::OK();
     }
   }
 
-  Status Reset() override {
+  Status reset() override {
 #if defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER >= 10800
-    // LZ4F_resetDecompressionContext appeared in 1.8.0
+    // LZ4F_resetDecompressionContext appeared in 1.8.0.
     VELOX_DCHECK_NOT_NULL(ctx_);
     LZ4F_resetDecompressionContext(ctx_);
     finished_ = false;
@@ -92,34 +92,34 @@ class LZ4Decompressor : public Decompressor {
     if (ctx_ != nullptr) {
       ARROW_UNUSED(LZ4F_freeDecompressionContext(ctx_));
     }
-    return Init();
+    return init();
 #endif
   }
 
-  Result<DecompressResult> Decompress(
-      int64_t input_len,
+  Result<DecompressResult> decompress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_len,
+      int64_t outputLen,
       uint8_t* output) override {
     auto src = input;
     auto dst = output;
-    auto src_size = static_cast<size_t>(input_len);
-    auto dst_capacity = static_cast<size_t>(output_len);
+    auto srcSize = static_cast<size_t>(inputLen);
+    auto dstCapacity = static_cast<size_t>(outputLen);
     size_t ret;
 
     ret = LZ4F_decompress(
-        ctx_, dst, &dst_capacity, src, &src_size, nullptr /* options */);
+        ctx_, dst, &dstCapacity, src, &srcSize, nullptr /* options */);
     if (LZ4F_isError(ret)) {
-      return LZ4Error(ret, "LZ4 decompress failed: ");
+      return lZ4Error(ret, "LZ4 decompress failed: ");
     }
     finished_ = (ret == 0);
     return DecompressResult{
-        static_cast<int64_t>(src_size),
-        static_cast<int64_t>(dst_capacity),
-        (src_size == 0 && dst_capacity == 0)};
+        static_cast<int64_t>(srcSize),
+        static_cast<int64_t>(dstCapacity),
+        (srcSize == 0 && dstCapacity == 0)};
   }
 
-  bool IsFinished() override {
+  bool isFinished() override {
     return finished_;
   }
 
@@ -128,13 +128,13 @@ class LZ4Decompressor : public Decompressor {
   bool finished_;
 };
 
-// ----------------------------------------------------------------------
-// Lz4 frame compressor implementation
+// ----------------------------------------------------------------------.
+// Lz4 frame Compressor implementation.
 
 class LZ4Compressor : public Compressor {
  public:
-  explicit LZ4Compressor(int compression_level)
-      : compression_level_(compression_level) {}
+  explicit LZ4Compressor(int compressionLevel)
+      : compressionLevel_(compressionLevel) {}
 
   ~LZ4Compressor() override {
     if (ctx_ != nullptr) {
@@ -142,482 +142,480 @@ class LZ4Compressor : public Compressor {
     }
   }
 
-  Status Init() {
+  Status init() {
     LZ4F_errorCode_t ret;
-    prefs_ = PreferencesWithCompressionLevel(compression_level_);
-    first_time_ = true;
+    prefs_ = preferencesWithCompressionLevel(compressionLevel_);
+    firstTime_ = true;
 
     ret = LZ4F_createCompressionContext(&ctx_, LZ4F_VERSION);
     if (LZ4F_isError(ret)) {
-      return LZ4Error(ret, "LZ4 init failed: ");
+      return lZ4Error(ret, "LZ4 init failed: ");
     } else {
       return Status::OK();
     }
   }
 
-#define BEGIN_COMPRESS(dst, dst_capacity, output_too_small)     \
-  if (first_time_) {                                            \
-    if (dst_capacity < LZ4F_HEADER_SIZE_MAX) {                  \
-      /* Output too small to write LZ4F header */               \
-      return (output_too_small);                                \
-    }                                                           \
-    ret = LZ4F_compressBegin(ctx_, dst, dst_capacity, &prefs_); \
-    if (LZ4F_isError(ret)) {                                    \
-      return LZ4Error(ret, "LZ4 compress begin failed: ");      \
-    }                                                           \
-    first_time_ = false;                                        \
-    dst += ret;                                                 \
-    dst_capacity -= ret;                                        \
-    bytes_written += static_cast<int64_t>(ret);                 \
+#define BEGIN_COMPRESS(dst, dstCapacity, outputTooSmall)       \
+  if (firstTime_) {                                            \
+    if (dstCapacity < LZ4F_HEADER_SIZE_MAX) {                  \
+      /* Output too small to write LZ4F header */              \
+      return (outputTooSmall);                                 \
+    }                                                          \
+    ret = LZ4F_compressBegin(ctx_, dst, dstCapacity, &prefs_); \
+    if (LZ4F_isError(ret)) {                                   \
+      return lZ4Error(ret, "LZ4 compress begin failed: ");     \
+    }                                                          \
+    firstTime_ = false;                                        \
+    dst += ret;                                                \
+    dstCapacity -= ret;                                        \
+    bytesWritten += static_cast<int64_t>(ret);                 \
   }
 
-  Result<CompressResult> Compress(
-      int64_t input_len,
+  Result<CompressResult> compress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_len,
+      int64_t outputLen,
       uint8_t* output) override {
     auto src = input;
     auto dst = output;
-    auto src_size = static_cast<size_t>(input_len);
-    auto dst_capacity = static_cast<size_t>(output_len);
+    auto srcSize = static_cast<size_t>(inputLen);
+    auto dstCapacity = static_cast<size_t>(outputLen);
     size_t ret;
-    int64_t bytes_written = 0;
+    int64_t bytesWritten = 0;
 
-    BEGIN_COMPRESS(dst, dst_capacity, (CompressResult{0, 0}));
+    BEGIN_COMPRESS(dst, dstCapacity, (CompressResult{0, 0}));
 
-    if (dst_capacity < LZ4F_compressBound(src_size, &prefs_)) {
-      // Output too small to compress into
-      return CompressResult{0, bytes_written};
+    if (dstCapacity < LZ4F_compressBound(srcSize, &prefs_)) {
+      // Output too small to compress into.
+      return CompressResult{0, bytesWritten};
     }
     ret = LZ4F_compressUpdate(
-        ctx_, dst, dst_capacity, src, src_size, nullptr /* options */);
+        ctx_, dst, dstCapacity, src, srcSize, nullptr /* options */);
     if (LZ4F_isError(ret)) {
-      return LZ4Error(ret, "LZ4 compress update failed: ");
+      return lZ4Error(ret, "LZ4 compress update failed: ");
     }
-    bytes_written += static_cast<int64_t>(ret);
-    VELOX_DCHECK_LE(bytes_written, output_len);
-    return CompressResult{input_len, bytes_written};
+    bytesWritten += static_cast<int64_t>(ret);
+    VELOX_DCHECK_LE(bytesWritten, outputLen);
+    return CompressResult{inputLen, bytesWritten};
   }
 
-  Result<FlushResult> Flush(int64_t output_len, uint8_t* output) override {
+  Result<FlushResult> flush(int64_t outputLen, uint8_t* output) override {
     auto dst = output;
-    auto dst_capacity = static_cast<size_t>(output_len);
+    auto dstCapacity = static_cast<size_t>(outputLen);
     size_t ret;
-    int64_t bytes_written = 0;
+    int64_t bytesWritten = 0;
 
-    BEGIN_COMPRESS(dst, dst_capacity, (FlushResult{0, true}));
+    BEGIN_COMPRESS(dst, dstCapacity, (FlushResult{0, true}));
 
-    if (dst_capacity < LZ4F_compressBound(0, &prefs_)) {
-      // Output too small to flush into
-      return FlushResult{bytes_written, true};
+    if (dstCapacity < LZ4F_compressBound(0, &prefs_)) {
+      // Output too small to flush into.
+      return FlushResult{bytesWritten, true};
     }
 
-    ret = LZ4F_flush(ctx_, dst, dst_capacity, nullptr /* options */);
+    ret = LZ4F_flush(ctx_, dst, dstCapacity, nullptr /* options */);
     if (LZ4F_isError(ret)) {
-      return LZ4Error(ret, "LZ4 flush failed: ");
+      return lZ4Error(ret, "LZ4 flush failed: ");
     }
-    bytes_written += static_cast<int64_t>(ret);
-    VELOX_DCHECK_LE(bytes_written, output_len);
-    return FlushResult{bytes_written, false};
+    bytesWritten += static_cast<int64_t>(ret);
+    VELOX_DCHECK_LE(bytesWritten, outputLen);
+    return FlushResult{bytesWritten, false};
   }
 
-  Result<EndResult> End(int64_t output_len, uint8_t* output) override {
+  Result<EndResult> end(int64_t outputLen, uint8_t* output) override {
     auto dst = output;
-    auto dst_capacity = static_cast<size_t>(output_len);
+    auto dstCapacity = static_cast<size_t>(outputLen);
     size_t ret;
-    int64_t bytes_written = 0;
+    int64_t bytesWritten = 0;
 
-    BEGIN_COMPRESS(dst, dst_capacity, (EndResult{0, true}));
+    BEGIN_COMPRESS(dst, dstCapacity, (EndResult{0, true}));
 
-    if (dst_capacity < LZ4F_compressBound(0, &prefs_)) {
-      // Output too small to end frame into
-      return EndResult{bytes_written, true};
+    if (dstCapacity < LZ4F_compressBound(0, &prefs_)) {
+      // Output too small to end frame into.
+      return EndResult{bytesWritten, true};
     }
 
-    ret = LZ4F_compressEnd(ctx_, dst, dst_capacity, nullptr /* options */);
+    ret = LZ4F_compressEnd(ctx_, dst, dstCapacity, nullptr /* options */);
     if (LZ4F_isError(ret)) {
-      return LZ4Error(ret, "LZ4 end failed: ");
+      return lZ4Error(ret, "LZ4 end failed: ");
     }
-    bytes_written += static_cast<int64_t>(ret);
-    VELOX_DCHECK_LE(bytes_written, output_len);
-    return EndResult{bytes_written, false};
+    bytesWritten += static_cast<int64_t>(ret);
+    VELOX_DCHECK_LE(bytesWritten, outputLen);
+    return EndResult{bytesWritten, false};
   }
 
 #undef BEGIN_COMPRESS
 
  protected:
-  int compression_level_;
+  int compressionLevel_;
   LZ4F_compressionContext_t ctx_ = nullptr;
   LZ4F_preferences_t prefs_;
-  bool first_time_;
+  bool firstTime_;
 };
 
-// ----------------------------------------------------------------------
-// Lz4 frame codec implementation
+// ----------------------------------------------------------------------.
+// Lz4 frame codec implementation.
 
 class Lz4FrameCodec : public Codec {
  public:
-  explicit Lz4FrameCodec(int compression_level)
-      : compression_level_(
-            compression_level == kUseDefaultCompressionLevel
+  explicit Lz4FrameCodec(int compressionLevel)
+      : compressionLevel_(
+            compressionLevel == kUseDefaultCompressionLevel
                 ? kLz4DefaultCompressionLevel
-                : compression_level),
-        prefs_(PreferencesWithCompressionLevel(compression_level_)) {}
+                : compressionLevel),
+        prefs_(preferencesWithCompressionLevel(compressionLevel_)) {}
 
-  int64_t MaxCompressedLen(
-      int64_t input_len,
+  int64_t maxCompressedLen(
+      int64_t inputLen,
       const uint8_t* ARROW_ARG_UNUSED(input)) override {
     return static_cast<int64_t>(
-        LZ4F_compressFrameBound(static_cast<size_t>(input_len), &prefs_));
+        LZ4F_compressFrameBound(static_cast<size_t>(inputLen), &prefs_));
   }
 
-  Result<int64_t> Compress(
-      int64_t input_len,
+  Result<int64_t> compress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) override {
-    auto output_len = LZ4F_compressFrame(
-        output_buffer,
-        static_cast<size_t>(output_buffer_len),
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) override {
+    auto outputLen = LZ4F_compressFrame(
+        outputBuffer,
+        static_cast<size_t>(outputBufferLen),
         input,
-        static_cast<size_t>(input_len),
+        static_cast<size_t>(inputLen),
         &prefs_);
-    if (LZ4F_isError(output_len)) {
-      return LZ4Error(output_len, "Lz4 compression failure: ");
+    if (LZ4F_isError(outputLen)) {
+      return lZ4Error(outputLen, "Lz4 compression failure: ");
     }
-    return static_cast<int64_t>(output_len);
+    return static_cast<int64_t>(outputLen);
   }
 
-  Result<int64_t> Decompress(
-      int64_t input_len,
+  Result<int64_t> decompress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) override {
-    ARROW_ASSIGN_OR_RAISE(auto decomp, MakeDecompressor());
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) override {
+    ARROW_ASSIGN_OR_RAISE(auto decomp, makeDecompressor());
 
-    int64_t total_bytes_written = 0;
-    while (!decomp->IsFinished() && input_len != 0) {
+    int64_t totalBytesWritten = 0;
+    while (!decomp->isFinished() && inputLen != 0) {
       ARROW_ASSIGN_OR_RAISE(
           auto res,
-          decomp->Decompress(
-              input_len, input, output_buffer_len, output_buffer));
-      input += res.bytes_read;
-      input_len -= res.bytes_read;
-      output_buffer += res.bytes_written;
-      output_buffer_len -= res.bytes_written;
-      total_bytes_written += res.bytes_written;
-      if (res.need_more_output) {
+          decomp->decompress(inputLen, input, outputBufferLen, outputBuffer));
+      input += res.bytesRead;
+      inputLen -= res.bytesRead;
+      outputBuffer += res.bytesWritten;
+      outputBufferLen -= res.bytesWritten;
+      totalBytesWritten += res.bytesWritten;
+      if (res.needMoreOutput) {
         return Status::IOError("Lz4 decompression buffer too small");
       }
     }
-    if (!decomp->IsFinished()) {
+    if (!decomp->isFinished()) {
       return Status::IOError(
           "Lz4 compressed input contains less than one frame");
     }
-    if (input_len != 0) {
+    if (inputLen != 0) {
       return Status::IOError(
           "Lz4 compressed input contains more than one frame");
     }
-    return total_bytes_written;
+    return totalBytesWritten;
   }
 
-  Result<std::shared_ptr<Compressor>> MakeCompressor() override {
-    auto ptr = std::make_shared<LZ4Compressor>(compression_level_);
-    RETURN_NOT_OK(ptr->Init());
+  Result<std::shared_ptr<Compressor>> makeCompressor() override {
+    auto ptr = std::make_shared<LZ4Compressor>(compressionLevel_);
+    RETURN_NOT_OK(ptr->init());
     return ptr;
   }
 
-  Result<std::shared_ptr<Decompressor>> MakeDecompressor() override {
+  Result<std::shared_ptr<Decompressor>> makeDecompressor() override {
     auto ptr = std::make_shared<LZ4Decompressor>();
-    RETURN_NOT_OK(ptr->Init());
+    RETURN_NOT_OK(ptr->init());
     return ptr;
   }
 
-  Compression::type compression_type() const override {
+  Compression::type compressionType() const override {
     return Compression::LZ4_FRAME;
   }
-  int minimum_compression_level() const override {
+  int minimumCompressionLevel() const override {
     return kLz4MinCompressionLevel;
   }
 #if (defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER < 10800)
-  int maximum_compression_level() const override {
+  int maximumCompressionLevel() const override {
     return 12;
   }
 #else
-  int maximum_compression_level() const override {
+  int maximumCompressionLevel() const override {
     return LZ4F_compressionLevel_max();
   }
 #endif
-  int default_compression_level() const override {
+  int defaultCompressionLevel() const override {
     return kLz4DefaultCompressionLevel;
   }
 
-  int compression_level() const override {
-    return compression_level_;
+  int compressionLevel() const override {
+    return compressionLevel_;
   }
 
  protected:
-  const int compression_level_;
+  const int compressionLevel_;
   const LZ4F_preferences_t prefs_;
 };
 
-// ----------------------------------------------------------------------
-// Lz4 "raw" codec implementation
+// ----------------------------------------------------------------------.
+// Lz4 "raw" codec implementation.
 
 class Lz4Codec : public Codec {
  public:
-  explicit Lz4Codec(int compression_level)
-      : compression_level_(
-            compression_level == kUseDefaultCompressionLevel
+  explicit Lz4Codec(int compressionLevel)
+      : compressionLevel_(
+            compressionLevel == kUseDefaultCompressionLevel
                 ? kLz4DefaultCompressionLevel
-                : compression_level) {}
+                : compressionLevel) {}
 
-  Result<int64_t> Decompress(
-      int64_t input_len,
+  Result<int64_t> decompress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) override {
-    int64_t decompressed_size = LZ4_decompress_safe(
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) override {
+    int64_t decompressedSize = LZ4_decompress_safe(
         reinterpret_cast<const char*>(input),
-        reinterpret_cast<char*>(output_buffer),
-        static_cast<int>(input_len),
-        static_cast<int>(output_buffer_len));
-    if (decompressed_size < 0) {
+        reinterpret_cast<char*>(outputBuffer),
+        static_cast<int>(inputLen),
+        static_cast<int>(outputBufferLen));
+    if (decompressedSize < 0) {
       return Status::IOError("Corrupt Lz4 compressed data.");
     }
-    return decompressed_size;
+    return decompressedSize;
   }
 
-  int64_t MaxCompressedLen(
-      int64_t input_len,
+  int64_t maxCompressedLen(
+      int64_t inputLen,
       const uint8_t* ARROW_ARG_UNUSED(input)) override {
-    return LZ4_compressBound(static_cast<int>(input_len));
+    return LZ4_compressBound(static_cast<int>(inputLen));
   }
 
-  Result<int64_t> Compress(
-      int64_t input_len,
+  Result<int64_t> compress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) override {
-    int64_t output_len;
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) override {
+    int64_t outputLen;
 #ifdef LZ4HC_CLEVEL_MIN
-    constexpr int min_hc_clevel = LZ4HC_CLEVEL_MIN;
+    constexpr int minHcClevel = LZ4HC_CLEVEL_MIN;
 #else // For older versions of the lz4 library
-    constexpr int min_hc_clevel = 3;
+    constexpr int minHcClevel = 3;
 #endif
-    if (compression_level_ < min_hc_clevel) {
-      output_len = LZ4_compress_default(
+    if (compressionLevel_ < minHcClevel) {
+      outputLen = LZ4_compress_default(
           reinterpret_cast<const char*>(input),
-          reinterpret_cast<char*>(output_buffer),
-          static_cast<int>(input_len),
-          static_cast<int>(output_buffer_len));
+          reinterpret_cast<char*>(outputBuffer),
+          static_cast<int>(inputLen),
+          static_cast<int>(outputBufferLen));
     } else {
-      output_len = LZ4_compress_HC(
+      outputLen = LZ4_compress_HC(
           reinterpret_cast<const char*>(input),
-          reinterpret_cast<char*>(output_buffer),
-          static_cast<int>(input_len),
-          static_cast<int>(output_buffer_len),
-          compression_level_);
+          reinterpret_cast<char*>(outputBuffer),
+          static_cast<int>(inputLen),
+          static_cast<int>(outputBufferLen),
+          compressionLevel_);
     }
-    if (output_len == 0) {
+    if (outputLen == 0) {
       return Status::IOError("Lz4 compression failure.");
     }
-    return output_len;
+    return outputLen;
   }
 
-  Result<std::shared_ptr<Compressor>> MakeCompressor() override {
+  Result<std::shared_ptr<Compressor>> makeCompressor() override {
     return Status::NotImplemented(
         "Streaming compression unsupported with LZ4 raw format. "
         "Try using LZ4 frame format instead.");
   }
 
-  Result<std::shared_ptr<Decompressor>> MakeDecompressor() override {
+  Result<std::shared_ptr<Decompressor>> makeDecompressor() override {
     return Status::NotImplemented(
         "Streaming decompression unsupported with LZ4 raw format. "
         "Try using LZ4 frame format instead.");
   }
 
-  Compression::type compression_type() const override {
+  Compression::type compressionType() const override {
     return Compression::LZ4;
   }
-  int minimum_compression_level() const override {
+  int minimumCompressionLevel() const override {
     return kLz4MinCompressionLevel;
   }
 #if (defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER < 10800)
-  int maximum_compression_level() const override {
+  int maximumCompressionLevel() const override {
     return 12;
   }
 #else
-  int maximum_compression_level() const override {
+  int maximumCompressionLevel() const override {
     return LZ4F_compressionLevel_max();
   }
 #endif
-  int default_compression_level() const override {
+  int defaultCompressionLevel() const override {
     return kLz4DefaultCompressionLevel;
   }
 
  protected:
-  int compression_level_;
+  int compressionLevel_;
 };
 
-// ----------------------------------------------------------------------
-// Lz4 Hadoop "raw" codec implementation
+// ----------------------------------------------------------------------.
+// Lz4 Hadoop "raw" codec implementation.
 
 class Lz4HadoopCodec : public Lz4Codec {
  public:
   Lz4HadoopCodec() : Lz4Codec(kUseDefaultCompressionLevel) {}
 
-  Result<int64_t> Decompress(
-      int64_t input_len,
+  Result<int64_t> decompress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) override {
-    const int64_t decompressed_size =
-        TryDecompressHadoop(input_len, input, output_buffer_len, output_buffer);
-    if (decompressed_size != kNotHadoop) {
-      return decompressed_size;
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) override {
+    const int64_t decompressedSize =
+        tryDecompressHadoop(inputLen, input, outputBufferLen, outputBuffer);
+    if (decompressedSize != kNotHadoop) {
+      return decompressedSize;
     }
-    // Fall back on raw LZ4 codec (for files produces by earlier versions of
+    // Fall back on raw LZ4 codec (for files produces by earlier versions of.
     // Parquet C++)
-    return Lz4Codec::Decompress(
-        input_len, input, output_buffer_len, output_buffer);
+    return Lz4Codec::decompress(inputLen, input, outputBufferLen, outputBuffer);
   }
 
-  int64_t MaxCompressedLen(
-      int64_t input_len,
+  int64_t maxCompressedLen(
+      int64_t inputLen,
       const uint8_t* ARROW_ARG_UNUSED(input)) override {
-    return kPrefixLength + Lz4Codec::MaxCompressedLen(input_len, nullptr);
+    return kPrefixLength + Lz4Codec::maxCompressedLen(inputLen, nullptr);
   }
 
-  Result<int64_t> Compress(
-      int64_t input_len,
+  Result<int64_t> compress(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) override {
-    if (output_buffer_len < kPrefixLength) {
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) override {
+    if (outputBufferLen < kPrefixLength) {
       return Status::Invalid(
           "Output buffer too small for Lz4HadoopCodec compression");
     }
 
     ARROW_ASSIGN_OR_RAISE(
-        int64_t output_len,
-        Lz4Codec::Compress(
-            input_len,
+        int64_t outputLen,
+        Lz4Codec::compress(
+            inputLen,
             input,
-            output_buffer_len - kPrefixLength,
-            output_buffer + kPrefixLength));
+            outputBufferLen - kPrefixLength,
+            outputBuffer + kPrefixLength));
 
-    // Prepend decompressed size in bytes and compressed size in bytes
-    // to be compatible with Hadoop Lz4Codec
-    const uint32_t decompressed_size =
-        bit_util::ToBigEndian(static_cast<uint32_t>(input_len));
-    const uint32_t compressed_size =
-        bit_util::ToBigEndian(static_cast<uint32_t>(output_len));
-    ::arrow::util::SafeStore(output_buffer, decompressed_size);
-    ::arrow::util::SafeStore(output_buffer + sizeof(uint32_t), compressed_size);
+    // Prepend decompressed size in bytes and compressed size in bytes.
+    // To be compatible with Hadoop Lz4Codec.
+    const uint32_t decompressedSize =
+        bit_util::ToBigEndian(static_cast<uint32_t>(inputLen));
+    const uint32_t compressedSize =
+        bit_util::ToBigEndian(static_cast<uint32_t>(outputLen));
+    ::arrow::util::SafeStore(outputBuffer, decompressedSize);
+    ::arrow::util::SafeStore(outputBuffer + sizeof(uint32_t), compressedSize);
 
-    return kPrefixLength + output_len;
+    return kPrefixLength + outputLen;
   }
 
-  Result<std::shared_ptr<Compressor>> MakeCompressor() override {
+  Result<std::shared_ptr<Compressor>> makeCompressor() override {
     return Status::NotImplemented(
         "Streaming compression unsupported with LZ4 Hadoop raw format. "
         "Try using LZ4 frame format instead.");
   }
 
-  Result<std::shared_ptr<Decompressor>> MakeDecompressor() override {
+  Result<std::shared_ptr<Decompressor>> makeDecompressor() override {
     return Status::NotImplemented(
         "Streaming decompression unsupported with LZ4 Hadoop raw format. "
         "Try using LZ4 frame format instead.");
   }
 
-  Compression::type compression_type() const override {
+  Compression::type compressionType() const override {
     return Compression::LZ4_HADOOP;
   }
 
  protected:
-  // Offset starting at which page data can be read/written
+  // Offset starting at which page data can be read/written.
   static const int64_t kPrefixLength = sizeof(uint32_t) * 2;
 
   static const int64_t kNotHadoop = -1;
 
-  int64_t TryDecompressHadoop(
-      int64_t input_len,
+  int64_t tryDecompressHadoop(
+      int64_t inputLen,
       const uint8_t* input,
-      int64_t output_buffer_len,
-      uint8_t* output_buffer) {
+      int64_t outputBufferLen,
+      uint8_t* outputBuffer) {
     // Parquet files written with the Hadoop Lz4Codec use their own framing.
-    // The input buffer can contain an arbitrary number of "frames", each
-    // with the following structure:
-    // - bytes 0..3: big-endian uint32_t representing the frame decompressed
-    // size
-    // - bytes 4..7: big-endian uint32_t representing the frame compressed size
-    // - bytes 8...: frame compressed data
+    // The input buffer can contain an arbitrary number of "frames", each.
+    // With the following structure:
+    // - Bytes 0..3: big-endian uint32_t representing the frame decompressed.
+    // Size.
+    // - Bytes 4..7: big-endian uint32_t representing the frame compressed size.
+    // - Bytes 8...: frame compressed data.
     //
     // The Hadoop Lz4Codec source code can be found here:
     // https://github.com/apache/hadoop/blob/trunk/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
-    int64_t total_decompressed_size = 0;
+    int64_t totalDecompressedSize = 0;
 
-    while (input_len >= kPrefixLength) {
-      const uint32_t expected_decompressed_size =
+    while (inputLen >= kPrefixLength) {
+      const uint32_t expectedDecompressedSize =
           bit_util::FromBigEndian(::arrow::util::SafeLoadAs<uint32_t>(input));
-      const uint32_t expected_compressed_size = bit_util::FromBigEndian(
+      const uint32_t expectedCompressedSize = bit_util::FromBigEndian(
           ::arrow::util::SafeLoadAs<uint32_t>(input + sizeof(uint32_t)));
       input += kPrefixLength;
-      input_len -= kPrefixLength;
+      inputLen -= kPrefixLength;
 
-      if (input_len < expected_compressed_size) {
-        // Not enough bytes for Hadoop "frame"
+      if (inputLen < expectedCompressedSize) {
+        // Not enough bytes for Hadoop "frame".
         return kNotHadoop;
       }
-      if (output_buffer_len < expected_decompressed_size) {
-        // Not enough bytes to hold advertised output => probably not Hadoop
+      if (outputBufferLen < expectedDecompressedSize) {
+        // Not enough bytes to hold advertised output => probably not Hadoop.
         return kNotHadoop;
       }
-      // Try decompressing and compare with expected decompressed length
-      auto maybe_decompressed_size = Lz4Codec::Decompress(
-          expected_compressed_size, input, output_buffer_len, output_buffer);
-      if (!maybe_decompressed_size.ok() ||
-          *maybe_decompressed_size != expected_decompressed_size) {
+      // Try decompressing and compare with expected decompressed length.
+      auto maybeDecompressedSize = Lz4Codec::decompress(
+          expectedCompressedSize, input, outputBufferLen, outputBuffer);
+      if (!maybeDecompressedSize.ok() ||
+          *maybeDecompressedSize != expectedDecompressedSize) {
         return kNotHadoop;
       }
-      input += expected_compressed_size;
-      input_len -= expected_compressed_size;
-      output_buffer += expected_decompressed_size;
-      output_buffer_len -= expected_decompressed_size;
-      total_decompressed_size += expected_decompressed_size;
+      input += expectedCompressedSize;
+      inputLen -= expectedCompressedSize;
+      outputBuffer += expectedDecompressedSize;
+      outputBufferLen -= expectedDecompressedSize;
+      totalDecompressedSize += expectedDecompressedSize;
     }
 
-    if (input_len == 0) {
-      return total_decompressed_size;
+    if (inputLen == 0) {
+      return totalDecompressedSize;
     } else {
       return kNotHadoop;
     }
   }
 
-  int minimum_compression_level() const override {
+  int minimumCompressionLevel() const override {
     return kUseDefaultCompressionLevel;
   }
-  int maximum_compression_level() const override {
+  int maximumCompressionLevel() const override {
     return kUseDefaultCompressionLevel;
   }
-  int default_compression_level() const override {
+  int defaultCompressionLevel() const override {
     return kUseDefaultCompressionLevel;
   }
 };
 
 } // namespace
 
-std::unique_ptr<Codec> MakeLz4FrameCodec(int compression_level) {
-  return std::make_unique<Lz4FrameCodec>(compression_level);
+std::unique_ptr<Codec> makeLz4FrameCodec(int compressionLevel) {
+  return std::make_unique<Lz4FrameCodec>(compressionLevel);
 }
 
-std::unique_ptr<Codec> MakeLz4HadoopRawCodec() {
+std::unique_ptr<Codec> makeLz4HadoopRawCodec() {
   return std::make_unique<Lz4HadoopCodec>();
 }
 
-std::unique_ptr<Codec> MakeLz4RawCodec(int compression_level) {
-  return std::make_unique<Lz4Codec>(compression_level);
+std::unique_ptr<Codec> makeLz4RawCodec(int compressionLevel) {
+  return std::make_unique<Lz4Codec>(compressionLevel);
 }
 
 } // namespace facebook::velox::parquet::arrow::util::internal

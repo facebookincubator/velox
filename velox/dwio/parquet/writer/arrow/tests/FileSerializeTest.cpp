@@ -42,291 +42,288 @@ template <typename TestType>
 class TestSerialize : public PrimitiveTypedTest<TestType> {
  public:
   void SetUp() {
-    num_columns_ = 4;
-    num_rowgroups_ = 4;
-    rows_per_rowgroup_ = 50;
-    rows_per_batch_ = 10;
-    this->SetUpSchema(Repetition::OPTIONAL, num_columns_);
+    numColumns_ = 4;
+    numRowgroups_ = 4;
+    rowsPerRowgroup_ = 50;
+    rowsPerBatch_ = 10;
+    this->setUpSchema(Repetition::kOptional, numColumns_);
   }
 
  protected:
-  int num_columns_;
-  int num_rowgroups_;
-  int rows_per_rowgroup_;
-  int rows_per_batch_;
+  int numColumns_;
+  int numRowgroups_;
+  int rowsPerRowgroup_;
+  int rowsPerBatch_;
 
-  void FileSerializeTest(Compression::type codec_type) {
-    FileSerializeTest(codec_type, codec_type);
+  void fileSerializeTest(Compression::type codecType) {
+    fileSerializeTest(codecType, codecType);
   }
 
-  void FileSerializeTest(
-      Compression::type codec_type,
-      Compression::type expected_codec_type) {
-    auto sink = CreateOutputStream();
+  void fileSerializeTest(
+      Compression::type codecType,
+      Compression::type expectedCodecType) {
+    auto sink = createOutputStream();
     auto gnode = std::static_pointer_cast<GroupNode>(this->node_);
 
-    WriterProperties::Builder prop_builder;
+    WriterProperties::Builder propBuilder;
 
-    for (int i = 0; i < num_columns_; ++i) {
-      prop_builder.compression(this->schema_.Column(i)->name(), codec_type);
+    for (int i = 0; i < numColumns_; ++i) {
+      propBuilder.compression(this->schema_.column(i)->name(), codecType);
     }
-    std::shared_ptr<WriterProperties> writer_properties = prop_builder.build();
+    std::shared_ptr<WriterProperties> WriterProperties = propBuilder.build();
 
-    auto file_writer = ParquetFileWriter::Open(sink, gnode, writer_properties);
-    this->GenerateData(rows_per_rowgroup_);
-    for (int rg = 0; rg < num_rowgroups_ / 2; ++rg) {
-      RowGroupWriter* row_group_writer;
-      row_group_writer = file_writer->AppendRowGroup();
-      for (int col = 0; col < num_columns_; ++col) {
-        auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-            row_group_writer->NextColumn());
-        column_writer->WriteBatch(
-            rows_per_rowgroup_,
-            this->def_levels_.data(),
+    auto fileWriter = ParquetFileWriter::open(sink, gnode, WriterProperties);
+    this->generateData(rowsPerRowgroup_);
+    for (int rg = 0; rg < numRowgroups_ / 2; ++rg) {
+      RowGroupWriter* rowGroupWriter;
+      rowGroupWriter = fileWriter->appendRowGroup();
+      for (int col = 0; col < numColumns_; ++col) {
+        auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+            rowGroupWriter->nextColumn());
+        columnWriter->writeBatch(
+            rowsPerRowgroup_,
+            this->defLevels_.data(),
             nullptr,
-            this->values_ptr_);
-        column_writer->Close();
-        // Ensure column() API which is specific to BufferedRowGroup cannot be
-        // called
-        ASSERT_THROW(row_group_writer->column(col), ParquetException);
+            this->valuesPtr_);
+        columnWriter->close();
+        // Ensure column() API which is specific to BufferedRowGroup cannot be.
+        // Called.
+        ASSERT_THROW(rowGroupWriter->column(col), ParquetException);
       }
-      EXPECT_EQ(0, row_group_writer->total_compressed_bytes());
-      EXPECT_NE(0, row_group_writer->total_bytes_written());
-      EXPECT_NE(0, row_group_writer->total_compressed_bytes_written());
-      row_group_writer->Close();
-      EXPECT_EQ(0, row_group_writer->total_compressed_bytes());
-      EXPECT_NE(0, row_group_writer->total_bytes_written());
-      EXPECT_NE(0, row_group_writer->total_compressed_bytes_written());
+      EXPECT_EQ(0, rowGroupWriter->totalCompressedBytes());
+      EXPECT_NE(0, rowGroupWriter->totalBytesWritten());
+      EXPECT_NE(0, rowGroupWriter->totalCompressedBytesWritten());
+      rowGroupWriter->close();
+      EXPECT_EQ(0, rowGroupWriter->totalCompressedBytes());
+      EXPECT_NE(0, rowGroupWriter->totalBytesWritten());
+      EXPECT_NE(0, rowGroupWriter->totalCompressedBytesWritten());
     }
-    // Write half BufferedRowGroups
-    for (int rg = 0; rg < num_rowgroups_ / 2; ++rg) {
-      RowGroupWriter* row_group_writer;
-      row_group_writer = file_writer->AppendBufferedRowGroup();
-      for (int batch = 0; batch < (rows_per_rowgroup_ / rows_per_batch_);
-           ++batch) {
-        for (int col = 0; col < num_columns_; ++col) {
-          auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-              row_group_writer->column(col));
-          column_writer->WriteBatch(
-              rows_per_batch_,
-              this->def_levels_.data() + (batch * rows_per_batch_),
+    // Write half BufferedRowGroups.
+    for (int rg = 0; rg < numRowgroups_ / 2; ++rg) {
+      RowGroupWriter* rowGroupWriter;
+      rowGroupWriter = fileWriter->appendBufferedRowGroup();
+      for (int batch = 0; batch < (rowsPerRowgroup_ / rowsPerBatch_); ++batch) {
+        for (int col = 0; col < numColumns_; ++col) {
+          auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+              rowGroupWriter->column(col));
+          columnWriter->writeBatch(
+              rowsPerBatch_,
+              this->defLevels_.data() + (batch * rowsPerBatch_),
               nullptr,
-              this->values_ptr_ + (batch * rows_per_batch_));
-          // Ensure NextColumn() API which is specific to RowGroup cannot be
-          // called
-          ASSERT_THROW(row_group_writer->NextColumn(), ParquetException);
+              this->valuesPtr_ + (batch * rowsPerBatch_));
+          // Ensure NextColumn() API which is specific to RowGroup cannot be.
+          // Called.
+          ASSERT_THROW(rowGroupWriter->nextColumn(), ParquetException);
         }
       }
-      // total_compressed_bytes() may equal to 0 if no dictionary enabled and no
-      // buffered values.
-      EXPECT_EQ(0, row_group_writer->total_bytes_written());
-      EXPECT_EQ(0, row_group_writer->total_compressed_bytes_written());
-      for (int col = 0; col < num_columns_; ++col) {
-        auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-            row_group_writer->column(col));
-        column_writer->Close();
+      // Total_compressed_bytes() may equal to 0 if no dictionary enabled and
+      // no. Buffered values.
+      EXPECT_EQ(0, rowGroupWriter->totalBytesWritten());
+      EXPECT_EQ(0, rowGroupWriter->totalCompressedBytesWritten());
+      for (int col = 0; col < numColumns_; ++col) {
+        auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+            rowGroupWriter->column(col));
+        columnWriter->close();
       }
-      row_group_writer->Close();
-      EXPECT_EQ(0, row_group_writer->total_compressed_bytes());
-      EXPECT_NE(0, row_group_writer->total_bytes_written());
-      EXPECT_NE(0, row_group_writer->total_compressed_bytes_written());
+      rowGroupWriter->close();
+      EXPECT_EQ(0, rowGroupWriter->totalCompressedBytes());
+      EXPECT_NE(0, rowGroupWriter->totalBytesWritten());
+      EXPECT_NE(0, rowGroupWriter->totalCompressedBytesWritten());
     }
-    file_writer->Close();
+    fileWriter->close();
 
     PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
-    int num_rows_ = num_rowgroups_ * rows_per_rowgroup_;
+    int numRows_ = numRowgroups_ * rowsPerRowgroup_;
 
     auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-    auto file_reader = ParquetFileReader::Open(source);
-    ASSERT_EQ(num_columns_, file_reader->metadata()->num_columns());
-    ASSERT_EQ(num_rowgroups_, file_reader->metadata()->num_row_groups());
-    ASSERT_EQ(num_rows_, file_reader->metadata()->num_rows());
+    auto fileReader = ParquetFileReader::open(source);
+    ASSERT_EQ(numColumns_, fileReader->metadata()->numColumns());
+    ASSERT_EQ(numRowgroups_, fileReader->metadata()->numRowGroups());
+    ASSERT_EQ(numRows_, fileReader->metadata()->numRows());
 
-    for (int rg = 0; rg < num_rowgroups_; ++rg) {
-      auto rg_reader = file_reader->RowGroup(rg);
-      auto rg_metadata = rg_reader->metadata();
-      ASSERT_EQ(num_columns_, rg_metadata->num_columns());
-      ASSERT_EQ(rows_per_rowgroup_, rg_metadata->num_rows());
+    for (int rg = 0; rg < numRowgroups_; ++rg) {
+      auto rgReader = fileReader->rowGroup(rg);
+      auto rgMetadata = rgReader->metadata();
+      ASSERT_EQ(numColumns_, rgMetadata->numColumns());
+      ASSERT_EQ(rowsPerRowgroup_, rgMetadata->numRows());
       // Check that the specified compression was actually used.
-      ASSERT_EQ(
-          expected_codec_type, rg_metadata->ColumnChunk(0)->compression());
+      ASSERT_EQ(expectedCodecType, rgMetadata->columnChunk(0)->compression());
 
-      const int64_t total_byte_size = rg_metadata->total_byte_size();
-      const int64_t total_compressed_size =
-          rg_metadata->total_compressed_size();
-      if (expected_codec_type == Compression::UNCOMPRESSED) {
-        ASSERT_EQ(total_byte_size, total_compressed_size);
+      const int64_t totalByteSize = rgMetadata->totalByteSize();
+      const int64_t totalCompressedSize = rgMetadata->totalCompressedSize();
+      if (expectedCodecType == Compression::UNCOMPRESSED) {
+        ASSERT_EQ(totalByteSize, totalCompressedSize);
       } else {
-        ASSERT_NE(total_byte_size, total_compressed_size);
+        ASSERT_NE(totalByteSize, totalCompressedSize);
       }
 
-      int64_t total_column_byte_size = 0;
-      int64_t total_column_compressed_size = 0;
+      int64_t totalColumnByteSize = 0;
+      int64_t totalColumnCompressedSize = 0;
 
-      for (int i = 0; i < num_columns_; ++i) {
-        int64_t values_read;
-        ASSERT_FALSE(rg_metadata->ColumnChunk(i)->has_index_page());
-        total_column_byte_size +=
-            rg_metadata->ColumnChunk(i)->total_uncompressed_size();
-        total_column_compressed_size +=
-            rg_metadata->ColumnChunk(i)->total_compressed_size();
+      for (int i = 0; i < numColumns_; ++i) {
+        int64_t valuesRead;
+        ASSERT_FALSE(rgMetadata->columnChunk(i)->hasIndexPage());
+        totalColumnByteSize +=
+            rgMetadata->columnChunk(i)->totalUncompressedSize();
+        totalColumnCompressedSize +=
+            rgMetadata->columnChunk(i)->totalCompressedSize();
 
-        std::vector<int16_t> def_levels_out(rows_per_rowgroup_);
-        std::vector<int16_t> rep_levels_out(rows_per_rowgroup_);
-        auto col_reader = std::static_pointer_cast<TypedColumnReader<TestType>>(
-            rg_reader->Column(i));
-        this->SetupValuesOut(rows_per_rowgroup_);
-        col_reader->ReadBatch(
-            rows_per_rowgroup_,
-            def_levels_out.data(),
-            rep_levels_out.data(),
-            this->values_out_ptr_,
-            &values_read);
-        this->SyncValuesOut();
-        ASSERT_EQ(rows_per_rowgroup_, values_read);
-        ASSERT_EQ(this->values_, this->values_out_);
-        ASSERT_EQ(this->def_levels_, def_levels_out);
+        std::vector<int16_t> defLevelsOut(rowsPerRowgroup_);
+        std::vector<int16_t> repLevelsOut(rowsPerRowgroup_);
+        auto colReader = std::static_pointer_cast<TypedColumnReader<TestType>>(
+            rgReader->column(i));
+        this->setupValuesOut(rowsPerRowgroup_);
+        colReader->readBatch(
+            rowsPerRowgroup_,
+            defLevelsOut.data(),
+            repLevelsOut.data(),
+            this->valuesOutPtr_,
+            &valuesRead);
+        this->syncValuesOut();
+        ASSERT_EQ(rowsPerRowgroup_, valuesRead);
+        ASSERT_EQ(this->values_, this->valuesOut_);
+        ASSERT_EQ(this->defLevels_, defLevelsOut);
       }
 
-      ASSERT_EQ(total_byte_size, total_column_byte_size);
-      ASSERT_EQ(total_compressed_size, total_column_compressed_size);
+      ASSERT_EQ(totalByteSize, totalColumnByteSize);
+      ASSERT_EQ(totalCompressedSize, totalColumnCompressedSize);
     }
   }
 
-  void UnequalNumRows(
-      int64_t max_rows,
-      const std::vector<int64_t> rows_per_column) {
-    auto sink = CreateOutputStream();
+  void unequalNumRows(
+      int64_t maxRows,
+      const std::vector<int64_t> rowsPerColumn) {
+    auto sink = createOutputStream();
     auto gnode = std::static_pointer_cast<GroupNode>(this->node_);
 
     std::shared_ptr<WriterProperties> props =
         WriterProperties::Builder().build();
 
-    auto file_writer = ParquetFileWriter::Open(sink, gnode, props);
+    auto fileWriter = ParquetFileWriter::open(sink, gnode, props);
 
-    RowGroupWriter* row_group_writer;
-    row_group_writer = file_writer->AppendRowGroup();
+    RowGroupWriter* rowGroupWriter;
+    rowGroupWriter = fileWriter->appendRowGroup();
 
-    this->GenerateData(max_rows);
-    for (int col = 0; col < num_columns_; ++col) {
-      auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-          row_group_writer->NextColumn());
-      column_writer->WriteBatch(
-          rows_per_column[col],
-          this->def_levels_.data(),
+    this->generateData(maxRows);
+    for (int col = 0; col < numColumns_; ++col) {
+      auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+          rowGroupWriter->nextColumn());
+      columnWriter->writeBatch(
+          rowsPerColumn[col],
+          this->defLevels_.data(),
           nullptr,
-          this->values_ptr_);
-      column_writer->Close();
+          this->valuesPtr_);
+      columnWriter->close();
     }
-    row_group_writer->Close();
-    file_writer->Close();
+    rowGroupWriter->close();
+    fileWriter->close();
   }
 
-  void UnequalNumRowsBuffered(
-      int64_t max_rows,
-      const std::vector<int64_t> rows_per_column) {
-    auto sink = CreateOutputStream();
+  void unequalNumRowsBuffered(
+      int64_t maxRows,
+      const std::vector<int64_t> rowsPerColumn) {
+    auto sink = createOutputStream();
     auto gnode = std::static_pointer_cast<GroupNode>(this->node_);
 
     std::shared_ptr<WriterProperties> props =
         WriterProperties::Builder().build();
 
-    auto file_writer = ParquetFileWriter::Open(sink, gnode, props);
+    auto fileWriter = ParquetFileWriter::open(sink, gnode, props);
 
-    RowGroupWriter* row_group_writer;
-    row_group_writer = file_writer->AppendBufferedRowGroup();
+    RowGroupWriter* rowGroupWriter;
+    rowGroupWriter = fileWriter->appendBufferedRowGroup();
 
-    this->GenerateData(max_rows);
-    for (int col = 0; col < num_columns_; ++col) {
-      auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-          row_group_writer->column(col));
-      column_writer->WriteBatch(
-          rows_per_column[col],
-          this->def_levels_.data(),
+    this->generateData(maxRows);
+    for (int col = 0; col < numColumns_; ++col) {
+      auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+          rowGroupWriter->column(col));
+      columnWriter->writeBatch(
+          rowsPerColumn[col],
+          this->defLevels_.data(),
           nullptr,
-          this->values_ptr_);
-      column_writer->Close();
+          this->valuesPtr_);
+      columnWriter->close();
     }
-    row_group_writer->Close();
-    file_writer->Close();
+    rowGroupWriter->close();
+    fileWriter->close();
   }
 
-  void RepeatedUnequalRows() {
-    // Optional and repeated, so definition and repetition levels
-    this->SetUpSchema(Repetition::REPEATED);
+  void repeatedUnequalRows() {
+    // Optional and repeated, so definition and repetition levels.
+    this->setUpSchema(Repetition::kRepeated);
 
     const int kNumRows = 100;
-    this->GenerateData(kNumRows);
+    this->generateData(kNumRows);
 
-    auto sink = CreateOutputStream();
+    auto sink = createOutputStream();
     auto gnode = std::static_pointer_cast<GroupNode>(this->node_);
     std::shared_ptr<WriterProperties> props =
         WriterProperties::Builder().build();
-    auto file_writer = ParquetFileWriter::Open(sink, gnode, props);
+    auto fileWriter = ParquetFileWriter::open(sink, gnode, props);
 
-    RowGroupWriter* row_group_writer;
-    row_group_writer = file_writer->AppendRowGroup();
+    RowGroupWriter* rowGroupWriter;
+    rowGroupWriter = fileWriter->appendRowGroup();
 
-    this->GenerateData(kNumRows);
+    this->generateData(kNumRows);
 
-    std::vector<int16_t> definition_levels(kNumRows, 1);
-    std::vector<int16_t> repetition_levels(kNumRows, 0);
+    std::vector<int16_t> definitionLevels(kNumRows, 1);
+    std::vector<int16_t> repetitionLevels(kNumRows, 0);
 
     {
-      auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-          row_group_writer->NextColumn());
-      column_writer->WriteBatch(
+      auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+          rowGroupWriter->nextColumn());
+      columnWriter->writeBatch(
           kNumRows,
-          definition_levels.data(),
-          repetition_levels.data(),
-          this->values_ptr_);
-      column_writer->Close();
+          definitionLevels.data(),
+          repetitionLevels.data(),
+          this->valuesPtr_);
+      columnWriter->close();
     }
 
-    definition_levels[1] = 0;
-    repetition_levels[3] = 1;
+    definitionLevels[1] = 0;
+    repetitionLevels[3] = 1;
 
     {
-      auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-          row_group_writer->NextColumn());
-      column_writer->WriteBatch(
+      auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+          rowGroupWriter->nextColumn());
+      columnWriter->writeBatch(
           kNumRows,
-          definition_levels.data(),
-          repetition_levels.data(),
-          this->values_ptr_);
-      column_writer->Close();
+          definitionLevels.data(),
+          repetitionLevels.data(),
+          this->valuesPtr_);
+      columnWriter->close();
     }
   }
 
-  void ZeroRowsRowGroup() {
-    auto sink = CreateOutputStream();
+  void zeroRowsRowGroup() {
+    auto sink = createOutputStream();
     auto gnode = std::static_pointer_cast<GroupNode>(this->node_);
 
     std::shared_ptr<WriterProperties> props =
         WriterProperties::Builder().build();
 
-    auto file_writer = ParquetFileWriter::Open(sink, gnode, props);
+    auto fileWriter = ParquetFileWriter::open(sink, gnode, props);
 
-    RowGroupWriter* row_group_writer;
+    RowGroupWriter* rowGroupWriter;
 
-    row_group_writer = file_writer->AppendRowGroup();
-    for (int col = 0; col < num_columns_; ++col) {
-      auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-          row_group_writer->NextColumn());
-      column_writer->Close();
+    rowGroupWriter = fileWriter->appendRowGroup();
+    for (int col = 0; col < numColumns_; ++col) {
+      auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+          rowGroupWriter->nextColumn());
+      columnWriter->close();
     }
-    row_group_writer->Close();
+    rowGroupWriter->close();
 
-    row_group_writer = file_writer->AppendBufferedRowGroup();
-    for (int col = 0; col < num_columns_; ++col) {
-      auto column_writer = static_cast<TypedColumnWriter<TestType>*>(
-          row_group_writer->column(col));
-      column_writer->Close();
+    rowGroupWriter = fileWriter->appendBufferedRowGroup();
+    for (int col = 0; col < numColumns_; ++col) {
+      auto columnWriter = static_cast<TypedColumnWriter<TestType>*>(
+          rowGroupWriter->column(col));
+      columnWriter->close();
     }
-    row_group_writer->Close();
+    rowGroupWriter->close();
 
-    file_writer->Close();
+    fileWriter->close();
   }
 };
 
@@ -344,177 +341,176 @@ typedef ::testing::Types<
 TYPED_TEST_SUITE(TestSerialize, TestTypes);
 
 TYPED_TEST(TestSerialize, SmallFileUncompressed) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::UNCOMPRESSED));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::UNCOMPRESSED));
 }
 
 TYPED_TEST(TestSerialize, TooFewRows) {
-  std::vector<int64_t> num_rows = {100, 100, 100, 99};
-  ASSERT_THROW(this->UnequalNumRows(100, num_rows), ParquetException);
-  ASSERT_THROW(this->UnequalNumRowsBuffered(100, num_rows), ParquetException);
+  std::vector<int64_t> numRows = {100, 100, 100, 99};
+  ASSERT_THROW(this->unequalNumRows(100, numRows), ParquetException);
+  ASSERT_THROW(this->unequalNumRowsBuffered(100, numRows), ParquetException);
 }
 
 TYPED_TEST(TestSerialize, TooManyRows) {
-  std::vector<int64_t> num_rows = {100, 100, 100, 101};
-  ASSERT_THROW(this->UnequalNumRows(101, num_rows), ParquetException);
-  ASSERT_THROW(this->UnequalNumRowsBuffered(101, num_rows), ParquetException);
+  std::vector<int64_t> numRows = {100, 100, 100, 101};
+  ASSERT_THROW(this->unequalNumRows(101, numRows), ParquetException);
+  ASSERT_THROW(this->unequalNumRowsBuffered(101, numRows), ParquetException);
 }
 
 TYPED_TEST(TestSerialize, ZeroRows) {
-  ASSERT_NO_THROW(this->ZeroRowsRowGroup());
+  ASSERT_NO_THROW(this->zeroRowsRowGroup());
 }
 
 TYPED_TEST(TestSerialize, RepeatedTooFewRows) {
-  ASSERT_THROW(this->RepeatedUnequalRows(), ParquetException);
+  ASSERT_THROW(this->repeatedUnequalRows(), ParquetException);
 }
 
 TYPED_TEST(TestSerialize, SmallFileSnappy) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::SNAPPY));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::SNAPPY));
 }
 
 #ifdef ARROW_WITH_BROTLI
 TYPED_TEST(TestSerialize, SmallFileBrotli) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::BROTLI));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::BROTLI));
 }
 #endif
 
 TYPED_TEST(TestSerialize, SmallFileGzip) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::GZIP));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::GZIP));
 }
 
 TYPED_TEST(TestSerialize, SmallFileLz4) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::LZ4));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::LZ4));
 }
 
 TYPED_TEST(TestSerialize, SmallFileLz4Hadoop) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::LZ4_HADOOP));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::LZ4_HADOOP));
 }
 
 TYPED_TEST(TestSerialize, SmallFileZstd) {
-  ASSERT_NO_FATAL_FAILURE(this->FileSerializeTest(Compression::ZSTD));
+  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::ZSTD));
 }
 
 TEST(TestBufferedRowGroupWriter, DisabledDictionary) {
   // PARQUET-1706:
-  // Wrong dictionary_page_offset when writing only data pages via
-  // BufferedPageWriter
-  auto sink = CreateOutputStream();
-  auto writer_props = WriterProperties::Builder().disable_dictionary()->build();
+  // Wrong dictionary_page_offset when writing only data pages via.
+  // BufferedPageWriter.
+  auto sink = createOutputStream();
+  auto writerProps = WriterProperties::Builder().disableDictionary()->build();
   schema::NodeVector fields;
   fields.push_back(
-      PrimitiveNode::Make("col", Repetition::REQUIRED, Type::INT32));
+      PrimitiveNode::make("col", Repetition::kRequired, Type::kInt32));
   auto schema = std::static_pointer_cast<GroupNode>(
-      GroupNode::Make("schema", Repetition::REQUIRED, fields));
-  auto file_writer = ParquetFileWriter::Open(sink, schema, writer_props);
-  auto rg_writer = file_writer->AppendBufferedRowGroup();
-  auto col_writer = static_cast<Int32Writer*>(rg_writer->column(0));
+      GroupNode::make("schema", Repetition::kRequired, fields));
+  auto fileWriter = ParquetFileWriter::open(sink, schema, writerProps);
+  auto rgWriter = fileWriter->appendBufferedRowGroup();
+  auto colWriter = static_cast<Int32Writer*>(rgWriter->column(0));
   int value = 0;
-  col_writer->WriteBatch(1, nullptr, nullptr, &value);
-  rg_writer->Close();
-  file_writer->Close();
+  colWriter->writeBatch(1, nullptr, nullptr, &value);
+  rgWriter->close();
+  fileWriter->close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
   auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
-  ASSERT_EQ(1, file_reader->metadata()->num_row_groups());
-  auto rg_reader = file_reader->RowGroup(0);
-  ASSERT_EQ(1, rg_reader->metadata()->num_columns());
-  ASSERT_EQ(1, rg_reader->metadata()->num_rows());
-  ASSERT_FALSE(rg_reader->metadata()->ColumnChunk(0)->has_dictionary_page());
+  auto fileReader = ParquetFileReader::open(source);
+  ASSERT_EQ(1, fileReader->metadata()->numRowGroups());
+  auto rgReader = fileReader->rowGroup(0);
+  ASSERT_EQ(1, rgReader->metadata()->numColumns());
+  ASSERT_EQ(1, rgReader->metadata()->numRows());
+  ASSERT_FALSE(rgReader->metadata()->columnChunk(0)->hasDictionaryPage());
 }
 
 TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
   constexpr int kValueCount = 10000;
   constexpr int kPageSize = 16384;
-  auto sink = CreateOutputStream();
-  auto writer_props = WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(kPageSize)
-                          ->build();
+  auto sink = createOutputStream();
+  auto writerProps = WriterProperties::Builder()
+                         .disableDictionary()
+                         ->dataPagesize(kPageSize)
+                         ->build();
   schema::NodeVector fields;
   fields.push_back(
-      PrimitiveNode::Make("col", Repetition::REQUIRED, Type::INT32));
+      PrimitiveNode::make("col", Repetition::kRequired, Type::kInt32));
   auto schema = std::static_pointer_cast<GroupNode>(
-      GroupNode::Make("schema", Repetition::REQUIRED, fields));
-  auto file_writer = ParquetFileWriter::Open(sink, schema, writer_props);
-  auto rg_writer = file_writer->AppendBufferedRowGroup();
-  auto col_writer = static_cast<Int32Writer*>(rg_writer->column(0));
-  std::vector<int32_t> values_in;
+      GroupNode::make("schema", Repetition::kRequired, fields));
+  auto fileWriter = ParquetFileWriter::open(sink, schema, writerProps);
+  auto rgWriter = fileWriter->appendBufferedRowGroup();
+  auto colWriter = static_cast<Int32Writer*>(rgWriter->column(0));
+  std::vector<int32_t> valuesIn;
   for (int i = 0; i < kValueCount; ++i) {
-    values_in.push_back((i % 100) + 1);
+    valuesIn.push_back((i % 100) + 1);
   }
-  col_writer->WriteBatch(kValueCount, nullptr, nullptr, values_in.data());
-  rg_writer->Close();
-  file_writer->Close();
+  colWriter->writeBatch(kValueCount, nullptr, nullptr, valuesIn.data());
+  rgWriter->close();
+  fileWriter->close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
   auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
-  auto file_metadata = file_reader->metadata();
-  ASSERT_EQ(1, file_reader->metadata()->num_row_groups());
-  std::vector<int32_t> values_out(kValueCount);
-  for (int r = 0; r < file_metadata->num_row_groups(); ++r) {
-    auto rg_reader = file_reader->RowGroup(r);
-    ASSERT_EQ(1, rg_reader->metadata()->num_columns());
-    ASSERT_EQ(kValueCount, rg_reader->metadata()->num_rows());
-    int64_t total_values_read = 0;
-    std::shared_ptr<ColumnReader> col_reader;
-    ASSERT_NO_THROW(col_reader = rg_reader->Column(0));
-    Int32Reader* int32_reader = static_cast<Int32Reader*>(col_reader.get());
+  auto fileReader = ParquetFileReader::open(source);
+  auto fileMetadata = fileReader->metadata();
+  ASSERT_EQ(1, fileReader->metadata()->numRowGroups());
+  std::vector<int32_t> valuesOut(kValueCount);
+  for (int r = 0; r < fileMetadata->numRowGroups(); ++r) {
+    auto rgReader = fileReader->rowGroup(r);
+    ASSERT_EQ(1, rgReader->metadata()->numColumns());
+    ASSERT_EQ(kValueCount, rgReader->metadata()->numRows());
+    int64_t totalValuesRead = 0;
+    std::shared_ptr<ColumnReader> colReader;
+    ASSERT_NO_THROW(colReader = rgReader->column(0));
+    Int32Reader* int32Reader = static_cast<Int32Reader*>(colReader.get());
     int64_t vn = kValueCount;
-    int32_t* vx = values_out.data();
-    while (int32_reader->HasNext()) {
-      int64_t values_read;
-      int32_reader->ReadBatch(vn, nullptr, nullptr, vx, &values_read);
-      vn -= values_read;
-      vx += values_read;
-      total_values_read += values_read;
+    int32_t* vx = valuesOut.data();
+    while (int32Reader->hasNext()) {
+      int64_t valuesRead;
+      int32Reader->readBatch(vn, nullptr, nullptr, vx, &valuesRead);
+      vn -= valuesRead;
+      vx += valuesRead;
+      totalValuesRead += valuesRead;
     }
-    ASSERT_EQ(kValueCount, total_values_read);
-    ASSERT_EQ(values_in, values_out);
+    ASSERT_EQ(kValueCount, totalValuesRead);
+    ASSERT_EQ(valuesIn, valuesOut);
   }
 }
 
 TEST(ParquetRoundtrip, AllNulls) {
-  auto primitive_node =
-      PrimitiveNode::Make("nulls", Repetition::OPTIONAL, nullptr, Type::INT32);
-  schema::NodeVector columns({primitive_node});
+  auto primitiveNode = PrimitiveNode::make(
+      "nulls", Repetition::kOptional, nullptr, Type::kInt32);
+  schema::NodeVector columns({primitiveNode});
 
-  auto root_node =
-      GroupNode::Make("root", Repetition::REQUIRED, columns, nullptr);
+  auto rootNode =
+      GroupNode::make("root", Repetition::kRequired, columns, nullptr);
 
-  auto sink = CreateOutputStream();
+  auto sink = createOutputStream();
 
-  auto file_writer = ParquetFileWriter::Open(
-      sink, std::static_pointer_cast<GroupNode>(root_node));
-  auto row_group_writer = file_writer->AppendRowGroup();
-  auto column_writer =
-      static_cast<Int32Writer*>(row_group_writer->NextColumn());
+  auto fileWriter = ParquetFileWriter::open(
+      sink, std::static_pointer_cast<GroupNode>(rootNode));
+  auto rowGroupWriter = fileWriter->appendRowGroup();
+  auto columnWriter = static_cast<Int32Writer*>(rowGroupWriter->nextColumn());
 
   int32_t values[3];
-  int16_t def_levels[] = {0, 0, 0};
+  int16_t defLevels[] = {0, 0, 0};
 
-  column_writer->WriteBatch(3, def_levels, nullptr, values);
+  columnWriter->writeBatch(3, defLevels, nullptr, values);
 
-  column_writer->Close();
-  row_group_writer->Close();
-  file_writer->Close();
+  columnWriter->close();
+  rowGroupWriter->close();
+  fileWriter->close();
 
-  ReaderProperties props = default_reader_properties();
-  props.enable_buffered_stream();
+  ReaderProperties props = defaultReaderProperties();
+  props.enableBufferedStream();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
   auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source, props);
-  auto row_group_reader = file_reader->RowGroup(0);
-  auto column_reader =
-      std::static_pointer_cast<Int32Reader>(row_group_reader->Column(0));
+  auto fileReader = ParquetFileReader::open(source, props);
+  auto RowGroupReader = fileReader->rowGroup(0);
+  auto ColumnReader =
+      std::static_pointer_cast<Int32Reader>(RowGroupReader->column(0));
 
-  int64_t values_read;
-  def_levels[0] = -1;
-  def_levels[1] = -1;
-  def_levels[2] = -1;
-  column_reader->ReadBatch(3, def_levels, nullptr, values, &values_read);
-  EXPECT_THAT(def_levels, ElementsAre(0, 0, 0));
+  int64_t valuesRead;
+  defLevels[0] = -1;
+  defLevels[1] = -1;
+  defLevels[2] = -1;
+  ColumnReader->readBatch(3, defLevels, nullptr, values, &valuesRead);
+  EXPECT_THAT(defLevels, ElementsAre(0, 0, 0));
 }
 
 } // namespace test

@@ -138,7 +138,7 @@ TEST_F(E2EFilterTest, integerDirect) {
 TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
   options_.enableDictionary = false;
   options_.encoding =
-      facebook::velox::parquet::arrow::Encoding::DELTA_BINARY_PACKED;
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   testWithTypes(
       "short_val:smallint,"
@@ -527,7 +527,7 @@ TEST_F(E2EFilterTest, stringDictionary) {
 TEST_F(E2EFilterTest, stringDeltaByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
-      facebook::velox::parquet::arrow::Encoding::DELTA_BYTE_ARRAY;
+      facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
 
   testWithTypes(
       "string_val:string,"
@@ -800,7 +800,7 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
 
 TEST_F(E2EFilterTest, booleanRle) {
   options_.enableDictionary = false;
-  options_.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options_.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options_.useParquetDataPageV2 = true;
 
   testWithTypes(
