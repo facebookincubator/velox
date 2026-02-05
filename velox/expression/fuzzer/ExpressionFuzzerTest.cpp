@@ -473,6 +473,9 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "uniqueness_distribution(khyperloglog) -> map(bigint,double)",
     "uniqueness_distribution(khyperloglog,bigint) -> map(bigint,double)",
     "merge_khll(array(khyperloglog)) -> khyperloglog",
+    // Velox uses a transform lambda function(K,V,U) while Presto uses a
+    // comparator lambda function(K,K,integer).
+    "map_top_n_keys(map(K,V),bigint,function(K,V,U)) -> array(K)",
 };
 
 int main(int argc, char** argv) {
