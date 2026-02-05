@@ -75,8 +75,8 @@ class CudfExpressionSelectionTest : public ::testing::Test {
 };
 
 TEST_F(CudfExpressionSelectionTest, astRoot) {
-  auto prev_ast = CudfConfig::getInstance().astExpressionEnabled;
-  auto prev_jit = CudfConfig::getInstance().jitExpressionEnabled;
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
   CudfConfig::getInstance().astExpressionEnabled = true;
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
@@ -84,8 +84,8 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prev_ast;
-  CudfConfig::getInstance().jitExpressionEnabled = prev_jit;
+  CudfConfig::getInstance().astExpressionEnabled = prevAst;
+  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
@@ -97,8 +97,8 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
-  auto prev_ast = CudfConfig::getInstance().astExpressionEnabled;
-  auto prev_jit = CudfConfig::getInstance().jitExpressionEnabled;
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
   CudfConfig::getInstance().astExpressionEnabled = true;
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr(
@@ -108,8 +108,8 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prev_ast;
-  CudfConfig::getInstance().jitExpressionEnabled = prev_jit;
+  CudfConfig::getInstance().astExpressionEnabled = prevAst;
+  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
