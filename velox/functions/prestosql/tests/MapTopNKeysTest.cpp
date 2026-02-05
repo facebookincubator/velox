@@ -170,5 +170,27 @@ TEST_F(MapTopNKeysTest, nestedVarcharMap) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(MapTopNKeysTest, dictionaryEncodedMap) {
+  auto map = makeMapVectorFromJson<int32_t, float>(
+      {"{3:0.44, 1:0.10, 4:0.80, 2:0.60}"});
+
+  auto indices = makeIndices({0, 0, 0});
+  auto dictMap = wrapInDictionary(indices, 3, map);
+
+  RowVectorPtr input = makeRowVector({dictMap});
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 1)", input),
+      makeArrayVectorFromJson<int32_t>({"[4]", "[4]", "[4]"}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 2)", input),
+      makeArrayVectorFromJson<int32_t>({"[4, 3]", "[4, 3]", "[4, 3]"}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 1, (k, v) -> v)", input),
+      makeArrayVectorFromJson<int32_t>({"[4]", "[4]", "[4]"}));
+}
+
 } // namespace
 } // namespace facebook::velox::functions
