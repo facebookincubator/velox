@@ -20,7 +20,7 @@
 namespace facebook::velox::functions {
 
 std::unique_ptr<RemoteFunctionClient> getThriftClient(
-    folly::SocketAddress location,
+    const folly::SocketAddress& location,
     folly::EventBase* eventBase) {
   auto sock = folly::AsyncSocket::newSocket(eventBase, location);
   return std::make_unique<RemoteFunctionClient>(
