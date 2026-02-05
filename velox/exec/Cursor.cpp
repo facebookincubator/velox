@@ -48,9 +48,8 @@ class TaskQueue {
   // producer may continue. Returns kWaitForConsumer if the queue is
   // full after the addition and sets '*future' to a future that is
   // realized when the producer may continue.
-  exec::BlockingReason enqueue(
-      RowVectorPtr vector,
-      velox::ContinueFuture* future);
+  exec::BlockingReason
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
 
   // Returns nullptr when all producers are at end. Otherwise blocks.
   RowVectorPtr dequeue();
@@ -76,6 +75,7 @@ class TaskQueue {
   std::mutex mutex_;
   std::vector<ContinuePromise> producerUnblockPromises_;
   bool consumerBlocked_ = false;
+  bool drained_ = false;
   ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
   ContinueFuture consumerFuture_;
   bool closed_ = false;
@@ -83,11 +83,18 @@ class TaskQueue {
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
+    bool drained,
     velox::ContinueFuture* future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
-    ++producersFinished_;
+    drained_ = drained;
+    if (!drained) {
+      LOG(ERROR) << "MADUAN enqueue producer finish";
+
+      ++producersFinished_;
+    }
     if (consumerBlocked_) {
+      LOG(ERROR) << "MADUAN enqueue consumer promise set";
       consumerBlocked_ = false;
       consumerPromise_.setValue();
     }
@@ -138,10 +145,16 @@ RowVectorPtr TaskQueue::dequeue() {
         }
       } else if (
           numProducers_.has_value() && producersFinished_ == numProducers_) {
+        LOG(ERROR) << "MADUAN dequeue producersFinished_ == numProducers_";
+        return nullptr;
+      }
+      if (drained_) {
+        drained_ = false;
         return nullptr;
       }
       if (!vector) {
         consumerBlocked_ = true;
+        LOG(ERROR) << "MADUAN dequeue promise";
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
       }
@@ -153,7 +166,9 @@ RowVectorPtr TaskQueue::dequeue() {
     if (vector) {
       return vector;
     }
+    LOG(ERROR) << "MADUAN dequeue consumer wait";
     consumerFuture_.wait();
+    LOG(ERROR) << "MADUAN dequeue consumer finish";
   }
 }
 
@@ -291,7 +306,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(queryCtx_),
         Task::ExecutionMode::kParallel,
         // consumer
-        [queueHolder, copyResult = params.copyResult, taskId = taskId_](
+        [this, queueHolder, copyResult = params.copyResult, taskId = taskId_](
             const RowVectorPtr& vector,
             bool drained,
             velox::ContinueFuture* future) {
@@ -300,16 +315,18 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
             return exec::BlockingReason::kNotBlocked;
           }
-          VELOX_CHECK(
-              !drained, "Unexpected drain in multithreaded task cursor");
-          if (!vector || !copyResult) {
-            return queue->enqueue(vector, future);
-          }
 
+          drained_ = drained;
+
+          if (!vector || !copyResult) {
+            return queue->enqueue(vector, drained, future);
+          }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
           return queue->enqueue(
-              std::static_pointer_cast<RowVector>(std::move(copy)), future);
+              std::static_pointer_cast<RowVector>(std::move(copy)),
+              drained,
+              future);
         },
         0,
         std::move(spillDiskOpts),
@@ -365,6 +382,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     checkTaskError();
     if (!current_) {
+      if (drained_) {
+        drained_ = false;
+        return false;
+      }
       atEnd_ = true;
     }
     return current_ != nullptr;
@@ -427,6 +448,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   std::shared_ptr<TaskQueue> queue_;
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
+  bool drained_{false};
   bool atEnd_{false};
   tsan_atomic<bool> noMoreSplits_{false};
   std::exception_ptr error_;

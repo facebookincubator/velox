@@ -430,6 +430,60 @@ TEST_F(FilterProjectTest, barrier) {
   }
 }
 
+TEST_F(FilterProjectTest, barrierMulti) {
+  std::vector<RowVectorPtr> vectors;
+  std::vector<std::shared_ptr<test::TempFilePath>> tempFiles;
+  const int numSplits{3};
+  for (int32_t i = 0; i < numSplits; ++i) {
+    vectors.push_back(makeTestVector());
+    tempFiles.push_back(test::TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(tempFiles), vectors);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId projectPlanNodeId;
+  auto plan = test::PlanBuilder()
+                  .tableScan(vectors.front()->rowType())
+                  .filter("c1 % 10  > 0")
+                  .project({"c0", "c1", "c0 + c1"})
+                  .capturePlanNodeId(projectPlanNodeId)
+                  .planNode();
+  struct {
+    bool barrierExecution;
+    int numOutputRows;
+
+    std::string toString() const {
+      return fmt::format(
+          "barrierExecution {}, numOutputRows {}",
+          barrierExecution,
+          numOutputRows);
+    }
+  } testSettings[] = {{true, 23}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
+    auto task =
+        test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver,
+                std::to_string(tempFiles.size()))
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                std::to_string(testData.numOutputRows))
+            .splits(makeHiveConnectorSplits(tempFiles))
+            .barrierExecution(testData.barrierExecution)
+            .assertResults("SELECT c0, c1, c0 + c1 FROM tmp WHERE c1 % 10 > 0");
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
+    ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
+    // NOTE: the projector node doesn't respect output batch size as it does
+    // one-to-one mapping and expects the upstream operator respects the output
+    // batch size.
+    ASSERT_EQ(
+        exec::toPlanStats(taskStats).at(projectPlanNodeId).outputVectors,
+        numSplits);
+  }
+}
+
 TEST_F(FilterProjectTest, lazyDereference) {
   constexpr int kSize = 10;
   VectorPtr expected[] = {

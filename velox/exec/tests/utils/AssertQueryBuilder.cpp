@@ -336,7 +336,6 @@ AssertQueryBuilder::readCursor() {
       return;
     }
     auto& task = taskCursor->task();
-    VELOX_CHECK(!params_.barrierExecution || params_.serialExecution);
     if (params_.barrierExecution) {
       int numSplits{0};
       for (auto& [nodeId, nodeSplits] : splits_) {
