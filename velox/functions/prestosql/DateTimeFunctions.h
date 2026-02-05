@@ -2123,17 +2123,17 @@ struct LocalTimestampFunction {
     auto sessionStartTimeMs = config.sessionStartTimeMs();
 
     // Convert ms → seconds + nanos
-    seconds_ = sessionStartTimeMs / 1000;
-    nanos_ = (sessionStartTimeMs % 1000) * 1'000'000;
+    int64_t seconds = sessionStartTimeMs / 1000;
+    uint64_t nanos = (sessionStartTimeMs % 1000) * 1'000'000;
+    ts_ = Timestamp{seconds, nanos};
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
-    result = Timestamp{seconds_, nanos_};
+    result = ts_;
   }
 
  private:
-  int64_t seconds_;
-  uint64_t nanos_;
+  Timestamp ts_;
 };
 
 } // namespace facebook::velox::functions
