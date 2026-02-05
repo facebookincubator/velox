@@ -459,6 +459,7 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
 
 .. spark:function:: to_pretty_string(x) -> varchar
+
     Returns pretty string for ``x``. All scalar types are supported.
     Adjusts the timestamp input to the given time zone if set through ``session_timezone`` config.
     The result is different from that of casting ``x`` as string in the following aspects.
