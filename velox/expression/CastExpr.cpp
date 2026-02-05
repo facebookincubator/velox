@@ -357,20 +357,23 @@ VectorPtr CastExpr::castToTime(
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
+        auto setError = [&](const std::string& errorMessage) INLINE_LAMBDA {
+          if (setNullInResultAtError()) {
+            castResult->setNull(row, true);
+          } else {
+            VELOX_USER_FAIL(
+                makeErrorMessage(input, row, TIME()) + " " + errorMessage);
           }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
+        };
+
+        const auto inputString =
+            hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+        const auto timeResult =
+            hooks_->castStringToTime(inputString, timeZone, sessionStartTimeMs);
+        if (timeResult.hasError()) {
+          setError(timeResult.error().message());
+        } else {
+          resultFlatVector->set(row, timeResult.value());
         }
       });
 
