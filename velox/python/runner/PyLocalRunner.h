@@ -41,6 +41,11 @@ class PyTaskIterator {
 
   PyVector next();
 
+  /// Steps through execution, returning either the input to the next operator
+  /// with a breakpoint installed, or the next task output. If no breakpoints
+  /// are set, then step() behaves like next().
+  PyVector step();
+
   std::optional<PyVector> current() const {
     if (!vector_) {
       return std::nullopt;
@@ -68,6 +73,8 @@ class PyLocalRunner {
       const PyPlanNode& pyPlanNode,
       const std::shared_ptr<memory::MemoryPool>& pool,
       const std::shared_ptr<folly::CPUThreadPoolExecutor>& executor);
+
+  virtual ~PyLocalRunner() = default;
 
   /// Add a split to scan an entire file.
   ///
@@ -105,7 +112,14 @@ class PyLocalRunner {
   /// If the task hasn't finished, will print the plan with the current stats.
   std::string printPlanWithStats() const;
 
- private:
+ protected:
+  /// Creates the CursorParameters used to execute the plan. Can be overridden
+  /// by subclasses to customize execution behavior.
+  ///
+  /// @param maxDrivers Maximum number of drivers to use when executing the
+  /// plan.
+  virtual exec::CursorParameters createCursorParameters(int32_t maxDrivers);
+
   // Memory pools and thread pool to be used by queryCtx.
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> outputPool_;
