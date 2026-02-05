@@ -16,11 +16,14 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/dwio/dwrf/test/TestReadFile.h"
 
 using namespace facebook::velox::dwio::common;
 using facebook::velox::common::Region;
@@ -498,6 +501,39 @@ TEST_F(BufferedInputTest, resetAfterPartialStreamsConsumed) {
   EXPECT_EQ(next4.value(), "dddeee");
 }
 
+class CustomDirectBufferedInput
+    : public facebook::velox::dwio::common::DirectBufferedInput {
+ public:
+  CustomDirectBufferedInput(
+      std::shared_ptr<facebook::velox::ReadFile> readFile,
+      const facebook::velox::dwio::common::MetricsLogPtr& metricsLog,
+      facebook::velox::StringIdLease fileNum,
+      std::shared_ptr<facebook::velox::cache::ScanTracker> tracker,
+      facebook::velox::StringIdLease groupId,
+      std::shared_ptr<facebook::velox::io::IoStatistics> ioStats,
+      std::shared_ptr<facebook::velox::filesystems::File::IoStats> fsStats,
+      folly::Executor* executor,
+      const facebook::velox::io::ReaderOptions& readerOptions,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {})
+      : DirectBufferedInput(
+            std::move(readFile),
+            metricsLog,
+            std::move(fileNum),
+            std::move(tracker),
+            std::move(groupId),
+            std::move(ioStats),
+            std::move(fsStats),
+            executor,
+            readerOptions,
+            std::move(fileReadOps)) {
+    // Dummy reserve to ensure the accessibility of protected members in
+    // DirectBufferedInput.
+    requests_.reserve(1);
+    coalescedLoads_.reserve(1);
+    VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
+  }
+};
+
 class CustomBufferedInputBuilder
     : public facebook::velox::connector::hive::BufferedInputBuilder {
  public:
@@ -510,7 +546,20 @@ class CustomBufferedInputBuilder
       folly::Executor* executor,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
       override {
-    VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
+    auto file = std::make_shared<TestReadFile>(11, 100 << 20, fsStats);
+    auto tracker = std::make_shared<facebook::velox::cache::ScanTracker>(
+        "", nullptr, /*loadQuantum=*/8 << 20);
+    return std::make_unique<CustomDirectBufferedInput>(
+        std::move(file),
+        facebook::velox::dwio::common::MetricsLog::voidLog(),
+        fileHandle.uuid,
+        std::move(tracker),
+        fileHandle.groupId,
+        std::move(ioStats),
+        std::move(fsStats),
+        executor,
+        readerOpts,
+        fileReadOps);
   }
 };
 
@@ -533,9 +582,16 @@ TEST_F(CustomBufferedInputTest, basic) {
   auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
   auto fsStats =
       std::make_shared<facebook::velox::filesystems::File::IoStats>();
+  auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
 
   VELOX_ASSERT_THROW(
       facebook::velox::connector::hive::BufferedInputBuilder::getInstance()
-          ->create(fileHandle, readerOpts, nullptr, ioStats, fsStats, nullptr),
+          ->create(
+              fileHandle,
+              readerOpts,
+              nullptr,
+              ioStats,
+              fsStats,
+              executor.get()),
       "Not implemented in CustomBufferedInputBuilder");
 }
