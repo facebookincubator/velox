@@ -154,7 +154,6 @@ void registerMathematicalFunctions(const std::string& prefix = "") {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
 
   registerDecimalFloor(prefix);
-  registerDecimalCeil(prefix);
   registerDecimalRound(prefix);
   registerDecimalTruncate(prefix);
 }

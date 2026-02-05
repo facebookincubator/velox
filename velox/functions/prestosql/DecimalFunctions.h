@@ -31,8 +31,6 @@ void registerDecimalModulus(const std::string& prefix);
 
 void registerDecimalFloor(const std::string& prefix);
 
-void registerDecimalCeil(const std::string& prefix);
-
 void registerDecimalRound(const std::string& prefix);
 
 void registerDecimalTruncate(const std::string& prefix);
