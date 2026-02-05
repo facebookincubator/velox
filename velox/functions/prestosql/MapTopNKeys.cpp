@@ -17,6 +17,8 @@
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 
+#include <queue>
+
 namespace facebook::velox::functions {
 namespace {
 
@@ -98,8 +100,54 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
     }
 
     CompareFlags flags{.nullsFirst = false, .ascending = true};
+
+    // Define comparator for min-heap: returns true if left > right.
+    // This keeps the smallest elements at the top, so we can maintain the
+    // largest N elements.
+    struct GreaterThanComparator {
+      const DecodedVector* decodedElements;
+      const BaseVector* baseElements;
+      const vector_size_t* decodedIndices;
+      CompareFlags flags;
+
+      bool operator()(vector_size_t leftIdx, vector_size_t rightIdx) const {
+        if (leftIdx == rightIdx) {
+          return false;
+        }
+
+        bool leftNull = decodedElements->isNullAt(leftIdx);
+        bool rightNull = decodedElements->isNullAt(rightIdx);
+
+        if (leftNull && rightNull) {
+          return false;
+        }
+        if (leftNull) {
+          return false;
+        }
+        if (rightNull) {
+          return true;
+        }
+
+        auto result = baseElements->compare(
+            baseElements,
+            decodedIndices[leftIdx],
+            decodedIndices[rightIdx],
+            flags);
+
+        if (!result.has_value()) {
+          VELOX_USER_FAIL("Ordering nulls is not supported");
+        }
+
+        return result.value() > 0;
+      }
+    };
+
+    GreaterThanComparator comparator{
+        decodedElements.get(), baseElements, decodedIndices, flags};
+
+    vector_size_t totalElements = 0;
     rows.applyToSelected([&](vector_size_t row) {
-      if (decodedMap.isNullAt(row)) {
+      if (decodedMap.isNullAt(row) || decodedN.isNullAt(row)) {
         return;
       }
 
@@ -111,59 +159,43 @@ class MapTopNKeysLambdaFunction : public exec::VectorFunction {
         return;
       }
 
-      // Sort keys in ascending order (matching Java's array_sort behavior).
-      // Use stable_sort to preserve original order when comparator returns 0.
-      // Then reverse to get descending order for TOP N.
-      std::stable_sort(
-          rawIndices + mapOffset,
-          rawIndices + mapOffset + mapSize,
-          [&](vector_size_t leftIdx, vector_size_t rightIdx) {
-            if (leftIdx == rightIdx) {
-              return false;
-            }
+      int64_t n = decodedN.valueAt<int64_t>(row);
+      auto resultSize = std::min(static_cast<vector_size_t>(n), mapSize);
 
-            // Handle null values in transformed results.
-            bool leftNull = decodedElements->isNullAt(leftIdx);
-            bool rightNull = decodedElements->isNullAt(rightIdx);
-
-            if (leftNull && rightNull) {
-              return false;
-            }
-            if (leftNull) {
-              return false;
-            }
-            if (rightNull) {
-              return true;
-            }
-
-            auto result = baseElements->compare(
-                baseElements,
-                decodedIndices[leftIdx],
-                decodedIndices[rightIdx],
-                flags);
-
-            if (!result.has_value()) {
-              VELOX_USER_FAIL("Ordering nulls is not supported");
-            }
-
-            return result.value() < 0;
-          });
-
-      std::reverse(rawIndices + mapOffset, rawIndices + mapOffset + mapSize);
-    });
-
-    vector_size_t totalElements = 0;
-    rows.applyToSelected([&](vector_size_t row) {
-      if (decodedMap.isNullAt(row) || decodedN.isNullAt(row)) {
+      if (resultSize == 0) {
         return;
       }
 
-      auto mapIndex = decodedMap.index(row);
-      auto mapSize = flatMap->sizeAt(mapIndex);
-      int64_t n = decodedN.valueAt<int64_t>(row);
-
-      auto resultSize = std::min(static_cast<vector_size_t>(n), mapSize);
       totalElements += resultSize;
+      std::priority_queue<
+          vector_size_t,
+          std::vector<vector_size_t>,
+          GreaterThanComparator>
+          minHeap(comparator);
+
+      // Build heap with top N elements
+      for (vector_size_t i = 0; i < mapSize; ++i) {
+        auto idx = mapOffset + i;
+        if (minHeap.size() < resultSize) {
+          minHeap.push(idx);
+        } else if (comparator(idx, minHeap.top())) {
+          minHeap.push(idx);
+          minHeap.pop();
+        }
+      }
+
+      // Extract from heap in reverse order to get descending order
+      std::vector<vector_size_t> topIndices(minHeap.size());
+      auto heapSize = minHeap.size();
+      for (int i = heapSize - 1; i >= 0; --i) {
+        topIndices[i] = minHeap.top();
+        minHeap.pop();
+      }
+
+      // Copy back to rawIndices
+      for (size_t i = 0; i < topIndices.size(); ++i) {
+        rawIndices[mapOffset + i] = topIndices[i];
+      }
     });
 
     auto elements = BaseVector::create(
