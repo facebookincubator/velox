@@ -284,6 +284,14 @@ class QueryConfig {
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
 
+  /// Initial output batch size in rows for MergeJoin operator. When non-zero,
+  /// the batch size starts at this value and is dynamically adjusted based on
+  /// the average row size of previous output batches. When zero (default),
+  /// dynamic adjustment is disabled and the batch size is fixed at
+  /// preferredOutputBatchRows.
+  static constexpr const char* kMergeJoinOutputBatchStartSize =
+      "merge_join_output_batch_start_size";
+
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
   /// limit'.
@@ -1014,6 +1022,12 @@ class QueryConfig {
     VELOX_USER_CHECK_LE(
         maxBatchRows, std::numeric_limits<vector_size_t>::max());
     return maxBatchRows;
+  }
+
+  vector_size_t mergeJoinOutputBatchStartSize() const {
+    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
+    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
+    return batchRows;
   }
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
