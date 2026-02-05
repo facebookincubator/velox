@@ -56,10 +56,7 @@ class TransformFunction : public TransformFunctionBase {
     // function(T, U) has 2 children (input T, output U) -> 1 input arg.
     // function(T, integer, U) has 3 children (input T, index integer, output U)
     // -> 2 input args.
-    auto functionType = args[1]->type();
-    bool withIndex = functionType->size() == 3;
-
-    if (withIndex) {
+    if (args[1]->type()->size() == 3) {
       lambdaArgs.push_back(createIndexVector(flatArray, numElements, context));
     }
   }
