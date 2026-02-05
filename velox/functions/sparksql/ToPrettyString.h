@@ -100,13 +100,7 @@ struct ToPrettyStringVarbinaryFunction {
       char* pos = startPosition;
       *pos++ = '[';
       for (auto i = 0; i < input->size(); i++) {
-        auto end =
-            fmt::format_to(pos, "{:02X}", static_cast<int>(input->data()[i]));
-        int count = end - pos;
-        VELOX_USER_RETURN_NE(count, 2, "to_pretty_string(VARBINARY): failed to format byte at index {} (value: {}).",
-              i,
-              static_cast<int>(input->data()[i]));
-
+        fmt::format_to(pos, "{:02X}", static_cast<int>(input->data()[i]));
         pos += 2;
         *pos++ = ' ';
       }
