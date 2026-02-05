@@ -23,6 +23,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/DictionaryVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SequenceVector.h"
@@ -473,6 +474,76 @@ VectorPtr BaseVector::createInternal(
     default:
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
           createEmpty, kind, size, pool, type);
+  }
+}
+
+// static
+VectorPtr BaseVector::createEmptyLike(
+    const BaseVector* source,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(source);
+  auto* wrapped = source->wrappedVector();
+  const auto& type = source->type();
+
+  switch (type->kind()) {
+    case TypeKind::ROW: {
+      auto& rowType = type->as<TypeKind::ROW>();
+      auto* sourceRow = wrapped->as<RowVector>();
+      std::vector<VectorPtr> children;
+      children.reserve(rowType.size());
+      for (size_t i = 0; i < rowType.size(); ++i) {
+        children.push_back(
+            createEmptyLike(sourceRow->childAt(i).get(), size, pool));
+      }
+      return std::make_shared<RowVector>(
+          pool, type, nullptr, size, std::move(children));
+    }
+    case TypeKind::ARRAY: {
+      auto offsets = allocateOffsets(size, pool);
+      auto sizes = allocateSizes(size, pool);
+      auto* sourceArray = wrapped->as<ArrayVector>();
+      auto elements = createEmptyLike(sourceArray->elements().get(), 0, pool);
+      return std::make_shared<ArrayVector>(
+          pool,
+          type,
+          nullptr,
+          size,
+          std::move(offsets),
+          std::move(sizes),
+          std::move(elements));
+    }
+    case TypeKind::MAP: {
+      // If source is FLAT_MAP, directly create FlatMapVector.
+      if (wrapped->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        return std::make_shared<FlatMapVector>(
+            pool,
+            type,
+            nullptr, // nulls
+            size,
+            nullptr, // distinctKeys
+            std::vector<VectorPtr>{}, // mapValues
+            std::vector<BufferPtr>{}); // inMaps
+      }
+
+      // Otherwise create standard MapVector.
+      auto offsets = allocateOffsets(size, pool);
+      auto sizes = allocateSizes(size, pool);
+      auto* sourceMap = wrapped->as<MapVector>();
+      auto keys = createEmptyLike(sourceMap->mapKeys().get(), 0, pool);
+      auto values = createEmptyLike(sourceMap->mapValues().get(), 0, pool);
+      return std::make_shared<MapVector>(
+          pool,
+          type,
+          nullptr,
+          size,
+          std::move(offsets),
+          std::move(sizes),
+          std::move(keys),
+          std::move(values));
+    }
+    default:
+      return BaseVector::create(type, size, pool);
   }
 }
 
