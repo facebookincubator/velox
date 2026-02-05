@@ -291,7 +291,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(queryCtx_),
         Task::ExecutionMode::kParallel,
         // consumer
-        [queueHolder, copyResult = params.copyResult, taskId = taskId_](
+        [queueHolder,
+         copyResult = params.copyResult,
+         taskId = taskId_,
+         preserveEncodedCopy = params.preserveEncodedCopy](
             const RowVectorPtr& vector,
             bool drained,
             velox::ContinueFuture* future) {
@@ -306,10 +309,21 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             return queue->enqueue(vector, future);
           }
 
-          VectorPtr copy = encodedVectorCopy(
-              {.pool = queue->pool(), .reuseSource = false}, vector);
-          return queue->enqueue(
-              std::static_pointer_cast<RowVector>(std::move(copy)), future);
+          if (preserveEncodedCopy) {
+            VectorPtr copy = encodedVectorCopy(
+                {.pool = queue->pool(), .reuseSource = false}, vector);
+            return queue->enqueue(
+                std::static_pointer_cast<RowVector>(std::move(copy)), future);
+          } else {
+            // Make sure to load lazy vector if not loaded already.
+            for (auto& child : vector->children()) {
+              child->loadedVector();
+            }
+            auto copy = BaseVector::create<RowVector>(
+                vector->type(), vector->size(), queue->pool());
+            copy->copy(vector.get(), 0, 0, vector->size());
+            return queue->enqueue(std::move(copy), future);
+          }
         },
         0,
         std::move(spillDiskOpts),

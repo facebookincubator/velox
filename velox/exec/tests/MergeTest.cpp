@@ -967,6 +967,7 @@ TEST_F(MergeTest, preserveVectorEncoding) {
   params.planNode = plan;
   params.queryCtx = core::QueryCtx::create(executor_.get());
   params.maxDrivers = 2;
+  params.preserveEncodedCopy = true;
 
   auto result = readCursor(params);
   ASSERT_EQ(result.second.size(), 1);

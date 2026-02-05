@@ -89,6 +89,10 @@ struct CursorParameters {
   /// breakpoints. This is useful for debugging query execution and
   /// understanding data flow through operators.
   std::vector<core::PlanNodeId> breakpoints;
+
+  /// Preserves encoded vector copy.
+  /// TODO remove.
+  bool preserveEncodedCopy = false;
 };
 
 /// Abstract interface for iterating over query results. TaskCursor manages
