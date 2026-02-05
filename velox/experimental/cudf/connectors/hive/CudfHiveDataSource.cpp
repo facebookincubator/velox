@@ -254,9 +254,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
                 cudf::get_current_device_resource_ref());
             // Directly read the column chunk data to the device buffer if
             // supported
-            if (auto cachedInput =
+            if (auto bufferedInput =
                     dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
-              cachedInput->enqueueForDevice(
+              bufferedInput->enqueueForDevice(
                   static_cast<uint64_t>(byteRange.offset()),
                   static_cast<uint64_t>(byteRange.size()),
                   static_cast<uint8_t*>(buffer.data()));
@@ -282,9 +282,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
             }
           });
 
-      if (auto cachedInput =
+      if (auto bufferedInput =
               dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
-        cachedInput->load(stream_);
+        bufferedInput->load(stream_);
       }
 
       // Wait for all IO futures to complete
