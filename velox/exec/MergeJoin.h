@@ -21,6 +21,162 @@
 
 namespace facebook::velox::exec {
 
+/// VectorGrouping is a streaming Velox Operator that groups consecutive rows by
+/// a set of key columns and produces columnar outputs where each output vector
+/// contains rows for exactly one key (e.g., one uid).
+///
+/// - Input ordering assumption: upstream guarantees rows are globally sorted by
+///   the grouping keys. Identical keys may span multiple consecutive input
+///   batches.
+/// - Columnar-only: it does not convert columns to row containers; outputs are
+///   built via slicing/concatenation to keep zero-copy/low-copy semantics.
+/// - Slicing: each input RowVector is partitioned into contiguous slices where
+///   all rows share the same key. Adjacent slices form boundaries when a key
+///   changes.
+/// - Cross-batch merge: if the last buffered slice and the first slice of the
+///   new batch have the same key, they are appended to form a single output
+////   vector for that key (preventing fragmentation across batches).
+/// - Backpressure: because each input batch may produce multiple slices but
+///   getOutput() emits only one slice per call, needsInput() throttles the
+///   source when the internal buffer grows (simple watermark).
+/// - Emission rule: the last (in-progress) slice is held until end-of-input,
+///   ensuring an output vector contains all rows for its key.
+class VectorGrouping : public Operator {
+ public:
+  VectorGrouping(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const std::shared_ptr<const core::VectorGroupingNode>& node)
+      : Operator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            "VectorMerge"),
+        mergeNode_(node) {}
+
+  void initialize() override {
+    Operator::initialize();
+    for (const auto& key : mergeNode_->keys()) {
+      keyChannels_.push_back(outputType_->getChildIdx(key->name()));
+    }
+    mergeNode_.reset();
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /* unused */) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  /// Backpressure the source because each input vector may be sliced into
+  /// multiple vectors, but only one vector is emitted per `getOutput` call.
+  bool needsInput() const override {
+    return !noMoreInput_ && inputs_.size() < 3;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    std::vector<RowVectorPtr> slices;
+    const auto numRows = input->size();
+    VELOX_CHECK_GT(numRows, 0);
+
+    vector_size_t lastStart = 0;
+    vector_size_t pos = lastStart + 1;
+
+    for (; pos < numRows; ++pos) {
+      if (!equal(input, lastStart, pos)) {
+        // Create a slice for the range [lastStart, pos).
+        slices.push_back(std::static_pointer_cast<RowVector>(
+            input->slice(lastStart, pos - lastStart)));
+        lastStart = pos;
+      }
+    }
+
+    // Final slice for the range [lastStart, numRows).
+    if (FOLLY_UNLIKELY(lastStart == 0)) {
+      // Entire batch is a single run, reuse the original input.
+      slices.push_back(input);
+    } else if (lastStart < numRows) {
+      slices.push_back(std::static_pointer_cast<RowVector>(
+          input->slice(lastStart, numRows - lastStart)));
+    }
+
+    VELOX_CHECK_GT(slices.size(), 0);
+    if (FOLLY_UNLIKELY(inputs_.empty())) {
+      inputs_ = std::move(slices);
+      return;
+    }
+
+    auto& lastInput = inputs_.back();
+    size_t index = 0;
+    if (equal(lastInput, 0, slices[0], 0)) {
+      lastInput->append(slices[0].get());
+      ++index;
+    }
+    for (; index < slices.size(); ++index) {
+      inputs_.push_back(std::move(slices[index]));
+    }
+  }
+
+  // If there’s only one buffered slice, emit it only after `noMoreInput_` is
+  // true. This avoids emitting a slice that might be extended by the next batch
+  // (same key).
+  RowVectorPtr getOutput() override {
+    if (inputs_.empty()) {
+      return nullptr;
+    }
+
+    if (inputs_.size() == 1) {
+      if (noMoreInput_) {
+        auto output = inputs_.front();
+        inputs_.pop_front();
+        return output;
+      }
+      return nullptr;
+    }
+
+    // When there are >= 2 slices buffered, the first slice's key boundary is
+    // closed by the presence of the next slice, so it's safe to emit now.
+    auto output = inputs_.front();
+    inputs_.pop_front();
+    return output;
+  }
+
+  bool isFinished() override {
+    return !noMoreInput_ && inputs_.empty();
+  }
+
+  bool equal(const RowVectorPtr& vector, vector_size_t lhs, vector_size_t rhs)
+      const {
+    for (const auto key : keyChannels_) {
+      const auto result =
+          vector->childAt(key)->compare(vector->childAt(key).get(), lhs, rhs);
+      if (result != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool equal(
+      const RowVectorPtr& vector,
+      vector_size_t index,
+      const RowVectorPtr& other,
+      vector_size_t otherIndex) const {
+    for (const auto key : keyChannels_) {
+      const auto result = vector->childAt(key)->compare(
+          other->childAt(key).get(), index, otherIndex);
+      if (result != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  std::shared_ptr<const core::VectorGroupingNode> mergeNode_;
+  std::vector<column_index_t> keyChannels_;
+  std::list<RowVectorPtr> inputs_;
+};
+
 /// The merge join operator assumes both streams, left (from addInput()) and
 /// right (from rightSource), are sorted in ascending order on the join key.
 ///
