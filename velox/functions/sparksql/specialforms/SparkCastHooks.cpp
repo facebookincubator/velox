@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -108,6 +109,23 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
   //   "1970-01-01 (BC)"
   return util::fromDateString(
       removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
+}
+
+Expected<int64_t> SparkCastHooks::castStringToTime(
+    const StringView& timeString,
+    const tz::TimeZone* /* timeZone */,
+    int64_t /* sessionStartTimeMs */) const {
+  // Spark represents TIME as BIGINT (microseconds since midnight).
+  // Spark doesn't use timezone for TIME type, so we ignore those parameters.
+  // Parse the time string and convert from milliseconds to microseconds.
+  auto timeMillis = util::fromTimeString(removeWhiteSpaces(timeString));
+
+  if (!timeMillis.hasValue()) {
+    return folly::makeUnexpected(timeMillis.error());
+  }
+
+  // Convert milliseconds to microseconds (Spark uses microseconds).
+  return timeMillis.value() * 1000;
 }
 
 Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {

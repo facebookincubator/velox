@@ -48,6 +48,14 @@ class SparkCastHooks : public exec::CastHooks {
   Expected<int32_t> castStringToDate(
       const StringView& dateString) const override;
 
+  /// Casts string to TIME (microseconds since midnight as BIGINT).
+  /// Supports format: HH:mm:ss[.SSSSSS]
+  /// Removes all leading and trailing UTF8 white-spaces before cast.
+  Expected<int64_t> castStringToTime(
+      const StringView& timeString,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const override;
+
   // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
   // strings with different letter cases to real.
   Expected<float> castStringToReal(const StringView& data) const override;

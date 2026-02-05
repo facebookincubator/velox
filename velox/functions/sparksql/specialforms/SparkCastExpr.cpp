@@ -31,6 +31,11 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     return true;
   }
 
+  // String to Time cast supports ANSI mode.
+  if (fromType->isVarchar() && toType->isTime()) {
+    return true;
+  }
+
   return false;
 }
 
@@ -48,10 +53,9 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   const auto& fromType = compiledChildren[0]->type();
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
-  // the specific cast operation doesn't support ANSI mode.
-  // The distinction between CAST (ANSI off) and TRY_CAST is limited to
-  // overflow handling, which is managed by the 'allowOverflow' flag in
-  // SparkCastHooks.
+  // the specific cast operation doesn't support ANSI mode. The distinction
+  // between CAST (ANSI off) and TRY_CAST is limited to overflow handling,
+  // which is managed by the 'allowOverflow' flag in SparkCastHooks.
   const bool isTryCast =
       !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
 

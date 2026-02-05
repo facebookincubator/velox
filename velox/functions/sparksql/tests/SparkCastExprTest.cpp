@@ -1094,6 +1094,99 @@ TEST_F(SparkCastExprTest, decimalToString) {
   }
 }
 
+TEST_F(SparkCastExprTest, stringToTime) {
+  // Test valid time strings with ANSI mode disabled (default).
+  // Use scope guard to ensure ANSI config is reset even if test fails.
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Note: Spark TIME is represented as microseconds since midnight.
+  {
+    auto input = makeFlatVector<std::string>(
+        {"00:00:00",
+         "01:30:00",
+         "12:00:00",
+         "23:59:59",
+         "01:30:45",
+         "12:03:17",
+         "23:59:59.999",
+         "00:00:00.000",
+         "12:03:17.123",
+         "12:03:17.456",
+         "1:2:3",
+         "1:02:03",
+         "01:2:3",
+         " 12:30:45 "});
+
+    std::vector<int64_t> expectedValues = {
+        0LL, // 00:00:00 = 0 microseconds
+        5400000000LL, // 01:30:00 = 1.5 hours in microseconds
+        43200000000LL, // 12:00:00 = 12 hours in microseconds
+        86399000000LL, // 23:59:59 = 86399 seconds in microseconds
+        5445000000LL, // 01:30:45
+        43397000000LL, // 12:03:17
+        86399999000LL, // 23:59:59.999
+        0LL, // 00:00:00.000
+        43397123000LL, // 12:03:17.123
+        43397456000LL, // 12:03:17.456
+        3723000000LL, // 1:2:3
+        3723000000LL, // 1:02:03
+        3723000000LL, // 01:2:3
+        45045000000LL}; // 12:30:45 with whitespace
+
+    auto result =
+        evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
+
+    // Manually verify results since DuckDB doesn't support TIME type.
+    ASSERT_EQ(result->size(), expectedValues.size());
+    ASSERT_TRUE(result->type()->isTime());
+
+    auto* flatResult = result->as<FlatVector<int64_t>>();
+    for (size_t i = 0; i < expectedValues.size(); i++) {
+      ASSERT_FALSE(result->isNullAt(i)) << "Row " << i << " should not be null";
+      ASSERT_EQ(flatResult->valueAt(i), expectedValues[i])
+          << "Mismatch at row " << i;
+    }
+  }
+
+  // Test invalid time strings with ANSI mode disabled - should return NULL.
+  {
+    auto input = makeFlatVector<std::string>(
+        {"24:00:00", "12:60:00", "12:30:60", "abc", ""});
+
+    auto result =
+        evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
+
+    // All should be null.
+    ASSERT_EQ(result->size(), 5);
+    ASSERT_TRUE(result->type()->isTime());
+    for (size_t i = 0; i < 5; i++) {
+      ASSERT_TRUE(result->isNullAt(i))
+          << "Row " << i << " should be null for invalid input";
+    }
+  }
+
+  // Test invalid time strings with ANSI mode enabled - should throw.
+  {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+    auto testInvalidString = [this](const std::string& value) {
+      auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      VELOX_ASSERT_THROW(
+          evaluateCast(VARCHAR(), TIME(), input, false), "Cannot cast");
+    };
+
+    testInvalidString("24:00:00");
+    testInvalidString("12:60:00");
+    testInvalidString("12:30:60");
+    testInvalidString("abc");
+    testInvalidString("");
+  }
+}
+
 TEST_F(SparkCastExprTest, recursiveTryCast) {
   // Test array elements.
   testCast(
