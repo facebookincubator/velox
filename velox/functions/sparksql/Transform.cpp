@@ -57,7 +57,8 @@ class TransformFunction : public TransformFunctionBase {
     // function(T, integer, U) has 3 children (input T, index integer, output U)
     // -> 2 input args.
     if (args[1]->type()->size() == 3) {
-      lambdaArgs.push_back(createIndexVector(flatArray, numElements, context));
+      lambdaArgs.push_back(
+          createIndexVector(flatArray, numElements, context.pool()));
     }
   }
 
@@ -68,8 +69,7 @@ class TransformFunction : public TransformFunctionBase {
   static VectorPtr createIndexVector(
       const ArrayVectorPtr& flatArray,
       vector_size_t numElements,
-      exec::EvalCtx& context) {
-    auto* pool = context.pool();
+      memory::MemoryPool* pool) {
     auto indexVector =
         BaseVector::create<FlatVector<int32_t>>(INTEGER(), numElements, pool);
 
