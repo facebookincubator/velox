@@ -233,6 +233,11 @@ jobs:
               - 'velox/experimental/cudf/**'
               - 'CMake/resolve_dependency_modules/cudf.cmake'
 
+      - name: Copy Shared Libraries for cuDF Test Binaries
+        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        run: |
+          for exe in _build/release/velox/experimental/cudf/tests/*; do [ -x "$exe" ] && ldd "$exe" 2>/dev/null; done | sed -n 's/''[^\/]*''\(\/[^ ]*\)'' .*''/\1/p' | sort -u
+
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
@@ -243,12 +248,6 @@ jobs:
             velox/experimental/cudf/tests/CMakeLists.txt
             _build/release/velox/experimental/cudf/tests/velox_cudf*
             _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-            _build/release/_deps/cudf-build/libcudf.so
-            _build/release/_deps/rmm-build/librmm.so
-            _build/release/_deps/rapids_logger-build/librapids_logger.so
-            _build/release/_deps/kvikio-build/libkvikio.so
-            _build/release/_deps/nvcomp_proprietary_binary-src/lib64/libnvcomp.so.4
-            _build/release/_deps/curl-build/lib/libcurl.so.4
           retention-days: ${{ env.RETENTION }}
 
   cudf-tests:
@@ -283,10 +282,6 @@ jobs:
       - name: Run cuDF Tests
         run: |
           cd _build/release/velox/experimental/cudf/tests/
-          export DEPS_PATH=../../../../_deps/
-          export LD_LIBRARY_PATH=$DEPS_PATH/cudf-build:$DEPS_PATH/rmm-build:$LD_LIBRARY_PATH
-          export LD_LIBRARY_PATH=$DEPS_PATH/kvikio-build:$DEPS_PATH/curl-build:$LD_LIBRARY_PATH
-          export LD_LIBRARY_PATH=$DEPS_PATH/rapids_logger-build:$DEPS_PATH/nvcomp_proprietary_binary-src/lib64:$LD_LIBRARY_PATH
           ctest --output-on-failure
 
   ubuntu-debug:
