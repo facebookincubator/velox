@@ -143,7 +143,8 @@ struct ToPrettyStringTimestampFunction {
             Timestamp::tsToStringView(inputValue, options_, result.data());
         result.resize(stringView.size());
       } catch (const std::exception& e) {
-        return Status::Invalid("Invalid timestamp in to_pretty_string: {}", e.what());
+        return Status::Invalid(
+            "Invalid timestamp in to_pretty_string: {}", e.what());
       }
     } else {
       result.setNoCopy(detail::kNull);

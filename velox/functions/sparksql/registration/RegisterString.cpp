@@ -15,8 +15,8 @@
  */
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/Re2Functions.h"
-#include "velox/functions/lib/UpperLower.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/lib/UpperLower.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/Base64Function.h"
@@ -29,9 +29,9 @@
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/ToPrettyString.h"
 #include "velox/functions/sparksql/UnBase64Function.h"
 #include "velox/functions/sparksql/VarcharTypeWriteSideCheck.h"
-#include "velox/functions/sparksql/ToPrettyString.h"
 
 namespace facebook::velox::functions {
 void registerSparkStringFunctions(const std::string& prefix) {

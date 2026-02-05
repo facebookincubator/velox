@@ -473,7 +473,7 @@ String Functions
         SELECT to_pretty_string(4); -- "4"
         SELECT to_pretty_string(cast("1.0" as float)); -- "1.0"
         SELECT to_pretty_string("spark"); -- "spark"
-        SELECT to_pretty_string(cast('abcdef' as binary)); -- "[61 62 63 64 65 66]" 
+        SELECT to_pretty_string(cast('abcdef' as binary)); -- "[61 62 63 64 65 66]"
         SELECT to_pretty_string(null); -- "NULL"
         SELECT to_pretty_string(cast(2347589 as timestamp)); -- "1970-01-28 12:06:29"
         SELECT to_pretty_string(cast('2024-05-08' as date)); -- "2024-05-08"
