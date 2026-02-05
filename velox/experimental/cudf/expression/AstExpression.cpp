@@ -201,6 +201,21 @@ bool isOpAndInputsSupported(
   return false;
 }
 
+bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (!expr) {
+    return false;
+  }
+  if (expr->type() && expr->type()->isDecimal()) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsDecimalType(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // not special form, name = function, so unsupported for astpure
 // "in", "between", "isnotnull" are not special form, but supported for astpure
 // enum class SpecialFormKind : int32_t {
@@ -222,17 +237,10 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
 
   // reject anything with DECIMAL to force to Function Evaluator path
   // seves 1/14/26
-  if (expr->type()->isDecimal()) {
-    std::cout << "**** DECIMAL type (output) not supported in AST: "
+  if (containsDecimalType(expr)) {
+    std::cout << "**** DECIMAL type (recursive) not supported in AST: "
               << expr->toString() << std::endl;
     return false;
-  }
-  for (const auto& input : expr->inputs()) {
-    if (input->type()->isDecimal()) {
-      std::cout << "**** DECIMAL type (input) not supported in AST: "
-                   << expr->toString() << std::endl;
-      return false;
-    }
   }
 
   const auto name =

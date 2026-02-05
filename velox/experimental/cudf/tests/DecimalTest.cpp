@@ -825,6 +825,35 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCastRight) {
   runAndAssert(false);
 }
 
+TEST_F(CudfDecimalTest, decimalAstRecursiveDecimalCastToReal) {
+  auto rowType = ROW({
+      {"d", DECIMAL(10, 2)},
+      {"x", DOUBLE()},
+  });
+
+  auto input = makeRowVector(
+      {"d", "x"},
+      {
+          makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2)),
+          makeFlatVector<double>({2.0, -4.0, 0.0}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto expected = makeRowVector(
+      {"prod"},
+      {makeFlatVector<double>({2.5, 10.0, 0.0})});
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"cast(cast(d as real) as double) * x AS prod"})
+                  .planNode();
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(CudfDecimalTest, decimalCastToDoubleProjection) {
   auto rowType = ROW({
       {"d", DECIMAL(10, 2)},
