@@ -88,7 +88,7 @@ CudfVectorPtr CudfTopN::mergeTopK(
       topNBatches[0]->pool(),
       outputType_,
       size,
-      std::make_unique<cudf::table>(topk, stream),
+      std::make_unique<cudf::table>(topk, stream, mr),
       stream);
 }
 

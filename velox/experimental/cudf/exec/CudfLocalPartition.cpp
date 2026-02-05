@@ -196,7 +196,10 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
               pool(),
               outputType_,
               partitionData.num_rows(),
-              std::make_unique<cudf::table>(partitionData, stream),
+              std::make_unique<cudf::table>(
+                  partitionData,
+                  stream,
+                  cudf::get_current_device_resource_ref()),
               stream),
           partitionData.num_rows(),
           &future);
