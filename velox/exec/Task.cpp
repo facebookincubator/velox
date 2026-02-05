@@ -471,11 +471,6 @@ Task::~Task() {
 }
 
 void Task::ensureBarrierSupport() const {
-  VELOX_CHECK_EQ(
-      mode_,
-      Task::ExecutionMode::kSerial,
-      "Task doesn't support barriered execution.");
-
   VELOX_CHECK_NULL(
       firstNodeNotSupportingBarrier_,
       "Task doesn't support barriered execution. Name of the first node that "
@@ -1357,6 +1352,12 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
       ++splitGroupState.numRunningDrivers;
     }
   }
+  if (!groupedExecutionDrivers && barrierRequested_) {
+    for (auto& driver : drivers) {
+      driver->startBarrier();
+      ++numDriversUnderBarrier_;
+    }
+  }
   noMoreLocalExchangeProducers(splitGroupId);
   if (groupedExecutionDrivers) {
     ++numRunningSplitGroups_;
@@ -1605,8 +1606,9 @@ void Task::addSplitLocked(
     addSplitToStoreLocked(splitsState, kUngroupedGroupId, split, promises);
     return;
   }
-  VELOX_CHECK(
-      !barrierRequested_, "Can't add new split under barrier processing");
+
+  /*VELOX_CHECK(
+      !barrierRequested_, "Can't add new split under barrier processing");*/
 
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
