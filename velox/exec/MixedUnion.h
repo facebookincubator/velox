@@ -41,7 +41,16 @@ class MixedUnion : public SourceOperator {
 
   void close() override;
 
+  bool startDrain() override;
+
+  void finishDrain() override;
+
  private:
+  /// Check if all sources have been drained and finish drain if so.
+  void maybeFinishDrain();
+
+  /// Output any remaining data during drain processing.
+  RowVectorPtr getOutputDraining();
   /// Get merge sources from the task
   BlockingReason addMergeSources(ContinueFuture* future);
 
@@ -74,8 +83,18 @@ class MixedUnion : public SourceOperator {
   /// List of blocking futures for sources
   std::vector<ContinueFuture> sourceBlockingFutures_;
 
+  /// Blocking reason and future for isBlocked() to return
+  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+  ContinueFuture blockingFuture_;
+
   /// True when all sources are exhausted
   bool finished_{false};
+
+  /// Tracks whether this operator has signaled its sources to drain.
+  bool drainSignaledToSources_{false};
+
+  /// Tracks which sources have been drained (during barrier processing).
+  std::vector<bool> sourcesDrained_;
 
   /// Maximum output batch size
   const vector_size_t maxOutputBatchRows_;

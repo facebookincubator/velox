@@ -159,7 +159,11 @@ OperatorSupplier makeOperatorSupplier(
       auto consumerCb =
           [mergeSource](
               RowVectorPtr input, bool drained, ContinueFuture* future) {
-            VELOX_CHECK(!drained);
+            if (drained) {
+              VELOX_CHECK_NULL(input);
+              mergeSource->drain();
+              return BlockingReason::kNotBlocked;
+            }
             return mergeSource->enqueue(std::move(input), future);
           };
       auto startCb = [mergeSource](ContinueFuture* future) {

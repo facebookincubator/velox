@@ -5594,6 +5594,10 @@ class MixedUnionNode : public PlanNode {
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
  private:
   void addDetails(std::stringstream& stream) const override {}
   const std::vector<PlanNodePtr> sources_;
