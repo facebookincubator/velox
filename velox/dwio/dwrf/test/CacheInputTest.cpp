@@ -1014,6 +1014,12 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_GT(ioStats_->read().sum(), 0);
   ASSERT_EQ(ioStats_->ramHit().sum(), 0);
   ASSERT_EQ(ioStats_->ssdRead().sum(), 0);
+  // Cold read should have remote storage latency.
+  ASSERT_GT(ioStats_->storageReadLatencyUs().count(), 0);
+  // This test does not use coalesced loading for cold reads, so no coalesced
+  // latency is expected.
+  ASSERT_EQ(ioStats_->coalescedSsdLoadLatencyUs().count(), 0);
+  ASSERT_EQ(ioStats_->ssdCacheReadLatencyUs().count(), 0);
 
   // Read kSsdBytes of data.
   readData(kSsdBytes);
@@ -1026,6 +1032,7 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_GT(ioStats_->read().sum(), 0);
   ASSERT_GT(ioStats_->ramHit().sum(), 0);
   ASSERT_EQ(ioStats_->ssdRead().sum(), 0);
+  ASSERT_EQ(ioStats_->ssdCacheReadLatencyUs().count(), 0);
 
   // Read kSsdBytes of data.
   readData(kSsdBytes);
@@ -1038,6 +1045,7 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_GT(ioStats_->read().sum(), 0);
   ASSERT_GT(ioStats_->ramHit().sum(), 0);
   ASSERT_GT(ioStats_->ssdRead().sum(), 0);
+  ASSERT_GT(ioStats_->ssdCacheReadLatencyUs().count(), 0);
 
   // Corrupt SSD cache file.
   corruptSsdFile(fmt::format("{}/cache0", tempDirectory_->getPath()));

@@ -141,8 +141,28 @@ class IoStatistics {
     return ramHit_;
   }
 
-  IoCounter& queryThreadIoLatency() {
-    return queryThreadIoLatency_;
+  IoCounter& queryThreadIoLatencyUs() {
+    return queryThreadIoLatencyUs_;
+  }
+
+  IoCounter& storageReadLatencyUs() {
+    return storageReadLatencyUs_;
+  }
+
+  IoCounter& ssdCacheReadLatencyUs() {
+    return ssdCacheReadLatencyUs_;
+  }
+
+  IoCounter& cacheWaitLatencyUs() {
+    return cacheWaitLatencyUs_;
+  }
+
+  IoCounter& coalescedSsdLoadLatencyUs() {
+    return coalescedSsdLoadLatencyUs_;
+  }
+
+  IoCounter& coalescedStorageLoadLatencyUs() {
+    return coalescedStorageLoadLatencyUs_;
   }
 
   void incOperationCounters(
@@ -187,7 +207,24 @@ class IoStatistics {
 
   // Time spent by a query processing thread waiting for synchronously issued IO
   // or for an in-progress read-ahead to finish.
-  IoCounter queryThreadIoLatency_;
+  IoCounter queryThreadIoLatencyUs_;
+
+  // Breakdown of queryThreadIoLatencyUs_ by I/O type:
+
+  // Time spent waiting for remote storage reads (S3, HDFS, etc.)
+  IoCounter storageReadLatencyUs_;
+
+  // Time spent waiting for SSD cache reads
+  IoCounter ssdCacheReadLatencyUs_;
+
+  // Time spent waiting for EXCLUSIVE cache entries (another thread is loading)
+  IoCounter cacheWaitLatencyUs_;
+
+  // Time spent waiting for coalesced loads from SSD cache
+  IoCounter coalescedSsdLoadLatencyUs_;
+
+  // Time spent waiting for coalesced loads from remote storage
+  IoCounter coalescedStorageLoadLatencyUs_;
 
   std::unordered_map<std::string, OperationCounters> operationStats_;
   mutable std::mutex operationStatsMutex_;

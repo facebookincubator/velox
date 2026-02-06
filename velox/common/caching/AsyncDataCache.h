@@ -456,6 +456,10 @@ class CoalescedLoad {
     return "<CoalescedLoad>";
   }
 
+  /// Returns true if this is a load from SSD cache, false if from remote
+  /// storage.
+  virtual bool isSsdLoad() const = 0;
+
  protected:
   // Makes entries for 'keys_' and loads their content. Elements of 'keys_' that
   // are already loaded or loading are expected to be left out. The returned
