@@ -59,7 +59,24 @@ Expected<Timestamp> PrestoCastHooks::castIntToTimestamp(
       Status::UserError("Conversion to Timestamp is not supported"));
 }
 
-Expected<int64_t> PrestoCastHooks::castTimestampToInt(
+Expected<std::optional<int8_t>> PrestoCastHooks::castTimestampToInt8(
+    Timestamp /*timestamp*/) const {
+  return folly::makeUnexpected(
+      Status::UserError("Conversion from Timestamp to Int is not supported"));
+}
+
+Expected<std::optional<int16_t>> PrestoCastHooks::castTimestampToInt16(
+    Timestamp /*timestamp*/) const {
+  return folly::makeUnexpected(
+      Status::UserError("Conversion from Timestamp to Int is not supported"));
+}
+Expected<std::optional<int32_t>> PrestoCastHooks::castTimestampToInt32(
+    Timestamp /*timestamp*/) const {
+  return folly::makeUnexpected(
+      Status::UserError("Conversion from Timestamp to Int is not supported"));
+}
+
+Expected<int64_t> PrestoCastHooks::castTimestampToInt64(
     Timestamp /*timestamp*/) const {
   return folly::makeUnexpected(
       Status::UserError("Conversion from Timestamp to Int is not supported"));
@@ -115,8 +132,8 @@ Expected<T> doCastToFloatingPoint(const StringView& data) {
         begin, length, &processedCharactersCount);
   }
   // Since we already removed leading space, if processedCharactersCount == 0,
-  // it means the remaining string is either empty or a junk string. So return a
-  // user error in this case.
+  // it means the remaining string is either empty or a junk string. So return
+  // a user error in this case.
   if UNLIKELY (processedCharactersCount == 0) {
     return folly::makeUnexpected(Status::UserError());
   }
