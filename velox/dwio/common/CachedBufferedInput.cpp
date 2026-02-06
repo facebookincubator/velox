@@ -383,6 +383,10 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
         input_(std::move(input)),
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
+  bool isSsdLoad() const override {
+    return false;
+  }
+
   std::vector<CachePin> loadData(bool prefetch) override {
     std::vector<CachePin> pins;
     pins.reserve(keys_.size());
@@ -433,6 +437,10 @@ class SsdLoad : public DwioCoalescedLoadBase {
             std::move(fsStats),
             groupId,
             std::move(requests)) {}
+
+  bool isSsdLoad() const override {
+    return true;
+  }
 
   std::vector<CachePin> loadData(bool prefetch) override {
     std::vector<SsdPin> ssdPins;

@@ -148,7 +148,8 @@ void ColumnStatsCollector::createGroupingSet() {
       nonReclaimableSection_,
       queryConfig_,
       pool_,
-      /*spillStats=*/nullptr);
+      /*spillStats=*/nullptr,
+      /*spillFsStats=*/nullptr);
 }
 
 void ColumnStatsCollector::addInput(RowVectorPtr input) {

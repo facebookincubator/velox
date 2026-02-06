@@ -85,6 +85,12 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   /// data is retrieved with getData().
   std::vector<cache::CachePin> loadData(bool prefetch) override;
 
+  /// Returns false since DirectCoalescedLoad reads from remote storage, not
+  /// SSD.
+  bool isSsdLoad() const override {
+    return false;
+  }
+
   /// Returns the buffer for 'region' in either 'data' or 'tinyData'. 'region'
   /// must match a region given to DirectBufferedInput::enqueue().
   int32_t

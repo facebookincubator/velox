@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/AstPrinter.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/vector/TableViewPrinter.h"
@@ -24,13 +25,6 @@
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
-
-#include <cudf/ast/detail/operators.hpp>
-#include <cudf/column/column_factories.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/transform.hpp>
-#include <cudf/unary.hpp>
-#include <cudf/utilities/traits.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {

@@ -135,7 +135,13 @@ class TaskCursor {
   /// @return Returns false is the task is done producing output.
   virtual bool moveStep() = 0;
 
+  /// Returns the vector the cursor is currently on.
   virtual RowVectorPtr& current() = 0;
+
+  /// If breakpoints are set, returns the plan node that generated the trace. If
+  /// the cursor is at the task output or if there are no breakpoints,
+  /// returns empty string.
+  virtual core::PlanNodeId at() const = 0;
 
   virtual void setError(std::exception_ptr error) = 0;
 

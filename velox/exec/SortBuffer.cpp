@@ -28,7 +28,8 @@ SortBuffer::SortBuffer(
     tsan_atomic<bool>* nonReclaimableSection,
     common::PrefixSortConfig prefixSortConfig,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<velox::common::SpillStats>* spillStats)
+    folly::Synchronized<velox::common::SpillStats>* spillStats,
+    filesystems::File::IoStats* spillFsStats)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
       pool_(pool),
@@ -36,6 +37,7 @@ SortBuffer::SortBuffer(
       prefixSortConfig_(prefixSortConfig),
       spillConfig_(spillConfig),
       spillStats_(spillStats),
+      spillFsStats_(spillFsStats),
       sortedRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_GE(input_->children().size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
@@ -349,7 +351,12 @@ void SortBuffer::spillInput() {
     VELOX_CHECK(!noMoreInput_);
     const auto sortingKeys = SpillState::makeSortingKeys(sortCompareFlags_);
     inputSpiller_ = std::make_unique<SortInputSpiller>(
-        data_.get(), spillerStoreType_, sortingKeys, spillConfig_, spillStats_);
+        data_.get(),
+        spillerStoreType_,
+        sortingKeys,
+        spillConfig_,
+        spillStats_,
+        spillFsStats_);
   }
   inputSpiller_->spill();
   data_->clear();
@@ -366,7 +373,7 @@ void SortBuffer::spillOutput() {
   }
 
   outputSpiller_ = std::make_unique<SortOutputSpiller>(
-      data_.get(), spillerStoreType_, spillConfig_, spillStats_);
+      data_.get(), spillerStoreType_, spillConfig_, spillStats_, spillFsStats_);
   auto spillRows = SpillerBase::SpillRows(
       sortedRows_.begin() + numOutputRows_,
       sortedRows_.end(),
@@ -485,7 +492,7 @@ void SortBuffer::prepareOutputWithSpill() {
 
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
   spillMerger_ = spillPartitionSet_.begin()->second->createOrderedReader(
-      *spillConfig_, pool(), spillStats_);
+      *spillConfig_, pool(), spillStats_, spillFsStats_);
   spillPartitionSet_.clear();
 }
 } // namespace facebook::velox::exec
