@@ -173,6 +173,7 @@ Presto Type               Physical Type
 ========================  =====================
 HYPERLOGLOG               VARBINARY
 KHYPERLOGLOG              VARBINARY
+P4HYPERLOGLOG             VARBINARY
 JSON                      VARCHAR
 TIMESTAMP WITH TIME ZONE  BIGINT
 UUID                      HUGEINT
@@ -194,6 +195,11 @@ Based on the `KHyperLogLog paper <https://research.google/pubs/khyperloglog-esti
 it maintains a map of K number of HyperLogLog structures, where each entry corresponds to a unique key from one column,
 and the HLL estimates the cardinality of the associated unique identifiers from another column.
 For storage and retrieval it may be cast to/from VARBINARY.
+
+P4HYPERLOGLOG is a data sketch for cardinality estimation that uses only the dense HyperLogLog
+representation. Unlike standard HYPERLOGLOG which supports both sparse and dense formats,
+P4HYPERLOGLOG always uses dense format. It may be cast to/from HYPERLOGLOG and to/from VARBINARY
+for storage and retrieval.
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
 from UNIX epoch with timezone information. Its physical type is BIGINT.

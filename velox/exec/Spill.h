@@ -514,7 +514,8 @@ class SpillPartition {
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
       const common::SpillConfig& spillConfig,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<common::SpillStats>* spillStats,
+      filesystems::File::IoStats* fsStats);
 
   std::string toString() const;
 
@@ -586,7 +587,7 @@ class SpillState {
   /// 'numSortKeys' is the number of leading columns on which the data is
   /// sorted, 0 if only hash partitioning is used. 'targetFileSize' is the
   /// target size of a single file.  'pool' owns the memory for state and
-  /// results.
+  /// results. 'fsStats' is used to collect filesystem I/O stats.
   SpillState(
       const common::GetSpillDirectoryPathCB& getSpillDirectoryPath,
       const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
@@ -598,7 +599,8 @@ class SpillState {
       const std::optional<common::PrefixSortConfig>& prefixSortConfig,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats,
-      const std::string& fileCreateConfig = {});
+      const std::string& fileCreateConfig = {},
+      filesystems::File::IoStats* fsStats = nullptr);
 
   static std::vector<SpillSortKey> makeSortingKeys(
       const std::vector<CompareFlags>& compareFlags = {});
@@ -703,6 +705,7 @@ class SpillState {
   const std::string fileCreateConfig_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
+  filesystems::File::IoStats* const fsStats_{nullptr};
 
   // A set of spilled partition ids.
   SpillPartitionIdSet spilledPartitionIdSet_;

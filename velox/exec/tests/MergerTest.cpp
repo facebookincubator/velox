@@ -77,7 +77,8 @@ class MergerTest : public OperatorTestBase {
         HashBitRange{},
         sortingKeys_,
         &spillConfig_,
-        spillStats_.get());
+        spillStats_.get(),
+        /*fsStats=*/nullptr);
     for (const auto& vector : sortedVectors) {
       spiller->spill(SpillPartitionId(0), vector);
     }

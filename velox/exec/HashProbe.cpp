@@ -253,7 +253,8 @@ void HashProbe::maybeSetupInputSpiller(
       restoringPartitionId_,
       HashBitRange(bitOffset, bitOffset + spillConfig()->numPartitionBits),
       spillConfig(),
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 
   // Set the spill partitions to the corresponding ones at the build side. We
   // only spill the seen partitions from the build side. For the ones not seen
@@ -2037,7 +2038,8 @@ void HashProbe::spillOutput() {
       std::nullopt,
       HashBitRange{},
       spillConfig(),
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
   outputSpiller->setPartitionsSpilled({SpillPartitionId(0)});
 
   RowVectorPtr output{nullptr};

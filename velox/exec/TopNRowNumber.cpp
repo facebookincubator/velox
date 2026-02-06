@@ -482,7 +482,7 @@ void TopNRowNumber::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        *spillConfig_, pool(), spillStats_.get());
+        *spillConfig_, pool(), spillStats_.get(), spillFsStats());
   } else {
     outputRows_.resize(outputBatchSize_);
   }
@@ -1073,7 +1073,8 @@ void TopNRowNumber::setupSpiller() {
       inputType_,
       sortingKeys,
       &spillConfig_.value(),
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 }
 
 // Using the underlying vector of the priority queue for the algorithms to
