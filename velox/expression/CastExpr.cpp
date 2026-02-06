@@ -472,6 +472,10 @@ void CastExpr::applyPeeled(
         result = kernel_->castToVarbinary(
             rows, input, context, toType, setNullInResultAtError());
         break;
+      case TypeKind::TIMESTAMP:
+        result = kernel_->castToTimestamp(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
       default: {
         // Handle primitive type conversions.
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
