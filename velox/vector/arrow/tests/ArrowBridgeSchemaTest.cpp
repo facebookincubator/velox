@@ -237,8 +237,8 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(DATE(), "tdD");
   testScalarType(INTERVAL_YEAR_MONTH(), "tiM");
 
-  testScalarType(DECIMAL(10, 4), "d:10,4,64");
-  testScalarType(DECIMAL(20, 15), "d:20,15,128");
+  testScalarType(DECIMAL(10, 4), "d:10,4");
+  testScalarType(DECIMAL(20, 15), "d:20,15");
 
   testScalarType(UNKNOWN(), "n");
 }
@@ -427,11 +427,10 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   VELOX_ASSERT_THROW(
       *testSchemaImport("d2,15"),
       "Unable to convert 'd2,15' ArrowSchema decimal format to Velox decimal");
-  EXPECT_EQ(*DECIMAL(10, 4), *testSchemaImport("d:10,4,64"));
   EXPECT_EQ(*DECIMAL(10, 4), *testSchemaImport("d:10,4,128"));
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,256"),
-      "Conversion failed for 'd:10,4,256'. Only 64 and 128-bit decimals are supported.");
+      "Conversion failed for 'd:10,4,256'. Velox decimal does not support custom bitwidth.");
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,"),
       "Unable to convert 'd:10,4,' ArrowSchema decimal format to Velox decimal");
@@ -552,7 +551,7 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
       {VARCHAR(), arrow::utf8()},
       {VARCHAR(), arrow::utf8_view()},
 #if ARROW_VERSION_MAJOR >= 18
-      {DECIMAL(10, 4), arrow::decimal64(10, 4)},
+      {DECIMAL(10, 4), arrow::decimal128(10, 4)},
       {DECIMAL(20, 15), arrow::decimal128(20, 15)},
 #else
       {DECIMAL(10, 4), arrow::decimal(10, 4)},

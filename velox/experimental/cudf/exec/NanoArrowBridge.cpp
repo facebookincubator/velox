@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/vector/arrow/Bridge.h"
+#include "velox/experimental/cudf/exec/NanoArrowBridge.h"
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
@@ -26,7 +26,7 @@
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/arrow/Abi.h"
 
-namespace facebook::velox {
+namespace facebook::velox::cudf_velox {
 
 namespace {
 
@@ -263,9 +263,14 @@ const char* exportArrowFormatStr(
     const ArrowOptions& options,
     std::string& formatBuffer) {
   if (type->isDecimal()) {
-    // Decimal types encode the precision, scale values.
+    // @CUDF
+    // Decimal types encode the precision and scale values.
+    // Use the optional bitWidth suffix to preserve the on-wire representation:
+    // - Velox short decimals (int64)  -> Arrow decimal64  (8 bytes)
+    // - Velox long decimals  (int128) -> Arrow decimal128 (16 bytes)
     const auto& [precision, scale] = getDecimalPrecisionScale(*type);
-    formatBuffer = fmt::format("d:{},{}", precision, scale);
+    const int bitWidth = type->isShortDecimal() ? 64 : 128;
+    formatBuffer = fmt::format("d:{},{},{}", precision, scale, bitWidth);
     return formatBuffer.c_str();
   }
 
@@ -304,10 +309,9 @@ const char* exportArrowFormatStr(
       }
       return "u"; // utf-8 string
     case TypeKind::VARBINARY:
-      if (options.exportToStringView) {
-        return "vz";
-      }
-      return "z"; // binary
+      // @CUDF
+      // export binary as string, as NanoArrow does not understand VARBINARY
+      return "u"; // utf-8 string (binary payload)
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
@@ -494,17 +498,15 @@ void gatherFromBuffer(
     rows.apply([&](vector_size_t i) {
       bits::setBit(dst, j++, bits::isBitSet(src, i));
     });
-  } else if (type.isShortDecimal()) {
-    rows.apply([&](vector_size_t i) {
-      int128_t value = buf.as<int64_t>()[i];
-      memcpy(dst + (j++) * sizeof(int128_t), &value, sizeof(int128_t));
-    });
   } else {
     auto typeSize = type.cppSizeInBytes();
     rows.apply([&](vector_size_t i) {
       memcpy(dst + (j++) * typeSize, src + i * typeSize, typeSize);
     });
   }
+  // @CUDF
+  // we no longer need to promote short decimal to long decimal
+  // as NanoArrow has native support for Decimal64
 }
 
 // Optionally, holds shared_ptrs pointing to the ArrowArray object that
@@ -715,20 +717,18 @@ void exportValidityBitmap(
 }
 
 bool isFlatScalarZeroCopy(const TypePtr& type) {
-  // - Short decimals need to be converted to 128 bit values as they are
-  // mapped to Arrow Decimal128.
   // - Velox's Timestamp representation (2x 64bit values) does not have an
   // equivalent in Arrow.
   // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
-  return !type->isShortDecimal() && !type->isTimestamp() && !type->isTime();
+  return !type->isTimestamp() && !type->isTime();
+  // @CUDF
+  // short decimal was removed from ^ as it is natively supported by NanoArrow Decimal64
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
 // buffer.
 size_t getArrowElementSize(const TypePtr& type) {
-  if (type->isShortDecimal()) {
-    return sizeof(int128_t);
-  } else if (type->isTimestamp()) {
+  if (type->isTimestamp()) {
     return sizeof(int64_t);
   } else if (type->isTime()) {
     // TIME is exported as Arrow time32 (int32_t).
@@ -736,6 +736,8 @@ size_t getArrowElementSize(const TypePtr& type) {
   } else {
     return type->cppSizeInBytes();
   }
+  // @CUDF
+  // short decimal size is no longer promoted as NanoArrow has native support for Decimal64
 }
 
 void exportValues(
@@ -1269,7 +1271,24 @@ void exportToArrowImpl(
 
 // Parses the velox decimal format from the given arrow format.
 // The input format string should be in the form "d:precision,scale<,bitWidth>".
-// bitWidth is not required and must be 128 if provided.
+// bitWidth is optional and may be 64 or 128 if provided.
+
+// @CUDF
+// additional convenience function
+int32_t parseDecimalBitWidthOrDefault(const char* format) {
+  std::string formatStr(format);
+  auto firstCommaIdx = formatStr.find(',', 2);
+  auto secondCommaIdx = formatStr.find(',', firstCommaIdx + 1);
+  if (secondCommaIdx == std::string::npos) {
+    // Default per Arrow C data interface conventions.
+    return 128;
+  }
+  // Parse the bitWidth.
+  std::string::size_type sz;
+  int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
+  return bitWidth;
+}
+
 TypePtr parseDecimalFormat(const char* format) {
   std::string invalidFormatMsg =
       "Unable to convert '{}' ArrowSchema decimal format to Velox decimal";
@@ -1290,15 +1309,22 @@ TypePtr parseDecimalFormat(const char* format) {
     // Parse "d:".
     int precision = std::stoi(&format[2], &sz);
     int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
-    // If bitwidth is provided, check if it is equal to 128.
     if (secondCommaIdx != std::string::npos) {
+      // @CUDF
+      // bitWidth is provided
+      // we only support 64 or 128
       int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
-      VELOX_USER_CHECK_EQ(
-          bitWidth,
-          128,
-          "Conversion failed for '{}'. Velox decimal does not support custom bitwidth.",
+      // return type depends on bitWidth
+      if (bitWidth == 64) {
+        return std::make_shared<ShortDecimalType>(precision, scale);
+      } else if (bitWidth == 128) {
+        return std::make_shared<LongDecimalType>(precision, scale);
+      }
+      VELOX_USER_FAIL(
+          "Conversion failed for '{}'. Only 64 and 128-bit decimals are supported.",
           format);
     }
+    // otherwise return type depends on precision
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
     VELOX_USER_FAIL(invalidFormatMsg, format);
@@ -2220,6 +2246,33 @@ VectorPtr importFromArrowImpl(
         arrowArray.null_count,
         isTime32);
   } else if (type->isShortDecimal()) {
+    // @CUDF
+    // handle short and long decimals differently
+    // this code was generated by Cursor/ChatGPT and might need some adjustments
+    const int32_t bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
+    if (bitWidth == 64) {
+      // Arrow decimal64 uses 8-byte values. Keep Velox short decimals (int64)
+      // unchanged by wrapping the values buffer directly.
+      VELOX_USER_CHECK_EQ(
+          arrowArray.n_buffers,
+          2,
+          "Decimal types expect two buffers as input.");
+      auto values = wrapInBufferView(
+          arrowArray.buffers[1], arrowArray.length * sizeof(int64_t));
+      return createFlatVector<TypeKind::BIGINT>(
+          pool,
+          type,
+          std::move(nulls),
+          arrowArray.length,
+          values,
+          arrowArray.null_count);
+    }
+    VELOX_USER_CHECK_EQ(
+        bitWidth,
+        128,
+        "Unsupported decimal bitWidth {} for '{}'",
+        bitWidth,
+        arrowSchema.format);
     return createShortDecimalVector(
         pool,
         type,
@@ -2228,6 +2281,15 @@ VectorPtr importFromArrowImpl(
         arrowArray.length,
         arrowArray.null_count);
   } else if (type->isLongDecimal()) {
+    // @CUDF
+    // as above
+    const int32_t bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
+    VELOX_USER_CHECK_EQ(
+        bitWidth,
+        128,
+        "Unsupported decimal bitWidth {} for '{}'",
+        bitWidth,
+        arrowSchema.format);
     return createLongDecimalVector(
         pool,
         type,
@@ -2346,4 +2408,4 @@ VectorPtr importFromArrowAsOwner(
   return importFromArrowImpl(arrowSchema, arrowArray, pool, false);
 }
 
-} // namespace facebook::velox
+} // namespace facebook::velox::cudf_velox

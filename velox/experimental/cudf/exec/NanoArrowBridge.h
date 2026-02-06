@@ -14,6 +14,17 @@
  * limitations under the License.
  */
 
+//
+// @CUDF
+// this is a fork of velox/vector/arrow/Bridge.h, which implements the conversion
+// between Velox and Arrow C data interface. We will keep this file in sync with
+// the original one, and make necessary adjustments to support CUDF use cases.
+// The main reason we need to fork is that we want to export some Velox types
+// (e.g. VARBINARY) as different Arrow types (e.g. STRING) that NanoArrow can
+// understand, and also to allow use of the Decimal64 type available in NanoArrow
+// 0.7.0 but not in full Arrow until 18.x (Velox is current on 15.x).
+//
+
 #pragma once
 
 #include "velox/common/memory/Memory.h"
@@ -42,7 +53,7 @@ struct ArrowOptions {
   bool exportToStringView = false;
 };
 
-namespace facebook::velox {
+namespace facebook::velox::cudf_velox {
 
 /// Export a generic Velox Vector to an ArrowArray, as defined by Arrow's C data
 /// interface:
@@ -165,4 +176,4 @@ VectorPtr importFromArrowAsOwner(
     ArrowArray& arrowArray,
     memory::MemoryPool* pool);
 
-} // namespace facebook::velox
+} // namespace facebook::velox::cudf_velox

@@ -28,6 +28,7 @@ add_library(
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp
+  NanoArrowBridge.cpp
 )
 
 set_target_properties(
@@ -42,7 +43,6 @@ target_link_libraries(
   PUBLIC cudf::cudf
   PRIVATE
     arrow
-    velox_arrow_bridge
     velox_exception
     velox_common_base
     velox_cudf_vector
