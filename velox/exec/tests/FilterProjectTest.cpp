@@ -433,7 +433,7 @@ TEST_F(FilterProjectTest, barrier) {
 TEST_F(FilterProjectTest, barrierMulti) {
   std::vector<RowVectorPtr> vectors;
   std::vector<std::shared_ptr<test::TempFilePath>> tempFiles;
-  const int numSplits{3};
+  const int numSplits{6};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeTestVector());
     tempFiles.push_back(test::TempFilePath::create());

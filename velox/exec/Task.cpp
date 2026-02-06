@@ -1245,6 +1245,8 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       numDriversUngrouped_ += factory->numDrivers;
     }
     nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
+    LOG(ERROR) << "Driver factory created with node " << factory->leafNodeId()
+               << " " << factory->numDrivers << "drivers";
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);

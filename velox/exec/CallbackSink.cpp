@@ -26,7 +26,8 @@ RowVectorPtr CallbackSink::getOutput() {
   if (FOLLY_LIKELY(!isDraining())) {
     return nullptr;
   }
-  LOG(ERROR) << "Callback getOutput isDraining";
+  LOG(ERROR) << "Callback getOutput isDraining "
+             << operatorCtx_->driverCtx()->driverId;
   const auto blockingReason = consumeCb_(nullptr, /*drained=*/true, &future_);
   VELOX_CHECK_EQ(blockingReason, BlockingReason::kNotBlocked);
   finishDrain();
