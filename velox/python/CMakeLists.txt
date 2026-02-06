@@ -105,6 +105,7 @@ add_library(
   runner/PyLocalDebuggerRunner.cpp
   runner/PyConnectors.cpp
 )
+target_compile_options(velox_py_local_runner_lib PRIVATE -Wno-missing-field-initializers)
 target_include_directories(
   velox_py_local_runner_lib
   PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash
