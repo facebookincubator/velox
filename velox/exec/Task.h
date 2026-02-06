@@ -529,8 +529,16 @@ class Task : public std::enable_shared_from_this<Task> {
   /// build threads are completed before allowing the probe pipeline to proceed.
   /// Throws a cancelled error if 'this' is in an error state.
   ///
-  /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
-  /// other peers to finish. The function won't set its promise and record it in
+  /// 'barrierId' allows one PlanNode to have multiple separate barriers. For
+  /// example, HashBuild and HashProbe share the same HashJoinNode, but use
+  /// different barriers only among their own drivers. Using different
+  /// barrierIds between HashBuild's and HashProbe's barriers ensure the these
+  /// barriers do not interfere with each other. 'barrierId' should be set
+  /// starting from 0 and incremented by 1 for every additional barrier.
+  ///
+  /// NOTE:
+  /// if 'future' is null, then the caller doesn't intend to wait for the other
+  /// peers to finish. The function won't set its promise and record it in
   /// peers. This is used in scenario that the caller only needs to know whether
   /// it is the last one to reach the barrier.
   ///
@@ -542,7 +550,8 @@ class Task : public std::enable_shared_from_this<Task> {
       Driver* caller,
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
-      std::vector<std::shared_ptr<Driver>>& peers);
+      std::vector<std::shared_ptr<Driver>>& peers,
+      uint32_t barrierId = 0);
 
   /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(

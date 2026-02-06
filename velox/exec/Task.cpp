@@ -2240,7 +2240,8 @@ bool Task::allPeersFinished(
     Driver* caller,
     ContinueFuture* future,
     std::vector<ContinuePromise>& promises,
-    std::vector<std::shared_ptr<Driver>>& peers) {
+    std::vector<std::shared_ptr<Driver>>& peers,
+    uint32_t barrierId) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   if (exception_) {
     VELOX_FAIL(
@@ -2248,14 +2249,17 @@ bool Task::allPeersFinished(
         errorMessageImpl(exception_));
   }
   const auto splitGroupId = caller->driverCtx()->splitGroupId;
-  auto& barriers = splitGroupStates_[splitGroupId].barriers;
-  auto& state = barriers[planNodeId];
+  auto& barriers = splitGroupStates_[splitGroupId].barriers[planNodeId];
+  while (barriers.size() <= barrierId) {
+    barriers.emplace_back();
+  }
+  auto& state = barriers[barrierId];
 
   const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
   if (++state.numRequested == numPeers) {
     peers = std::move(state.drivers);
     promises = std::move(state.allPeersFinishedPromises);
-    barriers.erase(planNodeId);
+    state = {};
     return true;
   }
   std::shared_ptr<Driver> callerShared;

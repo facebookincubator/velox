@@ -128,8 +128,7 @@ HashProbe::HashProbe(
       nullAware_{joinNode_->isNullAware()},
       probeType_(joinNode_->sources()[0]->outputType()),
       canOutputBuildRowsInParallel_(
-          driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled() &&
-          !canSpill()),
+          driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled()),
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
@@ -517,6 +516,7 @@ void HashProbe::prepareForSpillRestore() {
   }
   // Notify the hash build operators to build the next hash table.
   joinBridge_->probeFinished();
+  joinBridge_->setOutputBuildRowsInParallel(false);
 
   wakeupPeerOperators();
 
@@ -1070,10 +1070,35 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       return nullptr;
     }
 
-    if (needLastProbe() && (canOutputBuildRowsInParallel_ || lastProber_)) {
+    const auto parallelizingLastProbe =
+        joinBridge_->outputBuildRowsInParallel();
+    if (needLastProbe() &&
+        ((parallelizingLastProbe && hasMoreBuildSideOutput_) ||
+         (!parallelizingLastProbe && lastProber_))) {
       auto output = getBuildSideOutput();
       if (output != nullptr) {
         return output;
+      } else {
+        if (!toSpillOutput) {
+          hasMoreBuildSideOutput_ = false;
+        }
+        if (parallelizingLastProbe && canSpill() && !toSpillOutput) {
+          std::vector<std::shared_ptr<Driver>> peers;
+          if (!operatorCtx_->task()->allPeersFinished(
+                  planNodeId(),
+                  operatorCtx_->driver(),
+                  &future_,
+                  promises_,
+                  peers,
+                  1)) {
+            VELOX_CHECK(future_.valid());
+            setState(ProbeOperatorState::kWaitForPeers);
+            lastProber_ = false;
+            VELOX_DCHECK(promises_.empty());
+            return nullptr;
+          }
+          lastProber_ = true;
+        }
       }
     }
 
@@ -1751,6 +1776,7 @@ void HashProbe::noMoreInputInternal() {
   std::vector<std::shared_ptr<Driver>> peers;
 
   // Reset flags about outputing build-side rows in parallel.
+  hasMoreBuildSideOutput_ = true;
   buildSideOutputRowContainerId_ = -1;
 
   // NOTE: if 'canSpill()' is false and 'outputBuildRowsInParallel' is
@@ -1769,7 +1795,8 @@ void HashProbe::noMoreInputInternal() {
           operatorCtx_->driver(),
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
-          peers)) {
+          peers,
+          1)) {
     if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
@@ -1783,6 +1810,7 @@ void HashProbe::noMoreInputInternal() {
   VELOX_CHECK(promises.empty());
   lastProber_ = true;
   joinBridge_->resetUnclaimedRowContainerId();
+  joinBridge_->setOutputBuildRowsInParallel(outputBuildRowsInParallel);
   // If 'outputBuildRowsInParallel' is true, wake up all peers to start
   // outputing build-side rows in parallel. Otherwise, only let the last prober
   // proceed.
