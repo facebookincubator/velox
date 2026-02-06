@@ -291,7 +291,7 @@ Expression Evaluation Configuration
    * - expression.max_compiled_regexes
      - integer
      - 100
-     - Controls maximum number of compiled regular expression patterns per batch.
+     - Controls the capacity of the LRU cache for compiled regular expression patterns per batch.
    * - debug_disable_expression_with_peeling
      - bool
      - false
