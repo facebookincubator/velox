@@ -426,64 +426,75 @@ std::unordered_map<std::string, RuntimeMetric>
 HiveDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert(
-      {{"numPrefetch", RuntimeMetric(ioStats_->prefetch().count())},
+      {{"numPrefetch",
+        RuntimeMetric(unsignedToSigned(ioStats_->prefetch().count()))},
        {"prefetchBytes",
         RuntimeMetric(
-            ioStats_->prefetch().sum(),
+            unsignedToSigned(ioStats_->prefetch().sum()),
             ioStats_->prefetch().count(),
-            ioStats_->prefetch().min(),
-            ioStats_->prefetch().max(),
+            unsignedToSigned(ioStats_->prefetch().min()),
+            unsignedToSigned(ioStats_->prefetch().max()),
             RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
-        RuntimeMetric(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+        RuntimeMetric(
+            unsignedToSigned(ioStats_->totalScanTime()),
+            RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterTime,
         RuntimeMetric(
-            totalRemainingFilterTime_.load(std::memory_order_relaxed),
+            unsignedToSigned(
+                totalRemainingFilterTime_.load(std::memory_order_relaxed)),
             RuntimeCounter::Unit::kNanos)},
        {"ioWaitWallNanos",
         RuntimeMetric(
-            ioStats_->queryThreadIoLatency().sum() * 1000,
+            unsignedToSigned(ioStats_->queryThreadIoLatency().sum() * 1000),
             ioStats_->queryThreadIoLatency().count(),
-            ioStats_->queryThreadIoLatency().min() * 1000,
-            ioStats_->queryThreadIoLatency().max() * 1000,
+            unsignedToSigned(ioStats_->queryThreadIoLatency().min() * 1000),
+            unsignedToSigned(ioStats_->queryThreadIoLatency().max() * 1000),
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
         RuntimeMetric(
-            ioStats_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
+            unsignedToSigned(ioStats_->rawOverreadBytes()),
+            RuntimeCounter::Unit::kBytes)}});
   if (ioStats_->read().count() > 0) {
     res.insert(
         {"storageReadBytes",
          RuntimeMetric(
-             ioStats_->read().sum(),
+             unsignedToSigned(ioStats_->read().sum()),
              ioStats_->read().count(),
-             ioStats_->read().min(),
-             ioStats_->read().max(),
+             unsignedToSigned(ioStats_->read().min()),
+             unsignedToSigned(ioStats_->read().max()),
              RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ssdRead().count() > 0) {
-    res.insert({"numLocalRead", RuntimeMetric(ioStats_->ssdRead().count())});
+    res.insert(
+        {"numLocalRead",
+         RuntimeMetric(unsignedToSigned(ioStats_->ssdRead().count()))});
     res.insert(
         {"localReadBytes",
          RuntimeMetric(
-             ioStats_->ssdRead().sum(),
+             unsignedToSigned(ioStats_->ssdRead().sum()),
              ioStats_->ssdRead().count(),
-             ioStats_->ssdRead().min(),
-             ioStats_->ssdRead().max(),
+             unsignedToSigned(ioStats_->ssdRead().min()),
+             unsignedToSigned(ioStats_->ssdRead().max()),
              RuntimeCounter::Unit::kBytes)});
   }
   if (ioStats_->ramHit().count() > 0) {
-    res.insert({"numRamRead", RuntimeMetric(ioStats_->ramHit().count())});
+    res.insert(
+        {"numRamRead",
+         RuntimeMetric(unsignedToSigned(ioStats_->ramHit().count()))});
     res.insert(
         {"ramReadBytes",
          RuntimeMetric(
-             ioStats_->ramHit().sum(),
+             unsignedToSigned(ioStats_->ramHit().sum()),
              ioStats_->ramHit().count(),
-             ioStats_->ramHit().min(),
-             ioStats_->ramHit().max(),
+             unsignedToSigned(ioStats_->ramHit().min()),
+             unsignedToSigned(ioStats_->ramHit().max()),
              RuntimeCounter::Unit::kBytes)});
   }
   if (numBucketConversion_ > 0) {
-    res.insert({"numBucketConversion", RuntimeMetric(numBucketConversion_)});
+    res.insert(
+        {"numBucketConversion",
+         RuntimeMetric(unsignedToSigned(numBucketConversion_))});
   }
 
   const auto fsStats = fsStats_->stats();

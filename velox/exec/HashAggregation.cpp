@@ -270,7 +270,8 @@ void HashAggregation::resetPartialOutputIfNeed() {
         "flushRowCount", RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        "partialAggregationPct",
+        RuntimeCounter(static_cast<int64_t>(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
