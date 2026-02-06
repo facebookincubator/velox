@@ -101,10 +101,10 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         [runner.set_breakpoint(i) for i in self._node_ids]
         self.assertEqual(
             self._count_step(runner),
-            self._batch_size * self._num_batches * (self._num_projections + 1)
+            self._batch_size * self._num_batches * (self._num_projections + 1),
         )
 
-    def test_breakpoint_wit_aggregate(self):
+    def test_breakpoint_with_aggregate(self):
         """Set a breakpoint before aggregation to see pre-aggregated data."""
         batch_size = 100
 
@@ -140,3 +140,32 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         # Should be done now.
         with self.assertRaises(StopIteration):
             it.next()
+
+    def test_iterator_at(self):
+        runner = LocalDebuggerRunner(self._plan_node)
+        runner.set_breakpoint(self._node_ids[3])
+        runner.set_breakpoint(self._node_ids[8])
+
+        it = runner.execute()
+        self.assertEqual(it.at(), "")
+
+        it.step()
+        self.assertEqual(it.at(), self._node_ids[3])
+
+        it.step()
+        self.assertEqual(it.at(), self._node_ids[8])
+
+        it.step()
+        self.assertEqual(it.at(), "")
+
+        it.step()
+        self.assertEqual(it.at(), self._node_ids[3])
+
+        it.next()
+        self.assertEqual(it.at(), "")
+
+        it.next()
+        self.assertEqual(it.at(), "")
+
+        it.step()
+        self.assertEqual(it.at(), self._node_ids[3])

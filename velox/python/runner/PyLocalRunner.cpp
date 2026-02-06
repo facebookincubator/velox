@@ -86,6 +86,10 @@ PyVector PyTaskIterator::step() {
   return PyVector{vector_, outputPool_};
 }
 
+std::string PyTaskIterator::at() const {
+  return cursor_->at();
+}
+
 PyLocalRunner::PyLocalRunner(
     const PyPlanNode& pyPlanNode,
     const std::shared_ptr<memory::MemoryPool>& pool,

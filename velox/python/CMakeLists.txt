@@ -99,7 +99,12 @@ pyvelox_add_module(plan_builder MODULE plan_builder/plan_builder.cpp)
 target_link_libraries(plan_builder PRIVATE velox_py_plan_builder_lib)
 
 # pyvelox.runner library:
-add_library(velox_py_local_runner_lib runner/PyLocalRunner.cpp runner/PyConnectors.cpp)
+add_library(
+  velox_py_local_runner_lib
+  runner/PyLocalRunner.cpp
+  runner/PyLocalDebuggerRunner.cpp
+  runner/PyConnectors.cpp
+)
 target_include_directories(
   velox_py_local_runner_lib
   PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash
@@ -118,6 +123,7 @@ target_link_libraries(
   velox_dwio_dwrf_common
   velox_dwio_dwrf_writer
   pybind11::module
+  pybind11::embed
 )
 
 pyvelox_add_module(runner MODULE runner/runner.cpp)
