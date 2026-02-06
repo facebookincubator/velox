@@ -62,6 +62,8 @@ class TaskQueue {
     return pool_.get();
   }
 
+  int32_t producersDrainFinished_ = 0;
+
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -75,7 +77,6 @@ class TaskQueue {
   std::mutex mutex_;
   std::vector<ContinuePromise> producerUnblockPromises_;
   bool consumerBlocked_ = false;
-  bool drained_ = false;
   ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
   ContinueFuture consumerFuture_;
   bool closed_ = false;
@@ -87,14 +88,16 @@ exec::BlockingReason TaskQueue::enqueue(
     velox::ContinueFuture* future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
-    drained_ = drained;
-    if (!drained) {
-      LOG(ERROR) << "MADUAN enqueue producer finish";
 
+    if (!drained) {
       ++producersFinished_;
+      LOG(ERROR) << "MADUAN enqueue producer finished " << producersFinished_;
+    } else {
+      ++producersDrainFinished_;
+      LOG(ERROR) << "MADUAN enqueue producer barrier finished "
+                 << producersDrainFinished_;
     }
     if (consumerBlocked_) {
-      LOG(ERROR) << "MADUAN enqueue consumer promise set";
       consumerBlocked_ = false;
       consumerPromise_.setValue();
     }
@@ -147,14 +150,12 @@ RowVectorPtr TaskQueue::dequeue() {
           numProducers_.has_value() && producersFinished_ == numProducers_) {
         LOG(ERROR) << "MADUAN dequeue producersFinished_ == numProducers_";
         return nullptr;
-      }
-      if (drained_) {
-        drained_ = false;
+      } else if (producersDrainFinished_ == numProducers_) {
         return nullptr;
       }
+
       if (!vector) {
         consumerBlocked_ = true;
-        LOG(ERROR) << "MADUAN dequeue promise";
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
       }
@@ -316,8 +317,6 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             return exec::BlockingReason::kNotBlocked;
           }
 
-          drained_ = drained;
-
           if (!vector || !copyResult) {
             return queue->enqueue(vector, drained, future);
           }
@@ -384,8 +383,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     checkTaskError();
     if (!current_) {
-      if (drained_) {
-        drained_ = false;
+      if (queue_->producersDrainFinished_ > 0) {
+        queue_->producersDrainFinished_ = 0;
         return false;
       }
       atEnd_ = true;
@@ -450,7 +449,6 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   std::shared_ptr<TaskQueue> queue_;
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
-  bool drained_{false};
   bool atEnd_{false};
   tsan_atomic<bool> noMoreSplits_{false};
   std::exception_ptr error_;
