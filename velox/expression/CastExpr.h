@@ -177,12 +177,6 @@ class CastExpr : public SpecialForm {
       const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
       FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
 
-  template <typename TInput>
-  VectorPtr applyIntToBinaryCast(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input);
-
   template <TypeKind ToKind, TypeKind FromKind>
   void applyCastPrimitives(
       const SelectivityVector& rows,
@@ -198,12 +192,6 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const BaseVector& input,
       VectorPtr& result);
-
-  VectorPtr applyTimestampToVarcharCast(
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input);
 
   bool isTryCast() const {
     return isTryCast_;

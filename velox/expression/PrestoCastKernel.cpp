@@ -41,7 +41,18 @@
 namespace facebook::velox::exec {
 
 PrestoCastKernel::PrestoCastKernel(const core::QueryConfig& config)
-    : legacyCast_(config.isLegacyCast()) {}
+    : legacyCast_(config.isLegacyCast()) {
+  timestampToStringOptions_ = TimestampToStringOptions{
+      .precision = TimestampToStringOptions::Precision::kMilliseconds};
+  if (!legacyCast_) {
+    timestampToStringOptions_.zeroPaddingYear = true;
+    timestampToStringOptions_.dateTimeSeparator = ' ';
+    const auto sessionTzName = config.sessionTimezone();
+    if (config.adjustTimestampToTimezone() && !sessionTzName.empty()) {
+      timestampToStringOptions_.timeZone = tz::locateZone(sessionTzName);
+    }
+  }
+}
 
 VectorPtr PrestoCastKernel::castFromDate(
     const SelectivityVector& rows,
@@ -608,6 +619,89 @@ VectorPtr PrestoCastKernel::castToDecimal(
           "Cast from {} to {} is not supported",
           fromType->toString(),
           toType->toString());
+  }
+}
+
+VectorPtr PrestoCastKernel::applyTimestampToVarcharCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  VectorPtr result;
+  initializeResultVector(rows, toType, context, result);
+  auto flatResult = result->asFlatVector<StringView>();
+  const auto simpleInput = input.as<SimpleVector<Timestamp>>();
+
+  const uint32_t rowSize = getMaxStringLength(timestampToStringOptions());
+
+  Buffer* buffer = flatResult->getBufferWithSpace(
+      rows.countSelected() * rowSize, true /*exactSize*/);
+  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
+
+  const TimestampToStringOptions& options = timestampToStringOptions();
+
+  applyToSelectedNoThrowLocal(
+      rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+        // Adjust input timestamp according the session timezone.
+        Timestamp inputValue(simpleInput->valueAt(row));
+        if (options.timeZone) {
+          inputValue.toTimezone(*(options.timeZone));
+        }
+        const auto stringView =
+            Timestamp::tsToStringView(inputValue, options, rawBuffer);
+        flatResult->setNoCopy(row, stringView);
+        // The result of both Presto and Spark contains more than 12
+        // digits even when 'zeroPaddingYear' is disabled.
+        VELOX_DCHECK(!stringView.isInline());
+        rawBuffer += stringView.size();
+      });
+
+  // Update the exact buffer size.
+  buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
+VectorPtr PrestoCastKernel::castToVarchar(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  if (input.typeKind() == TypeKind::TIMESTAMP) {
+    return applyTimestampToVarcharCast(
+        rows, input, context, toType, setNullInResultAtError);
+  }
+
+  return applyCastPrimitivesDispatch<TypeKind::VARCHAR>(
+      rows, input, context, input.type(), toType, setNullInResultAtError);
+}
+
+VectorPtr PrestoCastKernel::castToVarbinary(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  switch (input.typeKind()) {
+    case TypeKind::TIMESTAMP:
+      return applyTimestampToVarcharCast(
+          rows, input, context, toType, setNullInResultAtError);
+    case TypeKind::TINYINT:
+      return applyIntToBinaryCast<int8_t>(
+          rows, input, context, toType, setNullInResultAtError);
+    case TypeKind::SMALLINT:
+      return applyIntToBinaryCast<int16_t>(
+          rows, input, context, toType, setNullInResultAtError);
+    case TypeKind::INTEGER:
+      return applyIntToBinaryCast<int32_t>(
+          rows, input, context, toType, setNullInResultAtError);
+    case TypeKind::BIGINT:
+      return applyIntToBinaryCast<int64_t>(
+          rows, input, context, toType, setNullInResultAtError);
+    default:
+      return applyCastPrimitivesDispatch<TypeKind::VARBINARY>(
+          rows, input, context, input.type(), toType, setNullInResultAtError);
   }
 }
 } // namespace facebook::velox::exec

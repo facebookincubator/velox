@@ -27,6 +27,11 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const velox::core::QueryConfig& config,
       bool allowOverflow);
 
+  /// Returns the options to cast from timestamp to string.
+  const TimestampToStringOptions& timestampToStringOptions() const override {
+    return timestampToStringOptions_;
+  }
+
   VectorPtr castToDate(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -194,6 +199,17 @@ class SparkCastKernel : public exec::PrestoCastKernel {
 
   // If true, the cast will truncate the overflow value to fit the target type.
   const bool allowOverflow_;
+
+  /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
+  /// microsecond. 3) Does not append trailing zeros. 4) Adds a positive
+  /// sign at first if the year exceeds 9999. 5) Respects the configured
+  /// session timezone.
+  TimestampToStringOptions timestampToStringOptions_ = {
+      .precision = TimestampToStringOptions::Precision::kMicroseconds,
+      .leadingPositiveSign = true,
+      .skipTrailingZeros = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' '};
 };
 } // namespace facebook::velox::functions::sparksql
 

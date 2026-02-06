@@ -406,31 +406,6 @@ void CastExpr::applyPeeled(
   } else if (toType->isDecimal()) {
     result = kernel_->castToDecimal(
         rows, input, context, toType, setNullInResultAtError());
-  } else if (
-      fromType->kind() == TypeKind::TIMESTAMP &&
-      (toType->kind() == TypeKind::VARCHAR ||
-       toType->kind() == TypeKind::VARBINARY)) {
-    result = applyTimestampToVarcharCast(toType, rows, context, input);
-  } else if (toType->kind() == TypeKind::VARBINARY) {
-    switch (fromType->kind()) {
-      case TypeKind::TINYINT:
-        result = applyIntToBinaryCast<int8_t>(rows, context, input);
-        break;
-      case TypeKind::SMALLINT:
-        result = applyIntToBinaryCast<int16_t>(rows, context, input);
-        break;
-      case TypeKind::INTEGER:
-        result = applyIntToBinaryCast<int32_t>(rows, context, input);
-        break;
-      case TypeKind::BIGINT:
-        result = applyIntToBinaryCast<int64_t>(rows, context, input);
-        break;
-      default:
-        // Handle primitive type conversions.
-        applyCastPrimitivesDispatch<TypeKind::VARBINARY>(
-            fromType, toType, rows, context, input, result);
-        break;
-    }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
@@ -489,6 +464,14 @@ void CastExpr::applyPeeled(
         result = kernel_->castToDouble(
             rows, input, context, toType, setNullInResultAtError());
         break;
+      case TypeKind::VARCHAR:
+        result = kernel_->castToVarchar(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::VARBINARY:
+        result = kernel_->castToVarbinary(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
       default: {
         // Handle primitive type conversions.
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -503,72 +486,6 @@ void CastExpr::applyPeeled(
       }
     }
   }
-}
-
-VectorPtr CastExpr::applyTimestampToVarcharCast(
-    const TypePtr& toType,
-    const SelectivityVector& rows,
-    exec::EvalCtx& context,
-    const BaseVector& input) {
-  VectorPtr result;
-  context.ensureWritable(rows, toType, result);
-  (*result).clearNulls(rows);
-  auto flatResult = result->asFlatVector<StringView>();
-  const auto simpleInput = input.as<SimpleVector<Timestamp>>();
-
-  const auto& options = hooks_->timestampToStringOptions();
-  const uint32_t rowSize = getMaxStringLength(options);
-
-  Buffer* buffer = flatResult->getBufferWithSpace(
-      rows.countSelected() * rowSize, true /*exactSize*/);
-  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
-
-  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    // Adjust input timestamp according the session timezone.
-    Timestamp inputValue(simpleInput->valueAt(row));
-    if (options.timeZone) {
-      inputValue.toTimezone(*(options.timeZone));
-    }
-    const auto stringView =
-        Timestamp::tsToStringView(inputValue, options, rawBuffer);
-    flatResult->setNoCopy(row, stringView);
-    // The result of both Presto and Spark contains more than 12
-    // digits even when 'zeroPaddingYear' is disabled.
-    VELOX_DCHECK(!stringView.isInline());
-    rawBuffer += stringView.size();
-  });
-
-  // Update the exact buffer size.
-  buffer->setSize(rawBuffer - buffer->asMutable<char>());
-  return result;
-}
-
-template <typename TInput>
-VectorPtr CastExpr::applyIntToBinaryCast(
-    const SelectivityVector& rows,
-    exec::EvalCtx& context,
-    const BaseVector& input) {
-  auto result = BaseVector::create(VARBINARY(), rows.end(), context.pool());
-  const auto flatResult = result->asFlatVector<StringView>();
-  const auto simpleInput = input.as<SimpleVector<TInput>>();
-
-  // The created string view is always inlined for int types.
-  char inlined[sizeof(TInput)];
-  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    TInput input = simpleInput->valueAt(row);
-    if constexpr (std::is_same_v<TInput, int8_t>) {
-      inlined[0] = static_cast<char>(input & 0xFF);
-    } else {
-      for (int i = sizeof(TInput) - 1; i >= 0; --i) {
-        inlined[i] = static_cast<char>(input & 0xFF);
-        input >>= 8;
-      }
-    }
-    const auto stringView = StringView(inlined, sizeof(TInput));
-    flatResult->setNoCopy(row, stringView);
-  });
-
-  return result;
 }
 
 void CastExpr::apply(

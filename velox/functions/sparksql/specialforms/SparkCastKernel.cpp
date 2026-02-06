@@ -44,7 +44,12 @@ SparkCastKernel::SparkCastKernel(
     bool allowOverflow)
     : exec::PrestoCastKernel(config),
       config_(config),
-      allowOverflow_(allowOverflow) {}
+      allowOverflow_(allowOverflow) {
+  const auto sessionTzName = config.sessionTimezone();
+  if (!sessionTzName.empty()) {
+    timestampToStringOptions_.timeZone = tz::locateZone(sessionTzName);
+  }
+}
 
 VectorPtr SparkCastKernel::castToDate(
     const SelectivityVector& rows,
