@@ -37,13 +37,22 @@ class MergeSource {
   /// from the consumer.
   virtual BlockingReason started(ContinueFuture* future) = 0;
 
-  virtual BlockingReason next(RowVectorPtr& data, ContinueFuture* future) = 0;
+  virtual BlockingReason
+  next(RowVectorPtr& data, ContinueFuture* future, bool& drained) = 0;
 
   virtual BlockingReason enqueue(
       RowVectorPtr input,
       ContinueFuture* future) = 0;
 
   virtual void close() = 0;
+
+  /// Called by the producer to signal that it has drained its pipeline under
+  /// barrier processing.
+  virtual void drain() = 0;
+
+  /// Called by the consumer to check if all producers have been drained.
+  /// Returns true if drained, false otherwise.
+  virtual bool testAndClearDrained() = 0;
 
   // Factory methods to create MergeSources.
   static std::shared_ptr<MergeSource> createLocalMergeSource(int queueSize);

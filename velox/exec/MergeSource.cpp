@@ -80,10 +80,13 @@ class LocalMergeSource : public MergeSource {
     return queue_.withWLock([&](auto& queue) { return queue.started(future); });
   }
 
-  BlockingReason next(RowVectorPtr& data, ContinueFuture* future) override {
+  BlockingReason next(RowVectorPtr& data, ContinueFuture* future, bool& drained)
+      override {
+    drained = false;
     ScopedPromiseNotification notification(1);
-    return queue_.withWLock(
-        [&](auto& queue) { return queue.next(data, future, notification); });
+    return queue_.withWLock([&](auto& queue) {
+      return queue.next(data, future, drained, notification);
+    });
   }
 
   BlockingReason enqueue(RowVectorPtr input, ContinueFuture* future) override {
@@ -94,6 +97,16 @@ class LocalMergeSource : public MergeSource {
   }
 
   void close() override {}
+
+  void drain() override {
+    ScopedPromiseNotification notification(1);
+    queue_.withWLock([&](auto& queue) { queue.drain(notification); });
+  }
+
+  bool testAndClearDrained() override {
+    return queue_.withWLock(
+        [&](auto& queue) { return queue.testAndClearDrained(); });
+  }
 
  private:
   class LocalMergeSourceQueue {
@@ -118,12 +131,18 @@ class LocalMergeSource : public MergeSource {
     BlockingReason next(
         RowVectorPtr& data,
         ContinueFuture* future,
+        bool& drained,
         ScopedPromiseNotification& notification) {
       VELOX_CHECK(started_);
 
       if (data_.empty()) {
         if (atEnd_) {
           data.reset();
+          return BlockingReason::kNotBlocked;
+        }
+        if (drained_) {
+          drained = true;
+          drained_ = false;
           return BlockingReason::kNotBlocked;
         }
         consumerPromises_.emplace_back("LocalMergeSourceQueue::next");
@@ -138,6 +157,20 @@ class LocalMergeSource : public MergeSource {
 
       notifyProducers(notification);
       return BlockingReason::kNotBlocked;
+    }
+
+    void drain(ScopedPromiseNotification& notification) {
+      VELOX_CHECK(!atEnd_);
+      drained_ = true;
+      notifyConsumers(notification);
+    }
+
+    bool testAndClearDrained() {
+      if (!drained_) {
+        return false;
+      }
+      drained_ = false;
+      return true;
     }
 
     BlockingReason enqueue(
@@ -180,6 +213,7 @@ class LocalMergeSource : public MergeSource {
 
     bool started_{false};
     bool atEnd_{false};
+    bool drained_{false};
     boost::circular_buffer<RowVectorPtr> data_;
     std::vector<ContinuePromise> consumerPromises_;
     std::vector<ContinuePromise> producerPromises_;
@@ -222,7 +256,9 @@ class MergeExchangeSource : public MergeSource {
     VELOX_NYI();
   }
 
-  BlockingReason next(RowVectorPtr& data, ContinueFuture* future) override {
+  BlockingReason next(RowVectorPtr& data, ContinueFuture* future, bool& drained)
+      override {
+    drained = false;
     data.reset();
 
     if (atEnd_ && !currentPage_) {
@@ -276,6 +312,14 @@ class MergeExchangeSource : public MergeSource {
       client_->close();
       client_ = nullptr;
     }
+  }
+
+  void drain() override {
+    VELOX_NYI("MergeExchangeSource::drain");
+  }
+
+  bool testAndClearDrained() override {
+    return false;
   }
 
  private:
