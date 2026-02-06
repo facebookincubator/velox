@@ -170,8 +170,24 @@ DecimalSumStateColumns deserializeDecimalSumStateWithCount(
   CUDF_EXPECTS(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column");
+  auto numRows = stateCol.size();
+  if (numRows == 0) {
+    DecimalSumStateColumns empty;
+    empty.sum = cudf::make_fixed_width_column(
+        cudf::data_type{cudf::type_id::DECIMAL128, -scale},
+        0,
+        cudf::mask_state::UNALLOCATED,
+        stream);
+    empty.count = cudf::make_fixed_width_column(
+        cudf::data_type{cudf::type_id::INT64},
+        0,
+        cudf::mask_state::UNALLOCATED,
+        stream);
+    return empty;
+  }
+
   cudf::strings_column_view strings(stateCol);
-  auto numRows = strings.size();
+  numRows = strings.size();
 
   auto offsetsView = strings.offsets();
   auto offsetsCol = offsetsView.data<int32_t>();

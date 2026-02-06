@@ -1537,6 +1537,34 @@ TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
       .assertResults("SELECT k, sum(d) AS s FROM tmp GROUP BY k");
 }
 
+TEST_F(CudfDecimalTest, decimalSumPartialFinalEmptyInput) {
+  auto rowType = ROW({
+      {"k", INTEGER()},
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(12, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .filter("k < 0")
+                  .partialAggregation({"k"}, {"sum(d) AS s"})
+                  .finalAggregation()
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(d) AS s FROM tmp WHERE k < 0 GROUP BY k");
+}
+
 TEST_F(CudfDecimalTest, decimalSumIntermediateVarbinary) {
   auto rowType = ROW({
       {"k", INTEGER()},
