@@ -27,6 +27,7 @@ struct Split {
   /// barrier processing which adds one barrier split to each leaf source node
   /// to signal the output drain processing.
   bool barrier{false};
+  uint32_t numBarrierDrivers_{0};
 
   Split() = default;
 

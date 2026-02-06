@@ -373,6 +373,42 @@ std::shared_ptr<Task> Task::create(
   return task;
 }
 
+// static
+std::shared_ptr<Task> Task::create(
+    const std::string& taskId,
+    core::PlanFragment planFragment,
+    int destination,
+    std::shared_ptr<core::QueryCtx> queryCtx,
+    ExecutionMode mode,
+    Consumer consumer,
+    int32_t memoryArbitrationPriority,
+    std::optional<common::SpillDiskOptions> spillDiskOpts,
+    std::function<void(std::exception_ptr)> onError,
+    uint32_t maxDrivers,
+    uint32_t concurrentSplitGroups) {
+  VELOX_CHECK_NOT_NULL(planFragment.planNode);
+  VELOX_CHECK_GE(maxDrivers, 1, "maxDrivers must be >= 1");
+  VELOX_CHECK_GE(
+      concurrentSplitGroups, 1, "concurrentSplitGroups must be >= 1");
+  auto task = std::shared_ptr<Task>(new Task(
+      taskId,
+      std::move(planFragment),
+      destination,
+      std::move(queryCtx),
+      mode,
+      (consumer ? [c = std::move(consumer)]() { return c; }
+                : ConsumerSupplier{}), // Lambda 封装
+      memoryArbitrationPriority,
+      std::move(onError)));
+
+  task->init(std::move(spillDiskOpts));
+  if (task->mode_ == Task::ExecutionMode::kParallel) {
+    task->initExecution(maxDrivers, concurrentSplitGroups);
+  }
+  task->addToTaskList();
+  return task;
+}
+
 Task::Task(
     const std::string& taskId,
     core::PlanFragment planFragment,
@@ -945,7 +981,168 @@ void Task::recordBatchEndTime() {
   batchStartTimeMs_.reset();
 }
 
+void Task::initExecution(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
+  facebook::velox::process::ThreadDebugInfo threadDebugInfo{
+      queryCtx()->queryId(), taskId_, nullptr};
+  facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
+
+  checkExecutionMode(ExecutionMode::kParallel);
+  VELOX_CHECK_GE(maxDrivers, 1, "maxDrivers must be >= 1");
+  VELOX_CHECK_GE(
+      concurrentSplitGroups, 1, "concurrentSplitGroups must be >= 1");
+
+  try {
+    // --- Phase 1: Plan Generation ---
+    {
+      std::unique_lock<std::timed_mutex> l(mutex_);
+      taskStats_.executionStartTimeMs = getCurrentTimeMs();
+
+      if (!isRunningLocked()) {
+        return;
+      }
+
+      // 1. Create DriverFactories
+      if (driverFactories_.empty()) {
+        createDriverFactoriesLocked(maxDrivers);
+      }
+
+      // [Critical Fix 1]: Explicitly resize exchangeClients_.
+      // In the original logic, this might happen implicitly in
+      // createAndStartDrivers, but now it must be done in advance to prevent
+      // out-of-bounds access when drivers are created.
+      if (exchangeClients_.empty() && !driverFactories_.empty()) {
+        exchangeClients_.resize(driverFactories_.size());
+      }
+    } // <--- Release lock
+
+    // --- Phase 2: Initialize Output ---
+    // [Critical Fix 2]: Must be called after releasing the lock and before
+    // creating drivers. This function acquires the lock internally, so calling
+    // it while holding the lock would cause a deadlock. Also, Driver Operators
+    // might depend on OutputBufferManager.
+    initializePartitionOutput();
+
+    // --- Phase 3: Instantiate Drivers ---
+    {
+      std::unique_lock<std::timed_mutex> l(mutex_);
+
+      // Re-check state because the lock was released in Phase 2.
+      if (!isRunningLocked()) {
+        return;
+      }
+
+      concurrentSplitGroups_ = concurrentSplitGroups;
+
+      // Pre-allocate memory slots for the drivers vector.
+      if (numDriversPerSplitGroup_ > 0) {
+        drivers_.resize(numDriversPerSplitGroup_ * concurrentSplitGroups_);
+      }
+
+      // Create Ungrouped Drivers
+      if (numDriversUngrouped_ > 0) {
+        createSplitGroupStateLocked(kUngroupedGroupId);
+
+        // At this point, exchangeClients_ has been resized, so
+        // getExchangeClientLocked will not fail with "INVALID_STATE".
+        std::vector<std::shared_ptr<Driver>> drivers =
+            createDriversLocked(kUngroupedGroupId);
+
+        if (isGroupedExecution()) {
+          splitGroupStates_[kUngroupedGroupId].mixedExecutionMode = true;
+        }
+
+        if (drivers_.empty()) {
+          drivers_ = std::move(drivers);
+        } else {
+          drivers_.reserve(drivers_.size() + numDriversUngrouped_);
+          for (auto& driver : drivers) {
+            drivers_.emplace_back(std::move(driver));
+          }
+        }
+      }
+    }
+
+  } catch (const std::exception&) {
+    handleStartException(std::current_exception());
+    throw;
+  }
+}
+
+void Task::startDrivers() {
+  facebook::velox::process::ThreadDebugInfo threadDebugInfo{
+      queryCtx()->queryId(), taskId_, nullptr};
+  facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
+
+  checkExecutionMode(ExecutionMode::kParallel);
+
+  try {
+    std::unique_lock<std::timed_mutex> l(mutex_);
+
+    VELOX_CHECK(
+        !driverFactories_.empty(),
+        "Task has not been initialized. Please call initExecution() first.");
+
+    VELOX_CHECK(
+        isRunningLocked(),
+        "Task {} has already been terminated before start: {}",
+        taskId_,
+        errorMessageLocked());
+
+    // 1. Enqueue Ungrouped Drivers.
+    // These drivers were instantiated in initExecution() but are sitting idle.
+    // Now we submit them to the Executor to start running on CPU threads.
+    //
+    // We iterate from the end because ungrouped drivers are appended after
+    // grouped driver slots.
+    if (numDriversUngrouped_ > 0) {
+      size_t startIdx = drivers_.size() - numDriversUngrouped_;
+      for (size_t i = startIdx; i < drivers_.size(); ++i) {
+        auto& driver = drivers_[i];
+        if (driver) {
+          // Increment the running counter only when we actually enqueue them.
+          ++numRunningDrivers_;
+          Driver::enqueue(driver);
+        }
+      }
+    }
+
+    // 2. Handle Grouped Drivers.
+    // If splits for grouped execution arrived during the init phase, we process
+    // them now. This function will create AND start drivers for any queued
+    // split groups.
+    if (numDriversPerSplitGroup_ > 0) {
+      ensureSplitGroupsAreBeingProcessedLocked();
+    }
+
+  } catch (const std::exception&) {
+    handleStartException(std::current_exception());
+    throw;
+  }
+}
+
+void Task::handleStartException(const std::exception_ptr& e) {
+  if (isRunning()) {
+    setError(e);
+  } else {
+    maybeRemoveFromOutputBufferManager();
+    {
+      // If the task fails before any driver starts running, we must manually
+      // mark all drivers as finished. Otherwise, the Task destructor might
+      // trigger an assertion failure due to inconsistent state.
+      std::unique_lock<std::timed_mutex> l(mutex_);
+      VELOX_CHECK_EQ(numRunningDrivers_, 0);
+      VELOX_CHECK_EQ(numFinishedDrivers_, 0);
+      numFinishedDrivers_ = numTotalDrivers_;
+    }
+  }
+}
+// Optional: Keep the original start() method for backward compatibility
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
+  // initExecution(maxDrivers, concurrentSplitGroups);
+  startDrivers();
+}
+
+/*void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -991,7 +1188,7 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
     }
     throw;
   }
-}
+}*/
 
 std::shared_ptr<Driver> Task::getDriver(uint32_t driverId) const {
   VELOX_CHECK_LT(driverId, drivers_.size());
@@ -1022,6 +1219,7 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
     } else {
       numDriversUngrouped_ += factory->numDrivers;
     }
+    // nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
@@ -1352,12 +1550,7 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
       ++splitGroupState.numRunningDrivers;
     }
   }
-  if (!groupedExecutionDrivers && barrierRequested_) {
-    for (auto& driver : drivers) {
-      driver->startBarrier();
-      ++numDriversUnderBarrier_;
-    }
-  }
+
   noMoreLocalExchangeProducers(splitGroupId);
   if (groupedExecutionDrivers) {
     ++numRunningSplitGroups_;
@@ -1809,6 +2002,7 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
   promises.reserve(leafPlanNodeIds.size());
   for (const auto& leafPlanNode : leafPlanNodeIds) {
     auto barrierSplit = Split::createBarrier();
+    // barrierSplit.numBarrierDrivers_ = nodeIdNumDrivers_.at(leafPlanNode);
     auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
     addSplitLocked(splitState, barrierSplit, promises);
   }

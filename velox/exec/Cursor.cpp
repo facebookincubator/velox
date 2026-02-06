@@ -340,7 +340,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             return;
           }
           queue->close();
-        });
+        },
+        maxDrivers_,
+        numConcurrentSplitGroups_);
   }
 
   ~MultiThreadedTaskCursor() override {
