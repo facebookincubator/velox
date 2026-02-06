@@ -14,19 +14,67 @@
  * limitations under the License.
  */
 #include "velox/expression/TryExpr.h"
+#include "velox/common/base/VeloxException.h"
 #include "velox/expression/ScopedVarSetter.h"
 
+#include <folly/String.h>
+
 namespace facebook::velox::exec {
+
+namespace {
+
+// Parse comma-separated error codes into a set.
+std::unordered_set<std::string> parseCatchableErrorCodes(
+    const std::string& codes) {
+  std::unordered_set<std::string> result;
+  if (codes.empty()) {
+    return result;
+  }
+
+  std::vector<std::string_view> parts;
+  folly::split(',', codes, parts);
+  for (const auto& part : parts) {
+    auto trimmed = folly::trimWhitespace(part);
+    if (!trimmed.empty()) {
+      result.insert(std::string(trimmed));
+    }
+  }
+  return result;
+}
+
+} // namespace
+
+bool TryExpr::shouldCatchError(const std::exception_ptr& exPtr) const {
+  if (!exPtr) {
+    return true;
+  }
+
+  try {
+    std::rethrow_exception(exPtr);
+  } catch (const VeloxException& e) {
+    if (e.isUserError()) {
+      return true;
+    }
+    if (!catchableErrorCodes_.empty() &&
+        catchableErrorCodes_.count(e.errorCode()) > 0) {
+      return true;
+    }
+    return false;
+  } catch (...) {
+    return true;
+  }
+}
 
 void TryExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
   ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
+  const bool needErrorDetails = !catchableErrorCodes_.empty();
   ScopedVarSetter captureErrorDetails(
-      context.mutableCaptureErrorDetails(), false);
+      context.mutableCaptureErrorDetails(), needErrorDetails);
 
-  ScopedThreadSkipErrorDetails skipErrorDetails(true);
+  ScopedThreadSkipErrorDetails skipErrorDetails(!needErrorDetails);
 
   // It's possible with nested TRY expressions that some rows already threw
   // exceptions in earlier expressions that haven't been handled yet. To avoid
@@ -52,10 +100,11 @@ void TryExpr::evalSpecialFormSimplified(
     EvalCtx& context,
     VectorPtr& result) {
   ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
+  const bool needErrorDetails = !catchableErrorCodes_.empty();
   ScopedVarSetter captureErrorDetails(
-      context.mutableCaptureErrorDetails(), false);
+      context.mutableCaptureErrorDetails(), needErrorDetails);
 
-  ScopedThreadSkipErrorDetails skipErrorDetails(true);
+  ScopedThreadSkipErrorDetails skipErrorDetails(!needErrorDetails);
 
   // It's possible with nested TRY expressions that some rows already threw
   // exceptions in earlier expressions that haven't been handled yet. To avoid
@@ -118,6 +167,37 @@ void TryExpr::nullOutErrors(
 
   applyListenersOnError(rows, context);
 
+  if (!catchableErrorCodes_.empty()) {
+    rows.applyToSelected([&](vector_size_t row) {
+      auto errorOpt = errors->errorAt(row);
+      if (!errorOpt.has_value()) {
+        return;
+      }
+      auto exPtr = *errorOpt;
+      if (exPtr && !shouldCatchError(*exPtr)) {
+        std::rethrow_exception(*exPtr);
+      }
+    });
+  }
+
+  auto shouldNullOutRow = [&](vector_size_t row) {
+    if (!errors->hasErrorAt(row)) {
+      return false;
+    }
+    if (catchableErrorCodes_.empty()) {
+      return true;
+    }
+    auto errorOpt = errors->errorAt(row);
+    if (!errorOpt.has_value()) {
+      return false;
+    }
+    const auto& exPtr = *errorOpt;
+    if (!exPtr) {
+      return shouldCatchError(nullptr);
+    }
+    return shouldCatchError(*exPtr);
+  };
+
   if (result->isConstantEncoding()) {
     // Since it's constant, if any row is NULL they're all NULL, so check row
     // 0 arbitrarily.
@@ -132,7 +212,7 @@ void TryExpr::nullOutErrors(
     auto nulls = allocateNulls(size, context.pool());
     auto rawNulls = nulls->asMutable<uint64_t>();
     rows.applyToSelected([&](auto row) {
-      if (errors->hasErrorAt(row)) {
+      if (shouldNullOutRow(row)) {
         bits::setNull(rawNulls, row, true);
       }
     });
@@ -145,7 +225,7 @@ void TryExpr::nullOutErrors(
       result->size() >= rows.end()) {
     auto* rawNulls = result->mutableRawNulls();
     rows.applyToSelected([&](auto row) {
-      if (errors->hasErrorAt(row)) {
+      if (shouldNullOutRow(row)) {
         bits::setNull(rawNulls, row, true);
       }
     });
@@ -157,7 +237,7 @@ void TryExpr::nullOutErrors(
 
     rows.applyToSelected([&](auto row) {
       rawIndices[row] = row;
-      if (errors->hasErrorAt(row)) {
+      if (shouldNullOutRow(row)) {
         bits::setNull(rawNulls, row, true);
       }
     });
@@ -180,12 +260,15 @@ ExprPtr TryCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool /* trackCpuUsage */,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,
       "TRY expressions expect exactly 1 argument, received: {}",
       compiledChildren.size());
-  return std::make_shared<TryExpr>(type, std::move(compiledChildren[0]));
+  auto catchableErrorCodes =
+      parseCatchableErrorCodes(config.tryCatchableErrorCodes());
+  return std::make_shared<TryExpr>(
+      type, std::move(compiledChildren.at(0)), std::move(catchableErrorCodes));
 }
 } // namespace facebook::velox::exec
