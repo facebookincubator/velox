@@ -674,8 +674,7 @@ TEST_F(DecimalArithmeticTest, ceil) {
 
   // long DECIMAL -> long DECIMAL.
   testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(19, 0))},
+      {makeFlatVector<int128_t>({0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(19, 0))},
       "ceil(c0)",
       {makeFlatVector<int128_t>(
           {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(20, 2))});
