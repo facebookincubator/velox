@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/expression/CastExpr.h"
-#include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/sparksql/specialforms/SparkCastKernel.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -32,14 +31,12 @@ class SparkCastExpr : public exec::CastExpr {
       exec::ExprPtr&& expr,
       bool trackCpuUsage,
       bool isTryCast,
-      std::shared_ptr<SparkCastHooks> hooks,
       std::shared_ptr<SparkCastKernel> kernel)
       : exec::CastExpr(
             type,
             std::move(expr),
             trackCpuUsage,
             isTryCast,
-            hooks,
             std::move(kernel)) {}
 };
 

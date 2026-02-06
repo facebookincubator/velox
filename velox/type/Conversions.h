@@ -41,16 +41,6 @@ struct PrestoCastPolicy {
   static constexpr bool throwOnUnicode = true;
 };
 
-struct SparkCastPolicy {
-  static constexpr bool legacyCast = false;
-  static constexpr bool throwOnUnicode = false;
-};
-
-struct SparkTryCastPolicy {
-  static constexpr bool legacyCast = false;
-  static constexpr bool throwOnUnicode = false;
-};
-
 struct LegacyCastPolicy {
   static constexpr bool legacyCast = true;
   static constexpr bool throwOnUnicode = false;

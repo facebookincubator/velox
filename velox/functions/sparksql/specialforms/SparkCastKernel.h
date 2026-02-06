@@ -27,6 +27,10 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const velox::core::QueryConfig& config,
       bool allowOverflow);
 
+  bool applyTryCastRecursively() const override {
+    return true;
+  }
+
   /// Returns the options to cast from timestamp to string.
   const TimestampToStringOptions& timestampToStringOptions() const override {
     return timestampToStringOptions_;
