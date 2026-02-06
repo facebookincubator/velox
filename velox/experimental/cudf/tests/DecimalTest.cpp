@@ -1537,6 +1537,29 @@ TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
       .assertResults("SELECT k, sum(d) AS s FROM tmp GROUP BY k");
 }
 
+TEST_F(CudfDecimalTest, decimalPartialSumVarbinaryToVeloxRoundTrip) {
+  auto rowType = ROW({
+      {"d", DECIMAL(12, 2)},
+  });
+
+  auto input = makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(12, 2))});
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(d) AS s"})
+                  .planNode();
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  VELOX_CHECK_NOT_NULL(result);
+  ASSERT_GT(result->size(), 0);
+  ASSERT_EQ(result->childAt(0)->type()->kind(), TypeKind::VARBINARY);
+}
+
 TEST_F(CudfDecimalTest, decimalSumPartialFinalEmptyInput) {
   auto rowType = ROW({
       {"k", INTEGER()},
@@ -2035,6 +2058,9 @@ TEST_F(CudfDecimalTest, cudfVarbinaryArrowRoundTrip) {
       with_arrow::toVeloxColumn(cudfTable->view(), pool(), "rt_", stream);
 
   ASSERT_EQ(roundTrip->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+  VELOX_ASSERT_THROW(
+      roundTrip->setType(ROW({{"rt_0", VARBINARY()}})),
+      "Cannot change vector type");
 
   auto expected = makeRowVector(
       {"rt_0"},
@@ -2043,6 +2069,84 @@ TEST_F(CudfDecimalTest, cudfVarbinaryArrowRoundTrip) {
           VARCHAR())});
 
   facebook::velox::test::assertEqualVectors(expected, roundTrip);
+}
+
+TEST_F(CudfDecimalTest, cudfVarbinaryArrowRoundTripWithExpectedType) {
+  auto input = makeRowVector(
+      {"bin"},
+      {makeNullableFlatVector<std::string>(
+          {std::string("abc"), std::nullopt, std::string("xyz")},
+          VARBINARY())});
+
+  auto expectedType = ROW({{"bin", VARBINARY()}});
+
+  auto stream = cudf::get_default_stream();
+  auto cudfTable = with_arrow::toCudfTable(input, pool(), stream);
+  auto roundTrip = with_arrow::toVeloxColumn(
+      cudfTable->view(), pool(), expectedType, "rt_", stream);
+
+  ASSERT_EQ(roundTrip->childAt(0)->type()->kind(), TypeKind::VARBINARY);
+
+  auto expected = makeRowVector(
+      {"rt_0"},
+      {makeNullableFlatVector<std::string>(
+          {std::string("abc"), std::nullopt, std::string("xyz")},
+          VARBINARY())});
+
+  facebook::velox::test::assertEqualVectors(expected, roundTrip);
+}
+
+TEST_F(CudfDecimalTest, cudfVarbinaryRowTypeMismatch) {
+  auto input = makeRowVector(
+      {"l_returnflag",
+       "l_linestatus",
+       "avg_51",
+       "avg_52",
+       "avg_53",
+       "count_54",
+       "sum_47",
+       "sum_48",
+       "sum_49",
+       "sum_50"},
+      {makeFlatVector<std::string>({"A", "B"}, VARCHAR()),
+       makeFlatVector<std::string>({"F", "O"}, VARCHAR()),
+       makeFlatVector<std::string>({"x", "y"}, VARBINARY()),
+       makeFlatVector<std::string>({"p", "q"}, VARBINARY()),
+       makeFlatVector<std::string>({"m", "n"}, VARBINARY()),
+       makeFlatVector<int64_t>({10, 20}, BIGINT()),
+       makeFlatVector<std::string>({"u", "v"}, VARBINARY()),
+       makeFlatVector<std::string>({"r", "s"}, VARBINARY()),
+       makeFlatVector<std::string>({"t", "w"}, VARBINARY()),
+       makeFlatVector<std::string>({"c", "d"}, VARBINARY())});
+
+  auto expectedType = ROW({
+      {"l_returnflag", VARCHAR()},
+      {"l_linestatus", VARCHAR()},
+      {"avg_51", VARBINARY()},
+      {"avg_52", VARBINARY()},
+      {"avg_53", VARBINARY()},
+      {"count_54", BIGINT()},
+      {"sum_47", VARBINARY()},
+      {"sum_48", VARBINARY()},
+      {"sum_49", VARBINARY()},
+      {"sum_50", VARBINARY()},
+  });
+
+  auto stream = cudf::get_default_stream();
+  auto cudfTable = with_arrow::toCudfTable(input, pool(), stream);
+  auto roundTrip =
+      with_arrow::toVeloxColumn(cudfTable->view(), pool(), "rt_", stream);
+
+  ASSERT_EQ(roundTrip->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(roundTrip->childAt(3)->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(roundTrip->childAt(4)->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(roundTrip->childAt(6)->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(roundTrip->childAt(7)->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(roundTrip->childAt(8)->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(roundTrip->childAt(9)->type()->kind(), TypeKind::VARCHAR);
+
+  VELOX_ASSERT_THROW(
+      roundTrip->setType(expectedType), "Cannot change vector type");
 }
 
 } // namespace

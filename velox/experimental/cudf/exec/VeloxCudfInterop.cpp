@@ -34,6 +34,9 @@
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
 
+#include <cstdlib>
+#include <cstring>
+
 namespace facebook::velox::cudf_velox {
 
 cudf::data_type veloxToCudfDataType(const TypePtr& type) {
@@ -139,10 +142,28 @@ std::unique_ptr<cudf::table> toCudfTable(
 
 namespace {
 
+void setArrowSchemaFormat(ArrowSchema* schema, const char* format) {
+  if (!schema) {
+    return;
+  }
+  if (schema->format != nullptr) {
+    std::free(const_cast<char*>(schema->format));
+    schema->format = nullptr;
+  }
+  if (format != nullptr) {
+    const size_t size = std::strlen(format) + 1;
+    auto* buffer = static_cast<char*>(std::malloc(size));
+    VELOX_CHECK_NOT_NULL(buffer);
+    std::memcpy(buffer, format, size);
+    schema->format = buffer;
+  }
+}
+
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata,
+    const RowTypePtr* expectedType,
     rmm::cuda_stream_view stream) {
 
   // To avoid ownership issues, we make copies of the Arrow objects
@@ -163,6 +184,53 @@ RowVectorPtr toVeloxColumn(
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
   ArrowSchema schemaCopy = *arrowSchema;
   arrowSchema->release = nullptr;
+
+  if (expectedType) {
+    auto applyExpectedArrowFormat =
+        [&](auto&& self, ArrowSchema* schema, const TypePtr& type) -> void {
+      if (!schema || !schema->format) {
+        return;
+      }
+      switch (type->kind()) {
+        case TypeKind::ROW: {
+          if (schema->n_children != static_cast<int64_t>(type->size())) {
+            return;
+          }
+          for (size_t i = 0; i < type->size(); ++i) {
+            self(self, schema->children[i], type->childAt(i));
+          }
+          return;
+        }
+        case TypeKind::ARRAY: {
+          if (schema->n_children < 1) {
+            return;
+          }
+          self(self, schema->children[0], type->childAt(0));
+          return;
+        }
+        case TypeKind::MAP: {
+          if (schema->n_children < 1) {
+            return;
+          }
+          auto* entry = schema->children[0];
+          if (!entry || entry->n_children < 2) {
+            return;
+          }
+          self(self, entry->children[0], type->childAt(0));
+          self(self, entry->children[1], type->childAt(1));
+          return;
+        }
+        case TypeKind::VARBINARY: {
+          setArrowSchemaFormat(schema, "z");
+          return;
+        }
+        default:
+          return;
+      }
+    };
+    applyExpectedArrowFormat(
+        applyExpectedArrowFormat, &schemaCopy, *expectedType);
+  }
 
   auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
 
@@ -195,7 +263,17 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     std::string namePrefix,
     rmm::cuda_stream_view stream) {
   auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
-  return toVeloxColumn(table, pool, metadata, stream);
+  return toVeloxColumn(table, pool, metadata, nullptr, stream);
+}
+
+facebook::velox::RowVectorPtr toVeloxColumn(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    const facebook::velox::RowTypePtr& expectedType,
+    std::string namePrefix,
+    rmm::cuda_stream_view stream) {
+  auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
+  return toVeloxColumn(table, pool, metadata, &expectedType, stream);
 }
 
 RowVectorPtr toVeloxColumn(
@@ -207,7 +285,7 @@ RowVectorPtr toVeloxColumn(
   for (auto name : columnNames) {
     metadata.emplace_back(cudf::column_metadata(name));
   }
-  return toVeloxColumn(table, pool, metadata, stream);
+  return toVeloxColumn(table, pool, metadata, nullptr, stream);
 }
 
 } // namespace with_arrow

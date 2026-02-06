@@ -44,6 +44,13 @@ facebook::velox::RowVectorPtr toVeloxColumn(
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
+    const facebook::velox::RowTypePtr& expectedType,
+    std::string namePrefix,
+    rmm::cuda_stream_view stream);
+
+facebook::velox::RowVectorPtr toVeloxColumn(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
     const std::vector<std::string>& columnNames,
     rmm::cuda_stream_view stream);
 
