@@ -2113,4 +2113,27 @@ struct LocalTimeFunction {
   int64_t localTimeSinceMidnight_;
 };
 
+template <typename T>
+struct LocalTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+
+    // Convert ms → seconds + nanos
+    int64_t seconds = sessionStartTimeMs / 1000;
+    uint64_t nanos = (sessionStartTimeMs % 1000) * 1'000'000;
+    ts_ = Timestamp{seconds, nanos};
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
+    result = ts_;
+  }
+
+ private:
+  Timestamp ts_;
+};
+
 } // namespace facebook::velox::functions

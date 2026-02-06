@@ -201,6 +201,10 @@ Date and Time Functions
         SELECT current_timestamp;  -- 2025-07-17 14:53:12.123 Asia/Kolkata
         SELECT now();              -- 2025-07-17 14:53:12.123 Asia/Kolkata
 
+.. function:: localtimestamp -> timestamp
+
+    Returns the timestamp as of the start of the query.
+
 Truncation Function
 -------------------
 
