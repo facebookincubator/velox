@@ -74,6 +74,21 @@ Mathematical Functions
     Returns the squared `Euclidean distance <https://en.wikipedia.org/wiki/Euclidean_distance>`_ between the vectors represented as array(double).
     If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
 
+.. function:: dot_product(map(varchar, double), map(varchar, double)) -> double
+
+    Returns the `Dot Product <https://en.wikipedia.org/wiki/Dot_product>`_ between the sparse vectors represented as map(varchar, double).
+    The dot product is computed as the sum of products of values for matching keys.
+    Keys that exist in only one map contribute 0 to the result.
+    If any input map is empty, the function returns NaN.
+
+        SELECT dot_product(MAP(ARRAY['a'], ARRAY[1.0]), MAP(ARRAY['a'], ARRAY[2.0])); -- 2.0
+
+        SELECT dot_product(MAP(ARRAY['a', 'b'], ARRAY[1.0, 2.0]), MAP(ARRAY['b', 'c'], ARRAY[3.0, 4.0])); -- 6.0
+
+        SELECT dot_product(MAP(ARRAY['a'], ARRAY[1.0]), MAP(ARRAY['b'], ARRAY[2.0])); -- 0.0
+
+        SELECT dot_product(MAP(ARRAY[], ARRAY[]), MAP(ARRAY['a'], ARRAY[1.0])); -- NaN
+
 .. function:: dot_product(array(real), array(real)) -> real
 
     Returns the `Dot Product <https://en.wikipedia.org/wiki/Dot_product>`_ between the vectors represented as array(real).

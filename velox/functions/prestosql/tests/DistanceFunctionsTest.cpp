@@ -119,6 +119,42 @@ TEST_F(DistanceFunctionsTest, cosineSimilarityArray) {
   EXPECT_TRUE(std::isnan(cosineSimilarity({1, 3}, {kInf, 1})));
 }
 
+TEST_F(DistanceFunctionsTest, dotProductMap) {
+  const auto dotProduct =
+      [&](const std::vector<std::pair<std::string, std::optional<double>>>&
+              left,
+          const std::vector<std::pair<std::string, std::optional<double>>>&
+              right) {
+        auto leftMap = makeMapVector<std::string, double>({left});
+        auto rightMap = makeMapVector<std::string, double>({right});
+        return evaluateOnce<double>(
+                   "dot_product(c0,c1)", makeRowVector({leftMap, rightMap}))
+            .value();
+      };
+
+  EXPECT_NEAR(
+      2.0 * 3.0, dotProduct({{"a", 1}, {"b", 2}}, {{"c", 1}, {"b", 3}}), 1e-6);
+
+  EXPECT_NEAR(
+      1 * 1 + 2 * 3,
+      dotProduct({{"a", 1}, {"b", 2}}, {{"a", 1}, {"b", 3}}),
+      1e-6);
+
+  EXPECT_DOUBLE_EQ(0.0, dotProduct({{"a", 1}, {"b", 2}}, {{"c", 1}, {"d", 3}}));
+
+  EXPECT_TRUE(std::isnan(dotProduct({}, {})));
+  EXPECT_TRUE(std::isnan(dotProduct({{"a", 1}}, {})));
+
+  auto nullableLeftMap = makeNullableMapVector<StringView, double>(
+      {{{{"a"_sv, 1}, {"b"_sv, std::nullopt}}}});
+  auto rightMap =
+      makeMapVector<StringView, double>({{{{"a"_sv, 2}, {"b"_sv, 3}}}});
+  EXPECT_FALSE(
+      evaluateOnce<double>(
+          "dot_product(c0,c1)", makeRowVector({nullableLeftMap, rightMap}))
+          .has_value());
+}
+
 TEST_F(DistanceFunctionsTest, dotProductArray) {
   const auto dotProduct = [&](const std::vector<double>& left,
                               const std::vector<double>& right) {
