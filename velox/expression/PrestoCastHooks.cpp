@@ -71,57 +71,6 @@ Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
       Status::UserError("Conversion to Timestamp is not supported"));
 }
 
-namespace {
-
-using double_conversion::StringToDoubleConverter;
-
-template <typename T>
-Expected<T> doCastToFloatingPoint(const StringView& data) {
-  static const T kNan = std::numeric_limits<T>::quiet_NaN();
-  static StringToDoubleConverter stringToDoubleConverter{
-      StringToDoubleConverter::ALLOW_TRAILING_SPACES,
-      /*empty_string_value*/ kNan,
-      /*junk_string_value*/ kNan,
-      "Infinity",
-      "NaN"};
-  int processedCharactersCount;
-  T result;
-  auto* begin = std::find_if_not(data.begin(), data.end(), [](char c) {
-    return functions::stringImpl::isAsciiWhiteSpace(c);
-  });
-  auto length = data.end() - begin;
-  if (length == 0) {
-    // 'data' only contains white spaces.
-    return folly::makeUnexpected(Status::UserError());
-  }
-  if constexpr (std::is_same_v<T, float>) {
-    result = stringToDoubleConverter.StringToFloat(
-        begin, length, &processedCharactersCount);
-  } else if constexpr (std::is_same_v<T, double>) {
-    result = stringToDoubleConverter.StringToDouble(
-        begin, length, &processedCharactersCount);
-  }
-  // Since we already removed leading space, if processedCharactersCount == 0,
-  // it means the remaining string is either empty or a junk string. So return a
-  // user error in this case.
-  if UNLIKELY (processedCharactersCount == 0) {
-    return folly::makeUnexpected(Status::UserError());
-  }
-  return result;
-}
-
-} // namespace
-
-Expected<float> PrestoCastHooks::castStringToReal(
-    const StringView& data) const {
-  return doCastToFloatingPoint<float>(data);
-}
-
-Expected<double> PrestoCastHooks::castStringToDouble(
-    const StringView& data) const {
-  return doCastToFloatingPoint<double>(data);
-}
-
 StringView PrestoCastHooks::removeWhiteSpaces(const StringView& view) const {
   return view;
 }
