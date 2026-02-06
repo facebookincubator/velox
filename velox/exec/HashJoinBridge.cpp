@@ -103,7 +103,8 @@ std::unique_ptr<HashBuildSpiller> createSpiller(
     const RowTypePtr& tableType,
     const HashBitRange& hashBitRange,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats) {
+    folly::Synchronized<common::SpillStats>* stats,
+    filesystems::File::IoStats* fileSystemStats = nullptr) {
   return std::make_unique<HashBuildSpiller>(
       joinType,
       parentId,
@@ -111,7 +112,8 @@ std::unique_ptr<HashBuildSpiller> createSpiller(
       hashJoinTableSpillType(tableType, joinType),
       hashBitRange,
       spillConfig,
-      stats);
+      stats,
+      fileSystemStats);
 }
 } // namespace
 

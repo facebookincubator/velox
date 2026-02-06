@@ -155,6 +155,13 @@ class HiveIndexReader {
   // condition (0 for equal condition value, 0/1 for between condition
   // lower/upper).
   std::vector<std::vector<DecodedVector>> decodedRequestVectors_;
+
+  // For BetweenIndexLookupCondition with constant bounds, stores the constant
+  // values directly. The outer vector is indexed by join condition index. The
+  // inner vector has size 2 for between conditions (lower, upper). If a bound
+  // is a constant, the corresponding optional contains the value; otherwise
+  // it's std::nullopt and the value should be decoded from request.
+  std::vector<std::vector<std::optional<variant>>> constantBoundValues_;
 };
 
 } // namespace facebook::velox::connector::hive

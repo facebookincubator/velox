@@ -38,7 +38,8 @@ SpillWriter::SpillWriter(
     const std::string& fileCreateConfig,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats)
+    folly::Synchronized<common::SpillStats>* stats,
+    filesystems::File::IoStats* fsStats)
     : serializer::SerializedPageFileWriter(
           pathPrefix,
           targetFileSize,
@@ -51,7 +52,8 @@ SpillWriter::SpillWriter(
               0.8,
               /*_nullsFirst=*/true),
           getNamedVectorSerde(VectorSerde::Kind::kPresto),
-          pool),
+          pool,
+          fsStats),
       type_(type),
       sortingKeys_(sortingKeys),
       stats_(stats),
@@ -138,7 +140,8 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats) {
+    folly::Synchronized<common::SpillStats>* stats,
+    filesystems::File::IoStats* fsStats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
       fileInfo.path,
@@ -148,7 +151,8 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.sortingKeys,
       fileInfo.compressionKind,
       pool,
-      stats));
+      stats,
+      fsStats));
 }
 
 SpillReadFile::SpillReadFile(
@@ -160,7 +164,8 @@ SpillReadFile::SpillReadFile(
     const std::vector<SpillSortKey>& sortingKeys,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats)
+    folly::Synchronized<common::SpillStats>* stats,
+    filesystems::File::IoStats* fsStats)
     : serializer::SerializedPageFileReader(
           path,
           bufferSize,
@@ -172,7 +177,8 @@ SpillReadFile::SpillReadFile(
               compressionKind,
               0.8,
               /*_nullsFirst=*/true),
-          pool),
+          pool,
+          fsStats),
       id_(id),
       path_(path),
       size_(size),

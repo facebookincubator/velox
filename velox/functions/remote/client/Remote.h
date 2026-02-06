@@ -18,6 +18,7 @@
 
 #include <folly/SocketAddress.h>
 #include "velox/functions/remote/client/RemoteVectorFunction.h"
+#include "velox/functions/remote/client/ThriftClient.h"
 
 namespace facebook::velox::functions {
 
@@ -27,6 +28,11 @@ struct RemoteThriftVectorFunctionMetadata
   /// Note that this can hold a network location (ip/port pair) or a unix domain
   /// socket path (see SocketAddress::makeFromPath()).
   folly::SocketAddress location;
+
+  /// Optional factory for creating remote function clients. If not set, the
+  /// default thrift client factory is used. This enables dependency injection
+  /// for testing with mock clients.
+  RemoteFunctionClientFactory clientFactory;
 };
 
 /// Registers a new remote function. It will use the meatadata defined in

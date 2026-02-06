@@ -25,6 +25,7 @@ add_executable(
   TableWriterReplayerTest.cpp
   TopNRowNumberReplayerTest.cpp
   TraceFileToolTest.cpp
+  TraceReplayerConfigPromptTest.cpp
   UnnestReplayerTest.cpp
 )
 

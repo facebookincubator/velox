@@ -529,7 +529,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
       spillConfig.fileCreateConfig = "";
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
-          spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+          spillPartition.createOrderedReader(
+              spillConfig, pool(), &spillStats_, /*fsStats=*/nullptr);
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -749,12 +750,12 @@ TEST_P(SpillTest, spillTimestamp) {
   spillConfig.writeBufferSize = 1 << 20;
   spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
   spillConfig.fileCreateConfig = "";
-  auto merge =
-      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+  auto merge = spillPartition.createOrderedReader(
+      spillConfig, pool(), &spillStats_, /*fsStats=*/nullptr);
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(
-      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_) ==
-      nullptr);
+      spillPartition.createOrderedReader(
+          spillConfig, pool(), &spillStats_, /*fsStats=*/nullptr) == nullptr);
   for (auto i = 0; i < timeValues.size(); ++i) {
     auto* stream = merge->next();
     ASSERT_NE(stream, nullptr);

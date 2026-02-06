@@ -38,7 +38,8 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
       folly::Synchronized<OperatorStats>* opStats,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<common::SpillStats>* spillStats,
+      filesystems::File::IoStats* spillFsStats);
 
   ~SubPartitionedSortWindowBuild() override {
     pool_->release();
@@ -78,6 +79,8 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
   memory::MemoryPool* const pool_;
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
+
+  filesystems::File::IoStats* const spillFsStats_{nullptr};
 
   // Divide input rows to the corresponding sub partitions.
   std::unique_ptr<HashPartitionFunction> subPartitioningFunction_;

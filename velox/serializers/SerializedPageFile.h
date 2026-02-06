@@ -38,7 +38,8 @@ class SerializedPageFile {
   static std::unique_ptr<SerializedPageFile> create(
       uint32_t id,
       const std::string& pathPrefix,
-      const std::string& fileCreateConfig);
+      const std::string& fileCreateConfig,
+      filesystems::File::IoStats* fsStats);
 
   uint32_t id() const {
     return id_;
@@ -69,7 +70,8 @@ class SerializedPageFile {
   SerializedPageFile(
       uint32_t id,
       const std::string& pathPrefix,
-      const std::string& fileCreateConfig);
+      const std::string& fileCreateConfig,
+      filesystems::File::IoStats* fsStats);
 
   const uint32_t id_;
 
@@ -89,7 +91,8 @@ class SerializedPageFileWriter {
   /// before write to file. 'fileCreateConfig' specifies the file layout on
   /// remote storage which is storage system specific. 'serdeOptions' specifies
   /// the serialization options to use. 'serde' specifies the VectorSerde
-  /// instance to use. 'pool' is used for buffering.
+  /// instance to use. 'pool' is used for buffering. 'fsStats' is used
+  /// to collect filesystem I/O stats.
   SerializedPageFileWriter(
       const std::string& pathPrefix,
       uint64_t targetFileSize,
@@ -97,7 +100,27 @@ class SerializedPageFileWriter {
       const std::string& fileCreateConfig,
       std::unique_ptr<VectorSerde::Options> serdeOptions,
       VectorSerde* serde,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      filesystems::File::IoStats* fsStats);
+
+  // TODO(jtan6): Remove after other dependencies switch to the new ctor.
+  SerializedPageFileWriter(
+      const std::string& pathPrefix,
+      uint64_t targetFileSize,
+      uint64_t writeBufferSize,
+      const std::string& fileCreateConfig,
+      std::unique_ptr<VectorSerde::Options> serdeOptions,
+      VectorSerde* serde,
+      memory::MemoryPool* pool)
+      : SerializedPageFileWriter(
+            pathPrefix,
+            targetFileSize,
+            writeBufferSize,
+            fileCreateConfig,
+            std::move(serdeOptions),
+            serde,
+            pool,
+            nullptr) {}
 
   virtual ~SerializedPageFileWriter() = default;
 
@@ -159,6 +182,7 @@ class SerializedPageFileWriter {
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
   memory::MemoryPool* const pool_;
   VectorSerde* const serde_;
+  filesystems::File::IoStats* const fsStats_;
 
   bool finished_{false};
   uint32_t nextFileId_{0};
@@ -171,13 +195,19 @@ class SerializedPageFileWriter {
 /// 'SerializedPageFileWriter'.
 class SerializedPageFileReader {
  public:
+  /// 'path' is the file path to read from. 'bufferSize' is the read buffer
+  /// size. 'type' is the row type of the data. 'serde' is the VectorSerde
+  /// instance to use. 'readOptions' specifies the deserialization options.
+  /// 'pool' is used for buffering. 'fsStats' is used to collect
+  /// filesystem I/O stats such as wsServiceTime.
   SerializedPageFileReader(
       const std::string& path,
       uint64_t bufferSize,
       const RowTypePtr& type,
       VectorSerde* serde,
       std::unique_ptr<VectorSerde::Options> readOptions,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      filesystems::File::IoStats* fsStats);
 
   virtual ~SerializedPageFileReader() = default;
 
