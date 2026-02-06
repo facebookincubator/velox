@@ -189,18 +189,6 @@ class CastExpr : public SpecialForm {
       const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
       FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
 
-  VectorPtr castFromDate(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
-
-  VectorPtr castToDate(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
-
   VectorPtr castFromIntervalDayTime(
       const SelectivityVector& rows,
       const BaseVector& input,

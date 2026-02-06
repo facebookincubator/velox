@@ -93,23 +93,6 @@ Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
   return Timestamp::fromMicrosNoError(val ? 1 : 0);
 }
 
-Expected<int32_t> SparkCastHooks::castStringToDate(
-    const StringView& dateString) const {
-  // Allows all patterns supported by Spark:
-  // `[+-]yyyy*`
-  // `[+-]yyyy*-[m]m`
-  // `[+-]yyyy*-[m]m-[d]d`
-  // `[+-]yyyy*-[m]m-[d]d *`
-  // `[+-]yyyy*-[m]m-[d]dT*`
-  // The asterisk `*` in `yyyy*` stands for any numbers.
-  // For the last two patterns, the trailing `*` can represent none or any
-  // sequence of characters, e.g:
-  //   "1970-01-01 123"
-  //   "1970-01-01 (BC)"
-  return util::fromDateString(
-      removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
-}
-
 Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {
   return util::Converter<TypeKind::REAL>::tryCast(data);
 }
