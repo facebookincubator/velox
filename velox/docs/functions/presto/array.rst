@@ -2,16 +2,16 @@
 Array Functions
 =============================
 
-.. function:: all_match(array(T), function(T, boolean)) → boolean
+.. function:: all_match(array(T), function(T, boolean)) -> boolean
 
     Returns whether all elements of an array match the given predicate.
 
         Returns true if all the elements match the predicate (a special case is when the array is empty);
-        Returns false if one or more elements don’t match;
+        Returns false if one or more elements don't match;
         Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.
 
-.. function:: any_match(array(T), function(T, boolean)) → boolean
+.. function:: any_match(array(T), function(T, boolean)) -> boolean
 
     Returns whether at least one element of an array matches the given predicate.
 
@@ -20,7 +20,7 @@ Array Functions
         Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
 
-.. function:: none_match(array(T), function(T, boolean)) → boolean
+.. function:: none_match(array(T), function(T, boolean)) -> boolean
 
     Returns whether no elements of an array match the given predicate.
 
@@ -156,7 +156,7 @@ Array Functions
     Returns null if there are no non-null elements in common but either array contains null.
     For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
 
-.. function:: arrays_union(x, y) -> array
+.. function:: array_union(x, y) -> array
 
     Returns an array of the elements in the union of x and y, without duplicates.
     For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
