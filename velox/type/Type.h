@@ -657,12 +657,6 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool containsUnknown() const;
 
-  /// Returns true if this type is any integer type (TINYINT, SMALLINT, INTEGER,
-  /// or BIGINT).
-  bool isAnyInteger() const {
-    return isTinyint() || isSmallint() || isInteger() || isBigint();
-  }
-
   template <typename T>
   std::string valueToString(T value) const;
 

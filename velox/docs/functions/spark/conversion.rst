@@ -84,7 +84,7 @@ From strings
 
 Casting a string to an integral type is allowed if the string represents a number within the range of result type.
 Casting from strings that represent floating-point numbers truncates the decimal part of the input value when ANSI mode is disabled.
-Casting from invalid strings throws an error when ANSI mode is enabled, or returns NULL when ANSI mode is disabled.
+Casting from invalid strings throws an error when ANSI mode is enabled; returns NULL otherwise.
 
 Valid examples
 

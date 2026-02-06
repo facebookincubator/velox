@@ -17,13 +17,29 @@
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
 namespace facebook::velox::functions::sparksql {
+namespace {
+
+bool isSparkIntegralType(const TypePtr& type) {
+  if (type->isTinyint() || type->isSmallint()) {
+    return true;
+  }
+  if (type->isInteger()) {
+    return !type->isDate() && !type->isIntervalYearMonth();
+  }
+  if (type->isBigint()) {
+    return !type->isIntervalDayTime() && !type->isTime();
+  }
+  return false;
+}
+
+} // namespace
 
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
   // String to Boolean or Integer types support ANSI mode
   if (fromType->isVarchar()) {
-    return toType->isBoolean() || toType->isAnyInteger();
+    return toType->isBoolean() || isSparkIntegralType(toType);
   }
 
   return false;
