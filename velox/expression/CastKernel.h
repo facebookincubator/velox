@@ -36,6 +36,19 @@ class CastKernel {
  public:
   virtual ~CastKernel() = default;
 
+  virtual VectorPtr castFromDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
+  virtual VectorPtr castToDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError) const = 0;
+
  protected:
   /// Initializes a result vector with the specified type and clears nulls
   /// for the selected rows.

@@ -27,7 +27,15 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const velox::core::QueryConfig& config,
       bool allowOverflow);
 
+  VectorPtr castToDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError) const override;
+
  private:
+  StringView removeWhiteSpaces(const StringView& view) const;
+
   const core::QueryConfig& config_;
 
   // If true, the cast will truncate the overflow value to fit the target type.
