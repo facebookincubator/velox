@@ -34,8 +34,6 @@ class PrestoCastHooks : public CastHooks {
 
   Expected<Timestamp> castBooleanToTimestamp(bool seconds) const override;
 
-  Expected<int64_t> castTimestampToInt(Timestamp timestamp) const override;
-
   Expected<std::optional<Timestamp>> castDoubleToTimestamp(
       double seconds) const override;
 

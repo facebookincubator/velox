@@ -187,6 +187,137 @@ VectorPtr SparkCastKernel::castToDecimal(
   }
 }
 
+VectorPtr SparkCastKernel::castToTinyInt(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VectorPtr result;
+    context.ensureWritable(rows, toType, result);
+    result->clearNulls(rows);
+    applyTimestampToIntegerCast<TypeKind::TINYINT>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  }
+
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+      castToIntegerImpl,
+      TypeKind::TINYINT,
+      fromType->kind(),
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
+
+VectorPtr SparkCastKernel::castToSmallInt(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VectorPtr result;
+    context.ensureWritable(rows, toType, result);
+    result->clearNulls(rows);
+    applyTimestampToIntegerCast<TypeKind::SMALLINT>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  }
+
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+      castToIntegerImpl,
+      TypeKind::SMALLINT,
+      fromType->kind(),
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
+
+VectorPtr SparkCastKernel::castToInteger(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VectorPtr result;
+    context.ensureWritable(rows, toType, result);
+    result->clearNulls(rows);
+    applyTimestampToIntegerCast<TypeKind::INTEGER>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  }
+
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+      castToIntegerImpl,
+      TypeKind::INTEGER,
+      fromType->kind(),
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
+
+VectorPtr SparkCastKernel::castToBigInt(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VectorPtr result;
+    context.ensureWritable(rows, toType, result);
+    result->clearNulls(rows);
+    applyTimestampToIntegerCast<TypeKind::BIGINT>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  }
+
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+      castToIntegerImpl,
+      TypeKind::BIGINT,
+      fromType->kind(),
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
+
+VectorPtr SparkCastKernel::castToHugeInt(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+      castToIntegerImpl,
+      TypeKind::HUGEINT,
+      fromType->kind(),
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
+
 StringView SparkCastKernel::removeWhiteSpaces(const StringView& view) const {
   StringView output;
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
