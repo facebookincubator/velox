@@ -484,6 +484,15 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t maxPreloadSplits = 0,
       const ConnectorSplitPreloadFunc& preload = nullptr);
 
+  BlockingReason getSplitOrFuture(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId,
+      exec::Split& split,
+      ContinueFuture& future,
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload,
+      uint32_t driverId);
+
   /// Returns the scaled scan controller for a given table scan node if the
   /// query has configured.
   std::shared_ptr<ScaledScanController> getScaledScanControllerLocked(

@@ -24,7 +24,6 @@ void CallbackSink::addInput(RowVectorPtr input) {
 
 RowVectorPtr CallbackSink::getOutput() {
   if (FOLLY_LIKELY(!isDraining())) {
-    LOG(ERROR) << "Callback getOutput not Draining";
     return nullptr;
   }
   LOG(ERROR) << "Callback getOutput isDraining";

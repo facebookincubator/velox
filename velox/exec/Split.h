@@ -43,6 +43,12 @@ struct Split {
     return barrierSplit;
   }
 
+  static Split createBarrier(uint32_t numDrivers) {
+    auto barrierSplit = createBarrier();
+    barrierSplit.numBarrierDrivers_ = numDrivers;
+    return barrierSplit;
+  }
+
   Split(Split&& other) = default;
   Split(const Split& other) = default;
   Split& operator=(Split&& other) = default;
