@@ -79,6 +79,16 @@ class PrestoCastKernel : public CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castToBoolean(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::BOOLEAN>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
  private:
   template <typename FromNativeType>
   VectorPtr applyDecimalToVarcharCast(
@@ -146,6 +156,31 @@ class PrestoCastKernel : public CastKernel {
       exec::EvalCtx& context,
       const TypePtr& toType,
       bool setNullInResultAtError) const;
+
+  template <TypeKind ToKind>
+  VectorPtr applyCastPrimitivesDispatch(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <TypeKind ToKind, TypeKind FromKind>
+  VectorPtr applyCastPrimitivesPolicyDispatch(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
+  void applyCastPrimitives(
+      vector_size_t row,
+      EvalCtx& context,
+      const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
+      bool setNullInResultAtError,
+      FlatVector<typename TypeTraits<ToKind>::NativeType>* result) const;
 
   static inline const tz::TimeZone* FOLLY_NULLABLE
   getTimeZoneFromConfig(const core::QueryConfig& config) {
