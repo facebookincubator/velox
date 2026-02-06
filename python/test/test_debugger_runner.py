@@ -101,7 +101,7 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         [runner.set_breakpoint(i) for i in self._node_ids]
         self.assertEqual(
             self._count_step(runner),
-            self._batch_size * self._num_batches * (self._num_projections + 1)
+            self._batch_size * self._num_batches * (self._num_projections + 1),
         )
 
     def test_breakpoint_wit_aggregate(self):
