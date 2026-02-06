@@ -192,8 +192,10 @@ class QueueSplitsStore : public SplitsStore {
  public:
   using SplitsStore::SplitsStore;
 
-  void requestBarrier(std::vector<ContinuePromise>& promises) override {
-    addSplit(Split::createBarrier(), promises);
+  void requestBarrier(
+      uint32_t numDrivers,
+      std::vector<ContinuePromise>& promises) override {
+    addSplit(Split::createBarrier(numDrivers), promises);
   }
 
   bool nextSplit(
@@ -203,6 +205,29 @@ class QueueSplitsStore : public SplitsStore {
       const ConnectorSplitPreloadFunc& preload) override {
     if (!splits_.empty()) {
       split = getSplit(maxPreloadSplits, preload);
+      return true;
+    }
+    if (noMoreSplits_) {
+      return true;
+    }
+    future = makeFuture();
+    return false;
+  }
+
+  bool nextSplit(
+      Split& split,
+      ContinueFuture& future,
+      int maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload,
+      uint32_t driverId) override {
+    if (!splits_.empty()) {
+      split = getSplit(maxPreloadSplits, preload);
+      return true;
+    }
+    if (barrierSplits_.contains(driverId)) {
+      LOG(ERROR) << "Barrier split for driver " << driverId;
+      split = barrierSplits_[driverId];
+      barrierSplits_.erase(driverId);
       return true;
     }
     if (noMoreSplits_) {
@@ -1219,7 +1244,7 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
     } else {
       numDriversUngrouped_ += factory->numDrivers;
     }
-    // nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
+    nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
@@ -1844,7 +1869,7 @@ void Task::addSplitToStoreLocked(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   if (split.isBarrier()) {
-    splitsStore->requestBarrier(promises);
+    splitsStore->requestBarrier(split.numBarrierDrivers_, promises);
     return;
   }
   auto* queueSplitsStore =
@@ -2001,8 +2026,8 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
 
   promises.reserve(leafPlanNodeIds.size());
   for (const auto& leafPlanNode : leafPlanNodeIds) {
-    auto barrierSplit = Split::createBarrier();
-    // barrierSplit.numBarrierDrivers_ = nodeIdNumDrivers_.at(leafPlanNode);
+    auto barrierSplit =
+        Split::createBarrier(nodeIdNumDrivers_.at(leafPlanNode));
     auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
     addSplitLocked(splitState, barrierSplit, promises);
   }
@@ -2178,6 +2203,28 @@ BlockingReason Task::getSplitOrFuture(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   return splitsStore->nextSplit(split, future, maxPreloadSplits, preload)
+      ? BlockingReason::kNotBlocked
+      : BlockingReason::kWaitForSplit;
+}
+
+BlockingReason Task::getSplitOrFuture(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId,
+    exec::Split& split,
+    ContinueFuture& future,
+    int32_t maxPreloadSplits,
+    const ConnectorSplitPreloadFunc& preload,
+    uint32_t driverId) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+  auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
+  if (!splitsStore) {
+    setSplitsStore(
+        splitsStore,
+        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
+  }
+  return splitsStore->nextSplit(
+             split, future, maxPreloadSplits, preload, driverId)
       ? BlockingReason::kNotBlocked
       : BlockingReason::kWaitForSplit;
 }

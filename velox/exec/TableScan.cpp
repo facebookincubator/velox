@@ -276,13 +276,16 @@ bool TableScan::getSplit() {
   TestValue::adjust("facebook::velox::exec::TableScan::getSplit", this);
 
   exec::Split split;
+  LOG(ERROR) << "Start to get split in table scan driver ID = "
+             << driverCtx_->driverId;
   blockingReason_ = driverCtx_->task->getSplitOrFuture(
       driverCtx_->splitGroupId,
       planNodeId(),
       split,
       blockingFuture_,
       maxPreloadedSplits_,
-      splitPreloader_);
+      splitPreloader_,
+      driverCtx_->driverId);
   if (blockingReason_ != BlockingReason::kNotBlocked) {
     return false;
   }
