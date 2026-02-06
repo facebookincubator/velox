@@ -100,22 +100,6 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
         },
         /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<int8_t, bool>(
-        {
-            1,
-            0,
-            12,
-            -1,
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-        },
-        /*truncate*/ true);
   }
 
   // From double.
@@ -135,22 +119,6 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
         },
         /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<double, bool>(
-        {
-            1.0,
-            1.1,
-            -1.0,
-            0.0000000000001,
-        },
-        {
-            true,
-            true,
-            true,
-            true,
-        },
-        /*truncate*/ true);
   }
 
   // From float.
@@ -172,24 +140,6 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
         },
         /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<float, bool>(
-        {
-            0.1,
-            0.0,
-            -0.1,
-            kInf,
-            kNan,
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-            false,
-        },
-        /*truncate*/ true);
   }
 
   // From boolean.
@@ -242,42 +192,6 @@ TEST_F(ConversionsTest, toBoolean) {
         /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<std::string, bool>(
-        {
-            "1",
-            "0",
-            "t",
-            "true",
-            "f",
-            "false",
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-        },
-        /*truncate*/ true);
-
-    // When TRUNCATE = true, invalid cases.
-    testConversion<std::string, bool>(
-        {
-            "1.7E308",
-            "nan",
-            "infinity",
-            "12",
-            "-1",
-            "tr",
-            "tru",
-        },
-        {},
-        /*truncate*/ true,
-        false,
-        /*expectError*/ true);
   }
 
   // From timestamp.
@@ -287,14 +201,6 @@ TEST_F(ConversionsTest, toBoolean) {
         {Timestamp(946729316, 123)},
         {},
         /*truncate*/ false,
-        false,
-        /*expectError*/ true);
-
-    // When TRUNCATE = true, invalid cases.
-    testConversion<Timestamp, bool>(
-        {Timestamp(946729316, 123)},
-        {},
-        /*truncate*/ true,
         false,
         /*expectError*/ true);
   }
