@@ -33,7 +33,39 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       exec::EvalCtx& context,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castFromDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
+  template <typename FromNativeType, TypeKind ToKind>
+  VectorPtr applyDecimalToIntegralCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename ToNativeType>
+  void applyVarcharToDecimalCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
+
   StringView removeWhiteSpaces(const StringView& view) const;
 
   const core::QueryConfig& config_;
@@ -42,3 +74,5 @@ class SparkCastKernel : public exec::PrestoCastKernel {
   const bool allowOverflow_;
 };
 } // namespace facebook::velox::functions::sparksql
+
+#include "velox/functions/sparksql/specialforms/SparkCastKernel-inl.h"

@@ -18,6 +18,26 @@
 
 #include "velox/functions/lib/string/StringImpl.h"
 
+#define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
+    TEMPLATE_FUNC, decimalTypePtr, ...)            \
+  [&]() {                                          \
+    if (decimalTypePtr->isLongDecimal()) {         \
+      return TEMPLATE_FUNC<int128_t>(__VA_ARGS__); \
+    } else {                                       \
+      return TEMPLATE_FUNC<int64_t>(__VA_ARGS__);  \
+    }                                              \
+  }()
+
+#define VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH( \
+    TEMPLATE_FUNC, decimalTypePtr, T, ...)            \
+  [&]() {                                             \
+    if (decimalTypePtr->isLongDecimal()) {            \
+      return TEMPLATE_FUNC<int128_t, T>(__VA_ARGS__); \
+    } else {                                          \
+      return TEMPLATE_FUNC<int64_t, T>(__VA_ARGS__);  \
+    }                                                 \
+  }()
+
 namespace facebook::velox::functions::sparksql {
 SparkCastKernel::SparkCastKernel(
     const velox::core::QueryConfig& config,
@@ -74,6 +94,96 @@ VectorPtr SparkCastKernel::castToDate(
       // Otherwise default back to Presto's behavior.
       return exec::PrestoCastKernel::castToDate(
           rows, input, context, setNullInResultAtError);
+  }
+}
+
+VectorPtr SparkCastKernel::castFromDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  switch (toType->kind()) {
+    case TypeKind::TINYINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::TINYINT,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::SMALLINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::SMALLINT,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::INTEGER:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::INTEGER,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::BIGINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::BIGINT,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    default:
+      return exec::PrestoCastKernel::castFromDecimal(
+          rows, input, context, toType, setNullInResultAtError);
+  }
+}
+
+VectorPtr SparkCastKernel::castToDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  switch (fromType->kind()) {
+    case TypeKind::VARCHAR: {
+      VectorPtr result;
+      initializeResultVector(rows, toType, context, result);
+
+      VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+          applyVarcharToDecimalCast,
+          toType,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError,
+          result);
+
+      return result;
+    }
+    default:
+      return exec::PrestoCastKernel::castToDecimal(
+          rows, input, context, toType, setNullInResultAtError);
   }
 }
 
