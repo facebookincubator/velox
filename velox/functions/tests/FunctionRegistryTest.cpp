@@ -601,6 +601,23 @@ TEST_F(FunctionRegistryTest, isDeterministic) {
   ASSERT_FALSE(isDeterministic("not_found_function").has_value());
 }
 
+TEST_F(FunctionRegistryTest, isDefaultNullBehavior) {
+  functions::prestosql::registerAllScalarFunctions();
+
+  // Functions with default null behavior.
+  ASSERT_TRUE(isDefaultNullBehavior("eq").value());
+  ASSERT_TRUE(isDefaultNullBehavior("plus").value());
+  ASSERT_TRUE(isDefaultNullBehavior("substr").value());
+
+  // Functions with non-default null behavior.
+  ASSERT_FALSE(isDefaultNullBehavior("distinct_from").value());
+  ASSERT_FALSE(isDefaultNullBehavior("in").value());
+
+  // Not found functions.
+  ASSERT_FALSE(isDefaultNullBehavior("cast").has_value());
+  ASSERT_FALSE(isDefaultNullBehavior("not_found_function").has_value());
+}
+
 TEST_F(FunctionRegistryTest, companionFunction) {
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();

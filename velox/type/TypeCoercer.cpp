@@ -50,6 +50,16 @@ allowedCoercions() {
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
   add(DATE(), {TIMESTAMP()});
+  add(UNKNOWN(),
+      {TINYINT(),
+       BOOLEAN(),
+       SMALLINT(),
+       INTEGER(),
+       BIGINT(),
+       REAL(),
+       DOUBLE(),
+       VARCHAR(),
+       VARBINARY()});
 
   return coercions;
 }

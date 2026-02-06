@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/WindowBuild.h"
@@ -33,7 +34,8 @@ class SortWindowBuild : public WindowBuild {
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
       folly::Synchronized<OperatorStats>* opStats,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<common::SpillStats>* spillStats,
+      filesystems::File::IoStats* spillFsStats);
 
   ~SortWindowBuild() override {
     pool_->release();
@@ -102,6 +104,8 @@ class SortWindowBuild : public WindowBuild {
   folly::Synchronized<OperatorStats>* const opStats_;
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
+
+  filesystems::File::IoStats* const spillFsStats_{nullptr};
 
   // allKeyInfo_ is a combination of (partitionKeyInfo_ and sortKeyInfo_).
   // It is used to perform a full sorting of the input rows to be able to

@@ -49,10 +49,19 @@ MergeJoin::MergeJoin(
           operatorId,
           joinNode->id(),
           "MergeJoin"),
-      outputBatchSize_{outputBatchRows()},
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
+      preferredOutputBatchRows_{
+          driverCtx->queryConfig().preferredOutputBatchRows()},
+      dynamicOutputBatchSizeEnabled_{
+          driverCtx->queryConfig().mergeJoinOutputBatchStartSize() != 0},
       joinType_{joinNode->joinType()},
       numKeys_{joinNode->leftKeys().size()},
       rightNodeId_{joinNode->sources()[1]->id()},
+      outputBatchSize_{
+          dynamicOutputBatchSizeEnabled_
+              ? driverCtx->queryConfig().mergeJoinOutputBatchStartSize()
+              : preferredOutputBatchRows_},
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
       core::MergeJoinNode::isSupported(joinType_),
@@ -111,12 +120,12 @@ void MergeJoin::initialize() {
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
         joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
         isSemiFilterJoin(joinType_)) {
-      joinTracker_ = JoinTracker(outputBatchSize_, pool());
+      joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
     }
   } else if (joinNode_->isAntiJoin()) {
     // Anti join needs to track the left side rows that have no match on the
     // right.
-    joinTracker_ = JoinTracker(outputBatchSize_, pool());
+    joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
   }
 
   joinNode_.reset();
@@ -568,7 +577,7 @@ bool MergeJoin::prepareOutput(
       } else {
         inputs[i] = BaseVector::create(
             filterInputType_->childAt(i),
-            outputBatchSize_,
+            preferredOutputBatchRows_,
             operatorCtx_->pool());
       }
     }
@@ -577,7 +586,7 @@ bool MergeJoin::prepareOutput(
         operatorCtx_->pool(),
         filterInputType_,
         nullptr,
-        outputBatchSize_,
+        preferredOutputBatchRows_,
         std::move(inputs));
   }
   return false;
@@ -760,6 +769,9 @@ RowVectorPtr MergeJoin::getOutput() {
   for (;;) {
     auto output = doGetOutput();
     if (output != nullptr && output->size() > 0) {
+      // Update the batch size based on the output before filtering.
+      updateOutputBatchSize(output);
+
       if (filter_) {
         output = applyFilter(output);
         if (output != nullptr) {
@@ -1278,6 +1290,34 @@ void MergeJoin::clearLeftInput() {
 
 void MergeJoin::clearRightInput() {
   rightInput_ = nullptr;
+}
+
+void MergeJoin::updateOutputBatchSize(const RowVectorPtr& output) {
+  if (!dynamicOutputBatchSizeEnabled_) {
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(output);
+
+  const auto outputSize = output->size();
+  VELOX_CHECK_GT(outputSize, 0);
+
+  // Calculate average row size from the current output batch.
+  const auto avgRowSize = output->estimateFlatSize() / outputSize;
+
+  if (avgRowSize == 0) {
+    // Avoid division by zero; keep current batch size.
+    return;
+  }
+
+  outputBatchSize_ = std::min(
+      static_cast<uint64_t>(preferredOutputBatchBytes_ / avgRowSize),
+      static_cast<uint64_t>(preferredOutputBatchRows_));
+
+  // Ensure we have at least 1 row.
+  if (outputBatchSize_ == 0) {
+    outputBatchSize_ = 1;
+  }
 }
 
 RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {

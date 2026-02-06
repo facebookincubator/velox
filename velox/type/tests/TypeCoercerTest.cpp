@@ -64,6 +64,19 @@ TEST(TypeCoercerTest, unknown) {
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), ARRAY(INTEGER())));
 }
 
+TEST(TypeCoercerTest, coerceTypeBaseFromUnknown) {
+  // Test coercion from UNKNOWN to various types.
+  testCoercion(UNKNOWN(), TINYINT());
+  testCoercion(UNKNOWN(), BOOLEAN());
+  testCoercion(UNKNOWN(), SMALLINT());
+  testCoercion(UNKNOWN(), INTEGER());
+  testCoercion(UNKNOWN(), BIGINT());
+  testCoercion(UNKNOWN(), REAL());
+  testCoercion(UNKNOWN(), DOUBLE());
+  testCoercion(UNKNOWN(), VARCHAR());
+  testCoercion(UNKNOWN(), VARBINARY());
+}
+
 TEST(TypeCoercerTest, noCost) {
   auto assertNoCost = [](const TypePtr& type) {
     SCOPED_TRACE(type->toString());

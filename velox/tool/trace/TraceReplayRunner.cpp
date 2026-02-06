@@ -22,6 +22,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -52,6 +53,7 @@
 #include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
 #include "velox/tool/trace/TopNRowNumberReplayer.h"
+#include "velox/tool/trace/TraceReplayerConfigPrompt.h"
 #include "velox/tool/trace/UnnestReplayer.h"
 #include "velox/type/Type.h"
 
@@ -105,6 +107,12 @@ DEFINE_uint64(
     0,
     "Specify the query memory capacity limit in GB. If it is zero, then there is no limit.");
 DEFINE_bool(copy_results, false, "Copy the replaying results.");
+DEFINE_bool(
+    cursor_copy_result,
+    false,
+    "Enable per-batch copying in TaskCursor. When false (default), avoids "
+    "expensive deep copies of complex nested types during output consumption. "
+    "Only enable for debugging or when output vectors need to be retained.");
 DEFINE_string(
     function_prefix,
     "",
@@ -253,7 +261,22 @@ TraceReplayRunner::TraceReplayRunner()
               std::make_shared<folly::NamedThreadFactory>(
                   "TraceReplayIoConnector"))) {}
 
+TraceReplayRunner::~TraceReplayRunner() {
+  // Explicitly unregister all connectors before the runner is destroyed.
+  // This ensures file handles are closed while folly::RequestContext is still
+  // valid, preventing use-after-free during program shutdown when the static
+  // connector map is destroyed after RequestContext.
+  const auto connectorsCopy = connector::getAllConnectors();
+  for (const auto& [connectorId, connector] : connectorsCopy) {
+    connector::unregisterConnector(connectorId);
+  }
+}
+
 void TraceReplayRunner::init() {
+  // Prompt user for configs interactively (unless --fast is set)
+  TraceReplayerConfigPrompt prompt;
+  prompt.run();
+
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
@@ -471,6 +494,6 @@ void TraceReplayRunner::run() {
     return;
   }
   VELOX_USER_CHECK(!FLAGS_task_id.empty(), "--task_id must be provided");
-  createReplayer()->run(FLAGS_copy_results);
+  createReplayer()->run(FLAGS_copy_results, FLAGS_cursor_copy_result);
 }
 } // namespace facebook::velox::tool::trace

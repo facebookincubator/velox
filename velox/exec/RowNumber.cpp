@@ -408,7 +408,8 @@ SpillPartitionIdSet RowNumber::spillHashTable() {
       tableType,
       spillPartitionBits_,
       &spillConfig,
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 
   hashTableSpiller->spill();
   hashTableSpiller->finishSpill(spillHashTablePartitionSet_);
@@ -429,7 +430,8 @@ void RowNumber::setupInputSpiller(
       restoringPartitionId_,
       spillPartitionBits_,
       &spillConfig,
-      spillStats_.get());
+      spillStats_.get(),
+      spillFsStats());
 
   const auto& hashers = table_->hashers();
 
@@ -544,7 +546,8 @@ RowNumberHashTableSpiller::RowNumberHashTableSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* spillFsStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -554,7 +557,8 @@ RowNumberHashTableSpiller::RowNumberHashTableSpiller(
           spillConfig->maxSpillRunRows,
           parentId,
           spillConfig,
-          spillStats) {}
+          spillStats,
+          spillFsStats) {}
 
 void RowNumberHashTableSpiller::spill() {
   SpillerBase::spill(nullptr);

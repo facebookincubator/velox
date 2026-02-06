@@ -46,7 +46,23 @@ class OperatorReplayerBase {
   OperatorReplayerBase& operator=(OperatorReplayerBase&& other) noexcept =
       delete;
 
-  virtual RowVectorPtr run(bool copyResults = true);
+  /// @deprecated Use the two-parameter version instead. This overload exists
+  ///        for backward compatibility and will be removed once all subclasses
+  ///        migrate to the new interface.
+  virtual RowVectorPtr run(bool copyResults) {
+    return run(copyResults, /*cursorCopyResult=*/false);
+  }
+
+  /// Runs the replayer with control over both result copying and cursor
+  /// per-batch copying.
+  /// @param copyResults If true, copies and returns all results as a single
+  ///        RowVector. If false, returns nullptr.
+  /// @param cursorCopyResult If true, each output batch is deep copied as it's
+  ///        consumed by the cursor. This can be expensive for complex nested
+  ///        types. Default is false.
+  virtual RowVectorPtr run(
+      bool copyResults = true,
+      bool cursorCopyResult = false);
 
  protected:
   virtual core::PlanNodePtr createPlanNode(

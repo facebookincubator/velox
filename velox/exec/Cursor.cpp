@@ -555,7 +555,7 @@ class TaskDebuggerCursor : public TaskCursorBase {
   /// Ensures the task completes before cleanup.
   ~TaskDebuggerCursor() {
     if (task_) {
-      waitForTaskDriversToFinish(task_.get());
+      task_->requestCancel().wait();
     }
   }
 

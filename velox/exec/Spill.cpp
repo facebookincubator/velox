@@ -139,7 +139,8 @@ SpillState::SpillState(
     const std::optional<common::PrefixSortConfig>& prefixSortConfig,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats,
-    const std::string& fileCreateConfig)
+    const std::string& fileCreateConfig,
+    filesystems::File::IoStats* fsStats)
     : getSpillDirPathCb_(getSpillDirPathCb),
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileNamePrefix_(fileNamePrefix),
@@ -150,7 +151,8 @@ SpillState::SpillState(
       prefixSortConfig_(prefixSortConfig),
       fileCreateConfig_(fileCreateConfig),
       pool_(pool),
-      stats_(stats) {}
+      stats_(stats),
+      fsStats_(fsStats) {}
 
 std::vector<SpillSortKey> SpillState::makeSortingKeys(
     const std::vector<CompareFlags>& compareFlags) {
@@ -231,7 +233,8 @@ uint64_t SpillState::appendToPartition(
               fileCreateConfig_,
               updateAndCheckSpillLimitCb_,
               pool_,
-              stats_));
+              stats_,
+              fsStats_));
     }
   });
 
@@ -440,7 +443,8 @@ SpillFileInfo mergeSpillFiles(
     uint64_t writeBufferSize,
     SpillFileMergeParams& mergeParams,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats) {
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fsStats) {
   VELOX_CHECK_GT(files.size(), 0);
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files.size());
@@ -466,7 +470,8 @@ SpillFileInfo mergeSpillFiles(
       fileCreateConfig,
       updateAndCheckSpillLimitCb,
       pool,
-      spillStats);
+      spillStats,
+      fsStats);
 
   while (mergeTree->next()) {
     VectorPtr tmpRowVector = std::move(mergeParams.rowVector);
@@ -502,7 +507,8 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReader(
     const common::SpillConfig& spillConfig,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats) {
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fsStats) {
   const auto numMaxMergeFiles = spillConfig.numMaxMergeFiles;
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
@@ -535,7 +541,8 @@ SpillPartition::createOrderedReader(
         spillConfig.writeBufferSize,
         mergeParams,
         pool,
-        spillStats);
+        spillStats,
+        fsStats);
     orderedFiles.push(mergedFile);
     files.clear();
   }

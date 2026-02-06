@@ -130,7 +130,8 @@ TEST_P(SerializedPageFileTest, serializedPageFileBasic) {
   const std::string pathPrefix = getTestFilePath();
   const uint32_t kFileId = 123;
 
-  auto pageFile = SerializedPageFile::create(kFileId, pathPrefix, "");
+  auto pageFile =
+      SerializedPageFile::create(kFileId, pathPrefix, "", /*fsStats=*/nullptr);
 
   EXPECT_EQ(pageFile->id(), kFileId);
   EXPECT_TRUE(pageFile->path().find(pathPrefix) == 0);
@@ -159,7 +160,8 @@ TEST_P(SerializedPageFileTest, serializedPageFileMultipleWrites) {
   const uint32_t kNumWrites = 10;
 
   const std::string pathPrefix = getTestFilePath();
-  auto pageFile = SerializedPageFile::create(kFileId, pathPrefix, "");
+  auto pageFile =
+      SerializedPageFile::create(kFileId, pathPrefix, "", /*fsStats=*/nullptr);
 
   uint64_t totalSize = 0;
   for (int i = 0; i < kNumWrites; ++i) {
@@ -315,7 +317,8 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
       asRowType(originalVector->type()),
       serde_,
       createSerdeOptions(),
-      pool());
+      pool(),
+      /*fsStats=*/nullptr);
 
   RowVectorPtr readVector;
   bool hasData = reader.nextBatch(readVector);
@@ -368,7 +371,8 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripMultipleBatches) {
         asRowType(originalVectors[0]->type()),
         serde_,
         createSerdeOptions(),
-        pool());
+        pool(),
+        /*fsStats=*/nullptr);
 
     RowVectorPtr readVector;
     while (reader.nextBatch(readVector)) {
@@ -436,7 +440,8 @@ TEST_P(SerializedPageFileTest, roundTripWithComplexTypes) {
         asRowType(originalVectors[0]->type()),
         serde_,
         createSerdeOptions(),
-        pool());
+        pool(),
+        /*fsStats=*/nullptr);
 
     RowVectorPtr readVector;
     while (reader.nextBatch(readVector)) {
