@@ -510,6 +510,39 @@ reported value is set to the corresponding CompressionKind enum with 0
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p>ioWaitWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Total time spent by query processing threads waiting for I/O operations
+to complete. This includes waiting for synchronously issued I/O or for
+in-progress read-ahead operations to finish.</p></td>
+</tr>
+<tr class="row-odd"><td><p>storageReadWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Time spent waiting for direct remote storage reads (e.g., S3, HDFS).
+This is a component of ioWaitWallNanos.</p></td>
+</tr>
+<tr class="row-even"><td><p>ssdCacheReadWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Time spent waiting for SSD cache reads. This is a component of
+ioWaitWallNanos.</p></td>
+</tr>
+<tr class="row-odd"><td><p>cacheWaitWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Time spent waiting for cache entries that are being loaded by another
+thread (EXCLUSIVE state). This is a component of ioWaitWallNanos.</p></td>
+</tr>
+<tr class="row-even"><td><p>coalescedSsdLoadWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Time spent waiting for coalesced loads from SSD cache. This occurs when
+multiple requests are combined into a single SSD read operation.
+This is a component of ioWaitWallNanos.</p></td>
+</tr>
+<tr class="row-odd"><td><p>coalescedStorageLoadWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Time spent waiting for coalesced loads from remote storage. This occurs
+when multiple requests are combined into a single remote storage read.
+This is a component of ioWaitWallNanos.</p></td>
+</tr>
 <tr class="row-even"><td><p>totalRemainingFilterWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The total walltime in nanoseconds that the data or index connector do the remaining filtering.</p></td>
