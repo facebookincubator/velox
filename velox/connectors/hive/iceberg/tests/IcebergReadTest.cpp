@@ -894,6 +894,62 @@ TEST_F(HiveIcebergTest, partitionColumnsFromHive) {
   AssertQueryBuilder(plan).splits(icebergSplits).assertResults(expectedVectors);
 }
 
+// Test that positional delete files are skipped when their position upper bound
+// is before the split offset. When a delete file's upperBound is less than the
+// split's starting row, all deletes in that file are not relevant to this
+// split.
+TEST_F(HiveIcebergTest, skipDeleteFileByPositionBound) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+
+  // Create a data file with 100 rows.
+  auto dataFilePath = TempFilePath::create();
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {makeFlatVector<int64_t>(makeContinuousIncreasingValues(0, 100))})};
+  writeToFile(dataFilePath->getPath(), dataVectors);
+  createDuckDbTable(dataVectors);
+
+  // Create a delete file targeting positions 0, 1, 2.
+  auto deleteFilePath = TempFilePath::create();
+  writeToFile(
+      deleteFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name},
+          {makeFlatVector<std::string>(
+               3, [&](auto) { return dataFilePath->getPath(); }),
+           makeFlatVector<int64_t>({0, 1, 2})})});
+
+  // Set upperBound to -1, which is before splitOffset (0). The delete file
+  // should be skipped completely, so no rows are deleted.
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      3,
+      testing::internal::GetFileSize(
+          std::fopen(deleteFilePath->getPath().c_str(), "r")),
+      {},
+      {},
+      {{posColumn->id, "-1"}});
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(ROW({"c0"}, {BIGINT()}))
+                  .endTableScan()
+                  .planNode();
+
+  // All 100 rows should be returned because the delete file was skipped
+  // completely.
+  assertQuery(
+      plan,
+      makeIcebergSplits(dataFilePath->getPath(), {deleteFile}),
+      "SELECT * FROM tmp",
+      0);
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
   // This file contains three row groups, each with about 100 rows.
