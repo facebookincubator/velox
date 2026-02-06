@@ -794,7 +794,7 @@ struct DayNameFunction {
     if (dayOfWeek < 0) {
       dayOfWeek += 7;
     }
-    result.setNoCopy(StringView(kDayNames[dayOfWeek]));
+    result.append(StringView(kDayNames[dayOfWeek]));
   }
 };
 
