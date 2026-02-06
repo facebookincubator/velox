@@ -387,6 +387,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     return current_;
   }
 
+  core::PlanNodeId at() const override {
+    return ""; // always at task output.
+  }
+
   void setError(std::exception_ptr error) override {
     error_ = error;
     if (task_) {
@@ -509,6 +513,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     return current_;
   }
 
+  core::PlanNodeId at() const override {
+    return ""; // always at task output.
+  }
+
   void setError(std::exception_ptr error) override {
     error_ = error;
     if (task_) {
@@ -577,6 +585,10 @@ class TaskDebuggerCursor : public TaskCursorBase {
     return current_;
   }
 
+  core::PlanNodeId at() const override {
+    return traceState_.planId;
+  }
+
   void setNoMoreSplits() override {
     VELOX_CHECK(!noMoreSplits_);
     noMoreSplits_ = true;
@@ -618,6 +630,7 @@ class TaskDebuggerCursor : public TaskCursorBase {
 
       if (auto vector = task_->next(&future)) {
         current_ = vector;
+        traceState_.planId.clear();
         return true;
       }
 
@@ -632,6 +645,7 @@ class TaskDebuggerCursor : public TaskCursorBase {
         // Signal the task driver to unblock.
         traceState_.traceData = nullptr;
         traceState_.tracePromise.setValue();
+        traceState_.planId.clear();
       }
 
       // Wait until the task future is unblocked.
@@ -647,18 +661,21 @@ class TaskDebuggerCursor : public TaskCursorBase {
     return false;
   }
 
-  /// Internal state for coordinating between the tracer and cursor.
-  ///
-  /// This struct manages the synchronization between the trace writer
-  /// (which produces intermediate results) and the cursor (which consumes
-  /// them).
+  // Internal state for coordinating between the tracer and cursor.
+  //
+  // This struct manages the synchronization between the trace writer
+  // (which produces intermediate results) and the cursor (which consumes
+  // them).
   struct TraceState {
-    /// Promise used to signal the tracer to continue after a partial result
-    /// has been consumed.
+    // Promise used to signal the tracer to continue after a partial result
+    // has been consumed.
     ContinuePromise tracePromise{ContinuePromise::makeEmpty()};
 
-    /// The most recent intermediate result from a traced operator.
+    // The most recent intermediate result from a traced operator.
     RowVectorPtr traceData;
+
+    // The plan id where this state came from.
+    core::PlanNodeId planId;
   };
 
   TraceState traceState_;
@@ -722,8 +739,9 @@ class TaskDebuggerCursor : public TaskCursorBase {
       bool write(const RowVectorPtr& vector, ContinueFuture* future) override {
         VELOX_CHECK(traceState_.tracePromise.isFulfilled());
 
-        traceState_.traceData = vector;
         traceState_.tracePromise = ContinuePromise("TaskQueue::dequeue");
+        traceState_.traceData = vector;
+        traceState_.planId = planId_;
         *future = traceState_.tracePromise.getFuture();
         return true;
       }

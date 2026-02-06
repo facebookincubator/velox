@@ -238,5 +238,81 @@ TEST_F(CustomTraceTest, taskDebuggerCursor) {
       });
 }
 
+TEST_F(CustomTraceTest, cursorAt) {
+  const size_t size = 10;
+  auto input1 = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto input2 = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>(size, [](auto row) { return row + 10; })});
+
+  core::PlanNodeId project1, project2, project3, project4;
+  auto plan = PlanBuilder()
+                  .values({input1, input2})
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project1)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project2)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project3)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project4)
+                  .planNode();
+
+  auto cursor = TaskCursor::create({
+      .planNode = plan,
+      .serialExecution = true,
+      .breakpoints = {project1, project3},
+  });
+
+  // Before any step, at() should return empty string.
+  EXPECT_EQ(cursor->at(), "");
+
+  // First step stops at project1 (first breakpoint).
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), project1);
+
+  // Second step stops at project3 (second breakpoint).
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), project3);
+
+  // Third step produces final output (no breakpoint, empty at()).
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), "");
+
+  // Fourth step stops at project1 for second input batch.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), project1);
+
+  // Fifth step stops at project3 for second input batch.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), project3);
+
+  // Sixth step produces final output for second batch.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), "");
+
+  // No more data.
+  EXPECT_FALSE(cursor->moveStep());
+
+  // Test that moveNext() skips breakpoints and at() returns empty.
+  auto cursor2 = TaskCursor::create({
+      .planNode = plan,
+      .serialExecution = true,
+      .breakpoints = {project1, project3},
+  });
+
+  EXPECT_EQ(cursor2->at(), "");
+
+  // moveNext() should skip to final output.
+  EXPECT_TRUE(cursor2->moveNext());
+  EXPECT_EQ(cursor2->at(), "");
+
+  EXPECT_TRUE(cursor2->moveNext());
+  EXPECT_EQ(cursor2->at(), "");
+
+  EXPECT_FALSE(cursor2->moveNext());
+}
+
 } // namespace
 } // namespace facebook::velox::exec::trace::test

@@ -57,6 +57,11 @@ PYBIND11_MODULE(runner, m) {
           "current",
           &velox::py::PyTaskIterator::current,
           py::keep_alive<0, 1>())
+      .def("at", &velox::py::PyTaskIterator::at, py::doc(R"(
+        Returns the plan node ID where the cursor is currently stopped.
+        This is useful for debugging to know where in the plan the
+        execution has paused.
+          )"))
       .def(
           "__iter__",
           &velox::py::PyTaskIterator::iter,
