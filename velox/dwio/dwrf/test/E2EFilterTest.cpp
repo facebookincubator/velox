@@ -63,7 +63,8 @@ class E2EFilterTest : public E2EFilterTestBase {
   void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip = false) override {
+      bool forRowGroupSkip,
+      const std::vector<std::string>& /*indexColumns*/ = {}) override {
     auto options = createWriterOptions(type);
     int32_t flushCounter = 0;
     // If we test row group skip, we have all the data in one stripe. For

@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 
+#include <fmt/format.h>
+
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
@@ -45,10 +47,46 @@ using dwio::common::InMemoryReadFile;
 using dwio::common::MemorySink;
 using velox::common::Subfield;
 
+// Helper to generate monotonic unique values for a given scalar type.
+// Generates values starting from startValue, incrementing by 1 for each row.
+// For ascending order, values go from startValue to startValue + numRows - 1.
+// The globalRowOffset is used to compute the correct value when generating
+// data across multiple batches.
+template <typename T>
+VectorPtr generateStrictSortedVectorImpl(
+    size_t numRows,
+    size_t rowOffset,
+    size_t totalRows,
+    int64_t startValue,
+    bool ascending,
+    memory::MemoryPool* pool) {
+  auto flatVector = BaseVector::create<FlatVector<T>>(
+      CppToType<T>::create(), static_cast<vector_size_t>(numRows), pool);
+  for (vector_size_t i = 0; i < static_cast<vector_size_t>(numRows); ++i) {
+    const size_t nextRowOffset = rowOffset + i;
+    // For ascending: value increases with nextRowOffset
+    // For descending: value decreases (totalRows - 1 - nextRowOffset)
+    const size_t adjustedRowOffset =
+        ascending ? nextRowOffset : (totalRows - 1 - nextRowOffset);
+    if constexpr (std::is_same_v<T, bool>) {
+      // For bool, we can only have 2 unique values, so this type is limited.
+      flatVector->set(i, adjustedRowOffset % 2 == 1);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      flatVector->set(
+          i,
+          Timestamp(startValue + static_cast<int64_t>(adjustedRowOffset), 0));
+    } else {
+      flatVector->set(i, static_cast<T>(startValue + adjustedRowOffset));
+    }
+  }
+  return flatVector;
+}
+
 std::vector<RowVectorPtr> E2EFilterTestBase::makeDataset(
     std::function<void()> customize,
     bool forRowGroupSkip,
-    bool withRecursiveNulls) {
+    bool withRecursiveNulls,
+    const std::vector<std::string>& indexColumns) {
   if (!dataSetBuilder_) {
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*leafPool_, 0);
   }
@@ -65,7 +103,143 @@ std::vector<RowVectorPtr> E2EFilterTestBase::makeDataset(
   }
 
   std::vector<RowVectorPtr> batches = *dataSetBuilder_->build();
+
+  // Replace index columns with monotonically increasing unique values.
+  if (!indexColumns.empty()) {
+    batches = replaceIndexColumnsWithStrictlySortedData(batches, indexColumns);
+  }
+
   return batches;
+}
+
+std::vector<RowVectorPtr>
+E2EFilterTestBase::replaceIndexColumnsWithStrictlySortedData(
+    const std::vector<RowVectorPtr>& batches,
+    const std::vector<std::string>& indexColumns) {
+  if (batches.empty() || indexColumns.empty()) {
+    return batches;
+  }
+
+  const auto& rowType = batches[0]->type()->asRow();
+
+  // Build index column indices.
+  std::vector<column_index_t> indexColIndices;
+  for (const auto& colName : indexColumns) {
+    auto idx = rowType.getChildIdxIfExists(colName);
+    VELOX_CHECK(
+        idx.has_value(), "Index column '{}' not found in schema", colName);
+    indexColIndices.push_back(idx.value());
+  }
+
+  // Calculate total rows across all batches.
+  size_t totalRows = 0;
+  for (const auto& batch : batches) {
+    totalRows += batch->size();
+  }
+
+  std::vector<RowVectorPtr> result;
+  result.reserve(batches.size());
+  size_t rowOffset = 0;
+
+  for (const auto& batch : batches) {
+    const size_t batchSize = batch->size();
+    std::vector<VectorPtr> newChildren;
+    newChildren.reserve(rowType.size());
+
+    for (size_t colIdx = 0; colIdx < rowType.size(); ++colIdx) {
+      const bool isIndexColumn =
+          std::find(indexColIndices.begin(), indexColIndices.end(), colIdx) !=
+          indexColIndices.end();
+
+      if (isIndexColumn) {
+        // Generate monotonically increasing unique values for index columns.
+        newChildren.push_back(generateStrictSortedVector(
+            rowType.childAt(colIdx),
+            batchSize,
+            rowOffset,
+            /*startValue=*/0,
+            totalRows,
+            /*ascending=*/true,
+            leafPool_.get()));
+      } else {
+        // Keep the original data for non-index columns.
+        newChildren.push_back(batch->childAt(colIdx));
+      }
+    }
+
+    result.push_back(
+        std::make_shared<RowVector>(
+            leafPool_.get(),
+            batch->type(),
+            nullptr,
+            batchSize,
+            std::move(newChildren)));
+    rowOffset += batchSize;
+  }
+
+  return result;
+}
+
+VectorPtr E2EFilterTestBase::generateStrictSortedVector(
+    const TypePtr& type,
+    size_t size,
+    size_t globalRowOffset,
+    int64_t startValue,
+    size_t totalRows,
+    bool ascending,
+    memory::MemoryPool* pool) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+      return generateStrictSortedVectorImpl<bool>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::TINYINT:
+      return generateStrictSortedVectorImpl<int8_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::SMALLINT:
+      return generateStrictSortedVectorImpl<int16_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::INTEGER:
+      return generateStrictSortedVectorImpl<int32_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::BIGINT:
+      return generateStrictSortedVectorImpl<int64_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::REAL:
+      return generateStrictSortedVectorImpl<float>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::DOUBLE:
+      return generateStrictSortedVectorImpl<double>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::TIMESTAMP:
+      return generateStrictSortedVectorImpl<Timestamp>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::VARCHAR: {
+      // Generate string keys like "key_00000000", "key_00000001", etc.
+      auto flatVector = BaseVector::create<FlatVector<StringView>>(
+          VARCHAR(), static_cast<vector_size_t>(size), pool);
+      for (vector_size_t i = 0; i < static_cast<vector_size_t>(size); ++i) {
+        const size_t globalIdx = globalRowOffset + i;
+        const size_t adjustedIdx =
+            ascending ? globalIdx : (totalRows - 1 - globalIdx);
+        auto str = fmt::format("key_{:08d}", startValue + adjustedIdx);
+        flatVector->set(i, StringView(str));
+      }
+      return flatVector;
+    }
+    case TypeKind::VARBINARY:
+    case TypeKind::HUGEINT:
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW:
+    case TypeKind::UNKNOWN:
+    case TypeKind::FUNCTION:
+    case TypeKind::OPAQUE:
+    case TypeKind::INVALID:
+      VELOX_UNREACHABLE(
+          "Unsupported type for generateStrictSortedVector: {}",
+          type->toString());
+  }
+  VELOX_UNREACHABLE();
 }
 
 void E2EFilterTestBase::makeAllNulls(const std::string& fieldName) {
@@ -408,18 +582,19 @@ void E2EFilterTestBase::testScenario(
     bool wrapInStruct,
     const std::vector<std::string>& filterable,
     int32_t numCombinations,
-    bool withRecursiveNulls) {
+    bool withRecursiveNulls,
+    const std::vector<std::string>& indexColumns) {
   rowType_ = DataSetBuilder::makeRowType(columns, wrapInStruct);
   filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
-
-  auto batches = makeDataset(customize, false, withRecursiveNulls);
-  writeToMemory(rowType_, batches, false);
+  auto batches =
+      makeDataset(customize, false, withRecursiveNulls, indexColumns);
+  writeToMemory(rowType_, batches, false, indexColumns);
   testNoRowGroupSkip(batches, filterable, numCombinations);
   testPruningWithFilter(batches, filterable);
 
   if (testRowGroupSkip_) {
-    batches = makeDataset(customize, true, withRecursiveNulls);
-    writeToMemory(rowType_, batches, true);
+    batches = makeDataset(customize, true, withRecursiveNulls, indexColumns);
+    writeToMemory(rowType_, batches, true, indexColumns);
     testRowGroupSkip(batches, filterable);
   }
 }
