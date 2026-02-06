@@ -236,7 +236,7 @@ jobs:
       - name: Copy Shared Libraries for cuDF Test Binaries
         if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
         run: |
-          for exe in _build/release/velox/experimental/cudf/tests/*; do [ -x "$exe" ] && ldd "$exe" 2>/dev/null; done | sed -n 's/''[^\/]*''\(\/[^ ]*\)'' .*''/\1/p' | sort -u
+          for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; do ldd "$exe" 2>/dev/null; done | sed -n 's/''[^\/]*''\(\/[^ ]*\)'' .*''/\1/p' | sort -u || true
 
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -246,7 +246,7 @@ jobs:
           path: |
             velox/dwio/parquet/tests/examples/int.parquet
             velox/experimental/cudf/tests/CMakeLists.txt
-            _build/release/velox/experimental/cudf/tests/velox_cudf*
+            _build/release/velox/experimental/cudf/tests/velox_cudf_*
             _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           retention-days: ${{ env.RETENTION }}
 
@@ -275,9 +275,7 @@ jobs:
           sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Source directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Build directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-          # Add execute permissions to the test file and check for missing dynamic libraries
-          chmod +x _build/release/velox/experimental/cudf/tests/velox_cudf*
-          MISSING=$(for exe in _build/release/velox/experimental/cudf/tests/*; do [ -x "$exe" ] && ldd "$exe" 2>/dev/null; done | grep "not found" | awk '{print $1}' | sort -u); if [ -n "$MISSING" ]; then echo "Missing libraries:"; echo "$MISSING"; exit 1; else echo "No missing libraries found"; fi
+          MISSING=$(for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; do ldd "$exe" 2>/dev/null; done | grep "not found" | awk '{print $1}' | sort -u); if [ -n "$MISSING" ]; then echo "Missing libraries:"; echo "$MISSING"; exit 1; else echo "No missing libraries found"; fi
 
       - name: Run cuDF Tests
         run: |
