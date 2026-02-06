@@ -22,6 +22,7 @@
 #include <folly/Conv.h>
 
 #include "folly/dynamic.h"
+#include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/CppToType.h"
@@ -647,6 +648,10 @@ class Variant {
   }
 
   bool operator<(const Variant& other) const;
+
+  std::optional<bool> equals(
+      const Variant& other,
+      CompareFlags::NullHandlingMode nullHandlingMode) const;
 
   bool equals(const Variant& other) const;
 
