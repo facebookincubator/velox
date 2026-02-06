@@ -18,6 +18,26 @@
 
 #include "velox/expression/StringWriter.h"
 
+#define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
+    TEMPLATE_FUNC, decimalTypePtr, ...)            \
+  [&]() {                                          \
+    if (decimalTypePtr->isLongDecimal()) {         \
+      return TEMPLATE_FUNC<int128_t>(__VA_ARGS__); \
+    } else {                                       \
+      return TEMPLATE_FUNC<int64_t>(__VA_ARGS__);  \
+    }                                              \
+  }()
+
+#define VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH( \
+    TEMPLATE_FUNC, decimalTypePtr, T, ...)            \
+  [&]() {                                             \
+    if (decimalTypePtr->isLongDecimal()) {            \
+      return TEMPLATE_FUNC<int128_t, T>(__VA_ARGS__); \
+    } else {                                          \
+      return TEMPLATE_FUNC<int64_t, T>(__VA_ARGS__);  \
+    }                                                 \
+  }()
+
 namespace facebook::velox::exec {
 
 PrestoCastKernel::PrestoCastKernel(const core::QueryConfig& config)
@@ -351,6 +371,243 @@ VectorPtr PrestoCastKernel::castToTime(
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to TIME is not supported", fromType->toString());
+  }
+}
+
+VectorPtr PrestoCastKernel::castFromDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  switch (toType->kind()) {
+    case TypeKind::VARCHAR:
+      return VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+          applyDecimalToVarcharCast,
+          fromType,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::BOOLEAN:
+      return VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+          applyDecimalToBooleanCast,
+          fromType,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::TINYINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::TINYINT,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::SMALLINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::SMALLINT,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::INTEGER:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::INTEGER,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::BIGINT:
+      if (toType->isShortDecimal()) {
+        return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+            applyDecimalToDecimalCast,
+            fromType,
+            int64_t,
+            rows,
+            input,
+            context,
+            toType,
+            setNullInResultAtError);
+      }
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToIntegralCast,
+          fromType,
+          TypeKind::BIGINT,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::HUGEINT:
+      if (toType->isLongDecimal()) {
+        return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+            applyDecimalToDecimalCast,
+            fromType,
+            int128_t,
+            rows,
+            input,
+            context,
+            toType,
+            setNullInResultAtError);
+      }
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+    case TypeKind::REAL:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToFloatCast,
+          fromType,
+          TypeKind::REAL,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::DOUBLE:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyDecimalToFloatCast,
+          fromType,
+          TypeKind::DOUBLE,
+          rows,
+          input,
+          context,
+          fromType,
+          toType,
+          setNullInResultAtError);
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+  }
+}
+
+VectorPtr PrestoCastKernel::castToDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  switch (fromType->kind()) {
+    case TypeKind::BOOLEAN:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyIntToDecimalCast,
+          toType,
+          bool,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::TINYINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyIntToDecimalCast,
+          toType,
+          int8_t,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::SMALLINT:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyIntToDecimalCast,
+          toType,
+          int16_t,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::INTEGER:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyIntToDecimalCast,
+          toType,
+          int32_t,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::REAL:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyFloatingPointToDecimalCast,
+          toType,
+          float,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::DOUBLE:
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyFloatingPointToDecimalCast,
+          toType,
+          double,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    case TypeKind::BIGINT: {
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyIntToDecimalCast,
+          toType,
+          int64_t,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    }
+    case TypeKind::HUGEINT: {
+      return VELOX_DYNAMIC_DECIMAL_TEMPLATE_TYPE_DISPATCH(
+          applyIntToDecimalCast,
+          toType,
+          int128_t,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    }
+    case TypeKind::VARCHAR:
+      return VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+          applyVarcharToDecimalCast,
+          toType,
+          rows,
+          input,
+          context,
+          toType,
+          setNullInResultAtError);
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
   }
 }
 } // namespace facebook::velox::exec

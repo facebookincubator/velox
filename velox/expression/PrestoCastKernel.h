@@ -65,7 +65,88 @@ class PrestoCastKernel : public CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castFromDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
+  template <typename FromNativeType>
+  VectorPtr applyDecimalToVarcharCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename FromNativeType, TypeKind ToKind>
+  VectorPtr applyDecimalToFloatCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename FromNativeType, TypeKind ToKind>
+  VectorPtr applyDecimalToIntegralCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename FromNativeType>
+  VectorPtr applyDecimalToBooleanCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename ToNativeType, typename FromNativeType>
+  VectorPtr applyIntToDecimalCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename FromNativeType, typename ToNativeType>
+  VectorPtr applyDecimalToDecimalCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename ToNativeType, typename FromNativeType>
+  VectorPtr applyFloatingPointToDecimalCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename ToNativeType>
+  VectorPtr applyVarcharToDecimalCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
   static inline const tz::TimeZone* FOLLY_NULLABLE
   getTimeZoneFromConfig(const core::QueryConfig& config) {
     if (config.adjustTimestampToTimezone()) {
@@ -80,3 +161,5 @@ class PrestoCastKernel : public CastKernel {
   const bool legacyCast_;
 };
 } // namespace facebook::velox::exec
+
+#include "velox/expression/PrestoCastKernel-inl.h"

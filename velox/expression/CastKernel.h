@@ -77,6 +77,20 @@ class CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const = 0;
 
+  virtual VectorPtr castFromDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
+  virtual VectorPtr castToDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
  protected:
   /// Initializes a result vector with the specified type and clears nulls
   /// for the selected rows.

@@ -54,16 +54,6 @@ void propagateErrorsOrSetNulls(
 }
 } // namespace
 
-#define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
-    TEMPLATE_FUNC, decimalTypePtr, ...)            \
-  [&]() {                                          \
-    if (decimalTypePtr->isLongDecimal()) {         \
-      return TEMPLATE_FUNC<int128_t>(__VA_ARGS__); \
-    } else {                                       \
-      return TEMPLATE_FUNC<int64_t>(__VA_ARGS__);  \
-    }                                              \
-  }()
-
 VectorPtr CastExpr::applyMap(
     const SelectivityVector& rows,
     const MapVector* input,
@@ -334,74 +324,6 @@ VectorPtr CastExpr::applyRow(
   return result;
 }
 
-template <typename toDecimalType>
-VectorPtr CastExpr::applyDecimal(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  // toType is a decimal
-  switch (fromType->kind()) {
-    case TypeKind::BOOLEAN:
-      applyIntToDecimalCastKernel<bool, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::TINYINT:
-      applyIntToDecimalCastKernel<int8_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::SMALLINT:
-      applyIntToDecimalCastKernel<int16_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::INTEGER:
-      applyIntToDecimalCastKernel<int32_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::REAL:
-      applyFloatingPointToDecimalCastKernel<float, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::DOUBLE:
-      applyFloatingPointToDecimalCastKernel<double, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::BIGINT: {
-      if (fromType->isShortDecimal()) {
-        applyDecimalCastKernel<int64_t, toDecimalType>(
-            rows, input, context, fromType, toType, castResult);
-        break;
-      }
-      applyIntToDecimalCastKernel<int64_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    }
-    case TypeKind::HUGEINT: {
-      if (fromType->isLongDecimal()) {
-        applyDecimalCastKernel<int128_t, toDecimalType>(
-            rows, input, context, fromType, toType, castResult);
-        break;
-      }
-      [[fallthrough]];
-    }
-    case TypeKind::VARCHAR:
-      applyVarcharToDecimalCastKernel<toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-  }
-  return castResult;
-}
-
 void CastExpr::applyPeeled(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -478,31 +400,12 @@ void CastExpr::applyPeeled(
   } else if (toType->isTime()) {
     result = kernel_->castToTime(
         rows, input, context, toType, setNullInResultAtError());
-  } else if (toType->isShortDecimal()) {
-    result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
-  } else if (toType->isLongDecimal()) {
-    result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
   } else if (fromType->isDecimal()) {
-    switch (toType->kind()) {
-      case TypeKind::VARCHAR:
-        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-            applyDecimalToVarcharCast,
-            fromType,
-            rows,
-            input,
-            context,
-            fromType);
-        break;
-      default:
-        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-            applyDecimalToPrimitiveCast,
-            fromType,
-            rows,
-            input,
-            context,
-            fromType,
-            toType);
-    }
+    result = kernel_->castFromDecimal(
+        rows, input, context, toType, setNullInResultAtError());
+  } else if (toType->isDecimal()) {
+    result = kernel_->castToDecimal(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&
       (toType->kind() == TypeKind::VARCHAR ||
