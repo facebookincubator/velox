@@ -304,7 +304,7 @@ struct DecimalCeilFunction {
   void call(R& out, const A& a) {
     const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
     // the reverse of floor
-    const auto increment = (a % rescaleFactor) < 0 ? 0 : 1;
+    const auto increment = (a % rescaleFactor) > 0 ? 1 : 0;
     out = a / rescaleFactor + increment;
   }
 
@@ -590,7 +590,7 @@ void registerDecimalCeil(const std::string& prefix) {
       exec::SignatureVariable(
           P2::name(),
           fmt::format(
-              "min(38, {p} - {s} + min({s}, 1) + 1)", // @TODO seves 1/28/26 verify the +1
+              "min(38, {p} - {s} + min({s}, 1))",
               fmt::arg("p", P1::name()),
               fmt::arg("s", S1::name())),
           exec::ParameterType::kIntegerParameter),
