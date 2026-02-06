@@ -1083,8 +1083,11 @@ std::unique_ptr<KeyEncoder> KeyEncoder::create(
     RowTypePtr inputType,
     std::vector<core::SortOrder> sortOrders,
     memory::MemoryPool* pool) {
-  return std::unique_ptr<KeyEncoder>(
-      new KeyEncoder(keyColumns, inputType, sortOrders, pool));
+  return std::unique_ptr<KeyEncoder>(new KeyEncoder(
+      std::move(keyColumns),
+      std::move(inputType),
+      std::move(sortOrders),
+      pool));
 }
 
 KeyEncoder::KeyEncoder(
