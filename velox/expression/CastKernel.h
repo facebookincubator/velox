@@ -63,6 +63,20 @@ class CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const = 0;
 
+  virtual VectorPtr castFromTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
+  virtual VectorPtr castToTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
  protected:
   /// Initializes a result vector with the specified type and clears nulls
   /// for the selected rows.

@@ -189,18 +189,6 @@ class CastExpr : public SpecialForm {
       const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
       FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
 
-  VectorPtr castFromTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& toType);
-
-  VectorPtr castToTime(
-      const SelectivityVector& rows,
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType);
-
   template <typename TInput, typename TOutput>
   void applyDecimalCastKernel(
       const SelectivityVector& rows,
