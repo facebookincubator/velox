@@ -1228,7 +1228,15 @@ class StringDictionaryColumnVisitor
     vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
     if constexpr (!DictSuper::hasFilter()) {
-      super::filterPassed(index);
+      // Hooks are LazyVector-level and have no access to the dictionary.
+      // They must receive decoded StringView values, not dictionary indices.
+      if constexpr (super::kHasHook) {
+        super::values_.addValue(
+            super::rowIndex_ + super::numValuesBias_,
+            valueInDictionary(index));
+      } else {
+        super::filterPassed(index);
+      }
     } else {
       // check the dictionary cache
       if (TFilter::deterministic &&
