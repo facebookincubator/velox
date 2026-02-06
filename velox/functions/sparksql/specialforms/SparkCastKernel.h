@@ -98,6 +98,20 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castToReal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToDouble(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
   template <typename FromNativeType, TypeKind ToKind>
   VectorPtr applyDecimalToIntegralCast(
@@ -165,6 +179,14 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       exec::EvalCtx& context,
       const TypePtr& toType,
       bool setNullInResultAtError) const;
+
+  template <TypeKind ToTypeKind>
+  void applyStringToFloatingPointCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
 
   StringView removeWhiteSpaces(const StringView& view) const;
 

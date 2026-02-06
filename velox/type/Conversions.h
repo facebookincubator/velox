@@ -34,7 +34,6 @@ DECLARE_bool(experimental_enable_legacy_cast);
 namespace facebook::velox::util {
 
 struct PrestoCastPolicy {
-  static constexpr bool truncate = false;
   static constexpr bool legacyCast = false;
   // Throws if we encounter unicode when converting to int
   // See issue : https://github.com/facebookincubator/velox/issues/10803
@@ -43,19 +42,16 @@ struct PrestoCastPolicy {
 };
 
 struct SparkCastPolicy {
-  static constexpr bool truncate = true;
   static constexpr bool legacyCast = false;
   static constexpr bool throwOnUnicode = false;
 };
 
 struct SparkTryCastPolicy {
-  static constexpr bool truncate = false;
   static constexpr bool legacyCast = false;
   static constexpr bool throwOnUnicode = false;
 };
 
 struct LegacyCastPolicy {
-  static constexpr bool truncate = false;
   static constexpr bool legacyCast = true;
   static constexpr bool throwOnUnicode = false;
 };
@@ -335,11 +331,7 @@ struct Converter<
   }
 
   static Expected<T> tryCast(const double& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return tryCast<double>(v);
-    }
+    return tryCast<double>(v);
   }
 
   static Expected<T> tryCast(const int8_t& v) {
