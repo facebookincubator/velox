@@ -637,6 +637,78 @@ TEST_F(DecimalArithmeticTest, floor) {
           DECIMAL(19, 19))});
 }
 
+TEST_F(DecimalArithmeticTest, ceil) {
+  // short DECIMAL -> short DECIMAL.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(2, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int64_t>(
+          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(3, 2))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>(
+          {123, -123, 124, -123, 124, -123, 124, -123, 124, -123, 124, -123},
+          DECIMAL(4, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int64_t>(
+          {12300,
+           -12300,
+           12301,
+           -12301,
+           12345,
+           -12345,
+           12349,
+           -12349,
+           12350,
+           -12350,
+           12399,
+           -12399},
+          DECIMAL(5, 2))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>(
+          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+          DECIMAL(18, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int64_t>(
+          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+          DECIMAL(18, 0))});
+
+  // long DECIMAL -> long DECIMAL.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(19, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int128_t>(
+          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(20, 2))});
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kPowersOfTen[33], -DecimalUtil::kPowersOfTen[33] + 1},
+          DECIMAL(34, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 5))});
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 0))});
+
+  // long DECIMAL -> short DECIMAL.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({1, 1, 0, 0, 0}, DECIMAL(1, 0))},
+      "ceil(c0)",
+      {makeFlatVector<int128_t>(
+          {1234567890123456789,
+           5000000000000000000,
+           -9000000000000000000,
+           -1000000000000000000,
+           0},
+          DECIMAL(19, 19))});
+}
+
 TEST_F(DecimalArithmeticTest, truncate) {
   // Truncate short decimals.
   testDecimalExpr<TypeKind::BIGINT>(
