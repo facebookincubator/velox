@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
 #include "velox/functions/prestosql/MapKeysOverlap.h"
 #include "velox/functions/prestosql/MapNormalize.h"
+#include "velox/functions/prestosql/MapRemoveOutliers.h"
 #include "velox/functions/prestosql/MapSubset.h"
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
@@ -281,6 +282,8 @@ void registerMapFunctions(const std::string& prefix) {
   registerMapRemoveNullValues(prefix);
 
   registerMapKeyExists(prefix);
+
+  registerMapRemoveOutliers(prefix + "map_remove_outliers");
 
   registerFunction<
       MapNormalizeFunction,
