@@ -24,6 +24,10 @@ class PrestoCastKernel : public CastKernel {
  public:
   explicit PrestoCastKernel(const core::QueryConfig& config);
 
+  const TimestampToStringOptions& timestampToStringOptions() const override {
+    return timestampToStringOptions_;
+  }
+
   VectorPtr castFromDate(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -159,6 +163,20 @@ class PrestoCastKernel : public CastKernel {
         rows, input, context, input.type(), toType, setNullInResultAtError);
   }
 
+  VectorPtr castToVarchar(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToVarbinary(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
   template <typename FromNativeType>
   VectorPtr applyDecimalToVarcharCast(
@@ -227,6 +245,21 @@ class PrestoCastKernel : public CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const;
 
+  VectorPtr applyTimestampToVarcharCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <typename TInput>
+  VectorPtr applyIntToBinaryCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
   template <TypeKind ToKind>
   VectorPtr applyCastPrimitivesDispatch(
       const SelectivityVector& rows,
@@ -267,6 +300,8 @@ class PrestoCastKernel : public CastKernel {
   }
 
   const bool legacyCast_;
+  TimestampToStringOptions timestampToStringOptions_ = {
+      .precision = TimestampToStringOptions::Precision::kMilliseconds};
 };
 } // namespace facebook::velox::exec
 
