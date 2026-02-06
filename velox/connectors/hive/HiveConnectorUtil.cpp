@@ -550,6 +550,13 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   if (nullStringIt != tableParameters.end()) {
     serDeOptions->nullString = nullStringIt->second;
   }
+
+  auto avroSchemaIt =
+      serdeParameters.find(dwio::common::SerDeOptions::kAvroSchema);
+  if (avroSchemaIt != serdeParameters.end()) {
+    serDeOptions->avroSchema = avroSchemaIt->second;
+  }
+
   return serDeOptions;
 }
 
