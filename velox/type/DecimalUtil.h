@@ -83,6 +83,9 @@ class DecimalUtil {
   static constexpr int128_t kShortDecimalMax =
       kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
 
+  /// Scale threshold for scientific notation.
+  static constexpr int32_t kMinScientificNotationScale = 6;
+
   static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
   static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
 
@@ -351,7 +354,7 @@ class DecimalUtil {
     char* writePosition = startPosition;
     if (unscaledValue == 0) {
       *writePosition++ = '0';
-      if (isScientific && scale > 6) {
+      if (isScientific && scale > kMinScientificNotationScale) {
         *writePosition++ = 'E';
         auto exp =
             std::to_chars(writePosition, startPosition + maxSize, -scale);
@@ -374,28 +377,31 @@ class DecimalUtil {
         unscaledValue = -unscaledValue;
       }
       if (isScientific) {
-        if (scale >= 6 &&
-            unscaledValue < DecimalUtil::kPowersOfTen[scale - 6]) {
-          const auto digits = countDigits(unscaledValue);
-          const auto adjusted = digits - 1 - scale;
+        if (scale >= kMinScientificNotationScale &&
+            unscaledValue < DecimalUtil::kPowersOfTen
+                                [scale - kMinScientificNotationScale]) {
           // Use scientific notation if the absolute value is less than 1e-6.
           // This is consistent with Spark's behavior.
-          auto coeffBuf = std::vector<char>(digits);
-          auto [coeffEnd, coeffEc] = std::to_chars(
-              coeffBuf.data(), coeffBuf.data() + digits, unscaledValue);
+          const auto digits = countDigits(unscaledValue);
+          auto coefficientBuf = std::vector<char>(digits);
+          auto [coefficientEnd, coefficientEc] = std::to_chars(
+              coefficientBuf.data(),
+              coefficientBuf.data() + digits,
+              unscaledValue);
           VELOX_DCHECK_EQ(
-              coeffEc,
+              coefficientEc,
               std::errc(),
-              "Failed to cast coeff to varchar: {}",
-              std::make_error_code(coeffEc).message());
-          *writePosition++ = coeffBuf[0];
+              "Failed to cast coefficient to varchar: {}",
+              std::make_error_code(coefficientEc).message());
+          *writePosition++ = coefficientBuf[0];
           if (digits > 1) {
             *writePosition++ = '.';
             size_t toCopy = digits - 1;
-            std::memcpy(writePosition, coeffBuf.data() + 1, toCopy);
+            std::memcpy(writePosition, coefficientBuf.data() + 1, toCopy);
             writePosition += toCopy;
           }
           *writePosition++ = 'E';
+          const auto adjusted = digits - 1 - scale;
           auto exp = std::to_chars(
               writePosition, writePosition + maxSize - digits - 2, adjusted);
           VELOX_DCHECK_EQ(
