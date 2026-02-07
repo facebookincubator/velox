@@ -122,8 +122,8 @@ class ParquetException : public std::exception {
 };
 
 // Support printing a ParquetException.
-// This is needed for clang-on-MSVC as there operator<< is not defined for.
-// Std::exception.
+// This is needed for clang-on-MSVC as there operator<< is not defined for
+// std::exception.
 PARQUET_EXPORT
 std::ostream& operator<<(std::ostream& os, const ParquetException& exception);
 

@@ -392,7 +392,7 @@ class PARQUET_EXPORT FileMetaData {
 
   /// \brief Set a path to all ColumnChunk for all RowGroups.
   ///
-  /// Commonly used by systems (Dask, Spark) who generate a metadata-only
+  /// Commonly used by systems (Dask, Spark) that generate a metadata-only
   /// Parquet file. The path is usually relative to said index file.
   ///
   /// \param[in] path Path to set.
@@ -403,7 +403,7 @@ class PARQUET_EXPORT FileMetaData {
   /// The schema of the input FileMetaData must be equal to the
   /// schema of this object.
   ///
-  /// This is used by systems who create an aggregate metadata-only file by
+  /// This is used by systems that create an aggregate metadata-only file by
   /// concatenating the row groups of multiple files. This newly created
   /// metadata file acts as an index of all available row groups.
   ///

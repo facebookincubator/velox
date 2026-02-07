@@ -242,9 +242,9 @@ class TypedColumnWriter : public ColumnWriter {
   ///
   /// In comparison to writeBatch() the length of repetition and definition
   /// levels is the same as of the number of values read for
-  /// max_definition_level == 1. In the case of max_definition_level > 1, the
+  /// maxDefinitionLevel == 1. In the case of maxDefinitionLevel > 1, the
   /// repetition and definition levels are larger than the values but the values
-  /// include the null entries with definition_level == (max_definition_level -
+  /// include the null entries with definitionLevel == (maxDefinitionLevel -
   /// 1). Thus we have to differentiate in the parameters of this function if
   /// the input has the length of numValues or the _number of rows in the lowest
   /// nesting level.
@@ -253,7 +253,7 @@ class TypedColumnWriter : public ColumnWriter {
   /// _number of rows in the lowest nesting level_ is equal to the number of
   /// non-null values. If the inner-most schema node is optional, the _number of
   /// rows in the lowest nesting level_ also includes all values with
-  /// definition_level == (max_definition_level - 1).
+  /// definitionLevel == (maxDefinitionLevel - 1).
   ///
   /// @param numValues Number of levels to write.
   /// @param defLevels The Parquet definition levels, length is numValues.

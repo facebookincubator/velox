@@ -384,7 +384,7 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Specify the write batch size while writing batches of Arrow values into.
+    /// Specify the write batch size while writing batches of Arrow values into
     /// Parquet. Default 1024.
     Builder* writeBatchSize(int64_t writeBatchSize) {
       writeBatchSize_ = writeBatchSize;
@@ -665,11 +665,11 @@ class PARQUET_EXPORT WriterProperties {
     ///
     /// In Parquet, DECIMAL can be stored in any of the following physical
     /// types:
-    /// - Int32: for 1 <= precision <= 9.
-    /// - Int64: for 10 <= precision <= 18.
-    /// - Fixed_len_byte_array: precision is limited by the array size.
+    /// - Int32: For 1 <= precision <= 9.
+    /// - Int64: For 10 <= precision <= 18.
+    /// - Fixed_len_byte_array: Precision is limited by the array size.
     ///   Length n can store <= floor(log_10(2^(8*n - 1) - 1)) base-10 digits.
-    /// - Binary: precision is unlimited. The minimum number of bytes to store
+    /// - Binary: Precision is unlimited. The minimum number of bytes to store
     ///   the unscaled value is used.
     ///
     /// By default, this is DISABLED and all decimal types annotate.
@@ -677,9 +677,9 @@ class PARQUET_EXPORT WriterProperties {
     ///
     /// When enabled, the C++ writer will use following physical types to store
     /// decimals:
-    /// - Int32: for 1 <= precision <= 9.
-    /// - Int64: for 10 <= precision <= 18.
-    /// - Fixed_len_byte_array: for precision > 18.
+    /// - Int32: For 1 <= precision <= 9.
+    /// - Int64: For 10 <= precision <= 18.
+    /// - Fixed_len_byte_array: For precision > 18.
     ///
     /// As a consequence, decimal columns stored in integer types are more
     /// compact.

@@ -261,8 +261,9 @@ class PARQUET_EXPORT PageIndexReader {
   /// \brief Determine the column index and offset index ranges for the given
   /// row group.
   ///
-  /// \param[in] row_group_metadata Row group metadata to get column chunk
-  /// metadata. \param[in] columns List of column ordinals to get page index.
+  /// \param[in] rowGroupMetadata Row group metadata to get column chunk
+  /// metadata.
+  /// \param[in] columns List of column ordinals to get page index.
   /// If the list is empty, it means all columns in the row group.
   /// \returns RowGroupIndexReadRange of the specified row group. Throws
   /// ParquetException
@@ -341,7 +342,7 @@ class PARQUET_EXPORT OffsetIndexBuilder {
   /// sink and the OffsetIndexBuilder has only collected the relative offset
   /// which requires adjustment once they are flushed to the file.
   ///
-  /// \param final_position Final stream offset to add for page offset
+  /// \param finalPosition Final stream offset to add for page offset
   /// adjustment.
   virtual void finish(int64_t finalPosition) = 0;
 

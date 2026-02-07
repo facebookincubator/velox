@@ -26,9 +26,9 @@
 #include "arrow/util/macros.h"
 #include "arrow/util/visibility.h"
 
-// "Safe-math.h" includes <intsafe.h> from the Windows headers.
+// "Safe-math.h" includes <intsafe.h> from the Windows headers
 #include "arrow/util/windows_compatibility.h"
-// #Include "arrow/vendored/portable-snippets/safe-math.h".
+// #include "arrow/vendored/portable-snippets/safe-math.h".
 #include "velox/dwio/parquet/writer/arrow/util/safe-math.h"
 // clang-format off (avoid include reordering)
 #include "arrow/util/windows_fixup.h"
@@ -38,9 +38,9 @@ namespace arrow {
 namespace internal {
 
 // Define functions AddWithOverflow, SubtractWithOverflow, MultiplyWithOverflow.
-// With the signature `bool(T u, T v, T* out)` where T is an integer type.
-// On overflow, these functions return true.  Otherwise, false is returned.
-// And `out` is updated with the result of the operation.
+// with the signature `bool(T u, T v, T* out)` where T is an integer type.
+// on overflow, these functions return true.  Otherwise, false is returned.
+// and `out` is updated with the result of the operation.
 
 #define OP_WITH_OVERFLOW(funcName, psnipOp, Type, PsnipType)             \
   [[nodiscard]] static inline bool funcName(Type u, Type v, Type* out) { \
@@ -66,9 +66,9 @@ OPS_WITH_OVERFLOW(DivideWithOverflow, div)
 #undef OPS_WITH_OVERFLOW
 
 // Define function NegateWithOverflow with the signature `bool(T u, T* out)`.
-// Where T is a signed integer type.  On overflow, these functions return true.
-// Otherwise, false is returned and `out` is updated with the result of the.
-// Operation.
+// where T is a signed integer type.  On overflow, these functions return true.
+// otherwise, false is returned and `out` is updated with the result of the.
+// operation.
 
 #define UNARY_OP_WITH_OVERFLOW(funcName, psnipOp, Type, PsnipType) \
   [[nodiscard]] static inline bool funcName(Type u, Type* out) {   \
@@ -110,7 +110,7 @@ SignedInt safeSignedNegate(SignedInt u) {
 }
 
 /// Signed left shift with well-defined behaviour on negative numbers or.
-/// Overflow.
+/// overflow.
 template <typename SignedInt, typename Shift>
 SignedInt safeLeftShift(SignedInt u, Shift shift) {
   using UnsignedInt = typename std::make_unsigned<SignedInt>::type;

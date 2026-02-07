@@ -40,7 +40,7 @@ Status zSTDError(size_t ret, const char* prefixMsg) {
 }
 
 // ----------------------------------------------------------------------.
-// ZSTD Decompressor implementation.
+// ZSTD decompressor implementation.
 
 class ZSTDDecompressor : public Decompressor {
  public:
@@ -101,7 +101,7 @@ class ZSTDDecompressor : public Decompressor {
 };
 
 // ----------------------------------------------------------------------.
-// ZSTD Compressor implementation.
+// ZSTD compressor implementation.
 
 class ZSTDCompressor : public Compressor {
  public:
@@ -199,8 +199,8 @@ class ZSTDCodec : public Codec {
       int64_t outputBufferLen,
       uint8_t* outputBuffer) override {
     if (outputBuffer == nullptr) {
-      // We may pass a NULL 0-byte output buffer but some zstd versions demand.
-      // A valid pointer: https://github.com/facebook/zstd/issues/1385.
+      // We may pass a NULL 0-byte output buffer but some zstd versions demand a
+      // valid pointer: https://github.com/facebook/zstd/issues/1385.
       static uint8_t emptyBuffer;
       VELOX_DCHECK_EQ(outputBufferLen, 0);
       outputBuffer = &emptyBuffer;
@@ -282,4 +282,4 @@ class ZSTDCodec : public Codec {
 std::unique_ptr<Codec> makeZSTDCodec(int compressionLevel) {
   return std::make_unique<ZSTDCodec>(compressionLevel);
 }
-} // namespace facebook::velox::parquet::arrow::util::internal.
+} // namespace facebook::velox::parquet::arrow::util::internal

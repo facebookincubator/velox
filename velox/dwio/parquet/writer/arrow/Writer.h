@@ -135,8 +135,8 @@ class PARQUET_EXPORT FileWriter {
 
   /// \brief Write a RecordBatch into the buffered row group.
   ///
-  /// Multiple RecordBatches can be written into the same row group.
-  /// through this method.
+  /// Multiple RecordBatches can be written into the same row group through this
+  /// method.
   ///
   /// WriterProperties::maxRowGroupLength() and
   /// WriterProperties::maxRowGroupBytes() are respected and a new row group

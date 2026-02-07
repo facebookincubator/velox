@@ -175,8 +175,8 @@ class ARROW_EXPORT Codec {
  public:
   virtual ~Codec() = default;
 
-  /// \brief Return special value to indicate that a codec implementation.
-  /// Should use its default compression level.
+  /// \brief Return special value to indicate that a codec implementation
+  /// should use its default compression level.
   static int useDefaultCompressionLevel();
 
   /// \brief Return a string name for compression type.
@@ -229,9 +229,9 @@ class ARROW_EXPORT Codec {
   /// Output_buffer_len must be correct and therefore be obtained in advance.
   /// The actual decompressed length is returned.
   ///
-  /// \note One-shot decompression is not always compatible with streaming.
-  /// Compression.  Depending on the codec (e.g. LZ4), different formats may.
-  /// Be used.
+  /// \note One-shot decompression is not always compatible with streaming
+  /// compression.  Depending on the codec (e.g. LZ4), different formats may
+  /// be used.
   virtual Result<int64_t> decompress(
       int64_t inputLen,
       const uint8_t* input,

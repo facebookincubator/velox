@@ -129,7 +129,7 @@ class LZ4Decompressor : public Decompressor {
 };
 
 // ----------------------------------------------------------------------.
-// Lz4 frame Compressor implementation.
+// Lz4 frame compressor implementation.
 
 class LZ4Compressor : public Compressor {
  public:
@@ -547,8 +547,8 @@ class Lz4HadoopCodec : public Lz4Codec {
     // Parquet files written with the Hadoop Lz4Codec use their own framing.
     // The input buffer can contain an arbitrary number of "frames", each.
     // With the following structure:
-    // - Bytes 0..3: big-endian uint32_t representing the frame decompressed.
-    // Size.
+    // - Bytes 0..3: big-endian uint32_t representing the frame decompressed
+    // size.
     // - Bytes 4..7: big-endian uint32_t representing the frame compressed size.
     // - Bytes 8...: frame compressed data.
     //

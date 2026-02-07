@@ -96,7 +96,7 @@ class PARQUET_EXPORT ColumnPath {
 };
 
 // Base class for logical schema types. A type has a name, repetition level,
-// and optionally a logical type (ConvertedType in Parquet metadata parlance)
+// and optionally a logical type (ConvertedType in Parquet metadata parlance)..
 class PARQUET_EXPORT Node {
  public:
   enum type { PRIMITIVE, GROUP };
@@ -531,7 +531,7 @@ class PARQUET_EXPORT ColumnDescriptor {
 // the reconstruction of fully materialized data structures from the
 // repetition-definition level encoding of nested data.
 //
-// TODO(wesm): this object can be recomputed from a Schema.
+// TODO(wesm): This object can be recomputed from a Schema.
 class PARQUET_EXPORT SchemaDescriptor {
  public:
   SchemaDescriptor() {}
@@ -582,7 +582,7 @@ class PARQUET_EXPORT SchemaDescriptor {
   int getColumnIndex(const schema::PrimitiveNode& node) const;
 
   /// \brief Return true if any field or their children have REPEATED
-  /// repetition. Type.
+  /// repetition type.
   bool hasRepeatedFields() const;
 
  private:
@@ -605,7 +605,7 @@ class PARQUET_EXPORT SchemaDescriptor {
   std::unordered_map<const schema::PrimitiveNode*, int> nodeToLeafIndex_;
 
   // Mapping between leaf nodes and root group of leaf (first node
-  // below the schema's root group)
+  // below the schema's root group).
   //
   // For example, the leaf `a.b.c.d` would have a link back to `a`.
   //

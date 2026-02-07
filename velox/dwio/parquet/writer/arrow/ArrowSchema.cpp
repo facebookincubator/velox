@@ -276,8 +276,8 @@ static Status getTimestampMetadata(
       coerce ? arrowProperties.coerceTimestampsUnit() : type.unit();
   const auto version = properties.version();
 
-  // The user is explicitly asking for Impala int96 encoding, there is no.
-  // Logical type.
+  // The user is explicitly asking for Impala int96 encoding, there is no
+  // logical type.
   if (arrowProperties.supportDeprecatedInt96Timestamps()) {
     *physicalType = ParquetType::kInt96;
     return Status::OK();
@@ -286,8 +286,8 @@ static Status getTimestampMetadata(
   *physicalType = ParquetType::kInt64;
   *logicalType = timestampLogicalTypeFromArrowTimestamp(type, targetUnit);
 
-  // The user is explicitly asking for timestamp data to be converted to the.
-  // Specified units (target_unit).
+  // The user is explicitly asking for timestamp data to be converted to the
+  // specified units (target_unit).
   if (coerce) {
     if (version == ParquetVersion::PARQUET_1_0 ||
         version == ParquetVersion::PARQUET_2_4) {
@@ -813,14 +813,14 @@ Status listToSchemaField(
     //   }
     // }
     //
-    // In this latter case, the inner type of the list should be a struct.
-    // Rather than a primitive value.
+    // In this latter case, the inner type of the list should be a struct
+    // rather than a primitive value.
     //
     // Yields list<item: struct<item: TYPE ?nullable> not null> ?nullable.
     const auto& listGroup = static_cast<const GroupNode&>(listNode);
     // Special case mentioned in the format spec:
     //   If the name is array or ends in _tuple, this should be a list of
-    //   struct. Even for single child elements.
+    //   struct, even for single child elements.
     if (listGroup.fieldCount() == 1 && !hasStructListName(listGroup)) {
       // List of primitive type.
       RETURN_NOT_OK(nodeToSchemaField(
@@ -893,7 +893,7 @@ Status groupToSchemaField(
     ctx->linkParent(&out->children[0], out);
     out->levelInfo = currentLevels;
     // At this point current_levels contains this list as the def level, we
-    // need. To use the previous ancestor of this list.
+    // need to use the previous ancestor of this list.
     out->levelInfo.repeatedAncestorDefLevel = repeatedAncestorDefLevel;
     return Status::OK();
   } else {
@@ -908,8 +908,8 @@ Status nodeToSchemaField(
     SchemaTreeContext* ctx,
     const SchemaField* parent,
     SchemaField* out) {
-  // Workhorse function for converting a Parquet schema node to an Arrow.
-  // Type. Handles different conventions for nested data.
+  // Workhorse function for converting a Parquet schema node to an Arrow
+  // type. Handles different conventions for nested data.
 
   ctx->linkParent(out, parent);
 
@@ -920,8 +920,8 @@ Status nodeToSchemaField(
         static_cast<const GroupNode&>(node), currentLevels, ctx, parent, out);
   } else {
     // Either a normal flat primitive type, or a list type encoded with 1-level.
-    // List encoding. Note that the 3-level encoding is the form recommended by.
-    // The parquet specification, but technically we can have either.
+    // List encoding. Note that the 3-level encoding is the form recommended by
+    // the Parquet specification, but technically we can have either.
     //
     // Required/optional $TYPE $FIELD_NAME.
     //
@@ -948,8 +948,8 @@ Status nodeToSchemaField(
           /*nullable=*/false,
           fieldIdMetadata(node.fieldId()));
       out->levelInfo = currentLevels;
-      // At this point current_levels has consider this list the ancestor so.
-      // Restore the actual ancestor.
+      // At this point current_levels has consider this list the ancestor so
+      // restore the actual ancestor.
       out->levelInfo.repeatedAncestorDefLevel = repeatedAncestorDefLevel;
       return Status::OK();
     } else {
@@ -990,8 +990,8 @@ Status getOriginSchema(
   }
 
   // The original Arrow schema was serialized using the store_schema option.
-  // We deserialize it here and use it to inform read options such as.
-  // Dictionary-encoded fields.
+  // We deserialize it here and use it to inform read options such as
+  // dictionary-encoded fields.
   auto decoded = ::arrow::util::base64_decode(metadata->value(schemaIndex));
   auto schemaBuf = std::make_shared<Buffer>(decoded);
 
@@ -1018,9 +1018,9 @@ Status getOriginSchema(
 }
 
 // Restore original Arrow field information that was serialized as Parquet.
-// Metadata but that is not necessarily present in the field reconstituted from.
-// Parquet data (for example, Parquet timestamp types doesn't carry timezone.
-// Information).
+// metadata but that is not necessarily present in the field reconstituted from
+// Parquet data (for example, Parquet timestamp types doesn't carry timezone
+// information).
 
 Result<bool> applyOriginalMetadata(
     const Field& originField,
@@ -1080,8 +1080,8 @@ Result<bool> applyOriginalStorageMetadata(
     VELOX_DCHECK_EQ(static_cast<int>(inferred->children.size()), numChildren);
     const auto factory = getNestedFactory(*originType, *inferredType);
     if (factory) {
-      // The type may be modified (e.g. LargeList) while the children stay the.
-      // Same.
+      // The type may be modified (e.g. LargeList) while the children stay the
+      // same.
       modified |= originType->id() != inferredType->id();
 
       // Apply original metadata recursively to children.
@@ -1112,8 +1112,8 @@ Result<bool> applyOriginalStorageMetadata(
     const auto& tsOriginType =
         checked_cast<const ::arrow::TimestampType&>(*originType);
 
-    // If the data is tz-aware, then set the original time zone, since Parquet.
-    // Has no native storage for timezones.
+    // If the data is tz-aware, then set the original time zone, since Parquet
+    // has no native storage for timezones.
     if (tsType.timezone() == "UTC" && !tsOriginType.timezone().empty()) {
       if (tsType.unit() == tsOriginType.unit()) {
         inferred->field = inferred->field->WithType(originType);
@@ -1136,8 +1136,8 @@ Result<bool> applyOriginalStorageMetadata(
   if (originType->id() == ::arrow::Type::DICTIONARY &&
       inferredType->id() != ::arrow::Type::DICTIONARY &&
       isDictionaryReadSupported(*inferredType)) {
-    // Direct dictionary reads are only supported for a couple primitive types,.
-    // So no need to recurse on value types.
+    // Direct dictionary reads are only supported for a couple primitive types,
+    // so no need to recurse on value types.
     const auto& dictOriginType =
         checked_cast<const ::arrow::DictionaryType&>(*originType);
     inferred->field = inferred->field->WithType(
@@ -1191,8 +1191,8 @@ Result<bool> applyOriginalMetadata(
     // Apply metadata recursively to storage type.
     RETURN_NOT_OK(applyOriginalStorageMetadata(*originStorageField, inferred));
 
-    // Restore extension type, if the storage type is the same as inferred.
-    // From the Parquet type.
+    // Restore extension type, if the storage type is the same as inferred
+    // from the Parquet type.
     if (exType.storage_type()->Equals(*inferred->field->type())) {
       inferred->field = inferred->field->WithType(originType);
     }
@@ -1264,8 +1264,8 @@ Status fromParquetSchema(
     fields[i] = schemaField.field;
   }
   if (manifest.originSchema) {
-    // ARROW-8980: If the ARROW:schema was in the input metadata, then.
-    // Manifest.origin_schema will have it scrubbed out.
+    // ARROW-8980: If the ARROW:schema was in the input metadata, then
+    // manifest.originSchema will have it scrubbed out.
     *out = ::arrow::schema(fields, manifest.originSchema->metadata());
   } else {
     *out = ::arrow::schema(fields, keyValueMetadata);
@@ -1318,10 +1318,10 @@ Status SchemaManifest::make(
         /*parent=*/nullptr,
         outField));
 
-    // TODO(wesm): as follow up to ARROW-3246, we should really pass the origin.
-    // Schema (if any) through all functions in the schema reconstruction, but.
-    // I'm being lazy and just setting dictionary fields at the top level for.
-    // Now.
+    // TODO(wesm): As follow up to ARROW-3246, we should really pass the origin
+    // schema (if any) through all functions in the schema reconstruction, but
+    // I'm being lazy and just setting dictionary fields at the top level for
+    // now.
     if (manifest->originSchema == nullptr) {
       continue;
     }

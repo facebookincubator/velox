@@ -69,16 +69,16 @@ typedef uint64_t hash_t;
 template <uint64_t AlgNum>
 inline hash_t computeStringHash(const void* data, int64_t length);
 
-/// \brief A hash function for bitmaps that can handle offsets and lengths in.
-/// Terms of number of bits. The hash only depends on the bits actually hashed.
+/// \brief A hash function for bitmaps that can handle offsets and lengths in
+/// terms of number of bits. The hash only depends on the bits actually hashed.
 ///
-/// It's the caller's responsibility to ensure that bits_offset + num_bits are.
-/// Readable from the bitmap.
+/// It's the caller's responsibility to ensure that bits_offset + num_bits are
+/// readable from the bitmap.
 ///
 /// \pre bits_offset >= 0.
 /// \pre num_bits >= 0.
-/// \pre (bits_offset + num_bits + 7) / 8 <= readable length in bytes from.
-/// Bitmap.
+/// \pre (bits_offset + num_bits + 7) / 8 <= readable length in bytes from
+/// bitmap.
 ///
 /// \param bitmap The pointer to the bitmap.
 /// \param seed The seed for the hash function (useful when chaining hash.
@@ -101,8 +101,8 @@ struct ScalarHelperBase {
     // Generic hash computation for scalars.  Simply apply the string hash.
     // To the bit representation of the value.
 
-    // XXX in the case of FP values, we'd like equal values to have the same.
-    // Hash, even if they have different bit representations...
+    // XXX in the case of FP values, we'd like equal values to have the same
+    // hash, even if they have different bit representations...
     return computeStringHash<AlgNum>(&value, sizeof(value));
   }
 };

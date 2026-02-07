@@ -415,8 +415,8 @@ class SerializedPageWriter : public PageWriter {
         compressor_->maxCompressedLen(srcBuffer.size(), srcBuffer.data());
 
     // Use Arrow::Buffer::shrink_to_fit = false.
-    // Underlying buffer only keeps growing. Resize to a smaller size does not.
-    // Reallocate.
+    // Underlying buffer only keeps growing. Resize to a smaller size does not
+    // reallocate.
     PARQUET_THROW_NOT_OK(destBuffer->Resize(maxCompressedSize, false));
 
     PARQUET_ASSIGN_OR_THROW(
@@ -599,7 +599,7 @@ class SerializedPageWriter : public PageWriter {
   }
 
  private:
-  // To allow UpdateEncryption on Close.
+  // To allow updateEncryption on close.
   friend class BufferedPageWriter;
 
   void initEncryption() {
@@ -665,7 +665,7 @@ class SerializedPageWriter : public PageWriter {
         break;
       }
       default:
-        throw ParquetException("Unknown module type in UpdateEncryption");
+        throw ParquetException("Unknown module type in updateEncryption");
     }
   }
 
@@ -1498,10 +1498,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       const int16_t* repLevels,
       const T* values) override {
     // We check for DataPage limits only after we have inserted the values. If
-    // a. User writes a large number of values, the DataPage size can be much
-    // above. The limit. The purpose of this chunking is to bound this. Even if
-    // a user. writes large number of values, the chunking will ensure the
-    // AddDataPage() Is called at a reasonable pagesize limit.
+    // a user writes a large number of values, the DataPage size can be much
+    // above the limit. The purpose of this chunking is to bound this. Even if
+    // a user writes large number of values, the chunking will ensure the
+    // addDataPage() is called at a reasonable pagesize limit.
     int64_t valueOffset = 0;
 
     auto writeChunk = [&](int64_t offset, int64_t batchSize, bool checkPage) {
@@ -1736,10 +1736,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
   std::shared_ptr<TypedStats> chunkStatistics_;
   bool pagesChangeOnRecordBoundaries_;
 
-  // If writing a sequence of ::arrow::DictionaryArray to the writer, we keep.
-  // The dictionary passed to DictEncoder<T>::PutDictionary so we can check.
-  // Subsequent array chunks to see either if materialization is required (in.
-  // which case we call back to the dense write path)
+  // If writing a sequence of ::arrow::DictionaryArray to the writer, we keep
+  // the dictionary passed to DictEncoder<T>::putDictionary so we can check
+  // subsequent array chunks to see either if materialization is required (in
+  // which case we call back to the dense write path).
   std::shared_ptr<::arrow::Array> preservedDictionary_;
 
   int64_t writeLevels(
@@ -1997,11 +1997,11 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
   // - If dictionary encoding is not enabled, convert to densely.
   //   Encoded and call WriteArrow.
   // - Dictionary encoding enabled.
-  //   - If this is the first time this is called, then we call.
-  //     PutDictionary into the encoder and then PutIndices on each.
-  //     Chunk. We store the dictionary that was written in.
-  //     Preserved_dictionary_ so that subsequent calls to this method.
-  //     Can make sure the dictionary has not changed.
+  //   - If this is the first time this is called, then we call
+  //     putDictionary into the encoder and then putIndices on each
+  //     chunk. We store the dictionary that was written in
+  //     preservedDictionary_ so that subsequent calls to this method
+  //     can make sure the dictionary has not changed.
   //   - On subsequent calls, we have to check whether the dictionary
   //     has changed. If it has, then we trigger the varying
   //     dictionary path and materialize each chunk and then call
@@ -2016,12 +2016,12 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
 
   if (!isDictionaryEncoding(currentEncoder_->encoding()) ||
       !dictionaryDirectWriteSupported(array)) {
-    // No longer dictionary-encoding for whatever reason, maybe we never were.
-    // Or we decided to stop. Note that WriteArrow can be invoked multiple.
-    // Times with both dense and dictionary-encoded versions of the same data.
-    // Without a problem. Any dense data will be hashed to indices until the.
-    // Dictionary page limit is reached, at which everything (dictionary and.
-    // Dense) will fall back to plain encoding.
+    // No longer dictionary-encoding for whatever reason, maybe we never were
+    // or we decided to stop. Note that writeArrow can be invoked multiple
+    // times with both dense and dictionary-encoded versions of the same data
+    // without a problem. Any dense data will be hashed to indices until the
+    // dictionary page limit is reached, at which everything (dictionary and
+    // dense) will fall back to plain encoding.
     return writeDense();
   }
 
@@ -2202,7 +2202,7 @@ Status writeArrowZeroCopy(
   using T = typename ParquetType::CType;
   const auto& data = static_cast<const ::arrow::PrimitiveArray&>(array);
   const T* values = nullptr;
-  // The values buffer may be null if the array is empty (ARROW-2744)
+  // The values buffer may be null if the array is empty (ARROW-2744).
   if (data.values() != nullptr) {
     values = reinterpret_cast<const T*>(data.values()->data()) + data.offset();
   } else {

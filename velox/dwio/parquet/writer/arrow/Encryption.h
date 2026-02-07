@@ -314,9 +314,9 @@ class PARQUET_EXPORT FileDecryptionProperties {
 
     /// Skip integrity verification of plaintext footers.
     /// If not called, integrity of plaintext footers will be checked in.
-    /// Runtime, and an exception will be thrown in the following situations:
+    /// runtime, and an exception will be thrown in the following situations:
     /// - Footer signing key is not available.
-    /// (not passed, or not found by key retriever)..
+    /// (not passed, or not found by key retriever).
     /// - Footer content and signature don't match.
     Builder* disableFooterSignatureVerification() {
       checkPlaintextFooterIntegrity_ = false;

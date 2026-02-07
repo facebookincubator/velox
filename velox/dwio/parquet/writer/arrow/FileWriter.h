@@ -234,7 +234,7 @@ class PARQUET_EXPORT ParquetFileWriter {
   RowGroupWriter* appendBufferedRowGroup();
 
   /// \brief Add key-value metadata to the file.
-  /// \param[in] keyValueMetadata the metadata to add.
+  /// \param[in] keyValueMetadata The metadata to add.
   /// \note This will overwrite any existing metadata with the same key.
   /// \throw ParquetException if close() has been called.
   void addKeyValueMetadata(

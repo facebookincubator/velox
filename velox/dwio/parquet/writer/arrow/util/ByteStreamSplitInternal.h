@@ -147,8 +147,8 @@ void byteStreamSplitEncodeSse2(
     }
 
     // The shuffling of bytes is performed through the unpack intrinsics.
-    // In my measurements this gives better performance then an implementation.
-    // Which uses the shuffle intrinsics.
+    // In my measurements this gives better performance then an implementation
+    // which uses the shuffle intrinsics.
     for (size_t stageLvl = 0; stageLvl < 2U; ++stageLvl) {
       for (size_t i = 0; i < kNumStreams / 2U; ++i) {
         stage[stageLvl + 1][i * 2] =
@@ -241,8 +241,8 @@ void byteStreamSplitDecodeAvx2(
 
     if constexpr (kNumStreams == 8U) {
       // Path for double, 128i index:
-      //   {0X00, 0x08}, {0x01, 0x09}, {0x02, 0x0A}, {0x03, 0x0B},.
-      //   {0X04, 0x0C}, {0x05, 0x0D}, {0x06, 0x0E}, {0x07, 0x0F},.
+      //   {0X00, 0x08}, {0x01, 0x09}, {0x02, 0x0A}, {0x03, 0x0B},
+      //   {0X04, 0x0C}, {0x05, 0x0D}, {0x06, 0x0E}, {0x07, 0x0F},
       finalResult[0] = mm256Permute2x128Si256(
           stage[kNumStreamsLog2][0], stage[kNumStreamsLog2][1], 0b00100000);
       finalResult[1] = mm256Permute2x128Si256(
@@ -411,10 +411,10 @@ void byteStreamSplitDecodeAvx512(
 
     if constexpr (kNumStreams == 8U) {
       // Path for double, 128i index:
-      // {0X00, 0x04, 0x08, 0x0C}, {0x10, 0x14, 0x18, 0x1C},.
-      // {0X01, 0x05, 0x09, 0x0D}, {0x11, 0x15, 0x19, 0x1D},.
-      // {0X02, 0x06, 0x0A, 0x0E}, {0x12, 0x16, 0x1A, 0x1E},.
-      // {0X03, 0x07, 0x0B, 0x0F}, {0x13, 0x17, 0x1B, 0x1F},.
+      // {0X00, 0x04, 0x08, 0x0C}, {0x10, 0x14, 0x18, 0x1C},
+      // {0X01, 0x05, 0x09, 0x0D}, {0x11, 0x15, 0x19, 0x1D},
+      // {0X02, 0x06, 0x0A, 0x0E}, {0x12, 0x16, 0x1A, 0x1E},
+      // {0X03, 0x07, 0x0B, 0x0F}, {0x13, 0x17, 0x1B, 0x1F},
       shuffle[0] = mm512ShuffleI32x4(
           stage[kNumStreamsLog2][0], stage[kNumStreamsLog2][1], 0b01000100);
       shuffle[1] = mm512ShuffleI32x4(
@@ -443,7 +443,7 @@ void byteStreamSplitDecodeAvx512(
     } else {
       // Path for float, 128i index:
       // {0x00, 0x04, 0x08, 0x0C}, {0x01, 0x05, 0x09, 0x0D}
-      // {0X02, 0x06, 0x0A, 0x0E}, {0x03, 0x07, 0x0B, 0x0F},.
+      // {0X02, 0x06, 0x0A, 0x0E}, {0x03, 0x07, 0x0B, 0x0F},
       shuffle[0] = mm512ShuffleI32x4(
           stage[kNumStreamsLog2][0], stage[kNumStreamsLog2][1], 0b01000100);
       shuffle[1] = mm512ShuffleI32x4(
@@ -564,10 +564,10 @@ void byteStreamSplitEncodeAvx512(
       // 1. Unpack to epi16 block.
       // 2. Permutexvar_epi16 to 128i block.
       // 3. Shuffle 128i to final 512i target, index:
-      //   {0X00, 0x04, 0x08, 0x0C}, {0x10, 0x14, 0x18, 0x1C},.
-      //   {0X01, 0x05, 0x09, 0x0D}, {0x11, 0x15, 0x19, 0x1D},.
-      //   {0X02, 0x06, 0x0A, 0x0E}, {0x12, 0x16, 0x1A, 0x1E},.
-      //   {0X03, 0x07, 0x0B, 0x0F}, {0x13, 0x17, 0x1B, 0x1F},.
+      //   {0X00, 0x04, 0x08, 0x0C}, {0x10, 0x14, 0x18, 0x1C},
+      //   {0X01, 0x05, 0x09, 0x0D}, {0x11, 0x15, 0x19, 0x1D},
+      //   {0X02, 0x06, 0x0A, 0x0E}, {0x12, 0x16, 0x1A, 0x1E},
+      //   {0X03, 0x07, 0x0B, 0x0F}, {0x13, 0x17, 0x1B, 0x1F},
       for (size_t i = 0; i < kNumStreams; ++i)
         permutex[i] =
             mm512PermutexvarEpi16(permutexMask, unpack[KNumUnpack][i]);
@@ -659,8 +659,8 @@ inline void doSplitStreams(
     int width,
     int64_t nvalues,
     uint8_t** destStreams) {
-  // Value empirically chosen to provide the best performance on the author's.
-  // Machine.
+  // Value empirically chosen to provide the best performance on the author's
+  // machine.
   constexpr int kBlockSize = 32;
 
   while (nvalues >= kBlockSize) {
@@ -704,8 +704,8 @@ inline void doMergeStreams(
     int width,
     int64_t nvalues,
     uint8_t* dest) {
-  // Value empirically chosen to provide the best performance on the author's.
-  // Machine.
+  // Value empirically chosen to provide the best performance on the author's
+  // machine.
   constexpr int kBlockSize = 128;
 
   while (nvalues >= kBlockSize) {
