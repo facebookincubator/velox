@@ -66,6 +66,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache ccache
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-macos-1-macos-15-${{ matrix.type }}
+
       - name: Install Dependencies
         env:
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 'TRUE'
@@ -76,6 +82,16 @@ jobs:
           install_velox_deps_from_brew
           install_gflags
           install_glog
+          # We can use Homebrew's FBThrift once Homebrew's Folly
+          # enables 128bit integer support. We need to fix
+          # https://github.com/facebook/folly/issues/1666 for it.
+          install_boost
+          install_fmt
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
           # Needed for faiss to find BLAS
           install_faiss_deps
           install_double_conversion
@@ -88,15 +104,8 @@ jobs:
           fi
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
-      - name: Cache ccache
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-macos-1-macos-15-${{ matrix.type }}
-
       - name: Configure Build
         env:
-          fmt_SOURCE: BUNDLED #brew fmt11 is not supported
           faiss_SOURCE: BUNDLED #brew faiss is not supported
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |

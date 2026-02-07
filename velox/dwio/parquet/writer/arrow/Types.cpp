@@ -406,60 +406,70 @@ std::shared_ptr<const LogicalType> LogicalType::FromConvertedType(
 
 std::shared_ptr<const LogicalType> LogicalType::FromThrift(
     const facebook::velox::parquet::thrift::LogicalType& type) {
-  if (type.__isset.STRING) {
-    return StringLogicalType::Make();
-  } else if (type.__isset.MAP) {
-    return MapLogicalType::Make();
-  } else if (type.__isset.LIST) {
-    return ListLogicalType::Make();
-  } else if (type.__isset.ENUM) {
-    return EnumLogicalType::Make();
-  } else if (type.__isset.DECIMAL) {
-    return DecimalLogicalType::Make(type.DECIMAL.precision, type.DECIMAL.scale);
-  } else if (type.__isset.DATE) {
-    return DateLogicalType::Make();
-  } else if (type.__isset.TIME) {
-    LogicalType::TimeUnit::unit unit;
-    if (type.TIME.unit.__isset.MILLIS) {
-      unit = LogicalType::TimeUnit::MILLIS;
-    } else if (type.TIME.unit.__isset.MICROS) {
-      unit = LogicalType::TimeUnit::MICROS;
-    } else if (type.TIME.unit.__isset.NANOS) {
-      unit = LogicalType::TimeUnit::NANOS;
-    } else {
-      unit = LogicalType::TimeUnit::UNKNOWN;
+  using Type = facebook::velox::parquet::thrift::LogicalType::Type;
+  using TimeUnitType = facebook::velox::parquet::thrift::TimeUnit::Type;
+  switch (type.getType()) {
+    case Type::STRING:
+      return StringLogicalType::Make();
+    case Type::MAP:
+      return MapLogicalType::Make();
+    case Type::LIST:
+      return ListLogicalType::Make();
+    case Type::ENUM:
+      return EnumLogicalType::Make();
+    case Type::DECIMAL:
+      return DecimalLogicalType::Make(
+          *type.get_DECIMAL().precision(), *type.get_DECIMAL().scale());
+    case Type::DATE:
+      return DateLogicalType::Make();
+    case Type::TIME: {
+      const auto& thrift_unit = type.get_TIME().unit();
+      LogicalType::TimeUnit::unit unit;
+      if (thrift_unit->getType() == TimeUnitType::MILLIS) {
+        unit = LogicalType::TimeUnit::MILLIS;
+      } else if (thrift_unit->getType() == TimeUnitType::MICROS) {
+        unit = LogicalType::TimeUnit::MICROS;
+      } else if (thrift_unit->getType() == TimeUnitType::NANOS) {
+        unit = LogicalType::TimeUnit::NANOS;
+      } else {
+        unit = LogicalType::TimeUnit::UNKNOWN;
+      }
+      return TimeLogicalType::Make(*type.get_TIME().isAdjustedToUTC(), unit);
     }
-    return TimeLogicalType::Make(type.TIME.isAdjustedToUTC, unit);
-  } else if (type.__isset.TIMESTAMP) {
-    LogicalType::TimeUnit::unit unit;
-    if (type.TIMESTAMP.unit.__isset.MILLIS) {
-      unit = LogicalType::TimeUnit::MILLIS;
-    } else if (type.TIMESTAMP.unit.__isset.MICROS) {
-      unit = LogicalType::TimeUnit::MICROS;
-    } else if (type.TIMESTAMP.unit.__isset.NANOS) {
-      unit = LogicalType::TimeUnit::NANOS;
-    } else {
-      unit = LogicalType::TimeUnit::UNKNOWN;
+    case Type::TIMESTAMP: {
+      const auto& thrift_unit = type.get_TIMESTAMP().unit();
+      LogicalType::TimeUnit::unit unit;
+      if (thrift_unit->getType() == TimeUnitType::MILLIS) {
+        unit = LogicalType::TimeUnit::MILLIS;
+      } else if (thrift_unit->getType() == TimeUnitType::MICROS) {
+        unit = LogicalType::TimeUnit::MICROS;
+      } else if (thrift_unit->getType() == TimeUnitType::NANOS) {
+        unit = LogicalType::TimeUnit::NANOS;
+      } else {
+        unit = LogicalType::TimeUnit::UNKNOWN;
+      }
+      return TimestampLogicalType::Make(
+          *type.get_TIMESTAMP().isAdjustedToUTC(), unit);
     }
-    return TimestampLogicalType::Make(type.TIMESTAMP.isAdjustedToUTC, unit);
     // TODO(tpboudreau): activate the commented code after parquet.thrift
     // recognizes IntervalType as a LogicalType
-    //} else if (type.__isset.INTERVAL) {
-    //  return IntervalLogicalType::Make();
-  } else if (type.__isset.INTEGER) {
-    return IntLogicalType::Make(
-        static_cast<int>(type.INTEGER.bitWidth), type.INTEGER.isSigned);
-  } else if (type.__isset.UNKNOWN) {
-    return NullLogicalType::Make();
-  } else if (type.__isset.JSON) {
-    return JSONLogicalType::Make();
-  } else if (type.__isset.BSON) {
-    return BSONLogicalType::Make();
-  } else if (type.__isset.UUID) {
-    return UUIDLogicalType::Make();
-  } else {
-    throw ParquetException(
-        "Metadata contains Thrift LogicalType that is not recognized");
+    // case Type::INTERVAL:
+    //   return IntervalLogicalType::Make();
+    case Type::INTEGER:
+      return IntLogicalType::Make(
+          static_cast<int>(*type.get_INTEGER().bitWidth()),
+          *type.get_INTEGER().isSigned());
+    case Type::UNKNOWN:
+      return NullLogicalType::Make();
+    case Type::JSON:
+      return JSONLogicalType::Make();
+    case Type::BSON:
+      return BSONLogicalType::Make();
+    case Type::UUID:
+      return UUIDLogicalType::Make();
+    default:
+      throw ParquetException(
+          "Metadata contains Thrift LogicalType that is not recognized");
   }
 }
 
@@ -905,7 +915,7 @@ class LogicalType::Impl::Inapplicable : public virtual LogicalType::Impl {
   facebook::velox::parquet::thrift::LogicalType ToThrift() const override { \
     facebook::velox::parquet::thrift::LogicalType type;                     \
     facebook::velox::parquet::thrift::t___ subtype;                         \
-    type.__set_##s___(subtype);                                             \
+    type.set_##s___(subtype);                                               \
     return type;                                                            \
   }
 
@@ -1100,9 +1110,9 @@ facebook::velox::parquet::thrift::LogicalType
 LogicalType::Impl::Decimal::ToThrift() const {
   facebook::velox::parquet::thrift::LogicalType type;
   facebook::velox::parquet::thrift::DecimalType decimal_type;
-  decimal_type.__set_precision(precision_);
-  decimal_type.__set_scale(scale_);
-  type.__set_DECIMAL(decimal_type);
+  decimal_type.precision() = precision_;
+  decimal_type.scale() = scale_;
+  type.set_DECIMAL(decimal_type);
   return type;
 }
 
@@ -1263,17 +1273,17 @@ LogicalType::Impl::Time::ToThrift() const {
   VELOX_DCHECK_NE(unit_, LogicalType::TimeUnit::UNKNOWN);
   if (unit_ == LogicalType::TimeUnit::MILLIS) {
     facebook::velox::parquet::thrift::MilliSeconds millis;
-    time_unit.__set_MILLIS(millis);
+    time_unit.set_MILLIS(millis);
   } else if (unit_ == LogicalType::TimeUnit::MICROS) {
     facebook::velox::parquet::thrift::MicroSeconds micros;
-    time_unit.__set_MICROS(micros);
+    time_unit.set_MICROS(micros);
   } else if (unit_ == LogicalType::TimeUnit::NANOS) {
     facebook::velox::parquet::thrift::NanoSeconds nanos;
-    time_unit.__set_NANOS(nanos);
+    time_unit.set_NANOS(nanos);
   }
-  time_type.__set_isAdjustedToUTC(adjusted_);
-  time_type.__set_unit(time_unit);
-  type.__set_TIME(time_type);
+  time_type.isAdjustedToUTC() = adjusted_;
+  time_type.unit() = time_unit;
+  type.set_TIME(time_type);
   return type;
 }
 
@@ -1431,17 +1441,17 @@ LogicalType::Impl::Timestamp::ToThrift() const {
   VELOX_DCHECK_NE(unit_, LogicalType::TimeUnit::UNKNOWN);
   if (unit_ == LogicalType::TimeUnit::MILLIS) {
     facebook::velox::parquet::thrift::MilliSeconds millis;
-    time_unit.__set_MILLIS(millis);
+    time_unit.set_MILLIS(millis);
   } else if (unit_ == LogicalType::TimeUnit::MICROS) {
     facebook::velox::parquet::thrift::MicroSeconds micros;
-    time_unit.__set_MICROS(micros);
+    time_unit.set_MICROS(micros);
   } else if (unit_ == LogicalType::TimeUnit::NANOS) {
     facebook::velox::parquet::thrift::NanoSeconds nanos;
-    time_unit.__set_NANOS(nanos);
+    time_unit.set_NANOS(nanos);
   }
-  timestamp_type.__set_isAdjustedToUTC(adjusted_);
-  timestamp_type.__set_unit(time_unit);
-  type.__set_TIMESTAMP(timestamp_type);
+  timestamp_type.isAdjustedToUTC() = adjusted_;
+  timestamp_type.unit() = time_unit;
+  type.set_TIMESTAMP(timestamp_type);
   return type;
 }
 
@@ -1637,9 +1647,9 @@ facebook::velox::parquet::thrift::LogicalType LogicalType::Impl::Int::ToThrift()
   facebook::velox::parquet::thrift::LogicalType type;
   facebook::velox::parquet::thrift::IntType int_type;
   VELOX_DCHECK(width_ == 64 || width_ == 32 || width_ == 16 || width_ == 8);
-  int_type.__set_bitWidth(static_cast<int8_t>(width_));
-  int_type.__set_isSigned(signed_);
-  type.__set_INTEGER(int_type);
+  int_type.bitWidth() = static_cast<int8_t>(width_);
+  int_type.isSigned() = signed_;
+  type.set_INTEGER(int_type);
   return type;
 }
 

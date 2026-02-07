@@ -288,7 +288,7 @@ TEST(Metadata, TestBuildAccess) {
     ASSERT_EQ(3, rg2_column2->encoding_stats().size());
 
     // Test FileMetaData::set_file_path
-    ASSERT_TRUE(rg2_column1->file_path().empty());
+    ASSERT_FALSE(rg2_column1->has_file_path());
     f_accessors[loop_index]->set_file_path("/foo/bar/bar.parquet");
     ASSERT_EQ("/foo/bar/bar.parquet", rg2_column1->file_path());
   }

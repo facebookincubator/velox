@@ -29,7 +29,6 @@ set(
 
 add_subdirectory(common)
 add_subdirectory(reader)
-add_subdirectory(thrift)
 add_subdirectory(writer)
 
 add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)

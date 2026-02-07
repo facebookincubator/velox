@@ -339,8 +339,8 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
-  # are included in Arrow.
+  # Native Parquet reader requires Arrow Parquet writer, which are
+  # included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
@@ -404,9 +404,9 @@ endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D USE_VELOX_COMMON_BASE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
 if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
@@ -547,19 +547,31 @@ velox_resolve_dependency(
 )
 
 set(
-  BOOST_INCLUDE_LIBRARIES
+  BOOST_COMPONENTS
   atomic
   context
   date_time
   filesystem
   program_options
   regex
-  system
   thread
+)
+set(
+  BOOST_OPTIONAL_COMPONENTS
+  system # Boost.System is header only since Boost 1.89
 )
 
 velox_set_source(Boost)
-velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+velox_resolve_dependency(
+  Boost
+  1.77.0
+  MODULE
+  COMPONENTS ${BOOST_COMPONENTS}
+  OPTIONAL_COMPONENTS ${BOOST_OPTIONAL_COMPONENTS}
+)
+if(NOT TARGET Boost::system)
+  add_library(Boost::system ALIAS Boost::headers)
+endif()
 
 velox_set_source(gflags)
 
@@ -649,7 +661,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)

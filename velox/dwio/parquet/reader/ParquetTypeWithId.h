@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
 
@@ -41,9 +41,9 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       uint32_t maxId,
       uint32_t column,
       std::string name,
-      std::optional<thrift::Type::type> parquetType,
+      std::optional<thrift::Type> parquetType,
       std::optional<thrift::LogicalType> logicalType,
-      std::optional<thrift::ConvertedType::type> convertedType,
+      std::optional<thrift::ConvertedType> convertedType,
       uint32_t maxRepeat,
       uint32_t maxDefine,
       bool isOptional,
@@ -84,9 +84,9 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       const&&;
 
   const std::string name_;
-  const std::optional<thrift::Type::type> parquetType_;
+  const std::optional<thrift::Type> parquetType_;
   const std::optional<thrift::LogicalType> logicalType_;
-  const std::optional<thrift::ConvertedType::type> convertedType_;
+  const std::optional<thrift::ConvertedType> convertedType_;
   const uint32_t maxRepeat_;
   const uint32_t maxDefine_;
   const bool isOptional_;
