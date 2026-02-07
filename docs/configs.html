@@ -42,6 +42,303 @@
 <h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Link to this heading">¶</a></h1>
 <section id="generic-configuration">
 <h2>Generic Configuration<a class="headerlink" href="#generic-configuration" title="Link to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18.2%" />
+<col style="width: 9.1%" />
+<col style="width: 9.1%" />
+<col style="width: 63.6%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>preferred_output_batch_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>10MB</p></td>
+<td><p>Preferred size of batches in bytes to be returned by operators from Operator::getOutput. It is used when an
+estimate of average row size is known. Otherwise preferred_output_batch_rows is used.</p></td>
+</tr>
+<tr class="row-odd"><td><p>preferred_output_batch_rows</p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
+average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_output_batch_rows</p></td>
+<td><p>integer</p></td>
+<td><p>10000</p></td>
+<td><p>Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
+average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>merge_join_output_batch_start_size</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Initial output batch size in rows for MergeJoin operator. When non-zero, the batch size starts at this value
+and is dynamically adjusted based on the average row size of previous output batches. When zero (default),
+dynamic adjustment is disabled and the batch size is fixed at preferred_output_batch_rows.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_elements_size_in_repeat_and_sequence</p></td>
+<td><p>integer</p></td>
+<td><p>10000</p></td>
+<td><p>Max number of elements that can be set in <cite>repeat</cite> and <cite>sequence</cite> functions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>table_scan_getoutput_time_limit_ms</p></td>
+<td><p>integer</p></td>
+<td><p>5000</p></td>
+<td><p>TableScan operator will exit getOutput() method after this many milliseconds even if it has no data to return yet. Zero means ‘no time limit’.</p></td>
+</tr>
+<tr class="row-even"><td><p>abandon_partial_topn_row_number_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>100,000</p></td>
+<td><p>Number of input rows to receive before starting to check whether to abandon partial TopNRowNumber.</p></td>
+</tr>
+<tr class="row-odd"><td><p>abandon_partial_topn_row_number_min_pct</p></td>
+<td><p>integer</p></td>
+<td><p>80</p></td>
+<td><p>Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.</p></td>
+</tr>
+<tr class="row-even"><td><p>abandon_dedup_hashmap_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>100,000</p></td>
+<td><p>Number of input rows to receive before starting to check whether to abandon building a HashTable without
+duplicates in HashBuild for left semi/anti join.</p></td>
+</tr>
+<tr class="row-odd"><td><p>abandon_dedup_hashmap_min_pct</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of
+distinct keys in the HashTable exceeds this threshold. Zero means ‘disable this optimization’.</p></td>
+</tr>
+<tr class="row-even"><td><p>session_timezone</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>User provided session timezone. Stores a string with the actual timezone name, e.g: “America/Los_Angeles”.</p></td>
+</tr>
+<tr class="row-odd"><td><p>adjust_timestamp_to_session_timezone</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, timezone-less timestamp conversions (e.g. string to timestamp, when the string does not specify a timezone)
+will be adjusted to the user provided <cite>session_timezone</cite> (if any). For instance: if this option is true and user
+supplied “America/Los_Angeles”, then “1970-01-01” will be converted to -28800 instead of 0. Similarly, timestamp
+to date conversions will adhere to user ‘session_timezone’, e.g: Timestamp(0) to Date will be -1 (number of days
+since epoch) for “America/Los_Angeles”.</p></td>
+</tr>
+<tr class="row-even"><td><p>track_operator_cpu_usage</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to track CPU usage for stages of individual operators. Can be expensive when processing small batches,
+e.g. &lt; 10K rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>operator_batch_size_stats_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, the driver will collect the operator’s input/output batch size through vector flat size estimation, otherwise not.
+We might turn this off in use cases which have very wide column width and batch size estimation has non-trivial cpu cost.</p></td>
+</tr>
+<tr class="row-even"><td><p>hash_adaptivity_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If false, the ‘group by’ code is forced to use generic hash mode hashtable.</p></td>
+</tr>
+<tr class="row-odd"><td><p>adaptive_filter_reordering_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, the conjunction expression can reorder inputs based on the time taken to calculate them.</p></td>
+</tr>
+<tr class="row-even"><td><p>parallel_join_build_rows_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, the hash probe drivers can output build-side rows in parallel for full and right joins (only when spilling is not
+enabled by hash probe). If false, only the last prober is allowed to output build-side rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max_local_exchange_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_local_exchange_partition_count</p></td>
+<td><p>integer</p></td>
+<td><p>2^32</p></td>
+<td><p>Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
+This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
+Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
+pipeline drivers configured for the task.</p></td>
+</tr>
+<tr class="row-odd"><td><p>exchange.max_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
+A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
+at the expense of reducing the amount of memory available for other usage.</p></td>
+</tr>
+<tr class="row-even"><td><p>min_exchange_output_batch_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>2MB</p></td>
+<td><p>The minimum number of bytes to accumulate in the ExchangeQueue before unblocking a consumer. This is used to avoid
+creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
+(for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
+when 1% of the data size observed so far is accumulated.</p></td>
+</tr>
+<tr class="row-odd"><td><p>merge_exchange.max_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>128MB</p></td>
+<td><p>The aggregate buffer size (in bytes) across all exchange clients generated by the merge exchange operator,
+responsible for storing data retrieved from various nodes prior to processing. It is divided
+equally among all clients and has an upper and lower limit of 32MB and 1MB, respectively, per
+client. Enforced approximately, not strictly. A larger size can increase network throughput
+for larger clusters and thus decrease query processing time at the expense of reducing the
+amount of memory available for other usage.</p></td>
+</tr>
+<tr class="row-even"><td><p>skip_request_data_size_with_single_source_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, skip request data size if there is only single source.
+This is used to optimize the Presto-on-Spark use case where each exchange client
+has only one shuffle partition source.</p></td>
+</tr>
+<tr class="row-odd"><td><p>local_merge_source_queue_size</p></td>
+<td><p>integer</p></td>
+<td><p>2</p></td>
+<td><p>Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_page_partitioning_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>The maximum size in bytes for the task’s buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
+The producer Drivers are blocked when the buffered size exceeds this.
+The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.</p></td>
+</tr>
+<tr class="row-odd"><td><p>partitioned_output_eager_flush</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, the PartitionedOutput operator will flush rows eagerly, without waiting until buffers reach certain size. Default is false.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_output_buffer_size</p></td>
+<td><p>integer</p></td>
+<td><p>32MB</p></td>
+<td><p>The maximum size in bytes for the task’s buffered output.
+The producer Drivers are blocked when the buffered size exceeds this.
+The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.</p></td>
+</tr>
+<tr class="row-odd"><td><p>min_table_rows_for_parallel_join_build</p></td>
+<td><p>integer</p></td>
+<td><p>1000</p></td>
+<td><p>The minimum number of table rows that can trigger the parallel hash join table build.</p></td>
+</tr>
+<tr class="row-even"><td><p>hash_probe_dynamic_filter_pushdown_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hash_probe_bloom_filter_pushdown_max_size</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The maximum byte size of Bloom filter that can be generated from hash
+probe.  When set to 0, no Bloom filter will be generated.  To achieve
+optimal performance, this should not be too larger than the CPU cache
+size on the host.</p></td>
+</tr>
+<tr class="row-even"><td><p>debug.validate_output_from_operators</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If set to true, then during execution of tasks, the output vectors of every operator are validated for consistency.
+This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
+cause failures or crashes by helping identify which operator is generating them.</p></td>
+</tr>
+<tr class="row-odd"><td><p>enable_expression_evaluation_cache</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
+evalWithMemo are enabled.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_shared_subexpr_results_cached</p></td>
+<td><p>integer</p></td>
+<td><p>10</p></td>
+<td><p>For a given shared subexpression, the maximum distinct sets of inputs we cache results for. Lambdas can call
+the same expression with different inputs many times, causing the results we cache to explode in size. Putting
+a limit contains the memory usage.</p></td>
+</tr>
+<tr class="row-odd"><td><p>driver_cpu_time_slice_limit_ms</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>If it is not zero, specifies the time limit that a driver can continuously
+run on a thread before yield. If it is zero, then it no limit.</p></td>
+</tr>
+<tr class="row-even"><td><p>window_num_sub_partitions</p></td>
+<td><p>integer</p></td>
+<td><p>1</p></td>
+<td><p>Window operator can be configured to sub-divide window partitions on each thread of execution into groups of
+sub partitions for sequential processing. This setting specifies how many sub-partitions to create for each
+thread. Use 1 to disable sub partitioning.</p></td>
+</tr>
+<tr class="row-odd"><td><p>prefixsort_normalized_key_max_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>128</p></td>
+<td><p>Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.</p></td>
+</tr>
+<tr class="row-even"><td><p>prefixsort_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>128</p></td>
+<td><p>Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.</p></td>
+</tr>
+<tr class="row-odd"><td><p>prefixsort_max_string_prefix_length</p></td>
+<td><p>integer</p></td>
+<td><p>16</p></td>
+<td><p>Byte length of the string prefix stored in the prefix-sort buffer. This doesn’t include the null byte.</p></td>
+</tr>
+<tr class="row-even"><td><p>shuffle_compression_codec</p></td>
+<td><p>string</p></td>
+<td><p>none</p></td>
+<td><p>Specifies the compression algorithm type to compress the shuffle data to
+trade CPU for network IO efficiency. The supported compression codecs
+are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.</p></td>
+</tr>
+<tr class="row-odd"><td><p>throw_exception_on_duplicate_map_keys</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>By default, if a key is found in multiple given maps, that key’s value in the resulting map comes from the last one of those maps.
+If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions <cite>CreateMap</cite>, <cite>MapFromArrays</cite>, <cite>MapFromEntries</cite>, <cite>StringToMap</cite>, <cite>MapConcat</cite>, <cite>TransformKeys</cite>.</p></td>
+</tr>
+<tr class="row-even"><td><p>index_lookup_join_max_prefetch_batches</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
+then process one input batch at a time.</p></td>
+</tr>
+<tr class="row-odd"><td><p>index_lookup_join_split_output</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If this is true, then the index join operator might split output for each input batch based
+on the output batch size control. Otherwise, it tries to produce a single output for each input
+batch.</p></td>
+</tr>
+<tr class="row-even"><td><p>unnest_split_output_batch</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If this is true, then the unnest operator might split output for each input batch based on the
+output batch size control. Otherwise, it produces a single output for each input batch.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max_num_splits_listened_to</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Specifies The max number of input splits to listen to by SplitListener per table scan node per
+worker. It’s up to the SplitListener implementation to respect this config.</p></td>
+</tr>
+<tr class="row-even"><td><p>operator_track_expression_stats</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If this is true, then operators that evaluate expressions will track stats for expressions that
+are not special forms and return them as part of their operator stats. Tracking these stats can
+be expensive (especially if operator stats are retrieved frequently) and this allows the user to
+explicitly enable it.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="expression-evaluation-configuration">
 <h2>Expression Evaluation Configuration<a class="headerlink" href="#expression-evaluation-configuration" title="Link to this heading">¶</a></h2>

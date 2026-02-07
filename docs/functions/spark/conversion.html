@@ -236,6 +236,7 @@ When the year exceeds 9999, a positive sign is added.</p>
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
 <section id="id2">
 <h3>From strings<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p><em>(ANSI compliant)</em></p>
 <p>All Spark supported patterns are allowed:</p>
 <blockquote>
 <div><ul class="simple">
@@ -255,8 +256,9 @@ For the last two patterns, the trailing <code class="docutils literal notranslat
 <li><p>“1970-01-01 (BC)”</p></li>
 </ul>
 </div></blockquote>
-<p>All leading and trailing UTF8 white-spaces will be trimmed before cast.
-Casting from invalid input values throws.</p>
+<p>All leading and trailing UTF8 white-spaces will be trimmed before cast.</p>
+<p>When ANSI mode is enabled, casting from invalid input values throws an error.
+When ANSI mode is disabled, casting from invalid input values returns NULL.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
