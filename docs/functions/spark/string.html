@@ -388,6 +388,30 @@ if pos + len is negative, it refers to -(pos + len)th element before the end of 
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="randstr">
+<span class="sig-name descname"><span class="pre">randstr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">length</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#randstr" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a string of the specified <code class="docutils literal notranslate"><span class="pre">length</span></code> whose characters are chosen uniformly
+at random from the following pool of characters: 0-9, a-z, A-Z.
+Both <code class="docutils literal notranslate"><span class="pre">length</span></code> and <code class="docutils literal notranslate"><span class="pre">seed</span></code> must be non-null constants.
+<code class="docutils literal notranslate"><span class="pre">length</span></code> must be a non-negative integer (SMALLINT or INT).
+<code class="docutils literal notranslate"><span class="pre">seed</span></code> must be an integer (INT or BIGINT).
+With the same <code class="docutils literal notranslate"><span class="pre">seed</span></code> and partition ID, the function produces a reproducible sequence
+of outputs, though each row receives a different value from the sequence as the
+internal generator advances.
+The partition ID is retrieved from the <code class="docutils literal notranslate"><span class="pre">spark_partition_id</span></code> query configuration.
+It’s consistent with Spark’s internal assignment for tasks.
+Uses XORShift random number generator matching Spark’s implementation.
+Note: Spark’s analyzer always provides a seed (either user-specified or
+auto-generated), so only the seeded variant is implemented.
+This function was added in Spark 4.0.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">randstr</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>  <span class="o">--</span> <span class="s2">&quot;ceV0P&quot;</span> <span class="p">(</span><span class="n">reproducible</span> <span class="k">with</span> <span class="n">seed</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">randstr</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;ceV0PXaR2I&quot;</span>
+<span class="n">SELECT</span> <span class="n">randstr</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">42</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="read_side_padding">
 <span class="sig-name descname"><span class="pre">read_side_padding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">limit</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#read_side_padding" title="Link to this definition">¶</a></dt>
 <dd><p>Right-pads the given string with spaces to the specified length <code class="docutils literal notranslate"><span class="pre">limit</span></code>.
@@ -734,6 +758,7 @@ Note: This function is not directly callable in Spark SQL, but internally used f
 <li><a class="reference internal" href="#luhn_check"><code class="docutils literal notranslate"><span class="pre">luhn_check()</span></code></a></li>
 <li><a class="reference internal" href="#mask"><code class="docutils literal notranslate"><span class="pre">mask()</span></code></a></li>
 <li><a class="reference internal" href="#overlay"><code class="docutils literal notranslate"><span class="pre">overlay()</span></code></a></li>
+<li><a class="reference internal" href="#randstr"><code class="docutils literal notranslate"><span class="pre">randstr()</span></code></a></li>
 <li><a class="reference internal" href="#read_side_padding"><code class="docutils literal notranslate"><span class="pre">read_side_padding()</span></code></a></li>
 <li><a class="reference internal" href="#repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
 <li><a class="reference internal" href="#replace"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
