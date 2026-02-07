@@ -909,20 +909,17 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionBound) {
   std::vector<RowVectorPtr> dataVectors = {makeRowVector(
       {makeFlatVector<int64_t>(makeContinuousIncreasingValues(0, 100))})};
   writeToFile(dataFilePath->getPath(), dataVectors);
-  createDuckDbTable(dataVectors);
 
   // Create a delete file targeting positions 0, 1, 2.
   auto deleteFilePath = TempFilePath::create();
-  writeToFile(
-      deleteFilePath->getPath(),
-      {makeRowVector(
-          {pathColumn->name, posColumn->name},
-          {makeFlatVector<std::string>(
-               3, [&](auto) { return dataFilePath->getPath(); }),
-           makeFlatVector<int64_t>({0, 1, 2})})});
+  std::vector<RowVectorPtr> deleteVectors = {makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {makeFlatVector<std::string>(
+           3, [&](auto) { return dataFilePath->getPath(); }),
+       makeFlatVector<int64_t>({0, 1, 2})})};
+  writeToFile(deleteFilePath->getPath(), deleteVectors);
 
-  // Set upperBound to -1, which is before splitOffset (0). The delete file
-  // should be skipped completely, so no rows are deleted.
+  // upperBound "2" is the max position in the delete file.
   IcebergDeleteFile deleteFile(
       FileContent::kPositionalDeletes,
       deleteFilePath->getPath(),
@@ -932,7 +929,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionBound) {
           std::fopen(deleteFilePath->getPath().c_str(), "r")),
       {},
       {},
-      {{posColumn->id, "-1"}});
+      {{posColumn->id, "2"}});
 
   auto plan = PlanBuilder()
                   .startTableScan()
@@ -941,13 +938,30 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionBound) {
                   .endTableScan()
                   .planNode();
 
-  // All 100 rows should be returned because the delete file was skipped
-  // completely.
-  assertQuery(
-      plan,
-      makeIcebergSplits(dataFilePath->getPath(), {deleteFile}),
-      "SELECT * FROM tmp",
-      0);
+  // Create a split that starts at the middle of the file. The split offset
+  // will be greater than the delete file's upper bound (2), so the delete
+  // file should be skipped completely.
+  auto file = filesystems::getFileSystem(dataFilePath->getPath(), nullptr)
+                  ->openFileForRead(dataFilePath->getPath());
+  const int64_t fileSize = file->size();
+  std::vector<IcebergDeleteFile> deleteFiles = {deleteFile};
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      dataFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      static_cast<uint64_t>(fileSize / 2),
+      static_cast<uint64_t>(fileSize / 2),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      std::shared_ptr<std::string>{},
+      true,
+      deleteFiles);
+
+  // The second half of the file should be returned with no rows deleted.
+  createDuckDbTable({makeRowVector(
+      {makeFlatVector<int64_t>(makeContinuousIncreasingValues(50, 50))})});
+  assertQuery(plan, {split}, "SELECT * FROM tmp", 0);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
