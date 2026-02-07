@@ -59,18 +59,18 @@ static constexpr uint32_t kDefaultPageHeaderSize = 16 * 1024;
 
 // \brief DataPageStats stores encoded statistics and number of values/rows for.
 // A page.
-struct PARQUET_EXPORT dataPageStats {
-  dataPageStats(
-      const EncodedStatistics* EncodedStatistics,
+struct PARQUET_EXPORT DataPageStats {
+  DataPageStats(
+      const EncodedStatistics* encodedStatistics,
       int32_t numValues,
       std::optional<int32_t> numRows)
-      : EncodedStatistics(EncodedStatistics),
+      : encodedStatistics(encodedStatistics),
         numValues(numValues),
         numRows(numRows) {}
 
   // Encoded statistics extracted from the page header.
   // Nullptr if there are no statistics in the page header.
-  const EncodedStatistics* EncodedStatistics;
+  const EncodedStatistics* encodedStatistics;
   // Number of values stored in the page. Filled for both V1 and V2 data pages.
   // For repeated fields, this can be greater than number of rows. For.
   // Non-repeated fields, this will be the same as the number of rows.
@@ -136,7 +136,7 @@ struct CryptoContext {
 // Abstract page iterator interface. This way, we can feed column pages to the.
 // ColumnReader through whatever mechanism we choose.
 class PARQUET_EXPORT PageReader {
-  using DataPageFilter = std::function<bool(const dataPageStats&)>;
+  using DataPageFilter = std::function<bool(const DataPageStats&)>;
 
  public:
   virtual ~PageReader() = default;

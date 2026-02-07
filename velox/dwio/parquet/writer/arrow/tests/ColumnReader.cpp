@@ -409,7 +409,7 @@ bool SerializedPageReader::shouldSkipPage(
     if (dataPageFilter_) {
       const EncodedStatistics* filterStatistics =
           dataPageStatistics->isSet() ? dataPageStatistics : nullptr;
-      dataPageStats dataPageStats(
+      DataPageStats dataPageStats(
           filterStatistics,
           header.num_values,
           /*num_rows=*/std::nullopt);
@@ -434,7 +434,7 @@ bool SerializedPageReader::shouldSkipPage(
     if (dataPageFilter_) {
       const EncodedStatistics* filterStatistics =
           dataPageStatistics->isSet() ? dataPageStatistics : nullptr;
-      dataPageStats dataPageStats(
+      DataPageStats dataPageStats(
           filterStatistics, header.num_values, header.num_rows);
       if (dataPageFilter_(dataPageStats)) {
         return true;

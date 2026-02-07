@@ -507,8 +507,8 @@ TYPED_TEST(PageFilterTest, TestPageWithoutStatistics) {
 
   int numPages = 0;
   bool isStatsNull = false;
-  auto readAllPages = [&](const dataPageStats& stats) -> bool {
-    isStatsNull = stats.EncodedStatistics == nullptr;
+  auto readAllPages = [&](const DataPageStats& stats) -> bool {
+    isStatsNull = stats.encodedStatistics == nullptr;
     ++numPages;
     return false;
   };
@@ -535,9 +535,9 @@ TYPED_TEST(PageFilterTest, TestPageFilterCallback) {
     std::vector<EncodedStatistics> readStats;
     std::vector<int64_t> readNumValues;
     std::vector<std::optional<int32_t>> readNumRows;
-    auto readAllPages = [&](const dataPageStats& stats) -> bool {
-      VELOX_DCHECK_NOT_NULL(stats.EncodedStatistics);
-      readStats.push_back(*stats.EncodedStatistics);
+    auto readAllPages = [&](const DataPageStats& stats) -> bool {
+      VELOX_DCHECK_NOT_NULL(stats.encodedStatistics);
+      readStats.push_back(*stats.encodedStatistics);
       readNumValues.push_back(stats.numValues);
       readNumRows.push_back(stats.numRows);
       return false;
@@ -566,7 +566,7 @@ TYPED_TEST(PageFilterTest, TestPageFilterCallback) {
     this->pageReader_ =
         PageReader::open(stream, this->totalRows_, Compression::UNCOMPRESSED);
 
-    auto skipAllPages = [](const dataPageStats& stats) -> bool { return true; };
+    auto skipAllPages = [](const DataPageStats& stats) -> bool { return true; };
 
     this->pageReader_->setDataPageFilter(skipAllPages);
     std::shared_ptr<Page> currentPage = this->pageReader_->nextPage();
@@ -579,7 +579,7 @@ TYPED_TEST(PageFilterTest, TestPageFilterCallback) {
         PageReader::open(stream, this->totalRows_, Compression::UNCOMPRESSED);
 
     // Skip pages with even number of values.
-    auto skipEvenPages = [](const dataPageStats& stats) -> bool {
+    auto skipEvenPages = [](const DataPageStats& stats) -> bool {
       if (stats.numValues % 2 == 0)
         return true;
       return false;
@@ -611,7 +611,7 @@ TYPED_TEST(PageFilterTest, TestChangingPageFilter) {
       PageReader::open(stream, this->totalRows_, Compression::UNCOMPRESSED);
 
   // This callback will always return false.
-  auto readAllPages = [](const dataPageStats& stats) -> bool { return false; };
+  auto readAllPages = [](const DataPageStats& stats) -> bool { return false; };
   this->pageReader_->setDataPageFilter(readAllPages);
   std::shared_ptr<Page> currentPage = this->pageReader_->nextPage();
   ASSERT_NE(currentPage, nullptr);
@@ -619,7 +619,7 @@ TYPED_TEST(PageFilterTest, TestChangingPageFilter) {
       checkDataPageHeader(this->dataPageHeaders_[0], currentPage.get()));
 
   // This callback will skip all pages.
-  auto skipAllPages = [](const dataPageStats& stats) -> bool { return true; };
+  auto skipAllPages = [](const DataPageStats& stats) -> bool { return true; };
   this->pageReader_->setDataPageFilter(skipAllPages);
   ASSERT_EQ(this->pageReader_->nextPage(), nullptr);
 }
@@ -646,7 +646,7 @@ TEST_F(TestPageSerde, DoesNotFilterDictionaryPages) {
   pageReader_ =
       PageReader::open(stream, /*num_rows=*/100, Compression::UNCOMPRESSED);
 
-  auto skipAllPages = [](const dataPageStats& stats) -> bool { return true; };
+  auto skipAllPages = [](const DataPageStats& stats) -> bool { return true; };
 
   pageReader_->setDataPageFilter(skipAllPages);
   // The first data page is skipped, so we are now at the dictionary page.
