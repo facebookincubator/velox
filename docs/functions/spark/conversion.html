@@ -215,7 +215,26 @@ or returns NULL when ANSI mode is disabled.</p>
 <section id="cast-to-string">
 <h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
 <section id="id1">
-<h3>From TIMESTAMP<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<h3>From DECIMAL<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<p><em>(ANSI compliant)</em></p>
+<p>Casting a DECIMAL to STRING returns a plain decimal value.
+Scientific notation is not used.
+The scale is preserved and trailing zeros are kept.
+The conversion always succeeds with identical results for both ANSI ON and OFF modes.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">1.00</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1.00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">12.30</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;12.30&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">0.00000012</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0.00000012&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">1.00</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-1.00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">123456789.123456789</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">9</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123456789.123456789&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">0.00</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0.00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">999.99</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;999.99&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">0.01</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-0.01&#39;</span>
+</pre></div>
+</div>
+</section>
+<section id="id2">
+<h3>From TIMESTAMP<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <p>Casting a timestamp to a string returns ISO 8601 format with space as separator between date and time,
 and the year part is padded with zeros to 4 characters.
 The conversion precision is microsecond, and trailing zeros are not appended.
@@ -234,8 +253,8 @@ When the year exceeds 9999, a positive sign is added.</p>
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
-<section id="id2">
-<h3>From strings<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h3>From strings<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>All Spark supported patterns are allowed:</p>
 <blockquote>
@@ -278,8 +297,8 @@ When ANSI mode is disabled, casting from invalid input values returns NULL.</p>
 </section>
 <section id="cast-to-decimal">
 <h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading">¶</a></h2>
-<section id="id3">
-<h3>From varchar<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<section id="id4">
+<h3>From varchar<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.</p>
 <p>Valid example</p>
@@ -295,8 +314,8 @@ The behavior is similar with Presto except Spark allows leading and trailing whi
 </section>
 <section id="cast-to-varbinary">
 <h2>Cast to Varbinary<a class="headerlink" href="#cast-to-varbinary" title="Link to this heading">¶</a></h2>
-<section id="id4">
-<h3>From integral types<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>From integral types<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to varbinary type is allowed.
 Bytes of input value are converted into an array of bytes in little-endian order.
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -311,8 +330,8 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to Timestamp<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
-<section id="id5">
-<h3>From integral types<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<section id="id6">
+<h3>From integral types<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to timestamp type is allowed.
 The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -324,8 +343,8 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </pre></div>
 </div>
 </section>
-<section id="id6">
-<h3>From floating-point types<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>From floating-point types<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <p>Casting from floating-point input to timestamp type is allowed.
 The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds by truncating the fractional part.</p>
 <p>Valid examples</p>
@@ -383,24 +402,25 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
-<li><a class="reference internal" href="#id1">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id1">From DECIMAL</a></li>
+<li><a class="reference internal" href="#id2">From TIMESTAMP</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id2">From strings</a></li>
+<li><a class="reference internal" href="#id3">From strings</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
-<li><a class="reference internal" href="#id3">From varchar</a></li>
+<li><a class="reference internal" href="#id4">From varchar</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-varbinary">Cast to Varbinary</a><ul>
-<li><a class="reference internal" href="#id4">From integral types</a></li>
+<li><a class="reference internal" href="#id5">From integral types</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
-<li><a class="reference internal" href="#id5">From integral types</a></li>
-<li><a class="reference internal" href="#id6">From floating-point types</a></li>
+<li><a class="reference internal" href="#id6">From integral types</a></li>
+<li><a class="reference internal" href="#id7">From floating-point types</a></li>
 <li><a class="reference internal" href="#from-boolean">From boolean</a></li>
 </ul>
 </li>

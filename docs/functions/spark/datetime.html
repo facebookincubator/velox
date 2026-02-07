@@ -347,6 +347,19 @@ e.g., make_ym_interval(178956970, 8).</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="monthname">
+<span class="sig-name descname"><span class="pre">monthname</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#monthname" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the three-letter abbreviated month name for the given <code class="docutils literal notranslate"><span class="pre">date</span></code>.
+Possible values: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">monthname</span><span class="p">(</span><span class="s1">&#39;2008-02-20&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Feb&#39;</span>
+<span class="n">SELECT</span> <span class="n">monthname</span><span class="p">(</span><span class="s1">&#39;2011-05-06&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;May&#39;</span>
+<span class="n">SELECT</span> <span class="n">monthname</span><span class="p">(</span><span class="s1">&#39;2023-08-20&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Aug&#39;</span>
+<span class="n">SELECT</span> <span class="n">monthname</span><span class="p">(</span><span class="s1">&#39;1582-10-15&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Oct&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="months_between">
 <span class="sig-name descname"><span class="pre">months_between</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestamp2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">roundOff</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#months_between" title="Link to this definition">¶</a></dt>
 <dd><p>Returns number of months between times <code class="docutils literal notranslate"><span class="pre">timestamp1</span></code> and <code class="docutils literal notranslate"><span class="pre">timestamp2</span></code>.
@@ -724,6 +737,7 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#make_ym_interval"><code class="docutils literal notranslate"><span class="pre">make_ym_interval()</span></code></a></li>
 <li><a class="reference internal" href="#minute"><code class="docutils literal notranslate"><span class="pre">minute()</span></code></a></li>
 <li><a class="reference internal" href="#month"><code class="docutils literal notranslate"><span class="pre">month()</span></code></a></li>
+<li><a class="reference internal" href="#monthname"><code class="docutils literal notranslate"><span class="pre">monthname()</span></code></a></li>
 <li><a class="reference internal" href="#months_between"><code class="docutils literal notranslate"><span class="pre">months_between()</span></code></a></li>
 <li><a class="reference internal" href="#next_day"><code class="docutils literal notranslate"><span class="pre">next_day()</span></code></a></li>
 <li><a class="reference internal" href="#quarter"><code class="docutils literal notranslate"><span class="pre">quarter()</span></code></a></li>
