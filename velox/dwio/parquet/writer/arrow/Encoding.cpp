@@ -94,8 +94,8 @@ std::shared_ptr<ResizableBuffer> allocateBuffer(
   return std::move(result);
 }
 
-// The Parquet spec isn't very clear whether ByteArray lengths are signed or.
-// Unsigned, but the Java implementation uses signed ints.
+// The Parquet spec isn't very clear whether ByteArray lengths are signed or
+// unsigned, but the Java implementation uses signed ints.
 constexpr size_t kMaxByteArraySize = std::numeric_limits<int32_t>::max();
 
 class EncoderImpl : virtual public Encoder {
@@ -469,20 +469,20 @@ static constexpr int32_t kInitialHashTableSize = 1 << 10;
 
 int rlePreserveBufferSize(int numValues, int bitWidth) {
   // Note: because of the way RleEncoder::CheckBufferFull()
-  // Is called, we have to Reserve an extra "RleEncoder::MinBufferSize".
-  // Bytes. These extra bytes won't be used but not reserving them.
-  // Would cause the encoder to fail.
+  // is called, we have to Reserve an extra "RleEncoder::MinBufferSize"
+  // bytes. These extra bytes won't be used but not reserving them
+  // would cause the encoder to fail.
   return RleEncoder::MaxBufferSize(bitWidth, numValues) +
       RleEncoder::MinBufferSize(bitWidth);
 }
 
-/// See the dictionary encoding section of.
+/// See the dictionary encoding section of
 /// https://github.com/Parquet/parquet-format.  The encoding supports
-/// Streaming encoding. Values are encoded as they are added while the.
-/// Dictionary is being constructed. At any time, the buffered values.
-/// Can be written out with the current dictionary size. More values.
-/// Can then be added to the encoder, including new dictionary.
-/// Entries.
+/// streaming encoding. Values are encoded as they are added while the
+/// dictionary is being constructed. At any time, the buffered values
+/// can be written out with the current dictionary size. More values
+/// can then be added to the encoder, including new dictionary
+/// entries.
 template <typename DType>
 class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
   using MemoTableType = typename DictEncoderTraits<DType>::MemoTableType;
@@ -490,8 +490,8 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
  public:
   typedef typename DType::CType T;
 
-  /// In data page, the bit width used to encode the entry.
-  /// Ids stored as 1 byte (max bit width = 32).
+  /// In data page, the bit width used to encode the entry
+  /// ids stored as 1 byte (max bit width = 32).
   constexpr static int32_t kDataPageBitWidthBytes = 1;
 
   explicit DictEncoderImpl(const ColumnDescriptor* desc, MemoryPool* pool)
@@ -528,8 +528,8 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
     this->typeLength_ = typeLength;
   }
 
-  /// Returns a conservative estimate of the number of bytes needed to encode.
-  /// The buffered indices. Used to size the buffer passed to WriteIndices().
+  /// Returns a conservative estimate of the number of bytes needed to encode
+  /// the buffered indices. Used to size the buffer passed to WriteIndices().
   int64_t estimatedDataEncodedSize() override {
     return kDataPageBitWidthBytes +
         rlePreserveBufferSize(
@@ -545,8 +545,8 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
     return ::arrow::bit_util::Log2(numEntries());
   }
 
-  /// Encode value. Note that this does not actually write any data, just.
-  /// Buffers the value's index to be written later.
+  /// Encode value. Note that this does not actually write any data, just
+  /// buffers the value's index to be written later.
   inline void put(const T& value);
 
   // Not implemented for other data types.
@@ -626,8 +626,8 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
     return std::move(buffer);
   }
 
-  /// Writes out the encoded dictionary to buffer. buffer must be preallocated.
-  /// To dict_encoded_size() bytes.
+  /// Writes out the encoded dictionary to buffer. buffer must be preallocated
+  /// to dict_encoded_size() bytes.
   void writeDict(uint8_t* buffer) const override;
 
   /// The number of entries in the dictionary.

@@ -147,7 +147,7 @@ std::shared_ptr<Statistics> makeColumnStats(
       break;
   }
   throw ParquetException(
-      "Can't decode page statistics for selected column type");
+      "Can't decode page statistics for selected column type.");
 }
 
 // MetaData Accessor.
@@ -253,7 +253,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
         } else {
           throw ParquetException(
               "Cannot decrypt ColumnMetadata."
-              " FileDecryption is not setup correctly");
+              " FileDecryption is not setup correctly.");
         }
       }
     }
@@ -299,8 +299,8 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
   // 2) Statistics must not be corrupted.
   inline bool isStatsSet() const {
     VELOX_DCHECK_NOT_NULL(writerVersion_);
-    // If the column statistics don't exist or column sort order is unknown.
-    // We cannot use the column stats.
+    // If the column statistics don't exist or column sort order is unknown,
+    // we cannot use the column stats.
     if (!columnMetadata_->__isset.statistics ||
         descr_->sortOrder() == SortOrder::kUnknown) {
       return false;
@@ -781,7 +781,7 @@ class FileMetaData::FileMetaDataImpl {
     // Verify decryption properties are set.
     if (fileDecryptor_ == nullptr) {
       throw ParquetException(
-          "Decryption not set properly. cannot verify signature");
+          "Decryption not set properly. Cannot verify signature.");
     }
     // Serialize the footer.
     uint8_t* serializedData;
@@ -1655,14 +1655,14 @@ bool ApplicationVersion::versionEq(
 }
 
 // Reference:
-// Parquet-mr/parquet-column/src/main/java/org/apache/parquet/Corruptstatistics.java.
+// Parquet-mr/parquet-column/src/main/java/org/apache/parquet/CorruptStatistics.java.
 // PARQUET-686 has more discussion on statistics.
 bool ApplicationVersion::hasCorrectStatistics(
     Type::type colType,
     EncodedStatistics& statistics,
     SortOrder::type sortOrder) const {
-  // Parquet-cpp version 1.3.0 and parquet-mr 1.10.0 onwards stats are computed.
-  // Correctly for all types.
+  // Parquet-cpp version 1.3.0 and parquet-mr 1.10.0 onwards stats are computed
+  // correctly for all types.
   if ((application_ == "parquet-cpp" &&
        versionLt(PARQUET_CPP_FIXED_STATS_VERSION())) ||
       (application_ == "parquet-mr" &&
@@ -1681,7 +1681,7 @@ bool ApplicationVersion::hasCorrectStatistics(
       return true;
     }
   }
-  // Created_by is not populated, which could have been caused by.
+  // Created_by is not populated, which could have been caused by
   // Parquet-mr during the same time as PARQUET-251, see PARQUET-297.
   if (application_ == "unknown") {
     return true;
@@ -1795,7 +1795,7 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
         facebook::velox::parquet::thrift::PageEncodingStats dictEncStat;
         dictEncStat.__set_page_type(
             facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE);
-        // Dictionary Encoding would be PLAIN_DICTIONARY in v1 and.
+        // Dictionary encoding would be PLAIN_DICTIONARY in v1 and
         // PLAIN in v2.
         facebook::velox::parquet::thrift::Encoding::type dictEncoding =
             toThrift(entry.first);
@@ -1808,8 +1808,8 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     // Always add encoding for RL/DL.
     // BIT_PACKED is supported in `LevelEncoder`, but would only be used.
     // In benchmark and testing.
-    // And for now, we always add RLE even if there are no levels at all,.
-    // While parquet-mr is more fine-grained.
+    // And for now, we always add RLE even if there are no levels at all,
+    // while parquet-mr is more fine-grained.
     addEncoding(facebook::velox::parquet::thrift::Encoding::RLE);
     // Add data page encoding stats.
     for (const auto& entry : dataEncodingStats) {
@@ -1853,9 +1853,9 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
       if (encryptMetadata) {
         ThriftSerializer serializer;
         // Serialize and encrypt ColumnMetadata separately.
-        // Thrift-serialize the ColumnMetaData structure,.
-        // Encrypt it with the column key, and write to.
-        // Encrypted_column_metadata.
+        // Thrift-serialize the ColumnMetaData structure,
+        // encrypt it with the column key, and write to
+        // encrypted_column_metadata.
         uint8_t* serializedData;
         uint32_t serializedLen;
 
@@ -2061,8 +2061,8 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
       if (i == 0) {
         const facebook::velox::parquet::thrift::ColumnMetaData& firstCol =
             rowGroup_->columns[0].meta_data;
-        // As per spec, file_offset for the row group points to the first.
-        // Dictionary or data page of the column.
+        // As per spec, file_offset for the row group points to the first
+        // dictionary or data page of the column.
         if (firstCol.__isset.dictionary_page_offset &&
             firstCol.dictionary_page_offset > 0) {
           fileOffset = firstCol.dictionary_page_offset;
@@ -2070,8 +2070,8 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
           fileOffset = firstCol.data_page_offset;
         }
       }
-      // Sometimes column metadata is encrypted and not available to read,.
-      // So we must get total_compressed_size from column builder.
+      // Sometimes column metadata is encrypted and not available to read,
+      // so we must get total_compressed_size from column builder.
       total_compressed_size += columnBuilders_[i]->totalCompressedSize();
     }
 
@@ -2175,7 +2175,7 @@ RowGroupMetaDataBuilder::nanCounts() const {
   return impl_->nanCounts();
 }
 
-// file metadata.
+// File metadata.
 class FileMetaDataBuilder::FileMetaDataBuilderImpl {
  public:
   explicit FileMetaDataBuilderImpl(
@@ -2280,11 +2280,11 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
     metadata_->__set_version(fileVersion);
     metadata_->__set_created_by(properties_->createdBy());
 
-    // Users cannot set the `ColumnOrder` since we do not have user defined
-    // sort. Order in the spec yet. We always default to `TYPE_DEFINED_ORDER`.
-    // We can. Expose it in the API once we have user defined sort orders in the
-    // Parquet. Format. TypeDefinedOrder implies choose SortOrder based on.
-    // ConvertedType/PhysicalType.
+    // Users cannot set the `ColumnOrder` since we do not have user-defined
+    // sort order in the spec yet. We always default to `TYPE_DEFINED_ORDER`.
+    // We can expose it in the API once we have user-defined sort orders in the
+    // Parquet format. TypeDefinedOrder implies choose SortOrder based on
+    // convertedType/physicalType.
     facebook::velox::parquet::thrift::TypeDefinedOrder typeDefinedOrder;
     facebook::velox::parquet::thrift::ColumnOrder columnOrder;
     columnOrder.__set_TYPE_ORDER(typeDefinedOrder);

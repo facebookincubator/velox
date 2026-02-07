@@ -37,9 +37,9 @@ static constexpr uint8_t kParquetEMagic[4] = {'P', 'A', 'R', 'E'};
 
 class PARQUET_EXPORT RowGroupWriter {
  public:
-  // Forward declare a virtual class 'Contents' to aid dependency injection and.
-  // More easily create test fixtures An implementation of the Contents class
-  // is. Defined in the .cc file.
+  // Forward declare a virtual class 'Contents' to aid dependency injection and
+  // more easily create test fixtures. An implementation of the Contents class
+  // is defined in the .cpp file.
   struct Contents {
     virtual ~Contents() = default;
     virtual int numColumns() const = 0;
@@ -53,13 +53,13 @@ class PARQUET_EXPORT RowGroupWriter {
     virtual int currentColumn() const = 0;
     virtual void close() = 0;
 
-    /// \brief total uncompressed bytes written by the page writer.
+    /// \brief Total uncompressed bytes written by the page writer.
     virtual int64_t totalBytesWritten() const = 0;
-    /// \brief total bytes still compressed but not written by the page writer.
+    /// \brief Total bytes still compressed but not written by the page writer.
     virtual int64_t totalCompressedBytes() const = 0;
-    /// \brief total compressed bytes written by the page writer.
+    /// \brief Total compressed bytes written by the page writer.
     virtual int64_t totalCompressedBytesWritten() const = 0;
-    /// \brief estimated size of the values that are not written to a page yet.
+    /// \brief Estimated size of the values that are not written to a page yet.
     virtual int64_t estimatedBufferedValueBytes() const = 0;
 
     virtual bool buffered() const = 0;
@@ -67,27 +67,27 @@ class PARQUET_EXPORT RowGroupWriter {
 
   explicit RowGroupWriter(std::unique_ptr<Contents> contents);
 
-  /// Construct a columnWriter for the indicated row group-relative column.
+  /// Construct a ColumnWriter for the indicated row group-relative column.
   ///
-  /// To be used only with ParquetFileWriter::AppendRowGroup.
-  /// Ownership is solely within the RowGroupWriter. The columnWriter is only.
-  /// Valid until the next call to NextColumn or Close. As the contents are.
-  /// Directly written to the sink, once a new column is started, the contents.
-  /// Of the previous one cannot be modified anymore.
+  /// To be used only with ParquetFileWriter::appendRowGroup().
+  /// Ownership is solely within the RowGroupWriter. The ColumnWriter is only
+  /// valid until the next call to nextColumn() or close(). As the contents are
+  /// directly written to the sink, once a new column is started, the contents
+  /// of the previous one cannot be modified anymore.
   ColumnWriter* nextColumn();
-  /// Index of currently written column. Equal to -1 if NextColumn()
-  /// Has not been called yet.
+  /// Index of currently written column. Equal to -1 if nextColumn()
+  /// has not been called yet.
   int currentColumn();
   void close();
 
   int numColumns() const;
 
-  /// Construct a columnWriter for the indicated row group column.
+  /// Construct a ColumnWriter for the indicated row group column.
   ///
-  /// To be used only with ParquetFileWriter::AppendBufferedRowGroup.
-  /// Ownership is solely within the RowGroupWriter. The columnWriter is.
-  /// Valid until Close. The contents are buffered in memory and written to
-  /// sink. On Close.
+  /// To be used only with ParquetFileWriter::appendBufferedRowGroup().
+  /// Ownership is solely within the RowGroupWriter. The ColumnWriter is
+  /// valid until close(). The contents are buffered in memory and written to
+  /// sink on close().
   ColumnWriter* column(int i);
 
   /**
@@ -95,18 +95,18 @@ class PARQUET_EXPORT RowGroupWriter {
    */
   int64_t numRows() const;
 
-  /// \brief total uncompressed bytes written by the page writer.
+  /// \brief Total uncompressed bytes written by the page writer.
   int64_t totalBytesWritten() const;
-  /// \brief total bytes still compressed but not written by the page writer.
+  /// \brief Total bytes still compressed but not written by the page writer.
   /// It will always return 0 from the SerializedPageWriter.
   int64_t totalCompressedBytes() const;
-  /// \brief total compressed bytes written by the page writer.
+  /// \brief Total compressed bytes written by the page writer.
   int64_t totalCompressedBytesWritten() const;
-  /// \brief including compressed bytes in page writer and uncompressed data
+  /// \brief Including compressed bytes in page writer and uncompressed data
   /// value buffer.
   int64_t totalBufferedBytes() const;
-  /// Returns whether the current rowGroupWriter is in the buffered mode and is.
-  /// Created by calling ParquetFileWriter::AppendBufferedRowGroup.
+  /// Returns whether the current RowGroupWriter is in the buffered mode and is
+  /// created by calling ParquetFileWriter::appendBufferedRowGroup().
   bool buffered() const;
 
  private:
@@ -128,14 +128,14 @@ PARQUET_EXPORT
 void writeEncryptedFileMetadata(
     const FileMetaData& fileMetadata,
     ArrowOutputStream* sink,
-    const std::shared_ptr<Encryptor>& Encryptor,
+    const std::shared_ptr<Encryptor>& encryptor,
     bool encryptFooter);
 
 PARQUET_EXPORT
 void writeEncryptedFileMetadata(
     const FileMetaData& fileMetadata,
     ::arrow::io::OutputStream* sink,
-    const std::shared_ptr<Encryptor>& Encryptor = NULLPTR,
+    const std::shared_ptr<Encryptor>& encryptor = NULLPTR,
     bool encryptFooter = false);
 PARQUET_EXPORT
 void writeFileCryptoMetaData(
@@ -144,9 +144,9 @@ void writeFileCryptoMetaData(
 
 class PARQUET_EXPORT ParquetFileWriter {
  public:
-  // Forward declare a virtual class 'Contents' to aid dependency injection and.
-  // More easily create test fixtures An implementation of the Contents class
-  // is. Defined in the .cc file.
+  // Forward declare a virtual class 'Contents' to aid dependency injection and
+  // more easily create test fixtures. An implementation of the Contents class
+  // is defined in the .cpp file.
   struct Contents {
     Contents(
         std::shared_ptr<schema::GroupNode> schema,
@@ -177,8 +177,8 @@ class PARQUET_EXPORT ParquetFileWriter {
     virtual void addKeyValueMetadata(
         const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata) = 0;
 
-    // Return const-pointer to make it clear that this object is not to be.
-    // Copied.
+    // Return const pointer to make it clear that this object is not to be
+    // copied.
     const SchemaDescriptor* schema() const {
       return &schema_;
     }
@@ -186,7 +186,7 @@ class PARQUET_EXPORT ParquetFileWriter {
     SchemaDescriptor schema_;
 
     /// This should be the only place this is stored. Everything else is a
-    /// const. Reference.
+    /// const reference.
     std::shared_ptr<const KeyValueMetadata> keyValueMetadata_;
 
     const std::shared_ptr<FileMetaData>& metadata() const {
@@ -207,43 +207,43 @@ class PARQUET_EXPORT ParquetFileWriter {
   void open(std::unique_ptr<Contents> contents);
   void close();
 
-  // Construct a rowGroupWriter for the indicated number of rows.
+  // Construct a RowGroupWriter for the indicated number of rows.
   //
-  // Ownership is solely within the ParquetFileWriter. The rowGroupWriter is.
-  // Only valid until the next call to AppendRowGroup or AppendBufferedRowGroup.
-  // Or Close.
-  // @param num_rows The number of rows that are stored in the new RowGroup.
+  // Ownership is solely within the ParquetFileWriter. The RowGroupWriter is
+  // only valid until the next call to appendRowGroup() or
+  // appendBufferedRowGroup() or close().
+  // @param numRows The number of rows that are stored in the new RowGroup.
   //
   // \deprecated Since 1.3.0.
   RowGroupWriter* appendRowGroup(int64_t numRows);
 
-  /// Construct a rowGroupWriter with an arbitrary number of rows.
+  /// Construct a RowGroupWriter with an arbitrary number of rows.
   ///
-  /// Ownership is solely within the ParquetFileWriter. The rowGroupWriter is.
-  /// Only valid until the next call to AppendRowGroup or
-  /// AppendBufferedRowGroup. Or Close.
+  /// Ownership is solely within the ParquetFileWriter. The RowGroupWriter is
+  /// only valid until the next call to appendRowGroup() or
+  /// appendBufferedRowGroup() or close().
   RowGroupWriter* appendRowGroup();
 
-  /// Construct a rowGroupWriter that buffers all the values until the RowGroup.
-  /// Is ready. Use this if you want to write a RowGroup based on a certain
+  /// Construct a RowGroupWriter that buffers all the values until the RowGroup
+  /// is ready. Use this if you want to write a RowGroup based on a certain
   /// size.
   ///
-  /// Ownership is solely within the ParquetFileWriter. The rowGroupWriter is.
-  /// Only valid until the next call to AppendRowGroup or
-  /// AppendBufferedRowGroup. Or Close.
+  /// Ownership is solely within the ParquetFileWriter. The RowGroupWriter is
+  /// only valid until the next call to appendRowGroup() or
+  /// appendBufferedRowGroup() or close().
   RowGroupWriter* appendBufferedRowGroup();
 
   /// \brief Add key-value metadata to the file.
-  /// \param[in] key_value_metadata the metadata to add.
+  /// \param[in] keyValueMetadata the metadata to add.
   /// \note This will overwrite any existing metadata with the same key.
-  /// \throw ParquetException if Close() has been called.
+  /// \throw ParquetException if close() has been called.
   void addKeyValueMetadata(
       const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata);
 
   /// Number of columns.
   ///
   /// This number is fixed during the lifetime of the writer as it is
-  /// determined. Via the schema.
+  /// determined via the schema.
   int numColumns() const;
 
   /// Number of rows in the yet started RowGroups.
@@ -266,7 +266,7 @@ class PARQUET_EXPORT ParquetFileWriter {
   /// Returns the file custom metadata.
   const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata() const;
 
-  /// Returns the file metadata, only available after calling Close().
+  /// Returns the file metadata, only available after calling close().
   const std::shared_ptr<FileMetaData> metadata() const;
 
  private:

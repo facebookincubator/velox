@@ -79,7 +79,7 @@ std::shared_ptr<ResizableBuffer> allocateBuffer(
   return std::move(result);
 }
 
-// ----------------------------------------------------------------------.
+// ----------------------------------------------------------------------
 // Comparator implementations.
 
 constexpr int valueLength(int valueLength, const ByteArray& value) {
@@ -110,8 +110,8 @@ struct CompareHelper {
     return std::numeric_limits<T>::min();
   }
 
-  // MSVC17 fix, isnan is not overloaded for IntegralType as per C++11.
-  // Standard requirements.
+  // MSVC17 fix, isnan is not overloaded for IntegralType as per C++11
+  // standard requirements.
   template <typename T1 = T>
   static ::arrow::enable_if_t<std::is_floating_point<T1>::value, T> coalesce(
       T val,
@@ -146,13 +146,12 @@ struct UnsignedCompareHelperBase {
   static_assert(!std::is_same<T, UCType>::value, "T is unsigned");
   static_assert(sizeof(T) == sizeof(UCType), "T and UCType not the same size");
 
-  // NOTE: according to the C++ spec, unsigned-to-signed conversion is.
-  // Implementation-defined if the original value does not fit in the signed.
-  // Type (i.e., two's complement cannot be assumed even on mainstream
-  // machines,. Because the compiler may decide otherwise).  Hence the use of
-  // `SafeCopy`. Below for deterministic bit-casting. (See "Integer conversions"
-  // in.
-  //  https://en.cppreference.com/w/cpp/language/implicit_conversion)
+  // NOTE: According to the C++ spec, unsigned-to-signed conversion is
+  // implementation-defined if the original value does not fit in the signed
+  // type (i.e., two's complement cannot be assumed even on mainstream
+  // machines, because the compiler may decide otherwise).  Hence the use of
+  // `safeCopy` below for deterministic bit-casting. (See "Integer conversions"
+  // in https://en.cppreference.com/w/cpp/language/implicit_conversion).
 
   static const T defaultMin() {
     return safeCopy<T>(std::numeric_limits<UCType>::max());
@@ -206,8 +205,8 @@ struct CompareHelper<Int96Type, isSigned> {
 
   static inline bool compare(int typeLength, const T& a, const T& b) {
     if (a.value[2] != b.value[2]) {
-      // Only the MSB bit is by Signed comparison. For little-endian, this is.
-      // The last bit of Int96 type.
+      // Only the MSB bit is by signed comparison. For little-endian, this is
+      // the last bit of Int96 type.
       return safeCopy<MsbType>(a.value[2]) < safeCopy<MsbType>(b.value[2]);
     } else if (a.value[1] != b.value[1]) {
       return (a.value[1] < b.value[1]);
@@ -231,8 +230,8 @@ struct BinaryLikeComparer<T, /*is_signed=*/false> {
   static bool compare(int typeLength, const T& a, const T& b) {
     int aLength = valueLength(typeLength, a);
     int bLength = valueLength(typeLength, b);
-    // Unsigned comparison is used for non-numeric types so straight.
-    // Lexicographic comparison makes sense. (a.ptr is always unsigned)....
+    // Unsigned comparison is used for non-numeric types so straight
+    // lexicographic comparison makes sense (a.ptr is always unsigned).
     return std::lexicographical_compare(
         a.ptr, a.ptr + aLength, b.ptr, b.ptr + bLength);
   }
@@ -241,8 +240,8 @@ struct BinaryLikeComparer<T, /*is_signed=*/false> {
 template <typename T>
 struct BinaryLikeComparer<T, /*is_signed=*/true> {
   static bool compare(int typeLength, const T& a, const T& b) {
-    // Is signed is used for integers encoded as big-endian twos.
-    // Complement integers. (e.g. decimals).
+    // Is signed is used for integers encoded as big-endian twos
+    // complement integers (e.g., decimals).
     int aLength = valueLength(typeLength, a);
     int bLength = valueLength(typeLength, b);
 
@@ -253,18 +252,18 @@ struct BinaryLikeComparer<T, /*is_signed=*/true> {
 
     int8_t firstA = *a.ptr;
     int8_t firstB = *b.ptr;
-    // We can short circuit for different signed numbers or.
-    // For equal length bytes arrays that have different first bytes.
+    // We can short circuit for different signed numbers or
+    // for equal length bytes arrays that have different first bytes.
     // The equality requirement is necessary for sign extension cases.
-    // 0XFF10 should be equal to 0x10 (due to big endian sign extension).
+    // 0xff10 should be equal to 0x10 (due to big-endian sign extension).
     if ((0x80 & firstA) != (0x80 & firstB) ||
         (aLength == bLength && firstA != firstB)) {
       return firstA < firstB;
     }
-    // When the lengths are unequal and the numbers are of the same.
-    // Sign we need to do comparison by sign extending the shorter.
-    // Value first, and once we get to equal sized arrays, lexicographical.
-    // Unsigned comparison of everything but the first byte is sufficient.
+    // When the lengths are unequal and the numbers are of the same
+    // sign we need to do comparison by sign extending the shorter
+    // value first, and once we get to equal sized arrays, lexicographical
+    // unsigned comparison of everything but the first byte is sufficient.
     const uint8_t* aStart = a.ptr;
     const uint8_t* bStart = b.ptr;
     if (aLength != bLength) {
@@ -282,8 +281,8 @@ struct BinaryLikeComparer<T, /*is_signed=*/true> {
         leadEnd = b.ptr + leadLength;
         bStart += leadLength;
       }
-      // Compare extra bytes to the sign extension of the first.
-      // Byte of the other number.
+      // Compare extra bytes to the sign extension of the first
+      // byte of the other number.
       uint8_t extension = firstA < 0 ? 0xFF : 0;
       bool notEqual = std::any_of(leadStart, leadEnd, [extension](uint8_t a) {
         return extension != a;
@@ -366,8 +365,8 @@ cleanStatistic(std::pair<T, T> minMax) {
   return minMax;
 }
 
-// In case of floating point types, the following rules are applied (as per.
-// Upstream parquet-mr):
+// In case of floating point types, the following rules are applied (as per
+// upstream parquet-mr):
 // - If any of min/max is NaN, return nothing.
 // - If min is infinity and max is -infinity, return nothing.
 // - If min is 0.0f, replace with -0.0f.
@@ -483,9 +482,9 @@ class TypedComparatorImpl : virtual public TypedComparator<DType> {
   int typeLength_;
 };
 
-// ARROW-11675: A hand-written version of GetMinMax(), to work around.
-// What looks like a MSVC code generation bug.
-// This does not seem to be required for GetMinMaxSpaced().
+// ARROW-11675: A hand-written version of getMinMax(), to work around
+// what looks like a MSVC code generation bug.
+// This does not seem to be required for getMinMaxSpaced().
 template <>
 std::pair<int32_t, int32_t>
 TypedComparatorImpl</*is_signed=*/false, Int32Type>::getMinMax(
@@ -571,7 +570,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
  public:
   using T = typename DType::CType;
 
-  // Create an empty stats.
+  // Create an empty statistics.
   TypedStatisticsImpl(const ColumnDescriptor* descr, MemoryPool* pool)
       : descr_(descr),
         pool_(pool),
@@ -704,8 +703,8 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
 
   void merge(const TypedStatistics<DType>& other) override {
     this->numValues_ += other.numValues();
-    // Null_count is always valid when merging page statistics into.
-    // Column chunk statistics.
+    // nullCount is always valid when merging page statistics into
+    // column chunk statistics.
     if (other.hasNullCount()) {
       this->statistics_.nullCount += other.nullCount();
     } else {
@@ -721,12 +720,12 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       statistics_.distinctCount =
           std::max(statistics_.distinctCount, other.distinctCount());
     } else {
-      // Otherwise clear has_distinct_count_ as distinct count cannot be merged.
+      // Otherwise clear hasDistinctCount_ as distinct count cannot be merged.
       this->hasDistinctCount_ = false;
     }
-    // Do not clear min/max here if the other side does not provide.
-    // Min/max which may happen when other is an empty stats or all.
-    // Its values are null and/or NaN.
+    // Do not clear min/max here if the other side does not provide
+    // min/max which may happen when other is an empty stats or all
+    // its values are null and/or NaN.
     if (other.hasMinMax()) {
       setMinMax(other.min(), other.max());
     }
@@ -842,7 +841,7 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     }
     if (hasNullCount()) {
       s.setNullCount(this->nullCount());
-      // Num_values_ is reliable and it means number of non-null values.
+      // numValues_ is reliable and it means the number of non-null values.
       s.allNullValue = numValues_ == 0;
     }
     if (hasDistinctCount()) {
@@ -890,10 +889,10 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   T max_;
   ::arrow::MemoryPool* pool_;
   // Number of non-null values.
-  // Please note that num_values_ is reliable when has_null_count_ is set.
-  // When has_null_count_ is not set, e.g. a page statistics created from.
-  // a statistics thrift message which doesn't have the optional null_count,.
-  // `num_values_` may include null values.
+  // Please note that numValues_ is reliable when hasNullCount_ is set.
+  // When hasNullCount_ is not set, e.g., a page statistics created from
+  // a statistics thrift message which doesn't have the optional nullCount,
+  // `numValues_` may include null values.
   int64_t numValues_ = 0;
   // NaN count is tracked separately since it's not written to the parquet file.
   int64_t nanCount_ = 0;
@@ -922,11 +921,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   }
 
   void resetHasFlags() {
-    // Has_min_max_ will only be set when it meets any valid value.
+    // hasMinMax_ will only be set when it meets any valid value.
     this->hasMinMax_ = false;
-    // has_distinct_count_ will only be set once SetDistinctCount()
-    // Is called because distinct count calculation is not cheap and.
-    // Disabled by default.
+    // hasDistinctCount_ will only be set once setDistinctCount()
+    // is called because distinct count calculation is not cheap and.
+    // disabled by default.
     this->hasDistinctCount_ = false;
     // Null count calculation is cheap and enabled by default.
     this->hasNullCount_ = true;
@@ -977,18 +976,18 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   int64_t countNaNSpaced(
       const T* values,
       int64_t length,
-      const uint8_t* valid_bits,
-      int64_t valid_bits_offset) {
+      const uint8_t* validBits,
+      int64_t validBitsOffset) {
     if constexpr (!std::is_floating_point_v<T>) {
       return 0;
     } else {
       int64_t count = 0;
       ::arrow::internal::VisitSetBitRunsVoid(
-          valid_bits,
-          valid_bits_offset,
+          validBits,
+          validBitsOffset,
           length,
-          [&](int64_t position, int64_t run_length) {
-            for (auto i = 0; i < run_length; i++) {
+          [&](int64_t position, int64_t runLength) {
+            for (auto i = 0; i < runLength; i++) {
               const auto val = safeLoad(values + i + position);
               if (std::isnan(val)) {
                 count++;
@@ -1117,7 +1116,7 @@ void TypedStatisticsImpl<ByteArrayType>::plainDecode(
 
 } // namespace
 
-// ----------------------------------------------------------------------.
+// ----------------------------------------------------------------------
 // Public factory functions.
 
 std::shared_ptr<Comparator> Comparator::make(

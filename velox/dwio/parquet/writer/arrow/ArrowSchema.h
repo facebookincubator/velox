@@ -41,8 +41,8 @@ class WriterProperties;
 
 namespace arrow {
 
-/// \defgroup arrow-to-parquet-schema-conversion Functions to convert an Arrow.
-/// Schema into a Parquet schema.
+/// \defgroup arrow-to-parquet-schema-conversion Functions to convert an Arrow
+/// schema into a Parquet schema.
 ///
 /// @{
 
@@ -68,8 +68,8 @@ PARQUET_EXPORT
 
 /// @}
 
-/// \defgroup parquet-to-arrow-schema-conversion Functions to convert a Parquet.
-/// Schema into an Arrow schema.
+/// \defgroup parquet-to-arrow-schema-conversion Functions to convert a Parquet
+/// schema into an arrow schema.
 ///
 /// @{
 
@@ -93,7 +93,7 @@ PARQUET_EXPORT
 
 /// @}
 
-/// \brief Bridge between an arrow::Field and parquet column indices.
+/// \brief Bridge between an arrow::Field and Parquet column indices.
 struct PARQUET_EXPORT SchemaField {
   std::shared_ptr<::arrow::Field> field;
   std::vector<SchemaField> children;
@@ -110,8 +110,8 @@ struct PARQUET_EXPORT SchemaField {
 
 /// \brief Bridge between a parquet Schema and an arrow Schema.
 ///
-/// Expose parquet columns as a tree structure. Useful traverse and link.
-/// Between arrow's Schema and parquet's Schema.
+/// Expose Parquet columns as a tree structure. Useful to traverse and link
+/// between Arrow and Parquet schemas.
 struct PARQUET_EXPORT SchemaManifest {
   static ::arrow::Status make(
       const SchemaDescriptor* schema,
@@ -149,9 +149,9 @@ struct PARQUET_EXPORT SchemaManifest {
     return it->second;
   }
 
-  /// Coalesce a list of field indices (relative to the equivalent.
-  /// Arrow::Schema) which correspond to the column root (first node below the.
-  /// Parquet schema's root group) of each leaf referenced in column_indices.
+  /// Coalesce a list of field indices (relative to the equivalent
+  /// Arrow schema) which correspond to the column root (first node below the
+  /// Parquet schema's root group) of each leaf referenced in columnIndices.
   ///
   /// For example, for leaves `a.b.c`, `a.b.d.e`, and `i.j.k`.
   /// (Column_indices=[0,1,3]) the roots are `a` and `i` (return=[0,2]).

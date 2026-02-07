@@ -149,16 +149,16 @@ struct ThriftenumTypeTraits<
 
 // If the parquet file is corrupted it is possible the enum value decoded.
 // Will not be in the range of defined values, which is undefined behaviour.
-// This facility prevents this by loading the value as the underlying type.
-// And checking to make sure it is in range.
+// This facility prevents this by loading the value as the underlying type
+// and checking to make sure it is in range.
 
 template <
     typename enumType,
     typename enumTypeRaw = typename std::underlying_type<enumType>::type>
 inline static enumTypeRaw loadenumRaw(const enumType* in) {
   enumTypeRaw rawValue;
-  // Use memcpy(), as a regular cast would be undefined behaviour on invalid.
-  // Values.
+  // Use memcpy(), as a regular cast would be undefined behaviour on invalid
+  // values.
   memcpy(&rawValue, in, sizeof(enumType));
   return rawValue;
 }
@@ -220,8 +220,8 @@ inline typename Parquetenum::type loadenumSafe(const ThriftType* in) {
 inline typename Compression::type loadenumSafe(
     const facebook::velox::parquet::thrift::CompressionCodec::type* in) {
   const auto rawValue = internal::loadenumRaw(in);
-  // Check bounds manually, as Compression::type doesn't have the same values.
-  // As facebook::velox::parquet::thrift::CompressionCodec.
+  // Check bounds manually, as Compression::type doesn't have the same values
+  // as facebook::velox::parquet::thrift::CompressionCodec.
   const auto minValue = static_cast<decltype(rawValue)>(
       facebook::velox::parquet::thrift::CompressionCodec::UNCOMPRESSED);
   const auto maxValue = static_cast<decltype(rawValue)>(
@@ -441,9 +441,9 @@ class ThriftDeserializer {
       : stringSizeLimit_(stringSizeLimit),
         containerSizeLimit_(containerSizeLimit) {}
 
-  // Deserialize a thrift message from buf/len.  buf/len must at least contain.
-  // All the bytes needed to store the thrift message.  On return, len will be.
-  // Set to the actual length of the header.
+  // Deserialize a thrift message from buf/len.  buf/len must at least contain
+  // all the bytes needed to store the thrift message.  On return, len will be
+  // set to the actual length of the header.
   template <class T>
   void deserializeMessage(
       const uint8_t* buf,
@@ -475,9 +475,9 @@ class ThriftDeserializer {
   }
 
  private:
-  // On Thrift 0.14.0+, we want to use TConfiguration to raise the max message.
-  // Size limit (ARROW-13655).  If we wanted to protect against huge messages,.
-  // We could do it ourselves since we know the message size up front.
+  // On Thrift 0.14.0+, we want to use TConfiguration to raise the max message
+  // size limit (ARROW-13655).  If we wanted to protect against huge messages,
+  // we could do it ourselves since we know the message size up front.
   std::shared_ptr<ThriftBuffer> createReadOnlyMemoryBuffer(
       uint8_t* buf,
       uint32_t len) {
@@ -520,8 +520,8 @@ class ThriftDeserializer {
   const int32_t containerSizeLimit_;
 };
 
-/// Utility class to serialize thrift objects to a binary format.  This object.
-/// Should be reused if possible to reuse the underlying memory.
+/// Utility class to serialize thrift objects to a binary format.  This object
+/// should be reused if possible to reuse the underlying memory.
 /// Note: thrift will encode NULLs into the serialized buffer so it is not
 /// valid. To treat it as a string.
 class ThriftSerializer {
@@ -533,8 +533,8 @@ class ThriftSerializer {
   }
 
   /// Serialize obj into a memory buffer.  The result is returned in buffer/len.
-  /// The memory returned is owned by this object and will be invalid when.
-  /// Another object is serialized.
+  /// The memory returned is owned by this object and will be invalid when
+  /// another object is serialized.
   template <class T>
   void serializeToBuffer(const T* obj, uint32_t* len, uint8_t** buffer) {
     serializeObject(obj);

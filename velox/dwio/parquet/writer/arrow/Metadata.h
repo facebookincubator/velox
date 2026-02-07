@@ -55,20 +55,20 @@ using KeyValueMetadata = ::arrow::KeyValueMetadata;
 
 class PARQUET_EXPORT ApplicationVersion {
  public:
-  // Known Versions with Issues.
+  // Known versions with issues.
   static const ApplicationVersion& PARQUET_251_FIXED_VERSION();
   static const ApplicationVersion& PARQUET_816_FIXED_VERSION();
   static const ApplicationVersion& PARQUET_CPP_FIXED_STATS_VERSION();
   static const ApplicationVersion& PARQUET_MR_FIXED_STATS_VERSION();
   static const ApplicationVersion& PARQUET_CPP_10353_FIXED_VERSION();
 
-  // Application that wrote the file. e.g. "IMPALA".
+  // Application that wrote the file, e.g., "IMPALA".
   std::string application_;
   // Build name.
   std::string build_;
 
-  // Version of the application that wrote the file, expressed as.
-  // (<Major>.<minor>.<patch>). Unmatched parts default to 0.
+  // Version of the application that wrote the file, expressed as
+  // (<major>.<minor>.<patch>). Unmatched parts default to 0.
   // "1.2.3"    => {1, 2, 3}
   // "1.2"      => {1, 2, 0}
   // "1.2-cdh5" => {1, 2, 0}
@@ -85,16 +85,16 @@ class PARQUET_EXPORT ApplicationVersion {
   explicit ApplicationVersion(const std::string& createdBy);
   ApplicationVersion(std::string application, int major, int minor, int patch);
 
-  // Returns true if version is strictly less than other_version.
+  // Returns true if version is strictly less than otherVersion.
   bool versionLt(const ApplicationVersion& otherVersion) const;
 
-  // Returns true if version is strictly equal with other_version.
+  // Returns true if version is strictly equal with otherVersion.
   bool versionEq(const ApplicationVersion& otherVersion) const;
 
   // Checks if the Version has the correct statistics for a given column.
   bool hasCorrectStatistics(
       Type::type primitive,
-      EncodedStatistics& Statistics,
+      EncodedStatistics& statistics,
       SortOrder::type sortOrder = SortOrder::kSigned) const;
 };
 
@@ -131,8 +131,8 @@ struct IndexLocation {
   int32_t length;
 };
 
-/// \brief ColumnChunkMetaData is a proxy around.
-/// Facebook::velox::parquet::thrift::ColumnChunkMetaData.
+/// \brief ColumnChunkMetaData is a proxy around
+/// facebook::velox::parquet::thrift::ColumnChunkMetaData.
 class PARQUET_EXPORT ColumnChunkMetaData {
  public:
   // API convenience to get a MetaData accessor.
@@ -174,8 +174,8 @@ class PARQUET_EXPORT ColumnChunkMetaData {
   std::shared_ptr<Statistics> statistics() const;
 
   Compression::type compression() const;
-  // Indicate if the ColumnChunk compression is supported by the current.
-  // Compiled parquet library.
+  // Indicate if the ColumnChunk compression is supported by the current
+  // compiled Parquet library.
   bool canDecompress() const;
 
   const std::vector<Encoding::type>& encodings() const;
@@ -207,8 +207,8 @@ class PARQUET_EXPORT ColumnChunkMetaData {
   std::unique_ptr<ColumnChunkMetaDataImpl> impl_;
 };
 
-/// \brief RowGroupMetaData is a proxy around.
-/// Facebook::velox::parquet::thrift::RowGroupMetaData.
+/// \brief RowGroupMetaData is a proxy around
+/// facebook::velox::parquet::thrift::RowGroupMetaData.
 class PARQUET_EXPORT RowGroupMetaData {
  public:
   ARROW_DEPRECATED("Use the ReaderProperties-taking overload")
@@ -230,17 +230,17 @@ class PARQUET_EXPORT RowGroupMetaData {
 
   bool equals(const RowGroupMetaData& other) const;
 
-  /// \brief The number of columns in this row group. The order must match the.
-  /// Parent's column ordering.
+  /// \brief The number of columns in this row group. The order must match the
+  /// parent's column ordering.
   int numColumns() const;
 
   /// \brief Return the ColumnChunkMetaData of the corresponding column ordinal.
   ///
-  /// WARNING, the returned object references memory location in it's parent.
-  /// (RowGroupMetaData) object. Hence, the parent must outlive the returned.
-  /// Object.
+  /// WARNING: The returned object references memory location in its parent
+  /// (RowGroupMetaData) object. Hence, the parent must outlive the returned
+  /// object.
   ///
-  /// \param[in] index of the ColumnChunkMetaData to retrieve.
+  /// \param[in] index Index of the ColumnChunkMetaData to retrieve.
   ///
   /// \throws ParquetException if the index is out of bound.
   std::unique_ptr<ColumnChunkMetaData> columnChunk(int index) const;
@@ -248,23 +248,23 @@ class PARQUET_EXPORT RowGroupMetaData {
   /// \brief Number of rows in this row group.
   int64_t numRows() const;
 
-  /// \brief Total byte size of all the uncompressed column data in this row.
-  /// Group.
+  /// \brief Total byte size of all the uncompressed column data in this row
+  /// group.
   int64_t totalByteSize() const;
 
   /// \brief Total byte size of all the compressed (and potentially encrypted)
-  /// Column data in this row group.
+  /// column data in this row group.
   ///
   /// This information is optional and may be 0 if omitted.
   int64_t totalCompressedSize() const;
 
-  /// \brief Byte offset from beginning of file to first page (data or.
-  /// Dictionary) in this row group.
+  /// \brief Byte offset from beginning of file to first page (data or
+  /// dictionary) in this row group.
   ///
-  /// The file_offset field that this method exposes is optional. This method.
-  /// Will return 0 if that field is not set to a meaningful value.
+  /// The file_offset field that this method exposes is optional. This method
+  /// will return 0 if that field is not set to a meaningful value.
   int64_t fileOffset() const;
-  // Return const-pointer to make it clear that this object is not to be copied.
+  // Return const pointer to make it clear that this object is not to be copied.
   const SchemaDescriptor* schema() const;
   // Indicate if all of the RowGroup's ColumnChunks can be decompressed.
   bool canDecompress() const;
@@ -285,8 +285,8 @@ class PARQUET_EXPORT RowGroupMetaData {
 
 class FileMetaDataBuilder;
 
-/// \brief FileMetaData is a proxy around.
-/// Facebook::velox::parquet::thrift::FileMetaData.
+/// \brief FileMetaData is a proxy around
+/// facebook::velox::parquet::thrift::FileMetaData.
 class PARQUET_EXPORT FileMetaData {
  public:
   ARROW_DEPRECATED("Use the ReaderProperties-taking overload")
@@ -306,27 +306,27 @@ class PARQUET_EXPORT FileMetaData {
 
   bool equals(const FileMetaData& other) const;
 
-  /// \brief The number of parquet "leaf" columns.
+  /// \brief The number of Parquet "leaf" columns.
   ///
-  /// Parquet thrift definition requires that nested schema elements are.
-  /// Flattened. This method returns the number of columns in the flattened.
-  /// Version.
-  /// For instance, if the schema looks like this :
-  /// 0 Foo.bar.
-  ///       Foo.bar.baz           0.
-  ///       Foo.bar.baz2          1.
-  ///   Foo.qux                   2.
-  /// 1 Foo2                      3.
-  /// 2 Foo3                      4.
-  /// This method will return 5, because there are 5 "leaf" fields (so 5.
-  /// flattened fields)
+  /// Parquet thrift definition requires that nested schema elements are
+  /// flattened. This method returns the number of columns in the flattened
+  /// version.
+  /// For instance, if the schema looks like this:
+  /// 0 Foo.bar
+  ///       Foo.bar.baz           0
+  ///       Foo.bar.baz2          1
+  ///   Foo.qux                   2
+  /// 1 Foo2                      3
+  /// 2 Foo3                      4
+  /// This method will return 5, because there are 5 "leaf" fields (so 5
+  /// flattened fields).
   int numColumns() const;
 
   /// \brief The number of flattened schema elements.
   ///
-  /// Parquet thrift definition requires that nested schema elements are.
-  /// Flattened. This method returns the total number of elements in the.
-  /// Flattened list.
+  /// Parquet thrift definition requires that nested schema elements are
+  /// flattened. This method returns the total number of elements in the
+  /// flattened list.
   int numSchemaElements() const;
 
   /// \brief The total number of rows.
@@ -337,10 +337,10 @@ class PARQUET_EXPORT FileMetaData {
 
   /// \brief Return the RowGroupMetaData of the corresponding row group ordinal.
   ///
-  /// WARNING, the returned object references memory location in it's parent.
+  /// WARNING: The returned object references memory location in its parent
   /// (FileMetaData) object. Hence, the parent must outlive the returned object.
   ///
-  /// \param[in] index of the RowGroup to retrieve.
+  /// \param[in] index Index of the RowGroup to retrieve.
   ///
   /// \throws ParquetException if the index is out of bound.
   std::unique_ptr<RowGroupMetaData> rowGroup(int index) const;
@@ -348,9 +348,9 @@ class PARQUET_EXPORT FileMetaData {
   /// \brief Return the "version" of the file.
   ///
   /// WARNING: The value returned by this method is unreliable as 1) the
-  /// Parquet. File metadata stores the version as a single integer and 2) some
-  /// producers. Are known to always write a hardcoded value.  Therefore, you
-  /// cannot use. This value to know which features are used in the file.
+  /// Parquet file metadata stores the version as a single integer and 2) some
+  /// producers are known to always write a hardcoded value. Therefore, you
+  /// cannot use this value to know which features are used in the file.
   ParquetVersion::type version() const;
 
   /// \brief Return the application's user-agent string of the writer.
@@ -362,63 +362,63 @@ class PARQUET_EXPORT FileMetaData {
   /// \brief Size of the original thrift encoded metadata footer.
   uint32_t size() const;
 
-  /// \brief Indicate if all of the FileMetadata's RowGroups can be.
-  /// Decompressed.
+  /// \brief Indicate if all of the FileMetadata's RowGroups can be
+  /// decompressed.
   ///
-  /// This will return false if any of the RowGroup's page is compressed with a.
-  /// Compression format which is not compiled in the current parquet library.
+  /// This will return false if any of the RowGroup's page is compressed with a
+  /// compression format which is not compiled in the current Parquet library.
   bool canDecompress() const;
 
   bool isEncryptionAlgorithmSet() const;
   EncryptionAlgorithm encryptionAlgorithm() const;
   const std::string& footerSigningKeyMetadata() const;
 
-  /// \brief Verify signature of FileMetaData when file is encrypted but footer.
-  /// Is not encrypted (plaintext footer).
+  /// \brief Verify signature of FileMetaData when file is encrypted but footer
+  /// is not encrypted (plaintext footer).
   bool verifySignature(const void* signature);
 
   void writeTo(
       ::arrow::io::OutputStream* dst,
-      const std::shared_ptr<Encryptor>& Encryptor = NULLPTR) const;
+      const std::shared_ptr<Encryptor>& encryptor = NULLPTR) const;
 
-  /// \brief Return Thrift-serialized representation of the metadata as a.
-  /// String.
+  /// \brief Return Thrift-serialized representation of the metadata as a
+  /// string.
   std::string serializeToString() const;
 
-  // Return const-pointer to make it clear that this object is not to be copied.
+  // Return const pointer to make it clear that this object is not to be copied.
   const SchemaDescriptor* schema() const;
 
   const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata() const;
 
   /// \brief Set a path to all ColumnChunk for all RowGroups.
   ///
-  /// Commonly used by systems (Dask, Spark) who generates an metadata-only.
+  /// Commonly used by systems (Dask, Spark) who generate a metadata-only
   /// Parquet file. The path is usually relative to said index file.
   ///
-  /// \param[in] path to set.
+  /// \param[in] path Path to set.
   void setFilePath(const std::string& path);
 
   /// \brief Merge row groups from another metadata file into this one.
   ///
-  /// The schema of the input FileMetaData must be equal to the.
-  /// Schema of this object.
+  /// The schema of the input FileMetaData must be equal to the
+  /// schema of this object.
   ///
-  /// This is used by systems who creates an aggregate metadata-only file by.
-  /// Concatenating the row groups of multiple files. This newly created.
-  /// Metadata file acts as an index of all available row groups.
+  /// This is used by systems who create an aggregate metadata-only file by
+  /// concatenating the row groups of multiple files. This newly created
+  /// metadata file acts as an index of all available row groups.
   ///
-  /// \param[in] other FileMetaData to merge the row groups from.
+  /// \param[in] other Other FileMetaData to merge the row groups from.
   ///
   /// \throws ParquetException if schemas are not equal.
   void appendRowGroups(const FileMetaData& other);
 
   /// \brief Return a FileMetaData containing a subset of the row groups in
-  /// this. FileMetaData.
+  /// this FileMetaData.
   std::shared_ptr<FileMetaData> subset(const std::vector<int>& rowGroups) const;
 
   /// \brief Get total NaN count for a specific field ID across all row groups.
-  /// Returns a pair of (nan_count, has_nan_count).
-  /// NaN counts are collected during writing but not written to the parquet
+  /// Returns a pair of (nanCount, hasNanCount).
+  /// NaN counts are collected during writing but not written to the Parquet
   /// file.
   std::pair<int64_t, bool> getNaNCount(int32_t fieldId) const;
 
@@ -508,9 +508,9 @@ class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
       int64_t uncompressedSize,
       bool hasDictionary,
       bool dictionaryFallback,
-      const std::map<Encoding::type, int32_t>& dictEncodingStats_,
-      const std::map<Encoding::type, int32_t>& dataEncodingStats_,
-      const std::shared_ptr<Encryptor>& Encryptor = NULLPTR);
+      const std::map<Encoding::type, int32_t>& dictEncodingStats,
+      const std::map<Encoding::type, int32_t>& dataEncodingStats,
+      const std::shared_ptr<Encryptor>& encryptor = NULLPTR);
 
   // The metadata contents, suitable for passing to ColumnChunkMetaData::Make.
   const void* Contents() const;
@@ -565,18 +565,18 @@ class PARQUET_EXPORT RowGroupMetaDataBuilder {
   std::unique_ptr<RowGroupMetaDataBuilderImpl> impl_;
 };
 
-/// \brief Public struct for location to all page indexes in a parquet file.
+/// \brief Public struct for location to all page indexes in a Parquet file.
 struct PageIndexLocation {
-  /// Alias type of page index location of a row group. The index location.
-  /// Is located by column ordinal. If the column does not have the page index,.
-  /// Its value is set to std::nullopt.
+  /// Alias type of page index location of a row group. The index location
+  /// is located by column ordinal. If the column does not have the page index,
+  /// its value is set to std::nullopt.
   using RowGroupIndexLocation = std::vector<std::optional<IndexLocation>>;
-  /// Alias type of page index location of a parquet file. The index location.
-  /// Is located by the row group ordinal.
+  /// Alias type of page index location of a Parquet file. The index location
+  /// is located by the row group ordinal.
   using FileIndexLocation = std::map<size_t, RowGroupIndexLocation>;
-  /// Row group column index locations which uses row group ordinal as the key.
+  /// Row group column index locations which use row group ordinal as the key.
   FileIndexLocation columnIndexLocation;
-  /// Row group offset index locations which uses row group ordinal as the key.
+  /// Row group offset index locations which use row group ordinal as the key.
   FileIndexLocation offsetIndexLocation;
 };
 
@@ -599,7 +599,7 @@ class PARQUET_EXPORT FileMetaDataBuilder {
   // The prior RowGroupMetaDataBuilder (if any) is destroyed.
   RowGroupMetaDataBuilder* appendRowGroup();
 
-  // Update location to all page indexes in the parquet file.
+  // Update location to all page indexes in the Parquet file.
   void setPageIndexLocation(const PageIndexLocation& location);
 
   // Complete the Thrift structure.

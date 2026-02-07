@@ -78,7 +78,7 @@
 #define PARQUET_NORETURN ARROW_NORETURN
 #define PARQUET_DEPRECATED ARROW_DEPRECATED
 
-// If ARROW_VALGRIND set when compiling unit tests, also define.
+// If ARROW_VALGRIND set when compiling unit tests, also define
 // PARQUET_VALGRIND.
 #ifdef ARROW_VALGRIND
 #define PARQUET_VALGRIND

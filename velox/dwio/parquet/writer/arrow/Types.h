@@ -43,14 +43,14 @@ namespace facebook::velox::parquet::arrow {
 // ----------------------------------------------------------------------.
 // Metadata enums to match Thrift metadata.
 //
-// The reason we maintain our own enums is to avoid transitive dependency on.
-// The compiled Thrift headers (and thus thrift/Thrift.h) for users of the.
-// Public API. After building parquet-cpp, you should not need to include.
-// Thrift headers in your application. This means some boilerplate to convert.
-// Between our types and Parquet's Thrift types.
+// The reason we maintain our own enums is to avoid transitive dependency on
+// the compiled Thrift headers (and thus thrift/Thrift.h) for users of the
+// public API. After building parquet-cpp, you should not need to include
+// Thrift headers in your application. This means some boilerplate to convert
+// between our types and Parquet's Thrift types.
 //
-// We can also add special values like NONE to distinguish between metadata.
-// Values being set and not set. As an example consider ConvertedType and.
+// We can also add special values like NONE to distinguish between metadata
+// values being set and not set. As an example consider ConvertedType and
 // CompressionCodec.
 
 // Mirrors parquet::Type.
@@ -103,8 +103,8 @@ struct ConvertedType {
     kInterval,
     // DEPRECATED INVALID ConvertedType for all-null data.
     // Only useful for reading legacy files written out by interim Parquet
-    // C++. Releases. For writing, always emit LogicalType::nullType instead.
-    // See. PARQUET-1990.
+    // C++ releases. For writing, always emit LogicalType::nullType instead.
+    // See PARQUET-1990.
     kNa = 25,
     kUndefined = 26 // Not a real converted type; should always be last element
   };
@@ -178,14 +178,14 @@ class PARQUET_EXPORT LogicalType {
     enum Unit { kUnknown = 0, kMillis = 1, kMicros, kNanos };
   };
 
-  /// \brief If possible, return a logical type equivalent to the given legacy.
-  /// Converted type (and decimal metadata if applicable).
+  /// \brief If possible, return a logical type equivalent to the given legacy
+  /// converted type (and decimal metadata if applicable).
   static std::shared_ptr<const LogicalType> fromConvertedType(
       const ConvertedType::type convertedType,
       const schema::DecimalMetadata convertedDecimalMetadata = {false, -1, -1});
 
-  /// \brief Return the logical type represented by the Thrift intermediary.
-  /// Object.
+  /// \brief Return the logical type represented by the Thrift intermediary
+  /// object.
   static std::shared_ptr<const LogicalType> fromThrift(
       const facebook::velox::parquet::thrift::LogicalType& thriftLogicalType);
 
@@ -203,14 +203,14 @@ class PARQUET_EXPORT LogicalType {
       LogicalType::TimeUnit::Unit timeUnit);
 
   /// \brief Create a Timestamp logical type.
-  /// \param[in] is_adjusted_to_utc set true if the data is UTC-normalized.
-  /// \param[in] time_unit the resolution of the timestamp.
-  /// \param[in] is_from_converted_type if true, the timestamp was generated.
-  /// By translating a legacy converted type of TIMESTAMP_MILLIS or.
+  /// \param[in] is_adjusted_to_utc Set true if the data is UTC-normalized.
+  /// \param[in] time_unit The resolution of the timestamp.
+  /// \param[in] is_from_converted_type If true, the timestamp was generated.
+  /// By translating a legacy converted type of TIMESTAMP_MILLIS or
   /// TIMESTAMP_MICROS. Default is false.
-  /// \param[in] force_set_converted_type if true, always set the.
-  /// Legacy ConvertedType TIMESTAMP_MICROS and TIMESTAMP_MILLIS.
-  /// Metadata. Default is false.
+  /// \param[in] force_set_converted_type If true, always set the
+  /// legacy ConvertedType TIMESTAMP_MICROS and TIMESTAMP_MILLIS.
+  /// metadata. Default is false.
   static std::shared_ptr<const LogicalType> timestamp(
       bool isAdjustedToUtc,
       LogicalType::TimeUnit::Unit timeUnit,
@@ -240,14 +240,14 @@ class PARQUET_EXPORT LogicalType {
       parquet::Type::type primitiveType,
       int32_t primitiveLength = -1) const;
 
-  /// \brief Return true if this logical type is equivalent to the given legacy.
-  /// Converted type (and decimal metadata if applicable).
+  /// \brief Return true if this logical type is equivalent to the given legacy
+  /// converted type (and decimal metadata if applicable).
   bool isCompatible(
       ConvertedType::type convertedType,
       schema::DecimalMetadata convertedDecimalMetadata = {false, -1, -1}) const;
 
   /// \brief If possible, return the legacy converted type (and decimal
-  /// metadata. If applicable) equivalent to this logical type.
+  /// metadata if applicable) equivalent to this logical type.
   ConvertedType::type toConvertedType(
       schema::DecimalMetadata* outDecimalMetadata) const;
 
@@ -261,7 +261,7 @@ class PARQUET_EXPORT LogicalType {
   facebook::velox::parquet::thrift::LogicalType toThrift() const;
 
   /// \brief Return true if the given logical type is equivalent to this
-  /// logical. Type.
+  /// logical type.
   bool equals(const LogicalType& other) const;
 
   /// \brief Return the enumerated type of this logical type.
@@ -368,7 +368,7 @@ class PARQUET_EXPORT DateLogicalType : public LogicalType {
 };
 
 /// \brief Allowed for physical type INT32 (for MILLIS) or INT64 (for MICROS
-/// and. NANOS).
+/// and NANOS).
 class PARQUET_EXPORT TimeLogicalType : public LogicalType {
  public:
   static std::shared_ptr<const LogicalType> make(

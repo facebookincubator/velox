@@ -146,8 +146,8 @@ PrimitiveNode::PrimitiveNode(
       typeLength_(length) {
   std::stringstream ss;
 
-  // PARQUET-842: In an earlier revision, decimal_metadata_.isset was being.
-  // Set to true, but Impala will raise an incompatible metadata in such cases.
+  // PARQUET-842: In an earlier revision, decimalMetadata_.isset was being
+  // set to true, but Impala will raise an incompatible metadata in such cases.
   memset(&decimalMetadata_, 0, sizeof(decimalMetadata_));
 
   // Check if the physical and logical types match.
@@ -268,8 +268,8 @@ PrimitiveNode::PrimitiveNode(
     if (!logicalType_->isNested()) {
       // Check for logical type <=> physical type consistency.
       if (logicalType_->isApplicable(physicalType, physicalLength)) {
-        // For backward compatibility, assign equivalent legacy.
-        // converted type (if possible)
+        // For backward compatibility, assign equivalent legacy
+        // converted type (if possible).
         convertedType_ = logicalType_->toConvertedType(&decimalMetadata_);
       } else {
         error << logicalType_->toString();
@@ -368,7 +368,7 @@ GroupNode::GroupNode(
     // Check for logical type <=> node type consistency.
     if (logicalType_->isNested()) {
       // For backward compatibility, assign equivalent legacy converted type
-      // (if. possible)
+      // (if possible).
       convertedType_ = logicalType_->toConvertedType(nullptr);
     } else {
       std::stringstream error;
@@ -907,8 +907,8 @@ void SchemaDescriptor::buildTree(
   if (Node->isOptional()) {
     ++maxDefLevel;
   } else if (Node->isRepeated()) {
-    // Repeated fields add a definition level. This is used to distinguish.
-    // Between an empty list and a list with an item in it.
+    // Repeated fields add a definition level. This is used to distinguish
+    // between an empty list and a list with an item in it.
     ++maxRepLevel;
     ++maxDefLevel;
   }

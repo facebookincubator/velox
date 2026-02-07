@@ -79,7 +79,7 @@ using util::CodecOptions;
 
 namespace {
 
-// Visitor that exracts the value buffer from a FlatArray at a given offset.
+// Visitor that extracts the value buffer from a FlatArray at a given offset.
 struct ValueBufferSlicer {
   template <typename T>
   ::arrow::enable_if_base_binary<typename T::TypeClass, Status> visit(
@@ -227,8 +227,8 @@ int LevelEncoder::maxBufferSize(
   int numBytes = 0;
   switch (encoding) {
     case Encoding::kRle: {
-      // TODO: Due to the way we currently check if the buffer is full enough,.
-      // We need to have MinBufferSize as head room.
+      // TODO: Due to the way we currently check if the buffer is full enough,
+      // we need to have MinBufferSize as head room.
       numBytes = RleEncoder::MaxBufferSize(bitWidth, numBufferedValues) +
           RleEncoder::MinBufferSize(bitWidth);
       break;
@@ -274,9 +274,9 @@ int LevelEncoder::encode(int batchSize, const int16_t* levels) {
 // ----------------------------------------------------------------------.
 // PageWriter implementation.
 
-// This subclass delimits pages appearing in a serialized stream, each preceded.
-// By a serialized Thrift facebook::velox::parquet::thrift::PageHeader.
-// Indicating the type of each page and the page metadata.
+// This subclass delimits pages appearing in a serialized stream, each preceded
+// by a serialized Thrift facebook::velox::parquet::thrift::PageHeader
+// indicating the type of each page and the page metadata.
 class SerializedPageWriter : public PageWriter {
  public:
   SerializedPageWriter(
@@ -491,9 +491,9 @@ class SerializedPageWriter : public PageWriter {
       if (!page.firstRowIndex().has_value()) {
         throw ParquetException("First row index is not set in data page.");
       }
-      /// Start_pos is a relative offset in the buffered mode. It should be.
-      /// Adjusted via OffsetIndexBuilder::Finish() after BufferedPageWriter.
-      /// Has flushed all data pages.
+      /// startPos is a relative offset in the buffered mode. It should be
+      /// adjusted via OffsetIndexBuilder::finish() after BufferedPageWriter
+      /// has flushed all data pages.
       offsetIndexBuilder_->addPage(
           startPos,
           static_cast<int32_t>(compressedSize),
@@ -555,8 +555,8 @@ class SerializedPageWriter : public PageWriter {
     pageHeader.__set_data_page_header_v2(dataPageHeader);
   }
 
-  /// \brief Finish page index builders and update the stream offset to adjust.
-  /// Page offsets.
+  /// \brief Finish page index builders and update the stream offset to adjust
+  /// page offsets.
   void finishPageIndexes(int64_t finalPosition) {
     if (columnIndexBuilder_ != nullptr) {
       columnIndexBuilder_->finish();
@@ -675,13 +675,11 @@ class SerializedPageWriter : public PageWriter {
   int64_t numValues_;
   int64_t dictionaryPageOffset_;
   int64_t dataPageOffset_;
-  // The uncompressed page size the page writer has already.
-  //  Written.
+  // The uncompressed page size the page writer has already written.
   int64_t totalUncompressedSize_;
-  // The compressed page size the page writer has already.
-  //  Written.
-  // If the column is UNCOMPRESSED, the size would be.
-  //  Equal to `total_uncompressed_size_`.
+  // The compressed page size the page writer has already written.
+  // If the column is UNCOMPRESSED, the size would be equal to
+  // totalUncompressedSize_.
   int64_t totalCompressedSize_;
   int32_t pageOrdinal_;
   int16_t rowGroupOrdinal_;
@@ -708,7 +706,7 @@ class SerializedPageWriter : public PageWriter {
   OffsetIndexBuilder* offsetIndexBuilder_;
 };
 
-// This implementation of the PageWriter writes to the final sink on Close .
+// This implementation of the PageWriter writes to the final sink on close.
 class BufferedPageWriter : public PageWriter {
  public:
   BufferedPageWriter(
@@ -1009,16 +1007,16 @@ class ColumnWriterImpl {
 
   MemoryPool* allocator_;
 
-  // The total number of values stored in the data page. This is the maximum of.
-  // The number of encoded definition levels or encoded values. For.
-  // Non-repeated, required columns, this is equal to the number of encoded.
-  // Values. For repeated or optional values, there may be fewer data values.
-  // Than levels, and this tells you how many encoded levels there are in that.
-  // Case.
+  // The total number of values stored in the data page. This is the maximum of
+  // the number of encoded definition levels or encoded values. For
+  // non-repeated, required columns, this is equal to the number of encoded
+  // values. For repeated or optional values, there may be fewer data values
+  // than levels, and this tells you how many encoded levels there are in that
+  // case.
   int64_t numBufferedValues_;
 
-  // The total number of stored values in the data page. For repeated or.
-  // Optional values, this number may be lower than num_buffered_values_.
+  // The total number of stored values in the data page. For repeated or
+  // optional values, this number may be lower than numBufferedValues_.
   int64_t numBufferedEncodedValues_;
 
   // The total number of nulls stored in the data page.
@@ -1083,7 +1081,7 @@ int64_t ColumnWriterImpl::rleEncodeLevels(
   // V1 DataPage includes the length of the RLE level as a prefix.
   int32_t prefixSize = includeLengthPrefix ? sizeof(int32_t) : 0;
 
-  // TODO: This only works with due to some RLE specifics.
+  // TODO: This only works due to some RLE specifics.
   int64_t rleSize =
       LevelEncoder::maxBufferSize(
           Encoding::kRle, maxLevel, static_cast<int>(numBufferedValues_)) +
@@ -1232,8 +1230,8 @@ void ColumnWriterImpl::buildDataPageV2(
     int64_t repetitionLevelsRleSize,
     int64_t uncompressedSize,
     const std::shared_ptr<Buffer>& values) {
-  // Compress the values if needed. Repetition and definition levels are.
-  // Uncompressed in V2.
+  // Compress the values if needed. Repetition and definition levels are
+  // uncompressed in V2.
   std::shared_ptr<Buffer> compressedValues;
   if (pager_->hasCompressor()) {
     pager_->compress(*values, compressorTempBuffer_.get());
@@ -1266,8 +1264,8 @@ void ColumnWriterImpl::buildDataPageV2(
   int32_t repLevelsByteLength = static_cast<int32_t>(repetitionLevelsRleSize);
   int64_t firstRowIndex = rowsWritten_ - numBufferedRows_;
 
-  // Page_stats.null_count is not set when page_statistics_ is nullptr. It is.
-  // Only used here for safety check.
+  // pageStats.null_count is not set when page_statistics_ is nullptr. It is
+  // only used here for safety check.
   VELOX_DCHECK(!pageStats.hasNullCount || pageStats.nullCount == nullCount);
 
   // Write the page to OutputStream eagerly if there is no dictionary or.
@@ -1368,7 +1366,7 @@ inline void doInBatches(
     Action&& action,
     bool pagesChangeOnRecordBoundaries) {
   if (!pagesChangeOnRecordBoundaries || !repLevels) {
-    // If rep_levels is null, then we are writing a non-repeated column.
+    // If repLevels is null, then we are writing a non-repeated column.
     // In this case, every record contains only one level.
     return doInBatches(numLevels, batchSize, std::forward<Action>(action));
   }
@@ -1377,20 +1375,20 @@ inline void doInBatches(
   while (offset < numLevels) {
     int64_t endOffset = std::min(offset + batchSize, numLevels);
 
-    // Find next record boundary (i.e. ref_level = 0)
+    // Find next record boundary (i.e. repLevel = 0).
     while (endOffset < numLevels && repLevels[endOffset] != 0) {
       endOffset++;
     }
 
     if (endOffset < numLevels) {
-      // This is not the last chunk of batch and end_offset is a record.
-      // Boundary. It is a good chance to check the page size.
+      // This is not the last chunk of batch and endOffset is a record
+      // boundary. It is a good chance to check the page size.
       action(offset, endOffset - offset, /*check_page_size=*/true);
     } else {
       VELOX_DCHECK_EQ(endOffset, numLevels);
-      // This is the last chunk of batch, and we do not know whether end_offset.
-      // Is a record boundary. Find the offset to beginning of last record in.
-      // This chunk, so we can check page size.
+      // This is the last chunk of batch, and we do not know whether endOffset
+      // is a record boundary. Find the offset to beginning of last record in
+      // this chunk, so we can check page size.
       int64_t lastRecordBeginOffset = numLevels - 1;
       while (lastRecordBeginOffset >= offset &&
              repLevels[lastRecordBeginOffset] != 0) {
@@ -1471,8 +1469,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
         descr_,
         properties->memoryPool());
 
-    // We have to dynamic_cast as some compilers don't want to static_cast.
-    // Through virtual inheritance.
+    // We have to dynamic_cast as some compilers don't want to static_cast
+    // through virtual inheritance.
     currentValueEncoder_ =
         dynamic_cast<TypedEncoder<DType>*>(currentEncoder_.get());
 
@@ -1522,8 +1520,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
           batchSize, valuesToWrite, numNulls, checkPage);
       valueOffset += valuesToWrite;
 
-      // Dictionary size checked separately from data page size since we.
-      // Circumvent this check when writing ::arrow::DictionaryArray directly.
+      // Dictionary size checked separately from data page size since we
+      // circumvent this check when writing ::arrow::DictionaryArray directly.
       checkDictionarySizeLimit();
     };
     doInBatches(
@@ -1583,8 +1581,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
           batchSize, batchNumSpacedValues, nullCount, checkPage);
       valueOffset += batchNumSpacedValues;
 
-      // Dictionary size checked separately from data page size since we.
-      // Circumvent this check when writing ::arrow::DictionaryArray directly.
+      // Dictionary size checked separately from data page size since we
+      // circumvent this check when writing ::arrow::DictionaryArray directly.
       checkDictionarySizeLimit();
     };
     doInBatches(
@@ -1605,7 +1603,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       bool leafFieldNullable) override {
     BEGIN_PARQUET_CATCH_EXCEPTIONS
     // Leaf nulls are canonical when there is only a single null element after
-    // a. List and it is at the leaf.
+    // a list and it is at the leaf.
     bool singleNullableElement =
         (levelInfo_.defLevel == levelInfo_.repeatedAncestorDefLevel + 1) &&
         leafFieldNullable;
@@ -1639,9 +1637,9 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     return currentEncoder_->flushValues();
   }
 
-  // Internal function to handle direct writing of ::arrow::DictionaryArray,.
-  // Since the standard logic concerning dictionary size limits and fallback to.
-  // Plain encoding is circumvented.
+  // Internal function to handle direct writing of ::arrow::DictionaryArray,
+  // since the standard logic concerning dictionary size limits and fallback to
+  // plain encoding is circumvented.
   Status writeArrowDictionary(
       const int16_t* defLevels,
       const int16_t* repLevels,
@@ -1728,10 +1726,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
   using ValueEncoderType = typename EncodingTraits<DType>::Encoder;
   using TypedStats = TypedStatistics<DType>;
   std::unique_ptr<Encoder> currentEncoder_;
-  // Downcasted observers of current_encoder_.
-  // The downcast is performed once as opposed to at every use since.
-  // Dynamic_cast is so expensive, and static_cast is not available due.
-  // To virtual inheritance.
+  // Downcasted observers of currentEncoder_.
+  // The downcast is performed once as opposed to at every use since
+  // dynamic_cast is so expensive, and static_cast is not available due
+  // to virtual inheritance.
   ValueEncoderType* currentValueEncoder_;
   DictEncoder<DType>* currentDictEncoder_;
   std::shared_ptr<TypedStats> pageStatistics_;
@@ -1784,10 +1782,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     return valuesToWrite;
   }
 
-  // This method will always update the three output parameters,.
-  // Out_values_to_write, out_spaced_values_to_write and null_count.
-  // Additionally it will update the validity bitmap if required (i.e. if at.
-  // Least one level of nullable structs directly precede the leaf node).
+  // This method will always update the three output parameters,
+  // outValuesToWrite, outSpacedValuesToWrite and nullCount.
+  // Additionally it will update the validity bitmap if required (i.e. if at
+  // least one level of nullable structs directly precede the leaf node).
   void maybeCalculateValidityBits(
       const int16_t* defLevels,
       int64_t batchSize,
@@ -1796,10 +1794,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       int64_t* nullCount) {
     if (bitsBuffer_ == nullptr) {
       if (levelInfo_.defLevel == 0) {
-        // In this case def levels should be null and we only.
-        // Need to output counts which will always be equal to.
-        // The batch size passed in (max def_level == 0 indicates.
-        // There cannot be repeated or null fields).
+        // In this case def levels should be null and we only
+        // need to output counts which will always be equal to
+        // the batch size passed in (max defLevel == 0 indicates
+        // there cannot be repeated or null fields).
         VELOX_DCHECK_NULL(defLevels);
         *outValuesToWrite = batchSize;
         *outSpacedValuesToWrite = batchSize;
@@ -1814,8 +1812,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       }
       return;
     }
-    // Shrink to fit possible causes another allocation, and would only be.
-    // Necessary on the last batch.
+    // Shrink to fit possible causes another allocation, and would only be
+    // necessary on the last batch.
     int64_t newBitmapSize = ::arrow::bit_util::BytesForBits(batchSize);
     if (newBitmapSize != bitsBuffer_->size()) {
       PARQUET_THROW_NOT_OK(
@@ -1900,7 +1898,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
   void fallbackToPlainEncoding() {
     if (isDictionaryEncoding(currentEncoder_->encoding())) {
       writeDictionaryPage();
-      // Serialize the buffered Dictionary Indices.
+      // Serialize the buffered dictionary indices.
       flushBufferedDataPages();
       fallback_ = true;
       // Only PLAIN encoding is supported for fallback in V1.
@@ -1925,8 +1923,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
   // Fallback to PLAIN if dictionary page limit is reached.
   void checkDictionarySizeLimit() {
     if (!hasDictionary_ || fallback_) {
-      // Either not using dictionary encoding, or we have already fallen back.
-      // To PLAIN encoding because the size threshold was reached.
+      // Either not using dictionary encoding, or we have already fallen back
+      // to PLAIN encoding because the size threshold was reached.
       return;
     }
 
@@ -1945,21 +1943,17 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
 
   /// \brief Write values with spaces and update page statistics accordingly.
   ///
-  /// \param values input buffer of values to write, including spaces.
-  /// \param num_values number of non-null values in the values buffer.
-  /// \param num_spaced_values length of values buffer, including spaces and.
-  /// Does not.
-  ///   Count some nulls from ancestor (e.g. empty lists).
-  /// \param valid_bits validity bitmap of values buffer, which does not
-  /// include. Some.
-  ///   Nulls from ancestor (e.g. empty lists).
-  /// \param valid_bits_offset offset to valid_bits bitmap.
-  /// \param num_levels number of levels to write, including nulls from values.
-  /// Buffer.
-  ///   And nulls from ancestor (e.g. empty lists).
-  /// \param num_nulls number of nulls in the values buffer as well as nulls.
-  /// From the.
-  ///   Ancestor (e.g. empty lists).
+  /// @param values input buffer of values to write, including spaces.
+  /// @param numValues number of non-null values in the values buffer.
+  /// @param numSpacedValues length of values buffer, including spaces and
+  /// does not count some nulls from ancestor (e.g. empty lists).
+  /// @param validBits validity bitmap of values buffer, which does not
+  /// include some nulls from ancestor (e.g. empty lists).
+  /// @param validBitsOffset offset to validBits bitmap.
+  /// @param numLevels number of levels to write, including nulls from values
+  /// buffer and nulls from ancestor (e.g. empty lists).
+  /// @param numNulls number of nulls in the values buffer as well as nulls
+  /// from the ancestor (e.g. empty lists).
   void writeValuesSpaced(
       const T* values,
       int64_t numValues,
@@ -1997,8 +1991,8 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
     const ::arrow::Array& array,
     ArrowWriteContext* ctx,
     bool maybeParentNulls) {
-  // If this is the first time writing a DictionaryArray, then there's.
-  // A few possible paths to take:
+  // If this is the first time writing a DictionaryArray, then there's
+  // a few possible paths to take:
   //
   // - If dictionary encoding is not enabled, convert to densely.
   //   Encoded and call WriteArrow.
@@ -2008,10 +2002,10 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
   //     Chunk. We store the dictionary that was written in.
   //     Preserved_dictionary_ so that subsequent calls to this method.
   //     Can make sure the dictionary has not changed.
-  //   - On subsequent calls, we have to check whether the dictionary.
-  //     Has changed. If it has, then we trigger the varying.
-  //     Dictionary path and materialize each chunk and then call.
-  //     WriteArrow with that.
+  //   - On subsequent calls, we have to check whether the dictionary
+  //     has changed. If it has, then we trigger the varying
+  //     dictionary path and materialize each chunk and then call
+  //     writeArrow with that.
   auto writeDense = [&] {
     std::shared_ptr<::arrow::Array> denseArray;
     RETURN_NOT_OK(convertDictionaryToDense(
@@ -2038,10 +2032,10 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
 
   auto updateStats = [&](int64_t numChunkLevels,
                          const std::shared_ptr<Array>& chunkIndices) {
-    // TODO(PARQUET-2068) This approach may make two copies.  First, a copy of.
-    // The indices array to a (hopefully smaller) referenced indices array.
+    // TODO(PARQUET-2068) This approach may make two copies. First, a copy of
+    // the indices array to a (hopefully smaller) referenced indices array.
     // Second, a copy of the values array to a (probably not smaller)
-    // referenced. Values array.
+    // referenced values array.
     //
     // Once the MinMax kernel supports all data types we should use that kernel.
     // Instead as it does not make any copies.
@@ -2113,9 +2107,9 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
     PARQUET_CATCH_NOT_OK(dictEncoder->putDictionary(*dictionary));
 
     // If there were duplicate value in the dictionary, the encoder's memo
-    // table. Will be out of sync with the indices in the Arrow array. The
-    // easiest solution for this uncommon case is to fallback to plain.
-    // Encoding.
+    // table will be out of sync with the indices in the Arrow array. The
+    // easiest solution for this uncommon case is to fallback to plain
+    // encoding.
     if (dictEncoder->numEntries() != dictionary->length()) {
       PARQUET_CATCH_NOT_OK(fallbackToPlainEncoding());
       return writeDense();
@@ -2333,8 +2327,8 @@ struct SerializeFunctor<
       PARQUET_ASSIGN_OR_THROW(value, decimalValue.ToInteger<ValueType>());
     } else {
       ::arrow::Decimal256 decimalValue(in);
-      // Decimal256 does not provide ToInteger, but we are sure it fits in the.
-      // Target integer type.
+      // Decimal256 does not provide ToInteger, but we are sure it fits in the
+      // target integer type.
       value = static_cast<ValueType>(decimalValue.low_bits());
     }
     return value;
@@ -2494,7 +2488,7 @@ struct SerializeFunctor<Int64Type, ::arrow::TimestampType> {
         kTimestampCoercionFactors[static_cast<int>(sourceUnit)]
                                  [static_cast<int>(targetUnit)];
 
-    // .First -> coercion operation; .second -> scale factor.
+    // first -> coercion operation; second -> scale factor.
     VELOX_DCHECK_NE(coercion.first, COERCE_INVALID);
     return coercion.first == COERCE_DIVIDE ? divideBy(coercion.second)
                                            : multiplyBy(coercion.second);
@@ -2551,7 +2545,7 @@ Status writeTimestamps(
        version == ParquetVersion::PARQUET_2_4) &&
       sourceType.unit() == ::arrow::TimeUnit::NANO) {
     // Absent superseding user instructions, when writing Parquet version
-    // <= 2.4. Files, timestamps in nanoseconds are coerced to microseconds.
+    // Files, timestamps in nanoseconds are coerced to microseconds.
     std::shared_ptr<ArrowWriterProperties> properties =
         (ArrowWriterProperties::Builder())
             .coerceTimestamps(::arrow::TimeUnit::MICRO)
@@ -2559,7 +2553,6 @@ Status writeTimestamps(
             ->build();
     return writeCoerce(properties.get());
   } else if (sourceType.unit() == ::arrow::TimeUnit::SECOND) {
-    // Absent superseding user instructions, timestamps in seconds are coerced.
     // To milliseconds.
     std::shared_ptr<ArrowWriterProperties> properties =
         (ArrowWriterProperties::Builder())
@@ -2739,8 +2732,8 @@ struct SerializeFunctor<
 // ----------------------------------------------------------------------.
 // Write Arrow to Decimal128.
 
-// Requires a custom serializer because decimal in parquet are in big-endian.
-// Format. Thus, a temporary local buffer is required.
+// Requires a custom serializer because decimal in parquet are in big-endian
+// format. Thus, a temporary local buffer is required.
 template <typename ParquetType, typename ArrowType>
 struct SerializeFunctor<
     ParquetType,
@@ -2772,10 +2765,10 @@ struct SerializeFunctor<
     return Status::OK();
   }
 
-  // Parquet's Decimal are stored with FixedLength values where the length is.
-  // Proportional to the precision. Arrow's Decimal are always stored with
-  // 16/32. Bytes. Thus the internal FLBA pointer must be adjusted by the
-  // offset. Calculated here.
+  // Parquet's decimals are stored with FixedLength values where the
+  // length is proportional to the precision. Arrow's Decimal are always stored
+  // with 16 or 32 bytes. Thus the internal FLBA pointer must be adjusted by the
+  // offset calculated here.
   int32_t decimalOffset(const Array& array) {
     auto decimalType = checked_pointer_cast<::arrow::DecimalType>(array.type());
     return decimalType->byte_width() -
@@ -2845,9 +2838,9 @@ std::shared_ptr<ColumnWriter> ColumnWriter::make(
   Encoding::type encoding = properties->encoding(descr->path());
 
   if (encoding == Encoding::kUnknown) {
-    // TODO: Arrow uses RLE by default for boolean columns. Since Velox can't.
-    // Read RLEs yet, we disable this check. Re-enable once Velox's native.
-    // Reader supports RLE.
+    // TODO: Arrow uses RLE by default for boolean columns. Since Velox can't
+    // read RLEs yet, we disable this check. Re-enable once Velox's native
+    // reader supports RLE.
     // Encoding = (descr->physical_type() == Type::kBoolean &&.
     //            properties->version() != ParquetVersion::PARQUET_1_0)
     //               ? Encoding::RLE.

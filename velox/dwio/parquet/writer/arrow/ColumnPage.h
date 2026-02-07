@@ -16,9 +16,9 @@
 
 // Adapted from Apache Arrow.
 
-// This module defines an abstract interface for iterating through pages in a.
-// Parquet column chunk within a row group. It could be extended in the future.
-// To iterate through all data pages in all chunks in a file.
+// This module defines an abstract interface for iterating through pages in a
+// Parquet column chunk within a row group. It could be extended in the future
+// to iterate through all data pages in all chunks in a file.
 
 #pragma once
 
@@ -33,13 +33,13 @@
 
 namespace facebook::velox::parquet::arrow {
 
-// TODO: Parallel processing is not yet safe because of memory-ownership.
-// Semantics (the PageReader may or may not own the memory referenced by a.
-// page)
+// TODO: Parallel processing is not yet safe because of memory-ownership
+// semantics (the PageReader may or may not own the memory referenced by a
+// page).
 //
-// TODO(wesm): In the future Parquet implementations may store the crc code.
-// In facebook::velox::parquet::thrift::PageHeader. parquet-mr currently does.
-// Not, so we also skip it here, both on the read and write path.
+// TODO(wesm): In the future Parquet implementations may store the crc code
+// in facebook::velox::parquet::thrift::PageHeader. parquet-mr currently does
+// not, so we also skip it here, both on the read and write path.
 class Page {
  public:
   Page(const std::shared_ptr<::arrow::Buffer>& buffer, PageType::type type)
@@ -53,12 +53,12 @@ class Page {
     return buffer_;
   }
 
-  // @returns: a pointer to the page's data.
+  // @returns: A pointer to the page's data.
   const uint8_t* data() const {
     return buffer_->data();
   }
 
-  // @returns: the total size in bytes of the page's data buffer.
+  // @returns: The total size in bytes of the page's data buffer.
   int32_t size() const {
     return static_cast<int32_t>(buffer_->size());
   }
@@ -83,9 +83,9 @@ class DataPage : public Page {
   const EncodedStatistics& statistics() const {
     return statistics_;
   }
-  /// Return the row ordinal within the row group to the first row in the data.
-  /// Page. Currently it is only present from data pages created by
-  /// ColumnWriter. In order to collect page index.
+  /// Return the row ordinal within the row group to the first row in the data
+  /// page. Currently it is only present from data pages created by
+  /// ColumnWriter in order to collect page index.
   std::optional<int64_t> firstRowIndex() const {
     return firstRowIndex_;
   }

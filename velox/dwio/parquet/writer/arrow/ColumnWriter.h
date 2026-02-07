@@ -73,7 +73,7 @@ class PARQUET_EXPORT LevelEncoder {
       uint8_t* data,
       int dataSize);
 
-  // Encodes a batch of levels from an array and returns the number of levels.
+  // Encodes a batch of levels from an array and returns the number of levels
   // encoded.
   int encode(int batchSize, const int16_t* levels);
 
@@ -107,14 +107,14 @@ class PARQUET_EXPORT PageWriter {
       std::shared_ptr<Encryptor> headerEncryptor = NULLPTR,
       std::shared_ptr<Encryptor> dataEncryptor = NULLPTR,
       bool pageWriteChecksumEnabled = false,
-      // Column_index_builder MUST outlive the PageWriter.
+      // columnIndexBuilder must outlive the PageWriter.
       ColumnIndexBuilder* columnIndexBuilder = NULLPTR,
-      // Offset_index_builder MUST outlive the PageWriter.
+      // offsetIndexBuilder must outlive the PageWriter.
       OffsetIndexBuilder* offsetIndexBuilder = NULLPTR,
       const util::CodecOptions& codecOptions = util::CodecOptions{});
 
   // TODO: remove this and port to new signature.
-  // ARROW_DEPRECATED(.
+  // ARROW_DEPRECATED(
   //    "Deprecated in 13.0.0. Use codecOptions-taking overload instead.")
   static std::unique_ptr<PageWriter> open(
       std::shared_ptr<ArrowOutputStream> sink,
@@ -128,24 +128,24 @@ class PARQUET_EXPORT PageWriter {
       std::shared_ptr<Encryptor> headerEncryptor = NULLPTR,
       std::shared_ptr<Encryptor> dataEncryptor = NULLPTR,
       bool pageWriteChecksumEnabled = false,
-      // Column_index_builder MUST outlive the PageWriter.
+      // columnIndexBuilder must outlive the PageWriter.
       ColumnIndexBuilder* columnIndexBuilder = NULLPTR,
-      // Offset_index_builder MUST outlive the PageWriter.
+      // offsetIndexBuilder must outlive the PageWriter.
       OffsetIndexBuilder* offsetIndexBuilder = NULLPTR);
 
-  // The Column Writer decides if dictionary encoding is used if set and.
-  // If the dictionary encoding has fallen back to default encoding on reaching.
+  // The column writer decides if dictionary encoding is used, if set, and
+  // if the dictionary encoding has fallen back to default encoding on reaching
   // dictionary page limit.
   virtual void close(bool hasDictionary, bool fallback) = 0;
 
-  // Return the number of uncompressed bytes written (including header size)
+  // Return the number of uncompressed bytes written (including header size).
   virtual int64_t writeDataPage(const DataPage& page) = 0;
 
-  // Return the number of uncompressed bytes written (including header size)
+  // Return the number of uncompressed bytes written (including header size).
   virtual int64_t writeDictionaryPage(const DictionaryPage& page) = 0;
 
-  /// \brief The total number of bytes written as serialized data and.
-  /// Dictionary pages to the sink so far.
+  /// \brief The total number of bytes written as serialized data and
+  /// dictionary pages to the sink so far.
   virtual int64_t totalCompressedBytesWritten() const = 0;
 
   virtual bool hasCompressor() = 0;
@@ -177,21 +177,21 @@ class PARQUET_EXPORT ColumnWriter {
   /// \brief The number of rows written so far.
   virtual int64_t rowsWritten() const = 0;
 
-  /// \brief The total size of the compressed pages + page headers. Values.
-  /// Are still buffered and not written to a pager yet.
+  /// \brief The total size of the compressed pages + page headers. Values
+  /// are still buffered and not written to a pager yet.
   ///
-  /// So in un-buffered mode, it always returns 0.
+  /// So in unbuffered mode, it always returns 0.
   virtual int64_t totalCompressedBytes() const = 0;
 
-  /// \brief The total number of bytes written as serialized data and.
-  /// Dictionary pages to the ColumnChunk so far.
+  /// \brief The total number of bytes written as serialized data and
+  /// dictionary pages to the ColumnChunk so far.
   /// These bytes are uncompressed bytes.
   virtual int64_t totalBytesWritten() const = 0;
 
-  /// \brief The total number of bytes written as serialized data and.
-  /// Dictionary pages to the ColumnChunk so far.
-  /// If the column is uncompressed, the value would be equal to.
-  /// Total_bytes_written().
+  /// \brief The total number of bytes written as serialized data and
+  /// dictionary pages to the ColumnChunk so far.
+  /// If the column is uncompressed, the value would be equal to
+  /// totalBytesWritten().
   virtual int64_t totalCompressedBytesWritten() const = 0;
 
   /// \brief The file-level writer properties.
@@ -201,8 +201,8 @@ class PARQUET_EXPORT ColumnWriter {
   /// error status if the array data type is not compatible with the concrete
   /// writer type.
   ///
-  /// Leaf_array is always a primitive (possibly dictionary encoded type).
-  /// Leaf_field_nullable indicates whether the leaf array is considered.
+  /// leafArray is always a primitive (possibly dictionary encoded type).
+  /// leafFieldNullable indicates whether the leaf array is considered
   /// nullable according to its schema in a Table or its parent array.
   virtual ::arrow::Status writeArrow(
       const int16_t* defLevels,
@@ -224,13 +224,13 @@ class TypedColumnWriter : public ColumnWriter {
 
   // Write a batch of repetition levels, definition levels, and values to the
   // column.
-  // `num_values` is the number of logical leaf values.
-  // `def_levels` (resp. `rep_levels`) can be null if the column's max
+  // 'numValues' is the number of logical leaf values.
+  // `defLevels` (resp. `repLevels`) can be null if the column's max
   // definition level (resp. max repetition level) is 0. If not null, each of
-  // `def_levels` and `rep_levels` must have at least `num_values`.
+  // `defLevels` and `repLevels` must have at least `numValues`.
   //
   // The number of physical values written (taken from `values`) is returned.
-  // It can be smaller than `num_values` is there are some undefined values.
+  // It can be smaller than `numValues` if there are some undefined values.
   virtual int64_t writeBatch(
       int64_t numValues,
       const int16_t* defLevels,
@@ -240,13 +240,14 @@ class TypedColumnWriter : public ColumnWriter {
   /// Write a batch of repetition levels, definition levels, and values to the
   /// column.
   ///
-  /// In comparison to WriteBatch the length of repetition and definition levels
-  /// is the same as of the number of values read for max_definition_level == 1.
-  /// In the case of max_definition_level > 1, the repetition and definition
-  /// levels are larger than the values but the values include the null entries
-  /// with definition_level == (max_definition_level - 1). Thus we have to
-  /// differentiate in the parameters of this function if the input has the
-  /// length of num_values or the _number of rows in the lowest nesting level_.
+  /// In comparison to writeBatch() the length of repetition and definition
+  /// levels is the same as of the number of values read for
+  /// max_definition_level == 1. In the case of max_definition_level > 1, the
+  /// repetition and definition levels are larger than the values but the values
+  /// include the null entries with definition_level == (max_definition_level -
+  /// 1). Thus we have to differentiate in the parameters of this function if
+  /// the input has the length of numValues or the _number of rows in the lowest
+  /// nesting level.
   ///
   /// In the case that the most inner node in the Parquet is required, the
   /// _number of rows in the lowest nesting level_ is equal to the number of
@@ -254,17 +255,16 @@ class TypedColumnWriter : public ColumnWriter {
   /// rows in the lowest nesting level_ also includes all values with
   /// definition_level == (max_definition_level - 1).
   ///
-  /// @param num_values number of levels to write.
-  /// @param def_levels The Parquet definition levels, length is num_values.
-  /// @param rep_levels The Parquet repetition levels, length is num_values.
-  /// @param valid_bits Bitmap that indicates if the row is null on the lowest.
-  /// Nesting.
-  ///   Level. The length is number of rows in the lowest nesting level.
-  /// @param valid_bits_offset The offset in bits of the valid_bits where the.
-  ///   First relevant bit resides.
-  /// @param values The values in the lowest nested level including.
-  ///   Spacing for nulls on the lowest levels; input has the length.
-  ///   Of the number of rows on the lowest nesting level.
+  /// @param numValues Number of levels to write.
+  /// @param defLevels The Parquet definition levels, length is numValues.
+  /// @param repLevels The Parquet repetition levels, length is numValues.
+  /// @param validBits Bitmap that indicates if the row is null on the lowest
+  /// nesting level. The length is number of rows in the lowest nesting level.
+  /// @param validBitsOffset The offset in bits of the validBits where the
+  ///   first relevant bit resides.
+  /// @param values The values in the lowest nested level including
+  ///   spacing for nulls on the lowest levels; input has the length
+  ///   of the number of rows on the lowest nesting level.
   virtual void writeBatchSpaced(
       int64_t numValues,
       const int16_t* defLevels,
@@ -288,7 +288,7 @@ using FixedLenByteArrayWriter = TypedColumnWriter<FLBAType>;
 
 namespace internal {
 
-// Timestamp conversion constants
+// Timestamp conversion constants.
 constexpr int64_t kJulianEpochOffsetDays = INT64_C(2440588);
 
 template <int64_t UnitPerDay, int64_t NanosecondsPerUnit>
@@ -300,8 +300,8 @@ inline void arrowTimestampToImpalaTimestamp(
 
   int64_t lastDayUnits = Time % UnitPerDay;
   auto lastDayNanos = lastDayUnits * NanosecondsPerUnit;
-  // Impala_timestamp will be unaligned every other entry so do memcpy instead.
-  // Of assign and reinterpret cast to avoid undefined behavior.
+  // impalaTimestamp will be unaligned every other entry so do memcpy instead
+  // of assign and reinterpret cast to avoid undefined behavior.
   std::memcpy(impalaTimestamp, &lastDayNanos, sizeof(int64_t));
 }
 

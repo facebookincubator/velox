@@ -35,7 +35,7 @@
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 
-// Define the parquet created by version.
+// Define the Parquet created by version.
 #define CREATED_BY_VERSION "parquet-cpp-velox"
 // Velox has no versioning yet. Set default 0.0.0.
 #define VELOX_VERSION "0.0.0"
@@ -46,21 +46,20 @@ using facebook::velox::parquet::arrow::util::CodecOptions;
 
 /// \brief Feature selection when writing Parquet files.
 ///
-/// `ParquetVersion::type` governs which data types are allowed and how they.
-/// Are represented. For example, uint32_t data will be written differently.
-/// Depending on this value (as INT64 for PARQUET_1_0, as UINT32 for other.
-/// Versions).
+/// `ParquetVersion::type` governs which data types are allowed and how they
+/// are represented. For example, uint32_t data will be written differently
+/// depending on this value (as INT64 for PARQUET_1_0, as UINT32 for other
+/// versions).
 ///
-/// However, some features - such as compression algorithms, encryption,.
-/// Or the improved "v2" data page format - must be enabled separately in.
+/// However, some features - such as compression algorithms, encryption,
+/// or the improved "v2" data page format - must be enabled separately in
 /// ArrowWriterProperties.
 struct ParquetVersion {
   enum type : int {
     /// Enable only pre-2.2 Parquet format features when writing.
     ///
     /// This setting is useful for maximum compatibility with legacy readers.
-    /// Note that logical types may still be emitted, as long they have a.
-    /// Corresponding converted type.
+    /// Corresponds to a converted type.
     PARQUET_1_0,
 
     /// DEPRECATED: Enable Parquet format 2.6 features.
@@ -72,35 +71,33 @@ struct ParquetVersion {
 
     /// Enable Parquet format 2.4 and earlier features when writing.
     ///
-    /// This enables UINT32 as well as logical types which don't have.
-    /// A corresponding converted type.
+    /// This enables UINT32 as well as logical types which don't have
+    /// a corresponding converted type.
     ///
     /// Note: Parquet format 2.4.0 was released in October 2017.
     PARQUET_2_4,
 
     /// Enable Parquet format 2.6 and earlier features when writing.
     ///
-    /// This enables the NANOS time unit in addition to the PARQUET_2_4.
-    /// Features.
+    /// units in addition to the PARQUET_2_4 features.
     ///
     /// Note: Parquet format 2.6.0 was released in September 2018.
     PARQUET_2_6,
 
     /// Enable latest Parquet format 2.x features.
     ///
-    /// This value is equal to the greatest 2.x version supported by.
-    /// This library.
+    /// The version supported by this library.
     PARQUET_2_LATEST = PARQUET_2_6
   };
 };
 
-/// Controls serialization format of data pages.  parquet-format v2.0.0.
-/// Introduced a new data page metadata type DataPageV2 and serialized page.
-/// Structure (for example, encoded levels are no longer compressed). Prior to.
-/// The completion of PARQUET-457 in 2020, this library did not implement.
-/// DataPageV2 correctly, so if you use the V2 data page format, you may have.
-/// Forward compatibility issues (older versions of the library will be unable.
-/// To read the files). Note that some Parquet implementations do not implement.
+/// Controls serialization format of data pages. Parquet-format v2.0.0
+/// introduced a new data page metadata type DataPageV2 and serialized page
+/// structure (for example, encoded levels are no longer compressed). Prior to
+/// the completion of PARQUET-457 in 2020, this library did not implement
+/// DataPageV2 correctly, so if you use the V2 data page format, you may have
+/// forward compatibility issues (older versions of the library will be unable
+/// to read the files). Note that some Parquet implementations do not implement
 /// DataPageV2 at all.
 enum class ParquetDataPageVersion { V1, V2 };
 
@@ -109,8 +106,8 @@ constexpr int64_t kDefaultBufferSize = 4096 * 4;
 
 constexpr int32_t kDefaultThriftStringSizeLimit = 100 * 1000 * 1000;
 // Structs in the thrift definition are relatively large (at least 300 bytes).
-// This limits total memory to the same order of magnitude as.
-// KDefaultStringSizeLimit.
+// This limits total memory to the same order of magnitude as
+// kDefaultStringSizeLimit.
 constexpr int32_t kDefaultThriftContainerSizeLimit = 1000 * 1000;
 
 class PARQUET_EXPORT ReaderProperties {
@@ -127,13 +124,13 @@ class PARQUET_EXPORT ReaderProperties {
       int64_t start,
       int64_t numBytes);
 
-  /// Buffered stream reading allows the user to control the memory usage of.
+  /// Buffered stream reading allows the user to control the memory usage of
   /// Parquet readers. This ensure that all `RandomAccessFile::ReadAt` calls
-  /// are. Wrapped in a buffered reader that uses a fix sized buffer (of size.
-  /// `Buffer_size()`) instead of the full size of the ReadAt.
+  /// are wrapped in a buffered reader that uses a fix sized buffer (of size
+  /// `bufferSize()`) instead of the full size of the ReadAt.
   ///
-  /// The primary reason for this control knobs is for resource control and not.
-  /// Performance.
+  /// The primary reason for this control knob is for resource control and not
+  /// performance.
   bool isBufferedStreamEnabled() const {
     return bufferedStreamEnabled_;
   }
@@ -157,8 +154,8 @@ class PARQUET_EXPORT ReaderProperties {
 
   /// \brief Return the size limit on thrift strings.
   ///
-  /// This limit helps prevent space and time bombs in files, but may need to.
-  /// Be increased in order to read files with especially large headers.
+  /// This limit helps prevent space and time bombs in files, but may need to
+  /// be increased in order to read files with especially large headers.
   int32_t thriftStringSizeLimit() const {
     return thriftStringSizeLimit_;
   }
@@ -169,8 +166,8 @@ class PARQUET_EXPORT ReaderProperties {
 
   /// \brief Return the size limit on thrift containers.
   ///
-  /// This limit helps prevent space and time bombs in files, but may need to.
-  /// Be increased in order to read files with especially large headers.
+  /// This limit helps prevent space and time bombs in files, but may need to
+  /// be increased in order to read files with especially large headers.
   int32_t thriftContainerSizeLimit() const {
     return thriftContainerSizeLimit_;
   }
@@ -354,28 +351,28 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Enable dictionary encoding for column specified by `path`. Default.
-    /// Enabled.
+    /// Enable dictionary encoding for column specified by `path`. Default
+    /// enabled.
     Builder* enableDictionary(const std::string& path) {
       dictionaryEnabled_[path] = true;
       return this;
     }
 
-    /// Enable dictionary encoding for column specified by `path`. Default.
-    /// Enabled.
+    /// Enable dictionary encoding for column specified by `path`. Default
+    /// enabled.
     Builder* enableDictionary(const std::shared_ptr<schema::ColumnPath>& path) {
       return this->enableDictionary(path->toDotString());
     }
 
-    /// Disable dictionary encoding for column specified by `path`. Default.
-    /// Enabled.
+    /// Disable dictionary encoding for column specified by `path`. Default
+    /// enabled.
     Builder* disableDictionary(const std::string& path) {
       dictionaryEnabled_[path] = false;
       return this;
     }
 
-    /// Disable dictionary encoding for column specified by `path`. Default.
-    /// Enabled.
+    /// Disable dictionary encoding for column specified by `path`. Default
+    /// enabled.
     Builder* disableDictionary(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->disableDictionary(path->toDotString());
@@ -406,10 +403,10 @@ class PARQUET_EXPORT WriterProperties {
     /// Specify the max bytes to put in a single row group.
     /// The size is estimated based on encoded and compressed data.
     /// Default 128MB.
-    Builder* maxRowGroupBytes(int64_t max_row_group_bytes) {
-      ARROW_CHECK_GT(max_row_group_bytes, 0)
-          << "max_row_group_bytes must be positive";
-      maxRowGroupBytes_ = max_row_group_bytes;
+    Builder* maxRowGroupBytes(int64_t maxRowGroupBytes) {
+      ARROW_CHECK_GT(maxRowGroupBytes, 0)
+          << "maxRowGroupBytes must be positive";
+      maxRowGroupBytes_ = maxRowGroupBytes;
       return this;
     }
 
@@ -450,10 +447,10 @@ class PARQUET_EXPORT WriterProperties {
     }
 
     /// \brief Define the encoding that is used when we don't utilise
-    /// dictionary. Encoding.
+    /// dictionary encoding.
     //
-    /// This either apply if dictionary encoding is disabled or if we fallback.
-    /// As the dictionary grew too large.
+    /// This either applies if dictionary encoding is disabled or if we fallback
+    /// because the dictionary grew too large.
     Builder* encoding(Encoding::type encodingType) {
       if (encodingType == Encoding::kPlainDictionary ||
           encodingType == Encoding::kRleDictionary) {
@@ -466,10 +463,10 @@ class PARQUET_EXPORT WriterProperties {
     }
 
     /// \brief Define the encoding that is used when we don't utilise
-    /// dictionary. Encoding.
+    /// dictionary encoding.
     //
-    /// This either apply if dictionary encoding is disabled or if we fallback.
-    /// As the dictionary grew too large.
+    /// This either applies if dictionary encoding is disabled or if we fallback
+    /// because the dictionary grew too large.
     Builder* encoding(const std::string& path, Encoding::type encodingType) {
       if (encodingType == Encoding::kPlainDictionary ||
           encodingType == Encoding::kRleDictionary) {
@@ -482,10 +479,10 @@ class PARQUET_EXPORT WriterProperties {
     }
 
     /// \brief Define the encoding that is used when we don't utilise
-    /// dictionary. Encoding.
+    /// dictionary encoding.
     //
-    /// This either apply if dictionary encoding is disabled or if we fallback.
-    /// As the dictionary grew too large.
+    /// This either applies if dictionary encoding is disabled or if we fallback
+    /// because the dictionary grew too large.
     Builder* encoding(
         const std::shared_ptr<schema::ColumnPath>& path,
         Encoding::type encodingType) {
@@ -521,37 +518,37 @@ class PARQUET_EXPORT WriterProperties {
       return this->compression(path->toDotString(), codec);
     }
 
-    /// \brief Specify the default compression level for the compressor in.
-    /// Every column.  In case a column does not have an explicitly specified.
-    /// Compression level, the default one would be used.
+    /// \brief Specify the default compression level for the compressor in
+    /// every column. In case a column does not have an explicitly specified
+    /// compression level, the default one would be used.
     ///
-    /// The provided compression level is compressor specific. The user would.
-    /// Have to familiarize oneself with the available levels for the selected.
-    /// Compressor.  If the compressor does not allow for selecting different.
-    /// Compression levels, calling this function would not have any effect.
-    /// Parquet and Arrow do not validate the passed compression level.  If no.
-    /// Level is selected by the user or if the special.
-    /// Std::numeric_limits<int>::min() value is passed, then Arrow selects the.
-    /// Compression level.
+    /// The provided compression level is compressor specific. The user would
+    /// have to familiarize oneself with the available levels for the selected
+    /// compressor. If the compressor does not allow for selecting different
+    /// compression levels, calling this function would not have any effect.
+    /// Parquet and Arrow do not validate the passed compression level. If no
+    /// level is selected by the user or if the special
+    /// std::numeric_limits<int>::min() value is passed, then Arrow selects the
+    /// compression level.
     ///
-    /// If other compressor-specific options need to be set in addition to the.
-    /// Compression level, use the codec_options method.
+    /// If other compressor-specific options need to be set in addition to the
+    /// compression level, use the codec_options method.
     Builder* compressionLevel(int compressionLevel) {
       defaultColumnProperties_.setCompressionLevel(compressionLevel);
       return this;
     }
 
-    /// \brief Specify a compression level for the compressor for the column.
-    /// Described by path.
+    /// \brief Specify a compression level for the compressor for the column
+    /// described by path.
     ///
-    /// The provided compression level is compressor specific. The user would.
-    /// Have to familiarize oneself with the available levels for the selected.
-    /// Compressor.  If the compressor does not allow for selecting different.
-    /// Compression levels, calling this function would not have any effect.
-    /// Parquet and Arrow do not validate the passed compression level.  If no.
-    /// Level is selected by the user or if the special.
-    /// Std::numeric_limits<int>::min() value is passed, then Arrow selects the.
-    /// Compression level.
+    /// The provided compression level is compressor specific. The user would
+    /// have to familiarize oneself with the available levels for the selected
+    /// compressor. If the compressor does not allow for selecting different
+    /// compression levels, calling this function would not have any effect.
+    /// Parquet and Arrow do not validate the passed compression level. If no
+    /// level is selected by the user or if the special
+    /// std::numeric_limits<int>::min() value is passed, then Arrow selects the
+    /// compression level.
     Builder* compressionLevel(const std::string& path, int compressionLevel) {
       if (!codecOptions_[path]) {
         codecOptions_[path] = std::make_shared<CodecOptions>();
@@ -560,35 +557,35 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// \brief Specify a compression level for the compressor for the column.
-    /// Described by path.
+    /// \brief Specify a compression level for the compressor for the column
+    /// described by path.
     ///
-    /// The provided compression level is compressor specific. The user would.
-    /// Have to familiarize oneself with the available levels for the selected.
-    /// Compressor.  If the compressor does not allow for selecting different.
-    /// Compression levels, calling this function would not have any effect.
-    /// Parquet and Arrow do not validate the passed compression level.  If no.
-    /// Level is selected by the user or if the special.
-    /// Std::numeric_limits<int>::min() value is passed, then Arrow selects the.
-    /// Compression level.
+    /// The provided compression level is compressor specific. The user would
+    /// have to familiarize oneself with the available levels for the selected
+    /// compressor. If the compressor does not allow for selecting different
+    /// compression levels, calling this function would not have any effect.
+    /// Parquet and Arrow do not validate the passed compression level. If no
+    /// level is selected by the user or if the special
+    /// std::numeric_limits<int>::min() value is passed, then Arrow selects the
+    /// compression level.
     Builder* compressionLevel(
         const std::shared_ptr<schema::ColumnPath>& path,
         int compressionLevel) {
       return this->compressionLevel(path->toDotString(), compressionLevel);
     }
 
-    /// \brief Specify the default codec options for the compressor in.
-    /// Every column.
+    /// \brief Specify the default codec options for the compressor in
+    /// every column.
     ///
-    /// The codec options allow configuring the compression level as well.
-    /// As other codec-specific options.
+    /// The codec options allow configuring the compression level as well
+    /// as other codec-specific options.
     Builder* codecOptions(const std::shared_ptr<CodecOptions>& codecOptions) {
       defaultColumnProperties_.setCodecOptions(codecOptions);
       return this;
     }
 
-    /// \brief Specify the codec options for the compressor for the column.
-    /// Described by path.
+    /// \brief Specify the codec options for the compressor for the column
+    /// described by path.
     Builder* codecOptions(
         const std::string& path,
         const std::shared_ptr<CodecOptions>& codecOptions) {
@@ -596,8 +593,8 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// \brief Specify the codec options for the compressor for the column.
-    /// Described by path.
+    /// \brief Specify the codec options for the compressor for the column
+    /// described by path.
     Builder* codecOptions(
         const std::shared_ptr<schema::ColumnPath>& path,
         const std::shared_ptr<CodecOptions>& codecOptions) {
@@ -642,9 +639,9 @@ class PARQUET_EXPORT WriterProperties {
     /// Define the sorting columns.
     /// Default empty.
     ///
-    /// If sorting columns are set, user should ensure that records.
-    /// Are sorted by sorting columns. Otherwise, the storing data.
-    /// Will be inconsistent with sorting_columns metadata.
+    /// If sorting columns are set, user should ensure that records
+    /// are sorted by sorting columns. Otherwise, the storing data
+    /// will be inconsistent with sorting_columns metadata.
     Builder* setSortingColumns(std::vector<SortingColumn> sortingColumns) {
       sortingColumns_ = std::move(sortingColumns);
       return this;
@@ -666,33 +663,33 @@ class PARQUET_EXPORT WriterProperties {
 
     /// Allow decimals with 1 <= precision <= 18 to be stored as integers.
     ///
-    /// In Parquet, DECIMAL can be stored in any of the following physical.
-    /// Types:
+    /// In Parquet, DECIMAL can be stored in any of the following physical
+    /// types:
     /// - Int32: for 1 <= precision <= 9.
     /// - Int64: for 10 <= precision <= 18.
     /// - Fixed_len_byte_array: precision is limited by the array size.
     ///   Length n can store <= floor(log_10(2^(8*n - 1) - 1)) base-10 digits.
-    /// - Binary: precision is unlimited. The minimum number of bytes to store.
-    ///   The unscaled value is used.
+    /// - Binary: precision is unlimited. The minimum number of bytes to store
+    ///   the unscaled value is used.
     ///
     /// By default, this is DISABLED and all decimal types annotate.
     /// Fixed_len_byte_array.
     ///
-    /// When enabled, the C++ writer will use following physical types to store.
-    /// Decimals:
+    /// When enabled, the C++ writer will use following physical types to store
+    /// decimals:
     /// - Int32: for 1 <= precision <= 9.
     /// - Int64: for 10 <= precision <= 18.
     /// - Fixed_len_byte_array: for precision > 18.
     ///
-    /// As a consequence, decimal columns stored in integer types are more.
-    /// Compact.
+    /// As a consequence, decimal columns stored in integer types are more
+    /// compact.
     Builder* enableStoreDecimalAsInteger() {
       storeDecimalAsInteger_ = true;
       return this;
     }
 
-    /// Disable decimal logical type with 1 <= precision <= 18 to be stored as.
-    /// Integer physical type.
+    /// Disable decimal logical type with 1 <= precision <= 18 to be stored as
+    /// integer physical type.
     ///
     /// Default disabled.
     Builder* disableStoreDecimalAsInteger() {
@@ -702,11 +699,11 @@ class PARQUET_EXPORT WriterProperties {
 
     /// Enable writing page index in general for all columns. Default disabled.
     ///
-    /// Writing statistics to the page index disables the old method of writing.
-    /// Statistics to each data page header.
-    /// The page index makes filtering more efficient than the page header, as.
-    /// It gathers all the statistics for a Parquet file in a single place,.
-    /// Avoiding scattered I/O.
+    /// Writing statistics to the page index disables the old method of writing
+    /// statistics to each data page header.
+    /// The page index makes filtering more efficient than the page header, as
+    /// it gathers all the statistics for a Parquet file in a single place,
+    /// avoiding scattered I/O.
     ///
     /// Please check the link below for more details:
     /// https://github.com/apache/parquet-format/blob/master/PageIndex.md
@@ -721,29 +718,29 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Enable writing page index for column specified by `path`. Default.
-    /// Disabled.
+    /// Enable writing page index for column specified by `path`. Default
+    /// disabled.
     Builder* enableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = true;
       return this;
     }
 
-    /// Enable writing page index for column specified by `path`. Default.
-    /// Disabled.
+    /// Enable writing page index for column specified by `path`. Default
+    /// disabled.
     Builder* enableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->enableWritePageIndex(path->toDotString());
     }
 
-    /// Disable writing page index for column specified by `path`. Default.
-    /// Disabled.
+    /// Disable writing page index for column specified by `path`. Default
+    /// disabled.
     Builder* disableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = false;
       return this;
     }
 
-    /// Disable writing page index for column specified by `path`. Default.
-    /// Disabled.
+    /// Disable writing page index for column specified by `path`. Default
+    /// disabled.
     Builder* disableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->disableWritePageIndex(path->toDotString());
@@ -1043,9 +1040,8 @@ class PARQUET_EXPORT ArrowReaderProperties {
 
   /// \brief Set whether to read a particular column as dictionary encoded.
   ///
-  /// If the file metadata contains a serialized Arrow schema, then ...
-  /// /.
-  /// This is only supported for columns with a Parquet physical type of.
+  /// If the file metadata contains a serialized Arrow schema, then this
+  /// is only supported for columns with a Parquet physical type of
   /// BYTE_ARRAY, such as string or binary types.
   void setReadDictionary(int columnIndex, bool readDict) {
     if (readDict) {
@@ -1161,8 +1157,8 @@ class PARQUET_EXPORT ArrowWriterProperties {
 
     /// \brief Enable writing legacy int96 timestamps (default disabled).
     ///
-    /// May be turned on to write timestamps compatible with older Parquet.
-    /// Writers. This takes precedent over coerce_timestamps.
+    /// May be turned on to write timestamps compatible with older Parquet
+    /// writers. This takes precedent over coerceTimestamps.
     Builder* enableDeprecatedInt96Timestamps() {
       writeTimestampsAsInt96_ = true;
       return this;
@@ -1192,9 +1188,9 @@ class PARQUET_EXPORT ArrowWriterProperties {
       return this;
     }
 
-    /// \brief EXPERIMENTAL: Write binary serialized Arrow schema to the file,.
-    /// To enable certain read options (like "read_dictionary") to be set.
-    /// Automatically.
+    /// \brief EXPERIMENTAL: Write binary serialized Arrow schema to the file,
+    /// to enable certain read options (like "read_dictionary") to be set
+    /// automatically.
     Builder* storeSchema() {
       storeSchema_ = true;
       return this;
@@ -1296,9 +1292,9 @@ class PARQUET_EXPORT ArrowWriterProperties {
 
   /// \brief Enable nested type naming according to the parquet specification.
   ///
-  /// Older versions of arrow wrote out field names for nested lists based on.
-  /// The name of the field.  According to the parquet specification they
-  /// should. Always be "element".
+  /// Older versions of arrow wrote out field names for nested lists based on
+  /// the name of the field. According to the Parquet specification they
+  /// should always be "element".
   bool compliantNestedTypes() const {
     return compliantNestedTypes_;
   }

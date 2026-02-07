@@ -16,8 +16,8 @@
 
 // Adapted from Apache Arrow.
 
-// This module contains the logical parquet-cpp types (independent of Thrift.
-// Structures), schema nodes, and related type tools.
+// This module contains the logical Parquet-cpp types (independent of Thrift
+// structures), schema nodes, and related type tools.
 
 #pragma once
 
@@ -40,11 +40,11 @@ namespace schema {
 
 class Node;
 
-// List encodings: using the terminology from Impala to define different styles.
-// Of representing logical lists (a.k.a. ARRAY types) in Parquet schemas. Since.
-// The converted type named in the Parquet metadata is ConvertedType::kList we.
-// Use that terminology here. It also helps distinguish from the *_ARRAY.
-// Primitive types.
+// List encodings: using the terminology from Impala to define different styles
+// of representing logical lists (a.k.a. ARRAY types) in Parquet schemas. Since
+// the converted type named in the Parquet metadata is ConvertedType::kList we
+// use that terminology here. It also helps distinguish from the *_ARRAY
+// primitive types.
 //
 // One-level encoding: Only allows required lists with required cells.
 //   Repeated value_type name.
@@ -58,20 +58,20 @@ class Node;
 //     Repeated group list.
 //       <Required/optional> value_type item.
 //
-// 2- And 1-level encoding are respectively equivalent to 3-level encoding with.
-// The non-repeated nodes set to required.
+// 2- And 1-level encoding are respectively equivalent to 3-level encoding with
+// the non-repeated nodes set to required.
 //
-// The "official" encoding recommended in the Parquet spec is the 3-level, and.
-// We use that as the default when creating list types. For semantic.
-// Completeness we allow the other two. Since all types of encodings will occur.
-// "In the wild" we need to be able to interpret the associated definition.
-// Levels in the context of the actual encoding used in the file.
+// The "official" encoding recommended in the Parquet spec is the 3-level, and
+// we use that as the default when creating list types. For semantic
+// completeness we allow the other two. Since all types of encodings will occur
+// "in the wild" we need to be able to interpret the associated definition
+// levels in the context of the actual encoding used in the file.
 //
-// NB: Some Parquet writers may not set ConvertedType::kList on the repeated.
-// SchemaElement, which could make things challenging if we are trying to infer.
-// That a sequence of nodes semantically represents an array according to one.
-// Of these encodings (versus a struct containing an array). We should refuse.
-// The temptation to guess, as they say.
+// NB: Some Parquet writers may not set ConvertedType::kList on the repeated
+// SchemaElement, which could make things challenging if we are trying to infer
+// that a sequence of nodes semantically represents an array according to one
+// of these encodings (versus a struct containing an array). We should refuse
+// the temptation to guess, as they say.
 struct ListEncoding {
   enum type { ONE_LEVEL, TWO_LEVEL, THREE_LEVEL };
 };
@@ -95,7 +95,7 @@ class PARQUET_EXPORT ColumnPath {
   std::vector<std::string> path_;
 };
 
-// Base class for logical schema types. A type has a name, repetition level,.
+// Base class for logical schema types. A type has a name, repetition level,
 // and optionally a logical type (ConvertedType in Parquet metadata parlance)
 class PARQUET_EXPORT Node {
  public:
@@ -145,8 +145,8 @@ class PARQUET_EXPORT Node {
     return logicalType_;
   }
 
-  /// \brief The field_id value for the serialized SchemaElement. If the.
-  /// Field_id is less than 0 (e.g. -1), it will not be set when serialized to.
+  /// \brief The fieldId value for the serialized SchemaElement. If the
+  /// fieldId is less than 0 (e.g. -1), it will not be set when serialized to
   /// Thrift.
   int fieldId() const {
     return fieldId_;
@@ -226,10 +226,10 @@ class PARQUET_EXPORT Node {
 using NodePtr = std::shared_ptr<Node>;
 using NodeVector = std::vector<NodePtr>;
 
-// A type that is one of the primitive Parquet storage types. In addition to.
-// The other type metadata (name, repetition level, logical type), also has the.
-// Physical storage type and their type-specific metadata (byte width, decimal.
-// parameters)
+// A type that is one of the primitive Parquet storage types. In addition to
+// the other type metadata (name, repetition level, logical type), also has the
+// physical storage type and their type-specific metadata (byte width, decimal
+// parameters).
 class PARQUET_EXPORT PrimitiveNode : public Node {
  public:
   static std::unique_ptr<Node> fromParquet(const void* opaqueElement);
@@ -371,8 +371,8 @@ class PARQUET_EXPORT GroupNode : public Node {
     return fields_[i];
   }
   // Get the index of a field by its name, or negative value if not found.
-  // If several fields share the same name, it is unspecified which one.
-  // Is returned.
+  // If several fields share the same name, it is unspecified which one
+  // is returned.
   int fieldIndex(const std::string& name) const;
   // Get the index of a field by its node, or negative value if not found.
   int fieldIndex(const Node& node) const;
@@ -385,8 +385,8 @@ class PARQUET_EXPORT GroupNode : public Node {
   void visit(Visitor* visitor) override;
   void visitConst(ConstVisitor* visitor) const override;
 
-  /// \brief Return true if this node or any child node has REPEATED repetition.
-  /// Type.
+  /// \brief Return true if this node or any child node has REPEATED repetition
+  /// type.
   bool hasRepeatedFields() const;
 
  private:
@@ -450,11 +450,11 @@ void PARQUET_EXPORT printSchema(
 
 } // namespace schema
 
-// The ColumnDescriptor encapsulates information necessary to interpret.
-// Primitive column data in the context of a particular schema. We have to.
-// Examine the node structure of a column's path to the root in the schema tree.
-// To be able to reassemble the nested structure from the repetition and.
-// Definition levels.
+// The ColumnDescriptor encapsulates information necessary to interpret
+// primitive column data in the context of a particular schema. We have to
+// examine the node structure of a column's path to the root in the schema tree
+// to be able to reassemble the nested structure from the repetition and
+// definition levels.
 class PARQUET_EXPORT ColumnDescriptor {
  public:
   ColumnDescriptor(
@@ -521,15 +521,15 @@ class PARQUET_EXPORT ColumnDescriptor {
   int16_t maxRepetitionLevel_;
 };
 
-// Container for the converted Parquet schema with a computed information from.
-// The schema analysis needed for file reading.
+// Container for the converted Parquet schema with a computed information from
+// the schema analysis needed for file reading.
 //
 // * Column index to Node.
 // * Max repetition / definition levels for each primitive node.
 //
-// The ColumnDescriptor objects produced by this class can be used to assist in.
-// The reconstruction of fully materialized data structures from the.
-// Repetition-definition level encoding of nested data.
+// The ColumnDescriptor objects produced by this class can be used to assist in
+// the reconstruction of fully materialized data structures from the
+// repetition-definition level encoding of nested data.
 //
 // TODO(wesm): this object can be recomputed from a Schema.
 class PARQUET_EXPORT SchemaDescriptor {
@@ -543,9 +543,9 @@ class PARQUET_EXPORT SchemaDescriptor {
 
   const ColumnDescriptor* column(int i) const;
 
-  // Get the index of a column by its dotstring path, or negative value if not.
-  // Found. If several columns share the same dotstring path, it is unspecified.
-  // Which one is returned.
+  // Get the index of a column by its dotstring path, or negative value if not
+  // found. If several columns share the same dotstring path, it is unspecified
+  // which one is returned.
   int columnIndex(const std::string& nodePath) const;
   // Get the index of a column by its node, or negative value if not found.
   int columnIndex(const schema::Node& node) const;
@@ -566,7 +566,7 @@ class PARQUET_EXPORT SchemaDescriptor {
     return groupNode_;
   }
 
-  // Returns the root (child of the schema root) node of the leaf(column) node.
+  // Returns the root (child of the schema root) node of the leaf (column) node.
   const schema::Node* getColumnRoot(int i) const;
 
   const std::string& name() const {
@@ -577,7 +577,7 @@ class PARQUET_EXPORT SchemaDescriptor {
 
   void updateColumnOrders(const std::vector<ColumnOrder>& columnOrders);
 
-  /// \brief Return column index corresponding to a particular.
+  /// \brief Return column index corresponding to a particular
   /// PrimitiveNode. Returns -1 if not found.
   int getColumnIndex(const schema::PrimitiveNode& node) const;
 
@@ -604,7 +604,7 @@ class PARQUET_EXPORT SchemaDescriptor {
 
   std::unordered_map<const schema::PrimitiveNode*, int> nodeToLeafIndex_;
 
-  // Mapping between leaf nodes and root group of leaf (first node.
+  // Mapping between leaf nodes and root group of leaf (first node
   // below the schema's root group)
   //
   // For example, the leaf `a.b.c.d` would have a link back to `a`.

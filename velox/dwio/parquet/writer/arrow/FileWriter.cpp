@@ -42,7 +42,7 @@ namespace facebook::velox::parquet::arrow {
 using schema::GroupNode;
 
 // ----------------------------------------------------------------------.
-// rowGroupWriter public API.
+// RowGroupWriter public API.
 
 RowGroupWriter::RowGroupWriter(std::unique_ptr<Contents> contents)
     : contents_(std::move(contents)) {}
@@ -141,14 +141,14 @@ class RowGroupSerializer : public RowGroupWriter::Contents {
 
   int64_t numRows() const override {
     checkRowsWritten();
-    // CheckRowsWritten ensures num_rows_ is set correctly.
+    // checkRowsWritten() ensures numRows_ is set correctly.
     return numRows_;
   }
 
   ColumnWriter* nextColumn() override {
     if (bufferedRowGroup_) {
       throw ParquetException(
-          "NextColumn() is not supported when a RowGroup is written by size");
+          "nextColumn() is not supported when a RowGroup is written by size");
     }
 
     if (columnWriters_[0]) {
@@ -296,7 +296,7 @@ class RowGroupSerializer : public RowGroupWriter::Contents {
       closed_ = true;
       checkRowsWritten();
 
-      // Avoid invalid state if ColumnWriter::Close() throws internally.
+      // Avoid invalid state if ColumnWriter::close() throws internally.
       auto columnWriters = std::move(columnWriters_);
       for (size_t i = 0; i < columnWriters.size(); i++) {
         if (columnWriters[i]) {
@@ -335,10 +335,8 @@ class RowGroupSerializer : public RowGroupWriter::Contents {
       } else if (numRows_ != currentColRows) {
         throwRowsMisMatchError(nextColumnIndex_, currentColRows, numRows_);
       }
-    } else if (
-        bufferedRowGroup_ && columnWriters_.size() > 0) { // when
-                                                          // Buffered_row_group.
-                                                          // = True.
+    } else if (bufferedRowGroup_ && columnWriters_.size() > 0) {
+      // When bufferedRowGroup = true.
       VELOX_DCHECK_NOT_NULL(columnWriters_[0]);
       int64_t currentColRows = columnWriters_[0]->rowsWritten();
       for (int i = 1; i < static_cast<int>(columnWriters_.size()); i++) {
@@ -411,11 +409,11 @@ class RowGroupSerializer : public RowGroupWriter::Contents {
   std::vector<std::shared_ptr<ColumnWriter>> columnWriters_;
 };
 
-// ----------------------------------------------------------------------.
+// ----------------------------------------------------------------------
 // FileSerializer.
 
-// An implementation of ParquetFileWriter::Contents that deals with the Parquet.
-// File structure, Thrift serialization, and other internal matters.
+// An implementation of ParquetFileWriter::Contents that deals with the Parquet
+// file structure, Thrift serialization, and other internal matters.
 
 class FileSerializer : public ParquetFileWriter::Contents {
  public:
@@ -435,8 +433,8 @@ class FileSerializer : public ParquetFileWriter::Contents {
 
   void close() override {
     if (isOpen_) {
-      // If any functions here raise an exception, we set is_open_ to be false.
-      // so that this does not get called again (possibly causing segfault)
+      // If any functions here raise an exception, we set isOpen_ to be false
+      // so that this does not get called again (possibly causing segfault).
       isOpen_ = false;
       if (rowGroupWriter_) {
         numRows_ += rowGroupWriter_->numRows();
@@ -452,7 +450,7 @@ class FileSerializer : public ParquetFileWriter::Contents {
       if (fileEncryptionProperties == nullptr) { // Non encrypted file.
         fileMetadata_ = metadata_->finish(keyValueMetadata_);
         writeFileMetaData(*fileMetadata_, sink_.get());
-      } else { // Encrypted file
+      } else { // Encrypted file.
         closeEncryptedFile(fileEncryptionProperties);
       }
     }
@@ -580,8 +578,8 @@ class FileSerializer : public ParquetFileWriter::Contents {
         throw ParquetException("Encryption is not supported with page index");
       }
 
-      // Serialize page index after all row groups have been written and report.
-      // Location to the file metadata.
+      // Serialize page index after all row groups have been written and report
+      // location to the file metadata.
       PageIndexLocation pageIndexLocation;
       pageIndexBuilder_->finish();
       pageIndexBuilder_->writeTo(sink_.get(), &pageIndexLocation);
@@ -606,11 +604,11 @@ class FileSerializer : public ParquetFileWriter::Contents {
       // Unencrypted parquet files always start with PAR1.
       PARQUET_THROW_NOT_OK(sink_->Write(kParquetMagic, 4));
     } else {
-      // Check that all columns in columnEncryptionProperties exist in the.
-      // Schema.
+      // Check that all columns in columnEncryptionProperties exist in the
+      // schema.
       auto encryptedColumns = fileEncryptionProperties->encryptedColumns();
-      // If columnEncryptionProperties is empty, every column in file schema.
-      // Will be encrypted with footer key.
+      // If columnEncryptionProperties is empty, every column in file schema
+      // will be encrypted with footer key.
       if (encryptedColumns.size() != 0) {
         std::vector<std::string> columnPathVec;
         // First, save all column paths in schema.
@@ -645,7 +643,7 @@ class FileSerializer : public ParquetFileWriter::Contents {
   }
 };
 
-// ----------------------------------------------------------------------.
+// ----------------------------------------------------------------------
 // ParquetFileWriter public API.
 
 ParquetFileWriter::ParquetFileWriter() {}
@@ -675,7 +673,7 @@ std::unique_ptr<ParquetFileWriter> ParquetFileWriter::open(
 void writeFileMetaData(
     const FileMetaData& fileMetadata,
     ArrowOutputStream* sink) {
-  // Write MetaData.
+  // Write metadata.
   PARQUET_ASSIGN_OR_THROW(int64_t position, sink->Tell());
   uint32_t metadataLen = static_cast<uint32_t>(position);
 
@@ -701,7 +699,7 @@ void writeEncryptedFileMetadata(
     ArrowOutputStream* sink,
     const std::shared_ptr<Encryptor>& encryptor,
     bool encryptFooter) {
-  if (encryptFooter) { // Encrypted file with encrypted footer
+  if (encryptFooter) { // Encrypted file with encrypted footer.
     // Encrypt and write to sink.
     fileMetadata.writeTo(sink, encryptor);
   } else { // Encrypted file with plaintext footer mode.

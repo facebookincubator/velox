@@ -79,7 +79,7 @@ int calculateLeafCount(const DataType* type) {
   if (type->id() == ::arrow::Type::EXTENSION) {
     type = checked_cast<const ExtensionType&>(*type).storage_type().get();
   }
-  // Note num_fields() can be 0 for an empty struct type.
+  // Note numFields() can be 0 for an empty struct type.
   if (!::arrow::is_nested(type->id())) {
     // Primitive type.
     return 1;
@@ -107,13 +107,13 @@ bool hasNullableRoot(
 }
 
 // Manages writing nested parquet columns with support for all nested types.
-// Supported by parquet.
+// Supported by Parquet.
 class ArrowColumnWriterV2 {
  public:
-  // Constructs a new object (use Make() method below to construct from.
-  // A ChunkedArray).
-  // Level_builders should contain one MultipathLevelBuilder per chunk of the.
-  // Arrow-column to write.
+  // Constructs a new object (use make() method below to construct from
+  // a ChunkedArray).
+  // LevelBuilders should contain one MultipathLevelBuilder per chunk of the
+  // arrow-column to write.
   ArrowColumnWriterV2(
       std::vector<std::unique_ptr<MultipathLevelBuilder>> levelBuilders,
       int startLeafColumnIndex,
@@ -124,9 +124,9 @@ class ArrowColumnWriterV2 {
         leafCount_(leafCount),
         rowGroupWriter_(rowGroupWriter) {}
 
-  // Writes out all leaf parquet columns to the rowGroupWriter that this.
-  // Object was constructed with.  Each leaf column is written fully before.
-  // The next column is written (i.e. no buffering is assumed).
+  // Writes out all leaf Parquet columns to the rowGroupWriter that this
+  // object was constructed with.  Each leaf column is written fully before
+  // the next column is written (i.e. no buffering is assumed).
   //
   // Columns are written in DFS order.
   Status write(ArrowWriteContext* ctx) {
@@ -170,16 +170,15 @@ class ArrowColumnWriterV2 {
     return Status::OK();
   }
 
-  // Make a new object by converting each chunk in |data| to a.
   // MultipathLevelBuilder.
   //
-  // It is necessary to create a new builder per array because the.
-  // MultipathlevelBuilder extracts the data necessary for writing each leaf.
-  // Column at construction time. (it optimizes based on null count) and with.
-  // Slicing via |offset| ephemeral chunks are created which need to be tracked.
-  // Across each leaf column-write. This decision could potentially be
-  // revisited. If we wanted to use "buffered" RowGroupWriters (we could
-  // construct each. Builder on demand in that case).
+  // It is necessary to create a new builder per array because the
+  // MultipathlevelBuilder extracts the data necessary for writing each leaf
+  // column at construction time (it optimizes based on null count) and with
+  // slicing via |offset| ephemeral chunks are created which need to be tracked
+  // across each leaf column-write. This decision could potentially be
+  // revisited if we wanted to use "buffered" RowGroupWriters (we could
+  // construct each builder on demand in that case).
   static ::arrow::Result<std::unique_ptr<ArrowColumnWriterV2>> make(
       const ChunkedArray& data,
       int64_t offset,
@@ -200,8 +199,8 @@ class ArrowColumnWriterV2 {
     while (chunkIndex < data.num_chunks() && absolutePosition < offset) {
       const int64_t chunkLength = data.chunk(chunkIndex)->length();
       if (absolutePosition + chunkLength > offset) {
-        // Relative offset into the chunk to reach the desired start offset for.
-        // Writing.
+        // Relative offset into the chunk to reach the desired start offset for
+        // writing.
         chunkOffset = offset - absolutePosition;
         break;
       } else {
@@ -224,8 +223,8 @@ class ArrowColumnWriterV2 {
     if (rowGroupWriter->buffered()) {
       columnIndex = startLeafColumnIndex;
     } else {
-      // The row_group_writer hasn't been advanced yet so add 1 to the current.
-      // Which is the one this instance will start writing for.
+      // The rowGroupWriter hasn't been advanced yet so add 1 to the current
+      // which is the one this instance will start writing for.
       columnIndex = rowGroupWriter->currentColumn() + 1;
     }
 
@@ -257,8 +256,8 @@ class ArrowColumnWriterV2 {
       const int64_t chunkWriteSize =
           std::min(size - valuesWritten, availableValues);
 
-      // The chunk offset here will be 0 except for possibly the first chunk.
-      // Because of the advancing logic above.
+      // The chunk offset here will be 0 except for possibly the first chunk
+      // because of the advancing logic above.
       std::shared_ptr<Array> arrayToWrite =
           chunk.Slice(chunkOffset, chunkWriteSize);
 
@@ -300,8 +299,8 @@ class ArrowColumnWriterV2 {
 
 } // namespace
 
-// ----------------------------------------------------------------------.
-// fileWriter implementation.
+// ----------------------------------------------------------------------
+// FileWriter implementation.
 
 class FileWriterImpl : public FileWriter {
  public:
@@ -319,9 +318,9 @@ class FileWriterImpl : public FileWriter {
     if (arrowProperties_->useThreads()) {
       parallelColumnWriteContexts_.reserve(schema_->num_fields());
       for (int i = 0; i < schema_->num_fields(); ++i) {
-        // Explicitly create each ArrowWriteContext object to avoid.
-        // Unintentional call of the copy constructor. Otherwise, the buffers
-        // in. The type of sharad_ptr will be shared among all contexts.
+        // Explicitly create each ArrowWriteContext object to avoid
+        // unintentional call of the copy constructor. Otherwise, the buffers
+        // in the type of shared_ptr will be shared among all contexts.
         parallelColumnWriteContexts_.emplace_back(pool, arrowProperties_.get());
       }
     }
@@ -356,7 +355,7 @@ class FileWriterImpl : public FileWriter {
   }
 
   Status writeColumnChunk(const Array& data) override {
-    // A bit awkward here since cannot instantiate ChunkedArray from const.
+    // A bit awkward here since cannot instantiate ChunkedArray from const
     // Array&.
     auto chunk = ::arrow::MakeArray(data.data());
     auto chunkedArray = std::make_shared<::arrow::ChunkedArray>(chunk);
@@ -405,7 +404,7 @@ class FileWriterImpl : public FileWriter {
     } else if (chunkSize > this->properties().maxRowGroupLength()) {
       chunkSize = this->properties().maxRowGroupLength();
     }
-    // max_row_group_bytes is applied only after the row group has accumulated
+    // maxRowGroupBytes is applied only after the row group has accumulated
     // data.
     if (rowGroupWriter_ != nullptr && rowGroupWriter_->numRows() > 0) {
       double avgRowSize = rowGroupWriter_->totalBufferedBytes() * 1.0 /
@@ -551,9 +550,9 @@ class FileWriterImpl : public FileWriter {
   std::shared_ptr<ArrowWriterProperties> arrowProperties_;
   bool closed_;
 
-  /// If arrow_properties_.use_threads() is true, the vector size is equal to.
-  /// Schema_->num_fields() to make it thread-safe. Otherwise, the vector is.
-  /// Empty and column_write_context_ above is shared by all columns.
+  /// If arrowProperties_->useThreads() is true, the vector size is equal to
+  /// schema_->num_fields() to make it thread-safe. Otherwise, the vector is
+  /// empty and columnWriteContext_ above is shared by all columns.
   std::vector<ArrowWriteContext> parallelColumnWriteContexts_;
 };
 

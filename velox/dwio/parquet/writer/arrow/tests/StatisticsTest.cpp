@@ -41,7 +41,7 @@ namespace test {
 namespace {
 void writeToFile(
     std::shared_ptr<exec::test::TempFilePath> filePath,
-    std::shared_ptr<arrow::Buffer> buffer) {
+    std::shared_ptr<::arrow::Buffer> buffer) {
   auto localWriteFile =
       std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
   auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
@@ -65,10 +65,10 @@ static FLBA fLBAFromString(const std::string& s) {
 }
 
 TEST(Comparison, SignedByteArray) {
-  // Signed byte array comparison is only used for Decimal comparison. When.
-  // Decimals are encoded as byte arrays they use twos complement big-endian.
-  // Encoded values. Comparisons of byte arrays of unequal types need to handle.
-  // Sign extension.
+  // Signed byte array comparison is only used for Decimal comparison. When
+  // decimals are encoded as byte arrays they use twos complement big-endian
+  // encoded values. Comparisons of byte arrays of unequal types need to handle
+  // sign extension.
   auto Comparator =
       makeComparator<ByteArrayType>(Type::kByteArray, SortOrder::kSigned);
   struct Case {
@@ -79,8 +79,8 @@ TEST(Comparison, SignedByteArray) {
     }
   };
 
-  // Test a mix of big-endian comparison values that are both equal and.
-  // Unequal after sign extension.
+  // Test a mix of big-endian comparison values that are both equal and
+  // unequal after sign extension.
   std::vector<Case> cases = {
       {{0x80, 0x80, 0, 0}, 0},
       {{/*0xFF,*/ 0x80, 0, 0}, 1},
@@ -453,8 +453,8 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     auto columnWriter =
         static_cast<TypedColumnWriter<TestType>*>(rowGroupWriter->nextColumn());
 
-    // Simulate the case when data comes from multiple buffers,.
-    // In which case special care is necessary for FLBA/ByteArray types.
+    // Simulate the case when data comes from multiple buffers,
+    // in which case special care is necessary for FLBA/ByteArray types.
     for (int i = 0; i < 2; i++) {
       int64_t batchNumValues = i ? numValues - numValues / 2 : numValues / 2;
       int64_t batchNullCount = i ? nullCount : 0;
@@ -733,8 +733,8 @@ class TestStatisticsHasFlag : public TestStatistics<TestType> {
   }
 
   // If all values in a page are null or nan, its stats should not set min-max.
-  // Merging its stats with another page having good min-max stats should not.
-  // Drop the valid min-max from the latter page.
+  // Merging its stats with another page having good min-max stats should not
+  // drop the valid min-max from the latter page.
   void testMergeMinMax() {
     this->generateData(1000);
     // Create a statistics object without min-max.
@@ -771,9 +771,9 @@ class TestStatisticsHasFlag : public TestStatistics<TestType> {
   }
 
   // Default statistics should have null_count even if no nulls is written.
-  // However, if statistics is created from thrift message, it might not.
-  // Have null_count. Merging statistics from such page will result in an.
-  // Invalid null_count as well.
+  // However, if statistics is created from thrift message, it might not
+  // have null_count. Merging statistics from such page will result in an
+  // invalid null_count as well.
   void testMergeNullCount() {
     this->generateData(/*num_values=*/1000);
 

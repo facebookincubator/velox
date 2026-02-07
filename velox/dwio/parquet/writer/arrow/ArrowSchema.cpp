@@ -98,18 +98,18 @@ struct CanToChars<
 
 /// \brief Whether std::to_chars exists for the current value type.
 ///
-/// This is useful as some C++ libraries do not implement all specified.
-/// Overloads for std::to_chars.
+/// This is useful as some C++ libraries do not implement all specified
+/// overloads for std::to_chars.
 template <typename T>
 inline constexpr bool haveToChars = detail::CanToChars<T>::value;
 
 /// \brief An ergonomic wrapper around std::to_chars, returning a std::string.
 ///
-/// For most inputs, the std::string result will not incur any heap allocation.
-/// Thanks to small string optimization.
+/// For most inputs, the std::string result will not incur any heap allocation
+/// thanks to small string optimization.
 ///
-/// Compared to std::to_string, this function gives locale-agnostic results.
-/// And might also be faster.
+/// Compared to std::to_string, this function gives locale-agnostic results
+/// and might also be faster.
 template <typename T, typename... Args>
 std::string toChars(T value, Args&&... args) {
   if constexpr (!haveToChars<T>) {
@@ -117,9 +117,9 @@ std::string toChars(T value, Args&&... args) {
     // Types, in which case we have to fallback to std::string.
     return std::to_string(value);
   } else {
-    // According to various sources, the GNU libstdc++ and Microsoft's C++ STL.
-    // Allow up to 15 bytes of small string optimization, while clang's libc++.
-    // Goes up to 22 bytes. Choose the pessimistic value.
+    // According to various sources, the GNU libstdc++ and Microsoft's C++ STL
+    // allow up to 15 bytes of small string optimization, while clang's libc++
+    // goes up to 22 bytes. Choose the pessimistic value.
     std::string out(15, 0);
     auto res = std::to_chars(&out.front(), &out.back(), value, args...);
     while (res.ec != std::errc{}) {
@@ -217,9 +217,9 @@ Status structToNode(
           &children[i]));
     }
   } else {
-    // XXX (ARROW-10928) We could add a dummy primitive node but that would.
-    // Require special handling when writing and reading, to avoid column index.
-    // Mismatches.
+    // XXX (ARROW-10928) We could add a dummy primitive node but that would
+    // require special handling when writing and reading, to avoid column index
+    // mismatches.
     return Status::NotImplemented(
         "Cannot write struct type '",
         name,
@@ -237,12 +237,12 @@ timestampLogicalTypeFromArrowTimestamp(
     const ::arrow::TimestampType& timestampType,
     ::arrow::TimeUnit::type timeUnit) {
   const bool utc = !(timestampType.timezone().empty());
-  // ARROW-5878(wesm): for forward compatibility reasons, and because.
-  // There's no other way to signal to old readers that values are.
-  // Timestamps, we force the ConvertedType field to be set to the.
-  // Corresponding TIMESTAMP_* value. This does cause some ambiguity.
-  // As Parquet readers have not been consistent about the.
-  // Interpretation of TIMESTAMP_* values as being UTC-normalized.
+  // ARROW-5878(wesm): for forward compatibility reasons, and because
+  // there's no other way to signal to old readers that values are
+  // timestamps, we force the ConvertedType field to be set to the
+  // corresponding TIMESTAMP_* value. This does cause some ambiguity
+  // as Parquet readers have not been consistent about the
+  // interpretation of TIMESTAMP_* values as being UTC-normalized.
   switch (timeUnit) {
     case ::arrow::TimeUnit::MILLI:
       return LogicalType::timestamp(
@@ -321,9 +321,9 @@ static Status getTimestampMetadata(
   }
 
   // The user implicitly wants timestamp data to retain its original time
-  // units,. However the ConvertedType field used to indicate logical types for
-  // Parquet. Version <= 2.4 fields does not allow for nanosecond time units and
-  // so. Nanoseconds must be coerced to microseconds.
+  // units. However, the ConvertedType field used to indicate logical types for
+  // Parquet version <= 2.4 fields does not allow for nanosecond time units and
+  // so nanoseconds must be coerced to microseconds.
   if ((version == ParquetVersion::PARQUET_1_0 ||
        version == ParquetVersion::PARQUET_2_4) &&
       type.unit() == ::arrow::TimeUnit::NANO) {
@@ -333,8 +333,8 @@ static Status getTimestampMetadata(
   }
 
   // The user implicitly wants timestamp data to retain its original time
-  // units,. However the Arrow seconds time unit can not be represented
-  // (annotated) in. Any version of Parquet and so must be coerced to
+  // units. However, the Arrow seconds time unit can not be represented
+  // (annotated) in any version of Parquet and so must be coerced to
   // milliseconds.
   if (type.unit() == ::arrow::TimeUnit::SECOND) {
     *logicalType =
@@ -530,8 +530,8 @@ Status fieldToNode(
           out);
     }
     case ArrowTypeId::DICTIONARY: {
-      // Parquet has no Dictionary type, dictionary-encoded is handled on.
-      // The encoding, not the schema level.
+      // Parquet has no Dictionary type, dictionary-encoded is handled on
+      // the encoding, not the schema level.
       const ::arrow::DictionaryType& dictType =
           static_cast<const ::arrow::DictionaryType&>(*field->type());
       std::shared_ptr<::arrow::Field> unpackedField = ::arrow::field(
@@ -637,8 +637,8 @@ Status populateLeaf(
 }
 
 // Special case mentioned in the format spec:
-//   If the name is array or ends in _tuple, this should be a list of struct.
-//   Even for single child elements.
+//   If the name is array or ends in _tuple, this should be a list of struct,
+//   even for single child elements.
 bool hasStructListName(const GroupNode& groupNode) {
   ::std::string_view name{groupNode.name()};
   return name == "array" || endsWith(name, "_tuple");
@@ -653,7 +653,7 @@ Status groupToStruct(
   std::vector<std::shared_ptr<Field>> arrowFields;
   out->children.resize(groupNode.fieldCount());
   // All level increments for the node are expected to happen by callers.
-  // This is required because repeated elements need to have their own.
+  // This is required because repeated elements need to have their own
   // SchemaField.
 
   for (int i = 0; i < groupNode.fieldCount(); i++) {
@@ -713,8 +713,8 @@ Status mapToSchemaField(
     return Status::Invalid("Map keys must be annotated as required.");
   }
   // Arrow doesn't support 1 column maps (i.e. Sets).  The options are to
-  // either. Make the values column nullable, or process the map as a list.  We
-  // choose. The latter as it is simpler.
+  // either make the values column nullable, or process the map as a list.  We
+  // choose the latter as it is simpler.
   if (keyValue.fieldCount() == 1) {
     return listToSchemaField(group, currentLevels, ctx, parent, out);
   }
@@ -760,7 +760,7 @@ Status mapToSchemaField(
       group.isOptional(),
       fieldIdMetadata(group.fieldId()));
   out->levelInfo = currentLevels;
-  // At this point current levels contains the def level for this list,.
+  // At this point current levels contains the def level for this list.
   // We need to reset to the prior parent.
   out->levelInfo.repeatedAncestorDefLevel = repeatedAncestorDefLevel;
   return Status::OK();
@@ -854,7 +854,7 @@ Status listToSchemaField(
       group.isOptional(),
       fieldIdMetadata(group.fieldId()));
   out->levelInfo = currentLevels;
-  // At this point current levels contains the def level for this list,.
+  // At this point current levels contains the def level for this list.
   // We need to reset to the prior parent.
   out->levelInfo.repeatedAncestorDefLevel = repeatedAncestorDefLevel;
   return Status::OK();

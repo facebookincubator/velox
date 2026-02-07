@@ -41,17 +41,18 @@ class ParquetFileWriter;
 
 namespace arrow {
 
-/// \brief Iterative fileWriter class.
+/// \brief Iterative FileWriter class.
 ///
-/// For basic usage, can write a Table at a time, creating one or more row.
-/// Groups per write call.
+/// For basic usage, can write a Table at a time, creating one or more row
+/// groups per write call.
 ///
-/// For advanced usage, can write column-by-column: Start a new RowGroup or.
-/// Chunk with NewRowGroup, then write column-by-column the whole column chunk.
+/// For advanced usage, can write column-by-column: Start a new row group or
+/// chunk with newRowGroup(), then write column-by-column the whole column
+/// chunk.
 ///
-/// If PARQUET:field_id is present as a metadata key on a field, and the.
-/// Corresponding value is a nonnegative integer, then it will be used as the.
-/// Field_id in the parquet file.
+/// If PARQUET:field_id is present as a metadata key on a field, and the
+/// corresponding value is a nonnegative integer, then it will be used as the
+/// field_id in the Parquet file.
 class PARQUET_EXPORT FileWriter {
  public:
   static ::arrow::Status make(
@@ -63,10 +64,10 @@ class PARQUET_EXPORT FileWriter {
 
   /// \brief Try to create an Arrow to Parquet file writer.
   ///
-  /// \param schema schema of data that will be passed.
-  /// \param pool memory pool to use.
-  /// \param sink output stream to write Parquet data.
-  /// \param properties general Parquet writer properties.
+  /// \param schema Schema of data that will be passed.
+  /// \param pool Memory pool to use.
+  /// \param sink Output stream to write Parquet data.
+  /// \param properties General Parquet writer properties.
   /// \param arrow_properties Arrow-specific writer properties.
   ///
   /// \since 11.0.0.
@@ -102,7 +103,7 @@ class PARQUET_EXPORT FileWriter {
   /// \brief Write a Table to Parquet.
   ///
   /// \param table Arrow table to write.
-  /// \param chunk_size maximum number of rows to write per row group.
+  /// \param chunk_size Maximum number of rows to write per row group.
   virtual ::arrow::Status writeTable(
       const ::arrow::Table& table,
       int64_t chunkSize = DEFAULT_MAX_ROW_GROUP_LENGTH) = 0;
@@ -111,7 +112,7 @@ class PARQUET_EXPORT FileWriter {
   ///
   /// Returns an error if not all columns have been written.
   ///
-  /// \param chunk_size the number of rows in the next row group.
+  /// \param chunk_size The number of rows in the next row group.
   virtual ::arrow::Status newRowGroup(int64_t chunkSize) = 0;
 
   /// \brief Write ColumnChunk in row group using an array.
@@ -135,19 +136,19 @@ class PARQUET_EXPORT FileWriter {
   /// \brief Write a RecordBatch into the buffered row group.
   ///
   /// Multiple RecordBatches can be written into the same row group.
-  /// Through this method.
+  /// through this method.
   ///
-  /// WriterProperties.max_row_group_length() and
-  /// WriterProperties.max_row_group_bytes() are respected and a new row group
+  /// WriterProperties::maxRowGroupLength() and
+  /// WriterProperties::maxRowGroupBytes() are respected and a new row group
   /// will be created if the current row group exceeds the limits.
   ///
-  /// Batches get flushed to the output stream once NewBufferedRowGroup()
-  /// Or Close() is called.
+  /// Batches get flushed to the output stream once newBufferedRowGroup()
+  /// or close() is called.
   ///
-  /// WARNING: If you are writing multiple files in parallel in the same.
-  /// Executor, deadlock may occur if ArrowWriterProperties::use_threads.
-  /// Is set to true to write columns in parallel. Please disable use_threads.
-  /// Option in this case.
+  /// WARNING: If you are writing multiple files in parallel in the same
+  /// executor, deadlock may occur if ArrowWriterProperties::useThreads
+  /// is set to true to write columns in parallel. Please disable useThreads
+  /// option in this case.
   virtual ::arrow::Status writeRecordBatch(
       const ::arrow::RecordBatch& batch) = 0;
 
@@ -156,7 +157,7 @@ class PARQUET_EXPORT FileWriter {
   virtual ~FileWriter();
 
   virtual MemoryPool* memoryPool() const = 0;
-  /// \brief Return the file metadata, only available after calling Close().
+  /// \brief Return the file metadata, only available after calling close().
   virtual const std::shared_ptr<FileMetaData> metadata() const = 0;
 };
 
@@ -174,14 +175,14 @@ PARQUET_EXPORT
 
 /// \brief Write a Table to Parquet.
 ///
-/// This writes one table in a single shot. To write a Parquet file with.
-/// Multiple tables iteratively, see parquet::arrow::FileWriter.
+/// This writes one table in a single shot. To write a Parquet file with
+/// multiple tables iteratively, see parquet::arrow::FileWriter.
 ///
-/// \param table Table to write.
-/// \param pool memory pool to use.
-/// \param sink output stream to write Parquet data.
-/// \param chunk_size maximum number of rows to write per row group.
-/// \param properties general Parquet writer properties.
+/// \param table Arrow table to write.
+/// \param pool Memory pool to use.
+/// \param sink Output stream to write Parquet data.
+/// \param chunk_size Maximum number of rows to write per row group.
+/// \param properties General Parquet writer properties.
 /// \param arrow_properties Arrow-specific writer properties.
 ::arrow::Status PARQUET_EXPORT writeTable(
     const ::arrow::Table& table,
