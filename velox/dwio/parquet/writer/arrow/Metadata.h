@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -416,6 +417,12 @@ class PARQUET_EXPORT FileMetaData {
   std::shared_ptr<FileMetaData> Subset(
       const std::vector<int>& row_groups) const;
 
+  /// \brief Get total NaN count for a specific field ID across all row groups.
+  /// Returns a pair of (nan_count, has_nan_count).
+  /// NaN counts are collected during writing but not written to the parquet
+  /// file.
+  std::pair<int64_t, bool> getNaNCount(int32_t fieldId) const;
+
  private:
   friend FileMetaDataBuilder;
   friend class SerializedFile;
@@ -486,6 +493,13 @@ class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
   const ColumnDescriptor* descr() const;
 
   int64_t total_compressed_size() const;
+
+  // NaN count accessors - NaN counts are collected during writing but not
+  // written to the parquet file.
+  int64_t nan_count() const;
+
+  bool has_nan_count() const;
+
   // commit the metadata
 
   void Finish(
@@ -536,6 +550,10 @@ class PARQUET_EXPORT RowGroupMetaDataBuilder {
   int current_column() const;
 
   void set_num_rows(int64_t num_rows);
+
+  // Get NaN counts for all columns in current row group.
+  // Returns a map of field_id -> (nan_count, has_nan_count).
+  std::unordered_map<int32_t, std::pair<int64_t, bool>> nan_counts() const;
 
   // commit the metadata
   void Finish(int64_t total_bytes_written, int16_t row_group_ordinal = -1);

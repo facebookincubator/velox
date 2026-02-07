@@ -26,6 +26,7 @@
 
 #include "arrow/io/caching.h"
 #include "arrow/type.h"
+#include "arrow/util/logging.h"
 #include "arrow/util/type_fwd.h"
 #include "velox/dwio/parquet/writer/arrow/Encryption.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
@@ -214,6 +215,7 @@ static constexpr int64_t DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT =
     kDefaultDataPageSize;
 static constexpr int64_t DEFAULT_WRITE_BATCH_SIZE = 1024;
 static constexpr int64_t DEFAULT_MAX_ROW_GROUP_LENGTH = 1024 * 1024;
+static constexpr int64_t DEFAULT_MAX_ROW_GROUP_BYTES = 128 * 1024 * 1024;
 static constexpr bool DEFAULT_ARE_STATISTICS_ENABLED = true;
 static constexpr int64_t DEFAULT_MAX_STATISTICS_SIZE = 4096;
 static constexpr Encoding::type DEFAULT_ENCODING = Encoding::UNKNOWN;
@@ -324,6 +326,7 @@ class PARQUET_EXPORT WriterProperties {
           dictionary_pagesize_limit_(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT),
           write_batch_size_(DEFAULT_WRITE_BATCH_SIZE),
           max_row_group_length_(DEFAULT_MAX_ROW_GROUP_LENGTH),
+          max_row_group_bytes_(DEFAULT_MAX_ROW_GROUP_BYTES),
           pagesize_(kDefaultDataPageSize),
           version_(ParquetVersion::PARQUET_2_6),
           data_page_version_(ParquetDataPageVersion::V1),
@@ -395,7 +398,19 @@ class PARQUET_EXPORT WriterProperties {
     /// Specify the max number of rows to put in a single row group.
     /// Default 1Mi rows.
     Builder* max_row_group_length(int64_t max_row_group_length) {
+      ARROW_CHECK_GT(max_row_group_length, 0)
+          << "max_row_group_length must be positive";
       max_row_group_length_ = max_row_group_length;
+      return this;
+    }
+
+    /// Specify the max bytes to put in a single row group.
+    /// The size is estimated based on encoded and compressed data.
+    /// Default 128MB.
+    Builder* max_row_group_bytes(int64_t max_row_group_bytes) {
+      ARROW_CHECK_GT(max_row_group_bytes, 0)
+          << "max_row_group_bytes must be positive";
+      max_row_group_bytes_ = max_row_group_bytes;
       return this;
     }
 
@@ -766,6 +781,7 @@ class PARQUET_EXPORT WriterProperties {
           dictionary_pagesize_limit_,
           write_batch_size_,
           max_row_group_length_,
+          max_row_group_bytes_,
           pagesize_,
           version_,
           created_by_,
@@ -783,6 +799,7 @@ class PARQUET_EXPORT WriterProperties {
     int64_t dictionary_pagesize_limit_;
     int64_t write_batch_size_;
     int64_t max_row_group_length_;
+    int64_t max_row_group_bytes_;
     int64_t pagesize_;
     ParquetVersion::type version_;
     ParquetDataPageVersion data_page_version_;
@@ -820,6 +837,10 @@ class PARQUET_EXPORT WriterProperties {
 
   inline int64_t max_row_group_length() const {
     return max_row_group_length_;
+  }
+
+  inline int64_t max_row_group_bytes() const {
+    return max_row_group_bytes_;
   }
 
   inline int64_t data_pagesize() const {
@@ -944,6 +965,7 @@ class PARQUET_EXPORT WriterProperties {
       int64_t dictionary_pagesize_limit,
       int64_t write_batch_size,
       int64_t max_row_group_length,
+      int64_t max_row_group_bytes,
       int64_t pagesize,
       ParquetVersion::type version,
       const std::string& created_by,
@@ -959,6 +981,7 @@ class PARQUET_EXPORT WriterProperties {
         dictionary_pagesize_limit_(dictionary_pagesize_limit),
         write_batch_size_(write_batch_size),
         max_row_group_length_(max_row_group_length),
+        max_row_group_bytes_(max_row_group_bytes),
         pagesize_(pagesize),
         parquet_data_page_version_(data_page_version),
         parquet_version_(version),
@@ -974,6 +997,7 @@ class PARQUET_EXPORT WriterProperties {
   int64_t dictionary_pagesize_limit_;
   int64_t write_batch_size_;
   int64_t max_row_group_length_;
+  int64_t max_row_group_bytes_;
   int64_t pagesize_;
   ParquetDataPageVersion parquet_data_page_version_;
   ParquetVersion::type parquet_version_;

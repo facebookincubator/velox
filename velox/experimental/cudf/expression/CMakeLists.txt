@@ -17,6 +17,7 @@ add_library(
   AstExpression.cpp
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
+  JitExpression.cpp
   SubfieldFiltersToAst.cpp
 )
 
