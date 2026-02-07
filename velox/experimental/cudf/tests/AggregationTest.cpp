@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -21,6 +22,8 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <cmath>
 
 namespace facebook::velox::exec::test {
 
@@ -38,6 +41,7 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
@@ -713,6 +717,162 @@ TEST_F(EmptyInputAggregationTest, globalPartialFinalAggregation) {
   assertQuery(
       plan_,
       "SELECT sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10");
+}
+
+TEST_F(AggregationTest, globalApproxDistinct) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
+      makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation(
+                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(c0_estimate, 4);
+  EXPECT_LE(c0_estimate, 6);
+
+  EXPECT_GE(c1_estimate, 4);
+  EXPECT_LE(c1_estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctWithNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 3, 4, 5, 1, 2, 3}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(estimate, 4);
+  EXPECT_LE(estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctHighCardinality) {
+  std::vector<int64_t> values;
+  for (int64_t i = 0; i < 10000; ++i) {
+    values.push_back(i);
+  }
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(values),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  double error_rate =
+      std::abs(static_cast<double>(estimate) - 10000.0) / 10000.0;
+  EXPECT_LT(error_rate, 0.05);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctEmpty) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>{}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_EQ(estimate, 0);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctPartialIntermediateFinal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
+      makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation(
+                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(c0_estimate, 4);
+  EXPECT_LE(c0_estimate, 6);
+
+  EXPECT_GE(c1_estimate, 4);
+  EXPECT_LE(c1_estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctWithNaN) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 2.0, std::nan(""), 4.0, std::nan(""), 1.0}),
+  });
+
+  auto planCudf = PlanBuilder()
+                      .values({data})
+                      .partialAggregation({}, {"approx_distinct(c0)"})
+                      .finalAggregation()
+                      .planNode();
+
+  auto cudfResult = AssertQueryBuilder(planCudf).copyResults(pool());
+  ASSERT_EQ(cudfResult->size(), 1);
+  auto cudfEstimate =
+      cudfResult->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  cudf_velox::unregisterCudf();
+  auto planVelox = PlanBuilder()
+                       .values({data})
+                       .partialAggregation({}, {"approx_distinct(c0)"})
+                       .finalAggregation()
+                       .planNode();
+
+  auto veloxResult = AssertQueryBuilder(planVelox).copyResults(pool());
+  ASSERT_EQ(veloxResult->size(), 1);
+  auto veloxEstimate =
+      veloxResult->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  cudf_velox::registerCudf();
+
+  EXPECT_EQ(cudfEstimate, veloxEstimate)
+      << "CUDF and Velox should produce the same result for NaN values. "
+      << "Expected distinct count: 3 (1.0, 2.0, 4.0) plus NaN as distinct. "
+      << "CUDF result: " << cudfEstimate << ", Velox result: " << veloxEstimate;
+
+  EXPECT_GE(cudfEstimate, 3);
+  EXPECT_LE(cudfEstimate, 5);
 }
 
 } // namespace facebook::velox::exec::test

@@ -19,7 +19,7 @@
 namespace facebook::velox::py {
 
 void PyLocalDebuggerRunner::setBreakpoint(const std::string& planNodeId) {
-  breakpoints_.push_back(planNodeId);
+  breakpoints_[planNodeId] = nullptr;
 }
 
 exec::CursorParameters PyLocalDebuggerRunner::createCursorParameters(

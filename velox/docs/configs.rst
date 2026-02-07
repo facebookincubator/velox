@@ -92,8 +92,8 @@ Generic Configuration
    * - parallel_join_build_rows_enabled
      - bool
      - false
-     - If true, the hash probe drivers can output build-side rows in parallel for full and right joins (only when spilling is not
-     - enabled by hash probe). If false, only the last prober is allowed to output build-side rows.
+     - If true, the hash probe drivers can output build\-side rows in parallel for full and right joins (only when spilling is not
+       enabled by hash probe). If false, only the last prober is allowed to output build\-side rows.
    * - max_local_exchange_buffer_size
      - integer
      - 32MB

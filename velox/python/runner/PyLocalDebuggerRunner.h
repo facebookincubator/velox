@@ -17,7 +17,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include "velox/python/runner/PyLocalRunner.h"
 
@@ -43,7 +42,7 @@ class PyLocalDebuggerRunner : public PyLocalRunner {
   exec::CursorParameters createCursorParameters(int32_t maxDrivers) override;
 
  private:
-  std::vector<std::string> breakpoints_;
+  exec::CursorParameters::TBreakpointMap breakpoints_;
 };
 
 } // namespace facebook::velox::py

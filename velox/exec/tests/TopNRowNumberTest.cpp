@@ -107,6 +107,66 @@ TEST_P(MultiTopNRowNumberTest, basic) {
   testLimit(5);
 }
 
+TEST_P(MultiTopNRowNumberTest, basicWithPeers) {
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({1, 1, 2, 2, 1, 2, 1, 1, 1, 1, 1}),
+      // Sorting key.
+      makeFlatVector<int64_t>({33, 11, 55, 44, 11, 22, 11, 11, 11, 33, 33}),
+      // Data. Mapping data to matching sorting keys to avoid ordering issues.
+      makeFlatVector<int64_t>({10, 50, 30, 40, 50, 60, 50, 50, 50, 10, 10}),
+  });
+
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    // Emit row numbers.
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // Do not emit row numbers.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {"c0"}, {"c1"}, limit, false)
+               .planNode();
+
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT c0, c1, c2 FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // No partitioning keys.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {}, {"c1"}, limit, true)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(1);
+  testLimit(2);
+  testLimit(3);
+  testLimit(5);
+}
+
 TEST_P(MultiTopNRowNumberTest, largeOutput) {
   // Make 10 vectors. Use different types for partitioning key, sorting key and
   // data. Use order of columns different from partitioning keys, followed by

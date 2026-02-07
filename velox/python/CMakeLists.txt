@@ -123,8 +123,8 @@ target_link_libraries(
   velox_dwio_dwrf_common
   velox_dwio_dwrf_writer
   pybind11::module
-  pybind11::embed
 )
+target_compile_options(velox_py_local_runner_lib PRIVATE -Wno-missing-field-initializers)
 
 pyvelox_add_module(runner MODULE runner/runner.cpp)
 target_link_libraries(runner PRIVATE velox_py_local_runner_lib)
