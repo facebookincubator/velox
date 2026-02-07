@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include "velox/common/file/FileSystems.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -295,7 +296,7 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Traces input batch of the operator.
-  virtual void traceInput(const RowVectorPtr&);
+  virtual bool traceInput(const RowVectorPtr& input, ContinueFuture* future);
 
   /// Finishes tracing of the operator.
   virtual void finishTrace();
@@ -622,6 +623,11 @@ class Operator : public BaseRuntimeStatWriter {
   /// Invoked to record spill stats in operator stats.
   virtual void recordSpillStats();
 
+  /// Returns the filesystem I/O stats for spill operations.
+  filesystems::File::IoStats* spillFsStats() {
+    return spillFsStats_.get();
+  }
+
   const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
   /// Contains the disk spilling related configs if spilling is enabled (e.g.
@@ -635,6 +641,8 @@ class Operator : public BaseRuntimeStatWriter {
   folly::Synchronized<OperatorStats> stats_;
   std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
       std::make_shared<folly::Synchronized<common::SpillStats>>();
+  std::unique_ptr<filesystems::File::IoStats> spillFsStats_ =
+      std::make_unique<filesystems::File::IoStats>();
 
   /// NOTE: only one of the two could be set for an operator for tracing .
   /// 'splitTracer_' is only set for table scan to record the processed split

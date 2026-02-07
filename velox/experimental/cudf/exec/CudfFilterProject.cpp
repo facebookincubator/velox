@@ -29,6 +29,7 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <iostream>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -37,10 +38,14 @@ namespace {
 
 void debugPrintTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
-    int indent = 0) {
-  std::cout << std::string(indent, ' ') << expr->name() << std::endl;
+    int indent = 0,
+    std::ostream& os = std::cout) {
+  if (indent == 0)
+    os << "=== Expression Tree ===" << std::endl;
+  os << std::string(indent, ' ') << expr->name() << "("
+     << expr->type()->toString() << ")" << std::endl;
   for (auto& input : expr->inputs()) {
-    debugPrintTree(input, indent + 2);
+    debugPrintTree(input, indent + 2, os);
   }
 }
 
@@ -105,8 +110,8 @@ bool canBeEvaluatedByCudf(
     return true;
   }
 
-  auto precompilePool = memory::memoryManager()->addLeafPool(
-      "cudf-expr-precompile", /*threadSafe*/ false);
+  auto precompilePool =
+      memory::memoryManager()->addLeafPool("", /*threadSafe*/ false);
   core::ExecCtx precompileCtx(precompilePool.get(), queryCtx);
 
   bool lazyDereference = false;
@@ -193,9 +198,8 @@ void CudfFilterProject::initialize() {
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
     for (const auto& expr : expr->exprs()) {
-      LOG(INFO) << "expr[" << i++ << "] " << expr->toString() << std::endl;
-      debugPrintTree(expr);
-      ++i;
+      LOG(INFO) << "expr[" << i++ << "] " << expr->toString();
+      debugPrintTree(expr, 0, LOG(INFO));
     }
   }
   if (hasFilter_) {
@@ -253,7 +257,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto const size = outputTable->num_rows();
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
-            << " columns " << std::endl;
+            << " columns";
   }
 
   auto cudfOutput = std::make_shared<CudfVector>(

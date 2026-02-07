@@ -27,6 +27,12 @@ Generic Configuration
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+   * - merge_join_output_batch_start_size
+     - integer
+     - 0
+     - Initial output batch size in rows for MergeJoin operator. When non-zero, the batch size starts at this value
+       and is dynamically adjusted based on the average row size of previous output batches. When zero (default),
+       dynamic adjustment is disabled and the batch size is fixed at preferred_output_batch_rows.
    * - max_elements_size_in_repeat_and_sequence
      - integer
      - 10000
@@ -86,8 +92,8 @@ Generic Configuration
    * - parallel_join_build_rows_enabled
      - bool
      - false
-     - If true, the hash probe drivers can output build-side rows in parallel for full and right joins (only when spilling is not
-     - enabled by hash probe). If false, only the last prober is allowed to output build-side rows.
+     - If true, the hash probe drivers can output build\-side rows in parallel for full and right joins (only when spilling is not
+       enabled by hash probe). If false, only the last prober is allowed to output build\-side rows.
    * - max_local_exchange_buffer_size
      - integer
      - 32MB
@@ -137,6 +143,10 @@ Generic Configuration
      - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
+   * - partitioned_output_eager_flush
+     - bool
+     - false
+     - If true, the PartitionedOutput operator will flush rows eagerly, without waiting until buffers reach certain size. Default is false.
    * - max_output_buffer_size
      - integer
      - 32MB

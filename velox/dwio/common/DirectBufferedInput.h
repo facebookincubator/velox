@@ -85,6 +85,12 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   /// data is retrieved with getData().
   std::vector<cache::CachePin> loadData(bool prefetch) override;
 
+  /// Returns false since DirectCoalescedLoad reads from remote storage, not
+  /// SSD.
+  bool isSsdLoad() const override {
+    return false;
+  }
+
   /// Returns the buffer for 'region' in either 'data' or 'tinyData'. 'region'
   /// must match a region given to DirectBufferedInput::enqueue().
   int32_t
@@ -205,12 +211,24 @@ class DirectBufferedInput : public BufferedInput {
     return executor_;
   }
 
+  const std::vector<std::shared_ptr<cache::CoalescedLoad>>&
+  testingCoalescedLoads() const {
+    return coalescedLoads_;
+  }
+
+  size_t testingStreamToCoalescedLoadSize() const {
+    return streamToCoalescedLoad_.rlock()->size();
+  }
+
   uint64_t nextFetchSize() const override {
     VELOX_NYI();
   }
 
+  /// Resets the buffered input for reuse across different operations.
+  void reset() override;
+
  private:
-  /// Constructor used by clone().
+  // Constructor used by clone().
   DirectBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       StringIdLease fileNum,
@@ -273,20 +291,17 @@ class DirectBufferedInput : public BufferedInput {
   const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
+  const io::ReaderOptions options_;
 
   // Regions that are candidates for loading.
   std::vector<LoadRequest> requests_;
-
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
-
   // Distinct coalesced loads in 'coalescedLoads_'.
   std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
-
-  io::ReaderOptions options_;
 };
 
 } // namespace facebook::velox::dwio::common

@@ -50,6 +50,16 @@ allowedCoercions() {
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
   add(DATE(), {TIMESTAMP()});
+  add(UNKNOWN(),
+      {TINYINT(),
+       BOOLEAN(),
+       SMALLINT(),
+       INTEGER(),
+       BIGINT(),
+       REAL(),
+       DOUBLE(),
+       VARCHAR(),
+       VARBINARY()});
 
   return coercions;
 }
@@ -77,6 +87,9 @@ std::optional<int32_t> TypeCoercer::coercible(
     const TypePtr& fromType,
     const TypePtr& toType) {
   if (fromType->isUnKnown()) {
+    if (toType->isUnKnown()) {
+      return 0;
+    }
     return 1;
   }
 

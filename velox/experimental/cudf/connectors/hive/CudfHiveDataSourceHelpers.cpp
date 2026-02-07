@@ -26,10 +26,30 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 
+#include <folly/futures/Future.h>
+
 #include <list>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace {
+template <typename T>
+std::future<T> toStdFuture(folly::Future<T> follyFuture) {
+  auto promise = std::make_shared<std::promise<T>>();
+  auto stdFuture = promise->get_future();
+
+  std::move(follyFuture).thenTry([promise](folly::Try<T>&& result) mutable {
+    if (result.hasValue()) {
+      promise->set_value(std::move(result.value()));
+    } else {
+      promise->set_exception(result.exception().to_exception_ptr());
+    }
+  });
+
+  return stdFuture;
+}
+} // namespace
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -78,8 +98,28 @@ std::future<size_t> BufferedInputDataSource::host_read_async(
   });
 }
 
+std::future<size_t> BufferedInputDataSource::device_read_async(
+    size_t offset,
+    size_t size,
+    uint8_t* dst,
+    rmm::cuda_stream_view stream) {
+  VELOX_CHECK(input_->executor() != nullptr, "IO executor is not initialized");
+  auto future = folly::via(input_->executor())
+                    .thenValue([this, offset, size, dst, stream](auto&&) {
+                      auto hostBuffer = this->host_read(offset, size);
+                      CUDF_CUDA_TRY(cudaMemcpyAsync(
+                          dst,
+                          hostBuffer->data(),
+                          hostBuffer->size(),
+                          cudaMemcpyHostToDevice,
+                          stream.value()));
+                      return hostBuffer->size();
+                    });
+  return toStdFuture(std::move(future));
+}
+
 bool BufferedInputDataSource::supports_device_read() const {
-  return false;
+  return true;
 }
 
 void BufferedInputDataSource::readContiguous(

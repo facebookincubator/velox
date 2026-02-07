@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FuzzerTestUtils.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -235,45 +236,6 @@ TEST_F(MapIntersectTest, booleanMap) {
   testMapIntersect("map_intersect(c0, c1)", {inputMap, keys}, expected);
 }
 
-TEST_F(MapIntersectTest, complexValueMap) {
-  // Create value arrays that will be used in the maps
-  auto valueArrays = makeArrayVector<int32_t>({
-      {1, 2}, // value for key [1, 2] in map 0
-      {3, 4, 5}, // value for key [3, 4] in map 0
-      {6}, // value for key [5, 6] in map 1
-      {7, 8, 9, 10}, // value for key [7, 8] in map 1
-  });
-
-  // Create input map with 2 maps:
-  // Map 0: {[1,2] => [1,2], [3,4] => [3,4,5]}
-  // Map 1: {[5,6] => [6], [7,8] => [7,8,9,10]}
-  auto inputMap = makeMapVector(
-      {0, 2, 4},
-      makeArrayVector<int32_t>({{1, 2}, {3, 4}, {5, 6}, {7, 8}}),
-      valueArrays);
-
-  // Keys to filter (array of arrays):
-  // Map 0: keep entries with key [1,2]
-  // Map 1: keep entries with key [5,6]
-  auto keys =
-      makeArrayVector({0, 1, 2}, makeArrayVector<int32_t>({{1, 2}, {5, 6}}));
-
-  // Expected output:
-  // Map 0: {[1,2] => [1,2]}
-  // Map 1: {[5,6] => [6]}
-  auto expectedValueArrays = makeArrayVector<int32_t>({
-      {1, 2}, // value for key [1, 2] in map 0
-      {6}, // value for key [5, 6] in map 1
-  });
-
-  auto expected = makeMapVector(
-      {0, 1, 2},
-      makeArrayVector<int32_t>({{1, 2}, {5, 6}}),
-      expectedValueArrays);
-
-  testMapIntersect("map_intersect(c0, c1)", {inputMap, keys}, expected);
-}
-
 TEST_F(MapIntersectTest, nullArguments) {
   auto inputMap =
       makeMapVector<int32_t, int32_t>({{{1, 10}, {2, 20}, {3, 30}}});
@@ -353,4 +315,77 @@ TEST_F(MapIntersectTest, basicTest) {
 }
 
 } // namespace
+
+class MapIntersectFuzzerTest : public test::FunctionBaseTest {
+ protected:
+  static constexpr const char* kEquivalentExpression =
+      "map_filter(c0, (k, v) -> coalesce(contains(c1, k), false))";
+
+  static SelectivityVector getNonNullRows(const RowVectorPtr& data) {
+    auto inputMap = data->childAt(0);
+    auto keys = data->childAt(1);
+    SelectivityVector nonNullRows(data->size());
+    for (vector_size_t i = 0; i < data->size(); ++i) {
+      if (inputMap->isNullAt(i) || keys->isNullAt(i)) {
+        nonNullRows.setValid(i, false);
+      }
+    }
+    nonNullRows.updateBounds();
+    return nonNullRows;
+  }
+
+  void testEquivalence(const RowVectorPtr& data) {
+    auto result = evaluate("map_intersect(c0, c1)", data);
+    auto expected = evaluate(kEquivalentExpression, data);
+    auto nonNullRows = getNonNullRows(data);
+    for (auto i = 0; i < data->size(); ++i) {
+      if (nonNullRows.isValid(i)) {
+        ASSERT_TRUE(expected->equalValueAt(result.get(), i, i))
+            << "Mismatch at row " << i << ": expected " << expected->toString(i)
+            << ", got " << result->toString(i);
+      }
+    }
+  }
+
+  void runFuzzTest(const TypePtr& type, const test::FuzzerTestOptions& opts) {
+    test::FuzzerTestHelper helper(pool());
+    helper.runMapArrayTest(
+        type,
+        type,
+        [this](const VectorPtr& inputMap, const VectorPtr& keys) {
+          auto data = makeRowVector({inputMap, keys});
+          testEquivalence(data);
+        },
+        opts);
+  }
+};
+
+TEST_F(MapIntersectFuzzerTest, fuzzInteger) {
+  runFuzzTest(INTEGER(), {.vectorSize = 100});
+}
+
+TEST_F(MapIntersectFuzzerTest, fuzzBigint) {
+  runFuzzTest(BIGINT(), {.vectorSize = 100});
+}
+
+TEST_F(MapIntersectFuzzerTest, fuzzVarchar) {
+  runFuzzTest(VARCHAR(), {.vectorSize = 100});
+}
+
+TEST_F(MapIntersectFuzzerTest, fuzzDouble) {
+  runFuzzTest(DOUBLE(), {.vectorSize = 100});
+}
+
+TEST_F(MapIntersectFuzzerTest, fuzzHighNullRatio) {
+  runFuzzTest(INTEGER(), {.vectorSize = 100, .nullRatio = 0.5});
+}
+
+TEST_F(MapIntersectFuzzerTest, fuzzSmallint) {
+  runFuzzTest(SMALLINT(), {.vectorSize = 100});
+}
+
+TEST_F(MapIntersectFuzzerTest, fuzzLargeVectors) {
+  runFuzzTest(INTEGER(), {.vectorSize = 500});
+}
+
 } // namespace facebook::velox::functions

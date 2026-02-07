@@ -16,12 +16,12 @@
 
 #pragma once
 
-namespace facebook::velox::parquet {
-/// Parquet field IDs during write operations. Each ID must be unique positive
-/// number, do not need to be sequential.
-/// Used to explicitly control field ID assignment in the Parquet schema.
-struct ParquetFieldId {
-  int32_t fieldId;
-  std::vector<ParquetFieldId> children;
-};
-} // namespace facebook::velox::parquet
+#include <string>
+
+namespace facebook::velox::functions {
+
+/// @param throwOnNull If true, throws exception when input array is null or
+/// contains null entry. Otherwise, returns null.
+void registerMapFromEntriesFunction(const std::string& name, bool throwForNull);
+
+} // namespace facebook::velox::functions

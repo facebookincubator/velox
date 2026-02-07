@@ -125,10 +125,11 @@ void Operator::maybeSetTracer() {
   }
 }
 
-void Operator::traceInput(const RowVectorPtr& input) {
+bool Operator::traceInput(const RowVectorPtr& input, ContinueFuture* future) {
   if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
-    inputTracer_->write(input);
+    return inputTracer_->write(input, future);
   }
+  return false;
 }
 
 void Operator::finishTrace() {
@@ -452,6 +453,15 @@ void Operator::recordSpillStats() {
             RuntimeCounter::Unit::kNanos});
   }
   lockedSpillStats->reset();
+
+  // Collect filesystem I/O stats for spilling.
+  if (spillFsStats_) {
+    const auto fsStatsMap = spillFsStats_->stats();
+    for (const auto& [statName, statValue] : fsStatsMap) {
+      lockedStats->addRuntimeStat(
+          statName, RuntimeCounter(statValue.sum, statValue.unit));
+    }
+  }
 }
 
 std::string Operator::toString() const {

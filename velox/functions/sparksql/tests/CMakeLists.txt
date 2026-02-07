@@ -55,6 +55,7 @@ add_executable(
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
+  MapFromEntriesTest.cpp
   MapTest.cpp
   MaskTest.cpp
   MightContainTest.cpp
@@ -72,6 +73,7 @@ add_executable(
   StringTest.cpp
   StringToMapTest.cpp
   ToJsonTest.cpp
+  ToPrettyStringTest.cpp
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp

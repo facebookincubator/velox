@@ -342,6 +342,33 @@ These stats are reported only by connector data or index sources.
    * - Stats
      - Unit
      - Description
+   * - ioWaitWallNanos
+     - nanos
+     - Total time spent by query processing threads waiting for I/O operations
+       to complete. This includes waiting for synchronously issued I/O or for
+       in-progress read-ahead operations to finish.
+   * - storageReadWallNanos
+     - nanos
+     - Time spent waiting for direct remote storage reads (e.g., S3, HDFS).
+       This is a component of ioWaitWallNanos.
+   * - ssdCacheReadWallNanos
+     - nanos
+     - Time spent waiting for SSD cache reads. This is a component of
+       ioWaitWallNanos.
+   * - cacheWaitWallNanos
+     - nanos
+     - Time spent waiting for cache entries that are being loaded by another
+       thread (EXCLUSIVE state). This is a component of ioWaitWallNanos.
+   * - coalescedSsdLoadWallNanos
+     - nanos
+     - Time spent waiting for coalesced loads from SSD cache. This occurs when
+       multiple requests are combined into a single SSD read operation.
+       This is a component of ioWaitWallNanos.
+   * - coalescedStorageLoadWallNanos
+     - nanos
+     - Time spent waiting for coalesced loads from remote storage. This occurs
+       when multiple requests are combined into a single remote storage read.
+       This is a component of ioWaitWallNanos.
    * - totalRemainingFilterWallNanos
      - nanos
      - The total walltime in nanoseconds that the data or index connector do the remaining filtering.
@@ -351,3 +378,8 @@ These stats are reported only by connector data or index sources.
        index bounds for index-based filtering (e.g., cluster index pruning in
        Nimble). A value greater than zero indicates filters were successfully
        converted to leverage file index structures for row pruning.
+   * - numStripeLoads
+     -
+     - The number of times a stripe has been loaded during index lookup. This
+       metric helps track the I/O efficiency of index-based reads, where lower
+       values indicate better stripe reuse across lookups.

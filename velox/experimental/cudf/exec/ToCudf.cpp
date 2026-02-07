@@ -31,6 +31,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -73,12 +74,12 @@ bool CompileState::compile(bool allowCpuFallback) {
 
   if (CudfConfig::getInstance().debugEnabled) {
     LOG(INFO) << "Operators before adapting for cuDF: count ["
-              << operators.size() << "]" << std::endl;
+              << operators.size() << "]";
     for (auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString() << std::endl;
+                << op->toString();
     }
-    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback << std::endl;
+    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
   }
 
   bool replacementsMade = false;
@@ -169,10 +170,12 @@ bool CompileState::compile(bool allowCpuFallback) {
       return false;
     }
 
-    return true;
+    // Use aggregation-based canBeEvaluatedByCudf
+    return canBeEvaluatedByCudf(
+        *aggregationPlanNode, ctx->task->queryCtx().get());
   };
 
-  auto isJoinSupported = [getPlanNode](const exec::Operator* op) {
+  auto isJoinSupported = [getPlanNode, ctx](const exec::Operator* op) {
     if (!isAnyOf<exec::HashBuild, exec::HashProbe>(op)) {
       return false;
     }
@@ -188,6 +191,12 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (planNode->joinType() == core::JoinType::kAnti and
         planNode->isNullAware() and planNode->filter()) {
       return false;
+    }
+    if (planNode->filter()) {
+      if (!canBeEvaluatedByCudf(
+              {planNode->filter()}, ctx->task->queryCtx().get())) {
+        return false;
+      }
     }
     return true;
   };
@@ -381,9 +390,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (CudfConfig::getInstance().debugEnabled) {
       LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
-                << oper->toString().c_str()
-                << ", keepOperator = " << keepOperator
-                << ", replaceOp.size() = " << replaceOp.size() << "\n";
+                << oper->toString() << ", keepOperator = " << keepOperator
+                << ", replaceOp.size() = " << replaceOp.size();
     }
     auto GpuReplacedOperator = [](const exec::Operator* op) {
       return isAnyOf<
@@ -413,16 +421,21 @@ bool CompileState::compile(bool allowCpuFallback) {
                       keepOperator == 0) ||
         (GpuRetainedOperator(oper) && replaceOp.empty() && keepOperator == 1);
     if (CudfConfig::getInstance().debugEnabled) {
-      LOG(INFO) << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
+      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
+                << oper->toString() << " Replacement condition: "
+                << "GpuReplacedOperator = " << GpuReplacedOperator(oper)
                 << ", GpuRetainedOperator = " << GpuRetainedOperator(oper)
-                << std::endl;
-      LOG(INFO) << "GPU operator condition = " << condition << std::endl;
+                << ", GPU operator condition = " << condition;
     }
     if (!allowCpuFallback) {
       VELOX_CHECK(condition, "Replacement with cuDF operator failed");
     } else if (!condition) {
       LOG(WARNING)
           << "Replacement with cuDF operator failed. Falling back to CPU execution";
+      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
+      auto planNode = getPlanNode(oper->planNodeId());
+      LOG(WARNING) << "Replacement Failed PlanNode: "
+                   << planNode->toString(true, false);
     }
 
     if (not replaceOp.empty()) {
@@ -440,10 +453,10 @@ bool CompileState::compile(bool allowCpuFallback) {
   if (CudfConfig::getInstance().debugEnabled) {
     operators = driver_.operators();
     LOG(INFO) << "Operators after adapting for cuDF: count ["
-              << operators.size() << "]" << std::endl;
+              << operators.size() << "]";
     for (auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString() << std::endl;
+                << op->toString();
     }
   }
 
@@ -483,7 +496,9 @@ void registerCudf() {
     return;
   }
 
-  registerBuiltinFunctions(CudfConfig::getInstance().functionNamePrefix);
+  auto prefix = CudfConfig::getInstance().functionNamePrefix;
+  registerBuiltinFunctions(prefix);
+  registerStepAwareBuiltinAggregationFunctions(prefix);
 
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
@@ -502,6 +517,10 @@ void registerCudf() {
 
   if (CudfConfig::getInstance().astExpressionEnabled) {
     registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
+  }
+
+  if (CudfConfig::getInstance().jitExpressionEnabled) {
+    registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
   isCudfRegistered = true;
@@ -545,6 +564,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfAstExpressionEnabled) != config.end()) {
     astExpressionEnabled = folly::to<bool>(config[kCudfAstExpressionEnabled]);
+  }
+  if (config.find(kCudfJitExpressionEnabled) != config.end()) {
+    jitExpressionEnabled = folly::to<bool>(config[kCudfJitExpressionEnabled]);
   }
   if (config.find(kCudfAstExpressionPriority) != config.end()) {
     astExpressionPriority =

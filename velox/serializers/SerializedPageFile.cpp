@@ -23,15 +23,17 @@ namespace facebook::velox::serializer {
 std::unique_ptr<SerializedPageFile> SerializedPageFile::create(
     uint32_t id,
     const std::string& pathPrefix,
-    const std::string& fileCreateConfig) {
+    const std::string& fileCreateConfig,
+    filesystems::File::IoStats* fsStats) {
   return std::unique_ptr<SerializedPageFile>(
-      new SerializedPageFile(id, pathPrefix, fileCreateConfig));
+      new SerializedPageFile(id, pathPrefix, fileCreateConfig, fsStats));
 }
 
 SerializedPageFile::SerializedPageFile(
     uint32_t id,
     const std::string& pathPrefix,
-    const std::string& fileCreateConfig)
+    const std::string& fileCreateConfig,
+    filesystems::File::IoStats* fsStats)
     : id_(id), path_(fmt::format("{}-{}", pathPrefix, ordinalCounter_++)) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
   file_ = fs->openFileForWrite(
@@ -40,7 +42,12 @@ SerializedPageFile::SerializedPageFile(
           {{filesystems::FileOptions::kFileCreateConfig.toString(),
             fileCreateConfig}},
           nullptr,
-          std::nullopt});
+          std::nullopt,
+          false,
+          true,
+          true,
+          std::nullopt,
+          fsStats});
 }
 
 void SerializedPageFile::finish() {
@@ -70,14 +77,16 @@ SerializedPageFileWriter::SerializedPageFileWriter(
     const std::string& fileCreateConfig,
     std::unique_ptr<VectorSerde::Options> serdeOptions,
     VectorSerde* serde,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    filesystems::File::IoStats* fsStats)
     : pathPrefix_(pathPrefix),
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       fileCreateConfig_(fileCreateConfig),
       serdeOptions_(std::move(serdeOptions)),
       pool_(pool),
-      serde_(serde) {}
+      serde_(serde),
+      fsStats_(fsStats) {}
 
 SerializedPageFile* SerializedPageFileWriter::ensureFile() {
   if ((currentFile_ != nullptr) && (currentFile_->size() > targetFileSize_)) {
@@ -87,7 +96,8 @@ SerializedPageFile* SerializedPageFileWriter::ensureFile() {
     currentFile_ = SerializedPageFile::create(
         nextFileId_++,
         fmt::format("{}-{}", pathPrefix_, finishedFiles_.size()),
-        fileCreateConfig_);
+        fileCreateConfig_,
+        fsStats_);
   }
   return currentFile_.get();
 }
@@ -184,13 +194,15 @@ SerializedPageFileReader::SerializedPageFileReader(
     const RowTypePtr& type,
     VectorSerde* serde,
     std::unique_ptr<VectorSerde::Options> readOptions,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    filesystems::File::IoStats* fsStats)
     : readOptions_(std::move(readOptions)),
       pool_(pool),
       serde_(serde),
       type_(type) {
   auto fs = filesystems::getFileSystem(path, nullptr);
-  auto file = fs->openFileForRead(path);
+  auto file =
+      fs->openFileForRead(path, filesystems::FileOptions{.stats = fsStats});
   input_ = std::make_unique<common::FileInputStream>(
       std::move(file), bufferSize, pool_);
 }

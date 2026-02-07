@@ -56,6 +56,7 @@ velox_add_library(
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  MixedUnion.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
   SpatialIndex.cpp

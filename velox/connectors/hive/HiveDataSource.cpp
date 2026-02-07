@@ -20,50 +20,15 @@
 #include <string>
 #include <unordered_map>
 
+#include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
+
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive {
-
-namespace {
-
-bool isMember(
-    const std::vector<exec::FieldReference*>& fields,
-    const exec::FieldReference& field) {
-  return std::find(fields.begin(), fields.end(), &field) != fields.end();
-}
-
-bool shouldEagerlyMaterialize(
-    const exec::Expr& remainingFilter,
-    const exec::FieldReference& field) {
-  if (!remainingFilter.evaluatesArgumentsOnNonIncreasingSelection()) {
-    return true;
-  }
-  for (auto& input : remainingFilter.inputs()) {
-    if (isMember(input->distinctFields(), field) && input->hasConditionals()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void checkColumnHandleConsistent(
-    const HiveColumnHandle& x,
-    const HiveColumnHandle& y) {
-  VELOX_CHECK(
-      x.columnType() == y.columnType(),
-      "Inconsistent column handle: {}",
-      x.name());
-  VELOX_CHECK_EQ(
-      *x.dataType(), *y.dataType(), "Inconsistent column handle: {}", x.name());
-  VELOX_CHECK_EQ(
-      *x.hiveType(), *y.hiveType(), "Inconsistent column handle: {}", x.name());
-}
-
-} // namespace
 
 void HiveDataSource::processColumnHandle(const HiveColumnHandlePtr& handle) {
   switch (handle->columnType()) {
@@ -99,20 +64,12 @@ HiveDataSource::HiveDataSource(
       pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
-  hiveTableHandle_ =
-      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
-  VELOX_CHECK_NOT_NULL(
-      hiveTableHandle_, "TableHandle must be an instance of HiveTableHandle");
+  hiveTableHandle_ = checkedPointerCast<const HiveTableHandle>(tableHandle);
 
   folly::F14FastMap<std::string_view, const HiveColumnHandle*> columnHandles;
   // Column handled keyed on the column alias, the name used in the query.
-  for (const auto& [canonicalizedName, columnHandle] : assignments) {
-    auto handle =
-        std::dynamic_pointer_cast<const HiveColumnHandle>(columnHandle);
-    VELOX_CHECK_NOT_NULL(
-        handle,
-        "ColumnHandle must be an instance of HiveColumnHandle for {}",
-        canonicalizedName);
+  for (const auto& [_, columnHandle] : assignments) {
+    auto handle = checkedPointerCast<const HiveColumnHandle>(columnHandle);
     const auto [it, unique] =
         columnHandles.emplace(handle->name(), handle.get());
     if (!unique) {
@@ -120,8 +77,9 @@ HiveDataSource::HiveDataSource(
       // queries that sometimes we do get duplicate assignments for partitioning
       // columns.
       checkColumnHandleConsistent(*handle, *it->second);
-      VELOX_CHECK(
-          handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey,
+      VELOX_CHECK_EQ(
+          handle->columnType(),
+          HiveColumnHandle::ColumnType::kPartitionKey,
           "Cannot map from same table column to different outputs in table scan; a project node should be used instead: {}",
           handle->name());
       continue;
@@ -226,6 +184,7 @@ HiveDataSource::HiveDataSource(
       readerOutputType_,
       subfields_,
       filters_,
+      /*indexColumns=*/{},
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,
@@ -254,7 +213,8 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       fsStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_);
+      scanSpec_,
+      /*subfieldFiltersForValidation=*/&filters_);
 }
 
 std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
@@ -295,6 +255,7 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
         readerOutputType_,
         subfields_,
         filters_,
+        /*indexColumns=*/{},
         hiveTableHandle_->dataColumns(),
         partitionKeys_,
         infoColumns_,
@@ -336,8 +297,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK_NULL(
       split_,
       "Previous split has not been processed yet. Call next to process the split.");
-  split_ = std::dynamic_pointer_cast<HiveConnectorSplit>(split);
-  VELOX_CHECK_NOT_NULL(split_, "Wrong type of split");
+  split_ = checkedPointerCast<HiveConnectorSplit>(split);
 
   VLOG(1) << "Adding split " << split_->toString();
 
@@ -354,6 +314,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   splitReader_ = createSplitReader();
+  splitReader_->setInfoColumns(&infoColumns_);
   if (!bucketChannels.empty()) {
     splitReader_->setBucketConversion(std::move(bucketChannels));
   }
@@ -465,6 +426,65 @@ std::unordered_map<std::string, RuntimeMetric>
 HiveDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert(
+      {Connector::kIoWaitWallNanos,
+       RuntimeMetric(
+           ioStats_->queryThreadIoLatencyUs().sum() * 1'000,
+           ioStats_->queryThreadIoLatencyUs().count(),
+           ioStats_->queryThreadIoLatencyUs().min() * 1'000,
+           ioStats_->queryThreadIoLatencyUs().max() * 1'000,
+           RuntimeCounter::Unit::kNanos)});
+  // Breakdown of ioWaitWallNanos by I/O type
+  if (ioStats_->storageReadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kStorageReadWallNanos,
+         RuntimeMetric(
+             ioStats_->storageReadLatencyUs().sum() * 1'000,
+             ioStats_->storageReadLatencyUs().count(),
+             ioStats_->storageReadLatencyUs().min() * 1'000,
+             ioStats_->storageReadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->ssdCacheReadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kSsdCacheReadWallNanos,
+         RuntimeMetric(
+             ioStats_->ssdCacheReadLatencyUs().sum() * 1'000,
+             ioStats_->ssdCacheReadLatencyUs().count(),
+             ioStats_->ssdCacheReadLatencyUs().min() * 1'000,
+             ioStats_->ssdCacheReadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->cacheWaitLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kCacheWaitWallNanos,
+         RuntimeMetric(
+             ioStats_->cacheWaitLatencyUs().sum() * 1'000,
+             ioStats_->cacheWaitLatencyUs().count(),
+             ioStats_->cacheWaitLatencyUs().min() * 1'000,
+             ioStats_->cacheWaitLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->coalescedSsdLoadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kCoalescedSsdLoadWallNanos,
+         RuntimeMetric(
+             ioStats_->coalescedSsdLoadLatencyUs().sum() * 1'000,
+             ioStats_->coalescedSsdLoadLatencyUs().count(),
+             ioStats_->coalescedSsdLoadLatencyUs().min() * 1'000,
+             ioStats_->coalescedSsdLoadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->coalescedStorageLoadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kCoalescedStorageLoadWallNanos,
+         RuntimeMetric(
+             ioStats_->coalescedStorageLoadLatencyUs().sum() * 1'000,
+             ioStats_->coalescedStorageLoadLatencyUs().count(),
+             ioStats_->coalescedStorageLoadLatencyUs().min() * 1'000,
+             ioStats_->coalescedStorageLoadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  res.insert(
       {{"numPrefetch", RuntimeMetric(ioStats_->prefetch().count())},
        {"prefetchBytes",
         RuntimeMetric(
@@ -478,13 +498,6 @@ HiveDataSource::getRuntimeStats() {
        {Connector::kTotalRemainingFilterTime,
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
-            RuntimeCounter::Unit::kNanos)},
-       {"ioWaitWallNanos",
-        RuntimeMetric(
-            ioStats_->queryThreadIoLatency().sum() * 1000,
-            ioStats_->queryThreadIoLatency().count(),
-            ioStats_->queryThreadIoLatency().min() * 1000,
-            ioStats_->queryThreadIoLatency().max() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
         RuntimeMetric(

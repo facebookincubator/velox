@@ -307,6 +307,14 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
           std::vector<std::unique_ptr<cudf::column>>&&,
           cudf::column_view)> func,
       rmm::cuda_stream_view stream);
+
+  std::unique_ptr<cudf::table> filteredOutputIndices(
+      cudf::table_view leftTableView,
+      cudf::column_view leftIndicesCol,
+      cudf::table_view rightTableView,
+      cudf::column_view rightIndicesCol,
+      cudf::join_kind joinKind,
+      rmm::cuda_stream_view stream);
 };
 
 /**

@@ -244,6 +244,11 @@ class QueryConfig {
   static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
       "max_elements_size_in_repeat_and_sequence";
 
+  /// If true, the PartitionedOutput operator will flush rows eagerly, without
+  /// waiting until buffers reach certain size. Default is false.
+  static constexpr const char* kPartitionedOutputEagerFlush =
+      "partitioned_output_eager_flush";
+
   /// The maximum number of bytes to buffer in PartitionedOutput operator to
   /// avoid creating tiny SerializedPages.
   ///
@@ -278,6 +283,14 @@ class QueryConfig {
   /// known and kPreferredOutputBatchBytes is used to compute the number of
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
+
+  /// Initial output batch size in rows for MergeJoin operator. When non-zero,
+  /// the batch size starts at this value and is dynamically adjusted based on
+  /// the average row size of previous output batches. When zero (default),
+  /// dynamic adjustment is disabled and the batch size is fixed at
+  /// preferredOutputBatchRows.
+  static constexpr const char* kMergeJoinOutputBatchStartSize =
+      "merge_join_output_batch_start_size";
 
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
@@ -819,7 +832,7 @@ class QueryConfig {
   };
 
   bool selectiveNimbleReaderEnabled() const {
-    return get<bool>(kSelectiveNimbleReaderEnabled, false);
+    return get<bool>(kSelectiveNimbleReaderEnabled, true);
   }
 
   RowSizeTrackingMode rowSizeTrackingMode() const {
@@ -928,6 +941,10 @@ class QueryConfig {
     return get<uint64_t>(kMaxSpillBytes, kDefault);
   }
 
+  bool partitionedOutputEagerFlush() const {
+    return get<bool>(kPartitionedOutputEagerFlush, false);
+  }
+
   uint64_t maxPartitionedOutputBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxPartitionedOutputBufferSize, kDefault);
@@ -1005,6 +1022,12 @@ class QueryConfig {
     VELOX_USER_CHECK_LE(
         maxBatchRows, std::numeric_limits<vector_size_t>::max());
     return maxBatchRows;
+  }
+
+  vector_size_t mergeJoinOutputBatchStartSize() const {
+    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
+    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
+    return batchRows;
   }
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
