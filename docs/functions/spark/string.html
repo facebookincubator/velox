@@ -601,6 +601,27 @@ If <code class="docutils literal notranslate"><span class="pre">delim</span></co
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="to_pretty_string">
+<span class="sig-name descname"><span class="pre">to_pretty_string</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#to_pretty_string" title="Link to this definition">¶</a></dt>
+<dd><p>Returns pretty string for <code class="docutils literal notranslate"><span class="pre">x</span></code>. All scalar types are supported.
+Adjusts the timestamp input to the given time zone if set through <code class="docutils literal notranslate"><span class="pre">session_timezone</span></code> config.
+The result is different from that of casting <code class="docutils literal notranslate"><span class="pre">x</span></code> as string in the following aspects.</p>
+<ul class="simple">
+<li><p>It prints null input as “NULL” rather than producing null output.</p></li>
+<li><p>It prints binary values using the hex format.</p></li>
+</ul>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="mi">4</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;4&quot;</span>
+<span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s2">&quot;1.0&quot;</span> <span class="k">as</span> <span class="nb">float</span><span class="p">));</span> <span class="o">--</span> <span class="s2">&quot;1.0&quot;</span>
+<span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="s2">&quot;spark&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;spark&quot;</span>
+<span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;abcdef&#39;</span> <span class="k">as</span> <span class="n">binary</span><span class="p">));</span> <span class="o">--</span> <span class="s2">&quot;[61 62 63 64 65 66]&quot;</span>
+<span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="n">null</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;NULL&quot;</span>
+<span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">2347589</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">));</span> <span class="o">--</span> <span class="s2">&quot;1970-01-28 12:06:29&quot;</span>
+<span class="n">SELECT</span> <span class="n">to_pretty_string</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2024-05-08&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">));</span> <span class="o">--</span> <span class="s2">&quot;2024-05-08&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="translate">
 <span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">match</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#translate" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a new translated string. It translates the character in <code class="docutils literal notranslate"><span class="pre">string</span></code> by a
@@ -726,6 +747,7 @@ Note: This function is not directly callable in Spark SQL, but internally used f
 <li><a class="reference internal" href="#str_to_map"><code class="docutils literal notranslate"><span class="pre">str_to_map()</span></code></a></li>
 <li><a class="reference internal" href="#substring"><code class="docutils literal notranslate"><span class="pre">substring()</span></code></a></li>
 <li><a class="reference internal" href="#substring_index"><code class="docutils literal notranslate"><span class="pre">substring_index()</span></code></a></li>
+<li><a class="reference internal" href="#to_pretty_string"><code class="docutils literal notranslate"><span class="pre">to_pretty_string()</span></code></a></li>
 <li><a class="reference internal" href="#translate"><code class="docutils literal notranslate"><span class="pre">translate()</span></code></a></li>
 <li><a class="reference internal" href="#trim"><code class="docutils literal notranslate"><span class="pre">trim()</span></code></a></li>
 <li><a class="reference internal" href="#unbase64"><code class="docutils literal notranslate"><span class="pre">unbase64()</span></code></a></li>
