@@ -225,7 +225,6 @@ class QueueSplitsStore : public SplitsStore {
       return true;
     }
     if (barrierSplits_.contains(driverId)) {
-      LOG(ERROR) << "Barrier split for driver " << driverId;
       split = barrierSplits_[driverId];
       barrierSplits_.erase(driverId);
       return true;

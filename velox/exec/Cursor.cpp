@@ -62,7 +62,7 @@ class TaskQueue {
     return pool_.get();
   }
 
-  int32_t producersDrainFinished_ = 0;
+  std::atomic<int32_t> producersDrainFinished_ = 0;
 
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
@@ -98,6 +98,7 @@ exec::BlockingReason TaskQueue::enqueue(
                  << producersDrainFinished_;
     }
     if (consumerBlocked_) {
+      LOG(ERROR) << "Vector is null set promise";
       consumerBlocked_ = false;
       consumerPromise_.setValue();
     }
@@ -115,6 +116,7 @@ exec::BlockingReason TaskQueue::enqueue(
   queue_.push_back(std::move(entry));
   totalBytes_ += bytes;
   if (consumerBlocked_) {
+    LOG(ERROR) << "Vector valid set promise";
     consumerBlocked_ = false;
     consumerPromise_.setValue();
   }
@@ -151,10 +153,14 @@ RowVectorPtr TaskQueue::dequeue() {
         LOG(ERROR) << "MADUAN dequeue producersFinished_ == numProducers_";
         return nullptr;
       } else if (producersDrainFinished_ == numProducers_) {
+        LOG(ERROR)
+            << "MADUAN dequeue producersDrainFinished_ == numProducers_ = "
+            << producersDrainFinished_;
         return nullptr;
       }
 
       if (!vector) {
+        LOG(ERROR) << "Vector is null add promise";
         consumerBlocked_ = true;
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
