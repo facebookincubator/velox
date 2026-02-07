@@ -72,6 +72,65 @@ std::vector<OperatorStats> splitStats(
   return {std::move(projectStats), std::move(filterStats)};
 }
 
+// Unwraps dictionary/constant/sequence encodings to get to the underlying
+// Lazy or Base vector.
+const BaseVector* unwrapToLazyOrBase(const VectorPtr& vector) {
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::CONSTANT:
+    case VectorEncoding::Simple::DICTIONARY:
+    case VectorEncoding::Simple::SEQUENCE: {
+      return vector->valueVector() ? unwrapToLazyOrBase(vector->valueVector())
+                                   : vector.get();
+    }
+    case VectorEncoding::Simple::LAZY:
+      return vector.get();
+    default:
+      return vector.get();
+  }
+}
+
+// Returns a unique identity pointer for Lazy vectors. For other vectors,
+// returns nullptr.
+const void* lazyIdentityPtr(const VectorPtr& vec) {
+  if (!vec) {
+    return nullptr;
+  }
+  return static_cast<const void*>(unwrapToLazyOrBase(vec));
+}
+
+// Returns true if any child lazy vector of input has been reused.
+bool hasReusedLazyVectors(const RowVectorPtr& input) {
+  const auto& vectors = input->children();
+
+  // Collect identity pointers for all child vectors of input.
+  std::vector<const void*> lazyIdentities;
+  for (const auto& vector : vectors) {
+    const void* id = lazyIdentityPtr(vector);
+    if (id) {
+      lazyIdentities.push_back(id);
+    }
+  }
+
+  // Check if any identity pointer appears more than once.
+  for (const auto& vector : vectors) {
+    const void* id = lazyIdentityPtr(vector);
+    if (!id) {
+      continue;
+    }
+
+    size_t cnt = 0;
+    for (auto* x : lazyIdentities) {
+      if (x == id) {
+        ++cnt;
+      }
+      if (cnt > 1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 FilterProject::FilterProject(
@@ -185,7 +244,11 @@ RowVectorPtr FilterProject::getOutput() {
   if (!hasFilter_) {
     VELOX_CHECK(!isIdentityProjection_);
     auto results = project(*rows, evalCtx);
-    return fillOutput(size, nullptr, results);
+    auto output = fillOutput(size, nullptr, results);
+    VELOX_USER_CHECK(
+        !hasReusedLazyVectors(output),
+        "Lazy vectors have been reused in FilterProject output. Please consider eliminating aliasing.");
+    return output;
   }
 
   // evaluate filter
@@ -205,10 +268,14 @@ RowVectorPtr FilterProject::getOutput() {
     results = project(*rows, evalCtx);
   }
 
-  return fillOutput(
+  auto output = fillOutput(
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
       results);
+  VELOX_USER_CHECK(
+      !hasReusedLazyVectors(output),
+      "Lazy vectors have been reused in FilterProject output. Please consider eliminating aliasing.");
+  return output;
 }
 
 std::vector<VectorPtr> FilterProject::project(
