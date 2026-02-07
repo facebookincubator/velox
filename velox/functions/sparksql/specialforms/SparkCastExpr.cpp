@@ -34,6 +34,11 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     return toType->isBoolean() || isSparkIntegralType(toType);
   }
 
+  // String to Date cast supports ANSI mode.
+  if (fromType->isVarchar() && toType->isDate()) {
+    return true;
+  }
+
   return false;
 }
 

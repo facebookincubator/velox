@@ -711,6 +711,25 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
 }
 
+TEST_F(E2EFilterTest, flushRowGroupByBufferedSize) {
+  bytesInRowGroup_ = 100;
+  rowType_ = ROW({"c0"}, {INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(5);
+  for (int i = 0; i < 5; i++) {
+    batches.push_back(
+        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+  }
+  writeToMemory(rowType_, batches, false);
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+  EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 1);
+  EXPECT_EQ(parquetReader.numberOfRows(), 25);
+}
+
 TEST_F(E2EFilterTest, writeDecimalAsInteger) {
   auto rowVector = makeRowVector(
       {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
