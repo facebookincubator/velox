@@ -1033,29 +1033,25 @@ bool incrementNullColumnValue(
     bool descending,
     bool nullLast,
     VectorPtr& result) {
-  if (!nullLast) {
-    if (descending) {
-      // Nulls first: null is at the beginning
-      result->setNull(row, false);
-      const auto ret = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          setMaxValueTyped, column->typeKind(), result, row);
-      if (!ret) {
-        result->setNull(row, true);
-      }
-      return ret;
-    } else {
-      result->setNull(row, false);
-      const auto ret = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          setMinValueTyped, column->typeKind(), result, row);
-      if (!ret) {
-        result->setNull(row, true);
-      }
-      return ret;
-    }
-  } else {
-    // Nulls last: null is at the end, can't increment
-    return false;
-  }
+  // For descending order, "next" value after null (or min in sort order) is
+  // MAX. For ascending order, "next" value after null (or min in sort order) is
+  // MIN.
+  result->setNull(row, false);
+  const auto ret = descending
+      ? VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            setMaxValueTyped, column->typeKind(), result, row)
+      : VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            setMinValueTyped, column->typeKind(), result, row);
+
+  VELOX_CHECK(
+      ret,
+      "Cannot set {} value for type {} when incrementing NULL",
+      descending ? "max" : "min",
+      column->type()->toString());
+
+  // Nulls first: increment succeeded, return true.
+  // Nulls last: null is at end of sort order, reset for carry, return false.
+  return !nullLast;
 }
 
 // Increments or decrements a column value at the given row index based on sort
@@ -1087,8 +1083,11 @@ std::unique_ptr<KeyEncoder> KeyEncoder::create(
     RowTypePtr inputType,
     std::vector<core::SortOrder> sortOrders,
     memory::MemoryPool* pool) {
-  return std::unique_ptr<KeyEncoder>(
-      new KeyEncoder(keyColumns, inputType, sortOrders, pool));
+  return std::unique_ptr<KeyEncoder>(new KeyEncoder(
+      std::move(keyColumns),
+      std::move(inputType),
+      std::move(sortOrders),
+      pool));
 }
 
 KeyEncoder::KeyEncoder(

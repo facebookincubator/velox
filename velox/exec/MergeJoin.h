@@ -346,6 +346,12 @@ class MergeJoin : public Operator {
     return std::move(output_);
   }
 
+  // Updates outputBatchSize_ dynamically based on the average row size of the
+  // current output batch. The new batch size is computed as:
+  // 1. preferredOutputBatchBytes / avgRowSize
+  // 2. min(result from step 1, preferredOutputBatchRows)
+  void updateOutputBatchSize(const RowVectorPtr& output);
+
   // Evaluates join filter on 'filterInput_' and returns 'output' that contains
   // a subset of rows on which the filter passed. Returns nullptr if no rows
   // passed the filter.
@@ -557,8 +563,15 @@ class MergeJoin : public Operator {
   // dictionaries wrapped around the right side input.
   bool isRightFlattened_{false};
 
-  // Maximum number of rows in the output batch.
-  const vector_size_t outputBatchSize_;
+  // Preferred output batch size in bytes from QueryConfig.
+  const uint64_t preferredOutputBatchBytes_;
+
+  // Preferred output batch size in rows from QueryConfig.
+  const vector_size_t preferredOutputBatchRows_;
+
+  // Whether dynamic output batch sizing is enabled. When disabled (default),
+  // outputBatchSize_ is fixed at preferredOutputBatchRows_.
+  const bool dynamicOutputBatchSizeEnabled_;
 
   // Type of join.
   const core::JoinType joinType_;
@@ -567,6 +580,11 @@ class MergeJoin : public Operator {
   const size_t numKeys_;
 
   const core::PlanNodeId rightNodeId_;
+
+  // Maximum number of rows in the output batch. This is dynamically adjusted
+  // based on the average row size of previous output batches when dynamic
+  // batching is enabled.
+  vector_size_t outputBatchSize_;
 
   // The cached merge join plan node used to initialize this operator after the
   // driver has started execution. It is reset after the initialization.

@@ -426,6 +426,65 @@ std::unordered_map<std::string, RuntimeMetric>
 HiveDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert(
+      {Connector::kIoWaitWallNanos,
+       RuntimeMetric(
+           ioStats_->queryThreadIoLatencyUs().sum() * 1'000,
+           ioStats_->queryThreadIoLatencyUs().count(),
+           ioStats_->queryThreadIoLatencyUs().min() * 1'000,
+           ioStats_->queryThreadIoLatencyUs().max() * 1'000,
+           RuntimeCounter::Unit::kNanos)});
+  // Breakdown of ioWaitWallNanos by I/O type
+  if (ioStats_->storageReadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kStorageReadWallNanos,
+         RuntimeMetric(
+             ioStats_->storageReadLatencyUs().sum() * 1'000,
+             ioStats_->storageReadLatencyUs().count(),
+             ioStats_->storageReadLatencyUs().min() * 1'000,
+             ioStats_->storageReadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->ssdCacheReadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kSsdCacheReadWallNanos,
+         RuntimeMetric(
+             ioStats_->ssdCacheReadLatencyUs().sum() * 1'000,
+             ioStats_->ssdCacheReadLatencyUs().count(),
+             ioStats_->ssdCacheReadLatencyUs().min() * 1'000,
+             ioStats_->ssdCacheReadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->cacheWaitLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kCacheWaitWallNanos,
+         RuntimeMetric(
+             ioStats_->cacheWaitLatencyUs().sum() * 1'000,
+             ioStats_->cacheWaitLatencyUs().count(),
+             ioStats_->cacheWaitLatencyUs().min() * 1'000,
+             ioStats_->cacheWaitLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->coalescedSsdLoadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kCoalescedSsdLoadWallNanos,
+         RuntimeMetric(
+             ioStats_->coalescedSsdLoadLatencyUs().sum() * 1'000,
+             ioStats_->coalescedSsdLoadLatencyUs().count(),
+             ioStats_->coalescedSsdLoadLatencyUs().min() * 1'000,
+             ioStats_->coalescedSsdLoadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  if (ioStats_->coalescedStorageLoadLatencyUs().count() > 0) {
+    res.insert(
+        {Connector::kCoalescedStorageLoadWallNanos,
+         RuntimeMetric(
+             ioStats_->coalescedStorageLoadLatencyUs().sum() * 1'000,
+             ioStats_->coalescedStorageLoadLatencyUs().count(),
+             ioStats_->coalescedStorageLoadLatencyUs().min() * 1'000,
+             ioStats_->coalescedStorageLoadLatencyUs().max() * 1'000,
+             RuntimeCounter::Unit::kNanos)});
+  }
+  res.insert(
       {{"numPrefetch", RuntimeMetric(ioStats_->prefetch().count())},
        {"prefetchBytes",
         RuntimeMetric(
@@ -439,13 +498,6 @@ HiveDataSource::getRuntimeStats() {
        {Connector::kTotalRemainingFilterTime,
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
-            RuntimeCounter::Unit::kNanos)},
-       {"ioWaitWallNanos",
-        RuntimeMetric(
-            ioStats_->queryThreadIoLatency().sum() * 1000,
-            ioStats_->queryThreadIoLatency().count(),
-            ioStats_->queryThreadIoLatency().min() * 1000,
-            ioStats_->queryThreadIoLatency().max() * 1000,
             RuntimeCounter::Unit::kNanos)},
        {"overreadBytes",
         RuntimeMetric(
