@@ -55,7 +55,8 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, true));
+      std::make_shared<SparkCastHooks>(config, true),
+      std::make_shared<SparkCastKernel>(config, true));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -73,6 +74,7 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<SparkCastHooks>(config, false));
+      std::make_shared<SparkCastHooks>(config, false),
+      std::make_shared<SparkCastKernel>(config, false));
 }
 } // namespace facebook::velox::functions::sparksql

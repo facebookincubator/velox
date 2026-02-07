@@ -100,22 +100,6 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
         },
         /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<int8_t, bool>(
-        {
-            1,
-            0,
-            12,
-            -1,
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-        },
-        /*truncate*/ true);
   }
 
   // From double.
@@ -135,22 +119,6 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
         },
         /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<double, bool>(
-        {
-            1.0,
-            1.1,
-            -1.0,
-            0.0000000000001,
-        },
-        {
-            true,
-            true,
-            true,
-            true,
-        },
-        /*truncate*/ true);
   }
 
   // From float.
@@ -172,24 +140,6 @@ TEST_F(ConversionsTest, toBoolean) {
             true,
         },
         /*truncate*/ false);
-
-    // When TRUNCATE = true.
-    testConversion<float, bool>(
-        {
-            0.1,
-            0.0,
-            -0.1,
-            kInf,
-            kNan,
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-            false,
-        },
-        /*truncate*/ true);
   }
 
   // From boolean.
@@ -242,42 +192,6 @@ TEST_F(ConversionsTest, toBoolean) {
         /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<std::string, bool>(
-        {
-            "1",
-            "0",
-            "t",
-            "true",
-            "f",
-            "false",
-        },
-        {
-            true,
-            false,
-            true,
-            true,
-            false,
-            false,
-        },
-        /*truncate*/ true);
-
-    // When TRUNCATE = true, invalid cases.
-    testConversion<std::string, bool>(
-        {
-            "1.7E308",
-            "nan",
-            "infinity",
-            "12",
-            "-1",
-            "tr",
-            "tru",
-        },
-        {},
-        /*truncate*/ true,
-        false,
-        /*expectError*/ true);
   }
 
   // From timestamp.
@@ -287,14 +201,6 @@ TEST_F(ConversionsTest, toBoolean) {
         {Timestamp(946729316, 123)},
         {},
         /*truncate*/ false,
-        false,
-        /*expectError*/ true);
-
-    // When TRUNCATE = true, invalid cases.
-    testConversion<Timestamp, bool>(
-        {Timestamp(946729316, 123)},
-        {},
-        /*truncate*/ true,
         false,
         /*expectError*/ true);
   }
@@ -342,72 +248,6 @@ TEST_F(ConversionsTest, toIntegralTypes) {
         /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<double, int64_t>(
-        {
-            12345.12,
-            12345.67,
-        },
-        {
-            12345,
-            12345,
-        },
-        /*truncate*/ true);
-    testConversion<double, int32_t>(
-        {
-            1.888,
-            2.5,
-            3.6,
-            100.44,
-            -100.101,
-        },
-        {
-            1,
-            2,
-            3,
-            100,
-            -100,
-        },
-        /*truncate*/ true);
-    testConversion<double, int8_t>(
-        {
-            12345.67,
-            -12345.67,
-            127.8,
-        },
-        {
-            57,
-            -57,
-            127,
-        },
-        /*truncate*/ true);
-    testConversion<double, int8_t>(
-        {
-            1,
-            256,
-            257,
-            2147483646,
-            2147483647,
-            2147483648,
-            -2147483646,
-            -2147483647,
-            -2147483648,
-            -2147483649,
-        },
-        {
-            1,
-            0,
-            1,
-            -2,
-            -1,
-            -1,
-            2,
-            1,
-            0,
-            0,
-        },
-        /*truncate*/ true);
   }
 
   // From float.
@@ -421,13 +261,6 @@ TEST_F(ConversionsTest, toIntegralTypes) {
         {kNan}, {}, /*truncate*/ false, false, /*expectError*/ true);
     testConversion<float, int8_t>(
         {kNan}, {}, /*truncate*/ false, false, /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<float, int64_t>(
-        {kInf, kNan}, {9223372036854775807, 0}, /*truncate*/ true);
-    testConversion<float, int32_t>({kNan}, {0}, /*truncate*/ true);
-    testConversion<float, int16_t>({kNan}, {0}, /*truncate*/ true);
-    testConversion<float, int8_t>({kNan}, {0}, /*truncate*/ true);
   }
 
   // From string.
@@ -484,47 +317,6 @@ TEST_F(ConversionsTest, toIntegralTypes) {
         /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<std::string, int8_t>(
-        {
-            "1.2",
-            "1.23444",
-            ".2355",
-            "-1.8",
-            "1.",
-            "-1.",
-            "0.",
-            ".",
-            "-.",
-            "+1",
-        },
-        {
-            1,
-            1,
-            0,
-            -1,
-            1,
-            -1,
-            0,
-            0,
-            0,
-            1,
-        },
-        /*truncate*/ true);
-    testConversion<std::string, int64_t>(
-        {
-            "1a",
-            "",
-            "1'234'567",
-            "1,234,567",
-            "infinity",
-            "nan",
-        },
-        {},
-        /*truncate*/ true,
-        false,
-        /*expectError*/ true);
   }
 
   // From integral types.
@@ -554,28 +346,6 @@ TEST_F(ConversionsTest, toIntegralTypes) {
         /*truncate*/ false,
         false,
         /*expectError*/ true);
-
-    // When TRUNCATE = true.
-    testConversion<int32_t, int8_t>(
-        {
-            1234567,
-            -1234567,
-            1111111,
-            2,
-            3,
-            1000,
-            -100101,
-        },
-        {
-            -121,
-            121,
-            71,
-            2,
-            3,
-            -24,
-            -5,
-        },
-        /*truncate*/ true);
   }
 
   // From boolean

@@ -42,13 +42,8 @@ class CastHooks {
 
   virtual Expected<Timestamp> castIntToTimestamp(int64_t seconds) const = 0;
 
-  virtual Expected<int64_t> castTimestampToInt(Timestamp timestamp) const = 0;
-
   virtual Expected<std::optional<Timestamp>> castDoubleToTimestamp(
       double seconds) const = 0;
-
-  virtual Expected<int32_t> castStringToDate(
-      const StringView& dateString) const = 0;
 
   /// 'data' is guaranteed to be non-empty and has been processed by
   /// removeWhiteSpaces.
