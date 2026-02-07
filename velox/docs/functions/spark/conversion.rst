@@ -1,23 +1,21 @@
-== == == == == == == == == == Conversion Functions == == == == == == == == ==
-    ==
+====================
+Conversion Functions
+====================
 
-        ..spark : function::cast(value AS type)
-        ->type
+.. spark:function:: cast(value AS type) -> type
 
-                  Explicitly cast a ``value`` to a specified ``type``
-        .Follows the behavior when Spark ANSI mode is disabled,
-    and does not support the behavior when ANSI is turned on :
+    Explicitly cast a ``value`` to a specified ``type``.
+    Follows the behavior when Spark ANSI mode is disabled, and does not support
+    the behavior when ANSI is turned on:
 
-    *If the ``value`` exceeds the range of the ``type``,
-    no error is raised.Instead,
-    the ``value`` is "wrapped" around.
+    * If the ``value`` exceeds the range of the ``type``, no error is raised.
+      Instead, the ``value`` is "wrapped" around.
 
-        * If the ``value`` has an invalid format
-    or contains characters incompatible with the target ``type``,
-    the cast function returns NULL.::
+    * If the ``value`` has an invalid format or contains characters incompatible
+      with the target ``type``, the cast function returns NULL. ::
 
-        SELECT cast(128 as tinyint);
--- -128 SELECT cast('2012-Oct-23' as date); -- NULL
+        SELECT cast(128 as tinyint); -- -128
+        SELECT cast('2012-Oct-23' as date); -- NULL
 
 .. spark:function:: try_cast(value AS type) -> type
 
@@ -27,109 +25,91 @@
     for failure to cast.
     ``try_cast`` differs from ``cast`` function with ANSI mode disabled in following case:
 
-*If the ``value`` cannot fit within the domain of ``type``,
-    the result is NULL.::
+    * If the ``value`` cannot fit within the domain of ``type``, the result is NULL. ::
 
-        SELECT try_cast(128 as tinyint);
---NULL SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint);
---NULL SELECT try_cast(1e12 as int);
---NULL
+        SELECT try_cast(128 as tinyint); -- NULL
+        SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint); -- NULL
+        SELECT try_cast(1e12 as int); -- NULL
 
-    Cast from UNKNOWN Type-- -- -- -- -- -- -- -- -- -- --
+Cast from UNKNOWN Type
+----------------------
 
-    Casting from UNKNOWN type to all other scalar types is supported,
-    e.g.,
-    cast(NULL as int)
-        .
+Casting from UNKNOWN type to all other scalar types is supported, e.g., cast(NULL as int).
 
-    Cast to Integral Types-- -- -- -- -- -- -- -- -- -- --
+Cast to Integral Types
+----------------------
 
-    Integral types include bigint,
-    integer, smallint,
-    and tinyint.
+Integral types include bigint, integer, smallint, and tinyint.
 
-        From integral types
-    ^
-    ^^^^^^^^^^^^^^^^^^
+From integral types
+^^^^^^^^^^^^^^^^^^^
 
-                     Casting one integral type to another is allowed
-                         .When the input value exceeds the range of result type,
-    a value of the result type is created forcedly with the input value.
+Casting one integral type to another is allowed. When the input value exceeds the range of result type,
+a value of the result type is created forcedly with the input value.
 
-    Valid examples :
+Valid examples:
 
-    ::
+::
 
-        SELECT cast(1234567 as bigint);
---1234567 SELECT cast(12 as tinyint);
---12 SELECT cast(1234 as tinyint);
--- -46 SELECT cast(1234567 as smallint);
--- -10617
+  SELECT cast(1234567 as bigint); -- 1234567
+  SELECT cast(12 as tinyint); -- 12
+  SELECT cast(1234 as tinyint); -- -46
+  SELECT cast(1234567 as smallint); -- -10617
 
-        From floating -
-        point types ^
-    ^^^^^^^^^^^^^^^^^^^^^^^^
+From floating-point types
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                           Casting from floating -
-        point input to an integral type truncates the input value
-            .It is allowed when the truncated result exceeds the range of result
-                type.
+Casting from floating-point input to an integral type truncates the input value.
+It is allowed when the truncated result exceeds the range of result type.
 
-        Valid examples
+Valid examples
 
-        ::
+::
 
-            SELECT cast(12345.12 as bigint);
---12345 SELECT cast(12345.67 as bigint);
---12345 SELECT cast(127.1 as tinyint);
---127 SELECT cast(127.8 as tinyint);
---127 SELECT cast(1234567.89 as smallint);
--- -10617 SELECT cast(cast('inf' as double) as bigint);
---9223372036854775807 SELECT cast(cast('nan' as double) as integer);
---0 SELECT cast(cast('nan' as double) as smallint);
---0 SELECT cast(cast('nan' as double) as tinyint);
---0 SELECT cast(cast('nan' as double) as bigint);
---0
+  SELECT cast(12345.12 as bigint); -- 12345
+  SELECT cast(12345.67 as bigint); -- 12345
+  SELECT cast(127.1 as tinyint); -- 127
+  SELECT cast(127.8 as tinyint); -- 127
+  SELECT cast(1234567.89 as smallint); -- -10617
+  SELECT cast(cast('inf' as double) as bigint); -- 9223372036854775807
+  SELECT cast(cast('nan' as double) as integer); -- 0
+  SELECT cast(cast('nan' as double) as smallint); -- 0
+  SELECT cast(cast('nan' as double) as tinyint); -- 0
+  SELECT cast(cast('nan' as double) as bigint); -- 0
 
-    From strings ^
-    ^^^^^^^^^^^
+From strings
+^^^^^^^^^^^^
 
-              Casting a string to an integral type is allowed if the string
-                  represents a number within the range of result
-                      type.Casting from strings that represent floating -
-        point numbers truncates the decimal part of the input
-            value.Casting from invalid input values throws.
+Casting a string to an integral type is allowed if the string represents a number within the range of result type.
+Casting from strings that represent floating-point numbers truncates the decimal part of the input value.
+Casting from invalid input values throws.
 
-        Valid examples
+Valid examples
 
-        ::
+::
 
-            SELECT cast('12345' as bigint);
---12345 SELECT cast('+1' as tinyint);
---1 SELECT cast('-1' as tinyint);
--- -1 SELECT cast('12345.67' as bigint);
---12345 SELECT cast('1.2' as tinyint);
---1 SELECT cast('-1.8' as tinyint);
--- -1 SELECT cast('+1' as tinyint);
---1 SELECT cast('1.' as tinyint);
---1 SELECT cast('-1' as tinyint);
--- -1 SELECT cast('-1.' as tinyint);
--- -1 SELECT cast('0.' as tinyint);
---0 SELECT cast('.' as tinyint);
---0 SELECT cast('-.' as tinyint);
---0
+  SELECT cast('12345' as bigint); -- 12345
+  SELECT cast('+1' as tinyint); -- 1
+  SELECT cast('-1' as tinyint); -- -1
+  SELECT cast('12345.67' as bigint); -- 12345
+  SELECT cast('1.2' as tinyint); -- 1
+  SELECT cast('-1.8' as tinyint); -- -1
+  SELECT cast('+1' as tinyint); -- 1
+  SELECT cast('1.' as tinyint); -- 1
+  SELECT cast('-1' as tinyint); -- -1
+  SELECT cast('-1.' as tinyint); -- -1
+  SELECT cast('0.' as tinyint); -- 0
+  SELECT cast('.' as tinyint); -- 0
+  SELECT cast('-.' as tinyint); -- 0
 
-    Invalid examples
+Invalid examples
 
-    ::
+::
 
-        SELECT cast('1234567' as tinyint);
---NULL // Reason: Out of range
-    SELECT cast('1a' as tinyint);
---NULL // Invalid argument
-    SELECT cast('' as tinyint);
---NULL // Invalid argument
-    SELECT cast('1,234,567' as bigint); -- NULL // Invalid argument
+  SELECT cast('1234567' as tinyint); -- NULL // Reason: Out of range
+  SELECT cast('1a' as tinyint); -- NULL // Invalid argument
+  SELECT cast('' as tinyint); -- NULL // Invalid argument
+  SELECT cast('1,234,567' as bigint); -- NULL // Invalid argument
   SELECT cast('1'234'567' as bigint); -- NULL // Invalid argument
   SELECT cast('nan' as bigint); -- NULL // Invalid argument
   SELECT cast('infinity' as bigint); -- NULL // Invalid argument
@@ -301,6 +281,7 @@ Invalid examples
   SELECT cast('2012/10/23' as date); -- NULL // Invalid argument
   SELECT cast('2012.10.23' as date); -- NULL // Invalid argument
 
+
 Cast to Time
 ------------
 
@@ -334,16 +315,6 @@ Valid examples
   SELECT cast('12:03:17.123' as time); -- 43397123000 (with milliseconds)
   SELECT cast(' 12:30:45 ' as time); -- 45045000000 (whitespace trimmed)
 
-Valid examples
-
-::
-
-  SELECT cast('00:00:00' as time); -- 0 (midnight)
-  SELECT cast('12:30:45' as time); -- 45045000000 (12:30:45 in microseconds)
-  SELECT cast('23:59:59' as time); -- 86399000000
-  SELECT cast('12:03:17.123' as time); -- 43397123000 (with milliseconds)
-  SELECT cast(' 12:30:45 ' as time); -- 45045000000 (whitespace trimmed)
-
 Invalid examples
 
 ::
@@ -352,7 +323,6 @@ Invalid examples
   SELECT cast('12:60:00' as time); -- NULL / throws error (minute out of range)
   SELECT cast('12:30:60' as time); -- NULL / throws error (second out of range)
   SELECT cast('12:30' as time); -- NULL / throws error (missing seconds component)
-
 
 Cast to Decimal
 ---------------
