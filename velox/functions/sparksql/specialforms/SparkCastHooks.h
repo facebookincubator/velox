@@ -28,41 +28,10 @@ class SparkCastHooks : public exec::CastHooks {
       const velox::core::QueryConfig& config,
       bool allowOverflow);
 
-  // TODO: Spark hook allows more string patterns than Presto.
-  Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const override;
-
-  /// When casting integral value as timestamp, the input is treated as the
-  /// number of seconds since the epoch (1970-01-01 00:00:00 UTC).
-  Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
-
-  Expected<int64_t> castTimestampToInt(Timestamp timestamp) const override;
-
-  /// When casting double as timestamp, the input is treated as
-  /// the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
-  Expected<std::optional<Timestamp>> castDoubleToTimestamp(
-      double value) const override;
-
-  /// 1) Removes all leading and trailing UTF8 white-spaces before cast. 2) Uses
-  /// non-standard cast mode to cast from string to date.
-  Expected<int32_t> castStringToDate(
-      const StringView& dateString) const override;
-
-  // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
-  // strings with different letter cases to real.
-  Expected<float> castStringToReal(const StringView& data) const override;
-
-  // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
-  // strings with different letter cases to double.
-  Expected<double> castStringToDouble(const StringView& data) const override;
-
   /// When casting from string to integral, floating-point, decimal, date, and
   /// timestamp types, Spark hook trims all leading and trailing UTF8
   /// whitespaces before cast.
   StringView removeWhiteSpaces(const StringView& view) const override;
-
-  // Supports Spark boolean to timestamp cast.
-  Expected<Timestamp> castBooleanToTimestamp(bool seconds) const override;
 
   const TimestampToStringOptions& timestampToStringOptions() const override {
     return timestampToStringOptions_;
