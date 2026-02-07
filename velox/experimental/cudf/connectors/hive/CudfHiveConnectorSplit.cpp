@@ -46,23 +46,6 @@ uint64_t CudfHiveConnectorSplit::size() const {
   return length;
 }
 
-folly::dynamic CudfHiveConnectorSplit::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "CudfHiveConnectorSplit";
-  obj["connectorId"] = connectorId;
-  obj["splitWeight"] = splitWeight;
-  obj["filePath"] = filePath;
-  obj["start"] = start;
-  obj["length"] = length;
-
-  folly::dynamic infoColumnsObj = folly::dynamic::object;
-  for (const auto& [key, value] : infoColumns) {
-    infoColumnsObj[key] = value;
-  }
-  obj["infoColumns"] = infoColumnsObj;
-  return obj;
-}
-
 CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     const std::string& connectorId,
     const std::string& _filePath,
