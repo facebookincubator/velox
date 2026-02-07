@@ -20,16 +20,8 @@ namespace facebook::velox::functions::sparksql {
 namespace {
 
 bool isSparkIntegralType(const TypePtr& type) {
-  if (type->isTinyint() || type->isSmallint()) {
-    return true;
-  }
-  if (type->isInteger()) {
-    return !type->isDate() && !type->isIntervalYearMonth();
-  }
-  if (type->isBigint()) {
-    return !type->isIntervalDayTime() && !type->isTime();
-  }
-  return false;
+  return type == TINYINT() || type == SMALLINT() || type == INTEGER() ||
+      type == BIGINT();
 }
 
 } // namespace
