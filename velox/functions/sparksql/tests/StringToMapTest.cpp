@@ -63,29 +63,25 @@ TEST_F(StringToMapTest, basic) {
       {"a:1_b:2_c:3", "_", "_"},
       {{"a:1", std::nullopt}, {"b:2", std::nullopt}, {"c:3", std::nullopt}});
 
+  testStringToMap(
+      {"a:1,,b:2,,c:3", ",,", ":"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"a::1,,b::2,,c::3", ",,", "::"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
   // Exception for illegal delimiters.
   // Empty string is used.
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", "", ":"}),
-      "entryDelimiter's size should be 1.");
+      "entryDelimiter's size should be greater than 0.");
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", ",", ""}),
-      "keyValueDelimiter's size should be 1.");
+      "keyValueDelimiter's size should be greater than 0.");
   // Delimiter's length > 1.
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ";;", ":"}),
-      "entryDelimiter's size should be 1.");
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ",", "::"}),
-      "keyValueDelimiter's size should be 1.");
-  // Unicode character is used.
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", "å", ":"}),
-      "entryDelimiter's size should be 1.");
-  VELOX_ASSERT_THROW(
-      evaluateStringToMap({"a:1,b:2", ",", "æ"}),
-      "keyValueDelimiter's size should be 1.");
-
+  testStringToMap({"a:1,b:2", ";;", ":"}, {{"a", "1,b:2"}});
+  testStringToMap(
+      {"a:1,b:2", ",", "::"}, {{"a:1", std::nullopt}, {"b:2", std::nullopt}});
+  testStringToMap({"a:1,b:2", "å", ":"}, {{"a", "1,b:2"}});
+  testStringToMap(
+      {"a:1,b:2", ",", "æ"}, {{"a:1", std::nullopt}, {"b:2", std::nullopt}});
   // Exception for duplicated keys.
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2,a:3", ",", ":"}),
