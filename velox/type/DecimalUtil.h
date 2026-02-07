@@ -86,6 +86,21 @@ class DecimalUtil {
   static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
   static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
 
+  /// @brief Return the integral and decimal parts of an unscaled decimal.
+  /// @tparam T The type of input value.
+  /// @param value The input unscaled value.
+  /// @param scale The scale of the decimal.
+  /// @return A std::pair<T,T> with the integral and decimal components.
+  template <typename T>
+  inline static std::pair<T, T> getDecimalParts(T value, uint8_t scale) {
+    if (scale < std::size(kPowersOfTen)) {
+      constexpr auto lookup = getDivisorTable<T>(
+          std::make_index_sequence<std::size(kPowersOfTen)>());
+      return lookup[scale](value);
+    }
+    VELOX_UNREACHABLE("Attempted to get decimal parts using invalid scale");
+  }
+
   FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
     VELOX_USER_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
@@ -356,10 +371,9 @@ class DecimalUtil {
         *writePosition++ = '-';
         unscaledValue = -unscaledValue;
       }
-      auto [position, errorCode] = std::to_chars(
-          writePosition,
-          writePosition + maxSize,
-          unscaledValue / DecimalUtil::kPowersOfTen[scale]);
+      auto [integral, fraction] = getDecimalParts(unscaledValue, scale);
+      auto [position, errorCode] =
+          std::to_chars(writePosition, writePosition + maxSize, integral);
       VELOX_DCHECK_EQ(
           errorCode,
           std::errc(),
@@ -369,7 +383,6 @@ class DecimalUtil {
 
       if (scale > 0) {
         *writePosition++ = '.';
-        uint128_t fraction = unscaledValue % DecimalUtil::kPowersOfTen[scale];
         // Append leading zeros.
         int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
         std::memset(writePosition, '0', numLeadingZeros);
@@ -555,5 +568,23 @@ class DecimalUtil {
       int32_t& parsedPrecision,
       int32_t& parsedScale,
       int128_t& out);
+
+  // Divide value by 10^Scale, returning the quotient and remainder.
+  // Scale is kept as a template parameter here because it makes the divisor
+  // constant, which lets the compiler apply strength reduction.
+  template <uint8_t Scale, typename T>
+  inline static std::pair<T, T> getDecimalParts(T value) {
+    static_assert(
+        Scale >= 0 && Scale <= std::size(kPowersOfTen),
+        "Decimal scale out of range.");
+    auto integralPart = value / kPowersOfTen[Scale];
+    auto fractionalPart = value % kPowersOfTen[Scale];
+    return {integralPart, fractionalPart};
+  }
+
+  template <typename T, std::size_t... Is>
+  inline constexpr static auto getDivisorTable(std::index_sequence<Is...>) {
+    return std::array{&getDecimalParts<Is, T>...};
+  }
 }; // DecimalUtil
 } // namespace facebook::velox
