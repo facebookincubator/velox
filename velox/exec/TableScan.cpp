@@ -287,16 +287,22 @@ bool TableScan::getSplit() {
       splitPreloader_,
       driverCtx_->driverId);
   if (blockingReason_ != BlockingReason::kNotBlocked) {
+    LOG(ERROR) << "Block get split in table scan driver ID = "
+               << driverCtx_->driverId;
     return false;
   }
 
   if (split.isBarrier()) {
+    LOG(ERROR) << "Get barrier split in table scan driver ID = "
+               << driverCtx_->driverId;
     driverCtx_->driver->drainOutput();
     return false;
   }
 
   if (!split.hasConnectorSplit()) {
     noMoreSplits_ = true;
+    LOG(ERROR) << "No more split in table scan driver ID = "
+               << driverCtx_->driverId;
     if (dataSource_) {
       const auto connectorStats = dataSource_->getRuntimeStats();
       auto lockedStats = stats_.wlock();
@@ -388,6 +394,7 @@ bool TableScan::getSplit() {
         RuntimeCounter(addSplitTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
   }
   ++stats_.wlock()->numSplits;
+  LOG(ERROR) << "Get split in table scan driver ID = " << driverCtx_->driverId;
   return true;
 }
 
