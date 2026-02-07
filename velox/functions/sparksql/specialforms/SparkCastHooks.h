@@ -50,7 +50,7 @@ class SparkCastHooks : public exec::CastHooks {
 
   /// Casts string to TIME (microseconds since midnight as BIGINT).
   /// Supports format: HH:mm:ss[.SSSSSS]
-  /// Removes all leading and trailing UTF8 white-spaces before cast.
+  /// Expects timeString to be trimmed by CastExpr::removeWhiteSpaces.
   Expected<int64_t> castStringToTime(
       const StringView& timeString,
       const tz::TimeZone* timeZone,

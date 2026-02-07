@@ -52,6 +52,7 @@ class CastHooks {
 
   /// Casts string to TIME (microseconds since midnight as BIGINT).
   /// Supports format: HH:mm:ss[.SSSSSS]
+  /// 'timeString' has been processed by removeWhiteSpaces.
   /// @param timeString The time string to parse
   /// @param timeZone The timezone for conversion (can be nullptr)
   /// @param sessionStartTimeMs Session start time in milliseconds for DST
