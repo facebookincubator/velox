@@ -68,7 +68,7 @@ struct CudfConfig {
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
 
-  /// Enable AST in expression evaluation
+  /// Enable AST in expression evaluation.
   bool astExpressionEnabled{true};
 
   /// Enable JIT in expression evaluation
