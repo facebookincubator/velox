@@ -344,7 +344,7 @@ TEST(PageIndex, WriteInt32ColumnIndex) {
   testWriteTypedColumnIndex(
       schema::int32("c1"),
       pageStats,
-      BoundaryOrder::Ascending,
+      BoundaryOrder::kAscending,
       /*has_null_counts=*/true);
 }
 
@@ -362,7 +362,7 @@ TEST(PageIndex, WriteInt64ColumnIndex) {
   testWriteTypedColumnIndex(
       schema::int64("c1"),
       pageStats,
-      BoundaryOrder::Descending,
+      BoundaryOrder::kDescending,
       /*has_null_counts=*/true);
 }
 
@@ -380,7 +380,7 @@ TEST(PageIndex, WriteFloatColumnIndex) {
   testWriteTypedColumnIndex(
       schema::floatType("c1"),
       pageStats,
-      BoundaryOrder::Unordered,
+      BoundaryOrder::kUnordered,
       /*has_null_counts=*/true);
 }
 
@@ -398,7 +398,7 @@ TEST(PageIndex, WriteDoubleColumnIndex) {
   testWriteTypedColumnIndex(
       schema::doubleType("c1"),
       pageStats,
-      BoundaryOrder::Unordered,
+      BoundaryOrder::kUnordered,
       /*has_null_counts=*/false);
 }
 
@@ -412,7 +412,7 @@ TEST(PageIndex, WriteByteArrayColumnIndex) {
   testWriteTypedColumnIndex(
       schema::byteArray("c1"),
       pageStats,
-      BoundaryOrder::Ascending,
+      BoundaryOrder::kAscending,
       /*has_null_counts=*/false);
 }
 
@@ -434,7 +434,7 @@ TEST(PageIndex, WriteFLBAColumnIndex) {
   testWriteTypedColumnIndex(
       std::move(Node),
       pageStats,
-      BoundaryOrder::Ascending,
+      BoundaryOrder::kAscending,
       /*has_null_counts=*/false);
 }
 
@@ -448,7 +448,7 @@ TEST(PageIndex, WriteColumnIndexWithAllNullPages) {
   testWriteTypedColumnIndex(
       schema::int32("c1"),
       pageStats,
-      BoundaryOrder::Unordered,
+      BoundaryOrder::kUnordered,
       /*has_null_counts=*/true);
 }
 
@@ -466,7 +466,7 @@ TEST(PageIndex, WriteColumnIndexWithInvalidNullCounts) {
   testWriteTypedColumnIndex(
       schema::int32("c1"),
       pageStats,
-      BoundaryOrder::Ascending,
+      BoundaryOrder::kAscending,
       /*has_null_counts=*/false);
 }
 

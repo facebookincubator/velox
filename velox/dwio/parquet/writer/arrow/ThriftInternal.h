@@ -340,9 +340,9 @@ static inline facebook::velox::parquet::thrift::CompressionCodec::type toThrift(
 static inline facebook::velox::parquet::thrift::BoundaryOrder::type toThrift(
     BoundaryOrder::type type) {
   switch (type) {
-    case BoundaryOrder::Unordered:
-    case BoundaryOrder::Ascending:
-    case BoundaryOrder::Descending:
+    case BoundaryOrder::kUnordered:
+    case BoundaryOrder::kAscending:
+    case BoundaryOrder::kDescending:
       return static_cast<facebook::velox::parquet::thrift::BoundaryOrder::type>(
           type);
     default:

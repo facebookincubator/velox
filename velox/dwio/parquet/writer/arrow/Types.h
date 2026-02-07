@@ -573,9 +573,9 @@ class ColumnOrder {
 /// Facebook::velox::parquet::thrift::BoundaryOrder.
 struct BoundaryOrder {
   enum type {
-    Unordered = 0,
-    Ascending = 1,
-    Descending = 2,
+    kUnordered = 0,
+    kAscending = 1,
+    kDescending = 2,
     // Should always be last element.
     kUndefined = 3
   };

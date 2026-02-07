@@ -73,7 +73,7 @@ class Node;
 // of these encodings (versus a struct containing an array). We should refuse
 // the temptation to guess, as they say.
 struct ListEncoding {
-  enum type { ONE_LEVEL, TWO_LEVEL, THREE_LEVEL };
+  enum type { kOneLevel, kTwoLevel, kThreeLevel };
 };
 
 class PARQUET_EXPORT ColumnPath {
@@ -99,16 +99,16 @@ class PARQUET_EXPORT ColumnPath {
 // and optionally a logical type (ConvertedType in Parquet metadata parlance)..
 class PARQUET_EXPORT Node {
  public:
-  enum type { PRIMITIVE, GROUP };
+  enum type { kPrimitive, kGroup };
 
   virtual ~Node() {}
 
   bool isPrimitive() const {
-    return type_ == Node::PRIMITIVE;
+    return type_ == Node::kPrimitive;
   }
 
   bool isGroup() const {
-    return type_ == Node::GROUP;
+    return type_ == Node::kGroup;
   }
 
   bool isOptional() const {

@@ -164,7 +164,7 @@ TEST_F(TestPrimitiveNode, Attrs) {
   ASSERT_EQ(Repetition::kRepeated, node1.repetition());
   ASSERT_EQ(Repetition::kOptional, node2.repetition());
 
-  ASSERT_EQ(Node::PRIMITIVE, node1.nodeType());
+  ASSERT_EQ(Node::kPrimitive, node1.nodeType());
 
   ASSERT_EQ(Type::kInt32, node1.physicalType());
   ASSERT_EQ(Type::kByteArray, node2.physicalType());
@@ -483,7 +483,7 @@ TEST_F(TestGroupNode, Attrs) {
   ASSERT_EQ(Repetition::kRepeated, node1.repetition());
   ASSERT_EQ(Repetition::kOptional, node2.repetition());
 
-  ASSERT_EQ(Node::GROUP, node1.nodeType());
+  ASSERT_EQ(Node::kGroup, node1.nodeType());
 
   // Logical types.
   ASSERT_EQ(ConvertedType::kNone, node1.convertedType());

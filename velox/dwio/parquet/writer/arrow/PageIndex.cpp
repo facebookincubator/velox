@@ -607,7 +607,7 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       const std::vector<T>& maxValues) const {
     VELOX_DCHECK_EQ(minValues.size(), maxValues.size());
     if (minValues.empty()) {
-      return BoundaryOrder::Unordered;
+      return BoundaryOrder::kUnordered;
     }
 
     std::shared_ptr<TypedComparator<DType>> comparator;
@@ -615,7 +615,7 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       comparator = makeComparator<DType>(descr_);
     } catch (const ParquetException&) {
       /// Simply return unordered for unsupported comparator.
-      return BoundaryOrder::Unordered;
+      return BoundaryOrder::kUnordered;
     }
 
     /// Check if both minValues and maxValues are in ascending order.
@@ -628,7 +628,7 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       }
     }
     if (isAscending) {
-      return BoundaryOrder::Ascending;
+      return BoundaryOrder::kAscending;
     }
 
     /// Check if both minValues and maxValues are in descending order.
@@ -641,11 +641,11 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       }
     }
     if (isDescending) {
-      return BoundaryOrder::Descending;
+      return BoundaryOrder::kDescending;
     }
 
     /// Neither ascending nor descending is detected.
-    return BoundaryOrder::Unordered;
+    return BoundaryOrder::kUnordered;
   }
 
   const ColumnDescriptor* descr_;

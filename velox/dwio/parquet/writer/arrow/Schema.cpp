@@ -141,7 +141,7 @@ PrimitiveNode::PrimitiveNode(
     int precision,
     int scale,
     int id)
-    : Node(Node::PRIMITIVE, name, repetition, convertedType, id),
+    : Node(Node::kPrimitive, name, repetition, convertedType, id),
       physicalType_(type),
       typeLength_(length) {
   std::stringstream ss;
@@ -259,7 +259,7 @@ PrimitiveNode::PrimitiveNode(
     Type::type physicalType,
     int physicalLength,
     int id)
-    : Node(Node::PRIMITIVE, name, repetition, std::move(logicalType), id),
+    : Node(Node::kPrimitive, name, repetition, std::move(logicalType), id),
       physicalType_(physicalType),
       typeLength_(physicalLength) {
   std::stringstream error;
@@ -340,7 +340,7 @@ GroupNode::GroupNode(
     const NodeVector& fields,
     ConvertedType::type convertedType,
     int id)
-    : Node(Node::GROUP, name, repetition, convertedType, id), fields_(fields) {
+    : Node(Node::kGroup, name, repetition, convertedType, id), fields_(fields) {
   // For forward compatibility, create an equivalent logical type.
   logicalType_ = LogicalType::fromConvertedType(convertedType_);
   if (!(logicalType_ && (logicalType_->isNested() || logicalType_->isNone()) &&
@@ -362,7 +362,7 @@ GroupNode::GroupNode(
     const NodeVector& fields,
     std::shared_ptr<const LogicalType> logicalType,
     int id)
-    : Node(Node::GROUP, name, repetition, std::move(logicalType), id),
+    : Node(Node::kGroup, name, repetition, std::move(logicalType), id),
       fields_(fields) {
   if (logicalType_) {
     // Check for logical type <=> node type consistency.
