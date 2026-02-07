@@ -143,6 +143,40 @@ Arithmetic Functions
     Division by zero or overflow results in an error.
     Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
+.. spark:function:: add(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of adding ``x`` and ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows.
+    Corresponds to Spark's operator ``+`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1.1 as DECIMAL(3, 1)) + CAST(2.2 as DECIMAL(3, 1)); -- 3.3
+        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) + CAST(1 as DECIMAL(38, 0)); -- NULL
+
+.. spark:function:: checked_add(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of adding ``x`` and ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Throws an error when the result overflows.
+    Corresponds to Spark's operator ``+`` with ``spark.sql.ansi.enabled`` set to true.
+
+.. spark:function:: subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of subtracting ``y`` from ``x``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows.
+    Corresponds to Spark's operator ``-`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1.1 as DECIMAL(3, 1)) - CAST(2.2 as DECIMAL(3, 1)); -- -1.1
+        SELECT CAST('-99999999999999999999999999999999999999' as DECIMAL(38, 0)) - CAST(1 as DECIMAL(38, 0)); -- NULL
+
+.. spark:function:: checked_subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of subtracting ``y`` from ``x``. The result type is determined
+    by the precision and scale computation rules described above.
+    Throws an error when the result overflows.
+    Corresponds to Spark's operator ``-`` with ``spark.sql.ansi.enabled`` set to true.
+
 Decimal Functions
 -----------------
 .. spark:function:: ceil(x: decimal(p, s)) -> r: decimal(pr, 0)
