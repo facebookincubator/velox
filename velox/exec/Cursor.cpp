@@ -688,21 +688,19 @@ class TaskDebuggerCursor : public TaskCursorBase {
    public:
     // Constructs a trace context for the specified plan nodes.
     //
-    // @param tracedIds The plan node IDs to trace.
+    // @param breakpoints Map of plan node IDs to optional callbacks.
     // @param traceState Reference to the shared trace state for coordination.
     TaskDebuggerTraceCtx(
-        const std::vector<core::PlanNodeId>& tracedIds,
+        const CursorParameters::TBreakpointMap& breakpoints,
         TraceState& traceState)
-        : TraceCtx(false),
-          tracedIds_(tracedIds.begin(), tracedIds.end()),
-          traceState_(traceState) {}
+        : TraceCtx(false), breakpoints_(breakpoints), traceState_(traceState) {}
 
     // Determines whether a given operator should be traced.
     //
     // @param op The operator to check.
     // @return true if the operator's plan node ID is in the traced set.
     bool shouldTrace(const Operator& op) const override {
-      return tracedIds_.contains(op.planNodeId());
+      return breakpoints_.contains(op.planNodeId());
     }
 
     // Creates an input trace writer for the given operator.
@@ -711,8 +709,11 @@ class TaskDebuggerCursor : public TaskCursorBase {
     // @return A unique pointer to the trace input writer.
     std::unique_ptr<trace::TraceInputWriter> createInputTracer(
         Operator& op) const override {
+      auto it = breakpoints_.find(op.planNodeId());
       return std::make_unique<TaskDebuggerTraceInputWriter>(
-          op.planNodeId(), traceState_);
+          op.planNodeId(),
+          it != breakpoints_.end() ? it->second : nullptr,
+          traceState_);
     }
 
    private:
@@ -724,19 +725,31 @@ class TaskDebuggerCursor : public TaskCursorBase {
      public:
       TaskDebuggerTraceInputWriter(
           const core::PlanNodeId& planId,
+          CursorParameters::BreakpointCallback callback,
           TraceState& traceState)
-          : planId_(planId), traceState_(traceState) {}
+          : planId_(planId),
+            callback_(std::move(callback)),
+            traceState_(traceState) {}
 
-      // Writes an input vector and pauses execution.
+      // Writes an input vector and potentially pauses execution.
       //
-      // Stores the vector in the trace state and creates a future that
-      // blocks until the cursor consumes the result and signals continuation.
+      // Invokes the callback if set. If the callback returns false, the writer
+      // does not block and execution continues. If the callback returns true
+      // (or is null), stores the vector in the trace state and creates a future
+      // that blocks until the cursor consumes the result and signals
+      // continuation.
       //
       // @param vector The input vector to trace.
       // @param future Output parameter set to a future that blocks until
       //        the cursor is ready to continue.
-      // @return true to indicate the writer is blocked waiting for the future.
+      // @return true if the writer is blocked waiting for the future, false
+      //         if execution should continue without blocking.
       bool write(const RowVectorPtr& vector, ContinueFuture* future) override {
+        // Invoke the callback if set. If it returns false, don't block.
+        if (callback_ && !callback_(vector)) {
+          return false;
+        }
+
         VELOX_CHECK(traceState_.tracePromise.isFulfilled());
 
         traceState_.tracePromise = ContinuePromise("TaskQueue::dequeue");
@@ -751,10 +764,11 @@ class TaskDebuggerCursor : public TaskCursorBase {
 
      private:
       const core::PlanNodeId planId_;
+      const CursorParameters::BreakpointCallback callback_;
       TraceState& traceState_;
     };
 
-    std::unordered_set<core::PlanNodeId> tracedIds_;
+    CursorParameters::TBreakpointMap breakpoints_;
     TraceState& traceState_;
   };
 

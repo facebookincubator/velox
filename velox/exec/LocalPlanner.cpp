@@ -31,6 +31,7 @@
 #include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/MixedUnion.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OperatorTraceScan.h"
@@ -84,6 +85,11 @@ bool mustStartNewPipeline(
     return true;
   }
 
+  if (std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+    // MixedUnion's sources run on their own pipelines.
+    return true;
+  }
+
   if (std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode)) {
     return true;
   }
@@ -128,6 +134,28 @@ OperatorSupplier makeOperatorSupplier(
           localMerge->id(),
           localMerge->outputType(),
           ctx->queryConfig().localMergeSourceQueueSize());
+      auto consumerCb =
+          [mergeSource](
+              RowVectorPtr input, bool drained, ContinueFuture* future) {
+            VELOX_CHECK(!drained);
+            return mergeSource->enqueue(std::move(input), future);
+          };
+      auto startCb = [mergeSource](ContinueFuture* future) {
+        return mergeSource->started(future);
+      };
+      return std::make_unique<CallbackSink>(
+          operatorId, ctx, std::move(consumerCb), std::move(startCb));
+    };
+  }
+
+  if (auto mixedUnion =
+          std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+    return [mixedUnion](int32_t operatorId, DriverCtx* ctx) {
+      auto mergeSource = ctx->task->addLocalMergeSource(
+          ctx->splitGroupId,
+          mixedUnion->id(),
+          mixedUnion->outputType(),
+          static_cast<int>(ctx->queryConfig().localMergeSourceQueueSize()));
       auto consumerCb =
           [mergeSource](
               RowVectorPtr input, bool drained, ContinueFuture* future) {
@@ -311,6 +339,9 @@ uint32_t maxDrivers(
       }
     } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
       // Local merge must run single-threaded.
+      return 1;
+    } else if (std::dynamic_pointer_cast<const core::MixedUnionNode>(node)) {
+      // Mixed union must run single-threaded.
       return 1;
     } else if (std::dynamic_pointer_cast<const core::MergeExchangeNode>(node)) {
       // Merge exchange must run single-threaded.
@@ -657,6 +688,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       auto localMergeOp =
           std::make_unique<LocalMerge>(id, ctx.get(), localMerge);
       operators.push_back(std::move(localMergeOp));
+    } else if (
+        auto mixedUnion =
+            std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+      auto mixedUnionOp =
+          std::make_unique<MixedUnion>(id, ctx.get(), mixedUnion);
+      operators.push_back(std::move(mixedUnionOp));
     } else if (
         auto mergeJoin =
             std::dynamic_pointer_cast<const core::MergeJoinNode>(planNode)) {

@@ -3598,6 +3598,7 @@ void PlanNode::registerSerDe() {
   registry.Register("ValuesNode", ValuesNode::create);
   registry.Register("WindowNode", WindowNode::create);
   registry.Register("MarkDistinctNode", MarkDistinctNode::create);
+  registry.Register("MixedUnionNode", MixedUnionNode::create);
   registry.Register(
       "GatherPartitionFunctionSpec", GatherPartitionFunctionSpec::deserialize);
 }
@@ -3845,4 +3846,24 @@ void EqualIndexLookupCondition::validate() const {
       key->type()->toString(),
       value->type()->toString());
 }
+
+void MixedUnionNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+folly::dynamic MixedUnionNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr MixedUnionNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+
+  return std::make_shared<MixedUnionNode>(
+      deserializePlanNodeId(obj), std::move(sources));
+}
+
 } // namespace facebook::velox::core
