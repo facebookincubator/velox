@@ -218,6 +218,8 @@ Cast to Date
 From strings
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 All Spark supported patterns are allowed:
 
   * ``[+-](YYYY-MM-DD)``
@@ -234,7 +236,9 @@ For the last two patterns, the trailing ``*`` can represent none or any sequence
   * "1970-01-01 (BC)"
 
 All leading and trailing UTF8 white-spaces will be trimmed before cast.
-Casting from invalid input values throws.
+
+When ANSI mode is enabled, casting from invalid input values throws an error.
+When ANSI mode is disabled, casting from invalid input values returns NULL.
 
 Valid examples
 
