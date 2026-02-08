@@ -134,15 +134,16 @@ GroupingSet::~GroupingSet() {
   }
 }
 
-std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
+std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+    std::vector<column_index_t>&& preGroupedKeys,
     OperatorCtx* operatorCtx,
     tsan_atomic<bool>* nonReclaimableSection) {
   return std::make_unique<GroupingSet>(
       inputType,
       std::move(hashers),
-      /*preGroupedKeys=*/std::vector<column_index_t>{},
+      std::move(preGroupedKeys),
       /*groupingKeyOutputProjections=*/std::vector<column_index_t>{},
       /*aggregates=*/std::vector<AggregateInfo>{},
       /*ignoreNullKeys=*/false,

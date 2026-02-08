@@ -95,6 +95,11 @@ class PrestoQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
     VELOX_NYI();
   }
 
+  void visit(const core::EnforceDistinctNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::MergeExchangeNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();

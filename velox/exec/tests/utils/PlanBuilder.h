@@ -1486,6 +1486,32 @@ class PlanBuilder {
       std::string markerKey,
       const std::vector<std::string>& distinctKeys);
 
+  /// Add an EnforceDistinctNode to ensure input has unique values for the
+  /// specified keys at runtime. Throws with the specified error message if
+  /// duplicates are found.
+  /// @param distinctKeys List of columns that must have unique values.
+  /// @param errorMessage Error message to include in the exception when
+  /// duplicates are found.
+  /// @param preGroupedKeys Optional subset of distinctKeys that input is
+  /// already clustered on. When equal to distinctKeys, uses streaming
+  /// enforcement.
+  PlanBuilder& enforceDistinct(
+      const std::vector<std::string>& distinctKeys,
+      std::string errorMessage,
+      const std::vector<std::string>& preGroupedKeys = {});
+
+  /// Add an EnforceDistinctNode to ensure pre-grouped input has unique
+  /// values for the specified keys. Equivalent to calling enforceDistinct with
+  /// preGroupedKeys equal to distinctKeys, which uses the streaming
+  /// implementation.
+  /// @param distinctKeys List of columns that must have unique values. Input
+  /// must be clustered on these keys.
+  /// @param errorMessage Error message to include in the exception when
+  /// duplicates are found.
+  PlanBuilder& streamingEnforceDistinct(
+      const std::vector<std::string>& distinctKeys,
+      std::string errorMessage);
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.

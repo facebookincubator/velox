@@ -5260,6 +5260,77 @@ class MarkDistinctNode : public PlanNode {
 
 using MarkDistinctNodePtr = std::shared_ptr<const MarkDistinctNode>;
 
+/// Checks that input rows have unique values in the specified key columns.
+/// Passes through all input rows unchanged. Raises an exception if duplicate
+/// key values are detected.
+///
+/// Used to validate uniqueness constraints, such as ensuring a scalar subquery
+/// returns at most one row per group.
+///
+class EnforceDistinctNode : public PlanNode {
+ public:
+  /// @param distinctKeys Columns that must have unique values.
+  /// @param preGroupedKeys Subset of distinctKeys that input is already
+  /// clustered on. When preGroupedKeys equals distinctKeys, a streaming
+  /// implementation is used that compares consecutive rows instead of using a
+  /// hash table.
+  /// @param errorMessage Custom error message to show when duplicates are
+  /// found.
+  EnforceDistinctNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      std::vector<FieldAccessTypedExprPtr> preGroupedKeys,
+      std::string errorMessage,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  std::string_view name() const override {
+    return "EnforceDistinct";
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys() const {
+    return preGroupedKeys_;
+  }
+
+  /// Returns true if all distinct keys are pre-grouped, meaning input is
+  /// clustered on distinct keys and streaming enforcement can be used.
+  bool isPreGrouped() const {
+    return preGroupedKeys_.size() == distinctKeys_.size();
+  }
+
+  const std::string& errorMessage() const {
+    return errorMessage_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys_;
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
+  const std::string errorMessage_;
+  const std::vector<PlanNodePtr> sources_;
+};
+
+using EnforceDistinctNodePtr = std::shared_ptr<const EnforceDistinctNode>;
+
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
@@ -5657,6 +5728,10 @@ class PlanNodeVisitor {
 
   virtual void visit(const MarkDistinctNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
+
+  virtual void visit(
+      const EnforceDistinctNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
 
   virtual void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const = 0;

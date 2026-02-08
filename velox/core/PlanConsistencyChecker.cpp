@@ -149,6 +149,11 @@ class Checker : public PlanNodeVisitor {
     visitSources(&node, ctx);
   }
 
+  void visit(const EnforceDistinctNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
   void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const override {
     visitSources(&node, ctx);

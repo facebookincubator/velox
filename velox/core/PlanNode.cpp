@@ -2425,6 +2425,86 @@ PlanNodePtr MarkDistinctNode::create(const folly::dynamic& obj, void* context) {
       deserializePlanNodeId(obj), markerName, distinctKeys, source);
 }
 
+EnforceDistinctNode::EnforceDistinctNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> distinctKeys,
+    std::vector<FieldAccessTypedExprPtr> preGroupedKeys,
+    std::string errorMessage,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      distinctKeys_(std::move(distinctKeys)),
+      preGroupedKeys_(std::move(preGroupedKeys)),
+      errorMessage_(std::move(errorMessage)),
+      sources_{std::move(source)} {
+  VELOX_USER_CHECK(!distinctKeys_.empty(), "distinctKeys must not be empty.");
+  VELOX_USER_CHECK(!errorMessage_.empty(), "errorMessage must not be empty");
+
+  using TypedExprSet = folly::
+      F14FastSet<const ITypedExpr*, ITypedExprHasher, ITypedExprComparer>;
+
+  TypedExprSet distinctKeySet;
+  const auto& inputType = sources_.front()->outputType();
+  for (const auto& key : distinctKeys_) {
+    VELOX_USER_CHECK(
+        key->isInputColumn(),
+        "Distinct key must be a column reference: {}.",
+        key->toString());
+
+    VELOX_USER_CHECK(
+        distinctKeySet.insert(key.get()).second,
+        "Duplicate distinct key: {}.",
+        key->toString());
+
+    VELOX_USER_CHECK(
+        inputType->containsChild(key->name()),
+        "Distinct key must be present in the input: {}.",
+        key->toString());
+  }
+
+  TypedExprSet preGroupedKeySet;
+  for (const auto& key : preGroupedKeys_) {
+    VELOX_USER_CHECK(
+        preGroupedKeySet.insert(key.get()).second,
+        "Duplicate pre-grouped key: {}.",
+        key->name());
+    VELOX_USER_CHECK(
+        distinctKeySet.contains(key.get()),
+        "Pre-grouped key must be one of the distinct keys: {}.",
+        key->name());
+  }
+}
+
+folly::dynamic EnforceDistinctNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["distinctKeys"] = ISerializable::serialize(this->distinctKeys_);
+  obj["preGroupedKeys"] = ISerializable::serialize(this->preGroupedKeys_);
+  obj["errorMessage"] = this->errorMessage_;
+  return obj;
+}
+
+void EnforceDistinctNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr EnforceDistinctNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto distinctKeys = deserializeFields(obj["distinctKeys"], context);
+  auto preGroupedKeys = deserializeFields(obj["preGroupedKeys"], context);
+  auto errorMessage = obj["errorMessage"].asString();
+
+  return std::make_shared<EnforceDistinctNode>(
+      deserializePlanNodeId(obj),
+      distinctKeys,
+      preGroupedKeys,
+      errorMessage,
+      source);
+}
+
 namespace {
 RowTypePtr getRowNumberOutputType(
     const RowTypePtr& inputType,
@@ -3395,6 +3475,14 @@ void MarkDistinctNode::addDetails(std::stringstream& stream) const {
   addFields(stream, distinctKeys_);
 }
 
+void EnforceDistinctNode::addDetails(std::stringstream& stream) const {
+  if (isPreGrouped()) {
+    stream << "STREAMING ";
+  }
+  addFields(stream, distinctKeys_);
+  stream << " " << errorMessage_;
+}
+
 void PlanNode::toString(
     std::stringstream& stream,
     bool detailed,
@@ -3571,6 +3659,7 @@ void PlanNode::registerSerDe() {
   registry.Register("AggregationNode", AggregationNode::create);
   registry.Register("AssignUniqueIdNode", AssignUniqueIdNode::create);
   registry.Register("EnforceSingleRowNode", EnforceSingleRowNode::create);
+  registry.Register("EnforceDistinctNode", EnforceDistinctNode::create);
   registry.Register("ExchangeNode", ExchangeNode::create);
   registry.Register("ExpandNode", ExpandNode::create);
   registry.Register("FilterNode", FilterNode::create);
