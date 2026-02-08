@@ -264,9 +264,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     auto it = planStats.find(plan->id());
     EXPECT_TRUE(it != planStats.end());
-    if (it != planStats.end()) {
-      EXPECT_TRUE(it->second.peakMemoryBytes > 0);
-    }
+    EXPECT_TRUE(it->second.peakMemoryBytes > 0);
     return task;
   }
 
@@ -933,15 +931,14 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
 TEST_F(HiveIcebergTest, icebergMetrics) {
   folly::SingletonVault::singleton()->registrationComplete();
 
-  // Helper function to aggregate a runtime metric across all pipelines and operators.
+  // Helper function to aggregate a runtime metric across all plan nodes.
   auto getAggregatedRuntimeMetric = [](const exec::TaskStats& taskStats, const std::string& metricName) -> int64_t {
     int64_t total = 0;
-    for (const auto& pipelineStats : taskStats.pipelineStats) {
-      for (const auto& operatorStats : pipelineStats.operatorStats) {
-        auto it = operatorStats.runtimeStats.find(metricName);
-        if (it != operatorStats.runtimeStats.end()) {
-          total += it->second.sum;
-        }
+    auto planStats = exec::toPlanStats(taskStats);
+    for (const auto& [planNodeId, nodeStats] : planStats) {
+      auto it = nodeStats.customStats.find(metricName);
+      if (it != nodeStats.customStats.end()) {
+        total += it->second.sum;
       }
     }
     return total;
