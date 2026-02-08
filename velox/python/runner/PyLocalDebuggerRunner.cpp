@@ -33,6 +33,7 @@ exec::CursorParameters PyLocalDebuggerRunner::createCursorParameters(
                       .build(),
       .outputPool = outputPool_,
       .serialExecution = true,
+      .groupedExecutionLeafNodeIds = {},
       .breakpoints = breakpoints_,
   };
 }
