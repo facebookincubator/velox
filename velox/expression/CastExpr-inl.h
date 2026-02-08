@@ -488,7 +488,11 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     char inlined[StringView::kInlineSize];
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       auto actualSize = DecimalUtil::castToString<FromNativeType>(
-          simpleInput->valueAt(row), scale, rowSize, inlined);
+          simpleInput->valueAt(row),
+          scale,
+          rowSize,
+          inlined,
+          hooks_->isScientific());
       flatResult->setNoCopy(row, StringView(inlined, actualSize));
     });
     return result;
@@ -500,7 +504,11 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     auto actualSize = DecimalUtil::castToString<FromNativeType>(
-        simpleInput->valueAt(row), scale, rowSize, rawBuffer);
+        simpleInput->valueAt(row),
+        scale,
+        rowSize,
+        rawBuffer,
+        hooks_->isScientific());
     flatResult->setNoCopy(row, StringView(rawBuffer, actualSize));
     if (!StringView::isInline(actualSize)) {
       // If string view is inline, corresponding bytes on the raw string buffer
