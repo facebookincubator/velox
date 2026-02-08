@@ -43,9 +43,10 @@ MarkDistinct::MarkDistinct(
   // We will use result[0] for distinct mask output.
   resultProjections_.emplace_back(0, inputType->size());
 
-  groupingSet_ = GroupingSet::createForMarkDistinct(
+  groupingSet_ = GroupingSet::createForDistinct(
       inputType,
       createVectorHashers(inputType, planNode->distinctKeys()),
+      /*preGroupedKeys=*/{},
       operatorCtx_.get(),
       &nonReclaimableSection_);
 
