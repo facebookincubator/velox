@@ -924,4 +924,23 @@ struct JaroWinklerSimilarityFunction {
   }
 };
 
+/// key_sampling_percent(varchar) -> double
+/// Returns a value between 0.0 and 1.0 using the hash of the given input
+/// string.
+template <typename T>
+struct KeySamplingPercentFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Varchar>& string) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    int64_t hash = XXH64(string.data(), string.size(), 0);
+    // Bitwise reinterpretation to match Java's
+    // Double.longBitsToDouble(xxhash64(...)) semantics.
+    // This may produce NaN, which is expected and allowed.
+    memcpy(&result, &hash, kTypeLength);
+    result = fmod(fabs(result), 100) / 100;
+  }
+};
 } // namespace facebook::velox::functions
