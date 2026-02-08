@@ -342,9 +342,8 @@ DataSink::Stats CudfHiveDataSink::stats() const {
 
   stats.numWrittenFiles = 1;
   VELOX_CHECK_NOT_NULL(writerInfo_);
-  const auto spillStats = writerInfo_->spillStats->rlock();
-  if (!spillStats->empty()) {
-    stats.spillStats += *spillStats;
+  if (!writerInfo_->spillStats->empty()) {
+    stats.spillStats += *writerInfo_->spillStats;
   }
 
   return stats;

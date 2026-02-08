@@ -60,7 +60,7 @@ class CachedBufferedInputTest : public testing::Test {
     allocator_ = std::make_shared<MallocAllocator>(
         512 << 20 /*capacity=*/, 0 /*reservationByteLimit=*/);
     cache_ = AsyncDataCache::create(allocator_.get());
-    ioStats_ = std::make_shared<IoStatistics>();
+    ioStatistics_ = std::make_shared<IoStatistics>();
     tracker_ = std::make_shared<ScanTracker>(
         "testTracker", nullptr, 256 << 10 /* 256KB */);
     pool_ = memoryManager()->addLeafPool();
@@ -77,7 +77,7 @@ class CachedBufferedInputTest : public testing::Test {
   std::shared_ptr<MemoryPool> pool_;
   std::shared_ptr<MallocAllocator> allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::shared_ptr<IoStatistics> ioStats_;
+  std::shared_ptr<IoStatistics> ioStatistics_;
   std::shared_ptr<ScanTracker> tracker_;
 };
 
@@ -104,7 +104,7 @@ TEST_F(CachedBufferedInputTest, reset) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStats_,
+      ioStatistics_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -241,7 +241,7 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStats_,
+      ioStatistics_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -308,7 +308,7 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStats_,
+      ioStatistics_,
       nullptr,
       executor_.get(),
       readerOptions);
@@ -404,7 +404,7 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
       cache_.get(),
       tracker_,
       std::move(groupId),
-      ioStats_,
+      ioStatistics_,
       nullptr,
       executor_.get(),
       readerOptions);

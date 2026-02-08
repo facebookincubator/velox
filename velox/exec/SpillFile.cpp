@@ -38,8 +38,7 @@ SpillWriter::SpillWriter(
     const std::string& fileCreateConfig,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats,
-    filesystems::File::IoStats* fsStats)
+    exec::SpillStats* stats)
     : serializer::SerializedPageFileWriter(
           pathPrefix,
           targetFileSize,
@@ -53,7 +52,7 @@ SpillWriter::SpillWriter(
               /*_nullsFirst=*/true),
           getNamedVectorSerde(VectorSerde::Kind::kPresto),
           pool,
-          fsStats),
+          &stats->ioStats),
       type_(type),
       sortingKeys_(sortingKeys),
       stats_(stats),
@@ -62,32 +61,31 @@ SpillWriter::SpillWriter(
 void SpillWriter::updateAppendStats(
     uint64_t numRows,
     uint64_t serializationTimeNs) {
-  auto statsLocked = stats_->wlock();
-  statsLocked->spilledRows += numRows;
-  statsLocked->spillSerializationTimeNanos += serializationTimeNs;
-  common::updateGlobalSpillAppendStats(numRows, serializationTimeNs);
+  stats_->spilledRows.fetch_add(numRows, std::memory_order_relaxed);
+  stats_->spillSerializationTimeNanos.fetch_add(
+      serializationTimeNs, std::memory_order_relaxed);
+  updateGlobalSpillAppendStats(numRows, serializationTimeNs);
 }
 
 void SpillWriter::updateWriteStats(
     uint64_t spilledBytes,
     uint64_t flushTimeNs,
     uint64_t fileWriteTimeNs) {
-  auto statsLocked = stats_->wlock();
-  statsLocked->spilledBytes += spilledBytes;
-  statsLocked->spillFlushTimeNanos += flushTimeNs;
-  statsLocked->spillWriteTimeNanos += fileWriteTimeNs;
-  ++statsLocked->spillWrites;
-  common::updateGlobalSpillWriteStats(
-      spilledBytes, flushTimeNs, fileWriteTimeNs);
+  stats_->spillWrites.fetch_add(1, std::memory_order_relaxed);
+  stats_->spilledBytes.fetch_add(spilledBytes, std::memory_order_relaxed);
+  stats_->spillFlushTimeNanos.fetch_add(flushTimeNs, std::memory_order_relaxed);
+  stats_->spillWriteTimeNanos.fetch_add(
+      fileWriteTimeNs, std::memory_order_relaxed);
+  updateGlobalSpillWriteStats(spilledBytes, flushTimeNs, fileWriteTimeNs);
   updateAndCheckLimitCb_(spilledBytes);
 }
 
 void SpillWriter::updateFileStats(
     const serializer::SerializedPageFile::FileInfo& file) {
-  ++stats_->wlock()->spilledFiles;
+  stats_->spilledFiles.fetch_add(1, std::memory_order_relaxed);
   addThreadLocalRuntimeStat(
       "spillFileSize", RuntimeCounter(file.size, RuntimeCounter::Unit::kBytes));
-  common::incrementGlobalSpilledFiles();
+  incrementGlobalSpilledFiles();
 }
 
 SpillFiles SpillWriter::finish() {
@@ -140,8 +138,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats,
-    filesystems::File::IoStats* fsStats) {
+    exec::SpillStats* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
       fileInfo.path,
@@ -151,8 +148,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.sortingKeys,
       fileInfo.compressionKind,
       pool,
-      stats,
-      fsStats));
+      stats));
 }
 
 SpillReadFile::SpillReadFile(
@@ -164,8 +160,7 @@ SpillReadFile::SpillReadFile(
     const std::vector<SpillSortKey>& sortingKeys,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats,
-    filesystems::File::IoStats* fsStats)
+    exec::SpillStats* stats)
     : serializer::SerializedPageFileReader(
           path,
           bufferSize,
@@ -178,7 +173,7 @@ SpillReadFile::SpillReadFile(
               0.8,
               /*_nullsFirst=*/true),
           pool,
-          fsStats),
+          &stats->ioStats),
       id_(id),
       path_(path),
       size_(size),
@@ -188,17 +183,19 @@ SpillReadFile::SpillReadFile(
 void SpillReadFile::updateFinalStats() {
   VELOX_CHECK(input_->atEnd());
   const auto readStats = input_->stats();
-  common::updateGlobalSpillReadStats(
+  updateGlobalSpillReadStats(
       readStats.numReads, readStats.readBytes, readStats.readTimeNs);
-  auto lockedSpillStats = stats_->wlock();
-  lockedSpillStats->spillReads += readStats.numReads;
-  lockedSpillStats->spillReadTimeNanos += readStats.readTimeNs;
-  lockedSpillStats->spillReadBytes += readStats.readBytes;
+  stats_->spillReads.fetch_add(readStats.numReads, std::memory_order_relaxed);
+  stats_->spillReadBytes.fetch_add(
+      readStats.readBytes, std::memory_order_relaxed);
+  stats_->spillReadTimeNanos.fetch_add(
+      readStats.readTimeNs, std::memory_order_relaxed);
 };
 
 void SpillReadFile::updateSerializationTimeStats(uint64_t timeNs) {
-  stats_->wlock()->spillDeserializationTimeNanos += timeNs;
-  common::updateGlobalSpillDeserializationTimeNs(timeNs);
+  stats_->spillDeserializationTimeNanos.fetch_add(
+      timeNs, std::memory_order_relaxed);
+  updateGlobalSpillDeserializationTimeNs(timeNs);
 };
 
 } // namespace facebook::velox::exec

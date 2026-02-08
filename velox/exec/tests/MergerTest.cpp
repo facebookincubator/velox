@@ -77,8 +77,7 @@ class MergerTest : public OperatorTestBase {
         HashBitRange{},
         sortingKeys_,
         &spillConfig_,
-        spillStats_.get(),
-        /*fsStats=*/nullptr);
+        spillStats_.get());
     for (const auto& vector : sortedVectors) {
       spiller->spill(SpillPartitionId(0), vector);
     }
@@ -324,8 +323,8 @@ class MergerTest : public OperatorTestBase {
       0,
       std::nullopt};
 
-  std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
-      std::make_shared<folly::Synchronized<common::SpillStats>>();
+  std::shared_ptr<exec::SpillStats> spillStats_ =
+      std::make_shared<exec::SpillStats>();
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
 } // namespace facebook::velox::exec::test

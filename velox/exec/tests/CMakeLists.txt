@@ -91,6 +91,7 @@ add_executable(
   SortBufferTest.cpp
   SpatialIndexTest.cpp
   HilbertIndexTest.cpp
+  SpillStatsTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp

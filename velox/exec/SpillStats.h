@@ -15,60 +15,62 @@
  */
 #pragma once
 
-#include <compare>
+#include <atomic>
 #include <cstdint>
-#include <cstring>
 
-#include <folly/executors/CPUThreadPoolExecutor.h>
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/file/File.h"
 
-#include "velox/common/compression/Compression.h"
+namespace facebook::velox::exec {
 
-namespace facebook::velox::common {
-/// Provides the fine-grained spill execution stats.
+/// Thread-safe spill statistics with atomic members.
 struct SpillStats {
   /// The number of times that spilling runs on an operator.
-  uint64_t spillRuns{0};
-  /// The number of bytes in memory to spill
-  uint64_t spilledInputBytes{0};
+  std::atomic_uint64_t spillRuns{0};
+  /// The number of bytes in memory to spill.
+  std::atomic_uint64_t spilledInputBytes{0};
   /// The number of bytes spilled to disks.
-  ///
   /// NOTE: if compression is enabled, this counts the compressed bytes.
-  uint64_t spilledBytes{0};
+  std::atomic_uint64_t spilledBytes{0};
   /// The number of spilled rows.
-  uint64_t spilledRows{0};
+  std::atomic_uint64_t spilledRows{0};
   /// NOTE: when we sum up the stats from a group of spill operators, it is
   /// the total number of spilled partitions X number of operators.
-  uint32_t spilledPartitions{0};
+  std::atomic_uint32_t spilledPartitions{0};
   /// The number of spilled files.
-  uint64_t spilledFiles{0};
+  std::atomic_uint64_t spilledFiles{0};
   /// The time spent on filling rows for spilling.
-  uint64_t spillFillTimeNanos{0};
+  std::atomic_uint64_t spillFillTimeNanos{0};
   /// The time spent on sorting rows for spilling.
-  uint64_t spillSortTimeNanos{0};
+  std::atomic_uint64_t spillSortTimeNanos{0};
   /// The time spent on extracting vector from RowContainer for spilling.
-  uint64_t spillExtractVectorTimeNanos{0};
+  std::atomic_uint64_t spillExtractVectorTimeNanos{0};
   /// The time spent on serializing rows for spilling.
-  uint64_t spillSerializationTimeNanos{0};
+  std::atomic_uint64_t spillSerializationTimeNanos{0};
   /// The number of spill writer flushes, equivalent to number of write calls to
   /// underlying filesystem.
-  uint64_t spillWrites{0};
+  std::atomic_uint64_t spillWrites{0};
   /// The time spent on copy out serialized rows for disk write. If compression
   /// is enabled, this includes the compression time.
-  uint64_t spillFlushTimeNanos{0};
+  std::atomic_uint64_t spillFlushTimeNanos{0};
   /// The time spent on writing spilled rows to disk.
-  uint64_t spillWriteTimeNanos{0};
+  std::atomic_uint64_t spillWriteTimeNanos{0};
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
-  uint64_t spillMaxLevelExceededCount{0};
+  std::atomic_uint64_t spillMaxLevelExceededCount{0};
   /// The number of bytes read from spilled files.
-  uint64_t spillReadBytes{0};
+  std::atomic_uint64_t spillReadBytes{0};
   /// The number of spill reader reads, equivalent to the number of read calls
   /// to the underlying filesystem.
-  uint64_t spillReads{0};
+  std::atomic_uint64_t spillReads{0};
   /// The time spent on read data from spilled files.
-  uint64_t spillReadTimeNanos{0};
+  std::atomic_uint64_t spillReadTimeNanos{0};
   /// The time spent on deserializing rows read from spilled files.
-  uint64_t spillDeserializationTimeNanos{0};
+  std::atomic_uint64_t spillDeserializationTimeNanos{0};
+  /// Filesystem I/O stats for spill operations.
+  IoStats ioStats;
+
+  SpillStats() = default;
 
   SpillStats(
       uint64_t _spillRuns,
@@ -90,24 +92,29 @@ struct SpillStats {
       uint64_t _spillReadTimeNanos,
       uint64_t _spillDeserializationTimeNanos);
 
-  SpillStats() = default;
+  SpillStats(const SpillStats& other);
 
-  bool empty() const {
-    return spilledBytes == 0;
-  }
+  SpillStats& operator=(const SpillStats& other);
 
   SpillStats& operator+=(const SpillStats& other);
+
   SpillStats operator-(const SpillStats& other) const;
-  bool operator==(const SpillStats& other) const = default;
+
+  bool operator==(const SpillStats& other) const;
+
+  bool empty() const;
 
   void reset();
 
   std::string toString() const;
+
+ private:
+  void copyFrom(const SpillStats& other);
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& o,
-    const common::SpillStats& stats) {
+    const SpillStats& stats) {
   return o << stats.toString();
 }
 
@@ -163,12 +170,12 @@ void updateGlobalSpillDeserializationTimeNs(uint64_t timeNs);
 
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
-} // namespace facebook::velox::common
+} // namespace facebook::velox::exec
 
 template <>
-struct fmt::formatter<facebook::velox::common::SpillStats>
+struct fmt::formatter<facebook::velox::exec::SpillStats>
     : fmt::formatter<std::string> {
-  auto format(const facebook::velox::common::SpillStats& s, format_context& ctx)
+  auto format(const facebook::velox::exec::SpillStats& s, format_context& ctx)
       const {
     return formatter<std::string>::format(s.toString(), ctx);
   }

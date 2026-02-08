@@ -318,7 +318,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
             currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
-    *spillStats_->wlock() += stats.spillStats;
+    *spillStats_ += stats.spillStats;
   }
 }
 

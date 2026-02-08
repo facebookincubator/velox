@@ -160,17 +160,12 @@ std::unique_ptr<SpillerBase> AggregateSpillBenchmarkBase::makeSpiller() {
                 spillConfig.startPartitionBit + spillConfig.numPartitionBits)},
         sortingKeys,
         &spillConfig,
-        &spillStats_,
-        /*fsStats=*/nullptr);
+        &spillStats_);
   } else {
     VELOX_CHECK_EQ(spillerType_, AggregationOutputSpiller::kType);
     // TODO: Add config flag to control the max spill rows.
     return std::make_unique<AggregationOutputSpiller>(
-        rowContainer_.get(),
-        rowType_,
-        &spillConfig,
-        &spillStats_,
-        /*fsStats=*/nullptr);
+        rowContainer_.get(), rowType_, &spillConfig, &spillStats_);
   }
 }
 } // namespace facebook::velox::exec::test

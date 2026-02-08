@@ -33,7 +33,7 @@ class WaveHiveDataSource : public WaveDataSource {
       folly::Executor* executor,
       const connector::ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<connector::hive::HiveConfig>& hiveConfig,
-      const std::shared_ptr<io::IoStatistics>& ioStats,
+      const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const exec::ExprSet* remainingFilter,
       std::shared_ptr<common::MetadataFilter> metadataFilter);
 

@@ -40,8 +40,7 @@ class SortBuffer {
       tsan_atomic<bool>* nonReclaimableSection,
       common::PrefixSortConfig prefixSortConfig,
       const common::SpillConfig* spillConfig = nullptr,
-      folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr,
-      filesystems::File::IoStats* spillFsStats = nullptr);
+      exec::SpillStats* spillStats = nullptr);
 
   ~SortBuffer();
 
@@ -126,9 +125,7 @@ class SortBuffer {
 
   const common::SpillConfig* const spillConfig_;
 
-  folly::Synchronized<common::SpillStats>* const spillStats_;
-
-  filesystems::File::IoStats* const spillFsStats_;
+  exec::SpillStats* const spillStats_;
 
   // The column projection map between 'input_' and 'spillerStoreType_' as sort
   // buffer stores the sort columns first in 'data_'.

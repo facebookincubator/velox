@@ -41,7 +41,7 @@ class RowsStreamingWindowBuild : public WindowBuild {
     VELOX_UNREACHABLE();
   }
 
-  std::optional<common::SpillStats> spilledStats() const override {
+  std::optional<exec::SpillStats> spilledStats() const override {
     return std::nullopt;
   }
 

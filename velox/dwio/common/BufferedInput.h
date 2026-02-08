@@ -35,7 +35,7 @@ class BufferedInput {
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
-      filesystems::File::IoStats* fsStats = nullptr,
+      velox::IoStats* ioStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt,
       folly::F14FastMap<std::string, std::string> fileReadOps = {})
@@ -44,7 +44,7 @@ class BufferedInput {
                 std::move(readFile),
                 metricsLog,
                 stats,
-                fsStats,
+                ioStats,
                 std::move(fileReadOps)),
             pool,
             maxMergeDistance,

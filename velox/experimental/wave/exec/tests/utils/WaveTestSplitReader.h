@@ -43,7 +43,7 @@ class WaveTestSplitReader : public WaveSplitReader {
   bool isFinished() const override;
 
   uint64_t getCompletedBytes() override {
-    return params_.ioStats->rawBytesRead();
+    return params_.ioStatistics->rawBytesRead();
   }
 
   uint64_t getCompletedRows() override {

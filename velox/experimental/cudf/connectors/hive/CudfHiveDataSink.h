@@ -163,7 +163,7 @@ struct CudfHiveWriterInfo {
       std::shared_ptr<memory::MemoryPool> _sortPool)
       : writerParameters(std::move(parameters)),
         nonReclaimableSectionHolder(new tsan_atomic<bool>(false)),
-        spillStats(std::make_unique<folly::Synchronized<common::SpillStats>>()),
+        spillStats(std::make_unique<exec::SpillStats>()),
         writerPool(std::move(_writerPool)),
         sinkPool(std::move(_sinkPool)),
         sortPool(std::move(_sortPool)) {}
@@ -172,7 +172,7 @@ struct CudfHiveWriterInfo {
   const std::unique_ptr<tsan_atomic<bool>> nonReclaimableSectionHolder;
   /// Collects the spill stats from sort writer if the spilling has been
   /// triggered.
-  const std::unique_ptr<folly::Synchronized<common::SpillStats>> spillStats;
+  const std::unique_ptr<exec::SpillStats> spillStats;
   const std::shared_ptr<memory::MemoryPool> writerPool;
   const std::shared_ptr<memory::MemoryPool> sinkPool;
   const std::shared_ptr<memory::MemoryPool> sortPool;
@@ -352,7 +352,7 @@ class CudfHiveDataSink : public DataSink {
   std::shared_ptr<CudfHiveWriterInfo> writerInfo_;
 
   // IO statistics collected for writer.
-  std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
