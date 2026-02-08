@@ -114,7 +114,21 @@ class SplitReader {
       dwio::common::RuntimeStatistics& runtimeStats,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
-  virtual uint64_t next(uint64_t size, VectorPtr& output);
+  /// Reads the next batch of rows from the split.
+  ///
+  /// @param size Maximum number of rows to read
+  /// @param output Output vector to store the read data
+  /// @param runtimeStats Runtime statistics collector for tracking metrics
+  ///        during split reading. Currently used by IcebergSplitReader to
+  ///        collect Iceberg-specific statistics:
+  ///        - "iceberg.numDeletes": Number of deleted rows encountered during
+  ///          reading (collected via runtimeStats.unitLoaderStats.addCounter)
+  ///
+  /// @return Number of rows actually read
+  virtual uint64_t next(
+      uint64_t size,
+      VectorPtr& output,
+      dwio::common::RuntimeStatistics& runtimeStats);
 
   void resetFilterCaches();
 
