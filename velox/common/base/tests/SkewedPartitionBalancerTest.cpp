@@ -28,10 +28,6 @@ using namespace facebook::velox::common::testutil;
 namespace facebook::velox::common::test {
 class SkewedPartitionRebalancerTestHelper {
  public:
-  static void SetUpTestCase() {
-    TestValue::enable();
-  }
-
   explicit SkewedPartitionRebalancerTestHelper(
       SkewedPartitionRebalancer* balancer)
       : balancer_(balancer) {
@@ -76,6 +72,10 @@ class SkewedPartitionRebalancerTestHelper {
 
 class SkewedPartitionRebalancerTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    TestValue::enable();
+  }
+
   std::unique_ptr<SkewedPartitionRebalancer> createBalancer(
       uint32_t numPartitions = 128,
       uint32_t numTasks = 8,
@@ -330,10 +330,16 @@ DEBUG_ONLY_TEST_F(SkewedPartitionRebalancerTest, serializedRebalanceExecution) {
   SkewedPartitionRebalancerTestHelper helper(balancer.get());
   folly::EventCount rebalanceWait;
   std::atomic_bool rebalanceWaitFlag{true};
+  // Signal to indicate the background thread has entered rebalancePartitions.
+  folly::EventCount enteredRebalanceWait;
+  std::atomic_bool enteredRebalanceFlag{false};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::common::SkewedPartitionRebalancer::rebalancePartitions",
       std::function<void(SkewedPartitionRebalancer*)>(
           [&](SkewedPartitionRebalancer*) {
+            // Signal that we've entered rebalancePartitions.
+            enteredRebalanceFlag = true;
+            enteredRebalanceWait.notifyAll();
             rebalanceWait.await([&] { return !rebalanceWaitFlag.load(); });
           }));
 
@@ -343,6 +349,10 @@ DEBUG_ONLY_TEST_F(SkewedPartitionRebalancerTest, serializedRebalanceExecution) {
   }
 
   std::thread rebalanceThread([&]() { balancer->rebalance(); });
+
+  // Wait for the background thread to enter rebalancePartitions before
+  // attempting rebalance from the main thread.
+  enteredRebalanceWait.await([&] { return enteredRebalanceFlag.load(); });
 
   balancer->rebalance();
 
