@@ -32,6 +32,13 @@ class CudfHiveConfig {
  public:
   // Reader config options
 
+  // Number of rows to skip from the start; CudfHive stores the number of rows
+  // as int64_t
+  static constexpr const char* kSkipRows = "parquet.reader.skip-rows";
+
+  // Number of rows to read; `nullopt` is all
+  static constexpr const char* kNumRows = "parquet.reader.num-rows";
+
   // This isn't a typo; parquet connector and session config names are different
   // ('-' vs '_').
   static constexpr const char* kMaxChunkReadLimit =
@@ -134,6 +141,9 @@ class CudfHiveConfig {
 
   std::size_t maxPassReadLimit() const;
   std::size_t maxPassReadLimitSession(const config::ConfigBase* session) const;
+
+  int64_t skipRows() const;
+  std::optional<cudf::size_type> numRows() const;
 
   bool isConvertStringsToCategories() const;
   bool isConvertStringsToCategoriesSession(
