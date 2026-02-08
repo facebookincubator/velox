@@ -183,7 +183,7 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
       emptyColumns.push_back(std::move(structColumn));
     } else {
       auto emptyColumn = cudf::make_empty_column(
-          cudf_velox::veloxToCudfTypeId(inputType->childAt(i)));
+          cudf_velox::veloxToCudfDataType(inputType->childAt(i)));
       emptyColumns.push_back(std::move(emptyColumn));
     }
   }

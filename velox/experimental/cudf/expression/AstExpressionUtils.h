@@ -203,6 +203,21 @@ bool isOpAndInputsSupported(
   return false;
 }
 
+bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (!expr) {
+    return false;
+  }
+  if (expr->type() && expr->type()->isDecimal()) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsDecimalType(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // not special form, name = function, so unsupported for astpure
 // "in", "between", "isnotnull" are not special form, but supported for astpure
 // enum class SpecialFormKind : int32_t {
@@ -222,6 +237,13 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
+  // reject anything with DECIMAL for now
+  // @TODO implement DECIMAL in AST and JIT
+  if (containsDecimalType(expr)) {
+    LOG(WARNING) << "DECIMAL expression not supported by AST/JIT: " << expr->toString();
+    return false;
+  }
+
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
@@ -229,7 +251,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
-      auto cudfType = cudf::data_type(veloxToCudfTypeId(type));
+      auto cudfType = veloxToCudfDataType(type);
       return cudf::is_fixed_width(cudfType) ||
           cudfType.id() == cudf::type_id::STRING;
     } catch (...) {
@@ -257,8 +279,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
-      inputCudfDataTypes.push_back(
-          cudf::data_type(veloxToCudfTypeId(input->type())));
+      inputCudfDataTypes.push_back(veloxToCudfDataType(input->type()));
     } catch (...) {
       return false;
     }

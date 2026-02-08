@@ -753,6 +753,9 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
   }
 
   const auto* leftSide = call.inputs()[0].get();
+  if (leftSide->type()->isDecimal()) {
+    return std::nullopt;
+  }
 
   common::Subfield subfield;
   if (call.name() == "eq") {

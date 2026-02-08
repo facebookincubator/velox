@@ -95,17 +95,32 @@ CudfHiveDataSource::CudfHiveDataSource(
   VELOX_CHECK_NOT_NULL(
       tableHandle_, "TableHandle must be an instance of HiveTableHandle");
 
-  // Copy subfield filters
+  auto isDecimalSubfield = [&](const common::Subfield& subfield) {
+    if (!tableHandle_->dataColumns()) {
+      return false;
+    }
+    const auto& name = getColumnName(subfield);
+    if (!tableHandle_->dataColumns()->containsChild(name)) {
+      return false;
+    }
+    return tableHandle_->dataColumns()->findChild(name)->isDecimal();
+  };
+
+  // Copy subfield filters, skipping decimal columns.
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
+    if (isDecimalSubfield(k)) {
+      continue;
+    }
     subfieldFilters_.emplace(k.clone(), v->clone());
-    // Add fields in the filter to the columns to read if not there
-    for (const auto& [field, _] : subfieldFilters_) {
-      if (std::find(
-              readColumnNames_.begin(),
-              readColumnNames_.end(),
-              field.toString()) == readColumnNames_.end()) {
-        readColumnNames_.push_back(field.toString());
-      }
+  }
+
+  // Add fields in the filter to the columns to read if not there.
+  for (const auto& [field, _] : subfieldFilters_) {
+    if (std::find(
+            readColumnNames_.begin(),
+            readColumnNames_.end(),
+            field.toString()) == readColumnNames_.end()) {
+      readColumnNames_.push_back(field.toString());
     }
   }
 
