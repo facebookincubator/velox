@@ -21,13 +21,13 @@
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SpillConfig.h"
-#include "velox/common/base/SpillStats.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/exec/SpillStats.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -206,7 +206,7 @@ class DataSink {
     uint64_t recodeTimeNs{0};
     uint64_t compressionTimeNs{0};
 
-    common::SpillStats spillStats;
+    exec::SpillStats spillStats;
 
     bool empty() const;
 

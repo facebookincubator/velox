@@ -292,8 +292,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
       uint64_t maxOutputBatchBytes,
       int mergeSourceQueueSize,
       const common::SpillConfig* spillConfig,
-      const std::shared_ptr<folly::Synchronized<common::SpillStats>>&
-          spillStats,
+      const std::shared_ptr<exec::SpillStats>& spillStats,
       velox::memory::MemoryPool* pool);
 
   ~SpillMerger();
@@ -339,7 +338,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
   void checkError();
 
   folly::Executor* const executor_;
-  const std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_;
+  const std::shared_ptr<exec::SpillStats> spillStats_;
   const std::shared_ptr<memory::MemoryPool> pool_;
 
   std::vector<std::shared_ptr<MergeSource>> sources_;

@@ -55,7 +55,7 @@ class DirectBufferedInputTest : public testing::Test {
 
   void SetUp() override {
     executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(10);
-    ioStats_ = std::make_shared<IoStatistics>();
+    ioStatistics_ = std::make_shared<IoStatistics>();
     tracker_ = std::make_shared<ScanTracker>(
         "testTracker", nullptr, 256 << 10 /* 256KB */);
     rootPool_ = memoryManager()->addRootPool();
@@ -69,7 +69,7 @@ class DirectBufferedInputTest : public testing::Test {
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<MemoryPool> rootPool_;
   std::shared_ptr<MemoryPool> pool_;
-  std::shared_ptr<IoStatistics> ioStats_;
+  std::shared_ptr<IoStatistics> ioStatistics_;
   std::shared_ptr<ScanTracker> tracker_;
 };
 
@@ -104,7 +104,7 @@ TEST_F(DirectBufferedInputTest, reset) {
         std::move(fileId),
         tracker_,
         std::move(groupId),
-        ioStats_,
+        ioStatistics_,
         nullptr,
         executor_.get(),
         readerOptions);
@@ -229,7 +229,7 @@ TEST_F(DirectBufferedInputTest, readAfterReset) {
         std::move(fileId),
         tracker_,
         std::move(groupId),
-        ioStats_,
+        ioStatistics_,
         nullptr,
         executor_.get(),
         readerOptions);
@@ -307,7 +307,7 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
         std::move(fileId),
         tracker_,
         std::move(groupId),
-        ioStats_,
+        ioStatistics_,
         nullptr,
         executor_.get(),
         readerOptions);
@@ -412,7 +412,7 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
         std::move(fileId),
         tracker_,
         std::move(groupId),
-        ioStats_,
+        ioStatistics_,
         nullptr,
         executor_.get(),
         readerOptions);

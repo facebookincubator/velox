@@ -352,116 +352,131 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
 }
 
 void Operator::recordSpillStats() {
-  const auto lockedSpillStats = spillStats_->wlock();
   auto lockedStats = stats_.wlock();
-  lockedStats->spilledInputBytes += lockedSpillStats->spilledInputBytes;
-  lockedStats->spilledBytes += lockedSpillStats->spilledBytes;
-  lockedStats->spilledRows += lockedSpillStats->spilledRows;
-  lockedStats->spilledPartitions += lockedSpillStats->spilledPartitions;
-  lockedStats->spilledFiles += lockedSpillStats->spilledFiles;
-  if (lockedSpillStats->spillFillTimeNanos != 0) {
+  lockedStats->spilledInputBytes +=
+      spillStats_->spilledInputBytes.load(std::memory_order_relaxed);
+  lockedStats->spilledBytes +=
+      spillStats_->spilledBytes.load(std::memory_order_relaxed);
+  lockedStats->spilledRows +=
+      spillStats_->spilledRows.load(std::memory_order_relaxed);
+  lockedStats->spilledPartitions +=
+      spillStats_->spilledPartitions.load(std::memory_order_relaxed);
+  lockedStats->spilledFiles +=
+      spillStats_->spilledFiles.load(std::memory_order_relaxed);
+
+  const auto fillTime =
+      spillStats_->spillFillTimeNanos.load(std::memory_order_relaxed);
+  if (fillTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillFillTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillFillTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(fillTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillSortTimeNanos != 0) {
+  const auto sortTime =
+      spillStats_->spillSortTimeNanos.load(std::memory_order_relaxed);
+  if (sortTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillSortTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillSortTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(sortTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillExtractVectorTimeNanos != 0) {
+  const auto extractTime =
+      spillStats_->spillExtractVectorTimeNanos.load(std::memory_order_relaxed);
+  if (extractTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillExtractVectorTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillExtractVectorTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(extractTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillSerializationTimeNanos != 0) {
+  const auto serializationTime =
+      spillStats_->spillSerializationTimeNanos.load(std::memory_order_relaxed);
+  if (serializationTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillSerializationTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillSerializationTimeNanos),
+            static_cast<int64_t>(serializationTime),
             RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillFlushTimeNanos != 0) {
+  const auto flushTime =
+      spillStats_->spillFlushTimeNanos.load(std::memory_order_relaxed);
+  if (flushTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillFlushTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillFlushTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(flushTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillWrites != 0) {
+  const auto writes = spillStats_->spillWrites.load(std::memory_order_relaxed);
+  if (writes != 0) {
     lockedStats->addRuntimeStat(
-        kSpillWrites,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillWrites)});
+        kSpillWrites, RuntimeCounter{static_cast<int64_t>(writes)});
   }
-  if (lockedSpillStats->spillWriteTimeNanos != 0) {
+  const auto writeTime =
+      spillStats_->spillWriteTimeNanos.load(std::memory_order_relaxed);
+  if (writeTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillWriteTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillWriteTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(writeTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillRuns != 0) {
+  const auto runs = spillStats_->spillRuns.load(std::memory_order_relaxed);
+  if (runs != 0) {
     lockedStats->addRuntimeStat(
-        kSpillRuns,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillRuns)});
-    common::updateGlobalSpillRunStats(lockedSpillStats->spillRuns);
+        kSpillRuns, RuntimeCounter{static_cast<int64_t>(runs)});
+    updateGlobalSpillRunStats(runs);
   }
 
-  if (lockedSpillStats->spillMaxLevelExceededCount != 0) {
+  const auto maxLevelExceeded =
+      spillStats_->spillMaxLevelExceededCount.load(std::memory_order_relaxed);
+  if (maxLevelExceeded != 0) {
     lockedStats->addRuntimeStat(
         kExceededMaxSpillLevel,
-        RuntimeCounter{static_cast<int64_t>(
-            lockedSpillStats->spillMaxLevelExceededCount)});
-    common::updateGlobalMaxSpillLevelExceededCount(
-        lockedSpillStats->spillMaxLevelExceededCount);
+        RuntimeCounter{static_cast<int64_t>(maxLevelExceeded)});
+    updateGlobalMaxSpillLevelExceededCount(maxLevelExceeded);
   }
 
-  if (lockedSpillStats->spillReadBytes != 0) {
+  const auto readBytes =
+      spillStats_->spillReadBytes.load(std::memory_order_relaxed);
+  if (readBytes != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadBytes,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadBytes),
-            RuntimeCounter::Unit::kBytes});
+            static_cast<int64_t>(readBytes), RuntimeCounter::Unit::kBytes});
   }
 
-  if (lockedSpillStats->spillReads != 0) {
+  const auto reads = spillStats_->spillReads.load(std::memory_order_relaxed);
+  if (reads != 0) {
     lockedStats->addRuntimeStat(
-        kSpillReads,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReads)});
+        kSpillReads, RuntimeCounter{static_cast<int64_t>(reads)});
   }
 
-  if (lockedSpillStats->spillReadTimeNanos != 0) {
+  const auto readTime =
+      spillStats_->spillReadTimeNanos.load(std::memory_order_relaxed);
+  if (readTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(readTime), RuntimeCounter::Unit::kNanos});
   }
 
-  if (lockedSpillStats->spillDeserializationTimeNanos != 0) {
+  const auto deserializationTime =
+      spillStats_->spillDeserializationTimeNanos.load(
+          std::memory_order_relaxed);
+  if (deserializationTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillDeserializationTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillDeserializationTimeNanos),
+            static_cast<int64_t>(deserializationTime),
             RuntimeCounter::Unit::kNanos});
   }
-  lockedSpillStats->reset();
 
   // Collect filesystem I/O stats for spilling.
-  if (spillFsStats_) {
-    const auto fsStatsMap = spillFsStats_->stats();
-    for (const auto& [statName, statValue] : fsStatsMap) {
-      lockedStats->addRuntimeStat(
-          statName, RuntimeCounter(statValue.sum, statValue.unit));
-    }
+  const auto ioStatsMap = spillStats_->ioStats.stats();
+  for (const auto& [statName, statValue] : ioStatsMap) {
+    lockedStats->addRuntimeStat(
+        statName, RuntimeCounter(statValue.sum, statValue.unit));
   }
+
+  spillStats_->reset();
 }
 
 std::string Operator::toString() const {

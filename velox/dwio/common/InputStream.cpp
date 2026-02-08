@@ -64,10 +64,10 @@ ReadFileInputStream::ReadFileInputStream(
     std::shared_ptr<velox::ReadFile> readFile,
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats,
-    filesystems::File::IoStats* fsStats,
+    velox::IoStats* ioStats,
     folly::F14FastMap<std::string, std::string> fileOpts)
-    : InputStream(readFile->getName(), metricsLog, stats, fsStats),
-      fileIoContext_(fsStats, std::move(fileOpts)),
+    : InputStream(readFile->getName(), metricsLog, stats, ioStats),
+      fileIoContext_(ioStats, std::move(fileOpts)),
       readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(

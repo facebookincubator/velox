@@ -20,12 +20,12 @@
 
 #include <re2/re2.h>
 #include "velox/common/base/SpillConfig.h"
-#include "velox/common/base/SpillStats.h"
 #include "velox/common/base/TreeOfLosers.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/SpillFile.h"
+#include "velox/exec/SpillStats.h"
 #include "velox/exec/UnorderedStreamReader.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/vector/ComplexVector.h"
@@ -503,7 +503,7 @@ class SpillPartition {
   std::unique_ptr<UnorderedStreamReader<BatchStream>> createUnorderedReader(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   /// Create an ordered stream reader from this spill partition. If the
   /// partition has more than spillConfig.numMaxMergeFiles files, the files will
@@ -514,8 +514,7 @@ class SpillPartition {
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
       const common::SpillConfig& spillConfig,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats,
-      filesystems::File::IoStats* fsStats);
+      exec::SpillStats* spillStats);
 
   std::string toString() const;
 
@@ -529,7 +528,7 @@ class SpillPartition {
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReaderInternal(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   SpillPartitionId id_;
   SpillFiles files_;
@@ -587,7 +586,7 @@ class SpillState {
   /// 'numSortKeys' is the number of leading columns on which the data is
   /// sorted, 0 if only hash partitioning is used. 'targetFileSize' is the
   /// target size of a single file.  'pool' owns the memory for state and
-  /// results. 'fsStats' is used to collect filesystem I/O stats.
+  /// results. 'ioStats' is used to collect filesystem I/O stats.
   SpillState(
       const common::GetSpillDirectoryPathCB& getSpillDirectoryPath,
       const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
@@ -598,9 +597,8 @@ class SpillState {
       common::CompressionKind compressionKind,
       const std::optional<common::PrefixSortConfig>& prefixSortConfig,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats,
-      const std::string& fileCreateConfig = {},
-      filesystems::File::IoStats* fsStats = nullptr);
+      exec::SpillStats* stats,
+      const std::string& fileCreateConfig = {});
 
   static std::vector<SpillSortKey> makeSortingKeys(
       const std::vector<CompareFlags>& compareFlags = {});
@@ -704,8 +702,7 @@ class SpillState {
   const std::optional<common::PrefixSortConfig> prefixSortConfig_;
   const std::string fileCreateConfig_;
   memory::MemoryPool* const pool_;
-  folly::Synchronized<common::SpillStats>* const stats_;
-  filesystems::File::IoStats* const fsStats_{nullptr};
+  exec::SpillStats* const stats_;
 
   // A set of spilled partition ids.
   SpillPartitionIdSet spilledPartitionIdSet_;

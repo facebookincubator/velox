@@ -67,10 +67,10 @@ using SplitInput =
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>;
 
 // Returns aggregated spilled stats by build and probe operators from 'task'.
-std::pair<common::SpillStats, common::SpillStats> taskSpilledStats(
+std::pair<exec::SpillStats, exec::SpillStats> taskSpilledStats(
     const exec::Task& task) {
-  common::SpillStats buildStats;
-  common::SpillStats probeStats;
+  exec::SpillStats buildStats;
+  exec::SpillStats probeStats;
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
