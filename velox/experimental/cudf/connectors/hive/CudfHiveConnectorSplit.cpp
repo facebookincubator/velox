@@ -78,4 +78,21 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
       connectorId, filePath, start, length, splitWeight, infoColumns);
 }
 
+folly::dynamic CudfHiveConnectorSplit::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["connectorId"] = connectorId;
+  obj["filePath"] = filePath;
+  obj["start"] = start;
+  obj["length"] = length;
+  obj["splitWeight"] = splitWeight;
+
+  folly::dynamic infoColumnsObj = folly::dynamic::object;
+  for (const auto& [key, value] : infoColumns) {
+    infoColumnsObj[key] = value;
+  }
+  obj["infoColumns"] = infoColumnsObj;
+
+  return obj;
+}
+
 } // namespace facebook::velox::cudf_velox::connector::hive
