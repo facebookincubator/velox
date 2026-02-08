@@ -61,6 +61,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
+    IcebergParquetStatsTest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp

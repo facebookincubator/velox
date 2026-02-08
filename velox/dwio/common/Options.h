@@ -28,6 +28,7 @@
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
+#include "velox/dwio/common/DataFileStatsCollector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
 #include "velox/dwio/common/FlatMapHelper.h"
 #include "velox/dwio/common/FlushPolicy.h"
@@ -772,6 +773,11 @@ struct WriterOptions {
 
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};
+
+  /// Collector for format-specific file statistics during write operations.
+  /// Connectors (e.g., Iceberg, Hudi) provide implementations to gather
+  /// table format specific metrics from the written data files.
+  std::shared_ptr<DataFileStatsCollectorBase> dataFileStatsCollector;
 
   // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.

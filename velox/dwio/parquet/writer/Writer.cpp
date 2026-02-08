@@ -18,6 +18,7 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include "velox/common/Casts.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
@@ -423,6 +424,7 @@ Writer::Writer(
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
   arrowMemoryPool_ = options.arrowMemoryPool;
   parquetFieldIds_ = std::move(options.parquetFieldIds);
+  dataFileStatsCollector_ = options.dataFileStatsCollector;
 }
 
 Writer::Writer(
@@ -510,8 +512,21 @@ void Writer::newRowGroup(int32_t numRows) {
 void Writer::close() {
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    if (dataFileStatsCollector_) {
+      auto fileMetadata = arrowContext_->writer->metadata();
+      auto typedCollector =
+          checkedPointerCast<dwio::common::DataFileStatsCollector<
+              std::shared_ptr<arrow::FileMetaData>>>(dataFileStatsCollector_);
+      dataFileStats_ = typedCollector->aggregate(fileMetadata);
+    }
     arrowContext_->writer.reset();
   }
+
+  if (!dataFileStats_) {
+    dataFileStats_ = std::make_shared<dwio::common::IcebergDataFileStatistics>(
+        dwio::common::IcebergDataFileStatistics::empty());
+  }
+
   PARQUET_THROW_NOT_OK(stream_->Close());
 }
 
