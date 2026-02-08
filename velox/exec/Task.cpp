@@ -566,6 +566,7 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
+    nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
   }
 
   // Create drivers.
@@ -1826,8 +1827,8 @@ void Task::addSplitLocked(
     return;
   }
 
-  /*VELOX_CHECK(
-      !barrierRequested_, "Can't add new split under barrier processing");*/
+  VELOX_CHECK(
+      !barrierRequested_, "Can't add new split under barrier processing");
 
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
