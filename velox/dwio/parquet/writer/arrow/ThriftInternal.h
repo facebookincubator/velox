@@ -46,38 +46,38 @@
 
 namespace facebook::velox::parquet::arrow {
 
-// ----------------------------------------------------------------------
-// Convert Thrift enums to Parquet enums
+// ----------------------------------------------------------------------.
+// Convert Thrift enums to Parquet enums.
 
 // Unsafe enum converters (input is not checked for validity)
 
-static inline Type::type FromThriftUnsafe(
+static inline Type::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::Type::type type) {
   return static_cast<Type::type>(type);
 }
 
-static inline ConvertedType::type FromThriftUnsafe(
+static inline ConvertedType::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::ConvertedType::type type) {
-  // item 0 is NONE
+  // Item 0 is NONE.
   return static_cast<ConvertedType::type>(static_cast<int>(type) + 1);
 }
 
-static inline Repetition::type FromThriftUnsafe(
+static inline Repetition::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::FieldRepetitionType::type type) {
   return static_cast<Repetition::type>(type);
 }
 
-static inline Encoding::type FromThriftUnsafe(
+static inline Encoding::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::Encoding::type type) {
   return static_cast<Encoding::type>(type);
 }
 
-static inline PageType::type FromThriftUnsafe(
+static inline PageType::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::PageType::type type) {
   return static_cast<PageType::type>(type);
 }
 
-static inline Compression::type FromThriftUnsafe(
+static inline Compression::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::CompressionCodec::type type) {
   switch (type) {
     case facebook::velox::parquet::thrift::CompressionCodec::UNCOMPRESSED:
@@ -102,7 +102,7 @@ static inline Compression::type FromThriftUnsafe(
   }
 }
 
-static inline BoundaryOrder::type FromThriftUnsafe(
+static inline BoundaryOrder::type fromThriftUnsafe(
     facebook::velox::parquet::thrift::BoundaryOrder::type type) {
   return static_cast<BoundaryOrder::type>(type);
 }
@@ -110,131 +110,131 @@ static inline BoundaryOrder::type FromThriftUnsafe(
 namespace internal {
 
 template <typename T>
-struct ThriftEnumTypeTraits {};
+struct ThriftenumTypeTraits {};
 
 template <>
-struct ThriftEnumTypeTraits<::facebook::velox::parquet::thrift::Type::type> {
-  using ParquetEnum = Type;
+struct ThriftenumTypeTraits<::facebook::velox::parquet::thrift::Type::type> {
+  using Parquetenum = Type;
 };
 
 template <>
-struct ThriftEnumTypeTraits<
+struct ThriftenumTypeTraits<
     ::facebook::velox::parquet::thrift::ConvertedType::type> {
-  using ParquetEnum = ConvertedType;
+  using Parquetenum = ConvertedType;
 };
 
 template <>
-struct ThriftEnumTypeTraits<
+struct ThriftenumTypeTraits<
     ::facebook::velox::parquet::thrift::FieldRepetitionType::type> {
-  using ParquetEnum = Repetition;
+  using Parquetenum = Repetition;
 };
 
 template <>
-struct ThriftEnumTypeTraits<
+struct ThriftenumTypeTraits<
     ::facebook::velox::parquet::thrift::Encoding::type> {
-  using ParquetEnum = Encoding;
+  using Parquetenum = Encoding;
 };
 
 template <>
-struct ThriftEnumTypeTraits<
+struct ThriftenumTypeTraits<
     ::facebook::velox::parquet::thrift::PageType::type> {
-  using ParquetEnum = PageType;
+  using Parquetenum = PageType;
 };
 
 template <>
-struct ThriftEnumTypeTraits<
+struct ThriftenumTypeTraits<
     ::facebook::velox::parquet::thrift::BoundaryOrder::type> {
-  using ParquetEnum = BoundaryOrder;
+  using Parquetenum = BoundaryOrder;
 };
 
-// If the parquet file is corrupted it is possible the enum value decoded
-// will not be in the range of defined values, which is undefined behaviour.
+// If the parquet file is corrupted it is possible the enum value decoded.
+// Will not be in the range of defined values, which is undefined behaviour.
 // This facility prevents this by loading the value as the underlying type
 // and checking to make sure it is in range.
 
 template <
-    typename EnumType,
-    typename EnumTypeRaw = typename std::underlying_type<EnumType>::type>
-inline static EnumTypeRaw LoadEnumRaw(const EnumType* in) {
-  EnumTypeRaw raw_value;
+    typename enumType,
+    typename enumTypeRaw = typename std::underlying_type<enumType>::type>
+inline static enumTypeRaw loadenumRaw(const enumType* in) {
+  enumTypeRaw rawValue;
   // Use memcpy(), as a regular cast would be undefined behaviour on invalid
-  // values
-  memcpy(&raw_value, in, sizeof(EnumType));
-  return raw_value;
+  // values.
+  memcpy(&rawValue, in, sizeof(enumType));
+  return rawValue;
 }
 
 template <typename ApiType>
 struct SafeLoader {
-  using ApiTypeEnum = typename ApiType::type;
-  using ApiTypeRawEnum = typename std::underlying_type<ApiTypeEnum>::type;
+  using ApiTypeenum = typename ApiType::type;
+  using ApiTypeRawenum = typename std::underlying_type<ApiTypeenum>::type;
 
   template <typename ThriftType>
-  inline static ApiTypeRawEnum LoadRaw(const ThriftType* in) {
+  inline static ApiTypeRawenum loadRaw(const ThriftType* in) {
     static_assert(
-        sizeof(ApiTypeEnum) == sizeof(ThriftType),
+        sizeof(ApiTypeenum) == sizeof(ThriftType),
         "parquet type should always be the same size as thrift type");
-    return static_cast<ApiTypeRawEnum>(LoadEnumRaw(in));
+    return static_cast<ApiTypeRawenum>(loadenumRaw(in));
   }
 
   template <typename ThriftType, bool IsUnsigned = true>
-  inline static ApiTypeEnum LoadChecked(
+  inline static ApiTypeenum loadChecked(
       const typename std::enable_if<IsUnsigned, ThriftType>::type* in) {
-    auto raw_value = LoadRaw(in);
+    auto rawValue = loadRaw(in);
     if (ARROW_PREDICT_FALSE(
-            raw_value >= static_cast<ApiTypeRawEnum>(ApiType::UNDEFINED))) {
-      return ApiType::UNDEFINED;
+            rawValue >= static_cast<ApiTypeRawenum>(ApiType::kUndefined))) {
+      return ApiType::kUndefined;
     }
-    return FromThriftUnsafe(static_cast<ThriftType>(raw_value));
+    return fromThriftUnsafe(static_cast<ThriftType>(rawValue));
   }
 
   template <typename ThriftType, bool IsUnsigned = false>
-  inline static ApiTypeEnum LoadChecked(
+  inline static ApiTypeenum loadChecked(
       const typename std::enable_if<!IsUnsigned, ThriftType>::type* in) {
-    auto raw_value = LoadRaw(in);
+    auto rawValue = loadRaw(in);
     if (ARROW_PREDICT_FALSE(
-            raw_value >= static_cast<ApiTypeRawEnum>(ApiType::UNDEFINED) ||
-            raw_value < 0)) {
-      return ApiType::UNDEFINED;
+            rawValue >= static_cast<ApiTypeRawenum>(ApiType::kUndefined) ||
+            rawValue < 0)) {
+      return ApiType::kUndefined;
     }
-    return FromThriftUnsafe(static_cast<ThriftType>(raw_value));
+    return fromThriftUnsafe(static_cast<ThriftType>(rawValue));
   }
 
   template <typename ThriftType>
-  inline static ApiTypeEnum Load(const ThriftType* in) {
-    return LoadChecked<ThriftType, std::is_unsigned<ApiTypeRawEnum>::value>(in);
+  inline static ApiTypeenum load(const ThriftType* in) {
+    return loadChecked<ThriftType, std::is_unsigned<ApiTypeRawenum>::value>(in);
   }
 };
 
 } // namespace internal
 
-// Safe enum loader: will check for invalid enum value before converting
+// Safe enum loader: will check for invalid enum value before converting.
 
 template <
     typename ThriftType,
-    typename ParquetEnum =
-        typename internal::ThriftEnumTypeTraits<ThriftType>::ParquetEnum>
-inline typename ParquetEnum::type LoadEnumSafe(const ThriftType* in) {
-  return internal::SafeLoader<ParquetEnum>::Load(in);
+    typename Parquetenum =
+        typename internal::ThriftenumTypeTraits<ThriftType>::Parquetenum>
+inline typename Parquetenum::type loadenumSafe(const ThriftType* in) {
+  return internal::SafeLoader<Parquetenum>::load(in);
 }
 
-inline typename Compression::type LoadEnumSafe(
+inline typename Compression::type loadenumSafe(
     const facebook::velox::parquet::thrift::CompressionCodec::type* in) {
-  const auto raw_value = internal::LoadEnumRaw(in);
+  const auto rawValue = internal::loadenumRaw(in);
   // Check bounds manually, as Compression::type doesn't have the same values
   // as facebook::velox::parquet::thrift::CompressionCodec.
-  const auto min_value = static_cast<decltype(raw_value)>(
+  const auto minValue = static_cast<decltype(rawValue)>(
       facebook::velox::parquet::thrift::CompressionCodec::UNCOMPRESSED);
-  const auto max_value = static_cast<decltype(raw_value)>(
+  const auto maxValue = static_cast<decltype(rawValue)>(
       facebook::velox::parquet::thrift::CompressionCodec::LZ4_RAW);
-  if (raw_value < min_value || raw_value > max_value) {
+  if (rawValue < minValue || rawValue > maxValue) {
     return Compression::UNCOMPRESSED;
   }
-  return FromThriftUnsafe(*in);
+  return fromThriftUnsafe(*in);
 }
 
-// Safe non-enum converters
+// Safe non-enum converters.
 
-static inline AadMetadata FromThrift(
+static inline AadMetadata fromThrift(
     facebook::velox::parquet::thrift::AesGcmV1 aesGcmV1) {
   return AadMetadata{
       aesGcmV1.aad_prefix,
@@ -242,7 +242,7 @@ static inline AadMetadata FromThrift(
       aesGcmV1.supply_aad_prefix};
 }
 
-static inline AadMetadata FromThrift(
+static inline AadMetadata fromThrift(
     facebook::velox::parquet::thrift::AesGcmCtrV1 aesGcmCtrV1) {
   return AadMetadata{
       aesGcmCtrV1.aad_prefix,
@@ -250,67 +250,68 @@ static inline AadMetadata FromThrift(
       aesGcmCtrV1.supply_aad_prefix};
 }
 
-static inline EncryptionAlgorithm FromThrift(
+static inline EncryptionAlgorithm fromThrift(
     facebook::velox::parquet::thrift::EncryptionAlgorithm encryption) {
-  EncryptionAlgorithm encryption_algorithm;
+  EncryptionAlgorithm encryptionAlgorithm;
 
   if (encryption.__isset.AES_GCM_V1) {
-    encryption_algorithm.algorithm = ParquetCipher::AES_GCM_V1;
-    encryption_algorithm.aad = FromThrift(encryption.AES_GCM_V1);
+    encryptionAlgorithm.algorithm = ParquetCipher::kAesGcmV1;
+    encryptionAlgorithm.aad = fromThrift(encryption.AES_GCM_V1);
   } else if (encryption.__isset.AES_GCM_CTR_V1) {
-    encryption_algorithm.algorithm = ParquetCipher::AES_GCM_CTR_V1;
-    encryption_algorithm.aad = FromThrift(encryption.AES_GCM_CTR_V1);
+    encryptionAlgorithm.algorithm = ParquetCipher::kAesGcmCtrV1;
+    encryptionAlgorithm.aad = fromThrift(encryption.AES_GCM_CTR_V1);
   } else {
     throw ParquetException("Unsupported algorithm");
   }
-  return encryption_algorithm;
+  return encryptionAlgorithm;
 }
 
-static inline SortingColumn FromThrift(
-    facebook::velox::parquet::thrift::SortingColumn thrift_sorting_column) {
-  SortingColumn sorting_column;
-  sorting_column.column_idx = thrift_sorting_column.column_idx;
-  sorting_column.nulls_first = thrift_sorting_column.nulls_first;
-  sorting_column.descending = thrift_sorting_column.descending;
-  return sorting_column;
+static inline SortingColumn fromThrift(
+    facebook::velox::parquet::thrift::SortingColumn thriftSortingColumn) {
+  SortingColumn sortingColumn;
+  sortingColumn.columnIdx = thriftSortingColumn.column_idx;
+  sortingColumn.nullsFirst = thriftSortingColumn.nulls_first;
+  sortingColumn.descending = thriftSortingColumn.descending;
+  return sortingColumn;
 }
 
-// ----------------------------------------------------------------------
-// Convert Thrift enums from Parquet enums
+// ----------------------------------------------------------------------.
+// Convert Thrift enums from Parquet enums.
 
-static inline facebook::velox::parquet::thrift::Type::type ToThrift(
+static inline facebook::velox::parquet::thrift::Type::type toThrift(
     Type::type type) {
   return static_cast<facebook::velox::parquet::thrift::Type::type>(type);
 }
 
-static fmt::underlying_t<ConvertedType::type> format_as(
+static fmt::underlying_t<ConvertedType::type> formatAs(
     ConvertedType::type type) {
   return fmt::underlying(type);
 }
 
-static inline facebook::velox::parquet::thrift::ConvertedType::type ToThrift(
+static inline facebook::velox::parquet::thrift::ConvertedType::type toThrift(
     ConvertedType::type type) {
-  // item 0 is NONE
-  VELOX_DCHECK_NE(type, ConvertedType::NONE);
+  // Item 0 is NONE.
+  const int typeValue = static_cast<int>(type);
+  VELOX_DCHECK_NE(typeValue, static_cast<int>(ConvertedType::kNone));
   // it is forbidden to emit "NA" (PARQUET-1990)
-  VELOX_DCHECK_NE(type, ConvertedType::NA);
-  VELOX_DCHECK_NE(type, ConvertedType::UNDEFINED);
+  VELOX_DCHECK_NE(typeValue, static_cast<int>(ConvertedType::kNa));
+  VELOX_DCHECK_NE(typeValue, static_cast<int>(ConvertedType::kUndefined));
   return static_cast<facebook::velox::parquet::thrift::ConvertedType::type>(
-      static_cast<int>(type) - 1);
+      typeValue - 1);
 }
 
 static inline facebook::velox::parquet::thrift::FieldRepetitionType::type
-ToThrift(Repetition::type type) {
+toThrift(Repetition::type type) {
   return static_cast<
       facebook::velox::parquet::thrift::FieldRepetitionType::type>(type);
 }
 
-static inline facebook::velox::parquet::thrift::Encoding::type ToThrift(
+static inline facebook::velox::parquet::thrift::Encoding::type toThrift(
     Encoding::type type) {
   return static_cast<facebook::velox::parquet::thrift::Encoding::type>(type);
 }
 
-static inline facebook::velox::parquet::thrift::CompressionCodec::type ToThrift(
+static inline facebook::velox::parquet::thrift::CompressionCodec::type toThrift(
     Compression::type type) {
   switch (type) {
     case Compression::UNCOMPRESSED:
@@ -326,7 +327,7 @@ static inline facebook::velox::parquet::thrift::CompressionCodec::type ToThrift(
     case Compression::LZ4:
       return facebook::velox::parquet::thrift::CompressionCodec::LZ4_RAW;
     case Compression::LZ4_HADOOP:
-      // Deprecated "LZ4" Parquet compression has Hadoop-specific framing
+      // Deprecated "LZ4" Parquet compression has Hadoop-specific framing.
       return facebook::velox::parquet::thrift::CompressionCodec::LZ4;
     case Compression::ZSTD:
       return facebook::velox::parquet::thrift::CompressionCodec::ZSTD;
@@ -336,12 +337,12 @@ static inline facebook::velox::parquet::thrift::CompressionCodec::type ToThrift(
   }
 }
 
-static inline facebook::velox::parquet::thrift::BoundaryOrder::type ToThrift(
+static inline facebook::velox::parquet::thrift::BoundaryOrder::type toThrift(
     BoundaryOrder::type type) {
   switch (type) {
-    case BoundaryOrder::Unordered:
-    case BoundaryOrder::Ascending:
-    case BoundaryOrder::Descending:
+    case BoundaryOrder::kUnordered:
+    case BoundaryOrder::kAscending:
+    case BoundaryOrder::kDescending:
       return static_cast<facebook::velox::parquet::thrift::BoundaryOrder::type>(
           type);
     default:
@@ -350,82 +351,82 @@ static inline facebook::velox::parquet::thrift::BoundaryOrder::type ToThrift(
   }
 }
 
-static inline facebook::velox::parquet::thrift::SortingColumn ToThrift(
-    SortingColumn sorting_column) {
-  facebook::velox::parquet::thrift::SortingColumn thrift_sorting_column;
-  thrift_sorting_column.column_idx = sorting_column.column_idx;
-  thrift_sorting_column.descending = sorting_column.descending;
-  thrift_sorting_column.nulls_first = sorting_column.nulls_first;
-  return thrift_sorting_column;
+static inline facebook::velox::parquet::thrift::SortingColumn toThrift(
+    SortingColumn sortingColumn) {
+  facebook::velox::parquet::thrift::SortingColumn thriftSortingColumn;
+  thriftSortingColumn.column_idx = sortingColumn.columnIdx;
+  thriftSortingColumn.descending = sortingColumn.descending;
+  thriftSortingColumn.nulls_first = sortingColumn.nullsFirst;
+  return thriftSortingColumn;
 }
 
-static inline facebook::velox::parquet::thrift::Statistics ToThrift(
+static inline facebook::velox::parquet::thrift::Statistics toThrift(
     const EncodedStatistics& stats) {
-  facebook::velox::parquet::thrift::Statistics statistics;
-  if (stats.has_min) {
-    statistics.__set_min_value(stats.min());
+  facebook::velox::parquet::thrift::Statistics Statistics;
+  if (stats.hasMin) {
+    Statistics.__set_min_value(stats.min());
     // If the order is SIGNED, then the old min value must be set too.
-    // This for backward compatibility
-    if (stats.is_signed()) {
-      statistics.__set_min(stats.min());
+    // This for backward compatibility.
+    if (stats.isSigned()) {
+      Statistics.__set_min(stats.min());
     }
   }
-  if (stats.has_max) {
-    statistics.__set_max_value(stats.max());
+  if (stats.hasMax) {
+    Statistics.__set_max_value(stats.max());
     // If the order is SIGNED, then the old max value must be set too.
-    // This for backward compatibility
-    if (stats.is_signed()) {
-      statistics.__set_max(stats.max());
+    // This for backward compatibility.
+    if (stats.isSigned()) {
+      Statistics.__set_max(stats.max());
     }
   }
-  if (stats.has_null_count) {
-    statistics.__set_null_count(stats.null_count);
+  if (stats.hasNullCount) {
+    Statistics.__set_null_count(stats.nullCount);
   }
-  if (stats.has_distinct_count) {
-    statistics.__set_distinct_count(stats.distinct_count);
+  if (stats.hasDistinctCount) {
+    Statistics.__set_distinct_count(stats.distinctCount);
   }
 
-  return statistics;
+  return Statistics;
 }
 
-static inline facebook::velox::parquet::thrift::AesGcmV1 ToAesGcmV1Thrift(
+static inline facebook::velox::parquet::thrift::AesGcmV1 toAesGcmV1Thrift(
     AadMetadata aad) {
   facebook::velox::parquet::thrift::AesGcmV1 aesGcmV1;
-  // aad_file_unique is always set
-  aesGcmV1.__set_aad_file_unique(aad.aad_file_unique);
-  aesGcmV1.__set_supply_aad_prefix(aad.supply_aad_prefix);
-  if (!aad.aad_prefix.empty()) {
-    aesGcmV1.__set_aad_prefix(aad.aad_prefix);
+  // Aad_file_unique is always set.
+  aesGcmV1.__set_aad_file_unique(aad.aadFileUnique);
+  aesGcmV1.__set_supply_aad_prefix(aad.supplyAadPrefix);
+  if (!aad.aadPrefix.empty()) {
+    aesGcmV1.__set_aad_prefix(aad.aadPrefix);
   }
   return aesGcmV1;
 }
 
-static inline facebook::velox::parquet::thrift::AesGcmCtrV1 ToAesGcmCtrV1Thrift(
+static inline facebook::velox::parquet::thrift::AesGcmCtrV1 toAesGcmCtrV1Thrift(
     AadMetadata aad) {
   facebook::velox::parquet::thrift::AesGcmCtrV1 aesGcmCtrV1;
-  // aad_file_unique is always set
-  aesGcmCtrV1.__set_aad_file_unique(aad.aad_file_unique);
-  aesGcmCtrV1.__set_supply_aad_prefix(aad.supply_aad_prefix);
-  if (!aad.aad_prefix.empty()) {
-    aesGcmCtrV1.__set_aad_prefix(aad.aad_prefix);
+  // Aad_file_unique is always set.
+  aesGcmCtrV1.__set_aad_file_unique(aad.aadFileUnique);
+  aesGcmCtrV1.__set_supply_aad_prefix(aad.supplyAadPrefix);
+  if (!aad.aadPrefix.empty()) {
+    aesGcmCtrV1.__set_aad_prefix(aad.aadPrefix);
   }
   return aesGcmCtrV1;
 }
 
-static inline facebook::velox::parquet::thrift::EncryptionAlgorithm ToThrift(
+static inline facebook::velox::parquet::thrift::EncryptionAlgorithm toThrift(
     EncryptionAlgorithm encryption) {
-  facebook::velox::parquet::thrift::EncryptionAlgorithm encryption_algorithm;
-  if (encryption.algorithm == ParquetCipher::AES_GCM_V1) {
-    encryption_algorithm.__set_AES_GCM_V1(ToAesGcmV1Thrift(encryption.aad));
+  facebook::velox::parquet::thrift::EncryptionAlgorithm encryptionAlgorithm;
+  if (encryption.algorithm == ParquetCipher::kAesGcmV1) {
+    encryptionAlgorithm.__set_AES_GCM_V1(toAesGcmV1Thrift(encryption.aad));
   } else {
-    encryption_algorithm.__set_AES_GCM_CTR_V1(
-        ToAesGcmCtrV1Thrift(encryption.aad));
+    encryptionAlgorithm.__set_AES_GCM_CTR_V1(
+        toAesGcmCtrV1Thrift(encryption.aad));
   }
-  return encryption_algorithm;
+  return encryptionAlgorithm;
 }
 
-// ----------------------------------------------------------------------
-// Thrift struct serialization / deserialization utilities
+// ----------------------------------------------------------------------.
+// Thrift struct serialization / deserialization utilities.
 
 using ThriftBuffer = apache::thrift::transport::TMemoryBuffer;
 
@@ -433,43 +434,43 @@ class ThriftDeserializer {
  public:
   explicit ThriftDeserializer(const ReaderProperties& properties)
       : ThriftDeserializer(
-            properties.thrift_string_size_limit(),
-            properties.thrift_container_size_limit()) {}
+            properties.thriftStringSizeLimit(),
+            properties.thriftContainerSizeLimit()) {}
 
-  ThriftDeserializer(int32_t string_size_limit, int32_t container_size_limit)
-      : string_size_limit_(string_size_limit),
-        container_size_limit_(container_size_limit) {}
+  ThriftDeserializer(int32_t stringSizeLimit, int32_t containerSizeLimit)
+      : stringSizeLimit_(stringSizeLimit),
+        containerSizeLimit_(containerSizeLimit) {}
 
   // Deserialize a thrift message from buf/len.  buf/len must at least contain
   // all the bytes needed to store the thrift message.  On return, len will be
   // set to the actual length of the header.
   template <class T>
-  void DeserializeMessage(
+  void deserializeMessage(
       const uint8_t* buf,
       uint32_t* len,
-      T* deserialized_msg,
-      const std::shared_ptr<Decryptor>& decryptor = NULLPTR) {
-    if (decryptor == NULLPTR) {
-      // thrift message is not encrypted
-      DeserializeUnencryptedMessage(buf, len, deserialized_msg);
+      T* deserializedMsg,
+      const std::shared_ptr<Decryptor>& Decryptor = NULLPTR) {
+    if (Decryptor == NULLPTR) {
+      // Thrift message is not encrypted.
+      deserializeUnencryptedMessage(buf, len, deserializedMsg);
     } else {
-      // thrift message is encrypted
+      // Thrift message is encrypted.
       uint32_t clen;
       clen = *len;
-      // decrypt
-      auto decrypted_buffer =
-          std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
-              decryptor->pool(),
-              static_cast<int64_t>(clen - decryptor->CiphertextSizeDelta())));
-      const uint8_t* cipher_buf = buf;
-      uint32_t decrypted_buffer_len =
-          decryptor->Decrypt(cipher_buf, 0, decrypted_buffer->mutable_data());
-      if (decrypted_buffer_len <= 0) {
+      // Decrypt.
+      auto decryptedBuffer =
+          std::static_pointer_cast<ResizableBuffer>(allocateBuffer(
+              Decryptor->pool(),
+              static_cast<int64_t>(clen - Decryptor->ciphertextSizeDelta())));
+      const uint8_t* cipherBuf = buf;
+      uint32_t decryptedBufferLen =
+          Decryptor->decrypt(cipherBuf, 0, decryptedBuffer->mutable_data());
+      if (decryptedBufferLen <= 0) {
         throw ParquetException("Couldn't decrypt buffer\n");
       }
-      *len = decrypted_buffer_len + decryptor->CiphertextSizeDelta();
-      DeserializeUnencryptedMessage(
-          decrypted_buffer->data(), &decrypted_buffer_len, deserialized_msg);
+      *len = decryptedBufferLen + Decryptor->ciphertextSizeDelta();
+      deserializeUnencryptedMessage(
+          decryptedBuffer->data(), &decryptedBufferLen, deserializedMsg);
     }
   }
 
@@ -477,7 +478,7 @@ class ThriftDeserializer {
   // On Thrift 0.14.0+, we want to use TConfiguration to raise the max message
   // size limit (ARROW-13655).  If we wanted to protect against huge messages,
   // we could do it ourselves since we know the message size up front.
-  std::shared_ptr<ThriftBuffer> CreateReadOnlyMemoryBuffer(
+  std::shared_ptr<ThriftBuffer> createReadOnlyMemoryBuffer(
       uint8_t* buf,
       uint32_t len) {
 #if PARQUET_THRIFT_VERSION_MAJOR > 0 || PARQUET_THRIFT_VERSION_MINOR >= 14
@@ -491,84 +492,84 @@ class ThriftDeserializer {
   }
 
   template <class T>
-  void DeserializeUnencryptedMessage(
+  void deserializeUnencryptedMessage(
       const uint8_t* buf,
       uint32_t* len,
-      T* deserialized_msg) {
+      T* deserializedMsg) {
     // Deserialize msg bytes into c++ thrift msg using memory transport.
-    auto tmem_transport =
-        CreateReadOnlyMemoryBuffer(const_cast<uint8_t*>(buf), *len);
+    auto tmemTransport =
+        createReadOnlyMemoryBuffer(const_cast<uint8_t*>(buf), *len);
     apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer>
-        tproto_factory;
-    // Protect against CPU and memory bombs
-    tproto_factory.setStringSizeLimit(string_size_limit_);
-    tproto_factory.setContainerSizeLimit(container_size_limit_);
-    auto tproto = tproto_factory.getProtocol(tmem_transport);
+        tprotoFactory;
+    // Protect against CPU and memory bombs.
+    tprotoFactory.setStringSizeLimit(stringSizeLimit_);
+    tprotoFactory.setContainerSizeLimit(containerSizeLimit_);
+    auto tproto = tprotoFactory.getProtocol(tmemTransport);
     try {
-      deserialized_msg->read(tproto.get());
+      deserializedMsg->read(tproto.get());
     } catch (std::exception& e) {
       std::stringstream ss;
       ss << "Couldn't deserialize thrift: " << e.what() << "\n";
       throw ParquetException(ss.str());
     }
-    uint32_t bytes_left = tmem_transport->available_read();
-    *len = *len - bytes_left;
+    uint32_t bytesLeft = tmemTransport->available_read();
+    *len = *len - bytesLeft;
   }
 
-  const int32_t string_size_limit_;
-  const int32_t container_size_limit_;
+  const int32_t stringSizeLimit_;
+  const int32_t containerSizeLimit_;
 };
 
 /// Utility class to serialize thrift objects to a binary format.  This object
 /// should be reused if possible to reuse the underlying memory.
-/// Note: thrift will encode NULLs into the serialized buffer so it is not valid
-/// to treat it as a string.
+/// Note: thrift will encode NULLs into the serialized buffer so it is not
+/// valid. To treat it as a string.
 class ThriftSerializer {
  public:
-  explicit ThriftSerializer(int initial_buffer_size = 1024)
-      : mem_buffer_(std::make_shared<ThriftBuffer>(initial_buffer_size)) {
+  explicit ThriftSerializer(int initialBufferSize = 1024)
+      : memBuffer_(std::make_shared<ThriftBuffer>(initialBufferSize)) {
     apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer> factory;
-    protocol_ = factory.getProtocol(mem_buffer_);
+    protocol_ = factory.getProtocol(memBuffer_);
   }
 
   /// Serialize obj into a memory buffer.  The result is returned in buffer/len.
   /// The memory returned is owned by this object and will be invalid when
   /// another object is serialized.
   template <class T>
-  void SerializeToBuffer(const T* obj, uint32_t* len, uint8_t** buffer) {
-    SerializeObject(obj);
-    mem_buffer_->getBuffer(buffer, len);
+  void serializeToBuffer(const T* obj, uint32_t* len, uint8_t** buffer) {
+    serializeObject(obj);
+    memBuffer_->getBuffer(buffer, len);
   }
 
   template <class T>
-  void SerializeToString(const T* obj, std::string* result) {
-    SerializeObject(obj);
-    *result = mem_buffer_->getBufferAsString();
+  void serializeToString(const T* obj, std::string* result) {
+    serializeObject(obj);
+    *result = memBuffer_->getBufferAsString();
   }
 
   template <class T>
-  int64_t Serialize(
+  int64_t serialize(
       const T* obj,
       ArrowOutputStream* out,
-      const std::shared_ptr<Encryptor>& encryptor = NULLPTR) {
-    uint8_t* out_buffer;
-    uint32_t out_length;
-    SerializeToBuffer(obj, &out_length, &out_buffer);
+      const std::shared_ptr<Encryptor>& Encryptor = NULLPTR) {
+    uint8_t* outBuffer;
+    uint32_t outLength;
+    serializeToBuffer(obj, &outLength, &outBuffer);
 
-    // obj is not encrypted
-    if (encryptor == NULLPTR) {
-      PARQUET_THROW_NOT_OK(out->Write(out_buffer, out_length));
-      return static_cast<int64_t>(out_length);
+    // Obj is not encrypted.
+    if (Encryptor == NULLPTR) {
+      PARQUET_THROW_NOT_OK(out->Write(outBuffer, outLength));
+      return static_cast<int64_t>(outLength);
     } else { // obj is encrypted
-      return SerializeEncryptedObj(out, out_buffer, out_length, encryptor);
+      return serializeEncryptedObj(out, outBuffer, outLength, Encryptor);
     }
   }
 
  private:
   template <class T>
-  void SerializeObject(const T* obj) {
+  void serializeObject(const T* obj) {
     try {
-      mem_buffer_->resetBuffer();
+      memBuffer_->resetBuffer();
       obj->write(protocol_.get());
     } catch (std::exception& e) {
       std::stringstream ss;
@@ -577,24 +578,24 @@ class ThriftSerializer {
     }
   }
 
-  int64_t SerializeEncryptedObj(
+  int64_t serializeEncryptedObj(
       ArrowOutputStream* out,
-      uint8_t* out_buffer,
-      uint32_t out_length,
-      const std::shared_ptr<Encryptor>& encryptor) {
-    auto cipher_buffer =
-        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
-            encryptor->pool(),
+      uint8_t* outBuffer,
+      uint32_t outLength,
+      const std::shared_ptr<Encryptor>& Encryptor) {
+    auto cipherBuffer =
+        std::static_pointer_cast<ResizableBuffer>(allocateBuffer(
+            Encryptor->pool(),
             static_cast<int64_t>(
-                encryptor->CiphertextSizeDelta() + out_length)));
-    int cipher_buffer_len = encryptor->Encrypt(
-        out_buffer, out_length, cipher_buffer->mutable_data());
+                Encryptor->ciphertextSizeDelta() + outLength)));
+    int cipherBufferLen =
+        Encryptor->encrypt(outBuffer, outLength, cipherBuffer->mutable_data());
 
-    PARQUET_THROW_NOT_OK(out->Write(cipher_buffer->data(), cipher_buffer_len));
-    return static_cast<int64_t>(cipher_buffer_len);
+    PARQUET_THROW_NOT_OK(out->Write(cipherBuffer->data(), cipherBufferLen));
+    return static_cast<int64_t>(cipherBufferLen);
   }
 
-  std::shared_ptr<ThriftBuffer> mem_buffer_;
+  std::shared_ptr<ThriftBuffer> memBuffer_;
   std::shared_ptr<apache::thrift::protocol::TProtocol> protocol_;
 };
 

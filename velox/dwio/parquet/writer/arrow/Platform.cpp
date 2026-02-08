@@ -27,7 +27,7 @@
 
 namespace facebook::velox::parquet::arrow {
 
-std::shared_ptr<::arrow::io::BufferOutputStream> CreateOutputStream(
+std::shared_ptr<::arrow::io::BufferOutputStream> createOutputStream(
     MemoryPool* pool) {
   PARQUET_ASSIGN_OR_THROW(
       auto stream,
@@ -35,7 +35,7 @@ std::shared_ptr<::arrow::io::BufferOutputStream> CreateOutputStream(
   return stream;
 }
 
-std::shared_ptr<ResizableBuffer> AllocateBuffer(
+std::shared_ptr<ResizableBuffer> allocateBuffer(
     MemoryPool* pool,
     int64_t size) {
   PARQUET_ASSIGN_OR_THROW(

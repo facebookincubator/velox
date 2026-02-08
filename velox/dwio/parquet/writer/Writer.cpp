@@ -143,13 +143,13 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   WriterProperties::Builder* properties = &builder;
   if (options.enableDictionary.value_or(
           facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
-    properties = properties->enable_dictionary();
-    properties = properties->dictionary_pagesize_limit(
+    properties = properties->enableDictionary();
+    properties = properties->dictionaryPagesizeLimit(
         options.dictionaryPageSizeLimit.value_or(
             facebook::velox::parquet::arrow::
                 DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   } else {
-    properties = properties->disable_dictionary();
+    properties = properties->disableDictionary();
   }
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
@@ -159,25 +159,23 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
         getArrowParquetCompression(columnCompressionValues.second));
   }
   properties = properties->encoding(options.encoding);
-  properties = properties->data_pagesize(options.dataPageSize.value_or(
+  properties = properties->dataPagesize(options.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));
-  properties = properties->write_batch_size(options.batchSize.value_or(
+  properties = properties->writeBatchSize(options.batchSize.value_or(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
-  properties = properties->max_row_group_length(
+  properties = properties->maxRowGroupLength(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
-  properties = properties->max_row_group_bytes(
+  properties = properties->maxRowGroupBytes(
       static_cast<int64_t>(flushPolicy->bytesInRowGroup()));
-  properties = properties->codec_options(options.codecOptions);
-  properties = properties->enable_store_decimal_as_integer();
+  properties = properties->codecOptions(options.codecOptions);
+  properties = properties->enableStoreDecimalAsInteger();
   if (options.useParquetDataPageV2.value_or(false)) {
-    properties =
-        properties->data_page_version(arrow::ParquetDataPageVersion::V2);
+    properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
   } else {
-    properties =
-        properties->data_page_version(arrow::ParquetDataPageVersion::V1);
+    properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V1);
   }
   if (options.createdBy.has_value()) {
-    properties = properties->created_by(options.createdBy.value());
+    properties = properties->createdBy(options.createdBy.value());
   }
   return properties->build();
 }
@@ -483,33 +481,33 @@ void Writer::write(const VectorPtr& data) {
   if (!arrowContext_->writer) {
     ArrowWriterProperties::Builder builder;
     if (writeInt96AsTimestamp_) {
-      builder.enable_deprecated_int96_timestamps();
+      builder.enableDeprecatedInt96Timestamps();
     }
     auto arrowProperties = builder.build();
     PARQUET_ASSIGN_OR_THROW(
         arrowContext_->writer,
-        FileWriter::Open(
+        FileWriter::open(
             *recordBatch->schema(),
             ::arrow::default_memory_pool(),
             stream_,
             arrowContext_->properties,
             arrowProperties));
   }
-  (void)arrowContext_->writer->WriteRecordBatch(*recordBatch);
+  (void)arrowContext_->writer->writeRecordBatch(*recordBatch);
 }
 
 bool Writer::isCodecAvailable(common::CompressionKind compression) {
-  return arrow::util::Codec::IsAvailable(
+  return arrow::util::Codec::isAvailable(
       getArrowParquetCompression(compression));
 }
 
 void Writer::newRowGroup(int32_t numRows) {
-  PARQUET_THROW_NOT_OK(arrowContext_->writer->NewRowGroup(numRows));
+  PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
 }
 
 void Writer::close() {
   if (arrowContext_->writer) {
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());

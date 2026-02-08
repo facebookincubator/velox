@@ -55,16 +55,16 @@ using KeyValueMetadata = ::arrow::KeyValueMetadata;
 
 class PARQUET_EXPORT ApplicationVersion {
  public:
-  // Known Versions with Issues
+  // Known versions with issues.
   static const ApplicationVersion& PARQUET_251_FIXED_VERSION();
   static const ApplicationVersion& PARQUET_816_FIXED_VERSION();
   static const ApplicationVersion& PARQUET_CPP_FIXED_STATS_VERSION();
   static const ApplicationVersion& PARQUET_MR_FIXED_STATS_VERSION();
   static const ApplicationVersion& PARQUET_CPP_10353_FIXED_VERSION();
 
-  // Application that wrote the file. e.g. "IMPALA"
+  // Application that wrote the file, e.g., "IMPALA".
   std::string application_;
-  // Build name
+  // Build name.
   std::string build_;
 
   // Version of the application that wrote the file, expressed as
@@ -77,37 +77,37 @@ class PARQUET_EXPORT ApplicationVersion {
     int minor;
     int patch;
     std::string unknown;
-    std::string pre_release;
-    std::string build_info;
+    std::string preRelease;
+    std::string buildInfo;
   } version;
 
   ApplicationVersion() = default;
-  explicit ApplicationVersion(const std::string& created_by);
+  explicit ApplicationVersion(const std::string& createdBy);
   ApplicationVersion(std::string application, int major, int minor, int patch);
 
-  // Returns true if version is strictly less than other_version
-  bool VersionLt(const ApplicationVersion& other_version) const;
+  // Returns true if version is strictly less than otherVersion.
+  bool versionLt(const ApplicationVersion& otherVersion) const;
 
-  // Returns true if version is strictly equal with other_version
-  bool VersionEq(const ApplicationVersion& other_version) const;
+  // Returns true if version is strictly equal with otherVersion.
+  bool versionEq(const ApplicationVersion& otherVersion) const;
 
-  // Checks if the Version has the correct statistics for a given column
-  bool HasCorrectStatistics(
+  // Checks if the Version has the correct statistics for a given column.
+  bool hasCorrectStatistics(
       Type::type primitive,
       EncodedStatistics& statistics,
-      SortOrder::type sort_order = SortOrder::SIGNED) const;
+      SortOrder::type sortOrder = SortOrder::kSigned) const;
 };
 
 class PARQUET_EXPORT ColumnCryptoMetaData {
  public:
-  static std::unique_ptr<ColumnCryptoMetaData> Make(const uint8_t* metadata);
+  static std::unique_ptr<ColumnCryptoMetaData> make(const uint8_t* metadata);
   ~ColumnCryptoMetaData();
 
-  bool Equals(const ColumnCryptoMetaData& other) const;
+  bool equals(const ColumnCryptoMetaData& other) const;
 
-  std::shared_ptr<schema::ColumnPath> path_in_schema() const;
-  bool encrypted_with_footer_key() const;
-  const std::string& key_metadata() const;
+  std::shared_ptr<schema::ColumnPath> pathInSchema() const;
+  bool encryptedWithFooterKey() const;
+  const std::string& keyMetadata() const;
 
  private:
   explicit ColumnCryptoMetaData(const uint8_t* metadata);
@@ -116,18 +116,18 @@ class PARQUET_EXPORT ColumnCryptoMetaData {
   std::unique_ptr<ColumnCryptoMetaDataImpl> impl_;
 };
 
-/// \brief Public struct for Thrift PageEncodingStats in ColumnChunkMetaData
+/// \brief Public struct for Thrift PageEncodingStats in ColumnChunkMetaData.
 struct PageEncodingStats {
-  PageType::type page_type;
+  PageType::type pageType;
   Encoding::type encoding;
   int32_t count;
 };
 
 /// \brief Public struct for location to page index in ColumnChunkMetaData.
 struct IndexLocation {
-  /// File offset of the given index, in bytes
+  /// File offset of the given index, in bytes.
   int64_t offset;
-  /// Length of the given index, in bytes
+  /// Length of the given index, in bytes.
   int32_t length;
 };
 
@@ -135,74 +135,74 @@ struct IndexLocation {
 /// facebook::velox::parquet::thrift::ColumnChunkMetaData.
 class PARQUET_EXPORT ColumnChunkMetaData {
  public:
-  // API convenience to get a MetaData accessor
+  // API convenience to get a MetaData accessor.
 
   ARROW_DEPRECATED("Use the ReaderProperties-taking overload")
-  static std::unique_ptr<ColumnChunkMetaData> Make(
+  static std::unique_ptr<ColumnChunkMetaData> make(
       const void* metadata,
       const ColumnDescriptor* descr,
-      const ApplicationVersion* writer_version,
-      int16_t row_group_ordinal = -1,
-      int16_t column_ordinal = -1,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+      const ApplicationVersion* writerVersion,
+      int16_t rowGroupOrdinal = -1,
+      int16_t columnOrdinal = -1,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
-  static std::unique_ptr<ColumnChunkMetaData> Make(
+  static std::unique_ptr<ColumnChunkMetaData> make(
       const void* metadata,
       const ColumnDescriptor* descr,
-      const ReaderProperties& properties = default_reader_properties(),
-      const ApplicationVersion* writer_version = NULLPTR,
-      int16_t row_group_ordinal = -1,
-      int16_t column_ordinal = -1,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+      const ReaderProperties& properties = defaultReaderProperties(),
+      const ApplicationVersion* writerVersion = NULLPTR,
+      int16_t rowGroupOrdinal = -1,
+      int16_t columnOrdinal = -1,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
   ~ColumnChunkMetaData();
 
-  bool Equals(const ColumnChunkMetaData& other) const;
+  bool equals(const ColumnChunkMetaData& other) const;
 
-  // column chunk
-  int64_t file_offset() const;
+  // Column chunk.
+  int64_t fileOffset() const;
 
-  // parameter is only used when a dataset is spread across multiple files
-  const std::string& file_path() const;
+  // Parameter is only used when a dataset is spread across multiple files.
+  const std::string& filePath() const;
 
-  // column metadata
-  bool is_metadata_set() const;
+  // Column metadata.
+  bool isMetadataSet() const;
   Type::type type() const;
-  int64_t num_values() const;
-  std::shared_ptr<schema::ColumnPath> path_in_schema() const;
-  bool is_stats_set() const;
+  int64_t numValues() const;
+  std::shared_ptr<schema::ColumnPath> pathInSchema() const;
+  bool isStatsSet() const;
   std::shared_ptr<Statistics> statistics() const;
 
   Compression::type compression() const;
   // Indicate if the ColumnChunk compression is supported by the current
-  // compiled parquet library.
-  bool can_decompress() const;
+  // compiled Parquet library.
+  bool canDecompress() const;
 
   const std::vector<Encoding::type>& encodings() const;
-  const std::vector<PageEncodingStats>& encoding_stats() const;
-  std::optional<int64_t> bloom_filter_offset() const;
-  bool has_dictionary_page() const;
-  int64_t dictionary_page_offset() const;
-  int64_t data_page_offset() const;
-  bool has_index_page() const;
-  int64_t index_page_offset() const;
-  int64_t total_compressed_size() const;
-  int64_t total_uncompressed_size() const;
-  int32_t field_id() const;
-  std::unique_ptr<ColumnCryptoMetaData> crypto_metadata() const;
-  std::optional<IndexLocation> GetColumnIndexLocation() const;
-  std::optional<IndexLocation> GetOffsetIndexLocation() const;
+  const std::vector<PageEncodingStats>& encodingStats() const;
+  std::optional<int64_t> bloomFilterOffset() const;
+  bool hasDictionaryPage() const;
+  int64_t dictionaryPageOffset() const;
+  int64_t dataPageOffset() const;
+  bool hasIndexPage() const;
+  int64_t indexPageOffset() const;
+  int64_t totalCompressedSize() const;
+  int64_t totalUncompressedSize() const;
+  int32_t fieldId() const;
+  std::unique_ptr<ColumnCryptoMetaData> cryptoMetadata() const;
+  std::optional<IndexLocation> getColumnIndexLocation() const;
+  std::optional<IndexLocation> getOffsetIndexLocation() const;
 
  private:
   explicit ColumnChunkMetaData(
       const void* metadata,
       const ColumnDescriptor* descr,
-      int16_t row_group_ordinal,
-      int16_t column_ordinal,
+      int16_t rowGroupOrdinal,
+      int16_t columnOrdinal,
       const ReaderProperties& properties,
-      const ApplicationVersion* writer_version = NULLPTR,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
-  // PIMPL Idiom
+      const ApplicationVersion* writerVersion = NULLPTR,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
+  // PIMPL Idiom.
   class ColumnChunkMetaDataImpl;
   std::unique_ptr<ColumnChunkMetaDataImpl> impl_;
 };
@@ -212,73 +212,73 @@ class PARQUET_EXPORT ColumnChunkMetaData {
 class PARQUET_EXPORT RowGroupMetaData {
  public:
   ARROW_DEPRECATED("Use the ReaderProperties-taking overload")
-  static std::unique_ptr<RowGroupMetaData> Make(
+  static std::unique_ptr<RowGroupMetaData> make(
       const void* metadata,
       const SchemaDescriptor* schema,
-      const ApplicationVersion* writer_version,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+      const ApplicationVersion* writerVersion,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
   /// \brief Create a RowGroupMetaData from a serialized thrift message.
-  static std::unique_ptr<RowGroupMetaData> Make(
+  static std::unique_ptr<RowGroupMetaData> make(
       const void* metadata,
       const SchemaDescriptor* schema,
-      const ReaderProperties& properties = default_reader_properties(),
-      const ApplicationVersion* writer_version = NULLPTR,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+      const ReaderProperties& properties = defaultReaderProperties(),
+      const ApplicationVersion* writerVersion = NULLPTR,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
   ~RowGroupMetaData();
 
-  bool Equals(const RowGroupMetaData& other) const;
+  bool equals(const RowGroupMetaData& other) const;
 
   /// \brief The number of columns in this row group. The order must match the
   /// parent's column ordering.
-  int num_columns() const;
+  int numColumns() const;
 
   /// \brief Return the ColumnChunkMetaData of the corresponding column ordinal.
   ///
-  /// WARNING, the returned object references memory location in it's parent
+  /// WARNING: The returned object references memory location in its parent
   /// (RowGroupMetaData) object. Hence, the parent must outlive the returned
   /// object.
   ///
-  /// \param[in] index of the ColumnChunkMetaData to retrieve.
+  /// \param[in] index Index of the ColumnChunkMetaData to retrieve.
   ///
   /// \throws ParquetException if the index is out of bound.
-  std::unique_ptr<ColumnChunkMetaData> ColumnChunk(int index) const;
+  std::unique_ptr<ColumnChunkMetaData> columnChunk(int index) const;
 
   /// \brief Number of rows in this row group.
-  int64_t num_rows() const;
+  int64_t numRows() const;
 
   /// \brief Total byte size of all the uncompressed column data in this row
   /// group.
-  int64_t total_byte_size() const;
+  int64_t totalByteSize() const;
 
   /// \brief Total byte size of all the compressed (and potentially encrypted)
   /// column data in this row group.
   ///
   /// This information is optional and may be 0 if omitted.
-  int64_t total_compressed_size() const;
+  int64_t totalCompressedSize() const;
 
   /// \brief Byte offset from beginning of file to first page (data or
-  /// dictionary) in this row group
+  /// dictionary) in this row group.
   ///
   /// The file_offset field that this method exposes is optional. This method
   /// will return 0 if that field is not set to a meaningful value.
-  int64_t file_offset() const;
-  // Return const-pointer to make it clear that this object is not to be copied
+  int64_t fileOffset() const;
+  // Return const pointer to make it clear that this object is not to be copied.
   const SchemaDescriptor* schema() const;
   // Indicate if all of the RowGroup's ColumnChunks can be decompressed.
-  bool can_decompress() const;
+  bool canDecompress() const;
   // Sorting columns of the row group if any.
-  std::vector<SortingColumn> sorting_columns() const;
+  std::vector<SortingColumn> sortingColumns() const;
 
  private:
   explicit RowGroupMetaData(
       const void* metadata,
       const SchemaDescriptor* schema,
       const ReaderProperties& properties,
-      const ApplicationVersion* writer_version = NULLPTR,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
-  // PIMPL Idiom
+      const ApplicationVersion* writerVersion = NULLPTR,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
+  // PIMPL Idiom.
   class RowGroupMetaDataImpl;
   std::unique_ptr<RowGroupMetaDataImpl> impl_;
 };
@@ -290,74 +290,74 @@ class FileMetaDataBuilder;
 class PARQUET_EXPORT FileMetaData {
  public:
   ARROW_DEPRECATED("Use the ReaderProperties-taking overload")
-  static std::shared_ptr<FileMetaData> Make(
-      const void* serialized_metadata,
-      uint32_t* inout_metadata_len,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor);
+  static std::shared_ptr<FileMetaData> make(
+      const void* serializedMetadata,
+      uint32_t* inoutMetadataLen,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor);
 
   /// \brief Create a FileMetaData from a serialized thrift message.
-  static std::shared_ptr<FileMetaData> Make(
-      const void* serialized_metadata,
-      uint32_t* inout_metadata_len,
-      const ReaderProperties& properties = default_reader_properties(),
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+  static std::shared_ptr<FileMetaData> make(
+      const void* serializedMetadata,
+      uint32_t* inoutMetadataLen,
+      const ReaderProperties& properties = defaultReaderProperties(),
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
   ~FileMetaData();
 
-  bool Equals(const FileMetaData& other) const;
+  bool equals(const FileMetaData& other) const;
 
-  /// \brief The number of parquet "leaf" columns.
+  /// \brief The number of Parquet "leaf" columns.
   ///
   /// Parquet thrift definition requires that nested schema elements are
   /// flattened. This method returns the number of columns in the flattened
   /// version.
-  /// For instance, if the schema looks like this :
-  /// 0 foo.bar
-  ///       foo.bar.baz           0
-  ///       foo.bar.baz2          1
-  ///   foo.qux                   2
-  /// 1 foo2                      3
-  /// 2 foo3                      4
+  /// For instance, if the schema looks like this:
+  /// 0 Foo.bar
+  ///       Foo.bar.baz           0
+  ///       Foo.bar.baz2          1
+  ///   Foo.qux                   2
+  /// 1 Foo2                      3
+  /// 2 Foo3                      4
   /// This method will return 5, because there are 5 "leaf" fields (so 5
-  /// flattened fields)
-  int num_columns() const;
+  /// flattened fields).
+  int numColumns() const;
 
   /// \brief The number of flattened schema elements.
   ///
   /// Parquet thrift definition requires that nested schema elements are
   /// flattened. This method returns the total number of elements in the
   /// flattened list.
-  int num_schema_elements() const;
+  int numSchemaElements() const;
 
   /// \brief The total number of rows.
-  int64_t num_rows() const;
+  int64_t numRows() const;
 
   /// \brief The number of row groups in the file.
-  int num_row_groups() const;
+  int numRowGroups() const;
 
   /// \brief Return the RowGroupMetaData of the corresponding row group ordinal.
   ///
-  /// WARNING, the returned object references memory location in it's parent
+  /// WARNING: The returned object references memory location in its parent
   /// (FileMetaData) object. Hence, the parent must outlive the returned object.
   ///
-  /// \param[in] index of the RowGroup to retrieve.
+  /// \param[in] index Index of the RowGroup to retrieve.
   ///
   /// \throws ParquetException if the index is out of bound.
-  std::unique_ptr<RowGroupMetaData> RowGroup(int index) const;
+  std::unique_ptr<RowGroupMetaData> rowGroup(int index) const;
 
-  /// \brief Return the "version" of the file
+  /// \brief Return the "version" of the file.
   ///
-  /// WARNING: The value returned by this method is unreliable as 1) the Parquet
-  /// file metadata stores the version as a single integer and 2) some producers
-  /// are known to always write a hardcoded value.  Therefore, you cannot use
-  /// this value to know which features are used in the file.
+  /// WARNING: The value returned by this method is unreliable as 1) the
+  /// Parquet file metadata stores the version as a single integer and 2) some
+  /// producers are known to always write a hardcoded value. Therefore, you
+  /// cannot use this value to know which features are used in the file.
   ParquetVersion::type version() const;
 
   /// \brief Return the application's user-agent string of the writer.
-  const std::string& created_by() const;
+  const std::string& createdBy() const;
 
   /// \brief Return the application's version of the writer.
-  const ApplicationVersion& writer_version() const;
+  const ApplicationVersion& writerVersion() const;
 
   /// \brief Size of the original thrift encoded metadata footer.
   uint32_t size() const;
@@ -366,60 +366,59 @@ class PARQUET_EXPORT FileMetaData {
   /// decompressed.
   ///
   /// This will return false if any of the RowGroup's page is compressed with a
-  /// compression format which is not compiled in the current parquet library.
-  bool can_decompress() const;
+  /// compression format which is not compiled in the current Parquet library.
+  bool canDecompress() const;
 
-  bool is_encryption_algorithm_set() const;
-  EncryptionAlgorithm encryption_algorithm() const;
-  const std::string& footer_signing_key_metadata() const;
+  bool isEncryptionAlgorithmSet() const;
+  EncryptionAlgorithm encryptionAlgorithm() const;
+  const std::string& footerSigningKeyMetadata() const;
 
   /// \brief Verify signature of FileMetaData when file is encrypted but footer
   /// is not encrypted (plaintext footer).
-  bool VerifySignature(const void* signature);
+  bool verifySignature(const void* signature);
 
-  void WriteTo(
+  void writeTo(
       ::arrow::io::OutputStream* dst,
       const std::shared_ptr<Encryptor>& encryptor = NULLPTR) const;
 
   /// \brief Return Thrift-serialized representation of the metadata as a
-  /// string
-  std::string SerializeToString() const;
+  /// string.
+  std::string serializeToString() const;
 
-  // Return const-pointer to make it clear that this object is not to be copied
+  // Return const pointer to make it clear that this object is not to be copied.
   const SchemaDescriptor* schema() const;
 
-  const std::shared_ptr<const KeyValueMetadata>& key_value_metadata() const;
+  const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata() const;
 
   /// \brief Set a path to all ColumnChunk for all RowGroups.
   ///
-  /// Commonly used by systems (Dask, Spark) who generates an metadata-only
-  /// parquet file. The path is usually relative to said index file.
+  /// Commonly used by systems (Dask, Spark) that generate a metadata-only
+  /// Parquet file. The path is usually relative to said index file.
   ///
-  /// \param[in] path to set.
-  void set_file_path(const std::string& path);
+  /// \param[in] path Path to set.
+  void setFilePath(const std::string& path);
 
   /// \brief Merge row groups from another metadata file into this one.
   ///
   /// The schema of the input FileMetaData must be equal to the
   /// schema of this object.
   ///
-  /// This is used by systems who creates an aggregate metadata-only file by
+  /// This is used by systems that create an aggregate metadata-only file by
   /// concatenating the row groups of multiple files. This newly created
   /// metadata file acts as an index of all available row groups.
   ///
-  /// \param[in] other FileMetaData to merge the row groups from.
+  /// \param[in] other Other FileMetaData to merge the row groups from.
   ///
   /// \throws ParquetException if schemas are not equal.
-  void AppendRowGroups(const FileMetaData& other);
+  void appendRowGroups(const FileMetaData& other);
 
-  /// \brief Return a FileMetaData containing a subset of the row groups in this
-  /// FileMetaData.
-  std::shared_ptr<FileMetaData> Subset(
-      const std::vector<int>& row_groups) const;
+  /// \brief Return a FileMetaData containing a subset of the row groups in
+  /// this FileMetaData.
+  std::shared_ptr<FileMetaData> subset(const std::vector<int>& rowGroups) const;
 
   /// \brief Get total NaN count for a specific field ID across all row groups.
-  /// Returns a pair of (nan_count, has_nan_count).
-  /// NaN counts are collected during writing but not written to the parquet
+  /// Returns a pair of (nanCount, hasNanCount).
+  /// NaN counts are collected during writing but not written to the Parquet
   /// file.
   std::pair<int64_t, bool> getNaNCount(int32_t fieldId) const;
 
@@ -428,15 +427,14 @@ class PARQUET_EXPORT FileMetaData {
   friend class SerializedFile;
 
   explicit FileMetaData(
-      const void* serialized_metadata,
-      uint32_t* metadata_len,
+      const void* serializedMetadata,
+      uint32_t* metadataLen,
       const ReaderProperties& properties,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
-  void set_file_decryptor(
-      std::shared_ptr<InternalFileDecryptor> file_decryptor);
+  void setFileDecryptor(std::shared_ptr<InternalFileDecryptor> fileDecryptor);
 
-  // PIMPL Idiom
+  // PIMPL Idiom.
   FileMetaData();
   class FileMetaDataImpl;
   std::unique_ptr<FileMetaDataImpl> impl_;
@@ -444,82 +442,81 @@ class PARQUET_EXPORT FileMetaData {
 
 class PARQUET_EXPORT FileCryptoMetaData {
  public:
-  // API convenience to get a MetaData accessor
-  static std::shared_ptr<FileCryptoMetaData> Make(
-      const uint8_t* serialized_metadata,
-      uint32_t* metadata_len,
-      const ReaderProperties& properties = default_reader_properties());
+  // API convenience to get a MetaData accessor.
+  static std::shared_ptr<FileCryptoMetaData> make(
+      const uint8_t* serializedMetadata,
+      uint32_t* metadataLen,
+      const ReaderProperties& properties = defaultReaderProperties());
   ~FileCryptoMetaData();
 
-  EncryptionAlgorithm encryption_algorithm() const;
-  const std::string& key_metadata() const;
+  EncryptionAlgorithm encryptionAlgorithm() const;
+  const std::string& keyMetadata() const;
 
-  void WriteTo(::arrow::io::OutputStream* dst) const;
+  void writeTo(::arrow::io::OutputStream* dst) const;
 
  private:
   friend FileMetaDataBuilder;
   FileCryptoMetaData(
-      const uint8_t* serialized_metadata,
-      uint32_t* metadata_len,
+      const uint8_t* serializedMetadata,
+      uint32_t* metadataLen,
       const ReaderProperties& properties);
 
-  // PIMPL Idiom
+  // PIMPL Idiom.
   FileCryptoMetaData();
   class FileCryptoMetaDataImpl;
   std::unique_ptr<FileCryptoMetaDataImpl> impl_;
 };
 
-// Builder API
+// Builder API.
 class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
  public:
-  // API convenience to get a MetaData reader
-  static std::unique_ptr<ColumnChunkMetaDataBuilder> Make(
+  // API convenience to get a MetaData reader.
+  static std::unique_ptr<ColumnChunkMetaDataBuilder> make(
       std::shared_ptr<WriterProperties> props,
       const ColumnDescriptor* column);
 
-  static std::unique_ptr<ColumnChunkMetaDataBuilder> Make(
+  static std::unique_ptr<ColumnChunkMetaDataBuilder> make(
       std::shared_ptr<WriterProperties> props,
       const ColumnDescriptor* column,
-      void* contents);
+      void* Contents);
 
   ~ColumnChunkMetaDataBuilder();
 
-  // column chunk
-  // Used when a dataset is spread across multiple files
-  void set_file_path(const std::string& path);
-  // column metadata
-  void SetStatistics(const EncodedStatistics& stats);
-  // get the column descriptor
+  // Column chunk.
+  // Used when a dataset is spread across multiple files.
+  void setFilePath(const std::string& path);
+  // Column metadata.
+  void setStatistics(const EncodedStatistics& stats);
+  // Get the column descriptor.
   const ColumnDescriptor* descr() const;
 
-  int64_t total_compressed_size() const;
+  int64_t totalCompressedSize() const;
 
   // NaN count accessors - NaN counts are collected during writing but not
   // written to the parquet file.
-  int64_t nan_count() const;
+  int64_t nanCount() const;
 
-  bool has_nan_count() const;
+  bool hasNanCount() const;
 
-  // commit the metadata
-
-  void Finish(
-      int64_t num_values,
-      int64_t dictionary_page_offset,
-      int64_t index_page_offset,
-      int64_t data_page_offset,
-      int64_t compressed_size,
-      int64_t uncompressed_size,
-      bool has_dictionary,
-      bool dictionary_fallback,
-      const std::map<Encoding::type, int32_t>& dict_encoding_stats_,
-      const std::map<Encoding::type, int32_t>& data_encoding_stats_,
+  // Commit the metadata.
+  void finish(
+      int64_t numValues,
+      int64_t dictionaryPageOffset,
+      int64_t indexPageOffset,
+      int64_t dataPageOffset,
+      int64_t compressedSize,
+      int64_t uncompressedSize,
+      bool hasDictionary,
+      bool dictionaryFallback,
+      const std::map<Encoding::type, int32_t>& dictEncodingStats,
+      const std::map<Encoding::type, int32_t>& dataEncodingStats,
       const std::shared_ptr<Encryptor>& encryptor = NULLPTR);
 
-  // The metadata contents, suitable for passing to ColumnChunkMetaData::Make
-  const void* contents() const;
+  // The metadata contents, suitable for passing to ColumnChunkMetaData::Make.
+  const void* Contents() const;
 
-  // For writing metadata at end of column chunk
-  void WriteTo(::arrow::io::OutputStream* sink);
+  // For writing metadata at end of column chunk.
+  void writeTo(::arrow::io::OutputStream* sink);
 
  private:
   explicit ColumnChunkMetaDataBuilder(
@@ -528,101 +525,101 @@ class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
   explicit ColumnChunkMetaDataBuilder(
       std::shared_ptr<WriterProperties> props,
       const ColumnDescriptor* column,
-      void* contents);
-  // PIMPL Idiom
+      void* Contents);
+  // PIMPL Idiom.
   class ColumnChunkMetaDataBuilderImpl;
   std::unique_ptr<ColumnChunkMetaDataBuilderImpl> impl_;
 };
 
 class PARQUET_EXPORT RowGroupMetaDataBuilder {
  public:
-  // API convenience to get a MetaData reader
-  static std::unique_ptr<RowGroupMetaDataBuilder> Make(
+  // API convenience to get a MetaData reader.
+  static std::unique_ptr<RowGroupMetaDataBuilder> make(
       std::shared_ptr<WriterProperties> props,
       const SchemaDescriptor* schema_,
-      void* contents);
+      void* Contents);
 
   ~RowGroupMetaDataBuilder();
 
-  ColumnChunkMetaDataBuilder* NextColumnChunk();
-  int num_columns();
-  int64_t num_rows();
-  int current_column() const;
+  ColumnChunkMetaDataBuilder* nextColumnChunk();
+  int numColumns();
+  int64_t numRows();
+  int currentColumn() const;
 
-  void set_num_rows(int64_t num_rows);
+  void setNumRows(int64_t numRows);
 
   // Get NaN counts for all columns in current row group.
   // Returns a map of field_id -> (nan_count, has_nan_count).
-  std::unordered_map<int32_t, std::pair<int64_t, bool>> nan_counts() const;
+  std::unordered_map<int32_t, std::pair<int64_t, bool>> nanCounts() const;
 
-  // commit the metadata
-  void Finish(int64_t total_bytes_written, int16_t row_group_ordinal = -1);
+  // Commit the metadata.
+  void finish(int64_t totalBytesWritten, int16_t rowGroupOrdinal = -1);
 
  private:
   explicit RowGroupMetaDataBuilder(
       std::shared_ptr<WriterProperties> props,
       const SchemaDescriptor* schema_,
-      void* contents);
-  // PIMPL Idiom
+      void* Contents);
+  // PIMPL Idiom.
   class RowGroupMetaDataBuilderImpl;
   std::unique_ptr<RowGroupMetaDataBuilderImpl> impl_;
 };
 
-/// \brief Public struct for location to all page indexes in a parquet file.
+/// \brief Public struct for location to all page indexes in a Parquet file.
 struct PageIndexLocation {
   /// Alias type of page index location of a row group. The index location
   /// is located by column ordinal. If the column does not have the page index,
   /// its value is set to std::nullopt.
   using RowGroupIndexLocation = std::vector<std::optional<IndexLocation>>;
-  /// Alias type of page index location of a parquet file. The index location
+  /// Alias type of page index location of a Parquet file. The index location
   /// is located by the row group ordinal.
   using FileIndexLocation = std::map<size_t, RowGroupIndexLocation>;
-  /// Row group column index locations which uses row group ordinal as the key.
-  FileIndexLocation column_index_location;
-  /// Row group offset index locations which uses row group ordinal as the key.
-  FileIndexLocation offset_index_location;
+  /// Row group column index locations which use row group ordinal as the key.
+  FileIndexLocation columnIndexLocation;
+  /// Row group offset index locations which use row group ordinal as the key.
+  FileIndexLocation offsetIndexLocation;
 };
 
 class PARQUET_EXPORT FileMetaDataBuilder {
  public:
   ARROW_DEPRECATED(
       "Deprecated in 12.0.0. Use overload without KeyValueMetadata instead.")
-  static std::unique_ptr<FileMetaDataBuilder> Make(
+  static std::unique_ptr<FileMetaDataBuilder> make(
       const SchemaDescriptor* schema,
       std::shared_ptr<WriterProperties> props,
-      std::shared_ptr<const KeyValueMetadata> key_value_metadata);
+      std::shared_ptr<const KeyValueMetadata> keyValueMetadata);
 
-  // API convenience to get a MetaData builder
-  static std::unique_ptr<FileMetaDataBuilder> Make(
+  // API convenience to get a MetaData builder.
+  static std::unique_ptr<FileMetaDataBuilder> make(
       const SchemaDescriptor* schema,
       std::shared_ptr<WriterProperties> props);
 
   ~FileMetaDataBuilder();
 
-  // The prior RowGroupMetaDataBuilder (if any) is destroyed
-  RowGroupMetaDataBuilder* AppendRowGroup();
+  // The prior RowGroupMetaDataBuilder (if any) is destroyed.
+  RowGroupMetaDataBuilder* appendRowGroup();
 
-  // Update location to all page indexes in the parquet file
-  void SetPageIndexLocation(const PageIndexLocation& location);
+  // Update location to all page indexes in the Parquet file.
+  void setPageIndexLocation(const PageIndexLocation& location);
 
-  // Complete the Thrift structure
-  std::unique_ptr<FileMetaData> Finish(
-      const std::shared_ptr<const KeyValueMetadata>& key_value_metadata =
+  // Complete the Thrift structure.
+  std::unique_ptr<FileMetaData> finish(
+      const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata =
           NULLPTR);
 
-  // crypto metadata
-  std::unique_ptr<FileCryptoMetaData> GetCryptoMetaData();
+  // Crypto metadata.
+  std::unique_ptr<FileCryptoMetaData> getCryptoMetaData();
 
  private:
   explicit FileMetaDataBuilder(
       const SchemaDescriptor* schema,
       std::shared_ptr<WriterProperties> props,
-      std::shared_ptr<const KeyValueMetadata> key_value_metadata = NULLPTR);
-  // PIMPL Idiom
+      std::shared_ptr<const KeyValueMetadata> keyValueMetadata = NULLPTR);
+  // PIMPL Idiom.
   class FileMetaDataBuilderImpl;
   std::unique_ptr<FileMetaDataBuilderImpl> impl_;
 };
 
-PARQUET_EXPORT std::string ParquetVersionToString(ParquetVersion::type ver);
+PARQUET_EXPORT std::string parquetVersionToString(ParquetVersion::type ver);
 
 } // namespace facebook::velox::parquet::arrow

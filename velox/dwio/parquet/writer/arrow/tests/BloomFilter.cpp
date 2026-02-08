@@ -33,50 +33,49 @@ namespace facebook::velox::parquet::arrow {
 
 BlockSplitBloomFilter::BlockSplitBloomFilter(::arrow::MemoryPool* pool)
     : pool_(pool),
-      hash_strategy_(HashStrategy::XXHASH),
+      hashStrategy_(HashStrategy::XXHASH),
       algorithm_(Algorithm::BLOCK),
-      compression_strategy_(CompressionStrategy::UNCOMPRESSED) {}
+      compressionStrategy_(CompressionStrategy::UNCOMPRESSED) {}
 
-void BlockSplitBloomFilter::Init(uint32_t num_bytes) {
-  if (num_bytes < kMinimumBloomFilterBytes) {
-    num_bytes = kMinimumBloomFilterBytes;
+void BlockSplitBloomFilter::init(uint32_t numBytes) {
+  if (numBytes < kMinimumBloomFilterBytes) {
+    numBytes = kMinimumBloomFilterBytes;
   }
 
   // Get next power of 2 if it is not power of 2.
-  if ((num_bytes & (num_bytes - 1)) != 0) {
-    num_bytes = static_cast<uint32_t>(::arrow::bit_util::NextPower2(num_bytes));
+  if ((numBytes & (numBytes - 1)) != 0) {
+    numBytes = static_cast<uint32_t>(::arrow::bit_util::NextPower2(numBytes));
   }
 
-  if (num_bytes > kMaximumBloomFilterBytes) {
-    num_bytes = kMaximumBloomFilterBytes;
+  if (numBytes > kMaximumBloomFilterBytes) {
+    numBytes = kMaximumBloomFilterBytes;
   }
 
-  num_bytes_ = num_bytes;
-  PARQUET_ASSIGN_OR_THROW(data_, ::arrow::AllocateBuffer(num_bytes_, pool_));
-  memset(data_->mutable_data(), 0, num_bytes_);
+  numBytes_ = numBytes;
+  PARQUET_ASSIGN_OR_THROW(data_, ::arrow::AllocateBuffer(numBytes_, pool_));
+  memset(data_->mutable_data(), 0, numBytes_);
 
   this->hasher_ = std::make_unique<XxHasher>();
 }
 
-void BlockSplitBloomFilter::Init(const uint8_t* bitset, uint32_t num_bytes) {
+void BlockSplitBloomFilter::init(const uint8_t* bitset, uint32_t numBytes) {
   VELOX_DCHECK_NOT_NULL(bitset);
 
-  if (num_bytes < kMinimumBloomFilterBytes ||
-      num_bytes > kMaximumBloomFilterBytes ||
-      (num_bytes & (num_bytes - 1)) != 0) {
+  if (numBytes < kMinimumBloomFilterBytes ||
+      numBytes > kMaximumBloomFilterBytes || (numBytes & (numBytes - 1)) != 0) {
     throw ParquetException("Given length of bitset is illegal");
   }
 
-  num_bytes_ = num_bytes;
-  PARQUET_ASSIGN_OR_THROW(data_, ::arrow::AllocateBuffer(num_bytes_, pool_));
-  memcpy(data_->mutable_data(), bitset, num_bytes_);
+  numBytes_ = numBytes;
+  PARQUET_ASSIGN_OR_THROW(data_, ::arrow::AllocateBuffer(numBytes_, pool_));
+  memcpy(data_->mutable_data(), bitset, numBytes_);
 
   this->hasher_ = std::make_unique<XxHasher>();
 }
 
 static constexpr uint32_t kBloomFilterHeaderSizeGuess = 256;
 
-static ::arrow::Status ValidateBloomFilterHeader(
+static ::arrow::Status validateBloomFilterHeader(
     const facebook::velox::parquet::thrift::BloomFilterHeader& header) {
   if (!header.algorithm.__isset.BLOCK) {
     return ::arrow::Status::Invalid(
@@ -106,71 +105,69 @@ static ::arrow::Status ValidateBloomFilterHeader(
   return ::arrow::Status::OK();
 }
 
-BlockSplitBloomFilter BlockSplitBloomFilter::Deserialize(
+BlockSplitBloomFilter BlockSplitBloomFilter::deserialize(
     const ReaderProperties& properties,
     ArrowInputStream* input) {
-  // NOTE: we don't know the bloom filter header size upfront, and we can't rely
-  // on InputStream::Peek() which isn't always implemented. Therefore, we must
-  // first Read() with an upper bound estimate of the header size, then once we
-  // know the bloom filter data size, we can Read() the exact number of
-  // remaining data bytes.
+  // NOTE: we don't know the bloom filter header size upfront, and we can't
+  // rely. On InputStream::Peek() which isn't always implemented. Therefore, we
+  // must. First Read() with an upper bound estimate of the header size, then
+  // once we. Know the bloom filter data size, we can Read() the exact number
+  // of. Remaining data bytes.
   ThriftDeserializer deserializer(properties);
   facebook::velox::parquet::thrift::BloomFilterHeader header;
 
-  // Read and deserialize bloom filter header
+  // Read and deserialize bloom filter header.
   PARQUET_ASSIGN_OR_THROW(
-      auto header_buf, input->Read(kBloomFilterHeaderSizeGuess));
-  // This gets used, then set by DeserializeThriftMsg
-  uint32_t header_size = static_cast<uint32_t>(header_buf->size());
+      auto headerBuf, input->Read(kBloomFilterHeaderSizeGuess));
+  // This gets used, then set by DeserializeThriftMsg.
+  uint32_t headerSize = static_cast<uint32_t>(headerBuf->size());
   try {
-    deserializer.DeserializeMessage(
-        reinterpret_cast<const uint8_t*>(header_buf->data()),
-        &header_size,
+    deserializer.deserializeMessage(
+        reinterpret_cast<const uint8_t*>(headerBuf->data()),
+        &headerSize,
         &header);
-    VELOX_DCHECK_LE(header_size, header_buf->size());
+    VELOX_DCHECK_LE(headerSize, headerBuf->size());
   } catch (std::exception& e) {
     std::stringstream ss;
     ss << "Deserializing bloom filter header failed.\n" << e.what();
     throw ParquetException(ss.str());
   }
-  PARQUET_THROW_NOT_OK(ValidateBloomFilterHeader(header));
+  PARQUET_THROW_NOT_OK(validateBloomFilterHeader(header));
 
-  const int32_t bloom_filter_size = header.numBytes;
-  if (bloom_filter_size + header_size <= header_buf->size()) {
-    // The bloom filter data is entirely contained in the buffer we just read
-    // => just return it.
-    BlockSplitBloomFilter bloom_filter(properties.memory_pool());
-    bloom_filter.Init(header_buf->data() + header_size, bloom_filter_size);
-    return bloom_filter;
+  const int32_t bloomFilterSize = header.numBytes;
+  if (bloomFilterSize + headerSize <= headerBuf->size()) {
+    // The bloom filter data is entirely contained in the buffer we just read.
+    // => Just return it.
+    BlockSplitBloomFilter bloomFilter(properties.memoryPool());
+    bloomFilter.init(headerBuf->data() + headerSize, bloomFilterSize);
+    return bloomFilter;
   }
-  // We have read a part of the bloom filter already, copy it to the target
-  // buffer and read the remaining part from the InputStream.
-  auto buffer = AllocateBuffer(properties.memory_pool(), bloom_filter_size);
+  // We have read a part of the bloom filter already, copy it to the target.
+  // Buffer and read the remaining part from the InputStream.
+  auto buffer = allocateBuffer(properties.memoryPool(), bloomFilterSize);
 
-  const auto bloom_filter_bytes_in_header = header_buf->size() - header_size;
-  if (bloom_filter_bytes_in_header > 0) {
+  const auto bloomFilterBytesInHeader = headerBuf->size() - headerSize;
+  if (bloomFilterBytesInHeader > 0) {
     std::memcpy(
         buffer->mutable_data(),
-        header_buf->data() + header_size,
-        bloom_filter_bytes_in_header);
+        headerBuf->data() + headerSize,
+        bloomFilterBytesInHeader);
   }
 
-  const auto required_read_size =
-      bloom_filter_size - bloom_filter_bytes_in_header;
+  const auto requiredReadSize = bloomFilterSize - bloomFilterBytesInHeader;
   PARQUET_ASSIGN_OR_THROW(
-      auto read_size,
+      auto readSize,
       input->Read(
-          required_read_size,
-          buffer->mutable_data() + bloom_filter_bytes_in_header));
-  if (ARROW_PREDICT_FALSE(read_size < required_read_size)) {
+          requiredReadSize, buffer->mutable_data() + bloomFilterBytesInHeader));
+  if (ARROW_PREDICT_FALSE(readSize < requiredReadSize)) {
     throw ParquetException("Bloom Filter read failed: not enough data");
   }
-  BlockSplitBloomFilter bloom_filter(properties.memory_pool());
-  bloom_filter.Init(buffer->data(), bloom_filter_size);
-  return bloom_filter;
+  BlockSplitBloomFilter bloomFilter(properties.memoryPool());
+  bloomFilter.init(buffer->data(), bloomFilterSize);
+  return bloomFilter;
 }
 
-void BlockSplitBloomFilter::WriteTo(ArrowOutputStream* sink) const {
+void BlockSplitBloomFilter::writeTo(ArrowOutputStream* sink) const {
   VELOX_DCHECK_NOT_NULL(sink);
 
   facebook::velox::parquet::thrift::BloomFilterHeader header;
@@ -180,29 +177,29 @@ void BlockSplitBloomFilter::WriteTo(ArrowOutputStream* sink) const {
   }
   header.algorithm.__set_BLOCK(
       facebook::velox::parquet::thrift::SplitBlockAlgorithm());
-  if (ARROW_PREDICT_FALSE(hash_strategy_ != HashStrategy::XXHASH)) {
+  if (ARROW_PREDICT_FALSE(hashStrategy_ != HashStrategy::XXHASH)) {
     throw ParquetException(
         "BloomFilter does not support Hash other than XXHASH");
   }
   header.hash.__set_XXHASH(facebook::velox::parquet::thrift::XxHash());
   if (ARROW_PREDICT_FALSE(
-          compression_strategy_ != CompressionStrategy::UNCOMPRESSED)) {
+          compressionStrategy_ != CompressionStrategy::UNCOMPRESSED)) {
     throw ParquetException(
         "BloomFilter does not support Compression other than UNCOMPRESSED");
   }
   header.compression.__set_UNCOMPRESSED(
       facebook::velox::parquet::thrift::Uncompressed());
-  header.__set_numBytes(num_bytes_);
+  header.__set_numBytes(numBytes_);
 
   ThriftSerializer serializer;
-  serializer.Serialize(&header, sink);
+  serializer.serialize(&header, sink);
 
-  PARQUET_THROW_NOT_OK(sink->Write(data_->data(), num_bytes_));
+  PARQUET_THROW_NOT_OK(sink->Write(data_->data(), numBytes_));
 }
 
-bool BlockSplitBloomFilter::FindHash(uint64_t hash) const {
-  const uint32_t bucket_index = static_cast<uint32_t>(
-      ((hash >> 32) * (num_bytes_ / kBytesPerFilterBlock)) >> 32);
+bool BlockSplitBloomFilter::findHash(uint64_t hash) const {
+  const uint32_t bucketIndex = static_cast<uint32_t>(
+      ((hash >> 32) * (numBytes_ / kBytesPerFilterBlock)) >> 32);
   const uint32_t key = static_cast<uint32_t>(hash);
   const uint32_t* bitset32 = reinterpret_cast<const uint32_t*>(data_->data());
 
@@ -210,35 +207,35 @@ bool BlockSplitBloomFilter::FindHash(uint64_t hash) const {
     // Calculate mask for key in the given bitset.
     const uint32_t mask = UINT32_C(0x1) << ((key * SALT[i]) >> 27);
     if (ARROW_PREDICT_FALSE(
-            0 == (bitset32[kBitsSetPerBlock * bucket_index + i] & mask))) {
+            0 == (bitset32[kBitsSetPerBlock * bucketIndex + i] & mask))) {
       return false;
     }
   }
   return true;
 }
 
-void BlockSplitBloomFilter::InsertHashImpl(uint64_t hash) {
-  const uint32_t bucket_index = static_cast<uint32_t>(
-      ((hash >> 32) * (num_bytes_ / kBytesPerFilterBlock)) >> 32);
+void BlockSplitBloomFilter::insertHashImpl(uint64_t hash) {
+  const uint32_t bucketIndex = static_cast<uint32_t>(
+      ((hash >> 32) * (numBytes_ / kBytesPerFilterBlock)) >> 32);
   const uint32_t key = static_cast<uint32_t>(hash);
   uint32_t* bitset32 = reinterpret_cast<uint32_t*>(data_->mutable_data());
 
   for (int i = 0; i < kBitsSetPerBlock; i++) {
     // Calculate mask for key in the given bitset.
     const uint32_t mask = UINT32_C(0x1) << ((key * SALT[i]) >> 27);
-    bitset32[bucket_index * kBitsSetPerBlock + i] |= mask;
+    bitset32[bucketIndex * kBitsSetPerBlock + i] |= mask;
   }
 }
 
-void BlockSplitBloomFilter::InsertHash(uint64_t hash) {
-  InsertHashImpl(hash);
+void BlockSplitBloomFilter::insertHash(uint64_t hash) {
+  insertHashImpl(hash);
 }
 
-void BlockSplitBloomFilter::InsertHashes(
+void BlockSplitBloomFilter::insertHashes(
     const uint64_t* hashes,
-    int num_values) {
-  for (int i = 0; i < num_values; ++i) {
-    InsertHashImpl(hashes[i]);
+    int numValues) {
+  for (int i = 0; i < numValues; ++i) {
+    insertHashImpl(hashes[i]);
   }
 }
 

@@ -22,30 +22,30 @@
 
 namespace facebook::velox::parquet::arrow {
 
-// Decryptor
+// Decryptor.
 Decryptor::Decryptor(
-    std::shared_ptr<encryption::AesDecryptor> aes_decryptor,
+    std::shared_ptr<encryption::AesDecryptor> aesDecryptor,
     const std::string& key,
-    const std::string& file_aad,
+    const std::string& fileAad,
     const std::string& aad,
     ::arrow::MemoryPool* pool)
-    : aes_decryptor_(aes_decryptor),
+    : aesDecryptor_(aesDecryptor),
       key_(key),
-      file_aad_(file_aad),
+      fileAad_(fileAad),
       aad_(aad),
       pool_(pool) {}
 
-int Decryptor::CiphertextSizeDelta() {
-  return aes_decryptor_->CiphertextSizeDelta();
+int Decryptor::ciphertextSizeDelta() {
+  return aesDecryptor_->ciphertextSizeDelta();
 }
 
-int Decryptor::Decrypt(
+int Decryptor::decrypt(
     const uint8_t* ciphertext,
-    int ciphertext_len,
+    int ciphertextLen,
     uint8_t* plaintext) {
-  return aes_decryptor_->Decrypt(
+  return aesDecryptor_->decrypt(
       ciphertext,
-      ciphertext_len,
+      ciphertextLen,
       str2bytes(key_),
       static_cast<int>(key_.size()),
       str2bytes(aad_),
@@ -53,190 +53,190 @@ int Decryptor::Decrypt(
       plaintext);
 }
 
-// InternalFileDecryptor
+// InternalFileDecryptor.
 InternalFileDecryptor::InternalFileDecryptor(
     FileDecryptionProperties* properties,
-    const std::string& file_aad,
+    const std::string& fileAad,
     ParquetCipher::type algorithm,
-    const std::string& footer_key_metadata,
+    const std::string& footerKeyMetadata,
     ::arrow::MemoryPool* pool)
     : properties_(properties),
-      file_aad_(file_aad),
+      fileAad_(fileAad),
       algorithm_(algorithm),
-      footer_key_metadata_(footer_key_metadata),
+      footerKeyMetadata_(footerKeyMetadata),
       pool_(pool) {
-  if (properties_->is_utilized()) {
+  if (properties_->isUtilized()) {
     throw ParquetException(
         "Re-using decryption properties with explicit keys for another file");
   }
-  properties_->set_utilized();
+  properties_->setUtilized();
 }
 
-void InternalFileDecryptor::WipeOutDecryptionKeys() {
-  properties_->WipeOutDecryptionKeys();
-  for (auto const& i : all_decryptors_) {
-    if (auto aes_decryptor = i.lock()) {
-      aes_decryptor->WipeOut();
+void InternalFileDecryptor::wipeOutDecryptionKeys() {
+  properties_->wipeOutDecryptionKeys();
+  for (auto const& i : allDecryptors_) {
+    if (auto aesDecryptor = i.lock()) {
+      aesDecryptor->wipeOut();
     }
   }
 }
 
-std::string InternalFileDecryptor::GetFooterKey() {
-  std::string footer_key = properties_->footer_key();
-  // ignore footer key metadata if footer key is explicitly set via API
-  if (footer_key.empty()) {
-    if (footer_key_metadata_.empty())
+std::string InternalFileDecryptor::getFooterKey() {
+  std::string footerKey = properties_->footerKey();
+  // Ignore footer key metadata if footer key is explicitly set via API.
+  if (footerKey.empty()) {
+    if (footerKeyMetadata_.empty())
       throw ParquetException("No footer key or key metadata");
-    if (properties_->key_retriever() == nullptr)
+    if (properties_->keyRetriever() == nullptr)
       throw ParquetException("No footer key or key retriever");
     try {
-      footer_key = properties_->key_retriever()->GetKey(footer_key_metadata_);
+      footerKey = properties_->keyRetriever()->getKey(footerKeyMetadata_);
     } catch (KeyAccessDeniedException& e) {
       std::stringstream ss;
       ss << "Footer key: access denied " << e.what() << "\n";
       throw ParquetException(ss.str());
     }
   }
-  if (footer_key.empty()) {
+  if (footerKey.empty()) {
     throw ParquetException(
         "Footer key unavailable. Could not verify "
         "plaintext footer metadata");
   }
-  return footer_key;
+  return footerKey;
 }
 
-std::shared_ptr<Decryptor> InternalFileDecryptor::GetFooterDecryptor() {
-  std::string aad = encryption::CreateFooterAad(file_aad_);
-  return GetFooterDecryptor(aad, true);
-}
-
-std::shared_ptr<Decryptor>
-InternalFileDecryptor::GetFooterDecryptorForColumnMeta(const std::string& aad) {
-  return GetFooterDecryptor(aad, true);
+std::shared_ptr<Decryptor> InternalFileDecryptor::getFooterDecryptor() {
+  std::string aad = encryption::createFooterAad(fileAad_);
+  return getFooterDecryptor(aad, true);
 }
 
 std::shared_ptr<Decryptor>
-InternalFileDecryptor::GetFooterDecryptorForColumnData(const std::string& aad) {
-  return GetFooterDecryptor(aad, false);
+InternalFileDecryptor::getFooterDecryptorForColumnMeta(const std::string& aad) {
+  return getFooterDecryptor(aad, true);
 }
 
-std::shared_ptr<Decryptor> InternalFileDecryptor::GetFooterDecryptor(
+std::shared_ptr<Decryptor>
+InternalFileDecryptor::getFooterDecryptorForColumnData(const std::string& aad) {
+  return getFooterDecryptor(aad, false);
+}
+
+std::shared_ptr<Decryptor> InternalFileDecryptor::getFooterDecryptor(
     const std::string& aad,
     bool metadata) {
   if (metadata) {
-    if (footer_metadata_decryptor_ != nullptr)
-      return footer_metadata_decryptor_;
+    if (footerMetadataDecryptor_ != nullptr)
+      return footerMetadataDecryptor_;
   } else {
-    if (footer_data_decryptor_ != nullptr)
-      return footer_data_decryptor_;
+    if (footerDataDecryptor_ != nullptr)
+      return footerDataDecryptor_;
   }
 
-  std::string footer_key = properties_->footer_key();
-  if (footer_key.empty()) {
-    if (footer_key_metadata_.empty())
+  std::string footerKey = properties_->footerKey();
+  if (footerKey.empty()) {
+    if (footerKeyMetadata_.empty())
       throw ParquetException("No footer key or key metadata");
-    if (properties_->key_retriever() == nullptr)
+    if (properties_->keyRetriever() == nullptr)
       throw ParquetException("No footer key or key retriever");
     try {
-      footer_key = properties_->key_retriever()->GetKey(footer_key_metadata_);
+      footerKey = properties_->keyRetriever()->getKey(footerKeyMetadata_);
     } catch (KeyAccessDeniedException& e) {
       std::stringstream ss;
       ss << "Footer key: access denied " << e.what() << "\n";
       throw ParquetException(ss.str());
     }
   }
-  if (footer_key.empty()) {
+  if (footerKey.empty()) {
     throw ParquetException(
         "Invalid footer encryption key. "
         "Could not parse footer metadata");
   }
 
-  // Create both data and metadata decryptors to avoid redundant retrieval of
-  // key from the key_retriever.
-  int key_len = static_cast<int>(footer_key.size());
-  auto aes_metadata_decryptor = encryption::AesDecryptor::Make(
-      algorithm_, key_len, /*metadata=*/true, &all_decryptors_);
-  auto aes_data_decryptor = encryption::AesDecryptor::Make(
-      algorithm_, key_len, /*metadata=*/false, &all_decryptors_);
+  // Create both data and metadata decryptors to avoid redundant retrieval of.
+  // Key from the key_retriever.
+  int keyLen = static_cast<int>(footerKey.size());
+  auto aesMetadataDecryptor = encryption::AesDecryptor::make(
+      algorithm_, keyLen, /*metadata=*/true, &allDecryptors_);
+  auto aesDataDecryptor = encryption::AesDecryptor::make(
+      algorithm_, keyLen, /*metadata=*/false, &allDecryptors_);
 
-  footer_metadata_decryptor_ = std::make_shared<Decryptor>(
-      aes_metadata_decryptor, footer_key, file_aad_, aad, pool_);
-  footer_data_decryptor_ = std::make_shared<Decryptor>(
-      aes_data_decryptor, footer_key, file_aad_, aad, pool_);
+  footerMetadataDecryptor_ = std::make_shared<Decryptor>(
+      aesMetadataDecryptor, footerKey, fileAad_, aad, pool_);
+  footerDataDecryptor_ = std::make_shared<Decryptor>(
+      aesDataDecryptor, footerKey, fileAad_, aad, pool_);
 
   if (metadata)
-    return footer_metadata_decryptor_;
-  return footer_data_decryptor_;
+    return footerMetadataDecryptor_;
+  return footerDataDecryptor_;
 }
 
-std::shared_ptr<Decryptor> InternalFileDecryptor::GetColumnMetaDecryptor(
-    const std::string& column_path,
-    const std::string& column_key_metadata,
+std::shared_ptr<Decryptor> InternalFileDecryptor::getColumnMetaDecryptor(
+    const std::string& ColumnPath,
+    const std::string& columnKeyMetadata,
     const std::string& aad) {
-  return GetColumnDecryptor(column_path, column_key_metadata, aad, true);
+  return getColumnDecryptor(ColumnPath, columnKeyMetadata, aad, true);
 }
 
-std::shared_ptr<Decryptor> InternalFileDecryptor::GetColumnDataDecryptor(
-    const std::string& column_path,
-    const std::string& column_key_metadata,
+std::shared_ptr<Decryptor> InternalFileDecryptor::getColumnDataDecryptor(
+    const std::string& ColumnPath,
+    const std::string& columnKeyMetadata,
     const std::string& aad) {
-  return GetColumnDecryptor(column_path, column_key_metadata, aad, false);
+  return getColumnDecryptor(ColumnPath, columnKeyMetadata, aad, false);
 }
 
-std::shared_ptr<Decryptor> InternalFileDecryptor::GetColumnDecryptor(
-    const std::string& column_path,
-    const std::string& column_key_metadata,
+std::shared_ptr<Decryptor> InternalFileDecryptor::getColumnDecryptor(
+    const std::string& ColumnPath,
+    const std::string& columnKeyMetadata,
     const std::string& aad,
     bool metadata) {
-  std::string column_key;
-  // first look if we already got the decryptor from before
+  std::string columnKey;
+  // First look if we already got the decryptor from before.
   if (metadata) {
-    if (column_metadata_map_.find(column_path) != column_metadata_map_.end()) {
-      auto res(column_metadata_map_.at(column_path));
-      res->UpdateAad(aad);
+    if (columnMetadataMap_.find(ColumnPath) != columnMetadataMap_.end()) {
+      auto res(columnMetadataMap_.at(ColumnPath));
+      res->updateAad(aad);
       return res;
     }
   } else {
-    if (column_data_map_.find(column_path) != column_data_map_.end()) {
-      auto res(column_data_map_.at(column_path));
-      res->UpdateAad(aad);
+    if (columnDataMap_.find(ColumnPath) != columnDataMap_.end()) {
+      auto res(columnDataMap_.at(ColumnPath));
+      res->updateAad(aad);
       return res;
     }
   }
 
-  column_key = properties_->column_key(column_path);
+  columnKey = properties_->columnKey(ColumnPath);
   // No explicit column key given via API. Retrieve via key metadata.
-  if (column_key.empty() && !column_key_metadata.empty() &&
-      properties_->key_retriever() != nullptr) {
+  if (columnKey.empty() && !columnKeyMetadata.empty() &&
+      properties_->keyRetriever() != nullptr) {
     try {
-      column_key = properties_->key_retriever()->GetKey(column_key_metadata);
+      columnKey = properties_->keyRetriever()->getKey(columnKeyMetadata);
     } catch (KeyAccessDeniedException& e) {
       std::stringstream ss;
-      ss << "HiddenColumnException, path=" + column_path + " " << e.what()
+      ss << "HiddenColumnException, path=" + ColumnPath + " " << e.what()
          << "\n";
       throw HiddenColumnException(ss.str());
     }
   }
-  if (column_key.empty()) {
-    throw HiddenColumnException("HiddenColumnException, path=" + column_path);
+  if (columnKey.empty()) {
+    throw HiddenColumnException("HiddenColumnException, path=" + ColumnPath);
   }
 
-  // Create both data and metadata decryptors to avoid redundant retrieval of
-  // key using the key_retriever.
-  int key_len = static_cast<int>(column_key.size());
-  auto aes_metadata_decryptor = encryption::AesDecryptor::Make(
-      algorithm_, key_len, /*metadata=*/true, &all_decryptors_);
-  auto aes_data_decryptor = encryption::AesDecryptor::Make(
-      algorithm_, key_len, /*metadata=*/false, &all_decryptors_);
+  // Create both data and metadata decryptors to avoid redundant retrieval of.
+  // Key using the key_retriever.
+  int keyLen = static_cast<int>(columnKey.size());
+  auto aesMetadataDecryptor = encryption::AesDecryptor::make(
+      algorithm_, keyLen, /*metadata=*/true, &allDecryptors_);
+  auto aesDataDecryptor = encryption::AesDecryptor::make(
+      algorithm_, keyLen, /*metadata=*/false, &allDecryptors_);
 
-  column_metadata_map_[column_path] = std::make_shared<Decryptor>(
-      aes_metadata_decryptor, column_key, file_aad_, aad, pool_);
-  column_data_map_[column_path] = std::make_shared<Decryptor>(
-      aes_data_decryptor, column_key, file_aad_, aad, pool_);
+  columnMetadataMap_[ColumnPath] = std::make_shared<Decryptor>(
+      aesMetadataDecryptor, columnKey, fileAad_, aad, pool_);
+  columnDataMap_[ColumnPath] = std::make_shared<Decryptor>(
+      aesDataDecryptor, columnKey, fileAad_, aad, pool_);
 
   if (metadata)
-    return column_metadata_map_[column_path];
-  return column_data_map_[column_path];
+    return columnMetadataMap_[ColumnPath];
+  return columnDataMap_[ColumnPath];
 }
 
 } // namespace facebook::velox::parquet::arrow

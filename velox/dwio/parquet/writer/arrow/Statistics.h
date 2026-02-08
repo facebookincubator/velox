@@ -40,30 +40,28 @@ namespace facebook::velox::parquet::arrow {
 class ColumnDescriptor;
 
 // ----------------------------------------------------------------------
-// Value comparator interfaces
+// Value Comparator interfaces.
 
-/// \brief Base class for value comparators. Generally used with
-/// TypedComparator<T>
+/// \brief Base class for value Comparators. Generally used with
+/// TypedComparator<T>.
 class PARQUET_EXPORT Comparator {
  public:
   virtual ~Comparator() {}
 
-  /// \brief Create a comparator explicitly from physical type and
-  /// sort order
-  /// \param[in] physical_type the physical type for the typed
-  /// comparator
-  /// \param[in] sort_order either SortOrder::SIGNED or
-  /// SortOrder::UNSIGNED
-  /// \param[in] type_length for FIXED_LEN_BYTE_ARRAY only
-  static std::shared_ptr<Comparator> Make(
-      Type::type physical_type,
-      SortOrder::type sort_order,
-      int type_length = -1);
+  /// \brief Create a Comparator explicitly from physical type and
+  /// sort order.
+  /// \param[in] physicalType Physical type for the typed
+  /// Comparator.
+  /// \param[in] sortOrder Either SortOrder::kSigned or
+  /// SortOrder::kUnsigned.
+  /// \param[in] typeLength For FIXED_LEN_BYTE_ARRAY only.
+  static std::shared_ptr<Comparator>
+  make(Type::type physicalType, SortOrder::type sortOrder, int typeLength = -1);
 
-  /// \brief Create typed comparator inferring default sort order from
-  /// ColumnDescriptor
-  /// \param[in] descr the Parquet column schema
-  static std::shared_ptr<Comparator> Make(const ColumnDescriptor* descr);
+  /// \brief Create typed Comparator inferring default sort order from
+  /// ColumnDescriptor.
+  /// \param[in] descr the Parquet column schema.
+  static std::shared_ptr<Comparator> make(const ColumnDescriptor* descr);
 };
 
 /// \brief Interface for comparison of physical types according to the
@@ -71,54 +69,54 @@ class PARQUET_EXPORT Comparator {
 template <typename DType>
 class TypedComparator : public Comparator {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   /// \brief Scalar comparison of two elements, return true if first
-  /// is strictly less than the second
-  virtual bool Compare(const T& a, const T& b) = 0;
+  /// is strictly less than the second.
+  virtual bool compare(const T& a, const T& b) = 0;
 
   /// \brief Compute maximum and minimum elements in a batch of
-  /// elements without any nulls
-  virtual std::pair<T, T> GetMinMax(const T* values, int64_t length) = 0;
+  /// elements without any nulls.
+  virtual std::pair<T, T> getMinMax(const T* values, int64_t length) = 0;
 
   /// \brief Compute minimum and maximum elements from an Arrow array. Only
   /// valid for certain Parquet Type / Arrow Type combinations, like BYTE_ARRAY
-  /// / arrow::BinaryArray
-  virtual std::pair<T, T> GetMinMax(const ::arrow::Array& values) = 0;
+  /// / Arrow::BinaryArray.
+  virtual std::pair<T, T> getMinMax(const ::arrow::Array& values) = 0;
 
   /// \brief Compute maximum and minimum elements in a batch of
   /// elements with accompanying bitmap indicating which elements are
-  /// included (bit set) and excluded (bit not set)
+  /// included (bit set) and excluded (bit not set).
   ///
-  /// \param[in] values the sequence of values
-  /// \param[in] length the length of the sequence
-  /// \param[in] valid_bits a bitmap indicating which elements are
-  /// included (1) or excluded (0)
-  /// \param[in] valid_bits_offset the bit offset into the bitmap of
-  /// the first element in the sequence
-  virtual std::pair<T, T> GetMinMaxSpaced(
+  /// \param[in] values The sequence of values.
+  /// \param[in] length The length of the sequence.
+  /// \param[in] validBits A bitmap indicating which elements are
+  /// included (1) or excluded (0).
+  /// \param[in] validBitsOffset The bit offset into the bitmap of
+  /// the first element in the sequence.
+  virtual std::pair<T, T> getMinMaxSpaced(
       const T* values,
       int64_t length,
-      const uint8_t* valid_bits,
-      int64_t valid_bits_offset) = 0;
+      const uint8_t* validBits,
+      int64_t validBitsOffset) = 0;
 };
 
-/// \brief Typed version of Comparator::Make
+/// \brief Typed version of Comparator::Make.
 template <typename DType>
-std::shared_ptr<TypedComparator<DType>> MakeComparator(
-    Type::type physical_type,
-    SortOrder::type sort_order,
-    int type_length = -1) {
+std::shared_ptr<TypedComparator<DType>> makeComparator(
+    Type::type physicalType,
+    SortOrder::type sortOrder,
+    int typeLength = -1) {
   return std::static_pointer_cast<TypedComparator<DType>>(
-      Comparator::Make(physical_type, sort_order, type_length));
+      Comparator::make(physicalType, sortOrder, typeLength));
 }
 
-/// \brief Typed version of Comparator::Make
+/// \brief Typed version of Comparator::Make.
 template <typename DType>
-std::shared_ptr<TypedComparator<DType>> MakeComparator(
+std::shared_ptr<TypedComparator<DType>> makeComparator(
     const ColumnDescriptor* descr) {
   return std::static_pointer_cast<TypedComparator<DType>>(
-      Comparator::Make(descr));
+      Comparator::make(descr));
 }
 
 // ----------------------------------------------------------------------
@@ -127,7 +125,7 @@ std::shared_ptr<TypedComparator<DType>> MakeComparator(
 /// and read from Parquet serialized metadata.
 class PARQUET_EXPORT EncodedStatistics {
   std::string max_, min_;
-  bool is_signed_ = false;
+  bool isSigned_ = false;
 
  public:
   EncodedStatistics() = default;
@@ -139,301 +137,300 @@ class PARQUET_EXPORT EncodedStatistics {
     return min_;
   }
 
-  int64_t null_count = 0;
-  int64_t distinct_count = 0;
-  int64_t nan_count = 0;
+  int64_t nullCount = 0;
+  int64_t distinctCount = 0;
+  int64_t nanCount = 0;
 
-  bool has_min = false;
-  bool has_max = false;
-  bool has_null_count = false;
-  bool has_distinct_count = false;
-  bool has_nan_count = false;
+  bool hasMin = false;
+  bool hasMax = false;
+  bool hasNullCount = false;
+  bool hasDistinctCount = false;
+  bool hasNanCount = false;
 
   // When all values in the statistics are null, it is set to true.
   // Otherwise, at least one value is not null, or we are not sure at all.
   // Page index requires this information to decide whether a data page
   // is a null page or not.
-  bool all_null_value = false;
+  bool allNullValue = false;
 
-  // From parquet-mr
+  // From parquet-mr.
   // Don't write stats larger than the max size rather than truncating. The
   // rationale is that some engines may use the minimum value in the page as
   // the true minimum for aggregations and there is no way to mark that a
   // value has been truncated and is a lower bound and not in the page.
-  void ApplyStatSizeLimits(size_t length) {
+  void applyStatSizeLimits(size_t length) {
     if (max_.length() > length) {
-      has_max = false;
+      hasMax = false;
       max_.clear();
     }
     if (min_.length() > length) {
-      has_min = false;
+      hasMin = false;
       min_.clear();
     }
   }
 
-  bool is_set() const {
-    return has_min || has_max || has_null_count || has_distinct_count;
+  bool isSet() const {
+    return hasMin || hasMax || hasNullCount || hasDistinctCount;
   }
 
-  bool is_signed() const {
-    return is_signed_;
+  bool isSigned() const {
+    return isSigned_;
   }
 
-  void set_is_signed(bool is_signed) {
-    is_signed_ = is_signed;
+  void setIsSigned(bool isSigned) {
+    isSigned_ = isSigned;
   }
 
-  EncodedStatistics& set_max(std::string value) {
+  EncodedStatistics& setMax(std::string value) {
     max_ = std::move(value);
-    has_max = true;
+    hasMax = true;
     return *this;
   }
 
-  EncodedStatistics& set_min(std::string value) {
+  EncodedStatistics& setMin(std::string value) {
     min_ = std::move(value);
-    has_min = true;
+    hasMin = true;
     return *this;
   }
 
-  EncodedStatistics& set_null_count(int64_t value) {
-    null_count = value;
-    has_null_count = true;
+  EncodedStatistics& setNullCount(int64_t value) {
+    nullCount = value;
+    hasNullCount = true;
     return *this;
   }
 
-  EncodedStatistics& set_distinct_count(int64_t value) {
-    distinct_count = value;
-    has_distinct_count = true;
+  EncodedStatistics& setDistinctCount(int64_t value) {
+    distinctCount = value;
+    hasDistinctCount = true;
     return *this;
   }
 
   EncodedStatistics& set_nan_count(int64_t value) {
-    nan_count = value;
-    has_nan_count = true;
+    nanCount = value;
+    hasNanCount = true;
     return *this;
   }
 };
 
-/// \brief Base type for computing column statistics while writing a file
+/// \brief Base type for computing column statistics while writing a file.
 class PARQUET_EXPORT Statistics {
  public:
   virtual ~Statistics() {}
 
   /// \brief Create a new statistics instance given a column schema
-  /// definition
-  /// \param[in] descr the column schema
-  /// \param[in] pool a memory pool to use for any memory allocations, optional
-  static std::shared_ptr<Statistics> Make(
+  /// definition.
+  /// \param[in] descr The column schema.
+  /// \param[in] pool A memory pool to use for any memory allocations, optional.
+  static std::shared_ptr<Statistics> make(
       const ColumnDescriptor* descr,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
 
   /// \brief Create a new statistics instance given a column schema
-  /// definition and pre-existing state
-  /// \param[in] descr the column schema
-  /// \param[in] encoded_min the encoded minimum value
-  /// \param[in] encoded_max the encoded maximum value
-  /// \param[in] num_values total number of values
-  /// \param[in] null_count number of null values
-  /// \param[in] distinct_count number of distinct values
-  /// \param[in] nan_count number of nan values
-  /// \param[in] has_min_max whether the min/max statistics are set
-  /// \param[in] has_null_count whether the null_count statistics are set
-  /// \param[in] has_distinct_count whether the distinct_count statistics are
-  /// set \param[in] has_nan_count whether the nan_count statistics are set
-  /// \param[in] pool a memory pool to use for any memory allocations,
-  /// optional
-  static std::shared_ptr<Statistics> Make(
+  /// definition and pre-existing state.
+  /// \param[in] descr The column schema.
+  /// \param[in] encodedMin The encoded minimum value.
+  /// \param[in] encodedMax The encoded maximum value.
+  /// \param[in] numValues Total number of values.
+  /// \param[in] nullCount Number of null values.
+  /// \param[in] distinctCount Number of distinct values.
+  /// \param[in] hasMinMax Whether the min/max statistics are set.
+  /// \param[in] hasNullCount Whether the nullCount statistics are set.
+  /// \param[in] hasDistinctCount Whether the distinctCount statistics are set.
+  /// \param[in] pool A memory pool to use for any memory allocations,
+  /// optional.
+  static std::shared_ptr<Statistics> make(
       const ColumnDescriptor* descr,
-      const std::string& encoded_min,
-      const std::string& encoded_max,
-      int64_t num_values,
-      int64_t null_count,
-      int64_t distinct_count,
-      int64_t nan_count,
-      bool has_min_max,
-      bool has_null_count,
-      bool has_distinct_count,
-      bool has_nan_count,
+      const std::string& encodedMin,
+      const std::string& encodedMax,
+      int64_t numValues,
+      int64_t nullCount,
+      int64_t distinctCount,
+      bool hasMinMax,
+      bool hasNullCount,
+      bool hasDistinctCount,
+      bool hasNaNCount,
+      int64_t nanCount,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
 
   // Helper function to convert EncodedStatistics to Statistics.
-  // EncodedStatistics does not contain number of non-null values, and it can be
-  // passed using the num_values parameter.
-  static std::shared_ptr<Statistics> Make(
+  // EncodedStatistics does not contain number of non-null values, and it can
+  // be passed using the numValues parameter.
+  static std::shared_ptr<Statistics> make(
       const ColumnDescriptor* descr,
-      const EncodedStatistics* encoded_statistics,
-      int64_t num_values = -1,
+      const EncodedStatistics* encodedStats,
+      int64_t numValues = -1,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
 
-  /// \brief Return true if the count of null values is set
-  virtual bool HasNullCount() const = 0;
+  /// \brief Return true if the count of null values is set.
+  virtual bool hasNullCount() const = 0;
 
-  /// \brief The number of null values, may not be set
-  virtual int64_t null_count() const = 0;
+  /// \brief The number of null values, may not be set.
+  virtual int64_t nullCount() const = 0;
 
-  /// \brief Return true if the count of distinct values is set
-  virtual bool HasDistinctCount() const = 0;
+  /// \brief Return true if the count of distinct values is set.
+  virtual bool hasDistinctCount() const = 0;
 
-  /// \brief The number of distinct values, may not be set
-  virtual int64_t distinct_count() const = 0;
+  /// \brief The number of distinct values, may not be set.
+  virtual int64_t distinctCount() const = 0;
 
-  /// \brief The number of non-null values in the column
-  virtual int64_t num_values() const = 0;
+  /// \brief The number of non-null values in the column.
+  virtual int64_t numValues() const = 0;
 
-  /// \brief Return true if the count of nan values is set
-  virtual bool HasNaNCount() const = 0;
+  /// \brief Return true if the count of nan values is set.
+  virtual bool hasNaNCount() const = 0;
 
-  /// \brief The number of NaN values, may not be set
-  virtual int64_t nan_count() const = 0;
+  /// \brief The number of NaN values, may not be set.
+  virtual int64_t nanCount() const = 0;
 
   /// \brief Return true if the min and max statistics are set. Obtain
-  /// with TypedStatistics<T>::min and max
-  virtual bool HasMinMax() const = 0;
+  /// with TypedStatistics<T>::min and max.
+  virtual bool hasMinMax() const = 0;
 
-  /// \brief Reset state of object to initial (no data observed) state
-  virtual void Reset() = 0;
+  /// \brief Reset state of object to initial (no data observed) state.
+  virtual void reset() = 0;
 
-  /// \brief Plain-encoded minimum value
-  virtual std::string EncodeMin() const = 0;
+  /// \brief Plain-encoded minimum value.
+  virtual std::string encodeMin() const = 0;
 
-  /// \brief Plain-encoded maximum value
-  virtual std::string EncodeMax() const = 0;
+  /// \brief Plain-encoded maximum value.
+  virtual std::string encodeMax() const = 0;
 
   /// \brief Encoded lower bound value compatible with Iceberg.
   ///
   /// Returns an encoded value guaranteed to be <= the actual minimum value.
-  /// For string types, truncates to at most \p truncateTo Unicode code points.
-  /// For decimal types, encodes the value in big-endian format as required by
-  /// Iceberg's single-value serialization specification.
-  /// For all other data types, uses the same plain encoding as Parquet
-  /// (returns the exact encoded minimum value).
+  /// For string types, truncates to at most \p truncateTo Unicode code
+  /// points. For decimal types, encodes the value in big-endian format as
+  /// required by Iceberg's single-value serialization specification. For
+  /// all other data types, uses the same plain encoding as Parquet.
+  /// (Returns the exact encoded minimum value).
   ///
-  /// @param truncateTo Maximum number of Unicode code points for string types.
-  virtual std::string IcebergLowerBoundInclusive(int32_t truncateTo) const = 0;
+  /// @param truncateTo Maximum number of Unicode code points for string
+  /// types.
+  virtual std::string icebergLowerBoundInclusive(int32_t truncateTo) const = 0;
 
   /// \brief Encoded upper bound value compatible with Iceberg.
   ///
   /// Returns an encoded value guaranteed to be >= the actual maximum value.
   /// For string types:
-  /// - If the maximum value has <= \p truncateTo Unicode code points, returns
-  ///   the exact encoded maximum value (inclusive upper bound).
-  /// - If the maximum value has > \p truncateTo Unicode code points, truncates
-  ///   to \p truncateTo code points and increments the last code point to
-  ///   produce an exclusive upper bound that is greater than the maximum value.
+  /// - If the maximum value has <= \p truncateTo Unicode code points,
+  /// returns the exact encoded maximum value (inclusive upper bound).
+  /// - If the maximum value has > \p truncateTo Unicode code points,
+  /// truncates to \p truncateTo code points and increments the last code point
+  /// to produce an exclusive upper bound that is greater than the maximum
+  /// value.
   /// - Returns std::nullopt if no valid upper bound can be computed (e.g.,
-  ///   all code points in the truncated portion are at the maximum Unicode
-  ///   value U+10FFFF). This allows distinguishing between "upper bound is
-  ///   empty string" and "no valid upper bound exists".
-  /// For decimal types, encodes the value in big-endian format as required by
-  /// Iceberg's single-value serialization specification.
-  /// For all other data types, uses the same plain encoding as Parquet
-  /// (returns the exact encoded maximum value).
+  /// all code points in the truncated portion are at the maximum Unicode
+  /// value U+10FFFF). This allows distinguishing between "upper bound is
+  /// empty string" and "no valid upper bound exists".
+  /// For decimal types, encodes the value in big-endian format as required
+  /// by Iceberg's single-value serialization specification. For all other
+  /// data types, uses the same plain encoding as Parquet. (Returns the
+  /// exact encoded maximum value).
   ///
-  /// @param truncateTo Maximum number of Unicode code points for string types.
+  /// @param truncateTo Maximum number of Unicode code points for string
+  /// types.
   /// @return Encoded upper bound value, or std::nullopt if no valid upper
   ///         bound can be computed.
-  virtual std::optional<std::string> IcebergUpperBoundExclusive(
+  virtual std::optional<std::string> icebergUpperBoundExclusive(
       int32_t truncateTo) const = 0;
 
-  /// \brief The finalized encoded form of the statistics for transport
-  virtual EncodedStatistics Encode() = 0;
+  /// \brief The finalized encoded form of the statistics for transport.
+  virtual EncodedStatistics encode() = 0;
 
-  /// \brief The physical type of the column schema
-  virtual Type::type physical_type() const = 0;
+  /// \brief The physical type of the column schema.
+  virtual Type::type physicalType() const = 0;
 
-  /// \brief The full type descriptor from the column schema
+  /// \brief The full type descriptor from the column schema.
   virtual const ColumnDescriptor* descr() const = 0;
 
-  /// \brief Check two Statistics for equality
-  virtual bool Equals(const Statistics& other) const = 0;
+  /// \brief Check two Statistics for equality.
+  virtual bool equals(const Statistics& other) const = 0;
 
-  /// \brief Return true if this object's max is greater than the other's max
-  /// \param[in] other the Statistics object to compare against
-  virtual bool MaxGreaterThan(const Statistics& other) const = 0;
+  /// \brief Return true if this object's max is greater than the other's
+  /// max.
+  /// \param[in] other The Statistics object to compare against.
+  virtual bool maxGreaterThan(const Statistics& other) const = 0;
 
-  /// \brief Return true if this object's min is less than the other's min
-  /// \param[in] other the Statistics object to compare against
-  virtual bool MinLessThan(const Statistics& other) const = 0;
+  /// \brief Return true if this object's min is less than the other's min.
+  /// \param[in] other The Statistics object to compare against.
+  virtual bool minLessThan(const Statistics& other) const = 0;
 
  protected:
-  static std::shared_ptr<Statistics> Make(
-      Type::type physical_type,
+  static std::shared_ptr<Statistics> make(
+      Type::type physicalType,
       const void* min,
       const void* max,
-      int64_t num_values,
-      int64_t null_count,
-      int64_t distinct_count);
+      int64_t numValues,
+      int64_t nullCount,
+      int64_t distinctCount);
 };
 
-/// \brief A typed implementation of Statistics
+/// \brief A typed implementation of Statistics.
 template <typename DType>
 class TypedStatistics : public Statistics {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
-  /// \brief The current minimum value
+  /// \brief The current minimum value.
   virtual const T& min() const = 0;
 
-  /// \brief The current maximum value
+  /// \brief The current maximum value.
   virtual const T& max() const = 0;
 
-  /// \brief Update state with state of another Statistics object
-  virtual void Merge(const TypedStatistics<DType>& other) = 0;
+  /// \brief Update state with state of another Statistics object.
+  virtual void merge(const TypedStatistics<DType>& other) = 0;
 
-  /// \brief Batch statistics update
+  /// \brief Batch statistics update.
   virtual void
-  Update(const T* values, int64_t num_values, int64_t null_count) = 0;
+  update(const T* values, int64_t numValues, int64_t nullCount) = 0;
 
-  /// \brief Batch statistics update with supplied validity bitmap
-  /// \param[in] values pointer to column values
-  /// \param[in] valid_bits Pointer to bitmap representing if values are
-  /// non-null. \param[in] valid_bits_offset Offset offset into valid_bits where
-  /// the slice of
-  ///                              data begins.
-  /// \param[in] num_spaced_values The length of values in values/valid_bits to
-  /// inspect
-  ///                              when calculating statistics. This can be
-  ///                              smaller than num_values+null_count as
-  ///                              null_count can include nulls from parents
-  ///                              while num_spaced_values does not.
-  /// \param[in] num_values Number of values that are not null.
-  /// \param[in] null_count Number of values that are null.
-  virtual void UpdateSpaced(
+  /// \brief Batch statistics update with supplied validity bitmap.
+  /// \param[in] values Pointer to column values.
+  /// \param[in] validBits Pointer to bitmap representing if values are
+  /// non-null. \param[in] validBitsOffset Offset offset into validBits
+  /// where the slice of data begins.
+  /// \param[in] numSpacedValues The length of values in values/validBits to
+  /// inspect when calculating statistics. This can be smaller than
+  /// numValues + nullCount as nullCount can include nulls from parents
+  /// while numSpacedValues does not.
+  /// \param[in] numValues Number of values that are not null.
+  /// \param[in] nullCount Number of values that are null.
+  virtual void updateSpaced(
       const T* values,
-      const uint8_t* valid_bits,
-      int64_t valid_bits_offset,
-      int64_t num_spaced_values,
-      int64_t num_values,
-      int64_t null_count) = 0;
+      const uint8_t* validBits,
+      int64_t validBitsOffset,
+      int64_t numSpacedValues,
+      int64_t numValues,
+      int64_t nullCount) = 0;
 
   /// \brief EXPERIMENTAL: Update statistics with an Arrow array without
   /// conversion to a primitive Parquet C type. Only implemented for certain
   /// Parquet type / Arrow type combinations like BYTE_ARRAY /
-  /// arrow::BinaryArray
+  /// Arrow::BinaryArray.
   ///
-  /// If update_counts is true then the null_count and num_values will be
-  /// updated based on the null_count of values.  Set to false if these are
+  /// If updateCounts is true then the nullCount and numValues will be
+  /// updated based on the nullCount of values. Set to false if these are
   /// updated elsewhere (e.g. when updating a dictionary where the counts are
-  /// taken from the indices and not the values)
-  virtual void Update(
+  /// taken from the indices and not the values).
+  virtual void update(
       const ::arrow::Array& values,
-      bool update_counts = true) = 0;
+      bool updateCounts = true) = 0;
 
-  /// \brief Set min and max values to particular values
-  virtual void SetMinMax(const T& min, const T& max) = 0;
+  /// \brief Set min and max values to particular values.
+  virtual void setMinMax(const T& min, const T& max) = 0;
 
-  /// \brief Increments the null count directly
-  /// Use Update to extract the null count from data.  Use this if you determine
-  /// the null count through some other means (e.g. dictionary arrays where the
-  /// null count is determined from the indices)
-  virtual void IncrementNullCount(int64_t n) = 0;
+  /// \brief Increments the null count directly.
+  /// Use Update to extract the null count from data.  Use this if you
+  /// determine the null count through some other means (e.g. dictionary arrays
+  /// where the null count is determined from the indices).
+  virtual void incrementNullCount(int64_t n) = 0;
 
-  /// \brief Increments the number of values directly
-  /// The same note on IncrementNullCount applies here
-  virtual void IncrementNumValues(int64_t n) = 0;
+  /// \brief Increments the number of values directly.
+  /// The same note on IncrementNullCount applies here.
+  virtual void incrementNumValues(int64_t n) = 0;
 
-  /// \brief Increments the NaN count directly
-  virtual void IncrementNaNValues(int64_t n) = 0;
+  /// \brief Increments the NaN count directly.
+  virtual void incrementNaNValues(int64_t n) = 0;
 };
 
 using BoolStatistics = TypedStatistics<BooleanType>;
@@ -444,59 +441,59 @@ using DoubleStatistics = TypedStatistics<DoubleType>;
 using ByteArrayStatistics = TypedStatistics<ByteArrayType>;
 using FLBAStatistics = TypedStatistics<FLBAType>;
 
-/// \brief Typed version of Statistics::Make
+/// \brief Typed version of Statistics::Make.
 template <typename DType>
-std::shared_ptr<TypedStatistics<DType>> MakeStatistics(
+std::shared_ptr<TypedStatistics<DType>> makeStatistics(
     const ColumnDescriptor* descr,
     ::arrow::MemoryPool* pool = ::arrow::default_memory_pool()) {
   return std::static_pointer_cast<TypedStatistics<DType>>(
-      Statistics::Make(descr, pool));
+      Statistics::make(descr, pool));
 }
 
-/// \brief Create Statistics initialized to a particular state
-/// \param[in] min the minimum value
-/// \param[in] max the minimum value
-/// \param[in] num_values number of values
-/// \param[in] null_count number of null values
-/// \param[in] distinct_count number of distinct values
+/// \brief Create Statistics initialized to a particular state.
+/// \param[in] min The minimum value.
+/// \param[in] max The maximum value.
+/// \param[in] numValues number of values.
+/// \param[in] nullCount Number of null values.
+/// \param[in] distinctCount Number of distinct values.
 template <typename DType>
-std::shared_ptr<TypedStatistics<DType>> MakeStatistics(
-    const typename DType::c_type& min,
-    const typename DType::c_type& max,
-    int64_t num_values,
-    int64_t null_count,
-    int64_t distinct_count) {
-  return std::static_pointer_cast<TypedStatistics<DType>>(Statistics::Make(
-      DType::type_num, &min, &max, num_values, null_count, distinct_count));
+std::shared_ptr<TypedStatistics<DType>> makeStatistics(
+    const typename DType::CType& min,
+    const typename DType::CType& max,
+    int64_t numValues,
+    int64_t nullCount,
+    int64_t distinctCount) {
+  return std::static_pointer_cast<TypedStatistics<DType>>(Statistics::make(
+      DType::typeNum, &min, &max, numValues, nullCount, distinctCount));
 }
 
-/// \brief Typed version of Statistics::Make
+/// \brief Typed version of Statistics::Make.
 template <typename DType>
-std::shared_ptr<TypedStatistics<DType>> MakeStatistics(
+std::shared_ptr<TypedStatistics<DType>> makeStatistics(
     const ColumnDescriptor* descr,
-    const std::string& encoded_min,
-    const std::string& encoded_max,
-    int64_t num_values,
-    int64_t null_count,
-    int64_t distinct_count,
-    int64_t nan_count,
-    bool has_min_max,
-    bool has_null_count,
-    bool has_distinct_count,
-    bool has_nan_count,
+    const std::string& encodedMin,
+    const std::string& encodedMax,
+    int64_t numValues,
+    int64_t nullCount,
+    int64_t distinctCount,
+    bool hasMinMax,
+    bool hasNullCount,
+    bool hasDistinctCount,
+    bool hasNaNCount,
+    int64_t nanCount,
     ::arrow::MemoryPool* pool = ::arrow::default_memory_pool()) {
-  return std::static_pointer_cast<TypedStatistics<DType>>(Statistics::Make(
+  return std::static_pointer_cast<TypedStatistics<DType>>(Statistics::make(
       descr,
-      encoded_min,
-      encoded_max,
-      num_values,
-      null_count,
-      distinct_count,
-      nan_count,
-      has_min_max,
-      has_null_count,
-      has_distinct_count,
-      has_nan_count,
+      encodedMin,
+      encodedMax,
+      numValues,
+      nullCount,
+      distinctCount,
+      hasMinMax,
+      hasNullCount,
+      hasDistinctCount,
+      hasNaNCount,
+      nanCount,
       pool));
 }
 
