@@ -23,12 +23,27 @@ void SplitsStore::addSplit(
     std::vector<ContinuePromise>& promises) {
   VELOX_CHECK(!noMoreSplits_);
   VELOX_CHECK(!(remoteSplit_ && split.isBarrier()));
-  splits_.push_back(std::move(split));
-  if (promises_.empty()) {
+  if (split.isBarrier()) {
+    for (auto i = 0; i < split.numBarrierDrivers_; ++i) {
+      barrierSplits_[i] = Split::createBarrier();
+    }
+
+    while (!promises_.empty()) {
+      promises.push_back(std::move(promises_.back()));
+      promises_.pop_back();
+    }
+  } else {
+    splits_.push_back(std::move(split));
+    if (!promises_.empty()) {
+      promises.push_back(std::move(promises_.back()));
+      promises_.pop_back();
+    }
+  }
+  /*if (promises_.empty()) {
     return;
   }
   promises.push_back(std::move(promises_.back()));
-  promises_.pop_back();
+  promises_.pop_back();*/
 }
 
 ContinueFuture SplitsStore::makeFuture() {

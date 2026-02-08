@@ -336,7 +336,6 @@ AssertQueryBuilder::readCursor() {
       return;
     }
     auto& task = taskCursor->task();
-    VELOX_CHECK(!params_.barrierExecution || params_.serialExecution);
     if (params_.barrierExecution) {
       int numSplits{0};
       for (auto& [nodeId, nodeSplits] : splits_) {
@@ -350,6 +349,8 @@ AssertQueryBuilder::readCursor() {
               nodeId, std::move(nodeSplits[0]), ++sequenceId_);
           task->setMaxSplitSequenceId(nodeId, sequenceId_);
         } else {
+          LOG(ERROR) << "Task " << task->taskId() << " add split for node "
+                     << nodeId;
           task->addSplit(nodeId, std::move(nodeSplits[0]));
         }
         nodeSplits.erase(nodeSplits.cbegin());

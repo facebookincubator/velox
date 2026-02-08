@@ -48,9 +48,8 @@ class TaskQueue {
   // producer may continue. Returns kWaitForConsumer if the queue is
   // full after the addition and sets '*future' to a future that is
   // realized when the producer may continue.
-  exec::BlockingReason enqueue(
-      RowVectorPtr vector,
-      velox::ContinueFuture* future);
+  exec::BlockingReason
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
 
   // Returns nullptr when all producers are at end. Otherwise blocks.
   RowVectorPtr dequeue();
@@ -62,6 +61,8 @@ class TaskQueue {
   velox::memory::MemoryPool* pool() const {
     return pool_.get();
   }
+
+  std::atomic<int32_t> producersDrainFinished_ = 0;
 
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
@@ -83,11 +84,21 @@ class TaskQueue {
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
+    bool drained,
     velox::ContinueFuture* future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
-    ++producersFinished_;
+
+    if (!drained) {
+      ++producersFinished_;
+      LOG(ERROR) << "MADUAN enqueue producer finished " << producersFinished_;
+    } else {
+      ++producersDrainFinished_;
+      LOG(ERROR) << "MADUAN enqueue producer barrier finished "
+                 << producersDrainFinished_;
+    }
     if (consumerBlocked_) {
+      LOG(ERROR) << "Vector is null set promise";
       consumerBlocked_ = false;
       consumerPromise_.setValue();
     }
@@ -105,6 +116,7 @@ exec::BlockingReason TaskQueue::enqueue(
   queue_.push_back(std::move(entry));
   totalBytes_ += bytes;
   if (consumerBlocked_) {
+    LOG(ERROR) << "Vector valid set promise";
     consumerBlocked_ = false;
     consumerPromise_.setValue();
   }
@@ -138,9 +150,17 @@ RowVectorPtr TaskQueue::dequeue() {
         }
       } else if (
           numProducers_.has_value() && producersFinished_ == numProducers_) {
+        LOG(ERROR) << "MADUAN dequeue producersFinished_ == numProducers_";
+        return nullptr;
+      } else if (producersDrainFinished_ == numProducers_) {
+        LOG(ERROR)
+            << "MADUAN dequeue producersDrainFinished_ == numProducers_ = "
+            << producersDrainFinished_;
         return nullptr;
       }
+
       if (!vector) {
+        LOG(ERROR) << "Vector is null add promise";
         consumerBlocked_ = true;
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
@@ -153,7 +173,9 @@ RowVectorPtr TaskQueue::dequeue() {
     if (vector) {
       return vector;
     }
+    LOG(ERROR) << "MADUAN dequeue consumer wait";
     consumerFuture_.wait();
+    LOG(ERROR) << "MADUAN dequeue consumer finish";
   }
 }
 
@@ -291,7 +313,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(queryCtx_),
         Task::ExecutionMode::kParallel,
         // consumer
-        [queueHolder, copyResult = params.copyResult, taskId = taskId_](
+        [this, queueHolder, copyResult = params.copyResult, taskId = taskId_](
             const RowVectorPtr& vector,
             bool drained,
             velox::ContinueFuture* future) {
@@ -300,16 +322,16 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
             return exec::BlockingReason::kNotBlocked;
           }
-          VELOX_CHECK(
-              !drained, "Unexpected drain in multithreaded task cursor");
-          if (!vector || !copyResult) {
-            return queue->enqueue(vector, future);
-          }
 
+          if (!vector || !copyResult) {
+            return queue->enqueue(vector, drained, future);
+          }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
           return queue->enqueue(
-              std::static_pointer_cast<RowVector>(std::move(copy)), future);
+              std::static_pointer_cast<RowVector>(std::move(copy)),
+              drained,
+              future);
         },
         0,
         std::move(spillDiskOpts),
@@ -323,7 +345,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             return;
           }
           queue->close();
-        });
+        },
+        maxDrivers_,
+        numConcurrentSplitGroups_);
   }
 
   ~MultiThreadedTaskCursor() override {
@@ -365,6 +389,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     checkTaskError();
     if (!current_) {
+      if (queue_->producersDrainFinished_ > 0) {
+        queue_->producersDrainFinished_ = 0;
+        return false;
+      }
       atEnd_ = true;
     }
     return current_ != nullptr;

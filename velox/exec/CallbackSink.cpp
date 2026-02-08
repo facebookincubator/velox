@@ -26,6 +26,8 @@ RowVectorPtr CallbackSink::getOutput() {
   if (FOLLY_LIKELY(!isDraining())) {
     return nullptr;
   }
+  LOG(ERROR) << "Callback getOutput isDraining "
+             << operatorCtx_->driverCtx()->driverId;
   const auto blockingReason = consumeCb_(nullptr, /*drained=*/true, &future_);
   VELOX_CHECK_EQ(blockingReason, BlockingReason::kNotBlocked);
   finishDrain();
@@ -60,8 +62,11 @@ BlockingReason CallbackSink::isBlocked(ContinueFuture* future) {
 
 void CallbackSink::close() {
   if (consumeCb_ == nullptr) {
+    LOG(ERROR) << "MACDUAN no more cb = null";
+
     return;
   }
+  LOG(ERROR) << "MACDUAN no more";
   consumeCb_(nullptr, false, nullptr);
   consumeCb_ = nullptr;
   Operator::close();
