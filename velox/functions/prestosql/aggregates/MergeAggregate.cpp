@@ -86,7 +86,7 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
         if (argTypes[0] == KHYPERLOGLOG()) {
           return std::make_unique<MergeKHyperLogLogAggregate>(resultType);
         }
-        if (argTypes[0]->isUnKnown()) {
+        if (argTypes[0]->isUnknown()) {
           return std::make_unique<HyperLogLogAggregate<UnknownValue, true>>(
               resultType, hllAsRawInput, defaultError);
         }

@@ -91,7 +91,7 @@ int32_t AggregationFuzzerBase::randInt(int32_t min, int32_t max) {
 
 bool AggregationFuzzerBase::isSupportedType(const TypePtr& type) const {
   // Date / IntervalDayTime/ Unknown are not currently supported by DWRF.
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
+  if (type->isDate() || type->isIntervalDayTime() || type->isUnknown()) {
     return false;
   }
 

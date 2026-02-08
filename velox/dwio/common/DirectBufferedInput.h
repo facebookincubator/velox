@@ -227,6 +227,14 @@ class DirectBufferedInput : public BufferedInput {
   /// Resets the buffered input for reuse across different operations.
   void reset() override;
 
+ protected:
+  // Some members are protected to allow custom extended buffered inputs.
+  // Regions that are candidates for loading.
+  std::vector<LoadRequest> requests_;
+
+  // Distinct coalesced loads in 'coalescedLoads_'.
+  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
+
  private:
   // Constructor used by clone().
   DirectBufferedInput(
@@ -293,15 +301,11 @@ class DirectBufferedInput : public BufferedInput {
   const uint64_t fileSize_;
   const io::ReaderOptions options_;
 
-  // Regions that are candidates for loading.
-  std::vector<LoadRequest> requests_;
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
-  // Distinct coalesced loads in 'coalescedLoads_'.
-  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
 };
 
 } // namespace facebook::velox::dwio::common
