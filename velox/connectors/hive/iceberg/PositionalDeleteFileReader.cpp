@@ -57,9 +57,6 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   VELOX_CHECK(deleteFile_.content == FileContent::kPositionalDeletes);
   VELOX_CHECK(deleteFile_.recordCount);
 
-  // TODO: check if the lowerbounds and upperbounds in deleteFile overlap with
-  //  this batch. If not, no need to proceed.
-
   // Create the ScanSpec for this delete file
   auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   scanSpec->addField(posColumn_->name, 0);
