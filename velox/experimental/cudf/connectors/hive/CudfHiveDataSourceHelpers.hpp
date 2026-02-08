@@ -25,11 +25,12 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_schema.hpp>
+#include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 
-#include <list>
-#include <string>
-#include <unordered_map>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/resource_ref.hpp>
+
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -71,53 +72,30 @@ class BufferedInputDataSource : public cudf::io::datasource {
   const size_t fileSize_;
 };
 
-// ---------------- Internal helper ----------------
-// Convert a filter expression such that all `ast::column_reference`s are
-// replaced with `ast::column_name_reference`s from the selected columns or
-// the schema tree.
-// TODO(mh): Remove this once https://github.com/rapidsai/cudf/pull/20604 is
-// merged
-class referenceToNameConverter
-    : public cudf::ast::detail::expression_transformer {
- public:
-  explicit referenceToNameConverter(
-      std::optional<std::reference_wrapper<const cudf::ast::expression>> expr,
-      const std::vector<cudf::io::parquet::SchemaElement>& schemaTree,
-      cudf::host_span<const std::string> readColumnNames);
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::literal& expr) override;
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::column_reference& expr) override;
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::column_name_reference& expr) override;
-
-  std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::operation& expr) override;
-
-  // Returns the converted AST expression
-  [[nodiscard]] std::reference_wrapper<const cudf::ast::expression>
-  convertedExpression() const;
-
- private:
-  std::vector<std::reference_wrapper<const cudf::ast::expression>>
-  visitOperands(
-      cudf::host_span<const std::reference_wrapper<const cudf::ast::expression>>
-          operands);
-  cudf::ast::tree convertedExpr_;
-  std::unordered_map<cudf::size_type, std::string> indicesToColumnNames_;
-};
-
 // Fetch a host buffer containing parquet source footer from a data source.
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource);
 
-std::vector<std::unique_ptr<cudf::io::datasource>>
-makeDataSourcesFromSourceInfo(
-    const cudf::io::source_info& info,
-    size_t offset = 0,
-    size_t maxSizeEstimate = 0);
+/**
+ * @brief Converts a list of byte ranges into lists of device buffers, device
+ * spans corresponding to each byte range, and a future to wait for all reads to
+ * complete
+ *
+ * @param dataSource Data source
+ * @param byteRanges Byte ranges to fetch
+ * @param stream CUDA stream
+ * @param mr Device memory resource
+ * @return Device buffers, device spans corresponding to each byte range, and a
+ * future to wait for all reads to complete
+ */
+std::tuple<
+    std::vector<rmm::device_buffer>,
+    std::vector<cudf::device_span<uint8_t const>>,
+    std::future<void>>
+fetchByteRanges(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox::connector::hive

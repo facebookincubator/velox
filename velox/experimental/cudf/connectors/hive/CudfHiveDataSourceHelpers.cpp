@@ -28,7 +28,6 @@
 
 #include <folly/futures/Future.h>
 
-#include <list>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -133,91 +132,6 @@ void BufferedInputDataSource::readContiguous(
   stream->readFully(reinterpret_cast<char*>(dst), size);
 }
 
-referenceToNameConverter::referenceToNameConverter(
-    std::optional<std::reference_wrapper<const cudf::ast::expression>> expr,
-    const std::vector<cudf::io::parquet::SchemaElement>& schemaTree,
-    cudf::host_span<const std::string> readColumnNames) {
-  if (not expr.has_value()) {
-    return;
-  }
-  // Map column indices to their names
-  if (not readColumnNames.empty()) {
-    std::transform(
-        readColumnNames.begin(),
-        readColumnNames.end(),
-        thrust::counting_iterator<cudf::size_type>(0),
-        std::inserter(indicesToColumnNames_, indicesToColumnNames_.end()),
-        [](const auto& columnName, const auto colIndex) {
-          return std::make_pair(colIndex, columnName);
-        });
-  } else {
-    const auto& root = schemaTree.front();
-    std::for_each(
-        thrust::counting_iterator(0),
-        thrust::counting_iterator<cudf::size_type>(root.children_idx.size()),
-        [&](int32_t colIndex) {
-          const auto schemaIdx = root.children_idx[colIndex];
-          indicesToColumnNames_.insert({colIndex, schemaTree[schemaIdx].name});
-        });
-  }
-
-  expr.value().get().accept(*this);
-}
-
-std::reference_wrapper<const cudf::ast::expression>
-referenceToNameConverter::visit(const cudf::ast::literal& expr) {
-  return expr;
-}
-
-std::reference_wrapper<const cudf::ast::expression>
-referenceToNameConverter::visit(const cudf::ast::column_reference& expr) {
-  const auto columnIdx = expr.get_column_index();
-  const auto columnName = indicesToColumnNames_.find(columnIdx);
-  VELOX_CHECK(
-      columnName != indicesToColumnNames_.end(), "Column index not found");
-  convertedExpr_.push(cudf::ast::column_name_reference{columnName->second});
-  return std::reference_wrapper<const cudf::ast::expression>(
-      convertedExpr_.back());
-}
-
-std::reference_wrapper<const cudf::ast::expression>
-referenceToNameConverter::visit(const cudf::ast::column_name_reference& expr) {
-  return expr;
-}
-
-std::reference_wrapper<const cudf::ast::expression>
-referenceToNameConverter::visit(const cudf::ast::operation& expr) {
-  const auto operands = expr.get_operands();
-  auto op = expr.get_operator();
-  auto newOperands = visitOperands(operands);
-  const auto operatorArity = cudf::ast::detail::ast_operator_arity(op);
-  if (operatorArity == 2) {
-    convertedExpr_.push(
-        cudf::ast::operation{op, newOperands.front(), newOperands.back()});
-  } else if (operatorArity == 1) {
-    convertedExpr_.push(cudf::ast::operation{op, newOperands.front()});
-  }
-  return convertedExpr_.back();
-}
-
-std::reference_wrapper<const cudf::ast::expression>
-referenceToNameConverter::convertedExpression() const {
-  return convertedExpr_.back();
-}
-
-std::vector<std::reference_wrapper<const cudf::ast::expression>>
-referenceToNameConverter::visitOperands(
-    cudf::host_span<const std::reference_wrapper<const cudf::ast::expression>>
-        operands) {
-  std::vector<std::reference_wrapper<const cudf::ast::expression>>
-      transformedOperands;
-  for (const auto& operand : operands) {
-    const auto newOperand = operand.get().accept(*this);
-    transformedOperands.push_back(newOperand);
-  }
-  return transformedOperands;
-}
-
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource) {
   using namespace cudf::io::parquet;
@@ -247,30 +161,102 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
       len - ender->footer_len - ender_len, ender->footer_len);
 }
 
-std::vector<std::unique_ptr<cudf::io::datasource>>
-makeDataSourcesFromSourceInfo(
-    const cudf::io::source_info& info,
-    size_t offset,
-    size_t maxSizeEstimate) {
-  switch (info.type()) {
-    case cudf::io::io_type::FILEPATH: {
-      std::vector<std::unique_ptr<cudf::io::datasource>> sources;
-      sources.reserve(info.filepaths().size());
-      for (auto const& filepath : info.filepaths()) {
-        sources.emplace_back(
-            cudf::io::datasource::create(filepath, offset, maxSizeEstimate));
+std::tuple<
+    std::vector<rmm::device_buffer>,
+    std::vector<cudf::device_span<uint8_t const>>,
+    std::future<void>>
+fetchByteRanges(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  static std::mutex mutex;
+  std::vector<cudf::device_span<uint8_t const>> columnChunkData(
+      byteRanges.size());
+  std::vector<std::future<size_t>> readTasks{};
+  std::vector<rmm::device_buffer> columnChunkBuffers{};
+  readTasks.reserve(byteRanges.size());
+  columnChunkBuffers.reserve(byteRanges.size());
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (size_t chunk = 0; chunk < byteRanges.size();) {
+      auto const ioOffset = static_cast<size_t>(byteRanges[chunk].offset());
+      auto ioSize = static_cast<size_t>(byteRanges[chunk].size());
+      size_t nextChunk = chunk + 1;
+      while (nextChunk < byteRanges.size()) {
+        size_t const nextOffset = byteRanges[nextChunk].offset();
+        if (nextOffset != ioOffset + ioSize) {
+          break;
+        }
+        ioSize += byteRanges[nextChunk].size();
+        nextChunk++;
       }
-      return sources;
+
+      // Padding is necessary for input/output buffers of several
+      // compression/decompression kernels Such kernels operate on aligned data
+      // pointers, which require padding to the buffers so that the pointers can
+      // shift along the address space to satisfy their alignment requirement.
+      constexpr size_t bufferPaddingMultiple = 8;
+
+      if (ioSize != 0) {
+        columnChunkBuffers.emplace_back(
+            cudf::util::round_up_safe(ioSize, bufferPaddingMultiple),
+            stream,
+            mr);
+        // Directly read the column chunk data to the device buffer if
+        // supported
+        if (dataSource->supports_device_read() and
+            dataSource->is_device_read_preferred(ioSize)) {
+          readTasks.emplace_back(dataSource->device_read_async(
+              ioOffset,
+              ioSize,
+              static_cast<uint8_t*>(columnChunkBuffers.back().data()),
+              stream));
+        } else {
+          // Asynchronously read the column chunk data to the host buffer and
+          // copy it to the device buffer
+          readTasks.emplace_back(
+              std::async(
+                  std::launch::deferred,
+                  [dataSource,
+                   ioOffset,
+                   ioSize,
+                   stream,
+                   dest = columnChunkBuffers.back().data()]() {
+                    auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
+                    CUDF_CUDA_TRY(cudaMemcpyAsync(
+                        dest,
+                        hostBuffer->data(),
+                        ioSize,
+                        cudaMemcpyHostToDevice,
+                        stream.value()));
+                    return ioSize;
+                  }));
+        }
+        auto chunkDeviceSpanPtr =
+            static_cast<uint8_t const*>(columnChunkBuffers.back().data());
+        do {
+          columnChunkData[chunk] = cudf::device_span<uint8_t const>{
+              chunkDeviceSpanPtr,
+              static_cast<size_t>(byteRanges[chunk].size())};
+          chunkDeviceSpanPtr += byteRanges[chunk].size();
+        } while (++chunk != nextChunk);
+      } else {
+        chunk = nextChunk;
+      }
     }
-    case cudf::io::io_type::HOST_BUFFER:
-      return cudf::io::datasource::create(info.host_buffers());
-    case cudf::io::io_type::DEVICE_BUFFER:
-      return cudf::io::datasource::create(info.device_buffers());
-    case cudf::io::io_type::USER_IMPLEMENTED:
-      return cudf::io::datasource::create(info.user_sources());
-    default:
-      CUDF_FAIL("Unsupported source type");
   }
+
+  auto syncFunction = [](decltype(readTasks) readTasks) {
+    for (auto& task : readTasks) {
+      task.get();
+    }
+  };
+
+  return {
+      std::move(columnChunkBuffers),
+      std::move(columnChunkData),
+      std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive
