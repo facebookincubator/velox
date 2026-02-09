@@ -168,19 +168,23 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td><p>EnforceSingleRow</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>AssignUniqueIdNode</p></td>
+<tr class="row-even"><td><p>EnforceDistinctNode</p></td>
+<td><p>EnforceDistinct or StreamingEnforceDistinct</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>AssignUniqueIdNode</p></td>
 <td><p>AssignUniqueId</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>WindowNode</p></td>
+<tr class="row-even"><td><p>WindowNode</p></td>
 <td><p>Window</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>RowNumberNode</p></td>
+<tr class="row-odd"><td><p>RowNumberNode</p></td>
 <td><p>RowNumber</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>TopNRowNumberNode</p></td>
+<tr class="row-even"><td><p>TopNRowNumberNode</p></td>
 <td><p>TopNRowNumber</p></td>
 <td></td>
 </tr>
@@ -1060,6 +1064,41 @@ returns that row unmodified. If input is empty, returns a single row with all
 values set to null. If input contains more than one row raises an exception.</p>
 <p>Used for queries with non-correlated sub-queries.</p>
 </section>
+<section id="enforcedistinctnode">
+<h3>EnforceDistinctNode<a class="headerlink" href="#enforcedistinctnode" title="Link to this heading">¶</a></h3>
+<p>The EnforceDistinct operator ensures that input rows have unique values for
+specified key columns. It passes through all input rows unchanged, but throws
+an exception with a custom error message if any duplicate key values are
+detected. This is useful for validating uniqueness constraints at runtime,
+such as ensuring a correlated scalar subquery returns at most one row per group.</p>
+<p>When preGroupedKeys equals distinctKeys (i.e., input is clustered on the
+distinct keys), the streaming implementation is used which requires only O(1)
+memory. Otherwise, the hash-based implementation is used which requires O(n)
+memory to track all unique key combinations seen so far.</p>
+<table class="docutils align-left">
+<colgroup>
+<col style="width: 25.0%" />
+<col style="width: 75.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>distinctKeys</p></td>
+<td><p>List of columns that must have unique values.</p></td>
+</tr>
+<tr class="row-odd"><td><p>preGroupedKeys</p></td>
+<td><p>Optional subset of distinctKeys that input is already clustered on. When
+equal to distinctKeys, uses streaming enforcement with O(1) memory.</p></td>
+</tr>
+<tr class="row-even"><td><p>errorMessage</p></td>
+<td><p>Error message to include in the exception when duplicates are found.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 <section id="assignuniqueidnode">
 <h3>AssignUniqueIdNode<a class="headerlink" href="#assignuniqueidnode" title="Link to this heading">¶</a></h3>
 <p>The assign unique id operation adds one column at the end of the input columns
@@ -1319,6 +1358,7 @@ ALL.</p>
 <li><a class="reference internal" href="#localmergenode">LocalMergeNode</a></li>
 <li><a class="reference internal" href="#localpartitionnode">LocalPartitionNode</a></li>
 <li><a class="reference internal" href="#enforcesinglerownode">EnforceSingleRowNode</a></li>
+<li><a class="reference internal" href="#enforcedistinctnode">EnforceDistinctNode</a></li>
 <li><a class="reference internal" href="#assignuniqueidnode">AssignUniqueIdNode</a></li>
 <li><a class="reference internal" href="#windownode">WindowNode</a></li>
 <li><a class="reference internal" href="#rownumbernode">RowNumberNode</a></li>
