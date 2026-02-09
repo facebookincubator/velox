@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfQueryConfig.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
@@ -92,6 +93,11 @@ TEST_F(CudfBatchConcatTest, fragmentedInputGetsConcatenated) {
   exec::CursorParameters params;
   params.planNode = plan;
   params.maxDrivers = 1;
+  // Enable concat optimization for this query so CudfBatchConcat can be
+  // inserted by the adapter.
+  params.queryConfigs
+      [cudf_velox::CudfQueryConfig::kCudfConcatOptimizationEnabled] = "true";
+
   auto [cursor, batches] = exec::test::readCursor(
       params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
 
@@ -103,6 +109,7 @@ TEST_F(CudfBatchConcatTest, fragmentedInputGetsConcatenated) {
   ASSERT_EQ(batches[2]->size(), 20);
 }
 
+// To test if the optimization is not performed after certain operators.
 TEST_F(CudfBatchConcatTest, fragmentedInputDoesNotGetConcatenated) {
   updateCudfConfig(/*min=*/1e5, 1e7);
 
@@ -126,6 +133,43 @@ TEST_F(CudfBatchConcatTest, fragmentedInputDoesNotGetConcatenated) {
   exec::CursorParameters params;
   params.planNode = plan;
   params.maxDrivers = 1;
+  params.queryConfigs
+      [cudf_velox::CudfQueryConfig::kCudfConcatOptimizationEnabled] = "true";
+
+  auto [cursor, batches] = exec::test::readCursor(
+      params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
+
+  // correctness
+  ASSERT_EQ(batches.size(), 6);
+}
+
+TEST_F(CudfBatchConcatTest, concatDisabledWithQueryConfig) {
+  updateCudfConfig(/*min=*/30, /*max=*/20);
+
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 6; ++i) {
+    vectors.push_back(makeRowVector({makeFlatSequence<int64_t>(i * 10, 10)}));
+  }
+
+  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  std::vector<core::PlanNodePtr> sources;
+  for (const auto& vec : vectors) {
+    sources.push_back(PlanBuilder(generator).values({vec}).planNode());
+  }
+
+  auto plan = PlanBuilder(generator)
+                  .localPartitionRoundRobin(sources)
+                  .limit(0, 100, false)
+                  .filter("c0 >= 0") // forces FilterProject
+                  .planNode();
+
+  exec::CursorParameters params;
+  params.planNode = plan;
+  params.maxDrivers = 1;
+  params.queryConfigs
+      [cudf_velox::CudfQueryConfig::kCudfConcatOptimizationEnabled] = "false";
+
   auto [cursor, batches] = exec::test::readCursor(
       params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
 

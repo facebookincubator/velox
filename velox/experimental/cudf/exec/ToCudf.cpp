@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfQueryConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
@@ -418,7 +419,10 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (operatorIndex < operators.size() - 1) {
       nextOper = operators[operatorIndex + 1];
     }
-    if (needsConcat(oper, nextOper) && !nextOperatorIsNotGpu) {
+    if (needsConcat(oper, nextOper) && !nextOperatorIsNotGpu &&
+        ctx->queryConfig().get<bool>(
+            CudfQueryConfig::kCudfConcatOptimizationEnabled,
+            CudfQueryConfig::isConcatOptimizationEnabledDefault)) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(
           std::make_unique<CudfBatchConcat>(oper->operatorId(), ctx, planNode));
