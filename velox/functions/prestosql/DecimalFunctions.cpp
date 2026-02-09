@@ -556,7 +556,9 @@ void registerDecimalModulus(const std::string& prefix) {
 }
 
 template <template <class> typename TFunc>
-void registerDecimalFloorOrCeil(const std::string& prefix, const std::string& functionName) {
+void registerDecimalFloorOrCeil(
+    const std::string& prefix,
+    const std::string& functionName) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
@@ -569,20 +571,14 @@ void registerDecimalFloorOrCeil(const std::string& prefix, const std::string& fu
           S2::name(), "0", exec::ParameterType::kIntegerParameter),
   };
 
-  registerFunction<
-      TFunc,
-      LongDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + functionName}, constraints);
+  registerFunction<TFunc, LongDecimal<P2, S2>, LongDecimal<P1, S1>>(
+      {prefix + functionName}, constraints);
 
-  registerFunction<
-      TFunc,
-      ShortDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + functionName}, constraints);
+  registerFunction<TFunc, ShortDecimal<P2, S2>, LongDecimal<P1, S1>>(
+      {prefix + functionName}, constraints);
 
-  registerFunction<
-      TFunc,
-      ShortDecimal<P2, S2>,
-      ShortDecimal<P1, S1>>({prefix + functionName}, constraints);
+  registerFunction<TFunc, ShortDecimal<P2, S2>, ShortDecimal<P1, S1>>(
+      {prefix + functionName}, constraints);
 }
 
 void registerDecimalFloor(const std::string& prefix) {
