@@ -235,6 +235,14 @@ Decimal Functions
 
     Returns absolute value of x (r = `|x|`).
 
+.. function:: ceil(x: decimal(p, s)) -> r: decimal(pr, 0)
+
+    Returns 'x' rounded up to the nearest integer. The scale of the result is 0.
+    The precision is calculated as:
+    ::
+
+        pr = min(38, p - s + min(s, 1))
+
 .. function:: divide(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p, s)
 
     Returns the result of dividing x by y (r = x / y).
@@ -252,14 +260,6 @@ Decimal Functions
 .. function:: floor(x: decimal(p, s)) -> r: decimal(pr, 0)
 
     Returns 'x' rounded down to the nearest integer. The scale of the result is 0.
-    The precision is calculated as:
-    ::
-
-        pr = min(38, p - s + min(s, 1))
-
-.. function:: ceil(x: decimal(p, s)) -> r: decimal(pr, 0)
-
-    Returns 'x' rounded up to the nearest integer. The scale of the result is 0.
     The precision is calculated as:
     ::
 
