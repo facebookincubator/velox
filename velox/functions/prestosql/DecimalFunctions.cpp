@@ -555,7 +555,7 @@ void registerDecimalModulus(const std::string& prefix) {
       LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
 }
 
-template <typename TFunc>
+template <template <class> typename TFunc>
 void registerDecimalFloorOrCeil(const std::string& prefix, const std::string& functionName) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
