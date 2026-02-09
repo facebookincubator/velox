@@ -585,57 +585,6 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   }
 }
 
-#if 0
-std::vector<ColumnOrView> precomputeSubexpressions(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    const std::vector<PrecomputeInstruction>& precomputeInstructions,
-    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema,
-    rmm::cuda_stream_view stream) {
-  std::vector<ColumnOrView> precomputedColumns;
-  precomputedColumns.reserve(precomputeInstructions.size());
-
-  for (const auto& instruction : precomputeInstructions) {
-    auto
-        [dependent_column_index,
-         ins_name,
-         new_column_index,
-         nested_dependent_column_indices,
-         cudf_expression] = instruction;
-
-    // If a compiled cudf node is available, evaluate it directly.
-    if (cudf_expression) {
-      auto result = cudf_expression->eval(
-          inputTableColumns,
-          stream,
-          cudf::get_current_device_resource_ref(),
-          /*finalize=*/true);
-      precomputedColumns.push_back(std::move(result));
-      continue;
-    }
-    if (ins_name.rfind("fill", 0) == 0) {
-      auto scalarIndex =
-          std::stoi(ins_name.substr(5)); // "fill " is 5 characters
-      auto newColumn = cudf::make_column_from_scalar(
-          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
-          inputTableColumns[dependent_column_index]->size(),
-          stream,
-          cudf::get_current_device_resource_ref());
-      precomputedColumns.push_back(std::move(newColumn));
-    } else if (ins_name == "nested_column") {
-      // Nested column already exists in input. Don't materialize.
-      auto view = inputTableColumns[dependent_column_index]->view().child(
-          nested_dependent_column_indices[0]);
-      precomputedColumns.push_back(view);
-    } else {
-      VELOX_FAIL("Unsupported precompute operation " + ins_name);
-    }
-  }
-
-  return precomputedColumns;
-}
-#endif
-
 int AstContext::findExpressionSide(
     const std::shared_ptr<velox::exec::Expr>& expr) const {
   for (const auto* field : expr->distinctFields()) {
