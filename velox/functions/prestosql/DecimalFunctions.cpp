@@ -278,8 +278,7 @@ struct DecimalFloorFunction {
   template <typename R, typename A>
   void call(R& out, const A& a) {
     const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
-    // Function interpretation is the same as ceil for negative numbers, and as
-    // floor for positive numbers.
+    // Round rowards -INF.
     const auto increment = (a % rescaleFactor) < 0 ? -1 : 0;
     out = a / rescaleFactor + increment;
   }
@@ -303,7 +302,7 @@ struct DecimalCeilFunction {
   template <typename R, typename A>
   void call(R& out, const A& a) {
     const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
-    // the reverse of floor
+    // Round towards +INF.
     const auto increment = (a % rescaleFactor) > 0 ? 1 : 0;
     out = a / rescaleFactor + increment;
   }
@@ -556,7 +555,8 @@ void registerDecimalModulus(const std::string& prefix) {
       LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
 }
 
-void registerDecimalFloor(const std::string& prefix) {
+template <typename TFunc>
+void registerDecimalFloorOrCeil(const std::string& prefix, const std::string& functionName) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
@@ -570,48 +570,27 @@ void registerDecimalFloor(const std::string& prefix) {
   };
 
   registerFunction<
-      DecimalFloorFunction,
+      TFunc,
       LongDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "floor"}, constraints);
+      LongDecimal<P1, S1>>({prefix + functionName}, constraints);
 
   registerFunction<
-      DecimalFloorFunction,
+      TFunc,
       ShortDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "floor"}, constraints);
+      LongDecimal<P1, S1>>({prefix + functionName}, constraints);
 
   registerFunction<
-      DecimalFloorFunction,
+      TFunc,
       ShortDecimal<P2, S2>,
-      ShortDecimal<P1, S1>>({prefix + "floor"}, constraints);
+      ShortDecimal<P1, S1>>({prefix + functionName}, constraints);
+}
+
+void registerDecimalFloor(const std::string& prefix) {
+  registerDecimalFloorOrCeil<DecimalFloorFunction>(prefix, "floor");
 }
 
 void registerDecimalCeil(const std::string& prefix) {
-  std::vector<exec::SignatureVariable> constraints = {
-      exec::SignatureVariable(
-          P2::name(),
-          fmt::format(
-              "min(38, {p} - {s} + min({s}, 1))",
-              fmt::arg("p", P1::name()),
-              fmt::arg("s", S1::name())),
-          exec::ParameterType::kIntegerParameter),
-      exec::SignatureVariable(
-          S2::name(), "0", exec::ParameterType::kIntegerParameter),
-  };
-
-  registerFunction<
-      DecimalCeilFunction,
-      LongDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "ceil"}, constraints);
-
-  registerFunction<
-      DecimalCeilFunction,
-      ShortDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "ceil"}, constraints);
-
-  registerFunction<
-      DecimalCeilFunction,
-      ShortDecimal<P2, S2>,
-      ShortDecimal<P1, S1>>({prefix + "ceil"}, constraints);
+  registerDecimalFloorOrCeil<DecimalCeilFunction>(prefix, "ceil");
 }
 
 void registerDecimalRound(const std::string& prefix) {
