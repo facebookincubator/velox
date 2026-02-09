@@ -573,8 +573,8 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
   // Do not pass these values to the Parquet reader for now, as the values
   // provided specifically by Presto appear to be incorrect, and hence Parquet
   // reading in that context is broken. This is the minimal change to unbreak
-  // things, so that it can more conveniently be investigated on the Presto side.
-  // simoneves 2/9/26
+  // things, so that it can more conveniently be investigated on the Presto
+  // side. simoneves 2/9/26
 #define PASS_SPLIT_START_AND_SIZE_TO_CUDF_PARQUET_READER 0
 
   // Reader options
@@ -635,9 +635,8 @@ CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
   if (not pageIndexByteRange.is_empty()) {
     auto const pageIndexBytes = dataSource_->host_read(
         pageIndexByteRange.offset(), pageIndexByteRange.size());
-    exptSplitReader->setup_page_index(
-        cudf::host_span<uint8_t const>{
-            pageIndexBytes->data(), pageIndexBytes->size()});
+    exptSplitReader->setup_page_index(cudf::host_span<uint8_t const>{
+        pageIndexBytes->data(), pageIndexBytes->size()});
   }
 
   return exptSplitReader;
