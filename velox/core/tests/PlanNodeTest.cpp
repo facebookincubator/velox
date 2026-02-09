@@ -523,9 +523,11 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/true,
+        /*preferStreamingAggregation=*/false,
         values);
     ASSERT_TRUE(aggNode->noGroupsSpanBatches());
     ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
     ASSERT_EQ(
         aggNode->toString(true),
         "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum() noGroupsSpanBatches] -> c0:BIGINT, sum:BIGINT\n");
@@ -543,9 +545,11 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
         values);
     ASSERT_FALSE(aggNode->noGroupsSpanBatches());
     ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
     ASSERT_EQ(
         aggNode->toString(true),
         "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
@@ -563,6 +567,7 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
           aggregates,
           /*ignoreNullKeys=*/false,
           /*noGroupsSpanBatches=*/true,
+          /*preferStreamingAggregation=*/false,
           values),
       "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
 
@@ -577,9 +582,11 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
         values);
     ASSERT_FALSE(aggNode->noGroupsSpanBatches());
     ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
     ASSERT_EQ(
         aggNode->toString(true),
         "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");

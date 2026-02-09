@@ -497,6 +497,7 @@ PlanNodePtr toVeloxPlan(
       std::move(aggregates),
       /*ignoreNullKeys=*/false,
       /*noGroupsSpanBatches=*/false,
+      /*preferStreamingAggregation=*/false,
       source);
 }
 

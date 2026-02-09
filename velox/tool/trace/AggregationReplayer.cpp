@@ -40,6 +40,7 @@ core::PlanNodePtr AggregationReplayer::createPlanNode(
       aggregationNode->groupId(),
       aggregationNode->ignoreNullKeys(),
       aggregationNode->noGroupsSpanBatches(),
+      aggregationNode->preferStreamingAggregation(),
       source);
 }
 } // namespace facebook::velox::tool::trace

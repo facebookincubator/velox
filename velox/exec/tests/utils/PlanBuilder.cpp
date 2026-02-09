@@ -937,9 +937,11 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       aggregates,
       partialAggNode->ignoreNullKeys(),
       partialAggNode->noGroupsSpanBatches(),
+      partialAggNode->preferStreamingAggregation(),
       planNode_);
   VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+      aggregationNode->supportsBarrier(),
+      aggregationNode->shouldUseStreamingAggregation());
   return aggregationNode;
 }
 
@@ -1143,9 +1145,11 @@ PlanBuilder& PlanBuilder::aggregation(
       groupId,
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
+      /*preferStreamingAggregation=*/false,
       planNode_);
   VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+      aggregationNode->supportsBarrier(),
+      aggregationNode->shouldUseStreamingAggregation());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1168,9 +1172,11 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       aggregatesAndNames.aggregates,
       ignoreNullKeys,
       noGroupsSpanBatches,
+      true,
       planNode_);
   VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+      aggregationNode->supportsBarrier(),
+      aggregationNode->shouldUseStreamingAggregation());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
