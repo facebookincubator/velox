@@ -570,10 +570,19 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     dataSource_ = std::move(makeDataSourcesFromSourceInfo(sourceInfo).front());
   }
 
+  // Do not pass these values to the Parquet reader for now, as the values
+  // provided specifically by Presto appear to be incorrect, and hence Parquet
+  // reading in that context is broken. This is the minimal change to unbreak
+  // things, so that it can more conveniently be investigated on the Presto side.
+  // simoneves 2/9/26
+#define PASS_SPLIT_START_AND_SIZE_TO_CUDF_PARQUET_READER 0
+
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
+#if PASS_SPLIT_START_AND_SIZE_TO_CUDF_PARQUET_READER
           .skip_bytes(split_->start)
+#endif
           .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
@@ -581,10 +590,12 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
+#if PASS_SPLIT_START_AND_SIZE_TO_CUDF_PARQUET_READER
   // Set num_bytes only if available
   if (split_->size() != std::numeric_limits<uint64_t>::max()) {
     readerOptions_.set_num_bytes(split_->size());
   }
+#endif
 
   if (subfieldFilterExpr_ != nullptr) {
     readerOptions_.set_filter(*subfieldFilterExpr_);
