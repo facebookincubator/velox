@@ -87,10 +87,10 @@ int main(int argc, char** argv) {
       [](auto row) { return fmt::format("2024-05-{:02d}", 1 + row % 30); });
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
-  auto validTimeStrings = vectorMaker.flatVector<std::string>(
-      vectorSize,
-      [](auto row) {
-        return fmt::format("{:02d}:{:02d}:{:02d}", row % 24, row % 60, row % 60);
+  auto validTimeStrings =
+      vectorMaker.flatVector<std::string>(vectorSize, [](auto row) {
+        return fmt::format(
+            "{:02d}:{:02d}:{:02d}", row % 24, row % 60, row % 60);
       });
 
   benchmarkBuilder
