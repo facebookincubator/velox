@@ -117,6 +117,7 @@ Expected<int64_t> SparkCastHooks::castStringToTime(
     int64_t /* sessionStartTimeMs */) const {
   // Spark represents TIME as BIGINT (microseconds since midnight).
   // Spark doesn't use timezone for TIME type, so we ignore those parameters.
+  // Note: timeString has already been trimmed by CastExpr::removeWhiteSpaces.
   // Parse the time string and convert from milliseconds to microseconds.
   auto timeMillis = util::fromTimeString(timeString);
 
