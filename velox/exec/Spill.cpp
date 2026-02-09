@@ -138,9 +138,8 @@ SpillState::SpillState(
     common::CompressionKind compressionKind,
     const std::optional<common::PrefixSortConfig>& prefixSortConfig,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats,
-    const std::string& fileCreateConfig,
-    filesystems::File::IoStats* fsStats)
+    exec::SpillStats* stats,
+    const std::string& fileCreateConfig)
     : getSpillDirPathCb_(getSpillDirPathCb),
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileNamePrefix_(fileNamePrefix),
@@ -151,8 +150,7 @@ SpillState::SpillState(
       prefixSortConfig_(prefixSortConfig),
       fileCreateConfig_(fileCreateConfig),
       pool_(pool),
-      stats_(stats),
-      fsStats_(fsStats) {}
+      stats_(stats) {}
 
 std::vector<SpillSortKey> SpillState::makeSortingKeys(
     const std::vector<CompareFlags>& compareFlags) {
@@ -180,8 +178,8 @@ std::vector<SpillSortKey> SpillState::makeSortingKeys(
 void SpillState::setPartitionSpilled(const SpillPartitionId& id) {
   VELOX_DCHECK(!spilledPartitionIdSet_.contains(id));
   spilledPartitionIdSet_.emplace(id);
-  ++stats_->wlock()->spilledPartitions;
-  common::incrementGlobalSpilledPartitionStats();
+  stats_->spilledPartitions.fetch_add(1, std::memory_order_relaxed);
+  incrementGlobalSpilledPartitionStats();
 }
 
 /*static*/
@@ -198,9 +196,8 @@ void SpillState::validateSpillBytesSize(uint64_t bytes) {
 }
 
 void SpillState::updateSpilledInputBytes(uint64_t bytes) {
-  auto statsLocked = stats_->wlock();
-  statsLocked->spilledInputBytes += bytes;
-  common::updateGlobalSpillMemoryBytes(bytes);
+  stats_->spilledInputBytes.fetch_add(bytes, std::memory_order_relaxed);
+  updateGlobalSpillMemoryBytes(bytes);
 }
 
 uint64_t SpillState::appendToPartition(
@@ -233,8 +230,7 @@ uint64_t SpillState::appendToPartition(
               fileCreateConfig_,
               updateAndCheckSpillLimitCb_,
               pool_,
-              stats_,
-              fsStats_));
+              stats_));
     }
   });
 
@@ -350,7 +346,7 @@ std::unique_ptr<UnorderedStreamReader<BatchStream>>
 SpillPartition::createUnorderedReader(
     uint64_t bufferSize,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats) {
+    exec::SpillStats* spillStats) {
   VELOX_CHECK_NOT_NULL(pool);
   std::vector<std::unique_ptr<BatchStream>> streams;
   streams.reserve(files_.size());
@@ -368,7 +364,7 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReaderInternal(
     uint64_t bufferSize,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats) {
+    exec::SpillStats* spillStats) {
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
@@ -443,8 +439,7 @@ SpillFileInfo mergeSpillFiles(
     uint64_t writeBufferSize,
     SpillFileMergeParams& mergeParams,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    filesystems::File::IoStats* fsStats) {
+    exec::SpillStats* spillStats) {
   VELOX_CHECK_GT(files.size(), 0);
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files.size());
@@ -470,8 +465,7 @@ SpillFileInfo mergeSpillFiles(
       fileCreateConfig,
       updateAndCheckSpillLimitCb,
       pool,
-      spillStats,
-      fsStats);
+      spillStats);
 
   while (mergeTree->next()) {
     VectorPtr tmpRowVector = std::move(mergeParams.rowVector);
@@ -507,8 +501,7 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReader(
     const common::SpillConfig& spillConfig,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    filesystems::File::IoStats* fsStats) {
+    exec::SpillStats* spillStats) {
   const auto numMaxMergeFiles = spillConfig.numMaxMergeFiles;
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
@@ -541,8 +534,7 @@ SpillPartition::createOrderedReader(
         spillConfig.writeBufferSize,
         mergeParams,
         pool,
-        spillStats,
-        fsStats);
+        spillStats);
     orderedFiles.push(mergedFile);
     files.clear();
   }

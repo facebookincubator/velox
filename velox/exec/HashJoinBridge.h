@@ -272,7 +272,7 @@ SpillPartitionSet spillHashJoinTable(
     const HashBitRange& hashBitRange,
     const std::shared_ptr<const core::HashJoinNode>& joinNode,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats);
+    exec::SpillStats* spillStats);
 
 /// Returns the type used to spill a given hash table type. The function
 /// might attach a boolean column at the end of 'tableType' if 'joinType' needs
