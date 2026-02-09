@@ -75,6 +75,13 @@ cudf::table_view createExtendedTableView(
 
 } // namespace
 
+void CudfHashJoinProbe::close() {
+  Operator::close();
+  filterEvaluator_.reset();
+  scalars_.clear();
+  tree_ = {};
+}
+
 void CudfHashJoinBridge::setHashTable(
     std::optional<CudfHashJoinBridge::hash_type> hashObject) {
   if (CudfConfig::getInstance().debugEnabled) {
@@ -408,6 +415,14 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
     VELOX_CHECK_EQ(exprs.exprs().size(), 1);
 
+    // Create a reusable evaluator for the filter column. This is expensive to
+    // build, and the expression + input schema are stable for the lifetime of
+    // the operator instance.
+    std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
+    filterEvaluator_ = createCudfExpression(
+        exprs.exprs()[0],
+        facebook::velox::type::concatRowTypes(filterRowTypes));
+
     // We don't need to get tables that contain conditional comparison columns
     // We'll pass the entire table. The ast will handle finding the required
     // columns. This is required because we build the ast with whole row schema
@@ -628,18 +643,16 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
       std::make_move_iterator(rightCols.begin()),
       std::make_move_iterator(rightCols.end()));
 
-  std::vector<velox::RowTypePtr> rowTypes{probeType_, buildType_};
-  exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
-  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
-  auto filterEvaluator = createCudfExpression(
-      exprs.exprs()[0], facebook::velox::type::concatRowTypes(rowTypes));
-  std::vector<cudf::column_view> inputViews;
-  inputViews.reserve(joinedCols.size());
-  for (auto& col : joinedCols) {
-    inputViews.push_back(col->view());
+  VELOX_CHECK_NOT_NULL(
+      filterEvaluator_,
+      "Join filter evaluator must be initialized before filteredOutput()");
+  std::vector<cudf::column_view> joinedColViews;
+  joinedColViews.reserve(joinedCols.size());
+  for (const auto& col : joinedCols) {
+    joinedColViews.push_back(col->view());
   }
-  auto filterColumns = filterEvaluator->eval(
-      inputViews, stream, cudf::get_current_device_resource_ref());
+  auto filterColumns = filterEvaluator_->eval(
+      joinedColViews, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);

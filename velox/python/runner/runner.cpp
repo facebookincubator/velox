@@ -135,10 +135,28 @@ PYBIND11_MODULE(runner, m) {
           &velox::py::PyLocalDebuggerRunner::setBreakpoint,
           py::arg("plan_node_id"),
           py::doc(R"(
-        Sets a breakpoint at the specified plan node.
+        Sets a breakpoint at the specified plan node. The breakpoint will
+        always stop execution.
 
         Args:
           plan_node_id: The ID of the plan node where execution should pause.
+          )"))
+      .def(
+          "set_hook",
+          &velox::py::PyLocalDebuggerRunner::setHook,
+          py::arg("plan_node_id"),
+          py::arg("callback"),
+          py::doc(R"(
+        Sets a breakpoint with a callback at the specified plan node.
+
+        The callback is invoked with a Vector when the breakpoint is hit.
+        If the callback returns True, execution stops and the vector is
+        produced. If the callback returns False, execution continues
+        without stopping.
+
+        Args:
+          plan_node_id: The ID of the plan node where the hook is installed.
+          callback: Python function that takes a Vector and returns bool.
           )"));
 
   m.def(
