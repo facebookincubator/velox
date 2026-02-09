@@ -18,8 +18,32 @@
 
 namespace facebook::velox::py {
 
+namespace py = pybind11;
+
 void PyLocalDebuggerRunner::setBreakpoint(const std::string& planNodeId) {
-  breakpoints_.push_back(planNodeId);
+  breakpoints_[planNodeId] = nullptr;
+}
+
+void PyLocalDebuggerRunner::setHook(
+    const std::string& planNodeId,
+    pybind11::function callback) {
+  // Capture the Python callback and outputPool in a C++ lambda.
+  // The lambda will be called when the breakpoint is hit.
+  auto pool = outputPool_;
+  breakpoints_[planNodeId] = [callback = std::move(callback),
+                              pool](const RowVectorPtr& vector) -> bool {
+    // Acquire the GIL before calling Python code.
+    py::gil_scoped_acquire acquire;
+
+    // Create a PyVector from the RowVectorPtr.
+    PyVector pyVector(vector, pool);
+
+    // Call the Python function and get the result.
+    py::object result = callback(pyVector);
+
+    // Convert the result to bool.
+    return result.cast<bool>();
+  };
 }
 
 exec::CursorParameters PyLocalDebuggerRunner::createCursorParameters(

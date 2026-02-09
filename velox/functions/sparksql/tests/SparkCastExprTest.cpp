@@ -234,6 +234,60 @@ TEST_F(SparkCastExprTest, invalidDate) {
       "date", {"- 1111-1-1"}, {std::nullopt}, VARCHAR(), DATE());
 }
 
+TEST_F(SparkCastExprTest, stringToDate) {
+  // Set up scope guard to restore ANSI mode after test
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Explicitly set ANSI mode to false for the first part of the test
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Valid dates.
+  testCast<std::string, int32_t>(
+      "date",
+      {"1970-01-01",
+       "2015-03-18",
+       "2015-03-18T", /*Trailing T*/
+       "2015-03-18 123", /*Trailing content*/
+       "  1970-01-01  ", /*Whitespace*/
+       "2015", /*Year only*/
+       "2015-03", /*Year-month*/
+       "1970-1-1"}, /*Single digit month/day*/
+      {0, 16512, 16512, 16512, 0, 16436, 16495, 0},
+      VARCHAR(),
+      DATE());
+
+  // ANSI OFF: Invalid dates return null.
+  testCast<std::string, int32_t>(
+      "date",
+      {"2012-Oct-23", /*Invalid format*/
+       "2015/03/18", /*Wrong separator*/
+       "2015-13-01", /*Invalid month*/
+       "2015-02-30"}, /*Invalid day*/
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      VARCHAR(),
+      DATE());
+
+  // ANSI ON: Invalid dates throw exceptions.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  auto testInvalidDate = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluateCast(VARCHAR(), DATE(), input, false)),
+        "Unable to parse date value");
+  };
+
+  testInvalidDate("2012-Oct-23");
+  testInvalidDate("2015/03/18");
+  testInvalidDate("2015-13-01");
+  testInvalidDate("2015-02-30");
+}
+
 TEST_F(SparkCastExprTest, stringToTimestamp) {
   std::vector<std::optional<std::string>> input{
       "1970-01-01",
@@ -968,6 +1022,76 @@ TEST_F(SparkCastExprTest, boolToTimestamp) {
           Timestamp(0, 1000),
           Timestamp(0, 0),
       }));
+}
+
+TEST_F(SparkCastExprTest, decimalToString) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Verify behavior is identical for both ANSI ON and OFF modes.
+  for (const char* ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {100, 1230, 12345, 0, -100, -1230, -12345}, DECIMAL(10, 2)),
+        makeFlatVector<std::string>(
+            {"1.00", "12.30", "123.45", "0.00", "-1.00", "-12.30", "-123.45"}));
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {100000, 123000, 123450, 0, -100000, -123000, -123450},
+            DECIMAL(10, 3)),
+        makeFlatVector<std::string>(
+            {"100.000",
+             "123.000",
+             "123.450",
+             "0.000",
+             "-100.000",
+             "-123.000",
+             "-123.450"}));
+
+    testCast(
+        makeFlatVector<int128_t>(
+            {HugeInt::build(0, 10000000000),
+             HugeInt::build(0, 12300000000),
+             HugeInt::build(0, 12345000000),
+             HugeInt::build(0, 0),
+             -HugeInt::build(0, 10000000000),
+             -HugeInt::build(0, 12300000000),
+             -HugeInt::build(0, 12345000000)},
+            DECIMAL(20, 10)),
+        makeFlatVector<std::string>(
+            {"1.0000000000",
+             "1.2300000000",
+             "1.2345000000",
+             "0.0000000000",
+             "-1.0000000000",
+             "-1.2300000000",
+             "-1.2345000000"}));
+
+    testCast(
+        makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 0)),
+        makeFlatVector<std::string>({"100", "200", "300"}));
+
+    testCast(
+        makeFlatVector<int64_t>({12, 120, 1200, -12, -120}, DECIMAL(10, 8)),
+        makeFlatVector<std::string>(
+            {"0.00000012",
+             "0.00000120",
+             "0.00001200",
+             "-0.00000012",
+             "-0.00000120"}));
+
+    testCast(
+        makeNullableFlatVector<int64_t>(
+            {100, std::nullopt, 1230, std::nullopt}, DECIMAL(10, 2)),
+        makeNullableFlatVector<std::string>(
+            {"1.00", std::nullopt, "12.30", std::nullopt}));
+  }
 }
 
 TEST_F(SparkCastExprTest, recursiveTryCast) {

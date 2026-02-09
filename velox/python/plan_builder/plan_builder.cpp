@@ -95,8 +95,9 @@ PYBIND11_MODULE(plan_builder, m) {
           "table_scan",
           &velox::py::PyPlanBuilder::tableScan,
           py::arg("output_schema") = velox::py::PyType{},
-          py::arg("aliases") = py::dict{},
-          py::arg("subfields") = py::dict{},
+          py::arg("aliases") = std::unordered_map<std::string, std::string>{},
+          py::arg("subfields") =
+              std::unordered_map<std::string, std::vector<int64_t>>{},
           py::arg("filters") = std::vector<std::string>{},
           py::arg("remaining_filter") = "",
           py::arg("row_index") = "",
