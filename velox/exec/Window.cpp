@@ -644,6 +644,8 @@ void Window::callApplyForPartitionRows(
         result->childAt(numInputColumns_ + i));
   }
 
+  velox::common::testutil::TestValue::adjust(
+      "facebook::velox::exec::Window::callApplyForPartitionRows", this);
   const vector_size_t numRows = endRow - startRow;
   numProcessedRows_ += numRows;
   partitionOffset_ += numRows;
