@@ -362,6 +362,10 @@ class TestingCoalescedLoad : public CoalescedLoad {
     return sum;
   }
 
+  bool isSsdLoad() const override {
+    return false;
+  }
+
  protected:
   const std::shared_ptr<AsyncDataCache> cache_;
   const std::vector<Request> requests_;
@@ -413,6 +417,10 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       throw;
     }
     return pins;
+  }
+
+  bool isSsdLoad() const override {
+    return true;
   }
 
  private:

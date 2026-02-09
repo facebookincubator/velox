@@ -98,7 +98,7 @@ std::vector<exec::AggregateRegistrationResult> registerApproxDistinct(
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        if (argTypes[0]->isUnKnown()) {
+        if (argTypes[0]->isUnknown()) {
           if (hllAsFinalResult) {
             return std::make_unique<HyperLogLogAggregate<UnknownValue, true>>(
                 resultType, hllAsRawInput, defaultError);

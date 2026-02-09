@@ -52,10 +52,12 @@ velox_add_library(
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  EnforceDistinct.cpp
   MemoryReclaimer.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  MixedUnion.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
   SpatialIndex.cpp
@@ -92,6 +94,7 @@ velox_add_library(
   SpillFile.cpp
   Spiller.cpp
   StreamingAggregation.cpp
+  StreamingEnforceDistinct.cpp
   Strings.cpp
   TableScan.cpp
   TableWriteMerge.cpp

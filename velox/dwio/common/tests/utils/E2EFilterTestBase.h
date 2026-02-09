@@ -96,6 +96,26 @@ class OwnershipChecker {
 };
 
 class E2EFilterTestBase : public testing::Test {
+ public:
+  // Generates a vector with monotonically increasing/decreasing unique values
+  // for the given scalar type. Supports TINYINT, SMALLINT, INTEGER, BIGINT,
+  // REAL, DOUBLE, TIMESTAMP, and VARCHAR.
+  // @param type The scalar type of the vector to generate.
+  // @param size The number of rows in this batch.
+  // @param globalRowOffset The starting row offset across all batches.
+  // @param startValue The starting value for the sequence.
+  // @param totalRows The total number of rows across all batches.
+  // @param ascending If true, values increase; if false, values decrease.
+  // @param pool The memory pool to allocate the vector from.
+  static VectorPtr generateStrictSortedVector(
+      const TypePtr& type,
+      size_t size,
+      size_t globalRowOffset,
+      int64_t startValue,
+      size_t totalRows,
+      bool ascending,
+      memory::MemoryPool* pool);
+
  protected:
   static constexpr int32_t kRowsInGroup = 10'000;
 
@@ -118,7 +138,15 @@ class E2EFilterTestBase : public testing::Test {
   std::vector<RowVectorPtr> makeDataset(
       std::function<void()> customize,
       bool forRowGroupSkip,
-      bool withRecursiveNulls);
+      bool withRecursiveNulls,
+      const std::vector<std::string>& indexColumns = {});
+
+  // Replaces index columns with monotonically increasing unique values.
+  // This ensures the data has sorted, unique keys for index testing
+  // without needing to sort and deduplicate random data.
+  std::vector<RowVectorPtr> replaceIndexColumnsWithStrictlySortedData(
+      const std::vector<RowVectorPtr>& batches,
+      const std::vector<std::string>& indexColumns);
 
   void makeAllNulls(const std::string& fieldName);
 
@@ -208,7 +236,8 @@ class E2EFilterTestBase : public testing::Test {
   virtual void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip) = 0;
+      bool forRowGroupSkip,
+      const std::vector<std::string>& indexColumns = {}) = 0;
 
   virtual std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
@@ -315,7 +344,8 @@ class E2EFilterTestBase : public testing::Test {
       bool wrapInStruct,
       const std::vector<std::string>& filterable,
       int32_t numCombinations,
-      bool withRecursiveNulls = true);
+      bool withRecursiveNulls = true,
+      const std::vector<std::string>& indexColumns = {});
 
   void testRunLengthDictionaryScenario(
       const std::string& columns,

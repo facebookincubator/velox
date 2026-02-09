@@ -19,6 +19,7 @@ from typing import Optional
 
 from pyvelox.file import File
 from pyvelox.type import Type
+from pyvelox.vector import Vector
 
 class JoinType(Enum):
     INNER = 1
@@ -28,6 +29,7 @@ class JoinType(Enum):
 
 class PlanNode:
     def name(self) -> str: ...
+    def id(self) -> str: ...
     def serialize(self) -> str: ...
     def to_string(self) -> str: ...
 
@@ -51,6 +53,14 @@ class PlanBuilder:
         scale_factor: int = 1,
         num_parts: int = 1,
         connector_id: str = "tpch",
+    ) -> PlanBuilder: ...
+    def values(
+        self,
+        values: list[Vector],
+    ) -> PlanBuilder: ...
+    def project(
+        self,
+        projections: list[str],
     ) -> PlanBuilder: ...
     def hash_join(
         self,

@@ -814,6 +814,32 @@ struct DayNameFunction {
 };
 
 template <typename T>
+struct MonthNameFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr std::string_view kMonthNames[] = {
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"};
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    const auto tm = getDateTime(date);
+    result.append(kMonthNames[tm.tm_mon]);
+  }
+};
+
+template <typename T>
 struct NextDayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

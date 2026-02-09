@@ -4593,8 +4593,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
              makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({101}),
-             makeNullableFlatVector<int64_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int64_t>(
+                 {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_LAST
+                                                           // upper
         makeRowVector(
             {makeFlatVector<int64_t>({10}),
              makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
@@ -4608,8 +4609,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
              makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({99}),
-             makeNullableFlatVector<int64_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int64_t>(
+                 {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
+                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -4643,8 +4645,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
              makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({101}),
-             makeNullableFlatVector<int64_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int64_t>(
+                 {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_LAST
+                                                           // upper
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
@@ -4658,8 +4661,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
              makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({99}),
-             makeNullableFlatVector<int64_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int64_t>(
+                 {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
+                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -5595,8 +5599,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
              makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({101}),
-             makeNullableFlatVector<int32_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int32_t>(
+                 {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_LAST
+                                                           // upper
         makeRowVector(
             {makeFlatVector<int32_t>({10}),
              makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
@@ -5610,8 +5615,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
              makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({99}),
-             makeNullableFlatVector<int32_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int32_t>(
+                 {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
+                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -5645,8 +5651,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
              makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({101}),
-             makeNullableFlatVector<int32_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int32_t>(
+                 {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_LAST
+                                                           // upper
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
@@ -5660,8 +5667,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
              makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({99}),
-             makeNullableFlatVector<int32_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int32_t>(
+                 {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
+                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -6597,8 +6605,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>({20})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({101}),
-             makeNullableFlatVector<int16_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int16_t>(
+                 {std::numeric_limits<int16_t>::min()})}), // ASC_NULLS_LAST
+                                                           // upper
         makeRowVector(
             {makeFlatVector<int16_t>({10}),
              makeFlatVector<int16_t>({20})}), // DESC_NULLS_FIRST lower
@@ -6612,8 +6621,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>({20})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({99}),
-             makeNullableFlatVector<int16_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int16_t>(
+                 {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
+                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -6647,8 +6657,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>({20})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({101}),
-             makeNullableFlatVector<int16_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int16_t>(
+                 {std::numeric_limits<int16_t>::min()})}), // ASC_NULLS_LAST
+                                                           // upper
         makeRowVector(
             {makeNullableFlatVector<int16_t>({std::nullopt}),
              makeFlatVector<int16_t>({20})}), // DESC_NULLS_FIRST lower
@@ -6662,8 +6673,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>({20})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({99}),
-             makeNullableFlatVector<int16_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int16_t>(
+                 {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
+                                                            // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -7567,8 +7579,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>({10})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int8_t>({51}),
-             makeNullableFlatVector<int8_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int8_t>(
+                 {std::numeric_limits<int8_t>::min()})}), // ASC_NULLS_LAST
+                                                          // upper
         makeRowVector(
             {makeFlatVector<int8_t>({5}),
              makeFlatVector<int8_t>({10})}), // DESC_NULLS_FIRST lower
@@ -7582,8 +7595,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>({10})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int8_t>({49}),
-             makeNullableFlatVector<int8_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int8_t>(
+                 {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
+                                                           // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -7617,8 +7631,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>({10})}), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int8_t>({51}),
-             makeNullableFlatVector<int8_t>(
-                 {std::nullopt})}), // ASC_NULLS_LAST upper
+             makeFlatVector<int8_t>(
+                 {std::numeric_limits<int8_t>::min()})}), // ASC_NULLS_LAST
+                                                          // upper
         makeRowVector(
             {makeNullableFlatVector<int8_t>({std::nullopt}),
              makeFlatVector<int8_t>({10})}), // DESC_NULLS_FIRST lower
@@ -7632,8 +7647,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>({10})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int8_t>({49}),
-             makeNullableFlatVector<int8_t>(
-                 {std::nullopt})})); // DESC_NULLS_LAST upper
+             makeFlatVector<int8_t>(
+                 {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
+                                                           // upper
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(testCase.debugString());
       testIndexBounds(testCase);
@@ -10233,33 +10249,86 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
 
   // Test Case 8: Single column with null in upper bound
   // Incrementing null in ASC_NULLS_FIRST gives empty string ""
-  // For other orders, null is at the end or decrement fails
+  // For ASC_NULLS_LAST, incrementing null gives "" (carry to first column)
+  // For DESC orders, decrement fails on strings
   {
-    auto testCases = createIndexBoundEncodeTestCases(
-        {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeNullableFlatVector<std::string>({std::nullopt})}),
-            .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // ASC_NULLS_FIRST lower
-        makeRowVector({makeNullableFlatVector<std::string>(
-            {""})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // ASC_NULLS_LAST lower
-        std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // DESC_NULLS_FIRST lower
-        std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<std::string>({"apple"})}), // DESC_NULLS_LAST lower
-        std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
+    // ASC_NULLS_FIRST: null sorts first, incrementing gives ""
+    EncodeIndexBoundsTestCase ascNullsFirstTestCase;
+    ascNullsFirstTestCase.indexColumns = {"c0"};
+    ascNullsFirstTestCase.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = true};
+    ascNullsFirstTestCase.sortOrder = velox::core::kAscNullsFirst;
+    ascNullsFirstTestCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({"apple"})});
+    ascNullsFirstTestCase.expectedUpperBound =
+        makeRowVector({makeFlatVector<std::string>({""})});
+    SCOPED_TRACE(ascNullsFirstTestCase.debugString());
+    testIndexBounds(ascNullsFirstTestCase);
+
+    // ASC_NULLS_LAST: null is at end, incrementing null resets to ""
+    // For single column, this causes carry with no more columns,
+    // so the upper bound becomes unbounded (nullopt)
+    {
+      EncodeIndexBoundsTestCase ascNullsLastTestCase;
+      ascNullsLastTestCase.indexColumns = {"c0"};
+      ascNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+          .inclusive = true};
+      ascNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      ascNullsLastTestCase.sortOrder = velox::core::kAscNullsLast;
+      ascNullsLastTestCase.expectedLowerBound =
+          makeRowVector({makeFlatVector<std::string>({"apple"})});
+      // Single column null with NULLS_LAST: carry causes overflow, no upper
+      // bound
+      ascNullsLastTestCase.expectedUpperBound = std::nullopt;
+      SCOPED_TRACE(ascNullsLastTestCase.debugString());
+      testIndexBounds(ascNullsLastTestCase);
+    }
+
+    // DESC_NULLS_FIRST: null sorts first (min), incrementing null requires
+    // setMaxValueTyped which fails for strings
+    {
+      EncodeIndexBoundsTestCase descNullsFirstTestCase;
+      descNullsFirstTestCase.indexColumns = {"c0"};
+      descNullsFirstTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+          .inclusive = true};
+      descNullsFirstTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsFirstTestCase.sortOrder = velox::core::kDescNullsFirst;
+      SCOPED_TRACE(descNullsFirstTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsFirstTestCase),
+          "Cannot set max value for type VARCHAR when incrementing NULL");
+    }
+
+    // DESC_NULLS_LAST: null is at end, incrementing null requires
+    // setMaxValueTyped which fails for strings
+    {
+      EncodeIndexBoundsTestCase descNullsLastTestCase;
+      descNullsLastTestCase.indexColumns = {"c0"};
+      descNullsLastTestCase.lowerBound = IndexBound{
+          .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
+          .inclusive = true};
+      descNullsLastTestCase.upperBound = IndexBound{
+          .bound = makeRowVector(
+              {makeNullableFlatVector<std::string>({std::nullopt})}),
+          .inclusive = true};
+      descNullsLastTestCase.sortOrder = velox::core::kDescNullsLast;
+      SCOPED_TRACE(descNullsLastTestCase.debugString());
+      VELOX_ASSERT_THROW(
+          testIndexBounds(descNullsLastTestCase),
+          "Cannot set max value for type VARCHAR when incrementing NULL");
     }
   }
 
@@ -10489,10 +10558,10 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
     ascNullsLastTestCase.expectedLowerBound = makeRowVector(
         {makeFlatVector<std::string>({"apple"}),
          makeFlatVector<std::string>({"banana"})});
-    // Null at NULLS_LAST can't be incremented, so increment first column
+    // Null at NULLS_LAST resets to "" for carry, increment first column
     ascNullsLastTestCase.expectedUpperBound = makeRowVector(
         {makeFlatVector<std::string>({makeStringWithNull("orange")}),
-         makeNullableFlatVector<std::string>({std::nullopt})});
+         makeFlatVector<std::string>({""})});
     SCOPED_TRACE(ascNullsLastTestCase.debugString());
     testIndexBounds(ascNullsLastTestCase);
 
@@ -10516,7 +10585,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
       SCOPED_TRACE(descNullsFirstTestCase.debugString());
       VELOX_ASSERT_THROW(
           testIndexBounds(descNullsFirstTestCase),
-          "Unexpected string underflow during descending bound increment");
+          "Cannot set max value for type VARCHAR when incrementing NULL");
     }
 
     {
@@ -10536,7 +10605,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
       SCOPED_TRACE(descNullsLastTestCase.debugString());
       VELOX_ASSERT_THROW(
           testIndexBounds(descNullsLastTestCase),
-          "Unexpected string underflow during descending bound increment");
+          "Cannot set max value for type VARCHAR when incrementing NULL");
     }
   }
 
@@ -10668,6 +10737,180 @@ TEST_F(KeyEncoderTest, columnSeparatorTest) {
         EXPECT_GT(encodedKeys[0], encodedKeys[1]);
       }
     }
+  }
+}
+
+// Tests for incrementNullColumnValue fix - verifies that incrementing NULL
+// values throws when the type doesn't support min/max representation.
+TEST_F(KeyEncoderTest, encodeIndexBoundsNullIncrementThrows) {
+  // Test Case 1: VARCHAR + DESC + NULLS_FIRST - incrementing NULL needs max
+  // value, which throws for strings since there's no max string representation.
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0"};
+    testCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kDescNullsFirst;
+    SCOPED_TRACE(testCase.debugString());
+    VELOX_ASSERT_THROW(
+        testIndexBounds(testCase),
+        "Cannot set max value for type VARCHAR when incrementing NULL");
+  }
+
+  // Test Case 2: VARCHAR + DESC + NULLS_LAST - resetting NULL for carry needs
+  // max value, which throws for strings.
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0"};
+    testCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kDescNullsLast;
+    SCOPED_TRACE(testCase.debugString());
+    VELOX_ASSERT_THROW(
+        testIndexBounds(testCase),
+        "Cannot set max value for type VARCHAR when incrementing NULL");
+  }
+
+  // Test Case 3: Multi-column with VARCHAR + DESC - second column NULL needs
+  // max value for carry, which throws.
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0", "c1"};
+    testCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<int64_t>({5}),
+             makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kDescNullsFirst;
+    SCOPED_TRACE(testCase.debugString());
+    VELOX_ASSERT_THROW(
+        testIndexBounds(testCase),
+        "Cannot set max value for type VARCHAR when incrementing NULL");
+  }
+
+  // Test Case 4: Integer + ASC + NULLS_FIRST - incrementing NULL gives
+  // MIN_VALUE which is supported.
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0"};
+    testCase.lowerBound = IndexBound{
+        .bound =
+            makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kAscNullsFirst;
+    testCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::min()})});
+    testCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(testCase.debugString());
+    testIndexBounds(testCase);
+  }
+
+  // Test Case 5: Integer + DESC + NULLS_FIRST - incrementing NULL gives
+  // MAX_VALUE which is supported.
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0"};
+    testCase.lowerBound = IndexBound{
+        .bound =
+            makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kDescNullsFirst;
+    testCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})});
+    testCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(testCase.debugString());
+    testIndexBounds(testCase);
+  }
+
+  // Test Case 6: Integer + ASC + NULLS_LAST - NULL is at end, can't increment,
+  // returns nullopt (single column overflow).
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0"};
+    testCase.lowerBound = IndexBound{
+        .bound =
+            makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kAscNullsLast;
+    testCase.expectedFailure = true;
+    SCOPED_TRACE(testCase.debugString());
+    testIndexBounds(testCase);
+  }
+
+  // Test Case 7: VARCHAR + ASC + NULLS_FIRST - incrementing NULL gives empty
+  // string (MIN_VALUE), which is supported.
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0"};
+    testCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeNullableFlatVector<std::string>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kAscNullsFirst;
+    testCase.expectedLowerBound =
+        makeRowVector({makeFlatVector<std::string>({""})});
+    testCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(testCase.debugString());
+    testIndexBounds(testCase);
+  }
+
+  // Test Case 8: Multi-column carry behavior - when rightmost column
+  // overflows, it should reset and carry to the next column.
+  // (5, NULL) with ASC NULLS_LAST -> (6, MIN_VALUE) for integers
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0", "c1"};
+    testCase.lowerBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<int64_t>({5}),
+             makeNullableFlatVector<int64_t>({std::nullopt})}),
+        .inclusive = false};
+    testCase.upperBound = std::nullopt;
+    testCase.sortOrder = velox::core::kAscNullsLast;
+    // NULL is at end in NULLS_LAST, so it overflows and carries to c0
+    // c0 increments from 5 to 6, c1 resets to MIN_VALUE
+    testCase.expectedLowerBound = makeRowVector(
+        {makeFlatVector<int64_t>({6}),
+         makeFlatVector<int64_t>({std::numeric_limits<int64_t>::min()})});
+    testCase.expectedUpperBound = std::nullopt;
+    SCOPED_TRACE(testCase.debugString());
+    testIndexBounds(testCase);
+  }
+
+  // Test Case 9: Multi-column carry behavior with DESC NULLS_LAST
+  // (5, NULL) with DESC NULLS_LAST -> (4, MAX_VALUE) for integers
+  // In DESC order, "increment" means decrement, and NULL at end overflows
+  {
+    EncodeIndexBoundsTestCase testCase;
+    testCase.indexColumns = {"c0", "c1"};
+    testCase.lowerBound = std::nullopt;
+    testCase.upperBound = IndexBound{
+        .bound = makeRowVector(
+            {makeFlatVector<int64_t>({5}),
+             makeNullableFlatVector<int64_t>({std::nullopt})}),
+        .inclusive = true};
+    testCase.sortOrder = velox::core::kDescNullsLast;
+    // For inclusive upper bound, we increment to make it exclusive
+    // NULL is at end in NULLS_LAST (for DESC), so it overflows and carries
+    // c0 decrements from 5 to 4, c1 resets to MAX_VALUE (which is min in DESC
+    // order)
+    testCase.expectedLowerBound = std::nullopt;
+    testCase.expectedUpperBound = makeRowVector(
+        {makeFlatVector<int64_t>({4}),
+         makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})});
+    SCOPED_TRACE(testCase.debugString());
+    testIndexBounds(testCase);
   }
 }
 } // namespace facebook::velox::serializer::test

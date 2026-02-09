@@ -616,6 +616,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     };
     stats_.clear();
     spillStats_ = folly::Synchronized<common::SpillStats>();
+    spillIoStats_ = filesystems::File::IoStats();
 
     spillConfig_.startPartitionBit = hashBits_.begin();
     spillConfig_.numPartitionBits = hashBits_.numBits();
@@ -636,7 +637,12 @@ class SpillerTest : public exec::test::RowContainerTestBase {
 
     if (type_ == SpillerType::NO_ROW_CONTAINER) {
       spiller_ = std::make_unique<NoRowContainerSpiller>(
-          rowType_, std::nullopt, hashBits_, &spillConfig_, &spillStats_);
+          rowType_,
+          std::nullopt,
+          hashBits_,
+          &spillConfig_,
+          &spillStats_,
+          &spillIoStats_);
     } else if (type_ == SpillerType::SORT_INPUT) {
       const auto sortingKeys = SpillState::makeSortingKeys(
           compareFlags_.empty()
@@ -647,10 +653,15 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           sortingKeys,
           &spillConfig_,
-          &spillStats_);
+          &spillStats_,
+          &spillIoStats_);
     } else if (type_ == SpillerType::SORT_OUTPUT) {
       spiller_ = std::make_unique<SortOutputSpiller>(
-          rowContainer_.get(), rowType_, &spillConfig_, &spillStats_);
+          rowContainer_.get(),
+          rowType_,
+          &spillConfig_,
+          &spillStats_,
+          &spillIoStats_);
     } else if (type_ == SpillerType::HASH_BUILD) {
       spiller_ = std::make_unique<HashBuildSpiller>(
           joinType_,
@@ -659,7 +670,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           hashBits_,
           &spillConfig_,
-          &spillStats_);
+          &spillStats_,
+          &spillIoStats_);
     } else if (type_ == SpillerType::AGGREGATION_INPUT) {
       const auto sortingKeys = SpillState::makeSortingKeys(
           compareFlags_.empty()
@@ -671,10 +683,15 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           hashBits_,
           sortingKeys,
           &spillConfig_,
-          &spillStats_);
+          &spillStats_,
+          &spillIoStats_);
     } else if (type_ == SpillerType::AGGREGATION_OUTPUT) {
       spiller_ = std::make_unique<AggregationOutputSpiller>(
-          rowContainer_.get(), rowType_, &spillConfig_, &spillStats_);
+          rowContainer_.get(),
+          rowType_,
+          &spillConfig_,
+          &spillStats_,
+          &spillIoStats_);
     } else if (type_ == SpillerType::ROW_NUMBER_HASH_TABLE) {
       spiller_ = std::make_unique<RowNumberHashTableSpiller>(
           rowContainer_.get(),
@@ -682,7 +699,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           hashBits_,
           &spillConfig_,
-          &spillStats_);
+          &spillStats_,
+          &spillIoStats_);
     } else {
       VELOX_UNREACHABLE("Unknown spiller type");
     }
@@ -715,11 +733,11 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       // We make a merge reader that merges the spill files and the rows that
       // are still in the RowContainer.
       auto merge = spillPartition->createOrderedReader(
-          spillConfig_, pool(), &spillStats_);
+          spillConfig_, pool(), &spillStats_, &spillIoStats_);
       ASSERT_TRUE(merge != nullptr);
       ASSERT_TRUE(
           spillPartition->createOrderedReader(
-              spillConfig_, pool(), &spillStats_) == nullptr);
+              spillConfig_, pool(), &spillStats_, &spillIoStats_) == nullptr);
 
       // We read the spilled data back and check that it matches the sorted
       // order of the partition.
@@ -1234,6 +1252,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
   std::unique_ptr<SpillerBase> spiller_;
   common::SpillConfig spillConfig_;
   folly::Synchronized<common::SpillStats> spillStats_;
+  // Filesystem I/O stats for spill operations.
+  filesystems::File::IoStats spillIoStats_;
 };
 
 struct AllTypesTestParam {
@@ -1575,7 +1595,7 @@ TEST_P(AggregationOutputOnly, basic) {
       ASSERT_EQ(spillPartitionSet.size(), 1);
       auto spillPartition = std::move(spillPartitionSet.begin()->second);
       auto merge = spillPartition->createOrderedReader(
-          spillConfig_, pool(), &spillStats_);
+          spillConfig_, pool(), &spillStats_, &spillIoStats_);
 
       for (auto i = 0; i < expectedNumSpilledRows; ++i) {
         auto* stream = merge->next();
@@ -1688,8 +1708,8 @@ TEST_P(SortOutputOnly, basic) {
     auto spillPartition = std::move(spillPartitionSet.begin()->second);
 
     const int expectedNumSpilledRows = numListedRows;
-    auto merge =
-        spillPartition->createOrderedReader(spillConfig_, pool(), &spillStats_);
+    auto merge = spillPartition->createOrderedReader(
+        spillConfig_, pool(), &spillStats_, &spillIoStats_);
     if (expectedNumSpilledRows == 0) {
       ASSERT_TRUE(merge == nullptr);
     } else {

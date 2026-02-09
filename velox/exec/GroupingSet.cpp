@@ -56,26 +56,28 @@ GroupingSet::GroupingSet(
     tsan_atomic<bool>* nonReclaimableSection,
     const core::QueryConfig* queryConfig,
     memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* spillFsStats)
     : preGroupedKeyChannels_(std::move(preGroupedKeys)),
-      groupingKeyOutputProjections_(std::move(groupingKeyOutputProjections)),
-      hashers_(std::move(hashers)),
-      isGlobal_(hashers_.empty()),
+      isGlobal_(hashers.empty()),
       isPartial_(isPartial),
       isRawInput_(isRawInput),
+      ignoreNullKeys_(ignoreNullKeys),
+      isAdaptive_(queryConfig->hashAdaptivityEnabled()),
+      globalGroupingSets_(globalGroupingSets),
+      nonReclaimableSection_(nonReclaimableSection),
+      spillConfig_(spillConfig),
       queryConfig_(queryConfig),
       pool_(pool),
+      spillStats_(spillStats),
+      spillFsStats_(spillFsStats),
+      groupingKeyOutputProjections_(std::move(groupingKeyOutputProjections)),
+      hashers_(std::move(hashers)),
       aggregates_(std::move(aggregates)),
       masks_(extractMaskChannels(aggregates_)),
-      ignoreNullKeys_(ignoreNullKeys),
-      globalGroupingSets_(globalGroupingSets),
       groupIdChannel_(groupIdChannel),
-      spillConfig_(spillConfig),
-      nonReclaimableSection_(nonReclaimableSection),
       stringAllocator_(pool_),
-      rows_(pool_),
-      isAdaptive_(queryConfig_->hashAdaptivityEnabled()),
-      spillStats_(spillStats) {
+      rows_(pool_) {
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
   VELOX_CHECK(pool_->trackUsage());
 
@@ -132,15 +134,16 @@ GroupingSet::~GroupingSet() {
   }
 }
 
-std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
+std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+    std::vector<column_index_t>&& preGroupedKeys,
     OperatorCtx* operatorCtx,
     tsan_atomic<bool>* nonReclaimableSection) {
   return std::make_unique<GroupingSet>(
       inputType,
       std::move(hashers),
-      /*preGroupedKeys=*/std::vector<column_index_t>{},
+      std::move(preGroupedKeys),
       /*groupingKeyOutputProjections=*/std::vector<column_index_t>{},
       /*aggregates=*/std::vector<AggregateInfo>{},
       /*ignoreNullKeys=*/false,
@@ -152,7 +155,8 @@ std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
       nonReclaimableSection,
       &operatorCtx->driverCtx()->queryConfig(),
       operatorCtx->pool(),
-      /*spillStats=*/nullptr);
+      /*spillStats=*/nullptr,
+      /*spillFsStats=*/nullptr);
 };
 
 namespace {
@@ -1031,7 +1035,8 @@ void GroupingSet::spill() {
                 spillConfig_->numPartitionBits)),
         sortingKeys,
         spillConfig_,
-        spillStats_);
+        spillStats_,
+        spillFsStats_);
   }
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations
@@ -1067,7 +1072,7 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
   auto* rows = table_->rows();
   VELOX_CHECK(pool_->trackUsage());
   outputSpiller_ = std::make_unique<AggregationOutputSpiller>(
-      rows, makeSpillType(), spillConfig_, spillStats_);
+      rows, makeSpillType(), spillConfig_, spillStats_, spillFsStats_);
 
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations
@@ -1139,7 +1144,8 @@ bool GroupingSet::prepareNextSpillPartitionOutput() {
   auto it = spillPartitionSet_.begin();
   VELOX_CHECK_NE(outputSpillPartition_, it->first.partitionNumber());
   outputSpillPartition_ = it->first.partitionNumber();
-  merge_ = it->second->createOrderedReader(*spillConfig_, pool_, spillStats_);
+  merge_ = it->second->createOrderedReader(
+      *spillConfig_, pool_, spillStats_, spillFsStats_);
   spillPartitionSet_.erase(it);
   return true;
 }
@@ -1576,7 +1582,8 @@ AggregationInputSpiller::AggregationInputSpiller(
     const HashBitRange& hashBitRange,
     const std::vector<SpillSortKey>& sortingKeys,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fileSystemStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -1586,13 +1593,15 @@ AggregationInputSpiller::AggregationInputSpiller(
           spillConfig->maxSpillRunRows,
           std::nullopt,
           spillConfig,
-          spillStats) {}
+          spillStats,
+          fileSystemStats) {}
 
 AggregationOutputSpiller::AggregationOutputSpiller(
     RowContainer* container,
     RowTypePtr rowType,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fileSystemStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -1602,7 +1611,8 @@ AggregationOutputSpiller::AggregationOutputSpiller(
           spillConfig->maxSpillRunRows,
           std::nullopt,
           spillConfig,
-          spillStats) {}
+          spillStats,
+          fileSystemStats) {}
 
 void AggregationInputSpiller::spill() {
   SpillerBase::spill(nullptr);

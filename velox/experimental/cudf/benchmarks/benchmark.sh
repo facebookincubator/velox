@@ -29,6 +29,9 @@ mkdir -p benchmark_results
 queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
+# Resolve script dir so binaries can be run from anywhere
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../" && pwd)"
 
 cudf_chunk_read_limit=$((1024 * 1024 * 1024 * 1))
 cudf_pass_read_limit=0
@@ -41,12 +44,12 @@ for query_number in ${queries}; do
     case "${device}" in
     "cpu")
       num_drivers=${NUM_DRIVERS:-32}
-      BENCHMARK_EXECUTABLE=./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark
+      BENCHMARK_EXECUTABLE="${REPO_ROOT}/_build/release/velox/benchmarks/tpch/velox_tpch_benchmark"
       CUDF_FLAGS=""
       ;;
     "gpu")
       num_drivers=${NUM_DRIVERS:-4}
-      BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
+      BENCHMARK_EXECUTABLE="${REPO_ROOT}/_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark"
       CUDF_FLAGS="--velox_cudf_table_scan=true --cudf_chunk_read_limit=${cudf_chunk_read_limit} --cudf_pass_read_limit=${cudf_pass_read_limit} --cudf_memory_resource=${VELOX_CUDF_MEMORY_RESOURCE} --cudf_memory_percent=${VELOX_CUDF_MEMORY_PERCENT}"
       ;;
     esac

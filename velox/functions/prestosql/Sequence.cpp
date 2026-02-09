@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-#include <iostream>
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
-#include "velox/vector/ConstantVector.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -114,7 +112,7 @@ class SequenceFunction : public exec::VectorFunction {
 
     const auto numRows = rows.end();
     auto pool = context.pool();
-    vector_size_t numElements = 0;
+    size_t numElements = 0;
 
     BufferPtr sizes = allocateSizes(numRows, pool);
     BufferPtr offsets = allocateOffsets(numRows, pool);
@@ -136,6 +134,16 @@ class SequenceFunction : public exec::VectorFunction {
               .maxElementsSizeInRepeatAndSequence());
       numElements += rawSizes[row];
     });
+
+    // We could overflow int32 if total number of elements is too large,
+    // potentially causing a small buffer allocation followed by a large write,
+    // resulting in SIGSEGV.
+    VELOX_USER_CHECK_LE(
+        numElements,
+        std::numeric_limits<vector_size_t>::max(),
+        "SEQUENCE result too large: {} elements exceeds maximum {}",
+        numElements,
+        std::numeric_limits<vector_size_t>::max());
 
     VectorPtr elements =
         BaseVector::create(outputType->childAt(0), numElements, pool);
