@@ -229,7 +229,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
     partitionOffsets.pop_back();
 
     auto partitionedTables =
-        cudf::split(partitionedTable->view(), partitionOffsets);
+        cudf::split(partitionedTable->view(), partitionOffsets, stream);
 
     // DM: We should investigate if keeping partitionedTables alive and using
     // the table view in partitonedData is more efficient than creating a new
@@ -246,7 +246,10 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
           pool(),
           outputType_,
           partitionData.num_rows(),
-          std::make_unique<cudf::table>(partitionData),
+          std::make_unique<cudf::table>(
+              partitionData,
+              stream,
+              cudf::get_current_device_resource_ref()),
           stream);
       enqueuePartition(i, partitionCudfVector);
     }

@@ -64,13 +64,13 @@ struct CursorParameters {
 
   /// Spilling directory, if not empty, then the task's spilling directory
   /// would be built from it.
-  std::string spillDirectory;
+  std::string spillDirectory = "";
 
   /// Callback function to dynamically create or determine the spill directory
   /// path at runtime. If provided, this callback is invoked when spilling is
   /// needed and must return a valid directory path. This allows for dynamic
   /// spill directory creation or path resolution based on runtime conditions.
-  std::function<std::string()> spillDirectoryCallback;
+  std::function<std::string()> spillDirectoryCallback = nullptr;
 
   bool copyResult = true;
 
@@ -82,13 +82,34 @@ struct CursorParameters {
 
   /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations
   /// in 'queryCtx' will be overridden by 'queryConfig'.
-  std::unordered_map<std::string, std::string> queryConfigs;
+  std::unordered_map<std::string, std::string> queryConfigs = {};
+
+  // Debugging related structures:
+
+  /// Callback type for breakpoints.
+  ///
+  /// Called with the current vector when the breakpoint is hit. The return
+  /// value semantics is "should block?"; returns true if the driver should stop
+  /// and produce the vector, false to continue without stopping.
+  ///
+  /// If callback is not specified (nullptr), assume the partial vector should
+  /// always be produced, which is the same as callback returning true (always
+  /// stop).
+  using BreakpointCallback = std::function<bool(const RowVectorPtr&)>;
+
+  /// Map type for breakpoints: plan node ID to optional callback.
+  using TBreakpointMap =
+      std::unordered_map<core::PlanNodeId, BreakpointCallback>;
 
   /// Breakpoints enable step-by-step execution of a query plan, allowing users
   /// to inspect intermediate results at operator boundaries containing
   /// breakpoints. This is useful for debugging query execution and
   /// understanding data flow through operators.
-  std::vector<core::PlanNodeId> breakpoints;
+  ///
+  /// Maps plan node IDs to optional callbacks. When a breakpoint is hit, the
+  /// callback (if non-null) is invoked with the current vector before the
+  /// cursor pauses.
+  TBreakpointMap breakpoints = {};
 };
 
 /// Abstract interface for iterating over query results. TaskCursor manages
@@ -135,7 +156,13 @@ class TaskCursor {
   /// @return Returns false is the task is done producing output.
   virtual bool moveStep() = 0;
 
+  /// Returns the vector the cursor is currently on.
   virtual RowVectorPtr& current() = 0;
+
+  /// If breakpoints are set, returns the plan node that generated the trace. If
+  /// the cursor is at the task output or if there are no breakpoints,
+  /// returns empty string.
+  virtual core::PlanNodeId at() const = 0;
 
   virtual void setError(std::exception_ptr error) = 0;
 

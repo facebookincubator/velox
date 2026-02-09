@@ -146,6 +146,31 @@ CudfHiveDataSource::CudfHiveDataSource(
     // readColumnNames_
   }
 
+  // Build a combined AST for all subfield filters once. This is query-constant
+  // and doesn't depend on split-specific state.
+  if (!subfieldFilters_.empty()) {
+    const RowTypePtr readerFilterType = [&] {
+      if (tableHandle_->dataColumns()) {
+        std::vector<std::string> newNames;
+        std::vector<TypePtr> newTypes;
+
+        for (const auto& name : readColumnNames_) {
+          // Ensure all columns being read are available to the filter.
+          auto parsedType = tableHandle_->dataColumns()->findChild(name);
+          newNames.emplace_back(std::move(name));
+          newTypes.push_back(parsedType);
+        }
+
+        return ROW(std::move(newNames), std::move(newTypes));
+      } else {
+        return outputType_;
+      }
+    }();
+
+    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
+        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
+  }
+
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
 
   // Create empty IOStats and FsStats for later use
@@ -426,10 +451,6 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           hiveSplit->fileFormat,
           dwio::common::FileFormat::PARQUET,
           "Unsupported file format for conversion from HiveConnectorSplit to CudfHiveConnectorSplit");
-      VELOX_CHECK_EQ(
-          hiveSplit->start,
-          0,
-          "CudfHiveDataSource cannot process splits with non-zero offset");
       // Remove "file:" prefix from the file path if present
       std::string cleanedPath = hiveSplit->filePath;
       constexpr std::string_view kFilePrefix = "file:";
@@ -441,10 +462,15 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         // "s3:".
         cleanedPath.erase(kS3APrefix.size() - 2, 1);
       }
-      return CudfHiveConnectorSplitBuilder(cleanedPath)
-          .connectorId(hiveSplit->connectorId)
-          .splitWeight(hiveSplit->splitWeight)
-          .build();
+      auto cudfHiveSplitBuilder = CudfHiveConnectorSplitBuilder(cleanedPath)
+                                      .start(hiveSplit->start)
+                                      .length(hiveSplit->length)
+                                      .connectorId(hiveSplit->connectorId)
+                                      .splitWeight(hiveSplit->splitWeight);
+      for (auto const& infoColumn : hiveSplit->infoColumns) {
+        cudfHiveSplitBuilder.infoColumn(infoColumn.first, infoColumn.second);
+      }
+      return cudfHiveSplitBuilder.build();
     } else {
       VELOX_FAIL("Unsupported split type: {}", split->toString());
     }
@@ -547,7 +573,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
-          .skip_rows(cudfHiveConfig_->skipRows())
+          .skip_bytes(split_->start)
           .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
@@ -555,35 +581,13 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
-  // Set num_rows only if available
-  if (cudfHiveConfig_->numRows().has_value()) {
-    readerOptions_.set_num_rows(cudfHiveConfig_->numRows().value());
+  // Set num_bytes only if available
+  if (split_->size() != std::numeric_limits<uint64_t>::max()) {
+    readerOptions_.set_num_bytes(split_->size());
   }
 
-  if (subfieldFilters_.size()) {
-    const RowTypePtr readerFilterType = [&] {
-      if (tableHandle_->dataColumns()) {
-        std::vector<std::string> newNames;
-        std::vector<TypePtr> newTypes;
-
-        for (const auto& name : readColumnNames_) {
-          // Ensure all columns being read are available to the filter
-          auto parsedType = tableHandle_->dataColumns()->findChild(name);
-          newNames.emplace_back(std::move(name));
-          newTypes.push_back(parsedType);
-        }
-
-        return ROW(std::move(newNames), std::move(newTypes));
-      } else {
-        return outputType_;
-      }
-    }();
-
-    // Build a combined AST for all subfield filters.
-    auto const& combinedExpr = createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
-
-    readerOptions_.set_filter(combinedExpr);
+  if (subfieldFilterExpr_ != nullptr) {
+    readerOptions_.set_filter(*subfieldFilterExpr_);
   }
 
   // Set column projection if needed

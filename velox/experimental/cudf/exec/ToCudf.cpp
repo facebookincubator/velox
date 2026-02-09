@@ -32,6 +32,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -366,6 +367,10 @@ void registerCudf() {
     registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
   }
 
+  if (CudfConfig::getInstance().jitExpressionEnabled) {
+    registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -407,6 +412,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfAstExpressionEnabled) != config.end()) {
     astExpressionEnabled = folly::to<bool>(config[kCudfAstExpressionEnabled]);
+  }
+  if (config.find(kCudfJitExpressionEnabled) != config.end()) {
+    jitExpressionEnabled = folly::to<bool>(config[kCudfJitExpressionEnabled]);
   }
   if (config.find(kCudfAstExpressionPriority) != config.end()) {
     astExpressionPriority =

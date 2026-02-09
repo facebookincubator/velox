@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <pybind11/embed.h>
-
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -52,6 +50,10 @@ class PyTaskIterator {
     }
     return PyVector{vector_, outputPool_};
   }
+
+  /// Returns the plan node ID where the cursor is currently stopped. This is
+  /// useful for debugging to know where in the plan the execution has paused.
+  std::string at() const;
 
  private:
   std::shared_ptr<memory::MemoryPool> outputPool_;

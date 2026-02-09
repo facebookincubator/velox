@@ -51,10 +51,14 @@ class GroupingSet {
 
   ~GroupingSet();
 
-  /// Used by MarkDistinct operator to identify rows with unique values.
-  static std::unique_ptr<GroupingSet> createForMarkDistinct(
+  /// Used by MarkDistinct and EnforceDistinct operators to identify rows with
+  /// unique values for a set of keys.
+  /// @param preGroupedKeys Subset of grouping keys that input is already
+  /// clustered on.
+  static std::unique_ptr<GroupingSet> createForDistinct(
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+      std::vector<column_index_t>&& preGroupedKeys,
       OperatorCtx* operatorCtx,
       tsan_atomic<bool>* nonReclaimableSection);
 

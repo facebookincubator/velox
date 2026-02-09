@@ -62,100 +62,99 @@ namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
 
-fmt::underlying_t<Type::type> format_as(Type::type type) {
+fmt::underlying_t<Type::type> formatAs(Type::type type) {
   return fmt::underlying(type);
 }
 
 namespace {
 
-// The minimum number of repetition/definition levels to decode at a time, for
-// better vectorized performance when doing many smaller record reads
+// The minimum number of repetition/definition levels to decode at a time, for.
+// Better vectorized performance when doing many smaller record reads.
 constexpr int64_t kMinLevelBatchSize = 1024;
 
 // Batch size for reading and throwing away values during skip.
 // Both RecordReader and the ColumnReader use this for skipping.
 constexpr int64_t kSkipScratchBatchSize = 1024;
 
-inline bool HasSpacedValues(const ColumnDescriptor* descr) {
-  if (descr->max_repetition_level() > 0) {
-    // repeated+flat case
-    return !descr->schema_node()->is_required();
+inline bool hasSpacedValues(const ColumnDescriptor* descr) {
+  if (descr->maxRepetitionLevel() > 0) {
+    // Repeated+flat case.
+    return !descr->schemaNode()->isRequired();
   } else {
-    // non-repeated+nested case
-    // Find if a node forces nulls in the lowest level along the hierarchy
-    const schema::Node* node = descr->schema_node().get();
-    while (node) {
-      if (node->is_optional()) {
+    // Non-repeated+nested case.
+    // Find if a node forces nulls in the lowest level along the hierarchy.
+    const schema::Node* Node = descr->schemaNode().get();
+    while (Node) {
+      if (Node->isOptional()) {
         return true;
       }
-      node = node->parent();
+      Node = Node->parent();
     }
     return false;
   }
 }
 
 // Throws exception if number_decoded does not match expected.
-inline void CheckNumberDecoded(int64_t number_decoded, int64_t expected) {
-  if (ARROW_PREDICT_FALSE(number_decoded != expected)) {
-    ParquetException::EofException(
-        "Decoded values " + std::to_string(number_decoded) +
+inline void checkNumberDecoded(int64_t numberDecoded, int64_t expected) {
+  if (ARROW_PREDICT_FALSE(numberDecoded != expected)) {
+    ParquetException::eofException(
+        "Decoded values " + std::to_string(numberDecoded) +
         " does not match expected " + std::to_string(expected));
   }
 }
 } // namespace
 
-LevelDecoder::LevelDecoder() : num_values_remaining_(0) {}
+LevelDecoder::LevelDecoder() : numValuesRemaining_(0) {}
 
 LevelDecoder::~LevelDecoder() {}
 
-int LevelDecoder::SetData(
+int LevelDecoder::setData(
     Encoding::type encoding,
-    int16_t max_level,
-    int num_buffered_values,
+    int16_t maxLevel,
+    int numBufferedValues,
     const uint8_t* data,
-    int32_t data_size) {
-  max_level_ = max_level;
-  int32_t num_bytes = 0;
+    int32_t dataSize) {
+  maxLevel_ = maxLevel;
+  int32_t numBytes = 0;
   encoding_ = encoding;
-  num_values_remaining_ = num_buffered_values;
-  bit_width_ = ::arrow::bit_util::Log2(max_level + 1);
+  numValuesRemaining_ = numBufferedValues;
+  bitWidth_ = ::arrow::bit_util::Log2(maxLevel + 1);
   switch (encoding) {
-    case Encoding::RLE: {
-      if (data_size < 4) {
+    case Encoding::kRle: {
+      if (dataSize < 4) {
         throw ParquetException("Received invalid levels (corrupt data page?)");
       }
-      num_bytes = ::arrow::util::SafeLoadAs<int32_t>(data);
-      if (num_bytes < 0 || num_bytes > data_size - 4) {
+      numBytes = ::arrow::util::SafeLoadAs<int32_t>(data);
+      if (numBytes < 0 || numBytes > dataSize - 4) {
         throw ParquetException(
             "Received invalid number of bytes (corrupt data page?)");
       }
-      const uint8_t* decoder_data = data + 4;
-      if (!rle_decoder_) {
-        rle_decoder_ =
-            std::make_unique<RleDecoder>(decoder_data, num_bytes, bit_width_);
+      const uint8_t* decoderData = data + 4;
+      if (!rleDecoder_) {
+        rleDecoder_ =
+            std::make_unique<RleDecoder>(decoderData, numBytes, bitWidth_);
       } else {
-        rle_decoder_->Reset(decoder_data, num_bytes, bit_width_);
+        rleDecoder_->Reset(decoderData, numBytes, bitWidth_);
       }
-      return 4 + num_bytes;
+      return 4 + numBytes;
     }
-    case Encoding::BIT_PACKED: {
-      int num_bits = 0;
-      if (MultiplyWithOverflow(num_buffered_values, bit_width_, &num_bits)) {
+    case Encoding::kBitPacked: {
+      int32_t numBits = 0;
+      if (MultiplyWithOverflow(numBufferedValues, bitWidth_, &numBits)) {
         throw ParquetException(
             "Number of buffered values too large (corrupt data page?)");
       }
-      num_bytes =
-          static_cast<int32_t>(::arrow::bit_util::BytesForBits(num_bits));
-      if (num_bytes < 0 || num_bytes > data_size - 4) {
+      numBytes = static_cast<int32_t>(::arrow::bit_util::BytesForBits(numBits));
+      if (numBytes < 0 || numBytes > dataSize - 4) {
         throw ParquetException(
             "Received invalid number of bytes (corrupt data page?)");
       }
-      if (!bit_packed_decoder_) {
-        bit_packed_decoder_ = std::make_unique<BitReader>(data, num_bytes);
+      if (!bitPackedDecoder_) {
+        bitPackedDecoder_ = std::make_unique<BitReader>(data, numBytes);
       } else {
-        bit_packed_decoder_->Reset(data, num_bytes);
+        bitPackedDecoder_->Reset(data, numBytes);
       }
-      return num_bytes;
+      return numBytes;
     }
     default:
       throw ParquetException("Unknown encoding type for levels.");
@@ -163,265 +162,263 @@ int LevelDecoder::SetData(
   return -1;
 }
 
-void LevelDecoder::SetDataV2(
-    int32_t num_bytes,
-    int16_t max_level,
-    int num_buffered_values,
+void LevelDecoder::setDataV2(
+    int32_t numBytes,
+    int16_t maxLevel,
+    int numBufferedValues,
     const uint8_t* data) {
-  max_level_ = max_level;
-  // Repetition and definition levels always uses RLE encoding
-  // in the DataPageV2 format.
-  if (num_bytes < 0) {
+  maxLevel_ = maxLevel;
+  // Repetition and definition levels always uses RLE encoding.
+  // In the DataPageV2 format.
+  if (numBytes < 0) {
     throw ParquetException("Invalid page header (corrupt data page?)");
   }
-  encoding_ = Encoding::RLE;
-  num_values_remaining_ = num_buffered_values;
-  bit_width_ = ::arrow::bit_util::Log2(max_level + 1);
+  encoding_ = Encoding::kRle;
+  numValuesRemaining_ = numBufferedValues;
+  bitWidth_ = ::arrow::bit_util::Log2(maxLevel + 1);
 
-  if (!rle_decoder_) {
-    rle_decoder_ = std::make_unique<RleDecoder>(data, num_bytes, bit_width_);
+  if (!rleDecoder_) {
+    rleDecoder_ = std::make_unique<RleDecoder>(data, numBytes, bitWidth_);
   } else {
-    rle_decoder_->Reset(data, num_bytes, bit_width_);
+    rleDecoder_->Reset(data, numBytes, bitWidth_);
   }
 }
 
-int LevelDecoder::Decode(int batch_size, int16_t* levels) {
-  int num_decoded = 0;
+int LevelDecoder::decode(int batchSize, int16_t* levels) {
+  int numDecoded = 0;
 
-  int num_values = std::min(num_values_remaining_, batch_size);
-  if (encoding_ == Encoding::RLE) {
-    num_decoded = rle_decoder_->GetBatch(levels, num_values);
+  int numValues = std::min(numValuesRemaining_, batchSize);
+  if (encoding_ == Encoding::kRle) {
+    numDecoded = rleDecoder_->GetBatch(levels, numValues);
   } else {
-    num_decoded = bit_packed_decoder_->GetBatch(bit_width_, levels, num_values);
+    numDecoded = bitPackedDecoder_->GetBatch(bitWidth_, levels, numValues);
   }
-  if (num_decoded > 0) {
-    MinMax min_max = FindMinMax(levels, num_decoded);
-    if (ARROW_PREDICT_FALSE(min_max.min < 0 || min_max.max > max_level_)) {
+  if (numDecoded > 0) {
+    MinMax minMax = FindMinMax(levels, numDecoded);
+    if (ARROW_PREDICT_FALSE(minMax.min < 0 || minMax.max > maxLevel_)) {
       std::stringstream ss;
-      ss << "Malformed levels. min: " << min_max.min << " max: " << min_max.max
-         << " out of range.  Max Level: " << max_level_;
+      ss << "Malformed levels. min: " << minMax.min << " max: " << minMax.max
+         << " out of range.  Max Level: " << maxLevel_;
       throw ParquetException(ss.str());
     }
   }
-  num_values_remaining_ -= num_decoded;
-  return num_decoded;
+  numValuesRemaining_ -= numDecoded;
+  return numDecoded;
 }
 
 namespace {
 
-// Extracts encoded statistics from V1 and V2 data page headers
+// Extracts encoded statistics from V1 and V2 data page headers.
 template <typename H>
-EncodedStatistics ExtractStatsFromHeader(const H& header) {
-  EncodedStatistics page_statistics;
+EncodedStatistics extractStatsFromHeader(const H& header) {
+  EncodedStatistics pageStatistics;
   if (!header.__isset.statistics) {
-    return page_statistics;
+    return pageStatistics;
   }
   const facebook::velox::parquet::thrift::Statistics& stats = header.statistics;
-  // Use the new V2 min-max statistics over the former one if it is filled
+  // Use the new V2 min-max statistics over the former one if it is filled.
   if (stats.__isset.max_value || stats.__isset.min_value) {
     // TODO: check if the column_order is TYPE_DEFINED_ORDER.
     if (stats.__isset.max_value) {
-      page_statistics.set_max(stats.max_value);
+      pageStatistics.setMax(stats.max_value);
     }
     if (stats.__isset.min_value) {
-      page_statistics.set_min(stats.min_value);
+      pageStatistics.setMin(stats.min_value);
     }
   } else if (stats.__isset.max || stats.__isset.min) {
     // TODO: check created_by to see if it is corrupted for some types.
     // TODO: check if the sort_order is SIGNED.
     if (stats.__isset.max) {
-      page_statistics.set_max(stats.max);
+      pageStatistics.setMax(stats.max);
     }
     if (stats.__isset.min) {
-      page_statistics.set_min(stats.min);
+      pageStatistics.setMin(stats.min);
     }
   }
   if (stats.__isset.null_count) {
-    page_statistics.set_null_count(stats.null_count);
+    pageStatistics.setNullCount(stats.null_count);
   }
   if (stats.__isset.distinct_count) {
-    page_statistics.set_distinct_count(stats.distinct_count);
+    pageStatistics.setDistinctCount(stats.distinct_count);
   }
-  return page_statistics;
+  return pageStatistics;
 }
 
-void CheckNumValuesInHeader(int num_values) {
-  if (num_values < 0) {
+void checkNumValuesInHeader(int numValues) {
+  if (numValues < 0) {
     throw ParquetException("Invalid page header (negative number of values)");
   }
 }
 
-// ----------------------------------------------------------------------
-// SerializedPageReader deserializes Thrift metadata and pages that have been
-// assembled in a serialized stream for storing in a Parquet files
+// ----------------------------------------------------------------------.
+// SerializedPageReader deserializes Thrift metadata and pages that have been.
+// Assembled in a serialized stream for storing in a Parquet files.
 
-// This subclass delimits pages appearing in a serialized stream, each preceded
-// by a serialized Thrift facebook::velox::parquet::thrift::PageHeader
-// indicating the type of each page and the page metadata.
+// This subclass delimits pages appearing in a serialized stream, each preceded.
+// By a serialized Thrift facebook::velox::parquet::thrift::PageHeader.
+// Indicating the type of each page and the page metadata.
 class SerializedPageReader : public PageReader {
  public:
   SerializedPageReader(
       std::shared_ptr<ArrowInputStream> stream,
-      int64_t total_num_values,
-      Compression::type codec,
+      int64_t totalNumValues,
+      Compression::type Codec,
       const ReaderProperties& properties,
-      const CryptoContext* crypto_ctx,
-      bool always_compressed)
+      const CryptoContext* cryptoCtx,
+      bool alwaysCompressed)
       : properties_(properties),
         stream_(std::move(stream)),
-        decompression_buffer_(AllocateBuffer(properties_.memory_pool(), 0)),
-        page_ordinal_(0),
-        seen_num_values_(0),
-        total_num_values_(total_num_values),
-        decryption_buffer_(AllocateBuffer(properties_.memory_pool(), 0)) {
-    if (crypto_ctx != nullptr) {
-      crypto_ctx_ = *crypto_ctx;
-      InitDecryption();
+        decompressionBuffer_(allocateBuffer(properties_.memoryPool(), 0)),
+        pageOrdinal_(0),
+        seenNumValues_(0),
+        totalNumValues_(totalNumValues),
+        decryptionBuffer_(allocateBuffer(properties_.memoryPool(), 0)) {
+    if (cryptoCtx != nullptr) {
+      cryptoCtx_ = *cryptoCtx;
+      initDecryption();
     }
-    max_page_header_size_ = kDefaultMaxPageHeaderSize;
-    decompressor_ = GetCodec(codec);
-    always_compressed_ = always_compressed;
+    maxPageHeaderSize_ = kDefaultMaxPageHeaderSize;
+    decompressor_ = getCodec(Codec);
+    alwaysCompressed_ = alwaysCompressed;
   }
 
-  // Implement the PageReader interface
+  // Implement the PageReader interface.
   //
-  // The returned Page contains references that aren't guaranteed to live
-  // beyond the next call to NextPage(). SerializedPageReader reuses the
-  // decryption and decompression buffers internally, so if NextPage() is
-  // called then the content of previous page might be invalidated.
-  std::shared_ptr<Page> NextPage() override;
+  // The returned Page contains references that aren't guaranteed to live.
+  // Beyond the next call to NextPage(). SerializedPageReader reuses the.
+  // Decryption and decompression buffers internally, so if NextPage() is.
+  // Called then the content of previous page might be invalidated.
+  std::shared_ptr<Page> nextPage() override;
 
-  void set_max_page_header_size(uint32_t size) override {
-    max_page_header_size_ = size;
+  void setMaxPageHeaderSize(uint32_t size) override {
+    maxPageHeaderSize_ = size;
   }
 
  private:
-  void UpdateDecryption(
-      const std::shared_ptr<Decryptor>& decryptor,
-      int8_t module_type,
-      std::string* page_aad);
+  void updateDecryption(
+      const std::shared_ptr<Decryptor>& Decryptor,
+      int8_t moduleType,
+      std::string* pageAad);
 
-  void InitDecryption();
+  void initDecryption();
 
-  std::shared_ptr<Buffer> DecompressIfNeeded(
-      std::shared_ptr<Buffer> page_buffer,
-      int compressed_len,
-      int uncompressed_len,
-      int levels_byte_len = 0);
+  std::shared_ptr<Buffer> decompressIfNeeded(
+      std::shared_ptr<Buffer> pageBuffer,
+      int compressedLen,
+      int uncompressedLen,
+      int levelsByteLen = 0);
 
-  // Returns true for non-data pages, and if we should skip based on
-  // data_page_filter_. Performs basic checks on values in the page header.
+  // Returns true for non-data pages, and if we should skip based on.
+  // Data_page_filter_. Performs basic checks on values in the page header.
   // Fills in data_page_statistics.
-  bool ShouldSkipPage(EncodedStatistics* data_page_statistics);
+  bool shouldSkipPage(EncodedStatistics* dataPageStatistics);
 
   const ReaderProperties properties_;
   std::shared_ptr<ArrowInputStream> stream_;
 
-  facebook::velox::parquet::thrift::PageHeader current_page_header_;
-  std::shared_ptr<Page> current_page_;
+  facebook::velox::parquet::thrift::PageHeader currentPageHeader_;
+  std::shared_ptr<Page> currentPage_;
 
   // Compression codec to use.
   std::unique_ptr<util::Codec> decompressor_;
-  std::shared_ptr<ResizableBuffer> decompression_buffer_;
+  std::shared_ptr<ResizableBuffer> decompressionBuffer_;
 
-  bool always_compressed_;
+  bool alwaysCompressed_;
 
-  // The fields below are used for calculation of AAD (additional authenticated
-  // data) suffix which is part of the Parquet Modular Encryption. The AAD
-  // suffix for a parquet module is built internally by concatenating different
-  // parts some of which include the row group ordinal, column ordinal and page
-  // ordinal. Please refer to the encryption specification for more details:
+  // The fields below are used for calculation of AAD (additional authenticated.
+  // Data) suffix which is part of the Parquet Modular Encryption. The AAD.
+  // Suffix for a parquet module is built internally by concatenating different.
+  // Parts some of which include the row group ordinal, column ordinal and page.
+  // Ordinal. Please refer to the encryption specification for more details:
   // https://github.com/apache/parquet-format/blob/encryption/Encryption.md#44-additional-authenticated-data
 
-  // The ordinal fields in the context below are used for AAD suffix
-  // calculation.
-  CryptoContext crypto_ctx_;
-  int32_t page_ordinal_; // page ordinal does not count the dictionary page
+  // The ordinal fields in the context below are used for AAD suffix.
+  // Calculation.
+  CryptoContext cryptoCtx_;
+  int32_t pageOrdinal_; // page ordinal does not count the dictionary page
 
-  // Maximum allowed page size
-  uint32_t max_page_header_size_;
+  // Maximum allowed page size.
+  uint32_t maxPageHeaderSize_;
 
-  // Number of values read in data pages so far
-  int64_t seen_num_values_;
+  // Number of values read in data pages so far.
+  int64_t seenNumValues_;
 
-  // Number of values in all the data pages
-  int64_t total_num_values_;
+  // Number of values in all the data pages.
+  int64_t totalNumValues_;
 
-  // data_page_aad_ and data_page_header_aad_ contain the AAD for data page and
-  // data page header in a single column respectively. While calculating AAD for
-  // different pages in a single column the pages AAD is updated by only the
-  // page ordinal.
-  std::string data_page_aad_;
-  std::string data_page_header_aad_;
-  // Encryption
-  std::shared_ptr<ResizableBuffer> decryption_buffer_;
+  // Data_page_aad_ and data_page_header_aad_ contain the AAD for data page and.
+  // Data page header in a single column respectively. While calculating AAD
+  // for. Different pages in a single column the pages AAD is updated by only
+  // the. Page ordinal.
+  std::string dataPageAad_;
+  std::string dataPageHeaderAad_;
+  // Encryption.
+  std::shared_ptr<ResizableBuffer> decryptionBuffer_;
 };
 
-void SerializedPageReader::InitDecryption() {
+void SerializedPageReader::initDecryption() {
   // Prepare the AAD for quick update later.
-  if (crypto_ctx_.data_decryptor != nullptr) {
-    VELOX_DCHECK(!crypto_ctx_.data_decryptor->file_aad().empty());
-    data_page_aad_ = encryption::CreateModuleAad(
-        crypto_ctx_.data_decryptor->file_aad(),
+  if (cryptoCtx_.dataDecryptor != nullptr) {
+    VELOX_DCHECK(!cryptoCtx_.dataDecryptor->fileAad().empty());
+    dataPageAad_ = encryption::createModuleAad(
+        cryptoCtx_.dataDecryptor->fileAad(),
         encryption::kDataPage,
-        crypto_ctx_.row_group_ordinal,
-        crypto_ctx_.column_ordinal,
+        cryptoCtx_.rowGroupOrdinal,
+        cryptoCtx_.columnOrdinal,
         kNonPageOrdinal);
   }
-  if (crypto_ctx_.meta_decryptor != nullptr) {
-    VELOX_DCHECK(!crypto_ctx_.meta_decryptor->file_aad().empty());
-    data_page_header_aad_ = encryption::CreateModuleAad(
-        crypto_ctx_.meta_decryptor->file_aad(),
+  if (cryptoCtx_.metaDecryptor != nullptr) {
+    VELOX_DCHECK(!cryptoCtx_.metaDecryptor->fileAad().empty());
+    dataPageHeaderAad_ = encryption::createModuleAad(
+        cryptoCtx_.metaDecryptor->fileAad(),
         encryption::kDataPageHeader,
-        crypto_ctx_.row_group_ordinal,
-        crypto_ctx_.column_ordinal,
+        cryptoCtx_.rowGroupOrdinal,
+        cryptoCtx_.columnOrdinal,
         kNonPageOrdinal);
   }
 }
 
-void SerializedPageReader::UpdateDecryption(
-    const std::shared_ptr<Decryptor>& decryptor,
-    int8_t module_type,
-    std::string* page_aad) {
-  VELOX_DCHECK_NOT_NULL(decryptor);
-  if (crypto_ctx_.start_decrypt_with_dictionary_page) {
-    std::string aad = encryption::CreateModuleAad(
-        decryptor->file_aad(),
-        module_type,
-        crypto_ctx_.row_group_ordinal,
-        crypto_ctx_.column_ordinal,
+void SerializedPageReader::updateDecryption(
+    const std::shared_ptr<Decryptor>& Decryptor,
+    int8_t moduleType,
+    std::string* pageAad) {
+  VELOX_DCHECK_NOT_NULL(Decryptor);
+  if (cryptoCtx_.startDecryptWithDictionaryPage) {
+    std::string aad = encryption::createModuleAad(
+        Decryptor->fileAad(),
+        moduleType,
+        cryptoCtx_.rowGroupOrdinal,
+        cryptoCtx_.columnOrdinal,
         kNonPageOrdinal);
-    decryptor->UpdateAad(aad);
+    Decryptor->updateAad(aad);
   } else {
-    encryption::QuickUpdatePageAad(page_ordinal_, page_aad);
-    decryptor->UpdateAad(*page_aad);
+    encryption::quickUpdatePageAad(pageOrdinal_, pageAad);
+    Decryptor->updateAad(*pageAad);
   }
 }
 
-bool SerializedPageReader::ShouldSkipPage(
-    EncodedStatistics* data_page_statistics) {
-  const PageType::type page_type = LoadEnumSafe(&current_page_header_.type);
-  if (page_type == PageType::DATA_PAGE) {
+bool SerializedPageReader::shouldSkipPage(
+    EncodedStatistics* dataPageStatistics) {
+  const PageType::type pageType = loadenumSafe(&currentPageHeader_.type);
+  if (pageType == PageType::kDataPage) {
     const facebook::velox::parquet::thrift::DataPageHeader& header =
-        current_page_header_.data_page_header;
-    CheckNumValuesInHeader(header.num_values);
-    *data_page_statistics = ExtractStatsFromHeader(header);
-    seen_num_values_ += header.num_values;
-    if (data_page_filter_) {
-      const EncodedStatistics* filter_statistics =
-          data_page_statistics->is_set() ? data_page_statistics : nullptr;
-      DataPageStats data_page_stats(
-          filter_statistics,
-          header.num_values,
-          /*num_rows=*/std::nullopt);
-      if (data_page_filter_(data_page_stats)) {
+        currentPageHeader_.data_page_header;
+    checkNumValuesInHeader(header.num_values);
+    *dataPageStatistics = extractStatsFromHeader(header);
+    seenNumValues_ += header.num_values;
+    if (dataPageFilter_) {
+      const EncodedStatistics* filterStatistics =
+          dataPageStatistics->isSet() ? dataPageStatistics : nullptr;
+      DataPageStats dataPageStats(
+          filterStatistics, header.num_values, std::nullopt);
+      if (dataPageFilter_(dataPageStats)) {
         return true;
       }
     }
-  } else if (page_type == PageType::DATA_PAGE_V2) {
+  } else if (pageType == PageType::kDataPageV2) {
     const facebook::velox::parquet::thrift::DataPageHeaderV2& header =
-        current_page_header_.data_page_header_v2;
-    CheckNumValuesInHeader(header.num_values);
+        currentPageHeader_.data_page_header_v2;
+    checkNumValuesInHeader(header.num_values);
     if (header.num_rows < 0) {
       throw ParquetException("Invalid page header (negative number of rows)");
     }
@@ -430,204 +427,200 @@ bool SerializedPageReader::ShouldSkipPage(
       throw ParquetException(
           "Invalid page header (negative levels byte length)");
     }
-    *data_page_statistics = ExtractStatsFromHeader(header);
-    seen_num_values_ += header.num_values;
-    if (data_page_filter_) {
-      const EncodedStatistics* filter_statistics =
-          data_page_statistics->is_set() ? data_page_statistics : nullptr;
-      DataPageStats data_page_stats(
-          filter_statistics, header.num_values, header.num_rows);
-      if (data_page_filter_(data_page_stats)) {
+    *dataPageStatistics = extractStatsFromHeader(header);
+    seenNumValues_ += header.num_values;
+    if (dataPageFilter_) {
+      const EncodedStatistics* filterStatistics =
+          dataPageStatistics->isSet() ? dataPageStatistics : nullptr;
+      DataPageStats dataPageStats(
+          filterStatistics, header.num_values, header.num_rows);
+      if (dataPageFilter_(dataPageStats)) {
         return true;
       }
     }
-  } else if (page_type == PageType::DICTIONARY_PAGE) {
-    const facebook::velox::parquet::thrift::DictionaryPageHeader& dict_header =
-        current_page_header_.dictionary_page_header;
-    CheckNumValuesInHeader(dict_header.num_values);
+  } else if (pageType == PageType::kDictionaryPage) {
+    const facebook::velox::parquet::thrift::DictionaryPageHeader& dictHeader =
+        currentPageHeader_.dictionary_page_header;
+    checkNumValuesInHeader(dictHeader.num_values);
   } else {
-    // We don't know what this page type is. We're allowed to skip non-data
-    // pages.
+    // We don't know what this page type is. We're allowed to skip non-data.
+    // Pages.
     return true;
   }
   return false;
 }
 
-std::shared_ptr<Page> SerializedPageReader::NextPage() {
+std::shared_ptr<Page> SerializedPageReader::nextPage() {
   ThriftDeserializer deserializer(properties_);
 
-  // Loop here because there may be unhandled page types that we skip until
-  // finding a page that we do know what to do with
-  while (seen_num_values_ < total_num_values_) {
-    uint32_t header_size = 0;
-    uint32_t allowed_page_size = kDefaultPageHeaderSize;
+  // Loop here because there may be unhandled page types that we skip until.
+  // Finding a page that we do know what to do with.
+  while (seenNumValues_ < totalNumValues_) {
+    uint32_t headerSize = 0;
+    uint32_t allowedPageSize = kDefaultPageHeaderSize;
 
-    // Page headers can be very large because of page statistics
-    // We try to deserialize a larger buffer progressively
-    // until a maximum allowed header limit
+    // Page headers can be very large because of page statistics.
+    // We try to deserialize a larger buffer progressively.
+    // Until a maximum allowed header limit.
     while (true) {
-      PARQUET_ASSIGN_OR_THROW(auto view, stream_->Peek(allowed_page_size));
+      PARQUET_ASSIGN_OR_THROW(auto view, stream_->Peek(allowedPageSize));
       if (view.size() == 0) {
         return std::shared_ptr<Page>(nullptr);
       }
 
-      // This gets used, then set by DeserializeThriftMsg
-      header_size = static_cast<uint32_t>(view.size());
+      // This gets used, then set by DeserializeThriftMsg.
+      headerSize = static_cast<uint32_t>(view.size());
       try {
-        if (crypto_ctx_.meta_decryptor != nullptr) {
-          UpdateDecryption(
-              crypto_ctx_.meta_decryptor,
+        if (cryptoCtx_.metaDecryptor != nullptr) {
+          updateDecryption(
+              cryptoCtx_.metaDecryptor,
               encryption::kDictionaryPageHeader,
-              &data_page_header_aad_);
+              &dataPageHeaderAad_);
         }
         // Reset current page header to avoid unclearing the __isset flag.
-        current_page_header_ = facebook::velox::parquet::thrift::PageHeader();
-        deserializer.DeserializeMessage(
+        currentPageHeader_ = facebook::velox::parquet::thrift::PageHeader();
+        deserializer.deserializeMessage(
             reinterpret_cast<const uint8_t*>(view.data()),
-            &header_size,
-            &current_page_header_,
-            crypto_ctx_.meta_decryptor);
+            &headerSize,
+            &currentPageHeader_,
+            cryptoCtx_.metaDecryptor);
         break;
       } catch (std::exception& e) {
-        // Failed to deserialize. Double the allowed page header size and try
-        // again
+        // Failed to deserialize. Double the allowed page header size and try.
+        // Again.
         std::stringstream ss;
         ss << e.what();
-        allowed_page_size *= 2;
-        if (allowed_page_size > max_page_header_size_) {
+        allowedPageSize *= 2;
+        if (allowedPageSize > maxPageHeaderSize_) {
           ss << "Deserializing page header failed.\n";
           throw ParquetException(ss.str());
         }
       }
     }
-    // Advance the stream offset
-    PARQUET_THROW_NOT_OK(stream_->Advance(header_size));
+    // Advance the stream offset.
+    PARQUET_THROW_NOT_OK(stream_->Advance(headerSize));
 
-    int compressed_len = current_page_header_.compressed_page_size;
-    int uncompressed_len = current_page_header_.uncompressed_page_size;
-    if (compressed_len < 0 || uncompressed_len < 0) {
+    int compressedLen = currentPageHeader_.compressed_page_size;
+    int uncompressedLen = currentPageHeader_.uncompressed_page_size;
+    if (compressedLen < 0 || uncompressedLen < 0) {
       throw ParquetException("Invalid page header");
     }
 
-    EncodedStatistics data_page_statistics;
-    if (ShouldSkipPage(&data_page_statistics)) {
-      PARQUET_THROW_NOT_OK(stream_->Advance(compressed_len));
+    EncodedStatistics dataPageStatistics;
+    if (shouldSkipPage(&dataPageStatistics)) {
+      PARQUET_THROW_NOT_OK(stream_->Advance(compressedLen));
       continue;
     }
 
-    if (crypto_ctx_.data_decryptor != nullptr) {
-      UpdateDecryption(
-          crypto_ctx_.data_decryptor,
-          encryption::kDictionaryPage,
-          &data_page_aad_);
+    if (cryptoCtx_.dataDecryptor != nullptr) {
+      updateDecryption(
+          cryptoCtx_.dataDecryptor, encryption::kDictionaryPage, &dataPageAad_);
     }
 
     // Read the compressed data page.
-    PARQUET_ASSIGN_OR_THROW(auto page_buffer, stream_->Read(compressed_len));
-    if (page_buffer->size() != compressed_len) {
+    PARQUET_ASSIGN_OR_THROW(auto pageBuffer, stream_->Read(compressedLen));
+    if (pageBuffer->size() != compressedLen) {
       std::stringstream ss;
-      ss << "Page was smaller (" << page_buffer->size() << ") than expected ("
-         << compressed_len << ")";
-      ParquetException::EofException(ss.str());
+      ss << "Page was smaller (" << pageBuffer->size() << ") than expected ("
+         << compressedLen << ")";
+      ParquetException::eofException(ss.str());
     }
 
-    const PageType::type page_type = LoadEnumSafe(&current_page_header_.type);
+    const PageType::type pageType = loadenumSafe(&currentPageHeader_.type);
 
-    if (properties_.page_checksum_verification() &&
-        current_page_header_.__isset.crc && PageCanUseChecksum(page_type)) {
-      // verify crc
+    if (properties_.pageChecksumVerification() &&
+        currentPageHeader_.__isset.crc && pageCanUseChecksum(pageType)) {
+      // Verify crc.
       uint32_t checksum = ::arrow::internal::crc32(
-          /* prev */ 0, page_buffer->data(), compressed_len);
-      if (static_cast<int32_t>(checksum) != current_page_header_.crc) {
+          /* prev */ 0, pageBuffer->data(), compressedLen);
+      if (static_cast<int32_t>(checksum) != currentPageHeader_.crc) {
         throw ParquetException(
             "could not verify page integrity, CRC checksum verification failed for "
             "page_ordinal " +
-            std::to_string(page_ordinal_));
+            std::to_string(pageOrdinal_));
       }
     }
 
-    // Decrypt it if we need to
-    if (crypto_ctx_.data_decryptor != nullptr) {
-      PARQUET_THROW_NOT_OK(decryption_buffer_->Resize(
-          compressed_len - crypto_ctx_.data_decryptor->CiphertextSizeDelta(),
-          /*shrink_to_fit=*/false));
-      compressed_len = crypto_ctx_.data_decryptor->Decrypt(
-          page_buffer->data(),
-          compressed_len,
-          decryption_buffer_->mutable_data());
+    // Decrypt it if we need to.
+    if (cryptoCtx_.dataDecryptor != nullptr) {
+      PARQUET_THROW_NOT_OK(decryptionBuffer_->Resize(
+          compressedLen - cryptoCtx_.dataDecryptor->ciphertextSizeDelta(),
+          false));
+      compressedLen = cryptoCtx_.dataDecryptor->decrypt(
+          pageBuffer->data(), compressedLen, decryptionBuffer_->mutable_data());
 
-      page_buffer = decryption_buffer_;
+      pageBuffer = decryptionBuffer_;
     }
 
-    if (page_type == PageType::DICTIONARY_PAGE) {
-      crypto_ctx_.start_decrypt_with_dictionary_page = false;
-      const facebook::velox::parquet::thrift::DictionaryPageHeader&
-          dict_header = current_page_header_.dictionary_page_header;
-      bool is_sorted =
-          dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
+    if (pageType == PageType::kDictionaryPage) {
+      cryptoCtx_.startDecryptWithDictionaryPage = false;
+      const facebook::velox::parquet::thrift::DictionaryPageHeader& dictHeader =
+          currentPageHeader_.dictionary_page_header;
+      bool isSorted =
+          dictHeader.__isset.is_sorted ? dictHeader.is_sorted : false;
 
-      page_buffer = DecompressIfNeeded(
-          std::move(page_buffer), compressed_len, uncompressed_len);
+      pageBuffer = decompressIfNeeded(
+          std::move(pageBuffer), compressedLen, uncompressedLen);
 
       return std::make_shared<DictionaryPage>(
-          page_buffer,
-          dict_header.num_values,
-          LoadEnumSafe(&dict_header.encoding),
-          is_sorted);
-    } else if (page_type == PageType::DATA_PAGE) {
-      ++page_ordinal_;
+          pageBuffer,
+          dictHeader.num_values,
+          loadenumSafe(&dictHeader.encoding),
+          isSorted);
+    } else if (pageType == PageType::kDataPage) {
+      ++pageOrdinal_;
       const facebook::velox::parquet::thrift::DataPageHeader& header =
-          current_page_header_.data_page_header;
-      page_buffer = DecompressIfNeeded(
-          std::move(page_buffer), compressed_len, uncompressed_len);
+          currentPageHeader_.data_page_header;
+      pageBuffer = decompressIfNeeded(
+          std::move(pageBuffer), compressedLen, uncompressedLen);
 
       return std::make_shared<DataPageV1>(
-          page_buffer,
+          pageBuffer,
           header.num_values,
-          LoadEnumSafe(&header.encoding),
-          LoadEnumSafe(&header.definition_level_encoding),
-          LoadEnumSafe(&header.repetition_level_encoding),
-          uncompressed_len,
-          data_page_statistics);
-    } else if (page_type == PageType::DATA_PAGE_V2) {
-      ++page_ordinal_;
+          loadenumSafe(&header.encoding),
+          loadenumSafe(&header.definition_level_encoding),
+          loadenumSafe(&header.repetition_level_encoding),
+          uncompressedLen,
+          dataPageStatistics);
+    } else if (pageType == PageType::kDataPageV2) {
+      ++pageOrdinal_;
       const facebook::velox::parquet::thrift::DataPageHeaderV2& header =
-          current_page_header_.data_page_header_v2;
+          currentPageHeader_.data_page_header_v2;
 
       // Arrow prior to 3.0.0 set is_compressed to false but still compressed.
-      bool is_compressed =
+      bool isCompressed =
           (header.__isset.is_compressed ? header.is_compressed : false) ||
-          always_compressed_;
+          alwaysCompressed_;
 
-      // Uncompress if needed
-      int levels_byte_len;
+      // Uncompress if needed.
+      int levelsByteLen;
       if (AddWithOverflow(
               header.definition_levels_byte_length,
               header.repetition_levels_byte_length,
-              &levels_byte_len)) {
+              &levelsByteLen)) {
         throw ParquetException("Levels size too large (corrupt file?)");
       }
-      // DecompressIfNeeded doesn't take `is_compressed` into account as
-      // it's page type-agnostic.
-      if (is_compressed) {
-        page_buffer = DecompressIfNeeded(
-            std::move(page_buffer),
-            compressed_len,
-            uncompressed_len,
-            levels_byte_len);
+      // DecompressIfNeeded doesn't take `is_compressed` into account as.
+      // It's page type-agnostic.
+      if (isCompressed) {
+        pageBuffer = decompressIfNeeded(
+            std::move(pageBuffer),
+            compressedLen,
+            uncompressedLen,
+            levelsByteLen);
       }
 
       return std::make_shared<DataPageV2>(
-          page_buffer,
+          pageBuffer,
           header.num_values,
           header.num_nulls,
           header.num_rows,
-          LoadEnumSafe(&header.encoding),
+          loadenumSafe(&header.encoding),
           header.definition_levels_byte_length,
           header.repetition_levels_byte_length,
-          uncompressed_len,
-          is_compressed,
-          data_page_statistics);
+          uncompressedLen,
+          isCompressed,
+          dataPageStatistics);
     } else {
       throw ParquetException(
           "Internal error, we have already skipped non-data pages in ShouldSkipPage()");
@@ -636,204 +629,200 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
   return std::shared_ptr<Page>(nullptr);
 }
 
-std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
-    std::shared_ptr<Buffer> page_buffer,
-    int compressed_len,
-    int uncompressed_len,
-    int levels_byte_len) {
+std::shared_ptr<Buffer> SerializedPageReader::decompressIfNeeded(
+    std::shared_ptr<Buffer> pageBuffer,
+    int compressedLen,
+    int uncompressedLen,
+    int levelsByteLen) {
   if (decompressor_ == nullptr) {
-    return page_buffer;
+    return pageBuffer;
   }
-  if (compressed_len < levels_byte_len || uncompressed_len < levels_byte_len) {
+  if (compressedLen < levelsByteLen || uncompressedLen < levelsByteLen) {
     throw ParquetException("Invalid page header");
   }
 
   // Grow the uncompressed buffer if we need to.
-  PARQUET_THROW_NOT_OK(
-      decompression_buffer_->Resize(uncompressed_len, /*shrink_to_fit=*/false));
+  PARQUET_THROW_NOT_OK(decompressionBuffer_->Resize(uncompressedLen, false));
 
-  if (levels_byte_len > 0) {
-    // First copy the levels as-is
-    uint8_t* decompressed = decompression_buffer_->mutable_data();
-    memcpy(decompressed, page_buffer->data(), levels_byte_len);
+  if (levelsByteLen > 0) {
+    // First copy the levels as-is.
+    uint8_t* decompressed = decompressionBuffer_->mutable_data();
+    memcpy(decompressed, pageBuffer->data(), levelsByteLen);
   }
 
-  // Decompress the values
-  PARQUET_THROW_NOT_OK(decompressor_->Decompress(
-      compressed_len - levels_byte_len,
-      page_buffer->data() + levels_byte_len,
-      uncompressed_len - levels_byte_len,
-      decompression_buffer_->mutable_data() + levels_byte_len));
+  // Decompress the values.
+  PARQUET_THROW_NOT_OK(decompressor_->decompress(
+      compressedLen - levelsByteLen,
+      pageBuffer->data() + levelsByteLen,
+      uncompressedLen - levelsByteLen,
+      decompressionBuffer_->mutable_data() + levelsByteLen));
 
-  return decompression_buffer_;
+  return decompressionBuffer_;
 }
 
 } // namespace
 
-std::unique_ptr<PageReader> PageReader::Open(
+std::unique_ptr<PageReader> PageReader::open(
     std::shared_ptr<ArrowInputStream> stream,
-    int64_t total_num_values,
-    Compression::type codec,
+    int64_t totalNumValues,
+    Compression::type Codec,
     const ReaderProperties& properties,
-    bool always_compressed,
+    bool alwaysCompressed,
     const CryptoContext* ctx) {
   return std::unique_ptr<PageReader>(new SerializedPageReader(
       std::move(stream),
-      total_num_values,
-      codec,
+      totalNumValues,
+      Codec,
       properties,
       ctx,
-      always_compressed));
+      alwaysCompressed));
 }
 
-std::unique_ptr<PageReader> PageReader::Open(
+std::unique_ptr<PageReader> PageReader::open(
     std::shared_ptr<ArrowInputStream> stream,
-    int64_t total_num_values,
-    Compression::type codec,
-    bool always_compressed,
+    int64_t totalNumValues,
+    Compression::type Codec,
+    bool alwaysCompressed,
     ::arrow::MemoryPool* pool,
     const CryptoContext* ctx) {
   return std::unique_ptr<PageReader>(new SerializedPageReader(
       std::move(stream),
-      total_num_values,
-      codec,
+      totalNumValues,
+      Codec,
       ReaderProperties(pool),
       ctx,
-      always_compressed));
+      alwaysCompressed));
 }
 
 namespace {
 
-// ----------------------------------------------------------------------
-// Impl base class for TypedColumnReader and RecordReader
+// ----------------------------------------------------------------------.
+// Impl base class for TypedColumnReader and RecordReader.
 
-// PLAIN_DICTIONARY is deprecated but used to be used as a dictionary index
-// encoding.
-static bool IsDictionaryIndexEncoding(const Encoding::type& e) {
-  return e == Encoding::RLE_DICTIONARY || e == Encoding::PLAIN_DICTIONARY;
+// PLAIN_DICTIONARY is deprecated but used to be used as a dictionary index.
+// Encoding.
+static bool isDictionaryIndexEncoding(const Encoding::type& e) {
+  return e == Encoding::kRleDictionary || e == Encoding::kPlainDictionary;
 }
 
 template <typename DType>
 class ColumnReaderImplBase {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   ColumnReaderImplBase(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
       : descr_(descr),
-        max_def_level_(descr->max_definition_level()),
-        max_rep_level_(descr->max_repetition_level()),
-        num_buffered_values_(0),
-        num_decoded_values_(0),
+        maxDefLevel_(descr->maxDefinitionLevel()),
+        maxRepLevel_(descr->maxRepetitionLevel()),
+        numBufferedValues_(0),
+        numDecodedValues_(0),
         pool_(pool),
-        current_decoder_(nullptr),
-        current_encoding_(Encoding::UNKNOWN) {}
+        currentDecoder_(nullptr),
+        currentEncoding_(Encoding::kUnknown) {}
 
   virtual ~ColumnReaderImplBase() = default;
 
  protected:
-  // Read up to batch_size values from the current data page into the
-  // pre-allocated memory T*
+  // Read up to batch_size values from the current data page into the.
+  // Pre-allocated memory T*.
   //
-  // @returns: the number of values read into the out buffer
-  int64_t ReadValues(int64_t batch_size, T* out) {
-    int64_t num_decoded =
-        current_decoder_->Decode(out, static_cast<int>(batch_size));
-    return num_decoded;
+  // @returns: the number of values read into the out buffer.
+  int64_t readValues(int64_t batchSize, T* out) {
+    int64_t numDecoded =
+        currentDecoder_->decode(out, static_cast<int>(batchSize));
+    return numDecoded;
   }
 
-  // Read up to batch_size values from the current data page into the
-  // pre-allocated memory T*, leaving spaces for null entries according
-  // to the def_levels.
+  // Read up to batch_size values from the current data page into the.
+  // Pre-allocated memory T*, leaving spaces for null entries according.
+  // To the def_levels.
   //
-  // @returns: the number of values read into the out buffer
-  int64_t ReadValuesSpaced(
-      int64_t batch_size,
+  // @returns: the number of values read into the out buffer.
+  int64_t readValuesSpaced(
+      int64_t batchSize,
       T* out,
-      int64_t null_count,
-      uint8_t* valid_bits,
-      int64_t valid_bits_offset) {
-    return current_decoder_->DecodeSpaced(
+      int64_t nullCount,
+      uint8_t* validBits,
+      int64_t validBitsOffset) {
+    return currentDecoder_->decodeSpaced(
         out,
-        static_cast<int>(batch_size),
-        static_cast<int>(null_count),
-        valid_bits,
-        valid_bits_offset);
+        static_cast<int>(batchSize),
+        static_cast<int>(nullCount),
+        validBits,
+        validBitsOffset);
   }
 
-  // Read multiple definition levels into preallocated memory
+  // Read multiple definition levels into preallocated memory.
   //
-  // Returns the number of decoded definition levels
-  int64_t ReadDefinitionLevels(int64_t batch_size, int16_t* levels) {
-    if (max_def_level_ == 0) {
+  // Returns the number of decoded definition levels.
+  int64_t readDefinitionLevels(int64_t batchSize, int16_t* levels) {
+    if (maxDefLevel_ == 0) {
       return 0;
     }
-    return definition_level_decoder_.Decode(
-        static_cast<int>(batch_size), levels);
+    return definitionLevelDecoder_.decode(static_cast<int>(batchSize), levels);
   }
 
-  bool HasNextInternal() {
-    // Either there is no data page available yet, or the data page has been
-    // exhausted
-    if (num_buffered_values_ == 0 ||
-        num_decoded_values_ == num_buffered_values_) {
-      if (!ReadNewPage() || num_buffered_values_ == 0) {
+  bool hasNextInternal() {
+    // Either there is no data page available yet, or the data page has been.
+    // Exhausted.
+    if (numBufferedValues_ == 0 || numDecodedValues_ == numBufferedValues_) {
+      if (!readNewPage() || numBufferedValues_ == 0) {
         return false;
       }
     }
     return true;
   }
 
-  // Read multiple repetition levels into preallocated memory
-  // Returns the number of decoded repetition levels
-  int64_t ReadRepetitionLevels(int64_t batch_size, int16_t* levels) {
-    if (max_rep_level_ == 0) {
+  // Read multiple repetition levels into preallocated memory.
+  // Returns the number of decoded repetition levels.
+  int64_t readRepetitionLevels(int64_t batchSize, int16_t* levels) {
+    if (maxRepLevel_ == 0) {
       return 0;
     }
-    return repetition_level_decoder_.Decode(
-        static_cast<int>(batch_size), levels);
+    return repetitionLevelDecoder_.decode(static_cast<int>(batchSize), levels);
   }
 
-  // Advance to the next data page
-  bool ReadNewPage() {
+  // Advance to the next data page.
+  bool readNewPage() {
     // Loop until we find the next data page.
     while (true) {
-      current_page_ = pager_->NextPage();
-      if (!current_page_) {
-        // EOS
+      currentPage_ = pager_->nextPage();
+      if (!currentPage_) {
+        // EOS.
         return false;
       }
 
-      if (current_page_->type() == PageType::DICTIONARY_PAGE) {
-        ConfigureDictionary(
-            static_cast<const DictionaryPage*>(current_page_.get()));
+      if (currentPage_->type() == PageType::kDictionaryPage) {
+        configureDictionary(
+            static_cast<const DictionaryPage*>(currentPage_.get()));
         continue;
-      } else if (current_page_->type() == PageType::DATA_PAGE) {
-        const auto page = std::static_pointer_cast<DataPageV1>(current_page_);
-        const int64_t levels_byte_size = InitializeLevelDecoders(
+      } else if (currentPage_->type() == PageType::kDataPage) {
+        const auto page = std::static_pointer_cast<DataPageV1>(currentPage_);
+        const int64_t levelsByteSize = initializeLevelDecoders(
             *page,
-            page->repetition_level_encoding(),
-            page->definition_level_encoding());
-        InitializeDataDecoder(*page, levels_byte_size);
+            page->repetitionLevelEncoding(),
+            page->definitionLevelEncoding());
+        initializeDataDecoder(*page, levelsByteSize);
         return true;
-      } else if (current_page_->type() == PageType::DATA_PAGE_V2) {
-        const auto page = std::static_pointer_cast<DataPageV2>(current_page_);
-        int64_t levels_byte_size = InitializeLevelDecodersV2(*page);
-        InitializeDataDecoder(*page, levels_byte_size);
+      } else if (currentPage_->type() == PageType::kDataPageV2) {
+        const auto page = std::static_pointer_cast<DataPageV2>(currentPage_);
+        int64_t levelsByteSize = initializeLevelDecodersV2(*page);
+        initializeDataDecoder(*page, levelsByteSize);
         return true;
       } else {
-        // We don't know what this page type is. We're allowed to skip non-data
-        // pages.
+        // We don't know what this page type is. We're allowed to skip non-data.
+        // Pages.
         continue;
       }
     }
     return true;
   }
 
-  void ConfigureDictionary(const DictionaryPage* page) {
+  void configureDictionary(const DictionaryPage* page) {
     int encoding = static_cast<int>(page->encoding());
-    if (page->encoding() == Encoding::PLAIN_DICTIONARY ||
-        page->encoding() == Encoding::PLAIN) {
-      encoding = static_cast<int>(Encoding::RLE_DICTIONARY);
+    if (page->encoding() == Encoding::kPlainDictionary ||
+        page->encoding() == Encoding::kPlain) {
+      encoding = static_cast<int>(Encoding::kRleDictionary);
     }
 
     auto it = decoders_.find(encoding);
@@ -841,20 +830,20 @@ class ColumnReaderImplBase {
       throw ParquetException("Column cannot have more than one dictionary.");
     }
 
-    if (page->encoding() == Encoding::PLAIN_DICTIONARY ||
-        page->encoding() == Encoding::PLAIN) {
-      auto dictionary = MakeTypedDecoder<DType>(Encoding::PLAIN, descr_);
-      dictionary->SetData(page->num_values(), page->data(), page->size());
+    if (page->encoding() == Encoding::kPlainDictionary ||
+        page->encoding() == Encoding::kPlain) {
+      auto dictionary = makeTypedDecoder<DType>(Encoding::kPlain, descr_);
+      dictionary->setData(page->numValues(), page->data(), page->size());
 
-      // The dictionary is fully decoded during DictionaryDecoder::Init, so the
-      // DictionaryPage buffer is no longer required after this step
+      // The dictionary is fully decoded during DictionaryDecoder::Init, so the.
+      // DictionaryPage buffer is no longer required after this step.
       //
-      // TODO(wesm): investigate whether this all-or-nothing decoding of the
-      // dictionary makes sense and whether performance can be improved
+      // TODO(wesm): investigate whether this all-or-nothing decoding of the.
+      // Dictionary makes sense and whether performance can be improved.
 
       std::unique_ptr<DictDecoder<DType>> decoder =
-          MakeDictDecoder<DType>(descr_, pool_);
-      decoder->SetDict(dictionary.get());
+          makeDictDecoder<DType>(descr_, pool_);
+      decoder->setDict(dictionary.get());
       decoders_[encoding] = std::unique_ptr<DecoderType>(
           dynamic_cast<DecoderType*>(decoder.release()));
     } else {
@@ -862,164 +851,164 @@ class ColumnReaderImplBase {
           "only plain dictionary encoding has been implemented");
     }
 
-    new_dictionary_ = true;
-    current_decoder_ = decoders_[encoding].get();
-    VELOX_DCHECK(current_decoder_);
+    newDictionary_ = true;
+    currentDecoder_ = decoders_[encoding].get();
+    VELOX_DCHECK(currentDecoder_);
   }
 
   // Initialize repetition and definition level decoders on the next data page.
 
-  // If the data page includes repetition and definition levels, we
-  // initialize the level decoders and return the number of encoded level bytes.
+  // If the data page includes repetition and definition levels, we.
+  // Initialize the level decoders and return the number of encoded level bytes.
   // The return value helps determine the number of bytes in the encoded data.
-  int64_t InitializeLevelDecoders(
+  int64_t initializeLevelDecoders(
       const DataPage& page,
-      Encoding::type repetition_level_encoding,
-      Encoding::type definition_level_encoding) {
+      Encoding::type repetitionLevelEncoding,
+      Encoding::type definitionLevelEncoding) {
     // Read a data page.
-    num_buffered_values_ = page.num_values();
+    numBufferedValues_ = page.numValues();
 
-    // Have not decoded any values from the data page yet
-    num_decoded_values_ = 0;
+    // Have not decoded any values from the data page yet.
+    numDecodedValues_ = 0;
 
     const uint8_t* buffer = page.data();
-    int32_t levels_byte_size = 0;
-    int32_t max_size = page.size();
+    int32_t levelsByteSize = 0;
+    int32_t maxSize = page.size();
 
     // Data page Layout: Repetition Levels - Definition Levels - encoded values.
     // Levels are encoded as rle or bit-packed.
-    // Init repetition levels
-    if (max_rep_level_ > 0) {
-      int32_t rep_levels_bytes = repetition_level_decoder_.SetData(
-          repetition_level_encoding,
-          max_rep_level_,
-          static_cast<int>(num_buffered_values_),
+    // Init repetition levels.
+    if (maxRepLevel_ > 0) {
+      int32_t repLevelsBytes = repetitionLevelDecoder_.setData(
+          repetitionLevelEncoding,
+          maxRepLevel_,
+          static_cast<int>(numBufferedValues_),
           buffer,
-          max_size);
-      buffer += rep_levels_bytes;
-      levels_byte_size += rep_levels_bytes;
-      max_size -= rep_levels_bytes;
+          maxSize);
+      buffer += repLevelsBytes;
+      levelsByteSize += repLevelsBytes;
+      maxSize -= repLevelsBytes;
     }
-    // TODO figure a way to set max_def_level_ to 0
-    // if the initial value is invalid
+    // TODO figure a way to set max_def_level_ to 0.
+    // If the initial value is invalid.
 
-    // Init definition levels
-    if (max_def_level_ > 0) {
-      int32_t def_levels_bytes = definition_level_decoder_.SetData(
-          definition_level_encoding,
-          max_def_level_,
-          static_cast<int>(num_buffered_values_),
+    // Init definition levels.
+    if (maxDefLevel_ > 0) {
+      int32_t defLevelsBytes = definitionLevelDecoder_.setData(
+          definitionLevelEncoding,
+          maxDefLevel_,
+          static_cast<int>(numBufferedValues_),
           buffer,
-          max_size);
-      levels_byte_size += def_levels_bytes;
-      max_size -= def_levels_bytes;
+          maxSize);
+      levelsByteSize += defLevelsBytes;
+      maxSize -= defLevelsBytes;
     }
 
-    return levels_byte_size;
+    return levelsByteSize;
   }
 
-  int64_t InitializeLevelDecodersV2(const DataPageV2& page) {
+  int64_t initializeLevelDecodersV2(const DataPageV2& page) {
     // Read a data page.
-    num_buffered_values_ = page.num_values();
+    numBufferedValues_ = page.numValues();
 
-    // Have not decoded any values from the data page yet
-    num_decoded_values_ = 0;
+    // Have not decoded any values from the data page yet.
+    numDecodedValues_ = 0;
     const uint8_t* buffer = page.data();
 
-    const int64_t total_levels_length =
-        static_cast<int64_t>(page.repetition_levels_byte_length()) +
-        page.definition_levels_byte_length();
+    const int64_t totalLevelsLength =
+        static_cast<int64_t>(page.repetitionLevelsByteLength()) +
+        page.definitionLevelsByteLength();
 
-    if (total_levels_length > page.size()) {
+    if (totalLevelsLength > page.size()) {
       throw ParquetException(
           "Data page too small for levels (corrupt header?)");
     }
 
-    if (max_rep_level_ > 0) {
-      repetition_level_decoder_.SetDataV2(
-          page.repetition_levels_byte_length(),
-          max_rep_level_,
-          static_cast<int>(num_buffered_values_),
+    if (maxRepLevel_ > 0) {
+      repetitionLevelDecoder_.setDataV2(
+          page.repetitionLevelsByteLength(),
+          maxRepLevel_,
+          static_cast<int>(numBufferedValues_),
           buffer);
     }
-    // ARROW-17453: Even if max_rep_level_ is 0, there may still be
-    // repetition level bytes written and/or reported in the header by
+    // ARROW-17453: Even if max_rep_level_ is 0, there may still be.
+    // Repetition level bytes written and/or reported in the header by.
     // some writers (e.g. Athena)
-    buffer += page.repetition_levels_byte_length();
+    buffer += page.repetitionLevelsByteLength();
 
-    if (max_def_level_ > 0) {
-      definition_level_decoder_.SetDataV2(
-          page.definition_levels_byte_length(),
-          max_def_level_,
-          static_cast<int>(num_buffered_values_),
+    if (maxDefLevel_ > 0) {
+      definitionLevelDecoder_.setDataV2(
+          page.definitionLevelsByteLength(),
+          maxDefLevel_,
+          static_cast<int>(numBufferedValues_),
           buffer);
     }
 
-    return total_levels_length;
+    return totalLevelsLength;
   }
 
-  // Get a decoder object for this page or create a new decoder if this is the
-  // first page with this encoding.
-  void InitializeDataDecoder(const DataPage& page, int64_t levels_byte_size) {
-    const uint8_t* buffer = page.data() + levels_byte_size;
-    const int64_t data_size = page.size() - levels_byte_size;
+  // Get a decoder object for this page or create a new decoder if this is the.
+  // First page with this encoding.
+  void initializeDataDecoder(const DataPage& page, int64_t levelsByteSize) {
+    const uint8_t* buffer = page.data() + levelsByteSize;
+    const int64_t dataSize = page.size() - levelsByteSize;
 
-    if (data_size < 0) {
+    if (dataSize < 0) {
       throw ParquetException("Page smaller than size of encoded levels");
     }
 
     Encoding::type encoding = page.encoding();
 
-    if (IsDictionaryIndexEncoding(encoding)) {
-      encoding = Encoding::RLE_DICTIONARY;
+    if (isDictionaryIndexEncoding(encoding)) {
+      encoding = Encoding::kRleDictionary;
     }
 
     auto it = decoders_.find(static_cast<int>(encoding));
     if (it != decoders_.end()) {
       VELOX_DCHECK_NOT_NULL(it->second.get());
-      current_decoder_ = it->second.get();
+      currentDecoder_ = it->second.get();
     } else {
       switch (encoding) {
-        case Encoding::PLAIN: {
-          auto decoder = MakeTypedDecoder<DType>(Encoding::PLAIN, descr_);
-          current_decoder_ = decoder.get();
+        case Encoding::kPlain: {
+          auto decoder = makeTypedDecoder<DType>(Encoding::kPlain, descr_);
+          currentDecoder_ = decoder.get();
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
-        case Encoding::BYTE_STREAM_SPLIT: {
+        case Encoding::kByteStreamSplit: {
           auto decoder =
-              MakeTypedDecoder<DType>(Encoding::BYTE_STREAM_SPLIT, descr_);
-          current_decoder_ = decoder.get();
+              makeTypedDecoder<DType>(Encoding::kByteStreamSplit, descr_);
+          currentDecoder_ = decoder.get();
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
-        case Encoding::RLE: {
-          auto decoder = MakeTypedDecoder<DType>(Encoding::RLE, descr_);
-          current_decoder_ = decoder.get();
+        case Encoding::kRle: {
+          auto decoder = makeTypedDecoder<DType>(Encoding::kRle, descr_);
+          currentDecoder_ = decoder.get();
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
-        case Encoding::RLE_DICTIONARY:
+        case Encoding::kRleDictionary:
           throw ParquetException("Dictionary page must be before data page.");
 
-        case Encoding::DELTA_BINARY_PACKED: {
+        case Encoding::kDeltaBinaryPacked: {
           auto decoder =
-              MakeTypedDecoder<DType>(Encoding::DELTA_BINARY_PACKED, descr_);
-          current_decoder_ = decoder.get();
+              makeTypedDecoder<DType>(Encoding::kDeltaBinaryPacked, descr_);
+          currentDecoder_ = decoder.get();
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
-        case Encoding::DELTA_BYTE_ARRAY: {
+        case Encoding::kDeltaByteArray: {
           auto decoder =
-              MakeTypedDecoder<DType>(Encoding::DELTA_BYTE_ARRAY, descr_);
-          current_decoder_ = decoder.get();
+              makeTypedDecoder<DType>(Encoding::kDeltaByteArray, descr_);
+          currentDecoder_ = decoder.get();
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
-        case Encoding::DELTA_LENGTH_BYTE_ARRAY: {
-          auto decoder = MakeTypedDecoder<DType>(
-              Encoding::DELTA_LENGTH_BYTE_ARRAY, descr_);
-          current_decoder_ = decoder.get();
+        case Encoding::kDeltaLengthByteArray: {
+          auto decoder =
+              makeTypedDecoder<DType>(Encoding::kDeltaLengthByteArray, descr_);
+          currentDecoder_ = decoder.get();
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
@@ -1028,73 +1017,73 @@ class ColumnReaderImplBase {
           throw ParquetException("Unknown encoding type.");
       }
     }
-    current_encoding_ = encoding;
-    current_decoder_->SetData(
-        static_cast<int>(num_buffered_values_),
+    currentEncoding_ = encoding;
+    currentDecoder_->setData(
+        static_cast<int>(numBufferedValues_),
         buffer,
-        static_cast<int>(data_size));
+        static_cast<int>(dataSize));
   }
 
-  int64_t available_values_current_page() const {
-    return num_buffered_values_ - num_decoded_values_;
+  int64_t availableValuesCurrentPage() const {
+    return numBufferedValues_ - numDecodedValues_;
   }
 
   const ColumnDescriptor* descr_;
-  const int16_t max_def_level_;
-  const int16_t max_rep_level_;
+  const int16_t maxDefLevel_;
+  const int16_t maxRepLevel_;
 
   std::unique_ptr<PageReader> pager_;
-  std::shared_ptr<Page> current_page_;
+  std::shared_ptr<Page> currentPage_;
 
-  // Not set if full schema for this field has no optional or repeated elements
-  LevelDecoder definition_level_decoder_;
+  // Not set if full schema for this field has no optional or repeated elements.
+  LevelDecoder definitionLevelDecoder_;
 
   // Not set for flat schemas.
-  LevelDecoder repetition_level_decoder_;
+  LevelDecoder repetitionLevelDecoder_;
 
-  // The total number of values stored in the data page. This is the maximum of
-  // the number of encoded definition levels or encoded values. For
-  // non-repeated, required columns, this is equal to the number of encoded
-  // values. For repeated or optional values, there may be fewer data values
-  // than levels, and this tells you how many encoded levels there are in that
-  // case.
-  int64_t num_buffered_values_;
+  // The total number of values stored in the data page. This is the maximum of.
+  // The number of encoded definition levels or encoded values. For.
+  // Non-repeated, required columns, this is equal to the number of encoded.
+  // Values. For repeated or optional values, there may be fewer data values.
+  // Than levels, and this tells you how many encoded levels there are in that.
+  // Case.
+  int64_t numBufferedValues_;
 
-  // The number of values from the current data page that have been decoded
-  // into memory
-  int64_t num_decoded_values_;
+  // The number of values from the current data page that have been decoded.
+  // Into memory.
+  int64_t numDecodedValues_;
 
   ::arrow::MemoryPool* pool_;
 
   using DecoderType = TypedDecoder<DType>;
-  DecoderType* current_decoder_;
-  Encoding::type current_encoding_;
+  DecoderType* currentDecoder_;
+  Encoding::type currentEncoding_;
 
-  /// Flag to signal when a new dictionary has been set, for the benefit of
-  /// DictionaryRecordReader
-  bool new_dictionary_;
+  /// Flag to signal when a new dictionary has been set, for the benefit of.
+  /// DictionaryRecordReader.
+  bool newDictionary_;
 
-  // The exposed encoding
-  ExposedEncoding exposed_encoding_ = ExposedEncoding::NO_ENCODING;
+  // The exposed encoding.
+  ExposedEncoding exposedEncoding_ = ExposedEncoding::kNoEncoding;
 
-  // Map of encoding type to the respective decoder object. For example, a
-  // column chunk's data pages may include both dictionary-encoded and
-  // plain-encoded data.
+  // Map of encoding type to the respective decoder object. For example, a.
+  // Column chunk's data pages may include both dictionary-encoded and.
+  // Plain-encoded data.
   std::unordered_map<int, std::unique_ptr<DecoderType>> decoders_;
 
-  void ConsumeBufferedValues(int64_t num_values) {
-    num_decoded_values_ += num_values;
+  void consumeBufferedValues(int64_t numValues) {
+    numDecodedValues_ += numValues;
   }
 };
 
-// ----------------------------------------------------------------------
-// TypedColumnReader implementations
+// ----------------------------------------------------------------------.
+// TypedColumnReader implementations.
 
 template <typename DType>
 class TypedColumnReaderImpl : public TypedColumnReader<DType>,
                               public ColumnReaderImplBase<DType> {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   TypedColumnReaderImpl(
       const ColumnDescriptor* descr,
@@ -1104,114 +1093,114 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
     this->pager_ = std::move(pager);
   }
 
-  bool HasNext() override {
-    return this->HasNextInternal();
+  bool hasNext() override {
+    return this->hasNextInternal();
   }
 
-  int64_t ReadBatch(
-      int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
+  int64_t readBatch(
+      int64_t batchSize,
+      int16_t* defLevels,
+      int16_t* repLevels,
       T* values,
-      int64_t* values_read) override;
+      int64_t* valuesRead) override;
 
-  int64_t ReadBatchSpaced(
-      int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
+  int64_t readBatchSpaced(
+      int64_t batchSize,
+      int16_t* defLevels,
+      int16_t* repLevels,
       T* values,
-      uint8_t* valid_bits,
-      int64_t valid_bits_offset,
-      int64_t* levels_read,
-      int64_t* values_read,
-      int64_t* null_count) override;
+      uint8_t* validBits,
+      int64_t validBitsOffset,
+      int64_t* levelsRead,
+      int64_t* valuesRead,
+      int64_t* nullCount) override;
 
-  int64_t Skip(int64_t num_values_to_skip) override;
+  int64_t skip(int64_t numValuesToSkip) override;
 
   Type::type type() const override {
-    return this->descr_->physical_type();
+    return this->descr_->physicalType();
   }
 
   const ColumnDescriptor* descr() const override {
     return this->descr_;
   }
 
-  ExposedEncoding GetExposedEncoding() override {
-    return this->exposed_encoding_;
+  ExposedEncoding getExposedEncoding() override {
+    return this->exposedEncoding_;
   };
 
-  int64_t ReadBatchWithDictionary(
-      int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
+  int64_t readBatchWithDictionary(
+      int64_t batchSize,
+      int16_t* defLevels,
+      int16_t* repLevels,
       int32_t* indices,
-      int64_t* indices_read,
+      int64_t* indicesRead,
       const T** dict,
-      int32_t* dict_len) override;
+      int32_t* dictLen) override;
 
  protected:
-  void SetExposedEncoding(ExposedEncoding encoding) override {
-    this->exposed_encoding_ = encoding;
+  void setExposedEncoding(ExposedEncoding encoding) override {
+    this->exposedEncoding_ = encoding;
   }
 
-  // Allocate enough scratch space to accommodate skipping 16-bit levels or any
-  // value type.
-  void InitScratchForSkip();
+  // Allocate enough scratch space to accommodate skipping 16-bit levels or any.
+  // Value type.
+  void initScratchForSkip();
 
-  // Scratch space for reading and throwing away rep/def levels and values when
-  // skipping.
-  std::shared_ptr<ResizableBuffer> scratch_for_skip_;
+  // Scratch space for reading and throwing away rep/def levels and values when.
+  // Skipping.
+  std::shared_ptr<ResizableBuffer> scratchForSkip_;
 
  private:
-  // Read dictionary indices. Similar to ReadValues but decode data to
-  // dictionary indices. This function is called only by
+  // Read dictionary indices. Similar to ReadValues but decode data to.
+  // Dictionary indices. This function is called only by.
   // ReadBatchWithDictionary().
-  int64_t ReadDictionaryIndices(int64_t indices_to_read, int32_t* indices) {
-    auto decoder = dynamic_cast<DictDecoder<DType>*>(this->current_decoder_);
-    return decoder->DecodeIndices(static_cast<int>(indices_to_read), indices);
+  int64_t readDictionaryIndices(int64_t indicesToRead, int32_t* indices) {
+    auto decoder = dynamic_cast<DictDecoder<DType>*>(this->currentDecoder_);
+    return decoder->decodeIndices(static_cast<int>(indicesToRead), indices);
   }
 
-  // Get dictionary. The dictionary should have been set by SetDict(). The
-  // dictionary is owned by the internal decoder and is destroyed when the
-  // reader is destroyed. This function is called only by
+  // Get dictionary. The dictionary should have been set by SetDict(). The.
+  // Dictionary is owned by the internal decoder and is destroyed when the.
+  // Reader is destroyed. This function is called only by.
   // ReadBatchWithDictionary() after dictionary is configured.
-  void GetDictionary(const T** dictionary, int32_t* dictionary_length) {
-    auto decoder = dynamic_cast<DictDecoder<DType>*>(this->current_decoder_);
-    decoder->GetDictionary(dictionary, dictionary_length);
+  void getDictionary(const T** dictionary, int32_t* dictionaryLength) {
+    auto decoder = dynamic_cast<DictDecoder<DType>*>(this->currentDecoder_);
+    decoder->getDictionary(dictionary, dictionaryLength);
   }
 
-  // Read definition and repetition levels. Also return the number of definition
-  // levels and number of values to read. This function is called before reading
-  // values.
-  void ReadLevels(
-      int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
-      int64_t* num_def_levels,
-      int64_t* values_to_read) {
-    batch_size = std::min(
-        batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+  // Read definition and repetition levels. Also return the number of
+  // definition. Levels and number of values to read. This function is called
+  // before reading. Values.
+  void readLevels(
+      int64_t batchSize,
+      int16_t* defLevels,
+      int16_t* repLevels,
+      int64_t* numDefLevels,
+      int64_t* valuesToRead) {
+    batchSize =
+        std::min(batchSize, this->numBufferedValues_ - this->numDecodedValues_);
 
-    // If the field is required and non-repeated, there are no definition levels
-    if (this->max_def_level_ > 0 && def_levels != nullptr) {
-      *num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
-      // TODO(wesm): this tallying of values-to-decode can be performed with
-      // better cache-efficiency if fused with the level decoding.
-      for (int64_t i = 0; i < *num_def_levels; ++i) {
-        if (def_levels[i] == this->max_def_level_) {
-          ++(*values_to_read);
+    // If the field is required and non-repeated, there are no definition
+    // levels.
+    if (this->maxDefLevel_ > 0 && defLevels != nullptr) {
+      *numDefLevels = this->readDefinitionLevels(batchSize, defLevels);
+      // TODO(wesm): this tallying of values-to-decode can be performed with.
+      // Better cache-efficiency if fused with the level decoding.
+      for (int64_t i = 0; i < *numDefLevels; ++i) {
+        if (defLevels[i] == this->maxDefLevel_) {
+          ++(*valuesToRead);
         }
       }
     } else {
-      // Required field, read all values
-      *values_to_read = batch_size;
+      // Required field, read all values.
+      *valuesToRead = batchSize;
     }
 
-    // Not present for non-repeated fields
-    if (this->max_rep_level_ > 0 && rep_levels != nullptr) {
-      int64_t num_rep_levels =
-          this->ReadRepetitionLevels(batch_size, rep_levels);
-      if (def_levels != nullptr && *num_def_levels != num_rep_levels) {
+    // Not present for non-repeated fields.
+    if (this->maxRepLevel_ > 0 && repLevels != nullptr) {
+      int64_t numRepLevels = this->readRepetitionLevels(batchSize, repLevels);
+      if (defLevels != nullptr && *numDefLevels != numRepLevels) {
         throw ParquetException(
             "Number of decoded rep / def levels did not match");
       }
@@ -1220,277 +1209,267 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 };
 
 template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::ReadBatchWithDictionary(
-    int64_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+int64_t TypedColumnReaderImpl<DType>::readBatchWithDictionary(
+    int64_t batchSize,
+    int16_t* defLevels,
+    int16_t* repLevels,
     int32_t* indices,
-    int64_t* indices_read,
+    int64_t* indicesRead,
     const T** dict,
-    int32_t* dict_len) {
-  bool has_dict_output = dict != nullptr && dict_len != nullptr;
+    int32_t* dictLen) {
+  bool hasDictOutput = dict != nullptr && dictLen != nullptr;
   // Similar logic as ReadValues to get pages.
-  if (!HasNext()) {
-    *indices_read = 0;
-    if (has_dict_output) {
+  if (!hasNext()) {
+    *indicesRead = 0;
+    if (hasDictOutput) {
       *dict = nullptr;
-      *dict_len = 0;
+      *dictLen = 0;
     }
     return 0;
   }
 
   // Verify the current data page is dictionary encoded.
-  if (this->current_encoding_ != Encoding::RLE_DICTIONARY) {
+  if (this->currentEncoding_ != Encoding::kRleDictionary) {
     std::stringstream ss;
     ss << "Data page is not dictionary encoded. Encoding: "
-       << EncodingToString(this->current_encoding_);
+       << encodingToString(this->currentEncoding_);
     throw ParquetException(ss.str());
   }
 
   // Get dictionary pointer and length.
-  if (has_dict_output) {
-    GetDictionary(dict, dict_len);
+  if (hasDictOutput) {
+    getDictionary(dict, dictLen);
   }
 
   // Similar logic as ReadValues to get def levels and rep levels.
-  int64_t num_def_levels = 0;
-  int64_t indices_to_read = 0;
-  ReadLevels(
-      batch_size, def_levels, rep_levels, &num_def_levels, &indices_to_read);
+  int64_t numDefLevels = 0;
+  int64_t indicesToRead = 0;
+  readLevels(batchSize, defLevels, repLevels, &numDefLevels, &indicesToRead);
 
   // Read dictionary indices.
-  *indices_read = ReadDictionaryIndices(indices_to_read, indices);
-  int64_t total_indices = std::max<int64_t>(num_def_levels, *indices_read);
+  *indicesRead = readDictionaryIndices(indicesToRead, indices);
+  int64_t totalIndices = std::max<int64_t>(numDefLevels, *indicesRead);
   // Some callers use a batch size of 0 just to get the dictionary.
-  int64_t expected_values = std::min(
-      batch_size, this->num_buffered_values_ - this->num_decoded_values_);
-  if (total_indices == 0 && expected_values > 0) {
+  int64_t expectedValues =
+      std::min(batchSize, this->numBufferedValues_ - this->numDecodedValues_);
+  if (totalIndices == 0 && expectedValues > 0) {
     std::stringstream ss;
-    ss << "Read 0 values, expected " << expected_values;
-    ParquetException::EofException(ss.str());
+    ss << "Read 0 values, expected " << expectedValues;
+    ParquetException::eofException(ss.str());
   }
-  this->ConsumeBufferedValues(total_indices);
+  this->consumeBufferedValues(totalIndices);
 
-  return total_indices;
+  return totalIndices;
 }
 
 template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::ReadBatch(
-    int64_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+int64_t TypedColumnReaderImpl<DType>::readBatch(
+    int64_t batchSize,
+    int16_t* defLevels,
+    int16_t* repLevels,
     T* values,
-    int64_t* values_read) {
-  // HasNext invokes ReadNewPage
-  if (!HasNext()) {
-    *values_read = 0;
+    int64_t* valuesRead) {
+  // HasNext invokes ReadNewPage.
+  if (!hasNext()) {
+    *valuesRead = 0;
     return 0;
   }
 
-  // TODO(wesm): keep reading data pages until batch_size is reached, or the
-  // row group is finished
-  int64_t num_def_levels = 0;
-  int64_t values_to_read = 0;
-  ReadLevels(
-      batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
+  // TODO(wesm): keep reading data pages until batch_size is reached, or the.
+  // Row group is finished.
+  int64_t numDefLevels = 0;
+  int64_t valuesToRead = 0;
+  readLevels(batchSize, defLevels, repLevels, &numDefLevels, &valuesToRead);
 
-  *values_read = this->ReadValues(values_to_read, values);
-  int64_t total_values = std::max<int64_t>(num_def_levels, *values_read);
-  int64_t expected_values = std::min(
-      batch_size, this->num_buffered_values_ - this->num_decoded_values_);
-  if (total_values == 0 && expected_values > 0) {
+  *valuesRead = this->readValues(valuesToRead, values);
+  int64_t totalValues = std::max<int64_t>(numDefLevels, *valuesRead);
+  int64_t expectedValues =
+      std::min(batchSize, this->numBufferedValues_ - this->numDecodedValues_);
+  if (totalValues == 0 && expectedValues > 0) {
     std::stringstream ss;
-    ss << "Read 0 values, expected " << expected_values;
-    ParquetException::EofException(ss.str());
+    ss << "Read 0 values, expected " << expectedValues;
+    ParquetException::eofException(ss.str());
   }
-  this->ConsumeBufferedValues(total_values);
+  this->consumeBufferedValues(totalValues);
 
-  return total_values;
+  return totalValues;
 }
 
 template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::ReadBatchSpaced(
-    int64_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+int64_t TypedColumnReaderImpl<DType>::readBatchSpaced(
+    int64_t batchSize,
+    int16_t* defLevels,
+    int16_t* repLevels,
     T* values,
-    uint8_t* valid_bits,
-    int64_t valid_bits_offset,
-    int64_t* levels_read,
-    int64_t* values_read,
-    int64_t* null_count_out) {
-  // HasNext invokes ReadNewPage
-  if (!HasNext()) {
-    *levels_read = 0;
-    *values_read = 0;
-    *null_count_out = 0;
+    uint8_t* validBits,
+    int64_t validBitsOffset,
+    int64_t* levelsRead,
+    int64_t* valuesRead,
+    int64_t* nullCountOut) {
+  // HasNext invokes ReadNewPage.
+  if (!hasNext()) {
+    *levelsRead = 0;
+    *valuesRead = 0;
+    *nullCountOut = 0;
     return 0;
   }
 
-  int64_t total_values;
-  // TODO(wesm): keep reading data pages until batch_size is reached, or the
-  // row group is finished
-  batch_size = std::min(
-      batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+  int64_t totalValues;
+  // TODO(wesm): keep reading data pages until batch_size is reached, or the.
+  // Row group is finished.
+  batchSize =
+      std::min(batchSize, this->numBufferedValues_ - this->numDecodedValues_);
 
-  // If the field is required and non-repeated, there are no definition levels
-  if (this->max_def_level_ > 0) {
-    int64_t num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
+  // If the field is required and non-repeated, there are no definition levels.
+  if (this->maxDefLevel_ > 0) {
+    int64_t numDefLevels = this->readDefinitionLevels(batchSize, defLevels);
 
-    // Not present for non-repeated fields
-    if (this->max_rep_level_ > 0) {
-      int64_t num_rep_levels =
-          this->ReadRepetitionLevels(batch_size, rep_levels);
-      if (num_def_levels != num_rep_levels) {
+    // Not present for non-repeated fields.
+    if (this->maxRepLevel_ > 0) {
+      int64_t numRepLevels = this->readRepetitionLevels(batchSize, repLevels);
+      if (numDefLevels != numRepLevels) {
         throw ParquetException(
             "Number of decoded rep / def levels did not match");
       }
     }
 
-    const bool has_spaced_values = HasSpacedValues(this->descr_);
-    int64_t null_count = 0;
-    if (!has_spaced_values) {
-      int values_to_read = 0;
-      for (int64_t i = 0; i < num_def_levels; ++i) {
-        if (def_levels[i] == this->max_def_level_) {
-          ++values_to_read;
+    const bool hasSpacedValuesFlag = hasSpacedValues(this->descr_);
+    int64_t nullCount = 0;
+    if (!hasSpacedValuesFlag) {
+      int valuesToRead = 0;
+      for (int64_t i = 0; i < numDefLevels; ++i) {
+        if (defLevels[i] == this->maxDefLevel_) {
+          ++valuesToRead;
         }
       }
-      total_values = this->ReadValues(values_to_read, values);
+      totalValues = this->readValues(valuesToRead, values);
       ::arrow::bit_util::SetBitsTo(
-          valid_bits,
-          valid_bits_offset,
-          /*length=*/total_values,
-          /*bits_are_set=*/true);
-      *values_read = total_values;
+          validBits, validBitsOffset, totalValues, true);
+      *valuesRead = totalValues;
     } else {
       LevelInfo info;
-      info.repeatedAncestorDefLevel = this->max_def_level_ - 1;
-      info.defLevel = this->max_def_level_;
-      info.repLevel = this->max_rep_level_;
-      ValidityBitmapInputOutput validity_io;
-      validity_io.valuesReadUpperBound = num_def_levels;
-      validity_io.validBits = valid_bits;
-      validity_io.validBitsOffset = valid_bits_offset;
-      validity_io.nullCount = null_count;
-      validity_io.valuesRead = *values_read;
+      info.repeatedAncestorDefLevel = this->maxDefLevel_ - 1;
+      info.defLevel = this->maxDefLevel_;
+      info.repLevel = this->maxRepLevel_;
+      ValidityBitmapInputOutput validityIo;
+      validityIo.valuesReadUpperBound = numDefLevels;
+      validityIo.validBits = validBits;
+      validityIo.validBitsOffset = validBitsOffset;
+      validityIo.nullCount = nullCount;
+      validityIo.valuesRead = *valuesRead;
 
-      DefLevelsToBitmap(def_levels, num_def_levels, info, &validity_io);
-      null_count = validity_io.nullCount;
-      *values_read = validity_io.valuesRead;
+      DefLevelsToBitmap(defLevels, numDefLevels, info, &validityIo);
+      nullCount = validityIo.nullCount;
+      *valuesRead = validityIo.valuesRead;
 
-      total_values = this->ReadValuesSpaced(
-          *values_read,
+      totalValues = this->readValuesSpaced(
+          *valuesRead,
           values,
-          static_cast<int>(null_count),
-          valid_bits,
-          valid_bits_offset);
+          static_cast<int>(nullCount),
+          validBits,
+          validBitsOffset);
     }
-    *levels_read = num_def_levels;
-    *null_count_out = null_count;
+    *levelsRead = numDefLevels;
+    *nullCountOut = nullCount;
 
   } else {
-    // Required field, read all values
-    total_values = this->ReadValues(batch_size, values);
-    ::arrow::bit_util::SetBitsTo(
-        valid_bits,
-        valid_bits_offset,
-        /*length=*/total_values,
-        /*bits_are_set=*/true);
-    *null_count_out = 0;
-    *values_read = total_values;
-    *levels_read = total_values;
+    // Required field, read all values.
+    totalValues = this->readValues(batchSize, values);
+    ::arrow::bit_util::SetBitsTo(validBits, validBitsOffset, totalValues, true);
+    *nullCountOut = 0;
+    *valuesRead = totalValues;
+    *levelsRead = totalValues;
   }
 
-  this->ConsumeBufferedValues(*levels_read);
-  return total_values;
+  this->consumeBufferedValues(*levelsRead);
+  return totalValues;
 }
 
 template <typename DType>
-void TypedColumnReaderImpl<DType>::InitScratchForSkip() {
-  if (this->scratch_for_skip_ == nullptr) {
-    int value_size = type_traits<DType::type_num>::value_byte_size;
-    this->scratch_for_skip_ = AllocateBuffer(
+void TypedColumnReaderImpl<DType>::initScratchForSkip() {
+  if (this->scratchForSkip_ == nullptr) {
+    int valueSize = TypeTraits<DType::typeNum>::valueByteSize;
+    this->scratchForSkip_ = allocateBuffer(
         this->pool_,
-        kSkipScratchBatchSize * std::max<int>(sizeof(int16_t), value_size));
+        kSkipScratchBatchSize * std::max<int>(sizeof(int16_t), valueSize));
   }
 }
 
 template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::Skip(int64_t num_values_to_skip) {
-  int64_t values_to_skip = num_values_to_skip;
+int64_t TypedColumnReaderImpl<DType>::skip(int64_t numValuesToSkip) {
+  int64_t valuesToSkip = numValuesToSkip;
   // Optimization: Do not call HasNext() when values_to_skip == 0.
-  while (values_to_skip > 0 && HasNext()) {
-    // If the number of values to skip is more than the number of undecoded
-    // values, skip the Page.
-    const int64_t available_values = this->available_values_current_page();
-    if (values_to_skip >= available_values) {
-      values_to_skip -= available_values;
-      this->ConsumeBufferedValues(available_values);
+  while (valuesToSkip > 0 && hasNext()) {
+    // If the number of values to skip is more than the number of undecoded.
+    // Values, skip the Page.
+    const int64_t availableValues = this->availableValuesCurrentPage();
+    if (valuesToSkip >= availableValues) {
+      valuesToSkip -= availableValues;
+      this->consumeBufferedValues(availableValues);
     } else {
-      // We need to read this Page
-      // Jump to the right offset in the Page
-      int64_t values_read = 0;
-      InitScratchForSkip();
-      VELOX_DCHECK_NOT_NULL(this->scratch_for_skip_);
+      // We need to read this Page.
+      // Jump to the right offset in the Page.
+      int64_t valuesRead = 0;
+      initScratchForSkip();
+      VELOX_DCHECK_NOT_NULL(this->scratchForSkip_);
       do {
-        int64_t batch_size = std::min(kSkipScratchBatchSize, values_to_skip);
-        values_read = ReadBatch(
-            static_cast<int>(batch_size),
-            reinterpret_cast<int16_t*>(this->scratch_for_skip_->mutable_data()),
-            reinterpret_cast<int16_t*>(this->scratch_for_skip_->mutable_data()),
-            reinterpret_cast<T*>(this->scratch_for_skip_->mutable_data()),
-            &values_read);
-        values_to_skip -= values_read;
-      } while (values_read > 0 && values_to_skip > 0);
+        int64_t batchSize = std::min(kSkipScratchBatchSize, valuesToSkip);
+        valuesRead = readBatch(
+            static_cast<int>(batchSize),
+            reinterpret_cast<int16_t*>(this->scratchForSkip_->mutable_data()),
+            reinterpret_cast<int16_t*>(this->scratchForSkip_->mutable_data()),
+            reinterpret_cast<T*>(this->scratchForSkip_->mutable_data()),
+            &valuesRead);
+        valuesToSkip -= valuesRead;
+      } while (valuesRead > 0 && valuesToSkip > 0);
     }
   }
-  return num_values_to_skip - values_to_skip;
+  return numValuesToSkip - valuesToSkip;
 }
 
 } // namespace
 
-// ----------------------------------------------------------------------
-// Dynamic column reader constructor
+// ----------------------------------------------------------------------.
+// Dynamic column reader constructor.
 
-std::shared_ptr<ColumnReader> ColumnReader::Make(
+std::shared_ptr<ColumnReader> ColumnReader::make(
     const ColumnDescriptor* descr,
     std::unique_ptr<PageReader> pager,
     MemoryPool* pool) {
-  switch (descr->physical_type()) {
-    case Type::BOOLEAN:
+  switch (descr->physicalType()) {
+    case Type::kBoolean:
       return std::make_shared<TypedColumnReaderImpl<BooleanType>>(
           descr, std::move(pager), pool);
-    case Type::INT32:
+    case Type::kInt32:
       return std::make_shared<TypedColumnReaderImpl<Int32Type>>(
           descr, std::move(pager), pool);
-    case Type::INT64:
+    case Type::kInt64:
       return std::make_shared<TypedColumnReaderImpl<Int64Type>>(
           descr, std::move(pager), pool);
-    case Type::INT96:
+    case Type::kInt96:
       return std::make_shared<TypedColumnReaderImpl<Int96Type>>(
           descr, std::move(pager), pool);
-    case Type::FLOAT:
+    case Type::kFloat:
       return std::make_shared<TypedColumnReaderImpl<FloatType>>(
           descr, std::move(pager), pool);
-    case Type::DOUBLE:
+    case Type::kDouble:
       return std::make_shared<TypedColumnReaderImpl<DoubleType>>(
           descr, std::move(pager), pool);
-    case Type::BYTE_ARRAY:
+    case Type::kByteArray:
       return std::make_shared<TypedColumnReaderImpl<ByteArrayType>>(
           descr, std::move(pager), pool);
-    case Type::FIXED_LEN_BYTE_ARRAY:
+    case Type::kFixedLenByteArray:
       return std::make_shared<TypedColumnReaderImpl<FLBAType>>(
           descr, std::move(pager), pool);
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning
+  // Unreachable code, but suppress compiler warning.
   return std::shared_ptr<ColumnReader>(nullptr);
 }
 
-// ----------------------------------------------------------------------
-// RecordReader
+// ----------------------------------------------------------------------.
+// RecordReader.
 
 namespace internal {
 
@@ -1500,526 +1479,515 @@ template <typename DType>
 class TypedRecordReader : public TypedColumnReaderImpl<DType>,
                           virtual public RecordReader {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
   using BASE = TypedColumnReaderImpl<DType>;
   TypedRecordReader(
       const ColumnDescriptor* descr,
-      LevelInfo leaf_info,
+      LevelInfo leafInfo,
       MemoryPool* pool,
-      bool read_dense_for_nullable)
+      bool readDenseForNullable)
       // Pager must be set using SetPageReader.
       : BASE(descr, /* pager = */ nullptr, pool) {
-    leaf_info_ = leaf_info;
-    nullable_values_ = leaf_info_.HasNullableValues();
-    at_record_start_ = true;
-    values_written_ = 0;
-    null_count_ = 0;
-    values_capacity_ = 0;
-    levels_written_ = 0;
-    levels_position_ = 0;
-    levels_capacity_ = 0;
-    read_dense_for_nullable_ = read_dense_for_nullable;
-    uses_values_ = !(descr->physical_type() == Type::BYTE_ARRAY);
+    leafInfo_ = leafInfo;
+    nullableValues_ = leafInfo_.HasNullableValues();
+    atRecordStart_ = true;
+    valuesWritten_ = 0;
+    nullCount_ = 0;
+    valuesCapacity_ = 0;
+    levelsWritten_ = 0;
+    levelsPosition_ = 0;
+    levelsCapacity_ = 0;
+    readDenseForNullable_ = readDenseForNullable;
+    usesValues_ = !(descr->physicalType() == Type::kByteArray);
 
-    if (uses_values_) {
-      values_ = AllocateBuffer(pool);
+    if (usesValues_) {
+      values_ = allocateBuffer(pool);
     }
-    valid_bits_ = AllocateBuffer(pool);
-    def_levels_ = AllocateBuffer(pool);
-    rep_levels_ = AllocateBuffer(pool);
-    TypedRecordReader::Reset();
+    validBits_ = allocateBuffer(pool);
+    defLevels_ = allocateBuffer(pool);
+    repLevels_ = allocateBuffer(pool);
+    TypedRecordReader::reset();
   }
 
-  // Compute the values capacity in bytes for the given number of elements
-  int64_t bytes_for_values(int64_t nitems) const {
-    int64_t type_size = GetTypeByteSize(this->descr_->physical_type());
-    int64_t bytes_for_values = -1;
-    if (MultiplyWithOverflow(nitems, type_size, &bytes_for_values)) {
+  // Compute the values capacity in bytes for the given number of elements.
+  int64_t bytesForValues(int64_t nitems) const {
+    int64_t typeSize = getTypeByteSize(this->descr_->physicalType());
+    int64_t bytesForValues = -1;
+    if (MultiplyWithOverflow(nitems, typeSize, &bytesForValues)) {
       throw ParquetException("Total size of items too large");
     }
-    return bytes_for_values;
+    return bytesForValues;
   }
 
-  int64_t ReadRecords(int64_t num_records) override {
-    if (num_records == 0)
+  int64_t readRecords(int64_t numRecords) override {
+    if (numRecords == 0)
       return 0;
-    // Delimit records, then read values at the end
-    int64_t records_read = 0;
+    // Delimit records, then read values at the end.
+    int64_t recordsRead = 0;
 
-    if (has_values_to_process()) {
-      records_read += ReadRecordData(num_records);
+    if (hasValuesToProcess()) {
+      recordsRead += readRecordData(numRecords);
     }
 
-    int64_t level_batch_size =
-        std::max<int64_t>(kMinLevelBatchSize, num_records);
+    int64_t levelBatchSize = std::max<int64_t>(kMinLevelBatchSize, numRecords);
 
-    // If we are in the middle of a record, we continue until reaching the
-    // desired number of records or the end of the current record if we've found
-    // enough records
-    while (!at_record_start_ || records_read < num_records) {
+    // If we are in the middle of a record, we continue until reaching the.
+    // Desired number of records or the end of the current record if we've
+    // found. Enough records.
+    while (!atRecordStart_ || recordsRead < numRecords) {
       // Is there more data to read in this row group?
-      if (!this->HasNextInternal()) {
-        if (!at_record_start_) {
-          // We ended the row group while inside a record that we haven't seen
-          // the end of yet. So increment the record count for the last record
-          // in the row group
-          ++records_read;
-          at_record_start_ = true;
+      if (!this->hasNextInternal()) {
+        if (!atRecordStart_) {
+          // We ended the row group while inside a record that we haven't seen.
+          // The end of yet. So increment the record count for the last record.
+          // In the row group.
+          ++recordsRead;
+          atRecordStart_ = true;
         }
         break;
       }
 
-      /// We perform multiple batch reads until we either exhaust the row group
-      /// or observe the desired number of records
-      int64_t batch_size =
-          std::min(level_batch_size, this->available_values_current_page());
+      /// We perform multiple batch reads until we either exhaust the row group.
+      /// Or observe the desired number of records.
+      int64_t batchSize =
+          std::min(levelBatchSize, this->availableValuesCurrentPage());
 
-      // No more data in column
-      if (batch_size == 0) {
+      // No more data in column.
+      if (batchSize == 0) {
         break;
       }
 
-      if (this->max_def_level_ > 0) {
-        ReserveLevels(batch_size);
+      if (this->maxDefLevel_ > 0) {
+        reserveLevels(batchSize);
 
-        int16_t* def_levels = this->def_levels() + levels_written_;
-        int16_t* rep_levels = this->rep_levels() + levels_written_;
+        int16_t* defLevels = this->defLevels() + levelsWritten_;
+        int16_t* repLevels = this->repLevels() + levelsWritten_;
 
-        // Not present for non-repeated fields
-        int64_t levels_read = 0;
-        if (this->max_rep_level_ > 0) {
-          levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
-          if (this->ReadRepetitionLevels(batch_size, rep_levels) !=
-              levels_read) {
+        // Not present for non-repeated fields.
+        int64_t levelsRead = 0;
+        if (this->maxRepLevel_ > 0) {
+          levelsRead = this->readDefinitionLevels(batchSize, defLevels);
+          if (this->readRepetitionLevels(batchSize, repLevels) != levelsRead) {
             throw ParquetException(
                 "Number of decoded rep / def levels did not match");
           }
-        } else if (this->max_def_level_ > 0) {
-          levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
+        } else if (this->maxDefLevel_ > 0) {
+          levelsRead = this->readDefinitionLevels(batchSize, defLevels);
         }
 
-        // Exhausted column chunk
-        if (levels_read == 0) {
+        // Exhausted column chunk.
+        if (levelsRead == 0) {
           break;
         }
 
-        levels_written_ += levels_read;
-        records_read += ReadRecordData(num_records - records_read);
+        levelsWritten_ += levelsRead;
+        recordsRead += readRecordData(numRecords - recordsRead);
       } else {
-        // No repetition or definition levels
-        batch_size = std::min(num_records - records_read, batch_size);
-        records_read += ReadRecordData(batch_size);
+        // No repetition or definition levels.
+        batchSize = std::min(numRecords - recordsRead, batchSize);
+        recordsRead += readRecordData(batchSize);
       }
     }
 
-    return records_read;
+    return recordsRead;
   }
 
   // Throw away levels from start_levels_position to levels_position_.
-  // Will update levels_position_, levels_written_, and levels_capacity_
-  // accordingly and move the levels to left to fill in the gap.
+  // Will update levels_position_, levels_written_, and levels_capacity_.
+  // Accordingly and move the levels to left to fill in the gap.
   // It will resize the buffer without releasing the memory allocation.
-  void ThrowAwayLevels(int64_t start_levels_position) {
-    VELOX_DCHECK_LE(levels_position_, levels_written_);
-    VELOX_DCHECK_LE(start_levels_position, levels_position_);
-    VELOX_DCHECK_GT(this->max_def_level_, 0);
-    VELOX_DCHECK_NOT_NULL(def_levels_);
+  void throwAwayLevels(int64_t startLevelsPosition) {
+    VELOX_DCHECK_LE(levelsPosition_, levelsWritten_);
+    VELOX_DCHECK_LE(startLevelsPosition, levelsPosition_);
+    VELOX_DCHECK_GT(this->maxDefLevel_, 0);
+    VELOX_DCHECK_NOT_NULL(defLevels_);
 
-    int64_t gap = levels_position_ - start_levels_position;
+    int64_t gap = levelsPosition_ - startLevelsPosition;
     if (gap == 0)
       return;
 
-    int64_t levels_remaining = levels_written_ - gap;
+    int64_t levelsRemaining = levelsWritten_ - gap;
 
-    auto left_shift = [&](::arrow::ResizableBuffer* buffer) {
+    auto leftShift = [&](::arrow::ResizableBuffer* buffer) {
       int16_t* data = reinterpret_cast<int16_t*>(buffer->mutable_data());
       std::copy(
-          data + levels_position_,
-          data + levels_written_,
-          data + start_levels_position);
-      PARQUET_THROW_NOT_OK(buffer->Resize(
-          levels_remaining * sizeof(int16_t),
-          /*shrink_to_fit=*/false));
+          data + levelsPosition_,
+          data + levelsWritten_,
+          data + startLevelsPosition);
+      PARQUET_THROW_NOT_OK(
+          buffer->Resize(levelsRemaining * sizeof(int16_t), false));
     };
 
-    left_shift(def_levels_.get());
+    leftShift(defLevels_.get());
 
-    if (this->max_rep_level_ > 0) {
-      VELOX_DCHECK_NOT_NULL(rep_levels_);
-      left_shift(rep_levels_.get());
+    if (this->maxRepLevel_ > 0) {
+      VELOX_DCHECK_NOT_NULL(repLevels_);
+      leftShift(repLevels_.get());
     }
 
-    levels_written_ -= gap;
-    levels_position_ -= gap;
-    levels_capacity_ -= gap;
+    levelsWritten_ -= gap;
+    levelsPosition_ -= gap;
+    levelsCapacity_ -= gap;
   }
 
-  // Skip records that we have in our buffer. This function is only for
-  // non-repeated fields.
-  int64_t SkipRecordsInBufferNonRepeated(int64_t num_records) {
-    VELOX_DCHECK_EQ(this->max_rep_level_, 0);
-    if (!this->has_values_to_process() || num_records == 0)
+  // Skip records that we have in our buffer. This function is only for.
+  // Non-repeated fields.
+  int64_t skipRecordsInBufferNonRepeated(int64_t numRecords) {
+    VELOX_DCHECK_EQ(this->maxRepLevel_, 0);
+    if (!this->hasValuesToProcess() || numRecords == 0)
       return 0;
 
-    int64_t remaining_records = levels_written_ - levels_position_;
-    int64_t skipped_records = std::min(num_records, remaining_records);
-    int64_t start_levels_position = levels_position_;
+    int64_t remainingRecords = levelsWritten_ - levelsPosition_;
+    int64_t skippedRecords = std::min(numRecords, remainingRecords);
+    int64_t startLevelsPosition = levelsPosition_;
     // Since there is no repetition, number of levels equals number of records.
-    levels_position_ += skipped_records;
+    levelsPosition_ += skippedRecords;
 
-    // We skipped the levels by incrementing 'levels_position_'. For values
-    // we do not have a buffer, so we need to read them and throw them away.
+    // We skipped the levels by incrementing 'levels_position_'. For values.
+    // We do not have a buffer, so we need to read them and throw them away.
     // First we need to figure out how many present/not-null values there are.
-    std::shared_ptr<::arrow::ResizableBuffer> valid_bits;
-    valid_bits = AllocateBuffer(this->pool_);
-    PARQUET_THROW_NOT_OK(valid_bits->Resize(
-        ::arrow::bit_util::BytesForBits(skipped_records),
-        /*shrink_to_fit=*/true));
-    ValidityBitmapInputOutput validity_io;
-    validity_io.valuesReadUpperBound = skipped_records;
-    validity_io.validBits = valid_bits->mutable_data();
-    validity_io.validBitsOffset = 0;
+    std::shared_ptr<::arrow::ResizableBuffer> validBits;
+    validBits = allocateBuffer(this->pool_);
+    PARQUET_THROW_NOT_OK(validBits->Resize(
+        ::arrow::bit_util::BytesForBits(skippedRecords), true));
+    ValidityBitmapInputOutput validityIo;
+    validityIo.valuesReadUpperBound = skippedRecords;
+    validityIo.validBits = validBits->mutable_data();
+    validityIo.validBitsOffset = 0;
     DefLevelsToBitmap(
-        def_levels() + start_levels_position,
-        skipped_records,
-        this->leaf_info_,
-        &validity_io);
-    int64_t values_to_read = validity_io.valuesRead - validity_io.nullCount;
+        defLevels() + startLevelsPosition,
+        skippedRecords,
+        this->leafInfo_,
+        &validityIo);
+    int64_t valuesToRead = validityIo.valuesRead - validityIo.nullCount;
 
-    // Now that we have figured out number of values to read, we do not need
-    // these levels anymore. We will remove these values from the buffer.
-    // This requires shifting the levels in the buffer to left. So this will
-    // update levels_position_ and levels_written_.
-    ThrowAwayLevels(start_levels_position);
-    // For values, we do not have them in buffer, so we will read them and
-    // throw them away.
-    ReadAndThrowAwayValues(values_to_read);
+    // Now that we have figured out number of values to read, we do not need.
+    // These levels anymore. We will remove these values from the buffer.
+    // This requires shifting the levels in the buffer to left. So this will.
+    // Update levels_position_ and levels_written_.
+    throwAwayLevels(startLevelsPosition);
+    // For values, we do not have them in buffer, so we will read them and.
+    // Throw them away.
+    readAndThrowAwayValues(valuesToRead);
 
     // Mark the levels as read in the underlying column reader.
-    this->ConsumeBufferedValues(skipped_records);
+    this->consumeBufferedValues(skippedRecords);
 
-    return skipped_records;
+    return skippedRecords;
   }
 
-  // Attempts to skip num_records from the buffer. Will throw away levels
-  // and corresponding values for the records it skipped and consumes them from
-  // the underlying decoder. Will advance levels_position_ and update
-  // at_record_start_.
+  // Attempts to skip num_records from the buffer. Will throw away levels.
+  // And corresponding values for the records it skipped and consumes them from.
+  // The underlying decoder. Will advance levels_position_ and update.
+  // At_record_start_.
   // Returns how many records were skipped.
-  int64_t DelimitAndSkipRecordsInBuffer(int64_t num_records) {
-    if (num_records == 0)
+  int64_t delimitAndSkipRecordsInBuffer(int64_t numRecords) {
+    if (numRecords == 0)
       return 0;
-    // Look at the buffered levels, delimit them based on
-    // (rep_level == 0), report back how many records are in there, and
-    // fill in how many not-null values (def_level == max_def_level_).
+    // Look at the buffered levels, delimit them based on.
+    // (Rep_level == 0), report back how many records are in there, and.
+    // Fill in how many not-null values (def_level == max_def_level_).
     // DelimitRecords updates levels_position_.
-    int64_t start_levels_position = levels_position_;
-    int64_t values_seen = 0;
-    int64_t skipped_records = DelimitRecords(num_records, &values_seen);
-    ReadAndThrowAwayValues(values_seen);
+    int64_t startLevelsPosition = levelsPosition_;
+    int64_t valuesSeen = 0;
+    int64_t skippedRecords = delimitRecords(numRecords, &valuesSeen);
+    readAndThrowAwayValues(valuesSeen);
     // Mark those levels and values as consumed in the underlying page.
-    // This must be done before we throw away levels since it updates
-    // levels_position_ and levels_written_.
-    this->ConsumeBufferedValues(levels_position_ - start_levels_position);
+    // This must be done before we throw away levels since it updates.
+    // Levels_position_ and levels_written_.
+    this->consumeBufferedValues(levelsPosition_ - startLevelsPosition);
     // Updated levels_position_ and levels_written_.
-    ThrowAwayLevels(start_levels_position);
-    return skipped_records;
+    throwAwayLevels(startLevelsPosition);
+    return skippedRecords;
   }
 
-  // Skip records for repeated fields. For repeated fields, we are technically
-  // reading and throwing away the levels and values since we do not know the
-  // record boundaries in advance. Keep filling the buffer and skipping until we
-  // reach the desired number of records or we run out of values in the column
-  // chunk. Returns number of skipped records.
-  int64_t SkipRecordsRepeated(int64_t num_records) {
-    VELOX_DCHECK_GT(this->max_rep_level_, 0);
-    int64_t skipped_records = 0;
+  // Skip records for repeated fields. For repeated fields, we are technically.
+  // Reading and throwing away the levels and values since we do not know the.
+  // Record boundaries in advance. Keep filling the buffer and skipping until
+  // we. Reach the desired number of records or we run out of values in the
+  // column. Chunk. Returns number of skipped records.
+  int64_t skipRecordsRepeated(int64_t numRecords) {
+    VELOX_DCHECK_GT(this->maxRepLevel_, 0);
+    int64_t skippedRecords = 0;
 
     // First consume what is in the buffer.
-    if (levels_position_ < levels_written_) {
+    if (levelsPosition_ < levelsWritten_) {
       // This updates at_record_start_.
-      skipped_records = DelimitAndSkipRecordsInBuffer(num_records);
+      skippedRecords = delimitAndSkipRecordsInBuffer(numRecords);
     }
 
-    int64_t level_batch_size =
-        std::max<int64_t>(kMinLevelBatchSize, num_records - skipped_records);
+    int64_t levelBatchSize =
+        std::max<int64_t>(kMinLevelBatchSize, numRecords - skippedRecords);
 
-    // If 'at_record_start_' is false, but (skipped_records == num_records), it
-    // means that for the last record that was counted, we have not seen all
-    // of its values yet.
-    while (!at_record_start_ || skipped_records < num_records) {
+    // If 'at_record_start_' is false, but (skipped_records == num_records), it.
+    // Means that for the last record that was counted, we have not seen all.
+    // Of its values yet.
+    while (!atRecordStart_ || skippedRecords < numRecords) {
       // Is there more data to read in this row group?
       // HasNextInternal() will advance to the next page if necessary.
-      if (!this->HasNextInternal()) {
-        if (!at_record_start_) {
-          // We ended the row group while inside a record that we haven't seen
-          // the end of yet. So increment the record count for the last record
-          // in the row group
-          ++skipped_records;
-          at_record_start_ = true;
+      if (!this->hasNextInternal()) {
+        if (!atRecordStart_) {
+          // We ended the row group while inside a record that we haven't seen.
+          // The end of yet. So increment the record count for the last record.
+          // In the row group.
+          ++skippedRecords;
+          atRecordStart_ = true;
         }
         break;
       }
 
       // Read some more levels.
-      int64_t batch_size =
-          std::min(level_batch_size, this->available_values_current_page());
+      int64_t batchSize =
+          std::min(levelBatchSize, this->availableValuesCurrentPage());
       // No more data in column. This must be an empty page.
-      // If we had exhausted the last page, HasNextInternal() must have advanced
-      // to the next page. So there must be available values to process.
-      if (batch_size == 0) {
+      // If we had exhausted the last page, HasNextInternal() must have
+      // advanced. To the next page. So there must be available values to
+      // process.
+      if (batchSize == 0) {
         break;
       }
 
-      // For skipping we will read the levels and append them to the end
-      // of the def_levels and rep_levels just like for read.
-      ReserveLevels(batch_size);
+      // For skipping we will read the levels and append them to the end.
+      // Of the def_levels and rep_levels just like for read.
+      reserveLevels(batchSize);
 
-      int16_t* def_levels = this->def_levels() + levels_written_;
-      int16_t* rep_levels = this->rep_levels() + levels_written_;
+      int16_t* defLevels = this->defLevels() + levelsWritten_;
+      int16_t* repLevels = this->repLevels() + levelsWritten_;
 
-      int64_t levels_read = 0;
-      levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
-      if (this->ReadRepetitionLevels(batch_size, rep_levels) != levels_read) {
+      int64_t levelsRead = 0;
+      levelsRead = this->readDefinitionLevels(batchSize, defLevels);
+      if (this->readRepetitionLevels(batchSize, repLevels) != levelsRead) {
         throw ParquetException(
             "Number of decoded rep / def levels did not match");
       }
 
-      levels_written_ += levels_read;
-      int64_t remaining_records = num_records - skipped_records;
+      levelsWritten_ += levelsRead;
+      int64_t remainingRecords = numRecords - skippedRecords;
       // This updates at_record_start_.
-      skipped_records += DelimitAndSkipRecordsInBuffer(remaining_records);
+      skippedRecords += delimitAndSkipRecordsInBuffer(remainingRecords);
     }
 
-    return skipped_records;
+    return skippedRecords;
   }
 
   // Read 'num_values' values and throw them away.
   // Throws an error if it could not read 'num_values'.
-  void ReadAndThrowAwayValues(int64_t num_values) {
-    int64_t values_left = num_values;
-    int64_t values_read = 0;
+  void readAndThrowAwayValues(int64_t numValues) {
+    int64_t valuesLeft = numValues;
+    int64_t valuesRead = 0;
 
-    // Allocate enough scratch space to accommodate 16-bit levels or any
-    // value type
-    this->InitScratchForSkip();
-    VELOX_DCHECK_NOT_NULL(this->scratch_for_skip_);
+    // Allocate enough scratch space to accommodate 16-bit levels or any.
+    // Value type.
+    this->initScratchForSkip();
+    VELOX_DCHECK_NOT_NULL(this->scratchForSkip_);
     do {
-      int64_t batch_size =
-          std::min<int64_t>(kSkipScratchBatchSize, values_left);
-      values_read = this->ReadValues(
-          batch_size,
-          reinterpret_cast<T*>(this->scratch_for_skip_->mutable_data()));
-      values_left -= values_read;
-    } while (values_read > 0 && values_left > 0);
-    if (values_left > 0) {
+      int64_t batchSize = std::min<int64_t>(kSkipScratchBatchSize, valuesLeft);
+      valuesRead = this->readValues(
+          batchSize,
+          reinterpret_cast<T*>(this->scratchForSkip_->mutable_data()));
+      valuesLeft -= valuesRead;
+    } while (valuesRead > 0 && valuesLeft > 0);
+    if (valuesLeft > 0) {
       std::stringstream ss;
-      ss << "Could not read and throw away " << num_values << " values";
+      ss << "Could not read and throw away " << numValues << " values";
       throw ParquetException(ss.str());
     }
   }
 
-  int64_t SkipRecords(int64_t num_records) override {
-    if (num_records == 0)
+  int64_t skipRecords(int64_t numRecords) override {
+    if (numRecords == 0)
       return 0;
 
-    // Top level required field. Number of records equals to number of levels,
-    // and there is not read-ahead for levels.
-    if (this->max_rep_level_ == 0 && this->max_def_level_ == 0) {
-      return this->Skip(num_records);
+    // Top level required field. Number of records equals to number of levels,.
+    // And there is not read-ahead for levels.
+    if (this->maxRepLevel_ == 0 && this->maxDefLevel_ == 0) {
+      return this->skip(numRecords);
     }
-    int64_t skipped_records = 0;
-    if (this->max_rep_level_ == 0) {
+    int64_t skippedRecords = 0;
+    if (this->maxRepLevel_ == 0) {
       // Non-repeated optional field.
       // First consume whatever is in the buffer.
-      skipped_records = SkipRecordsInBufferNonRepeated(num_records);
+      skippedRecords = skipRecordsInBufferNonRepeated(numRecords);
 
-      VELOX_DCHECK_LE(skipped_records, num_records);
+      VELOX_DCHECK_LE(skippedRecords, numRecords);
 
-      // For records that we have not buffered, we will use the column
-      // reader's Skip to do the remaining Skip. Since the field is not
-      // repeated number of levels to skip is the same as number of records
-      // to skip.
-      skipped_records += this->Skip(num_records - skipped_records);
+      // For records that we have not buffered, we will use the column.
+      // Reader's Skip to do the remaining Skip. Since the field is not.
+      // Repeated number of levels to skip is the same as number of records.
+      // To skip.
+      skippedRecords += this->skip(numRecords - skippedRecords);
     } else {
-      skipped_records += this->SkipRecordsRepeated(num_records);
+      skippedRecords += this->skipRecordsRepeated(numRecords);
     }
-    return skipped_records;
+    return skippedRecords;
   }
 
-  // We may outwardly have the appearance of having exhausted a column chunk
-  // when in fact we are in the middle of processing the last batch
-  bool has_values_to_process() const {
-    return levels_position_ < levels_written_;
+  // We may outwardly have the appearance of having exhausted a column chunk.
+  // When in fact we are in the middle of processing the last batch.
+  bool hasValuesToProcess() const {
+    return levelsPosition_ < levelsWritten_;
   }
 
-  std::shared_ptr<ResizableBuffer> ReleaseValues() override {
-    if (uses_values_) {
+  std::shared_ptr<ResizableBuffer> releaseValues() override {
+    if (usesValues_) {
       auto result = values_;
-      PARQUET_THROW_NOT_OK(result->Resize(
-          bytes_for_values(values_written_), /*shrink_to_fit=*/true));
-      values_ = AllocateBuffer(this->pool_);
-      values_capacity_ = 0;
+      PARQUET_THROW_NOT_OK(
+          result->Resize(bytesForValues(valuesWritten_), true));
+      values_ = allocateBuffer(this->pool_);
+      valuesCapacity_ = 0;
       return result;
     } else {
       return nullptr;
     }
   }
 
-  std::shared_ptr<ResizableBuffer> ReleaseIsValid() override {
-    if (nullable_values()) {
-      auto result = valid_bits_;
+  std::shared_ptr<ResizableBuffer> releaseIsValid() override {
+    if (nullableValues()) {
+      auto result = validBits_;
       PARQUET_THROW_NOT_OK(result->Resize(
-          ::arrow::bit_util::BytesForBits(values_written_),
-          /*shrink_to_fit=*/true));
-      valid_bits_ = AllocateBuffer(this->pool_);
+          ::arrow::bit_util::BytesForBits(valuesWritten_), true));
+      validBits_ = allocateBuffer(this->pool_);
       return result;
     } else {
       return nullptr;
     }
   }
 
-  // Process written repetition/definition levels to reach the end of
-  // records. Only used for repeated fields.
-  // Process no more levels than necessary to delimit the indicated
-  // number of logical records. Updates internal state of RecordReader
+  // Process written repetition/definition levels to reach the end of.
+  // Records. Only used for repeated fields.
+  // Process no more levels than necessary to delimit the indicated.
+  // Number of logical records. Updates internal state of RecordReader.
   //
-  // \return Number of records delimited
-  int64_t DelimitRecords(int64_t num_records, int64_t* values_seen) {
-    int64_t values_to_read = 0;
-    int64_t records_read = 0;
+  // \return Number of records delimited.
+  int64_t delimitRecords(int64_t numRecords, int64_t* valuesSeen) {
+    int64_t valuesToRead = 0;
+    int64_t recordsRead = 0;
 
-    const int16_t* def_levels = this->def_levels() + levels_position_;
-    const int16_t* rep_levels = this->rep_levels() + levels_position_;
+    const int16_t* defLevels = this->defLevels() + levelsPosition_;
+    const int16_t* repLevels = this->repLevels() + levelsPosition_;
 
-    VELOX_DCHECK_GT(this->max_rep_level_, 0);
+    VELOX_DCHECK_GT(this->maxRepLevel_, 0);
 
-    // Count logical records and number of values to read
-    while (levels_position_ < levels_written_) {
-      const int16_t rep_level = *rep_levels++;
-      if (rep_level == 0) {
-        // If at_record_start_ is true, we are seeing the start of a record
-        // for the second time, such as after repeated calls to
-        // DelimitRecords. In this case we must continue until we find
-        // another record start or exhausting the ColumnChunk
-        if (!at_record_start_) {
+    // Count logical records and number of values to read.
+    while (levelsPosition_ < levelsWritten_) {
+      const int16_t repLevel = *repLevels++;
+      if (repLevel == 0) {
+        // If at_record_start_ is true, we are seeing the start of a record.
+        // For the second time, such as after repeated calls to.
+        // DelimitRecords. In this case we must continue until we find.
+        // Another record start or exhausting the ColumnChunk.
+        if (!atRecordStart_) {
           // We've reached the end of a record; increment the record count.
-          ++records_read;
-          if (records_read == num_records) {
-            // We've found the number of records we were looking for. Set
-            // at_record_start_ to true and break
-            at_record_start_ = true;
+          ++recordsRead;
+          if (recordsRead == numRecords) {
+            // We've found the number of records we were looking for. Set.
+            // At_record_start_ to true and break.
+            atRecordStart_ = true;
             break;
           }
         }
       }
-      // We have decided to consume the level at this position; therefore we
-      // must advance until we find another record boundary
-      at_record_start_ = false;
+      // We have decided to consume the level at this position; therefore we.
+      // Must advance until we find another record boundary.
+      atRecordStart_ = false;
 
-      const int16_t def_level = *def_levels++;
-      if (def_level == this->max_def_level_) {
-        ++values_to_read;
+      const int16_t defLevel = *defLevels++;
+      if (defLevel == this->maxDefLevel_) {
+        ++valuesToRead;
       }
-      ++levels_position_;
+      ++levelsPosition_;
     }
-    *values_seen = values_to_read;
-    return records_read;
+    *valuesSeen = valuesToRead;
+    return recordsRead;
   }
 
-  void Reserve(int64_t capacity) override {
-    ReserveLevels(capacity);
-    ReserveValues(capacity);
+  void reserve(int64_t capacity) override {
+    reserveLevels(capacity);
+    reserveValues(capacity);
   }
 
-  int64_t UpdateCapacity(int64_t capacity, int64_t size, int64_t extra_size) {
-    if (extra_size < 0) {
+  int64_t updateCapacity(int64_t capacity, int64_t size, int64_t extraSize) {
+    if (extraSize < 0) {
       throw ParquetException("Negative size (corrupt file?)");
     }
-    int64_t target_size = -1;
-    if (AddWithOverflow(size, extra_size, &target_size)) {
+    int64_t targetSize = -1;
+    if (AddWithOverflow(size, extraSize, &targetSize)) {
       throw ParquetException("Allocation size too large (corrupt file?)");
     }
-    if (target_size >= (1LL << 62)) {
+    if (targetSize >= (1LL << 62)) {
       throw ParquetException("Allocation size too large (corrupt file?)");
     }
-    if (capacity >= target_size) {
+    if (capacity >= targetSize) {
       return capacity;
     }
-    return ::arrow::bit_util::NextPower2(target_size);
+    return ::arrow::bit_util::NextPower2(targetSize);
   }
 
-  void ReserveLevels(int64_t extra_levels) {
-    if (this->max_def_level_ > 0) {
-      const int64_t new_levels_capacity =
-          UpdateCapacity(levels_capacity_, levels_written_, extra_levels);
-      if (new_levels_capacity > levels_capacity_) {
+  void reserveLevels(int64_t extraLevels) {
+    if (this->maxDefLevel_ > 0) {
+      const int64_t newLevelsCapacity =
+          updateCapacity(levelsCapacity_, levelsWritten_, extraLevels);
+      if (newLevelsCapacity > levelsCapacity_) {
         constexpr auto kItemSize = static_cast<int64_t>(sizeof(int16_t));
-        int64_t capacity_in_bytes = -1;
+        int64_t capacityInBytes = -1;
         if (MultiplyWithOverflow(
-                new_levels_capacity, kItemSize, &capacity_in_bytes)) {
+                newLevelsCapacity, kItemSize, &capacityInBytes)) {
           throw ParquetException("Allocation size too large (corrupt file?)");
         }
-        PARQUET_THROW_NOT_OK(
-            def_levels_->Resize(capacity_in_bytes, /*shrink_to_fit=*/false));
-        if (this->max_rep_level_ > 0) {
-          PARQUET_THROW_NOT_OK(
-              rep_levels_->Resize(capacity_in_bytes, /*shrink_to_fit=*/false));
+        PARQUET_THROW_NOT_OK(defLevels_->Resize(capacityInBytes, false));
+        if (this->maxRepLevel_ > 0) {
+          PARQUET_THROW_NOT_OK(repLevels_->Resize(capacityInBytes, false));
         }
-        levels_capacity_ = new_levels_capacity;
+        levelsCapacity_ = newLevelsCapacity;
       }
     }
   }
 
-  void ReserveValues(int64_t extra_values) {
-    const int64_t new_values_capacity =
-        UpdateCapacity(values_capacity_, values_written_, extra_values);
-    if (new_values_capacity > values_capacity_) {
-      // XXX(wesm): A hack to avoid memory allocation when reading directly
-      // into builder classes
-      if (uses_values_) {
-        PARQUET_THROW_NOT_OK(values_->Resize(
-            bytes_for_values(new_values_capacity),
-            /*shrink_to_fit=*/false));
-      }
-      values_capacity_ = new_values_capacity;
-    }
-    if (nullable_values() && !read_dense_for_nullable_) {
-      int64_t valid_bytes_new =
-          ::arrow::bit_util::BytesForBits(values_capacity_);
-      if (valid_bits_->size() < valid_bytes_new) {
-        int64_t valid_bytes_old =
-            ::arrow::bit_util::BytesForBits(values_written_);
+  void reserveValues(int64_t extraValues) {
+    const int64_t newValuesCapacity =
+        updateCapacity(valuesCapacity_, valuesWritten_, extraValues);
+    if (newValuesCapacity > valuesCapacity_) {
+      // XXX(wesm): A hack to avoid memory allocation when reading directly.
+      // Into builder classes.
+      if (usesValues_) {
         PARQUET_THROW_NOT_OK(
-            valid_bits_->Resize(valid_bytes_new, /*shrink_to_fit=*/false));
+            values_->Resize(bytesForValues(newValuesCapacity), false));
+      }
+      valuesCapacity_ = newValuesCapacity;
+    }
+    if (nullableValues() && !readDenseForNullable_) {
+      int64_t validBytesNew = ::arrow::bit_util::BytesForBits(valuesCapacity_);
+      if (validBits_->size() < validBytesNew) {
+        int64_t validBytesOld = ::arrow::bit_util::BytesForBits(valuesWritten_);
+        PARQUET_THROW_NOT_OK(validBits_->Resize(validBytesNew, false));
 
-        // Avoid valgrind warnings
+        // Avoid valgrind warnings.
         memset(
-            valid_bits_->mutable_data() + valid_bytes_old,
+            validBits_->mutable_data() + validBytesOld,
             0,
-            valid_bytes_new - valid_bytes_old);
+            validBytesNew - validBytesOld);
       }
     }
   }
 
-  void Reset() override {
-    ResetValues();
+  void reset() override {
+    resetValues();
 
-    if (levels_written_ > 0) {
+    if (levelsWritten_ > 0) {
       // Throw away levels from 0 to levels_position_.
-      ThrowAwayLevels(0);
+      throwAwayLevels(0);
     }
 
-    // Call Finish on the binary builders to reset them
+    // Call Finish on the binary builders to reset them.
   }
 
-  void SetPageReader(std::unique_ptr<PageReader> reader) override {
-    at_record_start_ = true;
+  void setPageReader(std::unique_ptr<PageReader> reader) override {
+    atRecordStart_ = true;
     this->pager_ = std::move(reader);
-    ResetDecoders();
+    resetDecoders();
   }
 
-  bool HasMoreData() const override {
+  bool hasMoreData() const override {
     return this->pager_ != nullptr;
   }
 
@@ -2027,239 +1995,237 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     return this->descr_;
   }
 
-  // Dictionary decoders must be reset when advancing row groups
-  void ResetDecoders() {
+  // Dictionary decoders must be reset when advancing row groups.
+  void resetDecoders() {
     this->decoders_.clear();
   }
 
-  virtual void ReadValuesSpaced(int64_t values_with_nulls, int64_t null_count) {
-    uint8_t* valid_bits = valid_bits_->mutable_data();
-    const int64_t valid_bits_offset = values_written_;
+  virtual void readValuesSpaced(int64_t valuesWithNulls, int64_t nullCount) {
+    uint8_t* validBits = validBits_->mutable_data();
+    const int64_t validBitsOffset = valuesWritten_;
 
-    int64_t num_decoded = this->current_decoder_->DecodeSpaced(
-        ValuesHead<T>(),
-        static_cast<int>(values_with_nulls),
-        static_cast<int>(null_count),
-        valid_bits,
-        valid_bits_offset);
-    CheckNumberDecoded(num_decoded, values_with_nulls);
+    int64_t numDecoded = this->currentDecoder_->decodeSpaced(
+        valuesHead<T>(),
+        static_cast<int>(valuesWithNulls),
+        static_cast<int>(nullCount),
+        validBits,
+        validBitsOffset);
+    checkNumberDecoded(numDecoded, valuesWithNulls);
   }
 
-  virtual void ReadValuesDense(int64_t values_to_read) {
-    int64_t num_decoded = this->current_decoder_->Decode(
-        ValuesHead<T>(), static_cast<int>(values_to_read));
-    CheckNumberDecoded(num_decoded, values_to_read);
+  virtual void readValuesDense(int64_t valuesToRead) {
+    int64_t numDecoded = this->currentDecoder_->decode(
+        valuesHead<T>(), static_cast<int>(valuesToRead));
+    checkNumberDecoded(numDecoded, valuesToRead);
   }
 
-  // Reads repeated records and returns number of records read. Fills in
-  // values_to_read and null_count.
-  int64_t ReadRepeatedRecords(
-      int64_t num_records,
-      int64_t* values_to_read,
-      int64_t* null_count) {
-    const int64_t start_levels_position = levels_position_;
-    // Note that repeated records may be required or nullable. If they have
-    // an optional parent in the path, they will be nullable, otherwise,
-    // they are required. We use leaf_info_->HasNullableValues() that looks
-    // at repeated_ancestor_def_level to determine if it is required or
-    // nullable. Even if they are required, we may have to read ahead and
-    // delimit the records to get the right number of values and they will
-    // have associated levels.
-    int64_t records_read = DelimitRecords(num_records, values_to_read);
-    if (!nullable_values() || read_dense_for_nullable_) {
-      ReadValuesDense(*values_to_read);
-      // null_count is always 0 for required.
-      VELOX_DCHECK_EQ(*null_count, 0);
+  // Reads repeated records and returns number of records read. Fills in.
+  // Values_to_read and null_count.
+  int64_t readRepeatedRecords(
+      int64_t numRecords,
+      int64_t* valuesToRead,
+      int64_t* nullCount) {
+    const int64_t startLevelsPosition = levelsPosition_;
+    // Note that repeated records may be required or nullable. If they have.
+    // An optional parent in the path, they will be nullable, otherwise,.
+    // They are required. We use leaf_info_->HasNullableValues() that looks.
+    // At repeated_ancestor_def_level to determine if it is required or.
+    // Nullable. Even if they are required, we may have to read ahead and.
+    // Delimit the records to get the right number of values and they will.
+    // Have associated levels.
+    int64_t recordsRead = delimitRecords(numRecords, valuesToRead);
+    if (!nullableValues() || readDenseForNullable_) {
+      readValuesDense(*valuesToRead);
+      // Null_count is always 0 for required.
+      VELOX_DCHECK_EQ(*nullCount, 0);
     } else {
-      ReadSpacedForOptionalOrRepeated(
-          start_levels_position, values_to_read, null_count);
+      readSpacedForOptionalOrRepeated(
+          startLevelsPosition, valuesToRead, nullCount);
     }
-    return records_read;
+    return recordsRead;
   }
 
-  // Reads optional records and returns number of records read. Fills in
-  // values_to_read and null_count.
-  int64_t ReadOptionalRecords(
-      int64_t num_records,
-      int64_t* values_to_read,
-      int64_t* null_count) {
-    const int64_t start_levels_position = levels_position_;
-    // No repetition levels, skip delimiting logic. Each level represents a
-    // null or not null entry
-    int64_t records_read =
-        std::min<int64_t>(levels_written_ - levels_position_, num_records);
+  // Reads optional records and returns number of records read. Fills in.
+  // Values_to_read and null_count.
+  int64_t readOptionalRecords(
+      int64_t numRecords,
+      int64_t* valuesToRead,
+      int64_t* nullCount) {
+    const int64_t startLevelsPosition = levelsPosition_;
+    // No repetition levels, skip delimiting logic. Each level represents a.
+    // Null or not null entry.
+    int64_t recordsRead =
+        std::min<int64_t>(levelsWritten_ - levelsPosition_, numRecords);
     // This is advanced by DelimitRecords for the repeated field case above.
-    levels_position_ += records_read;
+    levelsPosition_ += recordsRead;
 
     // Optional fields are always nullable.
-    if (read_dense_for_nullable_) {
-      ReadDenseForOptional(start_levels_position, values_to_read);
-      // We don't need to update null_count when reading dense. It should be
-      // already set to 0.
-      VELOX_DCHECK_EQ(*null_count, 0);
+    if (readDenseForNullable_) {
+      readDenseForOptional(startLevelsPosition, valuesToRead);
+      // We don't need to update null_count when reading dense. It should be.
+      // Already set to 0.
+      VELOX_DCHECK_EQ(*nullCount, 0);
     } else {
-      ReadSpacedForOptionalOrRepeated(
-          start_levels_position, values_to_read, null_count);
+      readSpacedForOptionalOrRepeated(
+          startLevelsPosition, valuesToRead, nullCount);
     }
-    return records_read;
+    return recordsRead;
   }
 
-  // Reads required records and returns number of records read. Fills in
-  // values_to_read.
-  int64_t ReadRequiredRecords(int64_t num_records, int64_t* values_to_read) {
-    *values_to_read = num_records;
-    ReadValuesDense(*values_to_read);
-    return num_records;
+  // Reads required records and returns number of records read. Fills in.
+  // Values_to_read.
+  int64_t readRequiredRecords(int64_t numRecords, int64_t* valuesToRead) {
+    *valuesToRead = numRecords;
+    readValuesDense(*valuesToRead);
+    return numRecords;
   }
 
-  // Reads dense for optional records. First it figures out how many values to
-  // read.
-  void ReadDenseForOptional(
-      int64_t start_levels_position,
-      int64_t* values_to_read) {
-    // levels_position_ must already be incremented based on number of records
-    // read.
-    VELOX_DCHECK_GE(levels_position_, start_levels_position);
+  // Reads dense for optional records. First it figures out how many values to.
+  // Read.
+  void readDenseForOptional(
+      int64_t startLevelsPosition,
+      int64_t* valuesToRead) {
+    // Levels_position_ must already be incremented based on number of records.
+    // Read.
+    VELOX_DCHECK_GE(levelsPosition_, startLevelsPosition);
 
     // When reading dense we need to figure out number of values to read.
-    const int16_t* def_levels = this->def_levels();
-    for (int64_t i = start_levels_position; i < levels_position_; ++i) {
-      if (def_levels[i] == this->max_def_level_) {
-        ++(*values_to_read);
+    const int16_t* defLevels = this->defLevels();
+    for (int64_t i = startLevelsPosition; i < levelsPosition_; ++i) {
+      if (defLevels[i] == this->maxDefLevel_) {
+        ++(*valuesToRead);
       }
     }
-    ReadValuesDense(*values_to_read);
+    readValuesDense(*valuesToRead);
   }
 
   // Reads spaced for optional or repeated fields.
-  void ReadSpacedForOptionalOrRepeated(
-      int64_t start_levels_position,
-      int64_t* values_to_read,
-      int64_t* null_count) {
-    // levels_position_ must already be incremented based on number of records
-    // read.
-    VELOX_DCHECK_GE(levels_position_, start_levels_position);
-    ValidityBitmapInputOutput validity_io;
-    validity_io.valuesReadUpperBound = levels_position_ - start_levels_position;
-    validity_io.validBits = valid_bits_->mutable_data();
-    validity_io.validBitsOffset = values_written_;
+  void readSpacedForOptionalOrRepeated(
+      int64_t startLevelsPosition,
+      int64_t* valuesToRead,
+      int64_t* nullCount) {
+    // Levels_position_ must already be incremented based on number of records.
+    // Read.
+    VELOX_DCHECK_GE(levelsPosition_, startLevelsPosition);
+    ValidityBitmapInputOutput validityIo;
+    validityIo.valuesReadUpperBound = levelsPosition_ - startLevelsPosition;
+    validityIo.validBits = validBits_->mutable_data();
+    validityIo.validBitsOffset = valuesWritten_;
 
     DefLevelsToBitmap(
-        def_levels() + start_levels_position,
-        levels_position_ - start_levels_position,
-        leaf_info_,
-        &validity_io);
-    *values_to_read = validity_io.valuesRead - validity_io.nullCount;
-    *null_count = validity_io.nullCount;
-    VELOX_DCHECK_GE(*values_to_read, 0);
-    VELOX_DCHECK_GE(*null_count, 0);
-    ReadValuesSpaced(validity_io.valuesRead, *null_count);
+        defLevels() + startLevelsPosition,
+        levelsPosition_ - startLevelsPosition,
+        leafInfo_,
+        &validityIo);
+    *valuesToRead = validityIo.valuesRead - validityIo.nullCount;
+    *nullCount = validityIo.nullCount;
+    VELOX_DCHECK_GE(*valuesToRead, 0);
+    VELOX_DCHECK_GE(*nullCount, 0);
+    readValuesSpaced(validityIo.valuesRead, *nullCount);
   }
 
   // Return number of logical records read.
   // Updates levels_position_, values_written_, and null_count_.
-  int64_t ReadRecordData(int64_t num_records) {
-    // Conservative upper bound
-    const int64_t possible_num_values =
-        std::max<int64_t>(num_records, levels_written_ - levels_position_);
-    ReserveValues(possible_num_values);
+  int64_t readRecordData(int64_t numRecords) {
+    // Conservative upper bound.
+    const int64_t possibleNumValues =
+        std::max<int64_t>(numRecords, levelsWritten_ - levelsPosition_);
+    reserveValues(possibleNumValues);
 
-    const int64_t start_levels_position = levels_position_;
+    const int64_t startLevelsPosition = levelsPosition_;
 
-    // To be updated by the function calls below for each of the repetition
-    // types.
-    int64_t records_read = 0;
-    int64_t values_to_read = 0;
-    int64_t null_count = 0;
-    if (this->max_rep_level_ > 0) {
+    // To be updated by the function calls below for each of the repetition.
+    // Types.
+    int64_t recordsRead = 0;
+    int64_t valuesToRead = 0;
+    int64_t nullCount = 0;
+    if (this->maxRepLevel_ > 0) {
       // Repeated fields may be nullable or not.
       // This call updates levels_position_.
-      records_read =
-          ReadRepeatedRecords(num_records, &values_to_read, &null_count);
-    } else if (this->max_def_level_ > 0) {
+      recordsRead = readRepeatedRecords(numRecords, &valuesToRead, &nullCount);
+    } else if (this->maxDefLevel_ > 0) {
       // Non-repeated optional values are always nullable.
       // This call updates levels_position_.
-      VELOX_DCHECK(nullable_values());
-      records_read =
-          ReadOptionalRecords(num_records, &values_to_read, &null_count);
+      VELOX_DCHECK(nullableValues());
+      recordsRead = readOptionalRecords(numRecords, &valuesToRead, &nullCount);
     } else {
-      VELOX_DCHECK(!nullable_values());
-      records_read = ReadRequiredRecords(num_records, &values_to_read);
+      VELOX_DCHECK(!nullableValues());
+      recordsRead = readRequiredRecords(numRecords, &valuesToRead);
       // We don't need to update null_count, since it is 0.
     }
 
-    VELOX_DCHECK_GE(records_read, 0);
-    VELOX_DCHECK_GE(values_to_read, 0);
-    VELOX_DCHECK_GE(null_count, 0);
+    VELOX_DCHECK_GE(recordsRead, 0);
+    VELOX_DCHECK_GE(valuesToRead, 0);
+    VELOX_DCHECK_GE(nullCount, 0);
 
-    if (read_dense_for_nullable_) {
-      values_written_ += values_to_read;
-      VELOX_DCHECK_EQ(null_count, 0);
+    if (readDenseForNullable_) {
+      valuesWritten_ += valuesToRead;
+      VELOX_DCHECK_EQ(nullCount, 0);
     } else {
-      values_written_ += values_to_read + null_count;
-      null_count_ += null_count;
+      valuesWritten_ += valuesToRead + nullCount;
+      nullCount_ += nullCount;
     }
-    // Total values, including null spaces, if any
-    if (this->max_def_level_ > 0) {
-      // Optional, repeated, or some mix thereof
-      this->ConsumeBufferedValues(levels_position_ - start_levels_position);
+    // Total values, including null spaces, if any.
+    if (this->maxDefLevel_ > 0) {
+      // Optional, repeated, or some mix thereof.
+      this->consumeBufferedValues(levelsPosition_ - startLevelsPosition);
     } else {
-      // Flat, non-repeated
-      this->ConsumeBufferedValues(values_to_read);
+      // Flat, non-repeated.
+      this->consumeBufferedValues(valuesToRead);
     }
 
-    return records_read;
+    return recordsRead;
   }
 
-  void DebugPrintState() override {
-    const int16_t* def_levels = this->def_levels();
-    const int16_t* rep_levels = this->rep_levels();
-    const int64_t total_levels_read = levels_position_;
+  void debugPrintState() override {
+    const int16_t* defLevels = this->defLevels();
+    const int16_t* repLevels = this->repLevels();
+    const int64_t totalLevelsRead = levelsPosition_;
 
     const T* vals = reinterpret_cast<const T*>(this->values());
 
-    if (leaf_info_.defLevel > 0) {
+    if (leafInfo_.defLevel > 0) {
       std::cout << "def levels: ";
-      for (int64_t i = 0; i < total_levels_read; ++i) {
-        std::cout << def_levels[i] << " ";
+      for (int64_t i = 0; i < totalLevelsRead; ++i) {
+        std::cout << defLevels[i] << " ";
       }
       std::cout << std::endl;
     }
 
-    if (leaf_info_.repLevel > 0) {
+    if (leafInfo_.repLevel > 0) {
       std::cout << "rep levels: ";
-      for (int64_t i = 0; i < total_levels_read; ++i) {
-        std::cout << rep_levels[i] << " ";
+      for (int64_t i = 0; i < totalLevelsRead; ++i) {
+        std::cout << repLevels[i] << " ";
       }
       std::cout << std::endl;
     }
 
     std::cout << "values: ";
-    for (int64_t i = 0; i < this->values_written(); ++i) {
+    for (int64_t i = 0; i < this->valuesWritten(); ++i) {
       std::cout << vals[i] << " ";
     }
     std::cout << std::endl;
   }
 
-  void ResetValues() {
-    if (values_written_ > 0) {
-      // Resize to 0, but do not shrink to fit
-      if (uses_values_) {
-        PARQUET_THROW_NOT_OK(values_->Resize(0, /*shrink_to_fit=*/false));
+  void resetValues() {
+    if (valuesWritten_ > 0) {
+      // Resize to 0, but do not shrink to fit.
+      if (usesValues_) {
+        PARQUET_THROW_NOT_OK(values_->Resize(0, false));
       }
-      PARQUET_THROW_NOT_OK(valid_bits_->Resize(0, /*shrink_to_fit=*/false));
-      values_written_ = 0;
-      values_capacity_ = 0;
-      null_count_ = 0;
+      PARQUET_THROW_NOT_OK(validBits_->Resize(0, false));
+      valuesWritten_ = 0;
+      valuesCapacity_ = 0;
+      nullCount_ = 0;
     }
   }
 
  protected:
   template <typename T>
-  T* ValuesHead() {
-    return reinterpret_cast<T*>(values_->mutable_data()) + values_written_;
+  T* valuesHead() {
+    return reinterpret_cast<T*>(values_->mutable_data()) + valuesWritten_;
   }
-  LevelInfo leaf_info_;
+  LevelInfo leafInfo_;
 };
 
 class FLBARecordReader : public TypedRecordReader<FLBAType>,
@@ -2267,62 +2233,64 @@ class FLBARecordReader : public TypedRecordReader<FLBAType>,
  public:
   FLBARecordReader(
       const ColumnDescriptor* descr,
-      LevelInfo leaf_info,
+      LevelInfo leafInfo,
       ::arrow::MemoryPool* pool,
-      bool read_dense_for_nullable)
+      bool readDenseForNullable)
       : TypedRecordReader<FLBAType>(
             descr,
-            leaf_info,
+            leafInfo,
             pool,
-            read_dense_for_nullable),
+            readDenseForNullable),
         builder_(nullptr) {
-    VELOX_DCHECK_EQ(descr_->physical_type(), Type::FIXED_LEN_BYTE_ARRAY);
-    int byte_width = descr_->type_length();
+    VELOX_DCHECK_EQ(
+        static_cast<int>(descr_->physicalType()),
+        static_cast<int>(Type::kFixedLenByteArray));
+    int byteWidth = descr_->typeLength();
     std::shared_ptr<::arrow::DataType> type =
-        ::arrow::fixed_size_binary(byte_width);
+        ::arrow::fixed_size_binary(byteWidth);
     builder_ =
         std::make_unique<::arrow::FixedSizeBinaryBuilder>(type, this->pool_);
   }
 
-  ::arrow::ArrayVector GetBuilderChunks() override {
+  ::arrow::ArrayVector getBuilderChunks() override {
     std::shared_ptr<::arrow::Array> chunk;
     PARQUET_THROW_NOT_OK(builder_->Finish(&chunk));
     return ::arrow::ArrayVector({chunk});
   }
 
-  void ReadValuesDense(int64_t values_to_read) override {
-    auto values = ValuesHead<FLBA>();
-    int64_t num_decoded = this->current_decoder_->Decode(
-        values, static_cast<int>(values_to_read));
-    CheckNumberDecoded(num_decoded, values_to_read);
+  void readValuesDense(int64_t valuesToRead) override {
+    auto values = valuesHead<FLBA>();
+    int64_t numDecoded =
+        this->currentDecoder_->decode(values, static_cast<int>(valuesToRead));
+    checkNumberDecoded(numDecoded, valuesToRead);
 
-    for (int64_t i = 0; i < num_decoded; i++) {
+    for (int64_t i = 0; i < numDecoded; i++) {
       PARQUET_THROW_NOT_OK(builder_->Append(values[i].ptr));
     }
-    ResetValues();
+    resetValues();
   }
 
-  void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
-    uint8_t* valid_bits = valid_bits_->mutable_data();
-    const int64_t valid_bits_offset = values_written_;
-    auto values = ValuesHead<FLBA>();
+  void readValuesSpaced(int64_t valuesToRead, int64_t nullCount) override {
+    uint8_t* validBits = validBits_->mutable_data();
+    const int64_t validBitsOffset = valuesWritten_;
+    auto values = valuesHead<FLBA>();
 
-    int64_t num_decoded = this->current_decoder_->DecodeSpaced(
+    int64_t numDecoded = this->currentDecoder_->decodeSpaced(
         values,
-        static_cast<int>(values_to_read),
-        static_cast<int>(null_count),
-        valid_bits,
-        valid_bits_offset);
-    VELOX_DCHECK_EQ(num_decoded, values_to_read);
+        static_cast<int>(valuesToRead),
+        static_cast<int>(nullCount),
+        validBits,
+        validBitsOffset);
+    VELOX_DCHECK_EQ(numDecoded, valuesToRead);
 
-    for (int64_t i = 0; i < num_decoded; i++) {
-      if (::arrow::bit_util::GetBit(valid_bits, valid_bits_offset + i)) {
+    for (int64_t i = 0; i < numDecoded; i++) {
+      if (::arrow::bit_util::GetBit(validBits, validBitsOffset + i)) {
         PARQUET_THROW_NOT_OK(builder_->Append(values[i].ptr));
       } else {
         PARQUET_THROW_NOT_OK(builder_->AppendNull());
       }
     }
-    ResetValues();
+    resetValues();
   }
 
  private:
@@ -2334,49 +2302,51 @@ class ByteArrayChunkedRecordReader : public TypedRecordReader<ByteArrayType>,
  public:
   ByteArrayChunkedRecordReader(
       const ColumnDescriptor* descr,
-      LevelInfo leaf_info,
+      LevelInfo leafInfo,
       ::arrow::MemoryPool* pool,
-      bool read_dense_for_nullable)
+      bool readDenseForNullable)
       : TypedRecordReader<ByteArrayType>(
             descr,
-            leaf_info,
+            leafInfo,
             pool,
-            read_dense_for_nullable) {
-    VELOX_DCHECK_EQ(descr_->physical_type(), Type::BYTE_ARRAY);
-    accumulator_.builder = std::make_unique<::arrow::BinaryBuilder>(pool);
+            readDenseForNullable) {
+    VELOX_DCHECK_EQ(
+        static_cast<int>(descr_->physicalType()),
+        static_cast<int>(Type::kByteArray));
+    accumulator_.Builder = std::make_unique<::arrow::BinaryBuilder>(pool);
   }
 
-  ::arrow::ArrayVector GetBuilderChunks() override {
+  ::arrow::ArrayVector getBuilderChunks() override {
     ::arrow::ArrayVector result = accumulator_.chunks;
-    if (result.size() == 0 || accumulator_.builder->length() > 0) {
-      std::shared_ptr<::arrow::Array> last_chunk;
-      PARQUET_THROW_NOT_OK(accumulator_.builder->Finish(&last_chunk));
-      result.push_back(std::move(last_chunk));
+    if (result.size() == 0 || accumulator_.Builder->length() > 0) {
+      std::shared_ptr<::arrow::Array> lastChunk;
+      PARQUET_THROW_NOT_OK(accumulator_.Builder->Finish(&lastChunk));
+      result.push_back(std::move(lastChunk));
     }
     accumulator_.chunks = {};
     return result;
   }
 
-  void ReadValuesDense(int64_t values_to_read) override {
-    int64_t num_decoded = this->current_decoder_->DecodeArrowNonNull(
-        static_cast<int>(values_to_read), &accumulator_);
-    CheckNumberDecoded(num_decoded, values_to_read);
-    ResetValues();
+  void readValuesDense(int64_t valuesToRead) override {
+    int64_t numDecoded = this->currentDecoder_->decodeArrowNonNull(
+        static_cast<int>(valuesToRead), &accumulator_);
+    checkNumberDecoded(numDecoded, valuesToRead);
+    resetValues();
   }
 
-  void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
-    int64_t num_decoded = this->current_decoder_->DecodeArrow(
-        static_cast<int>(values_to_read),
-        static_cast<int>(null_count),
-        valid_bits_->mutable_data(),
-        values_written_,
+  void readValuesSpaced(int64_t valuesToRead, int64_t nullCount) override {
+    int64_t numDecoded = this->currentDecoder_->decodeArrow(
+        static_cast<int>(valuesToRead),
+        static_cast<int>(nullCount),
+        validBits_->mutable_data(),
+        valuesWritten_,
         &accumulator_);
-    CheckNumberDecoded(num_decoded, values_to_read - null_count);
-    ResetValues();
+    checkNumberDecoded(numDecoded, valuesToRead - nullCount);
+    resetValues();
   }
 
  private:
-  // Helper data structure for accumulating builder chunks
+  // Helper data structure for accumulating builder chunks.
   typename EncodingTraits<ByteArrayType>::Accumulator accumulator_;
 };
 
@@ -2385,166 +2355,166 @@ class ByteArrayDictionaryRecordReader : public TypedRecordReader<ByteArrayType>,
  public:
   ByteArrayDictionaryRecordReader(
       const ColumnDescriptor* descr,
-      LevelInfo leaf_info,
+      LevelInfo leafInfo,
       ::arrow::MemoryPool* pool,
-      bool read_dense_for_nullable)
+      bool readDenseForNullable)
       : TypedRecordReader<ByteArrayType>(
             descr,
-            leaf_info,
+            leafInfo,
             pool,
-            read_dense_for_nullable),
+            readDenseForNullable),
         builder_(pool) {
-    this->read_dictionary_ = true;
+    this->readDictionary_ = true;
   }
 
-  std::shared_ptr<::arrow::ChunkedArray> GetResult() override {
-    FlushBuilder();
+  std::shared_ptr<::arrow::ChunkedArray> getResult() override {
+    flushBuilder();
     std::vector<std::shared_ptr<::arrow::Array>> result;
-    std::swap(result, result_chunks_);
+    std::swap(result, resultChunks_);
     return std::make_shared<::arrow::ChunkedArray>(
         std::move(result), builder_.type());
   }
 
-  void FlushBuilder() {
+  void flushBuilder() {
     if (builder_.length() > 0) {
       std::shared_ptr<::arrow::Array> chunk;
       PARQUET_THROW_NOT_OK(builder_.Finish(&chunk));
-      result_chunks_.emplace_back(std::move(chunk));
+      resultChunks_.emplace_back(std::move(chunk));
 
-      // Also clears the dictionary memo table
+      // Also clears the dictionary memo table.
       builder_.Reset();
     }
   }
 
-  void MaybeWriteNewDictionary() {
-    if (this->new_dictionary_) {
-      /// If there is a new dictionary, we may need to flush the builder, then
-      /// insert the new dictionary values
-      FlushBuilder();
+  void maybeWriteNewDictionary() {
+    if (this->newDictionary_) {
+      /// If there is a new dictionary, we may need to flush the builder, then.
+      /// Insert the new dictionary values.
+      flushBuilder();
       builder_.ResetFull();
-      auto decoder = dynamic_cast<BinaryDictDecoder*>(this->current_decoder_);
-      decoder->InsertDictionary(&builder_);
-      this->new_dictionary_ = false;
+      auto decoder = dynamic_cast<BinaryDictDecoder*>(this->currentDecoder_);
+      decoder->insertDictionary(&builder_);
+      this->newDictionary_ = false;
     }
   }
 
-  void ReadValuesDense(int64_t values_to_read) override {
-    int64_t num_decoded = 0;
-    if (current_encoding_ == Encoding::RLE_DICTIONARY) {
-      MaybeWriteNewDictionary();
-      auto decoder = dynamic_cast<BinaryDictDecoder*>(this->current_decoder_);
-      num_decoded =
-          decoder->DecodeIndices(static_cast<int>(values_to_read), &builder_);
+  void readValuesDense(int64_t valuesToRead) override {
+    int64_t numDecoded = 0;
+    if (currentEncoding_ == Encoding::kRleDictionary) {
+      maybeWriteNewDictionary();
+      auto decoder = dynamic_cast<BinaryDictDecoder*>(this->currentDecoder_);
+      numDecoded =
+          decoder->decodeIndices(static_cast<int>(valuesToRead), &builder_);
     } else {
-      num_decoded = this->current_decoder_->DecodeArrowNonNull(
-          static_cast<int>(values_to_read), &builder_);
+      numDecoded = this->currentDecoder_->decodeArrowNonNull(
+          static_cast<int>(valuesToRead), &builder_);
 
-      /// Flush values since they have been copied into the builder
-      ResetValues();
+      /// Flush values since they have been copied into the builder.
+      resetValues();
     }
-    CheckNumberDecoded(num_decoded, values_to_read);
+    checkNumberDecoded(numDecoded, valuesToRead);
   }
 
-  void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
-    VELOX_DEBUG_ONLY int64_t num_decoded = 0;
-    if (current_encoding_ == Encoding::RLE_DICTIONARY) {
-      MaybeWriteNewDictionary();
-      auto decoder = dynamic_cast<BinaryDictDecoder*>(this->current_decoder_);
-      num_decoded = decoder->DecodeIndicesSpaced(
-          static_cast<int>(values_to_read),
-          static_cast<int>(null_count),
-          valid_bits_->mutable_data(),
-          values_written_,
+  void readValuesSpaced(int64_t valuesToRead, int64_t nullCount) override {
+    VELOX_DEBUG_ONLY int64_t numDecoded = 0;
+    if (currentEncoding_ == Encoding::kRleDictionary) {
+      maybeWriteNewDictionary();
+      auto decoder = dynamic_cast<BinaryDictDecoder*>(this->currentDecoder_);
+      numDecoded = decoder->decodeIndicesSpaced(
+          static_cast<int>(valuesToRead),
+          static_cast<int>(nullCount),
+          validBits_->mutable_data(),
+          valuesWritten_,
           &builder_);
     } else {
-      num_decoded = this->current_decoder_->DecodeArrow(
-          static_cast<int>(values_to_read),
-          static_cast<int>(null_count),
-          valid_bits_->mutable_data(),
-          values_written_,
+      numDecoded = this->currentDecoder_->decodeArrow(
+          static_cast<int>(valuesToRead),
+          static_cast<int>(nullCount),
+          validBits_->mutable_data(),
+          valuesWritten_,
           &builder_);
 
-      /// Flush values since they have been copied into the builder
-      ResetValues();
+      /// Flush values since they have been copied into the builder.
+      resetValues();
     }
-    VELOX_DCHECK_EQ(num_decoded, values_to_read - null_count);
+    VELOX_DCHECK_EQ(numDecoded, valuesToRead - nullCount);
   }
 
  private:
   using BinaryDictDecoder = DictDecoder<ByteArrayType>;
 
   ::arrow::BinaryDictionary32Builder builder_;
-  std::vector<std::shared_ptr<::arrow::Array>> result_chunks_;
+  std::vector<std::shared_ptr<::arrow::Array>> resultChunks_;
 };
 
-// TODO(wesm): Implement these to some satisfaction
+// TODO(wesm): Implement these to some satisfaction.
 template <>
-void TypedRecordReader<Int96Type>::DebugPrintState() {}
+void TypedRecordReader<Int96Type>::debugPrintState() {}
 
 template <>
-void TypedRecordReader<ByteArrayType>::DebugPrintState() {}
+void TypedRecordReader<ByteArrayType>::debugPrintState() {}
 
 template <>
-void TypedRecordReader<FLBAType>::DebugPrintState() {}
+void TypedRecordReader<FLBAType>::debugPrintState() {}
 
-std::shared_ptr<RecordReader> MakeByteArrayRecordReader(
+std::shared_ptr<RecordReader> makeByteArrayRecordReader(
     const ColumnDescriptor* descr,
-    LevelInfo leaf_info,
+    LevelInfo leafInfo,
     ::arrow::MemoryPool* pool,
-    bool read_dictionary,
-    bool read_dense_for_nullable) {
-  if (read_dictionary) {
+    bool readDictionary,
+    bool readDenseForNullable) {
+  if (readDictionary) {
     return std::make_shared<ByteArrayDictionaryRecordReader>(
-        descr, leaf_info, pool, read_dense_for_nullable);
+        descr, leafInfo, pool, readDenseForNullable);
   } else {
     return std::make_shared<ByteArrayChunkedRecordReader>(
-        descr, leaf_info, pool, read_dense_for_nullable);
+        descr, leafInfo, pool, readDenseForNullable);
   }
 }
 
 } // namespace
 
-std::shared_ptr<RecordReader> RecordReader::Make(
+std::shared_ptr<RecordReader> RecordReader::make(
     const ColumnDescriptor* descr,
-    LevelInfo leaf_info,
+    LevelInfo leafInfo,
     MemoryPool* pool,
-    bool read_dictionary,
-    bool read_dense_for_nullable) {
-  switch (descr->physical_type()) {
-    case Type::BOOLEAN:
+    bool readDictionary,
+    bool readDenseForNullable) {
+  switch (descr->physicalType()) {
+    case Type::kBoolean:
       return std::make_shared<TypedRecordReader<BooleanType>>(
-          descr, leaf_info, pool, read_dense_for_nullable);
-    case Type::INT32:
+          descr, leafInfo, pool, readDenseForNullable);
+    case Type::kInt32:
       return std::make_shared<TypedRecordReader<Int32Type>>(
-          descr, leaf_info, pool, read_dense_for_nullable);
-    case Type::INT64:
+          descr, leafInfo, pool, readDenseForNullable);
+    case Type::kInt64:
       return std::make_shared<TypedRecordReader<Int64Type>>(
-          descr, leaf_info, pool, read_dense_for_nullable);
-    case Type::INT96:
+          descr, leafInfo, pool, readDenseForNullable);
+    case Type::kInt96:
       return std::make_shared<TypedRecordReader<Int96Type>>(
-          descr, leaf_info, pool, read_dense_for_nullable);
-    case Type::FLOAT:
+          descr, leafInfo, pool, readDenseForNullable);
+    case Type::kFloat:
       return std::make_shared<TypedRecordReader<FloatType>>(
-          descr, leaf_info, pool, read_dense_for_nullable);
-    case Type::DOUBLE:
+          descr, leafInfo, pool, readDenseForNullable);
+    case Type::kDouble:
       return std::make_shared<TypedRecordReader<DoubleType>>(
-          descr, leaf_info, pool, read_dense_for_nullable);
-    case Type::BYTE_ARRAY: {
-      return MakeByteArrayRecordReader(
-          descr, leaf_info, pool, read_dictionary, read_dense_for_nullable);
+          descr, leafInfo, pool, readDenseForNullable);
+    case Type::kByteArray: {
+      return makeByteArrayRecordReader(
+          descr, leafInfo, pool, readDictionary, readDenseForNullable);
     }
-    case Type::FIXED_LEN_BYTE_ARRAY:
+    case Type::kFixedLenByteArray:
       return std::make_shared<FLBARecordReader>(
-          descr, leaf_info, pool, read_dense_for_nullable);
+          descr, leafInfo, pool, readDenseForNullable);
     default: {
-      // PARQUET-1481: This can occur if the file is corrupt
+      // PARQUET-1481: This can occur if the file is corrupt.
       std::stringstream ss;
       ss << "Invalid physical column type: "
-         << static_cast<int>(descr->physical_type());
+         << static_cast<int>(descr->physicalType());
       throw ParquetException(ss.str());
     }
   }
-  // Unreachable code, but suppress compiler warning
+  // Unreachable code, but suppress compiler warning.
   return nullptr;
 }
 
