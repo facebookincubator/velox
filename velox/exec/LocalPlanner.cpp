@@ -18,6 +18,7 @@
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
+#include "velox/exec/EnforceDistinct.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/Expand.h"
@@ -44,6 +45,7 @@
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/SpatialJoinProbe.h"
 #include "velox/exec/StreamingAggregation.h"
+#include "velox/exec/StreamingEnforceDistinct.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TableWriteMerge.h"
 #include "velox/exec/TableWriter.h"
@@ -682,6 +684,19 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode)) {
       operators.push_back(
           std::make_unique<MarkDistinct>(id, ctx.get(), markDistinctNode));
+    } else if (
+        auto enforceDistinctNode =
+            std::dynamic_pointer_cast<const core::EnforceDistinctNode>(
+                planNode)) {
+      if (enforceDistinctNode->isPreGrouped()) {
+        operators.push_back(
+            std::make_unique<StreamingEnforceDistinct>(
+                id, ctx.get(), enforceDistinctNode));
+      } else {
+        operators.push_back(
+            std::make_unique<EnforceDistinct>(
+                id, ctx.get(), enforceDistinctNode));
+      }
     } else if (
         auto localMerge =
             std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
