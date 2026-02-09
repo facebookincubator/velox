@@ -169,3 +169,88 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
 
         it.step()
         self.assertEqual(it.at(), self._node_ids[3])
+
+    def test_hook_always_stop(self):
+        """Hook that always returns True should behave like set_breakpoint."""
+        runner = LocalDebuggerRunner(self._plan_node)
+        runner.set_hook(self._node_ids[3], lambda v: True)
+        runner.set_hook(self._node_ids[5], lambda v: True)
+        runner.set_hook(self._node_ids[8], lambda v: True)
+        self.assertEqual(
+            self._count_step(runner), self._batch_size * self._num_batches * 4
+        )
+
+    def test_hook_never_stop(self):
+        """Hook that always returns False should skip the breakpoint."""
+        runner = LocalDebuggerRunner(self._plan_node)
+        runner.set_hook(self._node_ids[3], lambda v: False)
+        runner.set_hook(self._node_ids[5], lambda v: False)
+        runner.set_hook(self._node_ids[8], lambda v: False)
+        # Since all hooks return False, step() should behave like next()
+        self.assertEqual(self._count_step(runner), self._batch_size * self._num_batches)
+
+    def test_hook_conditional(self):
+        """Hook that conditionally stops based on vector content."""
+        runner = LocalDebuggerRunner(self._plan_node)
+
+        # Track how many times the hook is called.
+        call_count = 0
+
+        def conditional_hook(vector):
+            nonlocal call_count
+            call_count += 1
+            # Stop only on odd calls.
+            return call_count % 2 == 1
+
+        runner.set_hook(self._node_ids[5], conditional_hook)
+
+        # The hook is called for each batch (10 batches).
+        # It stops on odd calls (1, 3, 5, 7, 9) = 5 stops.
+        # Plus 10 task outputs = 15 total vectors.
+        self.assertEqual(self._count_step(runner), self._batch_size * 15)
+        self.assertEqual(call_count, self._num_batches)
+
+    def test_hook_mixed_with_breakpoint(self):
+        """Mix set_breakpoint and set_hook."""
+        runner = LocalDebuggerRunner(self._plan_node)
+
+        # set_breakpoint always stops.
+        runner.set_breakpoint(self._node_ids[3])
+
+        # set_hook that never stops.
+        runner.set_hook(self._node_ids[5], lambda v: False)
+
+        # set_hook that always stops.
+        runner.set_hook(self._node_ids[8], lambda v: True)
+
+        # node_ids[3] stops (10 batches), node_ids[8] stops (10 batches),
+        # plus 10 task outputs = 30 total vectors.
+        self.assertEqual(
+            self._count_step(runner), self._batch_size * self._num_batches * 3
+        )
+
+    def test_hook_inspects_vector(self):
+        """Verify the hook receives a valid vector."""
+        runner = LocalDebuggerRunner(self._plan_node)
+
+        received_sizes = []
+
+        def inspect_hook(vector):
+            received_sizes.append(vector.size())
+            return True
+
+        runner.set_hook(self._node_ids[5], inspect_hook)
+
+        it = runner.execute()
+
+        # Consume all output.
+        while True:
+            try:
+                it.step()
+            except StopIteration:
+                break
+
+        # Hook should have been called for each batch.
+        self.assertEqual(len(received_sizes), self._num_batches)
+        # Each vector should have batch_size rows.
+        self.assertTrue(all(s == self._batch_size for s in received_sizes))

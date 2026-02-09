@@ -26,54 +26,54 @@
 namespace facebook::velox::parquet::arrow {
 
 TEST(TestTypeToString, PhysicalTypes) {
-  ASSERT_STREQ("BOOLEAN", TypeToString(Type::BOOLEAN).c_str());
-  ASSERT_STREQ("INT32", TypeToString(Type::INT32).c_str());
-  ASSERT_STREQ("INT64", TypeToString(Type::INT64).c_str());
-  ASSERT_STREQ("INT96", TypeToString(Type::INT96).c_str());
-  ASSERT_STREQ("FLOAT", TypeToString(Type::FLOAT).c_str());
-  ASSERT_STREQ("DOUBLE", TypeToString(Type::DOUBLE).c_str());
-  ASSERT_STREQ("BYTE_ARRAY", TypeToString(Type::BYTE_ARRAY).c_str());
+  ASSERT_STREQ("BOOLEAN", typeToString(Type::kBoolean).c_str());
+  ASSERT_STREQ("INT32", typeToString(Type::kInt32).c_str());
+  ASSERT_STREQ("INT64", typeToString(Type::kInt64).c_str());
+  ASSERT_STREQ("INT96", typeToString(Type::kInt96).c_str());
+  ASSERT_STREQ("FLOAT", typeToString(Type::kFloat).c_str());
+  ASSERT_STREQ("DOUBLE", typeToString(Type::kDouble).c_str());
+  ASSERT_STREQ("BYTE_ARRAY", typeToString(Type::kByteArray).c_str());
   ASSERT_STREQ(
-      "FIXED_LEN_BYTE_ARRAY", TypeToString(Type::FIXED_LEN_BYTE_ARRAY).c_str());
+      "FIXED_LEN_BYTE_ARRAY", typeToString(Type::kFixedLenByteArray).c_str());
 }
 
 TEST(TestConvertedTypeToString, ConvertedTypes) {
-  ASSERT_STREQ("NONE", ConvertedTypeToString(ConvertedType::NONE).c_str());
-  ASSERT_STREQ("UTF8", ConvertedTypeToString(ConvertedType::UTF8).c_str());
-  ASSERT_STREQ("MAP", ConvertedTypeToString(ConvertedType::MAP).c_str());
+  ASSERT_STREQ("NONE", convertedTypeToString(ConvertedType::kNone).c_str());
+  ASSERT_STREQ("UTF8", convertedTypeToString(ConvertedType::kUtf8).c_str());
+  ASSERT_STREQ("MAP", convertedTypeToString(ConvertedType::kMap).c_str());
   ASSERT_STREQ(
       "MAP_KEY_VALUE",
-      ConvertedTypeToString(ConvertedType::MAP_KEY_VALUE).c_str());
-  ASSERT_STREQ("LIST", ConvertedTypeToString(ConvertedType::LIST).c_str());
-  ASSERT_STREQ("ENUM", ConvertedTypeToString(ConvertedType::ENUM).c_str());
+      convertedTypeToString(ConvertedType::kMapKeyValue).c_str());
+  ASSERT_STREQ("LIST", convertedTypeToString(ConvertedType::kList).c_str());
+  ASSERT_STREQ("ENUM", convertedTypeToString(ConvertedType::kEnum).c_str());
   ASSERT_STREQ(
-      "DECIMAL", ConvertedTypeToString(ConvertedType::DECIMAL).c_str());
-  ASSERT_STREQ("DATE", ConvertedTypeToString(ConvertedType::DATE).c_str());
+      "DECIMAL", convertedTypeToString(ConvertedType::kDecimal).c_str());
+  ASSERT_STREQ("DATE", convertedTypeToString(ConvertedType::kDate).c_str());
   ASSERT_STREQ(
-      "TIME_MILLIS", ConvertedTypeToString(ConvertedType::TIME_MILLIS).c_str());
+      "TIME_MILLIS", convertedTypeToString(ConvertedType::kTimeMillis).c_str());
   ASSERT_STREQ(
-      "TIME_MICROS", ConvertedTypeToString(ConvertedType::TIME_MICROS).c_str());
+      "TIME_MICROS", convertedTypeToString(ConvertedType::kTimeMicros).c_str());
   ASSERT_STREQ(
       "TIMESTAMP_MILLIS",
-      ConvertedTypeToString(ConvertedType::TIMESTAMP_MILLIS).c_str());
+      convertedTypeToString(ConvertedType::kTimestampMillis).c_str());
   ASSERT_STREQ(
       "TIMESTAMP_MICROS",
-      ConvertedTypeToString(ConvertedType::TIMESTAMP_MICROS).c_str());
-  ASSERT_STREQ("UINT_8", ConvertedTypeToString(ConvertedType::UINT_8).c_str());
+      convertedTypeToString(ConvertedType::kTimestampMicros).c_str());
+  ASSERT_STREQ("UINT_8", convertedTypeToString(ConvertedType::kUint8).c_str());
   ASSERT_STREQ(
-      "UINT_16", ConvertedTypeToString(ConvertedType::UINT_16).c_str());
+      "UINT_16", convertedTypeToString(ConvertedType::kUint16).c_str());
   ASSERT_STREQ(
-      "UINT_32", ConvertedTypeToString(ConvertedType::UINT_32).c_str());
+      "UINT_32", convertedTypeToString(ConvertedType::kUint32).c_str());
   ASSERT_STREQ(
-      "UINT_64", ConvertedTypeToString(ConvertedType::UINT_64).c_str());
-  ASSERT_STREQ("INT_8", ConvertedTypeToString(ConvertedType::INT_8).c_str());
-  ASSERT_STREQ("INT_16", ConvertedTypeToString(ConvertedType::INT_16).c_str());
-  ASSERT_STREQ("INT_32", ConvertedTypeToString(ConvertedType::INT_32).c_str());
-  ASSERT_STREQ("INT_64", ConvertedTypeToString(ConvertedType::INT_64).c_str());
-  ASSERT_STREQ("JSON", ConvertedTypeToString(ConvertedType::JSON).c_str());
-  ASSERT_STREQ("BSON", ConvertedTypeToString(ConvertedType::BSON).c_str());
+      "UINT_64", convertedTypeToString(ConvertedType::kUint64).c_str());
+  ASSERT_STREQ("INT_8", convertedTypeToString(ConvertedType::kInt8).c_str());
+  ASSERT_STREQ("INT_16", convertedTypeToString(ConvertedType::kInt16).c_str());
+  ASSERT_STREQ("INT_32", convertedTypeToString(ConvertedType::kInt32).c_str());
+  ASSERT_STREQ("INT_64", convertedTypeToString(ConvertedType::kInt64).c_str());
+  ASSERT_STREQ("JSON", convertedTypeToString(ConvertedType::kJson).c_str());
+  ASSERT_STREQ("BSON", convertedTypeToString(ConvertedType::kBson).c_str());
   ASSERT_STREQ(
-      "INTERVAL", ConvertedTypeToString(ConvertedType::INTERVAL).c_str());
+      "INTERVAL", convertedTypeToString(ConvertedType::kInterval).c_str());
 }
 
 #ifdef __GNUC__
@@ -87,86 +87,87 @@ TEST(TestConvertedTypeToString, ConvertedTypes) {
 TEST(TypePrinter, StatisticsTypes) {
   std::string smin;
   std::string smax;
-  int32_t int_min = 1024;
-  int32_t int_max = 2048;
-  smin = std::string(reinterpret_cast<char*>(&int_min), sizeof(int32_t));
-  smax = std::string(reinterpret_cast<char*>(&int_max), sizeof(int32_t));
-  ASSERT_STREQ("1024", FormatStatValue(Type::INT32, smin).c_str());
-  ASSERT_STREQ("2048", FormatStatValue(Type::INT32, smax).c_str());
+  int32_t intMin = 1024;
+  int32_t intMax = 2048;
+  smin = std::string(reinterpret_cast<char*>(&intMin), sizeof(int32_t));
+  smax = std::string(reinterpret_cast<char*>(&intMax), sizeof(int32_t));
+  ASSERT_STREQ("1024", formatStatValue(Type::kInt32, smin).c_str());
+  ASSERT_STREQ("2048", formatStatValue(Type::kInt32, smax).c_str());
 
-  int64_t int64_min = 10240000000000;
-  int64_t int64_max = 20480000000000;
-  smin = std::string(reinterpret_cast<char*>(&int64_min), sizeof(int64_t));
-  smax = std::string(reinterpret_cast<char*>(&int64_max), sizeof(int64_t));
-  ASSERT_STREQ("10240000000000", FormatStatValue(Type::INT64, smin).c_str());
-  ASSERT_STREQ("20480000000000", FormatStatValue(Type::INT64, smax).c_str());
+  int64_t int64Min = 10240000000000;
+  int64_t int64Max = 20480000000000;
+  smin = std::string(reinterpret_cast<char*>(&int64Min), sizeof(int64_t));
+  smax = std::string(reinterpret_cast<char*>(&int64Max), sizeof(int64_t));
+  ASSERT_STREQ("10240000000000", formatStatValue(Type::kInt64, smin).c_str());
+  ASSERT_STREQ("20480000000000", formatStatValue(Type::kInt64, smax).c_str());
 
-  float float_min = 1.024f;
-  float float_max = 2.048f;
-  smin = std::string(reinterpret_cast<char*>(&float_min), sizeof(float));
-  smax = std::string(reinterpret_cast<char*>(&float_max), sizeof(float));
-  ASSERT_STREQ("1.024", FormatStatValue(Type::FLOAT, smin).c_str());
-  ASSERT_STREQ("2.048", FormatStatValue(Type::FLOAT, smax).c_str());
+  float floatMin = 1.024f;
+  float floatMax = 2.048f;
+  smin = std::string(reinterpret_cast<char*>(&floatMin), sizeof(float));
+  smax = std::string(reinterpret_cast<char*>(&floatMax), sizeof(float));
+  ASSERT_STREQ("1.024", formatStatValue(Type::kFloat, smin).c_str());
+  ASSERT_STREQ("2.048", formatStatValue(Type::kFloat, smax).c_str());
 
-  double double_min = 1.0245;
-  double double_max = 2.0489;
-  smin = std::string(reinterpret_cast<char*>(&double_min), sizeof(double));
-  smax = std::string(reinterpret_cast<char*>(&double_max), sizeof(double));
-  ASSERT_STREQ("1.0245", FormatStatValue(Type::DOUBLE, smin).c_str());
-  ASSERT_STREQ("2.0489", FormatStatValue(Type::DOUBLE, smax).c_str());
+  double doubleMin = 1.0245;
+  double doubleMax = 2.0489;
+  smin = std::string(reinterpret_cast<char*>(&doubleMin), sizeof(double));
+  smax = std::string(reinterpret_cast<char*>(&doubleMax), sizeof(double));
+  ASSERT_STREQ("1.0245", formatStatValue(Type::kDouble, smin).c_str());
+  ASSERT_STREQ("2.0489", formatStatValue(Type::kDouble, smax).c_str());
 
 #if ARROW_LITTLE_ENDIAN
-  Int96 Int96_min = {{1024, 2048, 4096}};
-  Int96 Int96_max = {{2048, 4096, 8192}};
+  Int96 int96Min = {{1024, 2048, 4096}};
+  Int96 int96Max = {{2048, 4096, 8192}};
 #else
-  Int96 Int96_min = {{2048, 1024, 4096}};
-  Int96 Int96_max = {{4096, 2048, 8192}};
+  Int96 int96Min = {{2048, 1024, 4096}};
+  Int96 int96Max = {{4096, 2048, 8192}};
 #endif
-  smin = std::string(reinterpret_cast<char*>(&Int96_min), sizeof(Int96));
-  smax = std::string(reinterpret_cast<char*>(&Int96_max), sizeof(Int96));
-  ASSERT_STREQ("1024 2048 4096", FormatStatValue(Type::INT96, smin).c_str());
-  ASSERT_STREQ("2048 4096 8192", FormatStatValue(Type::INT96, smax).c_str());
+  smin = std::string(reinterpret_cast<char*>(&int96Min), sizeof(Int96));
+  smax = std::string(reinterpret_cast<char*>(&int96Max), sizeof(Int96));
+  ASSERT_STREQ("1024 2048 4096", formatStatValue(Type::kInt96, smin).c_str());
+  ASSERT_STREQ("2048 4096 8192", formatStatValue(Type::kInt96, smax).c_str());
 
   smin = std::string("abcdef");
   smax = std::string("ijklmnop");
-  ASSERT_STREQ("abcdef", FormatStatValue(Type::BYTE_ARRAY, smin).c_str());
-  ASSERT_STREQ("ijklmnop", FormatStatValue(Type::BYTE_ARRAY, smax).c_str());
+  ASSERT_STREQ("abcdef", formatStatValue(Type::kByteArray, smin).c_str());
+  ASSERT_STREQ("ijklmnop", formatStatValue(Type::kByteArray, smax).c_str());
 
-  // PARQUET-1357: FormatStatValue truncates binary statistics on zero character
+  // PARQUET-1357: FormatStatValue truncates binary statistics on zero
+  // character.
   smax.push_back('\0');
-  ASSERT_EQ(smax, FormatStatValue(Type::BYTE_ARRAY, smax));
+  ASSERT_EQ(smax, formatStatValue(Type::kByteArray, smax));
 
   smin = std::string("abcdefgh");
   smax = std::string("ijklmnop");
   ASSERT_STREQ(
-      "abcdefgh", FormatStatValue(Type::FIXED_LEN_BYTE_ARRAY, smin).c_str());
+      "abcdefgh", formatStatValue(Type::kFixedLenByteArray, smin).c_str());
   ASSERT_STREQ(
-      "ijklmnop", FormatStatValue(Type::FIXED_LEN_BYTE_ARRAY, smax).c_str());
+      "ijklmnop", formatStatValue(Type::kFixedLenByteArray, smax).c_str());
 }
 
 TEST(TestInt96Timestamp, Decoding) {
-  auto check = [](int32_t julian_day, uint64_t nanoseconds) {
+  auto check = [](int32_t julianDay, uint64_t nanoseconds) {
 #if ARROW_LITTLE_ENDIAN
     Int96 i96{
         static_cast<uint32_t>(nanoseconds),
         static_cast<uint32_t>(nanoseconds >> 32),
-        static_cast<uint32_t>(julian_day)};
+        static_cast<uint32_t>(julianDay)};
 #else
     Int96 i96{
         static_cast<uint32_t>(nanoseconds >> 32),
         static_cast<uint32_t>(nanoseconds),
-        static_cast<uint32_t>(julian_day)};
+        static_cast<uint32_t>(julianDay)};
 #endif
-    // Official formula according to
+    // Official formula according to.
     // https://github.com/apache/parquet-format/pull/49
     int64_t expected =
-        (julian_day - 2440588) * (86400LL * 1000 * 1000 * 1000) + nanoseconds;
-    int64_t actual = Int96GetNanoSeconds(i96);
+        (julianDay - 2440588) * (86400LL * 1000 * 1000 * 1000) + nanoseconds;
+    int64_t actual = int96GetNanoSeconds(i96);
     ASSERT_EQ(expected, actual);
   };
 
-  // [2333837, 2547339] is the range of Julian days that can be converted to
-  // 64-bit Unix timestamps.
+  // [2333837, 2547339] Is the range of Julian days that can be converted to.
+  // 64-Bit Unix timestamps.
   check(2333837, 0);
   check(2333855, 0);
   check(2547330, 0);
