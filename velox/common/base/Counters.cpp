@@ -196,6 +196,16 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricMemoryCacheNumAllocClocks, facebook::velox::StatType::SUM);
 
+  // Clocks spent waiting to acquire shard mutexes, since last counter retrieval
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumShardMutexWaitClocks,
+      facebook::velox::StatType::SUM);
+
+  // Time in milliseconds spent waiting to acquire shard mutexes, since last
+  // counter retrieval. Converted from raw clocks assuming ~3GHz CPU frequency.
+  DEFINE_METRIC(
+      kMetricMemoryCacheShardMutexWaitTimeMs, facebook::velox::StatType::SUM);
+
   // Number of AsyncDataCache entries that are aged out and evicted
   // given configured TTL.
   DEFINE_METRIC(
