@@ -23,6 +23,7 @@
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/PrestoCastHooks.h"
+#include "velox/expression/PrestoCastKernel.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -1166,7 +1167,8 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       false,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastHooks>(config),
+      std::make_shared<PrestoCastKernel>(config));
 }
 
 TypePtr TryCastCallToSpecialForm::resolveType(
@@ -1189,6 +1191,7 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastHooks>(config),
+      std::make_shared<PrestoCastKernel>(config));
 }
 } // namespace facebook::velox::exec
