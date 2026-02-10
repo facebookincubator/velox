@@ -406,7 +406,8 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Create a cudf split reader
   if (useExperimentalSplitReader_) {
     exptSplitReader_ = createExperimentalSplitReader();
-    hybridScanState_ = std::make_unique<facebook::velox::cudf_velox::connector::hive::HybridScanState>();
+    hybridScanState_ = std::make_unique<
+        facebook::velox::cudf_velox::connector::hive::HybridScanState>();
   } else {
     splitReader_ = createSplitReader();
   }
