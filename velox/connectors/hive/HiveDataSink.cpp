@@ -69,7 +69,7 @@ std::unique_ptr<dwio::common::FileSink> createHiveFileSink(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     memory::MemoryPool* sinkPool,
     io::IoStatistics* ioStats,
-    filesystems::File::IoStats* fileSystemStats) {
+    IoStats* fileSystemStats) {
   return dwio::common::FileSink::create(
       path,
       {
@@ -524,7 +524,7 @@ HiveDataSink::HiveDataSink(
       partitionKeyAsLowerCase_(hiveConfig_->isPartitionPathAsLowerCase(
           connectorQueryCtx_->sessionProperties())),
       fileNameGenerator_(insertTableHandle_->fileNameGenerator()) {
-  fileSystemStats_ = std::make_unique<filesystems::File::IoStats>();
+  fileSystemStats_ = std::make_unique<IoStats>();
 
   if (isBucketed()) {
     VELOX_USER_CHECK_LT(
@@ -777,9 +777,8 @@ DataSink::Stats HiveDataSink::stats() const {
     const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
     stats.numWrittenFiles += info->writtenFiles.size();
-    const auto spillStats = info->spillStats->rlock();
-    if (!spillStats->empty()) {
-      stats.spillStats += *spillStats;
+    if (!info->spillStats->empty()) {
+      stats.spillStats += *info->spillStats;
     }
   }
   return stats;

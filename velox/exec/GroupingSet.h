@@ -46,8 +46,7 @@ class GroupingSet {
       tsan_atomic<bool>* nonReclaimableSection,
       const core::QueryConfig* queryConfig,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats,
-      filesystems::File::IoStats* spillFsStats);
+      exec::SpillStats* spillStats);
 
   ~GroupingSet();
 
@@ -124,7 +123,7 @@ class GroupingSet {
   void spill(const RowContainerIterator& rowIterator);
 
   /// Returns the spiller stats including total bytes and rows spilled so far.
-  std::optional<common::SpillStats> spilledStats() const;
+  std::optional<exec::SpillStats> spilledStats() const;
 
   /// Returns true if spilling has triggered on this grouping set.
   bool hasSpilled() const;
@@ -312,8 +311,7 @@ class GroupingSet {
   const common::SpillConfig* const spillConfig_;
   const core::QueryConfig* const queryConfig_;
   memory::MemoryPool* const pool_;
-  folly::Synchronized<common::SpillStats>* const spillStats_;
-  filesystems::File::IoStats* const spillFsStats_{nullptr};
+  exec::SpillStats* const spillStats_;
 
   std::vector<column_index_t> keyChannels_;
   // Provides the column projections for extracting the grouping keys from
@@ -430,8 +428,7 @@ class AggregationInputSpiller : public SpillerBase {
       const HashBitRange& hashBitRange,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats,
-      filesystems::File::IoStats* spillFsStats);
+      exec::SpillStats* spillStats);
 
   void spill();
 
@@ -453,8 +450,7 @@ class AggregationOutputSpiller : public SpillerBase {
       RowContainer* container,
       RowTypePtr rowType,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats,
-      filesystems::File::IoStats* spillFsStats);
+      exec::SpillStats* spillStats);
 
   void spill(const RowContainerIterator& startRowIter);
 
