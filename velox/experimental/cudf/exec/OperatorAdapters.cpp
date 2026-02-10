@@ -116,8 +116,8 @@ class TableScanAdapter : public OperatorAdapter {
     return {}; // Keep original operator
   }
 
-  int keepOperator() const override {
-    return 1;
+  bool keepOperator() const override {
+    return true;
   }
 
   std::string name() const override {
@@ -529,8 +529,8 @@ class LocalPartitionAdapter : public OperatorAdapter {
     return result;
   }
 
-  int keepOperator() const override {
-    return 0;
+  bool keepOperator() const override {
+    return false;
   }
 
   std::string name() const override {
@@ -568,8 +568,8 @@ class LocalExchangeAdapter : public OperatorAdapter {
     return {}; // Keep original operator
   }
 
-  int keepOperator() const override {
-    return 1;
+  bool keepOperator() const override {
+    return true;
   }
 
   std::string name() const override {
@@ -654,8 +654,8 @@ class ValuesAdapter : public OperatorAdapter {
     return {}; // Keep original operator
   }
 
-  int keepOperator() const override {
-    return 1;
+  bool keepOperator() const override {
+    return true;
   }
 
   std::string name() const override {
@@ -693,8 +693,8 @@ class CallbackSinkAdapter : public OperatorAdapter {
     return {}; // Keep original operator
   }
 
-  int keepOperator() const override {
-    return 1;
+  bool keepOperator() const override {
+    return true;
   }
 
   std::string name() const override {

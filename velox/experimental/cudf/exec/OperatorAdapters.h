@@ -87,10 +87,10 @@ class OperatorAdapter {
 
   /**
    * @brief Check if the original operator should be kept (not replaced).
-   * @return 1 if the original operator should be kept, 0 otherwise
+   * @return true if the original operator should be kept, false otherwise
    */
-  virtual int keepOperator() const {
-    return 0;
+  virtual bool keepOperator() const {
+    return false;
   }
 
   /**
