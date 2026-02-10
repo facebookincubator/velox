@@ -92,6 +92,7 @@ velox_add_library(
   SpatialJoinProbe.cpp
   Spill.cpp
   SpillFile.cpp
+  SpillStats.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   StreamingEnforceDistinct.cpp

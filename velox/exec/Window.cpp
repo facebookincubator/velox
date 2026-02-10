@@ -78,8 +78,7 @@ Window::Window(
           spillConfig,
           &nonReclaimableSection_,
           &stats_,
-          spillStats_.get(),
-          spillFsStats());
+          spillStats_.get());
     } else {
       windowBuild_ = std::make_unique<SortWindowBuild>(
           windowNode,
@@ -88,8 +87,7 @@ Window::Window(
           spillConfig,
           &nonReclaimableSection_,
           &stats_,
-          spillStats_.get(),
-          spillFsStats());
+          spillStats_.get());
     }
   }
 }

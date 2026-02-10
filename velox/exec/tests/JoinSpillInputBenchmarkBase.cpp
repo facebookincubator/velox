@@ -46,12 +46,7 @@ void JoinSpillInputBenchmarkBase::setUp() {
   spillConfig.fileCreateConfig = {};
 
   spiller_ = std::make_unique<NoRowContainerSpiller>(
-      rowType_,
-      std::nullopt,
-      HashBitRange{29, 29},
-      &spillConfig,
-      &spillStats_,
-      /*fsStats=*/nullptr);
+      rowType_, std::nullopt, HashBitRange{29, 29}, &spillConfig, &spillStats_);
   dynamic_cast<NoRowContainerSpiller*>(spiller_.get())
       ->setPartitionsSpilled({SpillPartitionId(0)});
 }

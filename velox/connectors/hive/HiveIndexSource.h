@@ -170,8 +170,8 @@ class HiveIndexSource : public IndexSource,
   // Cached empty output vector.
   RowVectorPtr emptyOutput_;
 
-  std::shared_ptr<io::IoStatistics> ioStats_;
-  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<IoStats> ioStats_;
 };
 
 } // namespace facebook::velox::connector::hive

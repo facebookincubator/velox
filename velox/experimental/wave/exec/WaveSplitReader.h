@@ -39,7 +39,7 @@ struct SplitReaderParams {
   folly::Executor* executor;
   const connector::ConnectorQueryCtx* connectorQueryCtx;
   std::shared_ptr<connector::hive::HiveConfig> hiveConfig;
-  std::shared_ptr<io::IoStatistics> ioStats;
+  std::shared_ptr<io::IoStatistics> ioStatistics;
 };
 
 class WaveSplitReaderFactory;

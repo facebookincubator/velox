@@ -57,15 +57,15 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
  public:
   DirectCoalescedLoad(
       std::shared_ptr<ReadFileInputStream> input,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       uint64_t /* groupId */,
       const std::vector<LoadRequest*>& requests,
       memory::MemoryPool* pool,
       int32_t loadQuantum)
       : CoalescedLoad({}, {}),
+        ioStatistics_(ioStatistics),
         ioStats_(ioStats),
-        fsStats_(fsStats),
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
         pool_(pool) {
@@ -109,8 +109,8 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   }
 
  private:
-  const std::shared_ptr<IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
   memory::MemoryPool* const pool_;
@@ -127,8 +127,8 @@ class DirectBufferedInput : public BufferedInput {
       StringIdLease fileNum,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
       folly::F14FastMap<std::string, std::string> fileReadOps = {})
@@ -136,16 +136,16 @@ class DirectBufferedInput : public BufferedInput {
             std::move(readFile),
             readerOptions.memoryPool(),
             metricsLog,
+            ioStatistics.get(),
             ioStats.get(),
-            fsStats.get(),
             kMaxMergeDistance,
             std::nullopt,
             std::move(fileReadOps)),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -187,8 +187,8 @@ class DirectBufferedInput : public BufferedInput {
         fileNum_,
         tracker_,
         groupId_,
+        ioStatistics_,
         ioStats_,
-        fsStats_,
         executor_,
         options_));
   }
@@ -242,16 +242,16 @@ class DirectBufferedInput : public BufferedInput {
       StringIdLease fileNum,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.memoryPool()),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -295,8 +295,8 @@ class DirectBufferedInput : public BufferedInput {
   const StringIdLease fileNum_;
   const std::shared_ptr<cache::ScanTracker> tracker_;
   const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
   const io::ReaderOptions options_;
