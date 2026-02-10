@@ -28,6 +28,10 @@ class TraceReplayTaskRunner {
       std::shared_ptr<core::QueryCtx> queryCtx) {
     cursorParams_.planNode = std::move(plan);
     cursorParams_.queryCtx = std::move(queryCtx);
+    // Disable per-batch copying in MultiThreadedTaskCursor by default to avoid
+    // expensive deep copies of complex nested types. The final result copy is
+    // handled in run() if needed.
+    cursorParams_.copyResult = false;
     VELOX_CHECK_NOT_NULL(cursorParams_.planNode);
     VELOX_CHECK_NOT_NULL(cursorParams_.queryCtx);
   }
@@ -48,6 +52,11 @@ class TraceReplayTaskRunner {
   TraceReplayTaskRunner& splits(
       const core::PlanNodeId& planNodeId,
       std::vector<exec::Split> splits);
+
+  /// Enable or disable per-batch copying in TaskCursor. When true, each output
+  /// batch is copied as it's consumed, which can be expensive for complex
+  /// nested types. Default is false.
+  TraceReplayTaskRunner& cursorCopyResult(bool copyResult);
 
  private:
   void addSplits(exec::Task* task);

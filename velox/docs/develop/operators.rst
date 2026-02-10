@@ -56,6 +56,7 @@ ValuesNode                  Values                                           Y
 LocalMergeNode              LocalMerge
 LocalPartitionNode          LocalPartition and LocalExchange
 EnforceSingleRowNode        EnforceSingleRow
+EnforceDistinctNode         EnforceDistinct or StreamingEnforceDistinct
 AssignUniqueIdNode          AssignUniqueId
 WindowNode                  Window
 RowNumberNode               RowNumber
@@ -851,6 +852,35 @@ returns that row unmodified. If input is empty, returns a single row with all
 values set to null. If input contains more than one row raises an exception.
 
 Used for queries with non-correlated sub-queries.
+
+EnforceDistinctNode
+~~~~~~~~~~~~~~~~~~~
+
+The EnforceDistinct operator ensures that input rows have unique values for
+specified key columns. It passes through all input rows unchanged, but throws
+an exception with a custom error message if any duplicate key values are
+detected. This is useful for validating uniqueness constraints at runtime,
+such as ensuring a correlated scalar subquery returns at most one row per group.
+
+When preGroupedKeys equals distinctKeys (i.e., input is clustered on the
+distinct keys), the streaming implementation is used which requires only O(1)
+memory. Otherwise, the hash-based implementation is used which requires O(n)
+memory to track all unique key combinations seen so far.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - distinctKeys
+     - List of columns that must have unique values.
+   * - preGroupedKeys
+     - Optional subset of distinctKeys that input is already clustered on. When
+       equal to distinctKeys, uses streaming enforcement with O(1) memory.
+   * - errorMessage
+     - Error message to include in the exception when duplicates are found.
 
 AssignUniqueIdNode
 ~~~~~~~~~~~~~~~~~~

@@ -500,7 +500,6 @@ class CoalesceFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    std::cout << "CoalesceFunction::eval" << std::endl;
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
     // Starting from first column, we keep calling replace nulls with
     // subsequent cols until we get an all valid col or run out of columns

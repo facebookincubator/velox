@@ -97,7 +97,7 @@ namespace facebook::velox::parquet::arrow::internal {
 
 #define ALIGNOF_UINT32_T alignof(uint32_t)
 
-static const uint32_t crc32_lookup[16][256] = {
+static const uint32_t crc32Lookup[16][256] = {
     /* same algorithm as crc32_bitwise
 
        for (int i = 0; i <= 0xFF; i++)
@@ -861,7 +861,7 @@ static const uint32_t crc32_lookup[16][256] = {
 uint32_t crc32(uint32_t prev, const void* data, size_t length) {
   uint32_t crc = ~prev;
   unsigned unaligned;
-  const uint8_t* current_char;
+  const uint8_t* currentChar;
   const uint32_t* current;
 
   unaligned =
@@ -870,20 +870,20 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
     unaligned = 0;
 
   /* process a byte at a time until we hit an alignment boundary (max 3) */
-  current_char = reinterpret_cast<const uint8_t*>(data);
+  currentChar = reinterpret_cast<const uint8_t*>(data);
   for (; unaligned && length; unaligned--, length--)
-    crc = (crc >> 8) ^ crc32_lookup[0][(crc & 0xFF) ^ *current_char++];
+    crc = (crc >> 8) ^ crc32Lookup[0][(crc & 0xFF) ^ *currentChar++];
 
-  current = reinterpret_cast<const uint32_t*>(current_char);
+  current = reinterpret_cast<const uint32_t*>(currentChar);
 
   /* process 64 bytes at once (Slicing-by-16) */
 
   /* enabling optimization (at least -O2) automatically unrolls the inner
    * for-loop */
   const size_t unroll = 4;
-  const size_t bytes_at_once = 16 * unroll;
+  const size_t bytesAtOnce = 16 * unroll;
 
-  while (length >= bytes_at_once) {
+  while (length >= bytesAtOnce) {
     size_t unrolling;
     for (unrolling = 0; unrolling < unroll; unrolling++) {
 #if ARROW_LITTLE_ENDIAN
@@ -891,39 +891,39 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
       uint32_t two = *current++;
       uint32_t three = *current++;
       uint32_t four = *current++;
-      crc = crc32_lookup[0][(four >> 24) & 0xFF] ^
-          crc32_lookup[1][(four >> 16) & 0xFF] ^
-          crc32_lookup[2][(four >> 8) & 0xFF] ^ crc32_lookup[3][four & 0xFF] ^
-          crc32_lookup[4][(three >> 24) & 0xFF] ^
-          crc32_lookup[5][(three >> 16) & 0xFF] ^
-          crc32_lookup[6][(three >> 8) & 0xFF] ^ crc32_lookup[7][three & 0xFF] ^
-          crc32_lookup[8][(two >> 24) & 0xFF] ^
-          crc32_lookup[9][(two >> 16) & 0xFF] ^
-          crc32_lookup[10][(two >> 8) & 0xFF] ^ crc32_lookup[11][two & 0xFF] ^
-          crc32_lookup[12][(one >> 24) & 0xFF] ^
-          crc32_lookup[13][(one >> 16) & 0xFF] ^
-          crc32_lookup[14][(one >> 8) & 0xFF] ^ crc32_lookup[15][one & 0xFF];
+      crc = crc32Lookup[0][(four >> 24) & 0xFF] ^
+          crc32Lookup[1][(four >> 16) & 0xFF] ^
+          crc32Lookup[2][(four >> 8) & 0xFF] ^ crc32Lookup[3][four & 0xFF] ^
+          crc32Lookup[4][(three >> 24) & 0xFF] ^
+          crc32Lookup[5][(three >> 16) & 0xFF] ^
+          crc32Lookup[6][(three >> 8) & 0xFF] ^ crc32Lookup[7][three & 0xFF] ^
+          crc32Lookup[8][(two >> 24) & 0xFF] ^
+          crc32Lookup[9][(two >> 16) & 0xFF] ^
+          crc32Lookup[10][(two >> 8) & 0xFF] ^ crc32Lookup[11][two & 0xFF] ^
+          crc32Lookup[12][(one >> 24) & 0xFF] ^
+          crc32Lookup[13][(one >> 16) & 0xFF] ^
+          crc32Lookup[14][(one >> 8) & 0xFF] ^ crc32Lookup[15][one & 0xFF];
 #else
       uint32_t one = *current++ ^ ::arrow::bit_util::ByteSwap(crc);
       uint32_t two = *current++;
       uint32_t three = *current++;
       uint32_t four = *current++;
-      crc = crc32_lookup[0][four & 0xFF] ^ crc32_lookup[1][(four >> 8) & 0xFF] ^
-          crc32_lookup[2][(four >> 16) & 0xFF] ^
-          crc32_lookup[3][(four >> 24) & 0xFF] ^ crc32_lookup[4][three & 0xFF] ^
-          crc32_lookup[5][(three >> 8) & 0xFF] ^
-          crc32_lookup[6][(three >> 16) & 0xFF] ^
-          crc32_lookup[7][(three >> 24) & 0xFF] ^ crc32_lookup[8][two & 0xFF] ^
-          crc32_lookup[9][(two >> 8) & 0xFF] ^
-          crc32_lookup[10][(two >> 16) & 0xFF] ^
-          crc32_lookup[11][(two >> 24) & 0xFF] ^ crc32_lookup[12][one & 0xFF] ^
-          crc32_lookup[13][(one >> 8) & 0xFF] ^
-          crc32_lookup[14][(one >> 16) & 0xFF] ^
-          crc32_lookup[15][(one >> 24) & 0xFF];
+      crc = crc32Lookup[0][four & 0xFF] ^ crc32Lookup[1][(four >> 8) & 0xFF] ^
+          crc32Lookup[2][(four >> 16) & 0xFF] ^
+          crc32Lookup[3][(four >> 24) & 0xFF] ^ crc32Lookup[4][three & 0xFF] ^
+          crc32Lookup[5][(three >> 8) & 0xFF] ^
+          crc32Lookup[6][(three >> 16) & 0xFF] ^
+          crc32Lookup[7][(three >> 24) & 0xFF] ^ crc32Lookup[8][two & 0xFF] ^
+          crc32Lookup[9][(two >> 8) & 0xFF] ^
+          crc32Lookup[10][(two >> 16) & 0xFF] ^
+          crc32Lookup[11][(two >> 24) & 0xFF] ^ crc32Lookup[12][one & 0xFF] ^
+          crc32Lookup[13][(one >> 8) & 0xFF] ^
+          crc32Lookup[14][(one >> 16) & 0xFF] ^
+          crc32Lookup[15][(one >> 24) & 0xFF];
 #endif
     }
 
-    length -= bytes_at_once;
+    length -= bytesAtOnce;
   }
 
   /* process eight bytes at once (Slicing-by-8) */
@@ -932,21 +932,19 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
 #if ARROW_LITTLE_ENDIAN
     uint32_t one = *current++ ^ crc;
     uint32_t two = *current++;
-    crc = crc32_lookup[0][(two >> 24) & 0xFF] ^
-        crc32_lookup[1][(two >> 16) & 0xFF] ^
-        crc32_lookup[2][(two >> 8) & 0xFF] ^ crc32_lookup[3][two & 0xFF] ^
-        crc32_lookup[4][(one >> 24) & 0xFF] ^
-        crc32_lookup[5][(one >> 16) & 0xFF] ^
-        crc32_lookup[6][(one >> 8) & 0xFF] ^ crc32_lookup[7][one & 0xFF];
+    crc = crc32Lookup[0][(two >> 24) & 0xFF] ^
+        crc32Lookup[1][(two >> 16) & 0xFF] ^ crc32Lookup[2][(two >> 8) & 0xFF] ^
+        crc32Lookup[3][two & 0xFF] ^ crc32Lookup[4][(one >> 24) & 0xFF] ^
+        crc32Lookup[5][(one >> 16) & 0xFF] ^ crc32Lookup[6][(one >> 8) & 0xFF] ^
+        crc32Lookup[7][one & 0xFF];
 #else
     uint32_t one = *current++ ^ ::arrow::bit_util::ByteSwap(crc);
     uint32_t two = *current++;
-    crc = crc32_lookup[0][two & 0xFF] ^ crc32_lookup[1][(two >> 8) & 0xFF] ^
-        crc32_lookup[2][(two >> 16) & 0xFF] ^
-        crc32_lookup[3][(two >> 24) & 0xFF] ^ crc32_lookup[4][one & 0xFF] ^
-        crc32_lookup[5][(one >> 8) & 0xFF] ^
-        crc32_lookup[6][(one >> 16) & 0xFF] ^
-        crc32_lookup[7][(one >> 24) & 0xFF];
+    crc = crc32Lookup[0][two & 0xFF] ^ crc32Lookup[1][(two >> 8) & 0xFF] ^
+        crc32Lookup[2][(two >> 16) & 0xFF] ^
+        crc32Lookup[3][(two >> 24) & 0xFF] ^ crc32Lookup[4][one & 0xFF] ^
+        crc32Lookup[5][(one >> 8) & 0xFF] ^ crc32Lookup[6][(one >> 16) & 0xFF] ^
+        crc32Lookup[7][(one >> 24) & 0xFF];
 #endif
 
     length -= 8;
@@ -955,14 +953,13 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
   if (length >= 4) {
 #if ARROW_LITTLE_ENDIAN
     uint32_t one = *current++ ^ crc;
-    crc = crc32_lookup[0][(one >> 24) & 0xFF] ^
-        crc32_lookup[1][(one >> 16) & 0xFF] ^
-        crc32_lookup[2][(one >> 8) & 0xFF] ^ crc32_lookup[3][one & 0xFF];
+    crc = crc32Lookup[0][(one >> 24) & 0xFF] ^
+        crc32Lookup[1][(one >> 16) & 0xFF] ^ crc32Lookup[2][(one >> 8) & 0xFF] ^
+        crc32Lookup[3][one & 0xFF];
 #else
     uint32_t one = *current++ ^ ::arrow::bit_util::ByteSwap(crc);
-    crc = crc32_lookup[0][one & 0xFF] ^ crc32_lookup[1][(one >> 8) & 0xFF] ^
-        crc32_lookup[2][(one >> 16) & 0xFF] ^
-        crc32_lookup[3][(one >> 24) & 0xFF];
+    crc = crc32Lookup[0][one & 0xFF] ^ crc32Lookup[1][(one >> 8) & 0xFF] ^
+        crc32Lookup[2][(one >> 16) & 0xFF] ^ crc32Lookup[3][(one >> 24) & 0xFF];
 #endif
 
     length -= 4;
@@ -970,10 +967,10 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
 
   /* Finish with any remaining bytes one by one */
 
-  current_char = reinterpret_cast<const uint8_t*>(current);
+  currentChar = reinterpret_cast<const uint8_t*>(current);
   /* remaining 1 to 3 bytes (standard algorithm) */
   while (length-- != 0)
-    crc = (crc >> 8) ^ crc32_lookup[0][(crc & 0xFF) ^ *current_char++];
+    crc = (crc >> 8) ^ crc32Lookup[0][(crc & 0xFF) ^ *currentChar++];
 
   return ~crc;
 }

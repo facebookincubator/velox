@@ -228,7 +228,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       0,
       std::nullopt};
 
-  folly::Synchronized<common::SpillStats> spillStats_;
+  exec::SpillStats spillStats_;
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
 } // namespace facebook::velox::exec::test

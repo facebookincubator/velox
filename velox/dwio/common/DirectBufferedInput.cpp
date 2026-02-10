@@ -55,7 +55,7 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::enqueue(
   }
   auto stream = std::make_unique<DirectInputStream>(
       this,
-      ioStats_.get(),
+      ioStatistics_.get(),
       region,
       input_,
       fileNum_.id(),
@@ -187,8 +187,8 @@ void DirectBufferedInput::readRegion(
   }
   auto load = std::make_shared<DirectCoalescedLoad>(
       input_,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       groupId_.id(),
       requests,
       pool_,
@@ -261,7 +261,7 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
   VELOX_CHECK_LE(offset + length, fileSize_);
   return std::make_unique<DirectInputStream>(
       const_cast<DirectBufferedInput*>(this),
-      ioStats_.get(),
+      ioStatistics_.get(),
       Region{offset, length},
       input_,
       fileNum_.id(),
@@ -332,13 +332,14 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
     input_->read(buffers, requests_[0].region.offset, LogType::FILE);
   }
 
-  ioStats_->read().increment(size + overread);
-  ioStats_->incRawBytesRead(size);
-  ioStats_->incTotalScanTime(usecs * 1'000);
-  ioStats_->queryThreadIoLatency().increment(usecs);
-  ioStats_->incRawOverreadBytes(overread);
+  ioStatistics_->read().increment(size + overread);
+  ioStatistics_->incRawBytesRead(size);
+  ioStatistics_->incTotalScanTime(usecs * 1'000);
+  ioStatistics_->queryThreadIoLatencyUs().increment(usecs);
+  ioStatistics_->storageReadLatencyUs().increment(usecs);
+  ioStatistics_->incRawOverreadBytes(overread);
   if (prefetch) {
-    ioStats_->prefetch().increment(size + overread);
+    ioStatistics_->prefetch().increment(size + overread);
   }
   TestValue::adjust(
       "facebook::velox::cache::DirectCoalescedLoad::loadData", this);

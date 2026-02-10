@@ -1592,23 +1592,44 @@ const auto& joinTypeNames() {
 }
 
 // Check that each output of the join is in exactly one of the inputs.
-void checkJoinColumnNames(
+void checkJoinOutput(
     const RowTypePtr& leftType,
     const RowTypePtr& rightType,
     const RowTypePtr& outputType,
     uint32_t numColumnsToCheck) {
   for (auto i = 0; i < numColumnsToCheck; ++i) {
-    const auto name = outputType->nameOf(i);
-    const bool leftContains = leftType->containsChild(name);
-    const bool rightContains = rightType->containsChild(name);
+    const auto& name = outputType->nameOf(i);
+    const auto& type = outputType->childAt(i);
+
+    const auto leftIndex = leftType->getChildIdxIfExists(name);
+    const auto rightIndex = rightType->getChildIdxIfExists(name);
+
     VELOX_USER_CHECK(
-        !(leftContains && rightContains),
+        !(leftIndex.has_value() && rightIndex.has_value()),
         "Duplicate column name found on join's left and right sides: {}",
         name);
     VELOX_USER_CHECK(
-        leftContains || rightContains,
+        leftIndex.has_value() || rightIndex.has_value(),
         "Join's output column not found in either left or right sides: {}",
         name);
+
+    if (leftIndex.has_value()) {
+      const auto& expectedType = leftType->childAt(leftIndex.value());
+      VELOX_USER_CHECK(
+          expectedType->equivalent(*type),
+          "Join output column type must match the input type: {} vs. {}",
+          type->toString(),
+          expectedType->toString());
+    }
+
+    if (rightIndex.has_value()) {
+      const auto& expectedType = rightType->childAt(rightIndex.value());
+      VELOX_USER_CHECK(
+          expectedType->equivalent(*type),
+          "Join output column type must match the input type: {} vs. {}",
+          type->toString(),
+          expectedType->toString());
+    }
   }
 }
 
@@ -1830,7 +1851,7 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     VELOX_USER_CHECK(!rightType->containsChild(name));
   }
 
-  checkJoinColumnNames(leftType, rightType, outputType_, numOutputColumns);
+  checkJoinOutput(leftType, rightType, outputType_, numOutputColumns);
 }
 
 PlanNodePtr IndexLookupJoinNode::create(
@@ -1966,7 +1987,7 @@ NestedLoopJoinNode::NestedLoopJoinNode(
         name);
   }
 
-  checkJoinColumnNames(leftType, rightType, outputType_, numOutputColumns);
+  checkJoinOutput(leftType, rightType, outputType_, numOutputColumns);
 }
 
 NestedLoopJoinNode::NestedLoopJoinNode(
@@ -2402,6 +2423,86 @@ PlanNodePtr MarkDistinctNode::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<MarkDistinctNode>(
       deserializePlanNodeId(obj), markerName, distinctKeys, source);
+}
+
+EnforceDistinctNode::EnforceDistinctNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> distinctKeys,
+    std::vector<FieldAccessTypedExprPtr> preGroupedKeys,
+    std::string errorMessage,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      distinctKeys_(std::move(distinctKeys)),
+      preGroupedKeys_(std::move(preGroupedKeys)),
+      errorMessage_(std::move(errorMessage)),
+      sources_{std::move(source)} {
+  VELOX_USER_CHECK(!distinctKeys_.empty(), "distinctKeys must not be empty.");
+  VELOX_USER_CHECK(!errorMessage_.empty(), "errorMessage must not be empty");
+
+  using TypedExprSet = folly::
+      F14FastSet<const ITypedExpr*, ITypedExprHasher, ITypedExprComparer>;
+
+  TypedExprSet distinctKeySet;
+  const auto& inputType = sources_.front()->outputType();
+  for (const auto& key : distinctKeys_) {
+    VELOX_USER_CHECK(
+        key->isInputColumn(),
+        "Distinct key must be a column reference: {}.",
+        key->toString());
+
+    VELOX_USER_CHECK(
+        distinctKeySet.insert(key.get()).second,
+        "Duplicate distinct key: {}.",
+        key->toString());
+
+    VELOX_USER_CHECK(
+        inputType->containsChild(key->name()),
+        "Distinct key must be present in the input: {}.",
+        key->toString());
+  }
+
+  TypedExprSet preGroupedKeySet;
+  for (const auto& key : preGroupedKeys_) {
+    VELOX_USER_CHECK(
+        preGroupedKeySet.insert(key.get()).second,
+        "Duplicate pre-grouped key: {}.",
+        key->name());
+    VELOX_USER_CHECK(
+        distinctKeySet.contains(key.get()),
+        "Pre-grouped key must be one of the distinct keys: {}.",
+        key->name());
+  }
+}
+
+folly::dynamic EnforceDistinctNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["distinctKeys"] = ISerializable::serialize(this->distinctKeys_);
+  obj["preGroupedKeys"] = ISerializable::serialize(this->preGroupedKeys_);
+  obj["errorMessage"] = this->errorMessage_;
+  return obj;
+}
+
+void EnforceDistinctNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr EnforceDistinctNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto distinctKeys = deserializeFields(obj["distinctKeys"], context);
+  auto preGroupedKeys = deserializeFields(obj["preGroupedKeys"], context);
+  auto errorMessage = obj["errorMessage"].asString();
+
+  return std::make_shared<EnforceDistinctNode>(
+      deserializePlanNodeId(obj),
+      distinctKeys,
+      preGroupedKeys,
+      errorMessage,
+      source);
 }
 
 namespace {
@@ -3153,7 +3254,7 @@ SpatialJoinNode::SpatialJoinNode(
       sources_[1] != nullptr,
       "Right source must not be null for spatial joins");
 
-  checkJoinColumnNames(
+  checkJoinOutput(
       sources_[0]->outputType(),
       sources_[1]->outputType(),
       outputType_,
@@ -3378,6 +3479,14 @@ void MarkDistinctNode::addDetails(std::stringstream& stream) const {
   addFields(stream, distinctKeys_);
 }
 
+void EnforceDistinctNode::addDetails(std::stringstream& stream) const {
+  if (isPreGrouped()) {
+    stream << "STREAMING ";
+  }
+  addFields(stream, distinctKeys_);
+  stream << " " << errorMessage_;
+}
+
 void PlanNode::toString(
     std::stringstream& stream,
     bool detailed,
@@ -3554,6 +3663,7 @@ void PlanNode::registerSerDe() {
   registry.Register("AggregationNode", AggregationNode::create);
   registry.Register("AssignUniqueIdNode", AssignUniqueIdNode::create);
   registry.Register("EnforceSingleRowNode", EnforceSingleRowNode::create);
+  registry.Register("EnforceDistinctNode", EnforceDistinctNode::create);
   registry.Register("ExchangeNode", ExchangeNode::create);
   registry.Register("ExpandNode", ExpandNode::create);
   registry.Register("FilterNode", FilterNode::create);
@@ -3581,6 +3691,7 @@ void PlanNode::registerSerDe() {
   registry.Register("ValuesNode", ValuesNode::create);
   registry.Register("WindowNode", WindowNode::create);
   registry.Register("MarkDistinctNode", MarkDistinctNode::create);
+  registry.Register("MixedUnionNode", MixedUnionNode::create);
   registry.Register(
       "GatherPartitionFunctionSpec", GatherPartitionFunctionSpec::deserialize);
 }
@@ -3828,4 +3939,24 @@ void EqualIndexLookupCondition::validate() const {
       key->type()->toString(),
       value->type()->toString());
 }
+
+void MixedUnionNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+folly::dynamic MixedUnionNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr MixedUnionNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+
+  return std::make_shared<MixedUnionNode>(
+      deserializePlanNodeId(obj), std::move(sources));
+}
+
 } // namespace facebook::velox::core

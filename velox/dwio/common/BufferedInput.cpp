@@ -90,14 +90,15 @@ void BufferedInput::readToBuffer(
     uint64_t offset,
     folly::Range<char*> allocated,
     const LogType logType) {
-  uint64_t usec = 0;
+  uint64_t storageReadTimeUs = 0;
   {
-    MicrosecondTimer timer(&usec);
+    MicrosecondTimer timer(&storageReadTimeUs);
     input_->read(allocated.data(), allocated.size(), offset, logType);
   }
   if (auto* stats = input_->getStats()) {
     stats->read().increment(allocated.size());
-    stats->queryThreadIoLatency().increment(usec);
+    stats->queryThreadIoLatencyUs().increment(storageReadTimeUs);
+    stats->storageReadLatencyUs().increment(storageReadTimeUs);
   }
 }
 

@@ -50,10 +50,17 @@
 
 namespace facebook::velox::cudf_velox {
 
+void CudfHashJoinProbe::close() {
+  Operator::close();
+  filterEvaluator_.reset();
+  scalars_.clear();
+  tree_ = {};
+}
+
 void CudfHashJoinBridge::setHashTable(
     std::optional<CudfHashJoinBridge::hash_type> hashObject) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridge::setHashTable" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridge::setHashTable";
   }
   std::vector<ContinuePromise> promises;
   {
@@ -70,25 +77,22 @@ void CudfHashJoinBridge::setHashTable(
 std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(
     ContinueFuture* future) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridge::hashOrFuture" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridge::hashOrFuture";
   }
   std::lock_guard<std::mutex> l(mutex_);
   if (hashObject_.has_value()) {
     return hashObject_;
   }
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridge::hashOrFuture constructing promise"
-              << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridge::hashOrFuture constructing promise";
   }
   promises_.emplace_back("CudfHashJoinBridge::hashOrFuture");
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridge::hashOrFuture getSemiFuture"
-              << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridge::hashOrFuture getSemiFuture";
   }
   *future = promises_.back().getSemiFuture();
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridge::hashOrFuture returning nullopt"
-              << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridge::hashOrFuture returning nullopt";
   }
   return std::nullopt;
 }
@@ -120,13 +124,13 @@ CudfHashJoinBuild::CudfHashJoinBuild(
           fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "CudfHashJoinBuild constructor" << std::endl;
+    VLOG(2) << "CudfHashJoinBuild constructor";
   }
 }
 
 void CudfHashJoinBuild::addInput(RowVectorPtr input) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBuild::addInput" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBuild::addInput";
   }
   // Queue inputs, process all at once.
   if (input->size() > 0) {
@@ -148,7 +152,7 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
 
 bool CudfHashJoinBuild::needsInput() const {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBuild::needsInput" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBuild::needsInput";
   }
   return !noMoreInput_;
 }
@@ -159,7 +163,7 @@ RowVectorPtr CudfHashJoinBuild::getOutput() {
 
 void CudfHashJoinBuild::noMoreInput() {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBuild::noMoreInput" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBuild::noMoreInput";
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   Operator::noMoreInput();
@@ -188,13 +192,12 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "CudfHashJoinBuild: build batches" << std::endl;
-    LOG(INFO) << "Build batches number of columns: "
-              << inputs_[0]->getTableView().num_columns() << std::endl;
+    VLOG(1) << "CudfHashJoinBuild: build batches";
+    VLOG(1) << "Build batches number of columns: "
+            << inputs_[0]->getTableView().num_columns();
     for (auto i = 0; i < inputs_.size(); i++) {
-      LOG(INFO) << "Build batch " << i
-                << ": number of rows: " << inputs_[i]->getTableView().num_rows()
-                << std::endl;
+      VLOG(1) << "Build batch " << i
+              << ": number of rows: " << inputs_[i]->getTableView().num_rows();
     }
   }
 
@@ -210,11 +213,10 @@ void CudfHashJoinBuild::noMoreInput() {
     VELOX_CHECK_NOT_NULL(tbl);
   }
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Build table number of columns: " << tbls[0]->num_columns()
-              << std::endl;
+    VLOG(1) << "Build table number of columns: " << tbls[0]->num_columns();
     for (auto i = 0; i < tbls.size(); i++) {
-      LOG(INFO) << "Build table " << i
-                << ": number of rows: " << tbls[i]->num_rows() << std::endl;
+      VLOG(1) << "Build table " << i
+              << ": number of rows: " << tbls[i]->num_rows();
     }
   }
 
@@ -247,10 +249,10 @@ void CudfHashJoinBuild::noMoreInput() {
     }
     if (CudfConfig::getInstance().debugEnabled) {
       if (hashObjects.back() != nullptr) {
-        LOG(INFO) << "hashObject " << i << " is not nullptr "
-                  << hashObjects.back().get() << "\n";
+        VLOG(2) << "hashObject " << i << " is not nullptr "
+                << hashObjects.back().get() << "\n";
       } else {
-        LOG(INFO) << "hashObject " << i << " is *** nullptr\n";
+        VLOG(2) << "hashObject " << i << " is *** nullptr\n";
       }
     }
   }
@@ -300,7 +302,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
       joinNode_(joinNode),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "CudfHashJoinProbe constructor" << std::endl;
+    VLOG(2) << "CudfHashJoinProbe constructor";
   }
   auto probeType = joinNode_->sources()[0]->outputType();
   auto buildType = joinNode_->sources()[1]->outputType();
@@ -309,23 +311,21 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 
   if (CudfConfig::getInstance().debugEnabled) {
     for (int i = 0; i < probeType->names().size(); i++) {
-      LOG(INFO) << "Left column " << i << ": " << probeType->names()[i]
-                << std::endl;
+      VLOG(1) << "Left column " << i << ": " << probeType->names()[i];
     }
 
     for (int i = 0; i < buildType->names().size(); i++) {
-      LOG(INFO) << "Right column " << i << ": " << buildType->names()[i]
-                << std::endl;
+      VLOG(1) << "Right column " << i << ": " << buildType->names()[i];
     }
 
     for (int i = 0; i < leftKeys.size(); i++) {
-      LOG(INFO) << "Left key " << i << ": " << leftKeys[i]->name() << " "
-                << leftKeys[i]->type()->kind() << std::endl;
+      VLOG(1) << "Left key " << i << ": " << leftKeys[i]->name() << " "
+              << leftKeys[i]->type()->kind();
     }
 
     for (int i = 0; i < rightKeys.size(); i++) {
-      LOG(INFO) << "Right key " << i << ": " << rightKeys[i]->name() << " "
-                << rightKeys[i]->type()->kind() << std::endl;
+      VLOG(1) << "Right key " << i << ": " << rightKeys[i]->name() << " "
+              << rightKeys[i]->type()->kind();
     }
   }
 
@@ -352,7 +352,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
   for (int i = 0; i < outputType->names().size(); i++) {
     auto const outputName = outputType->names()[i];
     if (CudfConfig::getInstance().debugEnabled) {
-      LOG(INFO) << "Output column " << i << ": " << outputName << std::endl;
+      VLOG(1) << "Output column " << i << ": " << outputName;
     }
     auto channel = probeType->getChildIdxIfExists(outputName);
     if (channel.has_value()) {
@@ -374,13 +374,13 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 
   if (CudfConfig::getInstance().debugEnabled) {
     for (int i = 0; i < leftColumnIndicesToGather_.size(); i++) {
-      LOG(INFO) << "Left index to gather " << i << ": "
-                << leftColumnIndicesToGather_[i] << std::endl;
+      VLOG(1) << "Left index to gather " << i << ": "
+              << leftColumnIndicesToGather_[i];
     }
 
     for (int i = 0; i < rightColumnIndicesToGather_.size(); i++) {
-      LOG(INFO) << "Right index to gather " << i << ": "
-                << rightColumnIndicesToGather_[i] << std::endl;
+      VLOG(1) << "Right index to gather " << i << ": "
+              << rightColumnIndicesToGather_[i];
     }
   }
 
@@ -389,6 +389,14 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // simplify expression
     exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
     VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+
+    // Create a reusable evaluator for the filter column. This is expensive to
+    // build, and the expression + input schema are stable for the lifetime of
+    // the operator instance.
+    std::vector<velox::RowTypePtr> filterRowTypes{probeType, buildType};
+    filterEvaluator_ = createCudfExpression(
+        exprs.exprs()[0],
+        facebook::velox::type::concatRowTypes(filterRowTypes));
 
     // We don't need to get tables that contain conditional comparison columns
     // We'll pass the entire table. The ast will handle finding the required
@@ -430,7 +438,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 
 bool CudfHashJoinProbe::needsInput() const {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinProbe::needsInput" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinProbe::needsInput";
   }
   if (joinNode_->isRightSemiFilterJoin()) {
     return !noMoreInput_;
@@ -470,7 +478,7 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
 
 void CudfHashJoinProbe::noMoreInput() {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinProbe::noMoreInput" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinProbe::noMoreInput";
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   Operator::noMoreInput();
@@ -546,9 +554,8 @@ void CudfHashJoinProbe::noMoreInput() {
   VELOX_CHECK_NOT_NULL(tbl);
 
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Probe table number of columns: " << tbl->num_columns()
-              << std::endl;
-    LOG(INFO) << "Probe table number of rows: " << tbl->num_rows() << std::endl;
+    VLOG(1) << "Probe table number of columns: " << tbl->num_columns();
+    VLOG(1) << "Probe table number of rows: " << tbl->num_rows();
   }
 
   // Store the concatenated table in input_
@@ -576,10 +583,8 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::unfilteredOutput(
       cudf::gather(rightInput, rightIndicesCol, oobPolicy, stream);
 
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Left result number of columns: " << leftResult->num_columns()
-              << std::endl;
-    LOG(INFO) << "Right result number of columns: "
-              << rightResult->num_columns() << std::endl;
+    VLOG(1) << "Left result number of columns: " << leftResult->num_columns();
+    VLOG(1) << "Right result number of columns: " << rightResult->num_columns();
   }
 
   auto leftCols = leftResult->release();
@@ -622,14 +627,10 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
       std::make_move_iterator(rightCols.begin()),
       std::make_move_iterator(rightCols.end()));
 
-  auto probeType = joinNode_->sources()[0]->outputType();
-  auto buildType = joinNode_->sources()[1]->outputType();
-  std::vector<velox::RowTypePtr> rowTypes{probeType, buildType};
-  exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
-  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
-  auto filterEvaluator = createCudfExpression(
-      exprs.exprs()[0], facebook::velox::type::concatRowTypes(rowTypes));
-  auto filterColumns = filterEvaluator->eval(
+  VELOX_CHECK_NOT_NULL(
+      filterEvaluator_,
+      "Join filter evaluator must be initialized before filteredOutput()");
+  auto filterColumns = filterEvaluator_->eval(
       joinedCols, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = asView(filterColumns);
 
@@ -1085,7 +1086,7 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
 
 RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinProbe::getOutput" << std::endl;
+    VLOG(2) << "Calling CudfHashJoinProbe::getOutput";
   }
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
@@ -1167,10 +1168,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   // cudfInput is staying alive until the table view is no longer needed.
   auto leftTableView = cudfInput->getTableView();
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Probe table number of columns: "
-              << leftTableView.num_columns() << std::endl;
-    LOG(INFO) << "Probe table number of rows: " << leftTableView.num_rows()
-              << std::endl;
+    VLOG(1) << "Probe table number of columns: " << leftTableView.num_columns();
+    VLOG(1) << "Probe table number of rows: " << leftTableView.num_rows();
   }
 
   auto& rightTables = hashObject_.value().first;
@@ -1181,11 +1180,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     VELOX_CHECK_NOT_NULL(rightTable);
     if (CudfConfig::getInstance().debugEnabled) {
       if (rightTable != nullptr)
-        LOG(INFO) << "right_table is not nullptr " << rightTable.get()
-                  << " hasValue(" << hashObject_.has_value() << ")\n";
+        VLOG(2) << "right_table is not nullptr " << rightTable.get()
+                << " hasValue(" << hashObject_.has_value() << ")\n";
       if (hb != nullptr)
-        LOG(INFO) << "hb is not nullptr " << hb.get() << " hasValue("
-                  << hashObject_.has_value() << ")\n";
+        VLOG(2) << "hb is not nullptr " << hb.get() << " hasValue("
+                << hashObject_.has_value() << ")\n";
     }
   }
 
@@ -1265,8 +1264,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 
   if (!hashObject.has_value()) {
     if (CudfConfig::getInstance().debugEnabled) {
-      LOG(INFO) << "CudfHashJoinProbe is blocked, waiting for join build"
-                << std::endl;
+      VLOG(2) << "CudfHashJoinProbe is blocked, waiting for join build";
     }
     return exec::BlockingReason::kWaitForJoinBuild;
   }
@@ -1325,8 +1323,7 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     int32_t id,
     const core::PlanNodePtr& node) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridgeTranslator::toOperator"
-              << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toOperator";
   }
   if (auto joinNode =
           std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
@@ -1338,8 +1335,7 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
 std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
     const core::PlanNodePtr& node) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridgeTranslator::toJoinBridge"
-              << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toJoinBridge";
   }
   if (auto joinNode =
           std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
@@ -1352,8 +1348,7 @@ std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
 exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
     const core::PlanNodePtr& node) {
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier"
-              << std::endl;
+    VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier";
   }
   if (auto joinNode =
           std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {

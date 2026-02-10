@@ -194,7 +194,6 @@ IndexLookupJoin::IndexLookupJoin(
               : std::numeric_limits<vector_size_t>::max()},
       joinType_{joinNode->joinType()},
       hasMarker_(joinNode->hasMarker()),
-      numKeys_{joinNode->leftKeys().size()},
       probeType_{joinNode->sources()[0]->outputType()},
       lookupType_{joinNode->lookupSource()->outputType()},
       indexSourceNodeId_(joinNode->lookupSource()->id()),
@@ -311,7 +310,7 @@ void IndexLookupJoin::initLookupInput() {
           indexKeyType->toString(),
           probeKeyType->toString());
       addLookupInputColumn(
-          indexKeyName,
+          probeKeyName,
           probeKeyType,
           probeKeyChannel,
           lookupInputNames,
@@ -697,7 +696,7 @@ void IndexLookupJoin::mergeLookupResults(InputBatchState& batch) {
     outputOffset += static_cast<vector_size_t>(result->size());
   }
 
-  batch.lookupResult = std::make_unique<connector::IndexSource::LookupResult>(
+  batch.lookupResult = std::make_unique<connector::IndexSource::Result>(
       std::move(mergedInputHits), std::move(mergedOutput));
   batch.partialOutputs.clear();
 }
@@ -795,8 +794,8 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
   }
 
   // Create the lookup result iterator.
-  batch.lookupResultIter = indexSource_->lookup(
-      connector::IndexSource::LookupRequest{batch.lookupInput});
+  batch.lookupResultIter =
+      indexSource_->lookup(connector::IndexSource::Request{batch.lookupInput});
 
   getLookupResults(batch);
 }
