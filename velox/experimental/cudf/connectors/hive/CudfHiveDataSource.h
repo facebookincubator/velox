@@ -141,8 +141,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_set<std::string> readColumnSet_;
   std::vector<std::string> readColumnNames_;
 
-  std::shared_ptr<io::IoStatistics> ioStats_;
-  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<velox::IoStats> ioStats_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
 
@@ -170,7 +170,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Create callback data for total scan timing calculation
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;
-    std::shared_ptr<io::IoStatistics> ioStats;
+    std::shared_ptr<io::IoStatistics> ioStatistics;
   };
 
   // Host callback function to calculate total scan time
