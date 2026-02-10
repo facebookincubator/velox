@@ -14,6 +14,7 @@
 velox_add_library(
   velox_functions_spark_aggregates
   AverageAggregate.cpp
+  ApproxPercentileAggregate.cpp
   BitwiseXorAggregate.cpp
   BloomFilterAggAggregate.cpp
   CentralMomentsAggregate.cpp

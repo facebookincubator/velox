@@ -18,11 +18,15 @@
 
 #include <string>
 
-namespace facebook::velox::aggregate::prestosql {
+namespace facebook::velox::exec {
+struct AggregateRegistrationResult;
+}
 
-void registerApproxPercentileAggregate(
+namespace facebook::velox::functions::aggregate::sparksql {
+
+exec::AggregateRegistrationResult registerApproxPercentileAggregate(
    const std::string& prefix,
    bool withCompanionFunctions,
    bool overwrite);
 
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::functions::aggregate::sparksql
