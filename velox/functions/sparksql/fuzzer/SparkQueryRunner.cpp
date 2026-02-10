@@ -46,7 +46,7 @@ using dwio::common::ArenaCreate;
 
 namespace {
 
-void writeToFile(
+Status writeToFile(
     const std::string& path,
     const std::vector<RowVectorPtr>& data,
     memory::MemoryPool* pool) {
@@ -66,15 +66,23 @@ void writeToFile(
       dwio::common::getWriterFactory(dwio::common::FileFormat::PARQUET)
           ->createWriter(std::move(sink), options);
 
-  for (const auto& vector : data) {
-    // When vector is dictionary-encoded, complex types are not supported in
-    // exportFlattenedVector. Flatten the vector before writing to Parquet.
-    // https://github.com/facebookincubator/velox/issues/10397
-    VectorPtr flattened = vector;
-    BaseVector::flattenVector(flattened);
-    writer->write(flattened);
+  try {
+    for (const auto& vector : data) {
+      // When vector is dictionary-encoded, complex types are not supported in
+      // exportFlattenedVector. Flatten the vector before writing to Parquet.
+      // https://github.com/facebookincubator/velox/issues/10397
+      VectorPtr flattened = vector;
+      BaseVector::flattenVector(flattened);
+      writer->write(flattened);
+    }
+    writer->close();
+  } catch (const std::exception& e) {
+    // The below exception can be thrown for the month_interval type.
+    // NotImplemented: Unhandled type for Arrow to Parquet schema conversion:
+    // month_interval.
+    return Status::Invalid("Failed to write to file: ", e.what());
   }
-  writer->close();
+  return Status::OK();
 }
 
 } // namespace
@@ -106,7 +114,7 @@ SparkQueryRunner::aggregationFunctionDataSpecs() const {
 
 std::optional<std::string> SparkQueryRunner::toSql(
     const velox::core::PlanNodePtr& plan) {
-  exec::test::PrestoSqlPlanNodeVisitorContext context;
+  SparkSqlPlanNodeVisitorContext context;
   SparkQueryRunnerToSqlPlanNodeVisitor visitor;
   plan->accept(visitor, context);
 
@@ -132,7 +140,17 @@ std::pair<
     std::optional<std::vector<RowVectorPtr>>,
     exec::test::ReferenceQueryErrorCode>
 SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
-  if (std::optional<std::string> sql = toSql(plan)) {
+  std::optional<std::string> sql = std::nullopt;
+  try {
+    sql = toSql(plan);
+  } catch (const VeloxException& e) {
+    LOG(INFO) << "Failed to convert plan to SQL: " << e.what();
+    return std::make_pair(
+        std::nullopt,
+        exec::test::ReferenceQueryErrorCode::kReferenceQueryUnsupported);
+  }
+
+  if (sql.has_value()) {
     try {
       std::unordered_map<std::string, std::vector<RowVectorPtr>> inputMap =
           getAllTables(plan);
@@ -151,7 +169,13 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
         auto tempFile = exec::test::TempFilePath::create();
         tempFiles.emplace_back(tempFile);
         const auto& filePath = tempFile->getPath();
-        writeToFile(filePath, input, writerPool.get());
+        auto status = writeToFile(filePath, input, writerPool.get());
+        if (!status.ok()) {
+          LOG(INFO) << status.message();
+          return std::make_pair(
+              std::nullopt,
+              exec::test::ReferenceQueryErrorCode::kReferenceQueryUnsupported);
+        }
         // Create temporary view for this table in Spark by reading the
         // generated Parquet file.
         execute(
