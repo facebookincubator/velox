@@ -127,4 +127,50 @@ VectorPtr PrestoCastKernel::castToDate(
   }
 }
 
+VectorPtr PrestoCastKernel::castFromIntervalDayTime(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
+
+  VectorPtr result;
+  initializeResultVector(rows, toType, context, result);
+
+  switch (toType->kind()) {
+    case TypeKind::VARCHAR: {
+      auto* resultFlatVector = result->as<FlatVector<StringView>>();
+      applyToSelectedNoThrowLocal(
+          rows, context, result, setNullInResultAtError, [&](int row) {
+            // TODO Optimize to avoid creating an intermediate string.
+            auto output = INTERVAL_DAY_TIME()->valueToString(
+                inputFlatVector->valueAt(row));
+            auto writer = exec::StringWriter(resultFlatVector, row);
+            writer.resize(output.size());
+            ::memcpy(writer.data(), output.data(), output.size());
+            writer.finalize();
+          });
+
+      return result;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          input.type()->toString(),
+          toType->toString());
+  }
+}
+
+VectorPtr PrestoCastKernel::castToIntervalDayTime(
+    const SelectivityVector& /*rows*/,
+    const BaseVector& input,
+    exec::EvalCtx& /*context*/,
+    const TypePtr& toType,
+    bool /*setNullInResultAtError*/) const {
+  VELOX_UNSUPPORTED(
+      "Cast from {} to {} is not supported",
+      input.type()->toString(),
+      toType->toString());
+}
 } // namespace facebook::velox::exec
