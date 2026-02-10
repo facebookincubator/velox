@@ -339,6 +339,11 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
 }
 
 TEST_F(SparkCastExprTest, intToTimestamp) {
+  testCast<Timestamp, int8_t>("timestamp", {Timestamp(-1, 0)}, {std::nullopt});
+  testCast<Timestamp, int16_t>("timestamp", {Timestamp(-1, 0)}, {std::nullopt});
+  testCast<Timestamp, int32_t>("timestamp", {Timestamp(-1, 0)}, {std::nullopt});
+  testCast<Timestamp, int64_t>("timestamp", {Timestamp(-1, 0)}, {-1L});
+
   // Cast bigint as timestamp.
   testCast(
       makeNullableFlatVector<int64_t>({
