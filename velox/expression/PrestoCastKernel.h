@@ -51,6 +51,20 @@ class PrestoCastKernel : public CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castFromTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
   static inline const tz::TimeZone* FOLLY_NULLABLE
   getTimeZoneFromConfig(const core::QueryConfig& config) {
