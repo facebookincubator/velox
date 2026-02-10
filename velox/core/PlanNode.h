@@ -5673,39 +5673,6 @@ class MixedUnionNode : public PlanNode {
 };
 
 using MixedUnionNodePtr = std::shared_ptr<const MixedUnionNode>;
-// A basic plan node for the GPU batch concatenation operation.
-class CudfBatchConcatNode : public core::PlanNode {
- public:
-  CudfBatchConcatNode(const core::PlanNodeId& id, core::PlanNodePtr source)
-      : PlanNode(id), sources_({std::move(source)}) {}
-
-  const RowTypePtr& outputType() const override {
-    return sources_[0]->outputType();
-  }
-
-  const std::vector<core::PlanNodePtr>& sources() const override {
-    return sources_;
-  }
-
-  std::string_view name() const override {
-    return "CudfBatchConcat";
-  }
-
-  void addDetails(std::stringstream& stream) const override {
-    stream << name();
-  }
-
-  folly::dynamic serialize() const override {
-    auto obj = PlanNode::serialize();
-    obj["sources"] = ISerializable::serialize(sources_);
-    return obj;
-  }
-
- private:
-  const std::vector<core::PlanNodePtr> sources_;
-};
-
-using CudfBatchConcatNodePtr = std::shared_ptr<const CudfBatchConcatNode>;
 
 class PlanNodeVisitorContext {
  public:
