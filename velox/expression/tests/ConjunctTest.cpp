@@ -118,3 +118,24 @@ TEST_F(ConjunctTest, notOperator) {
 
   assertQuery(plan, "select c0, c1, not c1 from tmp");
 }
+
+TEST_F(ConjunctTest, andOrCombined) {
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(12, [](auto row) { return row; }),
+       makeFlatVector<bool>(
+           12,
+           [](auto row) { return row % 2 == 0; },
+           [](auto row) { return row == 7; }),
+       makeFlatVector<bool>(
+           12,
+           [](auto row) { return row % 3 == 0; },
+           [](auto row) { return row == 11; })});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0", "c1", "c2", "(c1 and c2) or (c0 < 5)"})
+                  .planNode();
+  createDuckDbTable({data});
+
+  assertQuery(plan, "select c0, c1, c2, (c1 and c2) or (c0 < 5) from tmp");
+}
