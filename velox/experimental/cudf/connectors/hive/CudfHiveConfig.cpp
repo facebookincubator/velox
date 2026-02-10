@@ -143,14 +143,15 @@ bool CudfHiveConfig::useBufferedInputSession(
       kUseBufferedInputSession, config_->get<bool>(kUseBufferedInput, true));
 }
 
-bool CudfHiveConfig::useOldCudfReader() const {
-  return config_->get<bool>(kUseOldCudfReader, false);
+bool CudfHiveConfig::useExperimentalCudfReader() const {
+  return config_->get<bool>(kUseExperimentalCudfReader, false);
 }
 
-bool CudfHiveConfig::useOldCudfReaderSession(
+bool CudfHiveConfig::useExperimentalCudfReaderSession(
     const config::ConfigBase* session) const {
   return session->get<bool>(
-      kUseOldCudfReaderSession, config_->get<bool>(kUseOldCudfReader, false));
+      kUseExperimentalCudfReaderSession,
+      config_->get<bool>(kUseExperimentalCudfReader, false));
 }
 
 bool CudfHiveConfig::immutableFiles() const {

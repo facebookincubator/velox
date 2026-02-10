@@ -17,12 +17,12 @@ include_guard(GLOBAL)
 # 3.30.4 is the minimum version required by cudf
 cmake_minimum_required(VERSION 3.30.4)
 
-# rapids_cmake commit ad1e0a9 from 2026-02-03
+# rapids_cmake commit 7ece71c from 2026-02-04
 set(VELOX_rapids_cmake_VERSION 26.04)
-set(VELOX_rapids_cmake_COMMIT ad1e0a9d933acabebc9c0b4632a2ef5d7477002d)
+set(VELOX_rapids_cmake_COMMIT 7ece71c2f94fb0ed402d567b457ce54ecb859695)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  91d86b6d8cd6a7849721d3d263e59a92e3dcf600c04a95d20e041f83ba483954
+  02abaa8580c30a0b01eb142d5cd58b5acc85005bf58f5360f4a62efbd6e4635a
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit c64c144 from 2026-02-03
+# rmm commit 3d6669c from 2026-02-09
 set(VELOX_rmm_VERSION 26.04)
-set(VELOX_rmm_COMMIT c64c14438c8693f52435938289e214c992b16b40)
+set(VELOX_rmm_COMMIT 3d6669cd21e15080a0af2dc18f991060be2a4c3c)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  9d8cead02f8f6e4739f5104ce66e2683fd5e725fc18bd767a1c9cd48074599df
+  1d2575d7a0fb492feaabc6917e7db33eb5c446a8e8eea301c54bd7e3d25fe66c
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 195a6cf from 2026-02-03
+# kvikio commit 593245b from 2026-02-05
 set(VELOX_kvikio_VERSION 26.04)
-set(VELOX_kvikio_COMMIT 195a6cf96ee2ed9fbb279f433a3f7e4231a71dbd)
+set(VELOX_kvikio_COMMIT 593245b7799b6ea91eed77dd03ce4c9a4e158465)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  49c816efed77613ad130529e34a274b45172427d02fc905f83f2ce7f0850654a
+  bcd03423b727fb0a23551a8ad3c6fcb58eaf0eb54ded7cdce914ea07a60ea1d7
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit c35fc44 from 2026-02-04
+# cudf commit 150558a from 2026-02-09
 set(VELOX_cudf_VERSION 26.04 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT c35fc44a82037d19055df57448925e37e0288c65)
+set(VELOX_cudf_COMMIT 150558a341a53cdc7344f05d42d79e002e3c1ba5)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  9b124b1c2cba39c0860c5b85695194f2640386a1dde716167ec75b03b6843d07
+  12f3c784cbb106e7b529965211589aecde498f2546f4d90ce459546523f0c240
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)

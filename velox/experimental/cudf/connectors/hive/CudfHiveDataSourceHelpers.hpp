@@ -72,6 +72,20 @@ class BufferedInputDataSource : public cudf::io::datasource {
   const size_t fileSize_;
 };
 
+/**
+ * @brief Hybrid scan reader state
+ *
+ * This struct is used to store the column chunk data for the hybrid scan reader
+ * and a once flag to ensure the setup is only done once.
+ */
+struct HybridScanState {
+  HybridScanState() : isHybridScanSetup_(std::make_unique<std::once_flag>()) {}
+
+  std::vector<rmm::device_buffer> columnChunkBuffers_;
+  std::vector<cudf::device_span<uint8_t const>> columnChunkData_;
+  std::unique_ptr<std::once_flag> isHybridScanSetup_;
+};
+
 // Fetch a host buffer containing parquet source footer from a data source.
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource);
