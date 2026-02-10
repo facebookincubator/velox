@@ -880,7 +880,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig =
         getSpillConfig(spillDirectory->getPath(), enableSpillPrefixSort);
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     const auto plan = usePrefixSort ? prefixSortPlan : nonPrefixSortPlan;
     velox::common::PrefixSortConfig prefixSortConfig =
         velox::common::PrefixSortConfig{

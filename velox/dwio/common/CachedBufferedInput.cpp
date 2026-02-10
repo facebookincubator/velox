@@ -55,7 +55,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
   }
   auto stream = std::make_unique<CacheInputStream>(
       this,
-      ioStats_.get(),
+      ioStatistics_.get(),
       region,
       input_,
       fileNum_.id(),
@@ -280,14 +280,14 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
  public:
   DwioCoalescedLoadBase(
       cache::AsyncDataCache& cache,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests)
       : CoalescedLoad(makeKeys(requests), makeSizes(requests)),
         cache_(cache),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         groupId_(groupId) {
     requests_.reserve(requests.size());
     for (const auto& request : requests) {
@@ -322,17 +322,17 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
 
  protected:
   void updateStats(const CoalesceIoStats& stats, bool prefetch, bool ssd) {
-    if (ioStats_ == nullptr) {
+    if (ioStatistics_ == nullptr) {
       return;
     }
-    ioStats_->incRawOverreadBytes(stats.extraBytes);
+    ioStatistics_->incRawOverreadBytes(stats.extraBytes);
     if (ssd) {
-      ioStats_->ssdRead().increment(stats.payloadBytes);
+      ioStatistics_->ssdRead().increment(stats.payloadBytes);
     } else {
-      ioStats_->read().increment(stats.payloadBytes);
+      ioStatistics_->read().increment(stats.payloadBytes);
     }
     if (prefetch) {
-      ioStats_->prefetch().increment(stats.payloadBytes);
+      ioStatistics_->prefetch().increment(stats.payloadBytes);
     }
   }
 
@@ -357,8 +357,8 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
 
   cache::AsyncDataCache& cache_;
   std::vector<CacheRequest> requests_;
-  std::shared_ptr<IoStatistics> ioStats_;
-  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<IoStatistics> ioStatistics_;
+  std::shared_ptr<velox::IoStats> ioStats_;
   const uint64_t groupId_;
   int64_t size_{0};
 };
@@ -369,19 +369,23 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
   DwioCoalescedLoad(
       cache::AsyncDataCache& cache,
       std::shared_ptr<ReadFileInputStream> input,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests,
       int32_t maxCoalesceDistance)
       : DwioCoalescedLoadBase(
             cache,
+            std::move(ioStatistics),
             std::move(ioStats),
-            std::move(fsStats),
             groupId,
             std::move(requests)),
         input_(std::move(input)),
         maxCoalesceDistance_(maxCoalesceDistance) {}
+
+  bool isSsdLoad() const override {
+    return false;
+  }
 
   std::vector<CachePin> loadData(bool prefetch) override {
     std::vector<CachePin> pins;
@@ -423,16 +427,20 @@ class SsdLoad : public DwioCoalescedLoadBase {
  public:
   SsdLoad(
       cache::AsyncDataCache& cache,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests)
       : DwioCoalescedLoadBase(
             cache,
+            std::move(ioStatistics),
             std::move(ioStats),
-            std::move(fsStats),
             groupId,
             std::move(requests)) {}
+
+  bool isSsdLoad() const override {
+    return true;
+  }
 
   std::vector<CachePin> loadData(bool prefetch) override {
     std::vector<SsdPin> ssdPins;
@@ -469,13 +477,13 @@ void CachedBufferedInput::readRegion(
   std::shared_ptr<cache::CoalescedLoad> load;
   if (!requests[0]->ssdPin.empty()) {
     load = std::make_shared<SsdLoad>(
-        *cache_, ioStats_, fsStats_, groupId_.id(), requests);
+        *cache_, ioStatistics_, ioStats_, groupId_.id(), requests);
   } else {
     load = std::make_shared<DwioCoalescedLoad>(
         *cache_,
         input_,
+        ioStatistics_,
         ioStats_,
-        fsStats_,
         groupId_.id(),
         requests,
         options_.maxCoalesceDistance());
@@ -567,7 +575,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
   VELOX_CHECK_LE(offset + length, fileSize_);
   return std::make_unique<CacheInputStream>(
       const_cast<CachedBufferedInput*>(this),
-      ioStats_.get(),
+      ioStatistics_.get(),
       Region{offset, length},
       input_,
       fileNum_.id(),

@@ -47,10 +47,10 @@ void allOperands(
 ReadStream::ReadStream(
     StructColumnReader* columnReader,
     WaveStream& _waveStream,
-    io::IoStatistics* ioStats,
+    io::IoStatistics* ioStatistics,
     FileInfo& fileInfo,
     const OperandSet* firstColumns)
-    : Executable(), ioStats_(ioStats), fileInfo_(fileInfo) {
+    : Executable(), ioStats_(ioStatistics), fileInfo_(fileInfo) {
   VELOX_CHECK_EQ(
       0,
       FLAGS_wave_reader_rows_per_tb & 1023,

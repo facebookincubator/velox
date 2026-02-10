@@ -20,6 +20,7 @@
 #include "velox/python/init/PyInit.h"
 
 #include "velox/python/runner/PyConnectors.h"
+#include "velox/python/runner/PyLocalDebuggerRunner.h"
 #include "velox/python/runner/PyLocalRunner.h"
 
 namespace py = pybind11;
@@ -41,9 +42,26 @@ PYBIND11_MODULE(runner, m) {
   /// Iterator class that exposes vectors being created by a Runner in
   /// execution.
   py::class_<velox::py::PyTaskIterator>(m, "TaskIterator")
-      .def("__next__", &velox::py::PyTaskIterator::next)
-      .def("next", &velox::py::PyTaskIterator::next)
-      .def("current", &velox::py::PyTaskIterator::current)
+      .def("__next__", &velox::py::PyTaskIterator::next, py::keep_alive<0, 1>())
+      .def("next", &velox::py::PyTaskIterator::next, py::keep_alive<0, 1>())
+      .def(
+          "step",
+          &velox::py::PyTaskIterator::step,
+          py::keep_alive<0, 1>(),
+          py::doc(R"(
+        Steps through execution, returning either the input to the next
+        operator with a breakpoint installed, or the next task output.
+        If no breakpoints are set, then step() behaves like next().
+          )"))
+      .def(
+          "current",
+          &velox::py::PyTaskIterator::current,
+          py::keep_alive<0, 1>())
+      .def("at", &velox::py::PyTaskIterator::at, py::doc(R"(
+        Returns the plan node ID where the cursor is currently stopped.
+        This is useful for debugging to know where in the plan the
+        execution has paused.
+          )"))
       .def(
           "__iter__",
           &velox::py::PyTaskIterator::iter,
@@ -104,6 +122,41 @@ PYBIND11_MODULE(runner, m) {
         Args:
           configName: The name (key) of the configuration parameter.
           configValue: The configuration value.
+          )"));
+
+  py::class_<velox::py::PyLocalDebuggerRunner, velox::py::PyLocalRunner>(
+      m, "LocalDebuggerRunner")
+      // Only expose the plan node through the Python API.
+      .def(py::init([](const velox::py::PyPlanNode& planNode) {
+        return velox::py::PyLocalDebuggerRunner{planNode, rootPool, executor};
+      }))
+      .def(
+          "set_breakpoint",
+          &velox::py::PyLocalDebuggerRunner::setBreakpoint,
+          py::arg("plan_node_id"),
+          py::doc(R"(
+        Sets a breakpoint at the specified plan node. The breakpoint will
+        always stop execution.
+
+        Args:
+          plan_node_id: The ID of the plan node where execution should pause.
+          )"))
+      .def(
+          "set_hook",
+          &velox::py::PyLocalDebuggerRunner::setHook,
+          py::arg("plan_node_id"),
+          py::arg("callback"),
+          py::doc(R"(
+        Sets a breakpoint with a callback at the specified plan node.
+
+        The callback is invoked with a Vector when the breakpoint is hit.
+        If the callback returns True, execution stops and the vector is
+        produced. If the callback returns False, execution continues
+        without stopping.
+
+        Args:
+          plan_node_id: The ID of the plan node where the hook is installed.
+          callback: Python function that takes a Vector and returns bool.
           )"));
 
   m.def(

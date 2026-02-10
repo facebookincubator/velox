@@ -145,8 +145,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
-    std::shared_ptr<io::IoStatistics> ioStats,
-    std::shared_ptr<filesystems::File::IoStats> fsStats,
+    std::shared_ptr<io::IoStatistics> ioStatistics,
+    std::shared_ptr<IoStats> ioStats,
     folly::Executor* executor,
     const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 

@@ -45,8 +45,8 @@ std::unique_ptr<SplitReader> IcebergDataSource::createSplitReader() {
       connectorQueryCtx_,
       hiveConfig_,
       readerOutputType_,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_);

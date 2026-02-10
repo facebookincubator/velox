@@ -578,7 +578,7 @@ TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
 
 template <core::TopNRowNumberNode::RankFunction TRank>
 void TopNRowNumber::computeNextRankInMemory(
-    const TopRows& partition,
+    TopRows& partition,
     vector_size_t outputIndex) {
   if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kRowNumber) {
     nextRank_ -= 1;
@@ -587,21 +587,19 @@ void TopNRowNumber::computeNextRankInMemory(
 
   // This is the logic for rank() and dense_rank().
   // If the next row is a peer of the current one, then the rank remains the
-  // same, but the number of peers is incremented.
+  // same.
   if (comparator_.compare(outputRows_[outputIndex], partition.rows.top()) ==
       0) {
-    numPeers_ += 1;
     return;
   }
 
   // The new row is not a peer of the current one. So dense_rank drops the
-  // rank by 1, but rank drops it by the number of peers (which is then
-  // reset).
+  // rank by 1, but rank drops by the number of peers of the new top
+  // row (new rank) in TopRows queue.
   if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kDenseRank) {
     nextRank_ -= 1;
   } else {
-    nextRank_ -= numPeers_;
-    numPeers_ = 1;
+    nextRank_ -= partition.numTopRankRows();
   }
 }
 
@@ -1110,18 +1108,32 @@ char* TopNRowNumber::TopRows::removeTopRankRows() {
 
 vector_size_t TopNRowNumber::TopRows::numTopRankRows() {
   VELOX_CHECK(!rows.empty());
+
+  tempTopRankRows.clear();
+  SCOPE_EXIT {
+    tempTopRankRows.clear();
+  };
+  auto popAndSaveTopRow = [&]() {
+    tempTopRankRows.push_back(rows.top());
+    rows.pop();
+  };
+
   char* topRow = rows.top();
-  vector_size_t numRows = 0;
-  const std::vector<char*, StlAllocator<char*>> partitionRowsVector =
-      PriorityQueueVector(rows);
-  for (const char* row : partitionRowsVector) {
-    if (rowComparator.compare(topRow, row) == 0) {
-      numRows += 1;
+  popAndSaveTopRow();
+  while (!rows.empty()) {
+    if (rowComparator.compare(topRow, rows.top()) == 0) {
+      popAndSaveTopRow();
     } else {
       break;
     }
   }
-  return numRows;
+
+  vector_size_t numTopRows = tempTopRankRows.size();
+  // Re-insert all rows with the top rank row.
+  for (char* row : tempTopRankRows) {
+    rows.push(row);
+  }
+  return numTopRows;
 }
 
 bool TopNRowNumber::TopRows::isDuplicate(

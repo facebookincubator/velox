@@ -93,8 +93,8 @@ class SplitReader {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
-      const std::shared_ptr<io::IoStatistics>& ioStats,
-      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+      const std::shared_ptr<io::IoStatistics>& ioStatistics,
+      const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
@@ -158,8 +158,8 @@ class SplitReader {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
-      const std::shared_ptr<io::IoStatistics>& ioStats,
-      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+      const std::shared_ptr<io::IoStatistics>& ioStatistics,
+      const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
@@ -245,8 +245,8 @@ class SplitReader {
   const std::shared_ptr<const HiveConfig> hiveConfig_;
 
   RowTypePtr readerOutputType_;
-  const std::shared_ptr<io::IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<io::IoStatistics> ioStatistics_;
+  const std::shared_ptr<IoStats> ioStats_;
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;

@@ -523,7 +523,7 @@ SpillMerger::SpillMerger(
     uint64_t maxOutputBatchBytes,
     int mergeSourceQueueSize,
     const common::SpillConfig* spillConfig,
-    const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
+    const std::shared_ptr<exec::SpillStats>& spillStats,
     velox::memory::MemoryPool* pool)
     : executor_(spillConfig->executor),
       spillStats_(spillStats),
