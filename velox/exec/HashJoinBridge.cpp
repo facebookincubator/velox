@@ -103,8 +103,7 @@ std::unique_ptr<HashBuildSpiller> createSpiller(
     const RowTypePtr& tableType,
     const HashBitRange& hashBitRange,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats,
-    filesystems::File::IoStats* fileSystemStats = nullptr) {
+    exec::SpillStats* stats) {
   return std::make_unique<HashBuildSpiller>(
       joinType,
       parentId,
@@ -112,8 +111,7 @@ std::unique_ptr<HashBuildSpiller> createSpiller(
       hashJoinTableSpillType(tableType, joinType),
       hashBitRange,
       spillConfig,
-      stats,
-      fileSystemStats);
+      stats);
 }
 } // namespace
 
@@ -173,7 +171,7 @@ SpillPartitionSet spillHashJoinTable(
     const HashBitRange& hashBitRange,
     const std::shared_ptr<const core::HashJoinNode>& joinNode,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats) {
+    exec::SpillStats* spillStats) {
   VELOX_CHECK_NOT_NULL(table);
   VELOX_CHECK_NOT_NULL(spillConfig);
   if (table->numDistinct() == 0) {
@@ -196,7 +194,7 @@ SpillPartitionSet spillHashJoinTable(
         tableType,
         hashBitRange,
         spillConfig,
-        stats));
+        spillStats));
     spillers.push_back(spillersHolder.back().get());
   }
   if (spillersHolder.empty()) {

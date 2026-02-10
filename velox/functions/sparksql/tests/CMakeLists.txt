@@ -61,6 +61,7 @@ add_executable(
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
   RaiseErrorTest.cpp
+  RandStrTest.cpp
   RandTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
@@ -68,12 +69,14 @@ add_executable(
   SizeTest.cpp
   SortArrayTest.cpp
   SparkCastExprTest.cpp
+  XORShiftRandomTest.cpp
   SparkPartitionIdTest.cpp
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
   ToJsonTest.cpp
   ToPrettyStringTest.cpp
+  TransformTest.cpp
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp

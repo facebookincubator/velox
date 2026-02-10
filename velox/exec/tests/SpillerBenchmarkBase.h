@@ -71,6 +71,6 @@ class SpillerBenchmarkBase {
   std::unique_ptr<SpillerBase> spiller_;
   // Stats.
   uint64_t executionTimeUs_{0};
-  folly::Synchronized<common::SpillStats> spillStats_;
+  exec::SpillStats spillStats_;
 };
 } // namespace facebook::velox::exec::test

@@ -119,8 +119,8 @@ HiveIndexReader::HiveIndexReader(
     const std::vector<core::IndexLookupConditionPtr>& joinConditions,
     const RowTypePtr& requestType,
     const RowTypePtr& outputType,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor)
     : hiveSplit_{getSingleSplit(hiveSplits)},
@@ -130,8 +130,8 @@ HiveIndexReader::HiveIndexReader(
       fileHandleFactory_{fileHandleFactory},
       requestType_{requestType},
       outputType_{outputType},
+      ioStatistics_{ioStatistics},
       ioStats_{ioStats},
-      fsStats_{fsStats},
       ioExecutor_{ioExecutor},
       pool_{connectorQueryCtx->memoryPool()},
       scanSpec_{scanSpec},
@@ -318,15 +318,15 @@ std::unique_ptr<dwio::common::Reader> HiveIndexReader::createFileReader() {
 
   auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
   auto fileHandleCachePtr = fileHandleFactory_->generate(
-      fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+      fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
 
   auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       readerOpts,
       connectorQueryCtx_,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       ioExecutor_,
       /*fileReadOps=*/{});
 

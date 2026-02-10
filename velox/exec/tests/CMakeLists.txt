@@ -64,6 +64,7 @@ add_executable(
   LocalPartitionTest.cpp
   Main.cpp
   MarkDistinctTest.cpp
+  EnforceDistinctTest.cpp
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
@@ -91,12 +92,14 @@ add_executable(
   SortBufferTest.cpp
   SpatialIndexTest.cpp
   HilbertIndexTest.cpp
+  SpillStatsTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp
   SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
+  StreamingEnforceDistinctTest.cpp
   TableScanTest.cpp
   TableWriterTest.cpp
   TaskListenerTest.cpp
