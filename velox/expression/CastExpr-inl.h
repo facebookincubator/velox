@@ -105,27 +105,18 @@ void CastExpr::applyCastKernel(
   // If castResult has an error, set the error in context. Otherwise, set the
   // value in castResult directly to result. This lambda should be called only
   // when ToKind is primitive and is not VARCHAR or VARBINARY.
-  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
-                              INLINE_LAMBDA {
-                                if (castResult.hasError()) {
-                                  const auto errorDetails =
-                                      context.captureErrorDetails()
-                                      ? makeErrorMessage(
-                                            *input,
-                                            row,
-                                            result->type(),
-                                            castResult.error().message())
-                                      : std::string{};
-                                  setCastError(
-                                      row,
-                                      context,
-                                      result,
-                                      wrapException,
-                                      errorDetails);
-                                } else {
-                                  result->set(row, castResult.value());
-                                }
-                              };
+  auto setResultOrError = [&](const auto& castResult,
+                              vector_size_t row) INLINE_LAMBDA {
+    if (castResult.hasError()) {
+      const auto errorDetails = context.captureErrorDetails()
+          ? makeErrorMessage(
+                *input, row, result->type(), castResult.error().message())
+          : std::string{};
+      setCastError(row, context, result, wrapException, errorDetails);
+    } else {
+      result->set(row, castResult.value());
+    }
+  };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -162,8 +153,7 @@ void CastExpr::applyCastKernel(
       const auto castResult =
           hooks_->castDoubleToTimestamp(static_cast<double>(inputRowValue));
       if (castResult.hasError()) {
-        const auto errorDetails =
-            context.captureErrorDetails()
+        const auto errorDetails = context.captureErrorDetails()
             ? makeErrorMessage(
                   *input, row, result->type(), castResult.error().message())
             : std::string{};
@@ -185,8 +175,7 @@ void CastExpr::applyCastKernel(
           TypeTraits<ToKind>::isFixedWidth) {
         inputRowValue = hooks_->removeWhiteSpaces(inputRowValue);
         if (inputRowValue.size() == 0) {
-          const auto errorDetails =
-              context.captureErrorDetails()
+          const auto errorDetails = context.captureErrorDetails()
               ? makeErrorMessage(*input, row, result->type(), "Empty string")
               : std::string{};
           setCastError(row, context, result, wrapException, errorDetails);
@@ -226,8 +215,7 @@ void CastExpr::applyCastKernel(
     const auto castResult =
         util::Converter<ToKind, void, TPolicy>::tryCast(inputRowValue);
     if (castResult.hasError()) {
-      const auto errorDetails =
-          context.captureErrorDetails()
+      const auto errorDetails = context.captureErrorDetails()
           ? makeErrorMessage(
                 *input, row, result->type(), castResult.error().message())
           : std::string{};
@@ -250,14 +238,12 @@ void CastExpr::applyCastKernel(
     if (!ue.isUserError() || !wrapException) {
       throw;
     }
-    const auto errorDetails =
-        context.captureErrorDetails()
+    const auto errorDetails = context.captureErrorDetails()
         ? makeErrorMessage(*input, row, result->type(), ue.message())
         : std::string{};
     setCastError(row, context, result, wrapException, errorDetails);
   } catch (const std::exception& e) {
-    const auto errorDetails =
-        context.captureErrorDetails()
+    const auto errorDetails = context.captureErrorDetails()
         ? makeErrorMessage(*input, row, result->type(), e.what())
         : std::string{};
     setCastError(row, context, result, wrapException, errorDetails);

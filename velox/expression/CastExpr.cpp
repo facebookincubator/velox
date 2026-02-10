@@ -127,7 +127,8 @@ VectorPtr CastExpr::castToDate(
                 "{} {}",
                 makeErrorMessage(input, row, DATE()),
                 result.error().message());
-            setCastError(row, context, resultFlatVector, wrapException, errorDetails);
+            setCastError(
+                row, context, resultFlatVector, wrapException, errorDetails);
           } else {
             resultFlatVector->set(row, result.value());
           }

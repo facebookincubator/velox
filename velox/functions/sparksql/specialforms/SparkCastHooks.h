@@ -53,7 +53,8 @@ class SparkCastHooks : public exec::CastHooks {
   ///   - H is hour (0-23)
   ///   - m is minute (0-59)
   ///   - s is second (0-59)
-  ///   - SSSSSS is optional fractional seconds (up to 6 digits for microseconds)
+  ///   - SSSSSS is optional fractional seconds (up to 6 digits for
+  ///   microseconds)
   /// Expects timeString to be trimmed by CastExpr::removeWhiteSpaces.
   Expected<int64_t> castStringToTime(
       const StringView& timeString,

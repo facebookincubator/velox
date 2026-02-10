@@ -112,18 +112,13 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
 }
 
 Expected<int64_t> SparkCastHooks::castStringToTime(
-  const StringView& timeString,
-  const tz::TimeZone* /* timeZone */,
-  int64_t /* sessionStartTimeMs */) const {
+    const StringView& timeString,
+    const tz::TimeZone* /* timeZone */,
+    int64_t /* sessionStartTimeMs */) const {
   // Spark represents TIME as BIGINT (microseconds since midnight).
-  // Spark doesn't use timezone for TIME type, so we ignore those parameters.
-  auto timeMicros = util::fromTimeStringMicros(timeString);
-
-  if (!timeMicros.hasValue()) {
-    return folly::makeUnexpected(timeMicros.error());
-  }
-
-  return timeMicros.value();
+  // Parse directly to microseconds - validation and error handling
+  // flow through CAST/TRY_CAST semantics automatically.
+  return util::fromTimeStringMicros(timeString);
 }
 
 Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {
