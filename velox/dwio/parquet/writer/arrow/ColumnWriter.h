@@ -211,9 +211,6 @@ class PARQUET_EXPORT ColumnWriter {
       const ::arrow::Array& leafArray,
       ArrowWriteContext* ctx,
       bool leafFieldNullable) = 0;
-
-  /// \brief Estimated size of the values that are not written to a page yet.
-  virtual int64_t estimatedBufferedValueBytes() const = 0;
 };
 
 // API to write values to a single column. This is the main client facing API.
@@ -273,7 +270,7 @@ class TypedColumnWriter : public ColumnWriter {
       int64_t validBitsOffset,
       const T* values) = 0;
 
-  // Estimated size of the values that are not written to a page yet.
+  // Estimated size of the values that are not written to a page yet
   virtual int64_t estimatedBufferedValueBytes() const = 0;
 };
 

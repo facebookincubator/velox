@@ -118,8 +118,7 @@ void Merge::maybeSetupOutputSpiller() {
       HashBitRange{},
       sortingKeys_,
       &spillConfig_.value(),
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 }
 
 void Merge::spill() {
@@ -524,7 +523,7 @@ SpillMerger::SpillMerger(
     uint64_t maxOutputBatchBytes,
     int mergeSourceQueueSize,
     const common::SpillConfig* spillConfig,
-    const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
+    const std::shared_ptr<exec::SpillStats>& spillStats,
     velox::memory::MemoryPool* pool)
     : executor_(spillConfig->executor),
       spillStats_(spillStats),
