@@ -2943,7 +2943,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
                           .build();
       ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
-      const auto spillStats = common::globalSpillStats();
+      const auto spillStats = globalSpillStats();
       std::atomic<int> numInputs{0};
       SCOPED_TESTVALUE_SET(
           "facebook::velox::exec::Driver::runInternal::addInput",
@@ -3011,7 +3011,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           numPrevNonReclaimableAttempts);
 
       waitForAllTasksToBeDeleted(3'000'000);
-      const auto updatedSpillStats = common::globalSpillStats();
+      const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
         ASSERT_GT(
@@ -3399,7 +3399,7 @@ DEBUG_ONLY_TEST_F(
               {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
-  const auto spillStats = common::globalSpillStats();
+  const auto spillStats = globalSpillStats();
   const auto spillDirectory = TempDirectoryPath::create();
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
@@ -3425,7 +3425,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  const auto updatedSpillStats = common::globalSpillStats();
+  const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();
 }
