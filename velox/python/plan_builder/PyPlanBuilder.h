@@ -175,8 +175,8 @@ class PyPlanBuilder {
   ///  )
   PyPlanBuilder& tableScan(
       const PyType& outputSchema,
-      const pybind11::dict& aliases,
-      const pybind11::dict& subfields,
+      const std::unordered_map<std::string, std::string>& aliases,
+      const std::unordered_map<std::string, std::vector<int64_t>>& subfields,
       const std::vector<std::string>& filters,
       const std::string& remainingFilter,
       const std::string& rowIndexColumnName,

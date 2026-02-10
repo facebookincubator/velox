@@ -390,6 +390,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
         dataColumns_,
+        indexColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
         filterColumnHandles_);
   }
@@ -2518,6 +2519,27 @@ PlanBuilder& PlanBuilder::markDistinct(
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::enforceDistinct(
+    const std::vector<std::string>& distinctKeys,
+    std::string errorMessage,
+    const std::vector<std::string>& preGroupedKeys) {
+  VELOX_CHECK_NOT_NULL(planNode_, "EnforceDistinct cannot be the source node");
+  planNode_ = std::make_shared<core::EnforceDistinctNode>(
+      nextPlanNodeId(),
+      fields(planNode_->outputType(), distinctKeys),
+      fields(planNode_->outputType(), preGroupedKeys),
+      std::move(errorMessage),
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::streamingEnforceDistinct(
+    const std::vector<std::string>& distinctKeys,
+    std::string errorMessage) {
+  return enforceDistinct(distinctKeys, std::move(errorMessage), distinctKeys);
 }
 
 core::PlanNodeId PlanBuilder::nextPlanNodeId() {

@@ -16,6 +16,7 @@ velox_add_library(
   velox_cudf_expression
   AstExpression.cpp
   ExpressionEvaluator.cpp
+  JitExpression.cpp
   SubfieldFiltersToAst.cpp
 )
 

@@ -6618,7 +6618,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   const int exceededMaxSpillLevelCount =
-      common::globalSpillStats().spillMaxLevelExceededCount;
+      exec::globalSpillStats().spillMaxLevelExceededCount;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::HashBuild::reclaim",
       std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
@@ -6672,7 +6672,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
       })
       .run();
   ASSERT_EQ(
-      common::globalSpillStats().spillMaxLevelExceededCount,
+      exec::globalSpillStats().spillMaxLevelExceededCount,
       exceededMaxSpillLevelCount + 16);
 }
 

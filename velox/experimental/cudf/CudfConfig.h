@@ -33,6 +33,10 @@ struct CudfConfig {
       "cudf.ast_expression_enabled"};
   static constexpr const char* kCudfAstExpressionPriority{
       "cudf.ast_expression_priority"};
+  static constexpr const char* kCudfJitExpressionEnabled{
+      "cudf.jit_expression_enabled"};
+  static constexpr const char* kCudfJitExpressionPriority{
+      "cudf.jit_expression_priority"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
   static constexpr const char* kCudfExchange{"cudf.exchange"};
@@ -70,6 +74,9 @@ struct CudfConfig {
   /// Enable AST in expression evaluation
   bool astExpressionEnabled{true};
 
+  /// Enable JIT in expression evaluation
+  bool jitExpressionEnabled{true};
+
   /// Priority of AST expression. Expression with higher priority is chosen for
   /// a given root expression.
   /// Example:
@@ -78,6 +85,9 @@ struct CudfConfig {
   /// by both, AST will be chosen as replacement for cudf execution, if AST
   /// priority is 25 then standalone cudf function is chosen.
   int astExpressionPriority{100};
+
+  /// Priority of JIT expression.
+  int jitExpressionPriority{101};
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};

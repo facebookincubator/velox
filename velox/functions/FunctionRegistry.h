@@ -46,6 +46,13 @@ FunctionSignatureMap getVectorFunctionSignatures();
 /// the entries are not deterministic.
 std::optional<bool> isDeterministic(const std::string& functionName);
 
+/// Returns if a function has default null behavior (null in any input produces
+/// null output) by fetching all registry entries for the given function name
+/// and checking if all of them have default null behavior.
+/// Returns std::nullopt if the function is not found. Returns false if any of
+/// the entries do not have default null behavior.
+std::optional<bool> isDefaultNullBehavior(const std::string& functionName);
+
 /// Given a function name and argument types, returns
 /// the return type if function exists otherwise returns nullptr
 TypePtr resolveFunction(

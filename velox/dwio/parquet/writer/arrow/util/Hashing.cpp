@@ -24,32 +24,32 @@
 namespace facebook::velox::parquet::arrow::internal {
 namespace {
 
-/// \brief A hash function for bitmaps that can handle offsets and lengths in
-/// terms of number of bits. The hash only depends on the bits actually hashed.
+/// \brief A hash function for bitmaps that can handle offsets and lengths in.
+/// Terms of number of bits. The hash only depends on the bits actually hashed.
 ///
-/// This implementation is based on 64-bit versions of MurmurHash2 by Austin
+/// This implementation is based on 64-bit versions of MurmurHash2 by Austin.
 /// Appleby.
 ///
-/// It's the caller's responsibility to ensure that bits_offset + num_bits are
-/// readable from the bitmap.
+/// It's the caller's responsibility to ensure that bits_offset + num_bits are.
+/// Readable from the bitmap.
 ///
 /// \param key The pointer to the bitmap.
-/// \param seed The seed for the hash function (useful when chaining hash
-/// functions). \param bits_offset The offset in bits relative to the start of
-/// the bitmap. \param num_bits The number of bits after the offset to be
-/// hashed.
-uint64_t MurmurHashBitmap64(
+/// \param seed The seed for the hash function (useful when chaining hash.
+/// Functions). \param bits_offset The offset in bits relative to the start of.
+/// The bitmap. \param num_bits The number of bits after the offset to be.
+/// Hashed.
+uint64_t murmurHashBitmap64(
     const uint8_t* key,
     uint64_t seed,
-    uint64_t bits_offset,
-    uint64_t num_bits) {
+    uint64_t bitsOffset,
+    uint64_t numBits) {
   const uint64_t m = 0xc6a4a7935bd1e995LLU;
   const int r = 47;
 
-  uint64_t h = seed ^ (num_bits * m);
+  uint64_t h = seed ^ (numBits * m);
 
   ::arrow::internal::BitmapWordReader<uint64_t> reader(
-      key, bits_offset, num_bits);
+      key, bitsOffset, numBits);
   auto nwords = reader.words();
   while (nwords--) {
     auto k = reader.NextWord();
@@ -60,12 +60,12 @@ uint64_t MurmurHashBitmap64(
     h ^= k;
     h *= m;
   }
-  int valid_bits;
+  int validBits;
   auto nbytes = reader.trailing_bytes();
   if (nbytes) {
     uint64_t k = 0;
     do {
-      auto byte = reader.NextTrailingByte(valid_bits);
+      auto byte = reader.NextTrailingByte(validBits);
       k = (k << 8) | static_cast<uint64_t>(byte);
     } while (--nbytes);
     h ^= k;
@@ -80,14 +80,14 @@ uint64_t MurmurHashBitmap64(
 
 } // namespace
 
-hash_t ComputeBitmapHash(
+hash_t computeBitmapHash(
     const uint8_t* bitmap,
     hash_t seed,
-    int64_t bits_offset,
-    int64_t num_bits) {
-  VELOX_DCHECK_GE(bits_offset, 0);
-  VELOX_DCHECK_GE(num_bits, 0);
-  return MurmurHashBitmap64(bitmap, seed, bits_offset, num_bits);
+    int64_t bitsOffset,
+    int64_t numBits) {
+  VELOX_DCHECK_GE(bitsOffset, 0);
+  VELOX_DCHECK_GE(numBits, 0);
+  return murmurHashBitmap64(bitmap, seed, bitsOffset, numBits);
 }
 
 } // namespace facebook::velox::parquet::arrow::internal

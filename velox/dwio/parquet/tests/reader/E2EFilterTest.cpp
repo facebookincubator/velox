@@ -59,7 +59,8 @@ class E2EFilterTest : public E2EFilterTestBase,
   void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip = false) override {
+      bool forRowGroupSkip = false,
+      const std::vector<std::string>& /*indexColumns*/ = {}) override {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
@@ -137,7 +138,7 @@ TEST_F(E2EFilterTest, integerDirect) {
 TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
   options_.enableDictionary = false;
   options_.encoding =
-      facebook::velox::parquet::arrow::Encoding::DELTA_BINARY_PACKED;
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   testWithTypes(
       "short_val:smallint,"
@@ -526,7 +527,7 @@ TEST_F(E2EFilterTest, stringDictionary) {
 TEST_F(E2EFilterTest, stringDeltaByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
-      facebook::velox::parquet::arrow::Encoding::DELTA_BYTE_ARRAY;
+      facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
 
   testWithTypes(
       "string_val:string,"
@@ -780,7 +781,7 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
 
 TEST_F(E2EFilterTest, booleanRle) {
   options_.enableDictionary = false;
-  options_.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options_.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options_.useParquetDataPageV2 = true;
 
   testWithTypes(

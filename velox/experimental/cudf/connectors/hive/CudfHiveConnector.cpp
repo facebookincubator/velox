@@ -30,7 +30,7 @@ CudfHiveConnector::CudfHiveConnector(
     folly::Executor* executor)
     : ::facebook::velox::connector::hive::HiveConnector(id, config, executor),
       cudfHiveConfig_(std::make_shared<CudfHiveConfig>(config)) {
-  LOG(INFO) << "cuDF Hive connector created";
+  VLOG(1) << "cuDF Hive connector created";
 }
 
 std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(

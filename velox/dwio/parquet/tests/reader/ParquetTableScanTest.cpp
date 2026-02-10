@@ -1422,7 +1422,7 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
 TEST_F(ParquetTableScanTest, booleanRle) {
   WriterOptions options;
   options.enableDictionary = false;
-  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
 
   auto allTrue = [](vector_size_t row) -> bool { return true; };
@@ -1470,7 +1470,7 @@ TEST_F(ParquetTableScanTest, booleanRle) {
 TEST_F(ParquetTableScanTest, singleBooleanRle) {
   WriterOptions options;
   options.enableDictionary = false;
-  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
 
   auto vector = makeRowVector(
