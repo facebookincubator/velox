@@ -293,7 +293,9 @@ TEST_F(KHyperLogLogTest, uniquenessDistribution) {
 
     // Use 10% tolerance since the values of uniqueness distribution are a sum
     // of 1 / size of minHash, and not the cardinality estimates.
-    EXPECT_NEAR(khllEstimated, expected, expected * 0.1)
+    // Allow larger tolerance for buckets with very few values.
+    double tolerance = std::max(2.0 / size, 0.1 * expected);
+    EXPECT_NEAR(khllEstimated, expected, tolerance)
         << "Histogram mismatch at bucket " << i;
   }
 }

@@ -89,6 +89,25 @@ bool isPointLookupFilter(const common::Filter* filter) {
       return false;
   }
 }
+
+// Extracts bound value for between condition: either from constant or decoded
+// request.
+variant extractBoundValue(
+    const std::optional<variant>& constantValue,
+    const DecodedVector& decoded,
+    const TypePtr& type,
+    vector_size_t row,
+    bool isLowerBound) {
+  if (constantValue.has_value()) {
+    return constantValue.value();
+  }
+  VELOX_CHECK(
+      !decoded.isNullAt(row),
+      "Null value not allowed for {} bound",
+      isLowerBound ? "lower" : "upper");
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      extractValue, type->kind(), decoded, row);
+}
 } // namespace
 
 HiveIndexReader::HiveIndexReader(
@@ -135,9 +154,10 @@ void HiveIndexReader::initJoinConditions() {
       joinConditions_.size(),
       tableIndexColumns.size(),
       "Too many join conditions");
-  joinIndexColumnSpecs_.reserve(joinConditions_.size());
-  requestColumnIndices_.reserve(joinConditions_.size());
+  joinIndexColumnSpecs_.resize(joinConditions_.size());
+  requestColumnIndices_.resize(joinConditions_.size());
   decodedRequestVectors_.resize(joinConditions_.size());
+  constantBoundValues_.resize(joinConditions_.size());
 
   auto getRequestColumnIndex = [&](const std::string& name) {
     const auto idxOpt = requestType_->getChildIdxIfExists(name);
@@ -187,10 +207,13 @@ void HiveIndexReader::initJoinConditions() {
       continue;
     }
 
-    joinIndexColumnSpecs_.push_back(spec);
+    joinIndexColumnSpecs_[conditionIdx] = spec;
     // Process the join condition for this index column.
     const auto& condition = joinConditions_[conditionIdx];
-    VELOX_CHECK(!condition->isFilter());
+    VELOX_CHECK(
+        !condition->isFilter(),
+        "Join condition on index column '{}' cannot be a filter",
+        indexColumn);
 
     // Determine the request column index for the condition value.
     if (auto equalCondition =
@@ -199,8 +222,8 @@ void HiveIndexReader::initJoinConditions() {
       const auto requestFieldAccess =
           checkedPointerCast<const core::FieldAccessTypedExpr>(
               equalCondition->value);
-      requestColumnIndices_.push_back(
-          {getRequestColumnIndex(requestFieldAccess->name())});
+      requestColumnIndices_[conditionIdx] = {
+          getRequestColumnIndex(requestFieldAccess->name())};
       decodedRequestVectors_[conditionIdx].resize(1);
       ++conditionIdx;
       continue;
@@ -209,16 +232,62 @@ void HiveIndexReader::initJoinConditions() {
     if (auto betweenCondition =
             std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
                 condition)) {
-      auto lowerFieldAccess =
-          checkedPointerCast<const core::FieldAccessTypedExpr>(
-              betweenCondition->lower);
-      auto upperFieldAccess =
-          checkedPointerCast<const core::FieldAccessTypedExpr>(
-              betweenCondition->upper);
-      requestColumnIndices_.push_back(
-          {getRequestColumnIndex(lowerFieldAccess->name()),
-           getRequestColumnIndex(upperFieldAccess->name())});
+      constantBoundValues_[conditionIdx].resize(2);
+      requestColumnIndices_[conditionIdx].resize(2);
       decodedRequestVectors_[conditionIdx].resize(2);
+
+      bool hasNonConstantBound = false;
+
+      // Check if lower bound is constant or field access.
+      if (auto lowerConstant =
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                  betweenCondition->lower)) {
+        VELOX_CHECK(
+            !lowerConstant->hasValueVector(),
+            "Complex constant values not supported for between condition lower bound");
+        VELOX_CHECK(
+            !lowerConstant->value().isNull(),
+            "Null constant value not allowed for between condition lower bound");
+        constantBoundValues_[conditionIdx][0] = lowerConstant->value();
+        requestColumnIndices_[conditionIdx][0] = kConstantChannel;
+      } else {
+        auto lowerFieldAccess =
+            checkedPointerCast<const core::FieldAccessTypedExpr>(
+                betweenCondition->lower);
+        requestColumnIndices_[conditionIdx][0] =
+            getRequestColumnIndex(lowerFieldAccess->name());
+        hasNonConstantBound = true;
+      }
+
+      // Check if upper bound is constant or field access.
+      if (auto upperConstant =
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                  betweenCondition->upper)) {
+        VELOX_CHECK(
+            !upperConstant->hasValueVector(),
+            "Complex constant values not supported for between condition upper bound");
+        VELOX_CHECK(
+            !upperConstant->value().isNull(),
+            "Null constant value not allowed for between condition upper bound");
+        constantBoundValues_[conditionIdx][1] = upperConstant->value();
+        requestColumnIndices_[conditionIdx][1] = kConstantChannel;
+      } else {
+        auto upperFieldAccess =
+            checkedPointerCast<const core::FieldAccessTypedExpr>(
+                betweenCondition->upper);
+        requestColumnIndices_[conditionIdx][1] =
+            getRequestColumnIndex(upperFieldAccess->name());
+        hasNonConstantBound = true;
+      }
+
+      // At least one bound must be a field access (not constant). If both
+      // bounds are constants, the condition should be pushed down as a filter.
+      VELOX_CHECK(
+          hasNonConstantBound,
+          "Join condition on index column '{}' cannot have both bounds as constants. "
+          "Use a pushdown filter instead.",
+          condition->key->name());
+
       ++conditionIdx;
       // Between condition is a range condition, stop processing further.
       break;
@@ -372,10 +441,15 @@ void HiveIndexReader::setRequest(const Request& request) {
   requestRow_ = 0;
 
   // Decode all input vectors used in join conditions.
+  // Skip decoding for constant bounds (indicated by kConstantChannel).
   SelectivityVector allRows(request_->size());
   for (size_t i = 0; i < joinConditions_.size(); ++i) {
     const auto& indices = requestColumnIndices_[i];
     for (size_t j = 0; j < indices.size(); ++j) {
+      if (indices[j] == kConstantChannel) {
+        // Constant bound, no need to decode.
+        continue;
+      }
       decodedRequestVectors_[i][j].decode(
           *request_->childAt(indices[j]), allRows);
     }
@@ -415,27 +489,28 @@ void HiveIndexReader::applyFiltersFromRequest(vector_size_t row) {
         auto betweenCondition =
             std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
                 condition)) {
-      const auto& lowerDecoded = decodedRequestVectors_[i][0];
-      VELOX_CHECK(
-          !lowerDecoded.isNullAt(row),
-          "Null value not allowed for lower bound");
-      const auto& upperDecoded = decodedRequestVectors_[i][1];
-      VELOX_CHECK(
-          !upperDecoded.isNullAt(row),
-          "Null value not allowed for upper bound");
-      const auto& type = requestType_->childAt(requestColumnIndices_[i][0]);
-      const auto lower = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          extractValue, type->kind(), lowerDecoded, row);
-      const auto upper = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          extractValue, type->kind(), upperDecoded, row);
+      const auto& type = betweenCondition->key->type();
+
+      const auto lower = extractBoundValue(
+          constantBoundValues_[i][0],
+          decodedRequestVectors_[i][0],
+          type,
+          row,
+          /*isLowerBound=*/true);
+      const auto upper = extractBoundValue(
+          constantBoundValues_[i][1],
+          decodedRequestVectors_[i][1],
+          type,
+          row,
+          /*isLowerBound=*/false);
       spec->setFilter(createRangeFilter(type, lower, upper));
     } else {
       VELOX_FAIL("Unsupported join condition type: {}", condition->toString());
     }
   }
   scanSpec_->resetCachedValues(/*doReorder=*/false);
-  // Resets the row reader for the new index lookup. This resets internal state
-  // and re-applies index bounds based on the updated filters set above.
+  // Resets the row reader for the new index lookup. This resets internal
+  // state and re-applies index bounds based on the updated filters set above.
   rowReader_->reset();
 }
 
@@ -447,8 +522,8 @@ void HiveIndexReader::clearKeyFilters() {
 
 uint64_t HiveIndexReader::readNext(VectorPtr& output) {
   VELOX_CHECK_NOT_NULL(rowReader_);
-  // Pre-allocate output vector with correct schema to ensure the reader returns
-  // results with expected schema even when no rows match.
+  // Pre-allocate output vector with correct schema to ensure the reader
+  // returns results with expected schema even when no rows match.
   if (output == nullptr) {
     output = BaseVector::create(outputType_, 0, pool_);
   }

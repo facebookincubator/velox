@@ -226,7 +226,12 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
       splits;
   for (const auto& filePath : filePaths) {
-    splits.push_back(makeCudfHiveConnectorSplit(filePath->getPath()));
+    splits.push_back(makeCudfHiveConnectorSplit(
+        filePath->getPath(),
+        filePath->fileSize(),
+        filePath->fileModifiedTime(),
+        0,
+        std::numeric_limits<uint64_t>::max()));
   }
   return splits;
 }
@@ -235,7 +240,9 @@ std::vector<
     std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>>
 CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
     const std::string& filePath,
-    uint32_t splitCount) {
+    uint32_t splitCount,
+    const std::optional<std::unordered_map<std::string, std::string>>&
+        infoColumns) {
   auto file =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
   const int64_t fileSize = file->size();
@@ -246,12 +253,18 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
       splits;
   // Add all the splits.
   for (int i = 0; i < splitCount; i++) {
-    auto split =
+    auto splitBuilder =
         facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
             .connectorId(kCudfHiveConnectorId)
             .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
-            .build();
-    splits.push_back(std::move(split));
+            .start(i * splitSize)
+            .length(splitSize);
+    if (infoColumns.has_value()) {
+      for (auto infoColumn : infoColumns.value()) {
+        splitBuilder.infoColumn(infoColumn.first, infoColumn.second);
+      }
+    }
+    splits.push_back(splitBuilder.build());
   }
   return splits;
 }
@@ -259,14 +272,32 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplits(
 std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>
 CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
     const std::string& filePath,
+    uint64_t start,
+    uint64_t length,
     int64_t splitWeight) {
   return facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
       .connectorId(kCudfHiveConnectorId)
       .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
+      .start(start)
+      .length(length)
       .splitWeight(splitWeight)
       .build();
 }
 
+std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>
+CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
+    const std::string& filePath,
+    int64_t fileSize,
+    int64_t fileModifiedTime,
+    uint64_t start,
+    uint64_t length) {
+  return facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
+      .infoColumn("$file_size", fmt::format("{}", fileSize))
+      .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
+      .start(start)
+      .length(length)
+      .build();
+}
 // static
 std::shared_ptr<connector::hive::CudfHiveInsertTableHandle>
 CudfHiveConnectorTestBase::makeCudfHiveInsertTableHandle(

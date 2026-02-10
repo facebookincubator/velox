@@ -37,7 +37,8 @@ SpillerBase::SpillerBase(
     uint64_t maxSpillRunRows,
     std::optional<SpillPartitionId> parentId,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fileSystemStats)
     : container_(container),
       executor_(spillConfig->executor),
       bits_(bits),
@@ -64,7 +65,8 @@ SpillerBase::SpillerBase(
           spillConfig->prefixSortConfig,
           memory::spillMemoryPool(),
           spillStats,
-          spillConfig->fileCreateConfig) {
+          spillConfig->fileCreateConfig,
+          fileSystemStats) {
   TestValue::adjust("facebook::velox::exec::SpillerBase", this);
 }
 
@@ -389,14 +391,16 @@ NoRowContainerSpiller::NoRowContainerSpiller(
     std::optional<SpillPartitionId> parentId,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fileSystemStats)
     : NoRowContainerSpiller(
           std::move(rowType),
           parentId,
           bits,
           {},
           spillConfig,
-          spillStats) {}
+          spillStats,
+          fileSystemStats) {}
 
 NoRowContainerSpiller::NoRowContainerSpiller(
     RowTypePtr rowType,
@@ -404,7 +408,8 @@ NoRowContainerSpiller::NoRowContainerSpiller(
     HashBitRange bits,
     const std::vector<SpillSortKey>& sortingKeys,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fileSystemStats)
     : SpillerBase(
           nullptr,
           std::move(rowType),
@@ -414,7 +419,8 @@ NoRowContainerSpiller::NoRowContainerSpiller(
           0,
           parentId,
           spillConfig,
-          spillStats) {}
+          spillStats,
+          fileSystemStats) {}
 
 void NoRowContainerSpiller::spill(
     const SpillPartitionId& partitionId,
@@ -437,7 +443,8 @@ SortOutputSpiller::SortOutputSpiller(
     RowContainer* container,
     RowTypePtr rowType,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    folly::Synchronized<common::SpillStats>* spillStats,
+    filesystems::File::IoStats* fileSystemStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -447,7 +454,8 @@ SortOutputSpiller::SortOutputSpiller(
           spillConfig->maxSpillRunRows,
           std::nullopt,
           spillConfig,
-          spillStats) {}
+          spillStats,
+          fileSystemStats) {}
 
 void SortOutputSpiller::spill(SpillRows& rows) {
   VELOX_CHECK(!finalized_);

@@ -31,6 +31,7 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
+#include <cudf/ast/expressions.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
@@ -160,6 +161,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
   common::SubfieldFilters subfieldFilters_;
+  // Cached combined subfield filter expression owned by 'subfieldTree_'.
+  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
   dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};

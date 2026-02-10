@@ -99,8 +99,6 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
     const std::string& dataFilePath,
     const std::vector<IcebergDeleteFile>& deleteFiles) {
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  std::unordered_map<std::string, std::string> customSplitInfo;
-  customSplitInfo["table_format"] = "hive-iceberg";
 
   auto readFile = std::make_shared<LocalReadFile>(dataFilePath);
   const int64_t fileSize = readFile->size();
@@ -113,7 +111,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
       fileSize,
       partitionKeys,
       std::nullopt,
-      customSplitInfo,
+      std::unordered_map<std::string, std::string>{},
       nullptr,
       /*cacheable=*/true,
       deleteFiles);
