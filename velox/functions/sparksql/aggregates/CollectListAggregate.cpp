@@ -38,23 +38,19 @@ class CollectListAggregate {
   /// behavior can only be achieved when the default-null behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
-  static bool toIntermediate(
-      exec::out_type<Array<Generic<T1>>>& out,
-      exec::optional_arg_type<Generic<T1>> in) {
-    if (in.has_value()) {
-      out.add_item().copy_from(in.value());
-      return true;
-    }
-    return false;
-  }
+  // Whether null input values should be ignored. Defaults to true.
+  // NOTE: toIntermediate() was intentionally removed because it is static and
+  // cannot access the runtime ignoreNulls_ config. Without it, partial
+  // aggregation uses the accumulator path, which correctly respects the config.
+  bool ignoreNulls_{true};
 
   struct AccumulatorType {
     ValueList elements_;
 
     explicit AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        CollectListAggregate* /*fn*/)
-        : elements_{} {}
+        CollectListAggregate* fn)
+        : elements_{}, ignoreNulls_(fn->ignoreNulls_) {}
 
     static constexpr bool is_fixed_size_ = false;
 
@@ -65,8 +61,14 @@ class CollectListAggregate {
         elements_.appendValue(data, allocator);
         return true;
       }
+      if (!ignoreNulls_) {
+        elements_.appendValue(data, allocator);
+        return true;
+      }
       return false;
     }
+
+    bool ignoreNulls_;
 
     bool combine(
         HashStringAllocator* allocator,
@@ -122,12 +124,14 @@ AggregateRegistrationResult registerCollectList(
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes at most one argument", name);
-        return std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
-            step, argTypes, resultType);
+        auto aggregate =
+            std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
+                step, argTypes, resultType);
+        aggregate->fn()->ignoreNulls_ = config.sparkCollectListIgnoreNulls();
+        return aggregate;
       },
       withCompanionFunctions,
       overwrite);

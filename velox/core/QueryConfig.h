@@ -501,6 +501,12 @@ class QueryConfig {
   static constexpr const char* kSparkJsonIgnoreNullFields =
       "spark.json_ignore_null_fields";
 
+  /// If true, collect_list aggregate function will ignore nulls in the input.
+  /// Defaults to true to match Spark's default behavior. Set to false to
+  /// include nulls (RESPECT NULLS).
+  static constexpr const char* kSparkCollectListIgnoreNulls =
+      "spark.collect_list.ignore_nulls";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -1283,6 +1289,10 @@ class QueryConfig {
 
   bool sparkJsonIgnoreNullFields() const {
     return get<bool>(kSparkJsonIgnoreNullFields, true);
+  }
+
+  bool sparkCollectListIgnoreNulls() const {
+    return get<bool>(kSparkCollectListIgnoreNulls, true);
   }
 
   bool exprTrackCpuUsage() const {

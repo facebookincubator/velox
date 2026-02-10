@@ -589,6 +589,12 @@ class SimpleAggregateAdapter : public Aggregate {
   std::vector<DecodedVector> inputDecoded_;
   DecodedVector intermediateDecoded_;
 
+ public:
+  FUNC* fn() {
+    return fn_.get();
+  }
+
+ private:
   std::unique_ptr<FUNC> fn_;
 };
 
