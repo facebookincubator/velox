@@ -282,7 +282,6 @@ jobs:
       - name: Check NVIDIA Driver Version
         run: |
           nvidia-smi
-          ls /usr/local/cuda*
 
       - name: Install Packages
         run: sudo apt-get update && sudo apt-get install -y cmake
@@ -302,11 +301,16 @@ jobs:
           tar -xvf _build/release/cudf-libs.tar -C _build/release/
           export LD_LIBRARY_PATH="$PWD/_build/release/cudf-libs/:${LD_LIBRARY_PATH}"
           echo $LD_LIBRARY_PATH
+          echo $( \
+            for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
+              do ldd "$exe" 2>/dev/null; done | \
+            sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | sort -u
+          )
           MISSING=$(for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
             do ldd "$exe" 2>/dev/null; done | \
             grep "not found" | awk '{print $1}' | sort -u); \
-            if [ -n "$MISSING" ]; then echo "Missing libraries:"; echo "$MISSING"; exit 1; \
-            else echo "No missing libraries found"; fi
+          if [ -n "$MISSING" ]; then echo "Missing libraries:"; echo "$MISSING"; exit 1; \
+          else echo "No missing libraries found"; fi
 
       - name: Run cuDF Tests
         run: |
