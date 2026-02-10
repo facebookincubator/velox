@@ -322,6 +322,36 @@ class CastExpr : public SpecialForm {
     return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
   }
 
+  /// Helper function to set error status or null in result based on cast policy.
+  /// Centralizes error handling logic used across different cast operations.
+  /// @param row The row index where the error occurred
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be wrapped
+  /// @param details Optional error details message
+  template <typename TResult>
+  void setCastError(
+      vector_size_t row,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException,
+      const std::string& details = "") const {
+    if (setNullInResultAtError()) {
+      result->setNull(row, true);
+    } else {
+      wrapException = false;
+      if (context.captureErrorDetails()) {
+        if (!details.empty()) {
+          context.setStatus(row, Status::UserError("{}", details));
+        } else {
+          context.setStatus(row, Status::UserError());
+        }
+      } else {
+        context.setStatus(row, Status::UserError());
+      }
+    }
+  }
+
   CastOperatorPtr getCastOperator(const TypePtr& type);
 
   // Custom cast operators for to and from top-level as well as nested types.

@@ -49,7 +49,11 @@ class SparkCastHooks : public exec::CastHooks {
       const StringView& dateString) const override;
 
   /// Casts string to TIME (microseconds since midnight as BIGINT).
-  /// Supports format: HH:mm:ss[.SSSSSS]
+  /// Supports format: H:m:s[.SSSSSS] where:
+  ///   - H is hour (0-23)
+  ///   - m is minute (0-59)
+  ///   - s is second (0-59)
+  ///   - SSSSSS is optional fractional seconds (up to 6 digits for microseconds)
   /// Expects timeString to be trimmed by CastExpr::removeWhiteSpaces.
   Expected<int64_t> castStringToTime(
       const StringView& timeString,

@@ -290,12 +290,12 @@ From strings
 
 *(ANSI compliant)*
 
-Supported format is ``H:m:s[.SSS]`` where:
+Supported format is ``H:m:s[.SSSSSS]`` where:
 
   * ``H`` is hour (0-23)
   * ``m`` is minute (0-59)
   * ``s`` is second (0-59)
-  * ``SSS`` is optional milliseconds (0-999)
+  * ``SSSSSS`` is optional fractional seconds (0-999999, up to microseconds)
 
 All leading and trailing UTF8 white-spaces are trimmed before casting.
 TIME values are represented as microseconds since midnight (0 to 86,399,999,999).
@@ -313,6 +313,7 @@ Valid examples
   SELECT cast('12:30:45' as time); -- 45045000000 (12:30:45 in microseconds)
   SELECT cast('23:59:59' as time); -- 86399000000
   SELECT cast('12:03:17.123' as time); -- 43397123000 (with milliseconds)
+  SELECT cast('12:03:17.123456' as time); -- 43397123456 (with microseconds)
   SELECT cast(' 12:30:45 ' as time); -- 45045000000 (whitespace trimmed)
 
 Invalid examples
