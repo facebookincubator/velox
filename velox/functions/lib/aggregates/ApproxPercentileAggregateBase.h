@@ -784,8 +784,10 @@ private:
    auto rowVec = decoded.base()->as<RowVector>();
    if constexpr (checkIntermediateInputs) {
      VELOX_USER_CHECK(rowVec);
-     for (int i = kPercentiles; i <= kAccuracy; ++i) {
-       VELOX_USER_CHECK(rowVec->childAt(i)->isConstantEncoding());
+     if constexpr (kIsPresto) {
+       for (int i = kPercentiles; i <= kAccuracy; ++i) {
+         VELOX_USER_CHECK(rowVec->childAt(i)->isConstantEncoding());
+       }
      }
      for (int i = kK; i <= kMaxValue; ++i) {
        VELOX_USER_CHECK(rowVec->childAt(i)->isFlatEncoding());
