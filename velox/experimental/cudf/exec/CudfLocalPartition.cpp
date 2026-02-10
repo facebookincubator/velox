@@ -232,7 +232,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
         cudf::split(partitionedTable->view(), partitionOffsets, stream);
 
     // DM: We should investigate if keeping partitionedTables alive and using
-    // the table view in partitonedData is more efficient than creating a new
+    // the table view in partitionData is more efficient than creating a new
     // table each time. Currently out of scope because it would need a new
     // type of RowVector that can hold a table view and shared_ptr to the
     // table.
