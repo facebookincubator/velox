@@ -52,6 +52,7 @@ velox_add_library(
   LambdaExpr.cpp
   PeeledEncoding.cpp
   PrestoCastHooks.cpp
+  PrestoCastKernel.cpp
   RegisterSpecialForm.cpp
   RowConstructor.cpp
   SimpleFunctionRegistry.cpp
