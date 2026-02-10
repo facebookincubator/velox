@@ -293,9 +293,16 @@ inline void arrowTimestampToImpalaTimestamp(
     const int64_t Time,
     Int96* impalaTimestamp) {
   int64_t julianDays = (Time / UnitPerDay) + kJulianEpochOffsetDays;
-  (*impalaTimestamp).value[2] = (uint32_t)julianDays;
-
   int64_t lastDayUnits = Time % UnitPerDay;
+
+  // Avoid negative nanos.
+  if (lastDayUnits < 0) {
+    lastDayUnits += UnitPerDay;
+    julianDays -= 1;
+  }
+
+  (*impalaTimestamp).value[2] = julianDays;
+
   auto lastDayNanos = lastDayUnits * NanosecondsPerUnit;
   // impalaTimestamp will be unaligned every other entry so do memcpy instead
   // of assign and reinterpret cast to avoid undefined behavior.
