@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_file_test_utils TestUtils.cpp FaultyFile.cpp FaultyFileSystem.cpp)
+add_library(
+  velox_file_test_utils
+  TestUtils.cpp
+  FaultyFile.cpp
+  FaultyFileSystem.cpp
+)
 
 target_link_libraries(velox_file_test_utils PUBLIC velox_file)
 

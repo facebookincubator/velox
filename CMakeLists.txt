@@ -36,7 +36,10 @@ project(velox)
 # If we are in an active conda env disable search in system paths and add env to
 # prefix path
 if(DEFINED ENV{CONDA_PREFIX})
-  if(NOT DEFINED ENV{VELOX_DEPENDENCY_SOURCE} OR "$ENV{VELOX_DEPENDENCY_SOURCE}" STREQUAL "CONDA")
+  if(
+    NOT DEFINED ENV{VELOX_DEPENDENCY_SOURCE}
+    OR "$ENV{VELOX_DEPENDENCY_SOURCE}" STREQUAL "CONDA"
+  )
     message(STATUS "Using Conda environment: $ENV{CONDA_PREFIX}")
     set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)
     list(APPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
@@ -67,7 +70,11 @@ include(ResolveDependency)
 include(VeloxUtils)
 include(CMakeDependentOption)
 
-velox_set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
+velox_set_with_default(
+  VELOX_DEPENDENCY_SOURCE_DEFAULT
+  VELOX_DEPENDENCY_SOURCE
+  AUTO
+)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # Add all options below
@@ -78,12 +85,14 @@ option(
 )
 option(
   VELOX_BUILD_MINIMAL
-  "Build a minimal set of components only. This will override other build options."
+  "Build a minimal set of components only.
+   This will override other build options."
   OFF
 )
 option(
   VELOX_BUILD_MINIMAL_WITH_DWIO
-  "Build a minimal set of components, including DWIO (file format readers/writers).
+  "Build a minimal set of components, including DWIO
+   (file format readers/writers).
    This will override other build options."
   OFF
 )
@@ -91,7 +100,11 @@ option(VELOX_MONO_LIBRARY "Build single unified library." ON)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
 option(VELOX_BUILD_CMAKE_PACKAGE "Build CMake package for Velox." OFF)
-option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test." OFF)
+option(
+  VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST
+  "Disable Wave branch kernel test."
+  OFF
+)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
 cmake_dependent_option(
@@ -111,7 +124,8 @@ endif()
 if(VELOX_BUILD_SHARED)
   message(
     WARNING
-    "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
+    "When building Velox as a shared library it's recommended to build
+     against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
 endif()
@@ -126,7 +140,8 @@ set(
   VELOX_DEPENDENCY_SOURCE
   ${VELOX_DEPENDENCY_SOURCE_DEFAULT}
   CACHE STRING
-  "Default source for all dependencies with source builds enabled: AUTO SYSTEM BUNDLED."
+  "Default source for all dependencies with source builds enabled:
+   AUTO SYSTEM BUNDLED."
 )
 set(
   VELOX_GFLAGS_TYPE
@@ -168,16 +183,25 @@ option(VELOX_PYTHON_LEGACY_ONLY "Build only the pyvelox module" OFF)
 option(VELOX_BUILD_RUNNER "Builds velox runner" ON)
 option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
-  "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
+  "make buildPartitionBounds_ a vector int64 instead of int32 to avoid
+   integer overflow when the hashtable has billions of records"
   OFF
 )
-option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
+option(
+  VELOX_SIMDJSON_SKIPUTF8VALIDATION
+  "Skip simdjson utf8 validation in JSON parsing"
+  OFF
+)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
 # is broken if you use ninja.
-option(VELOX_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." OFF)
+option(
+  VELOX_FORCE_COLORED_OUTPUT
+  "Always produce ANSI-colored output (GNU/Clang only)."
+  OFF
+)
 
 if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
@@ -216,9 +240,15 @@ if(VELOX_ENABLE_CUDF)
   if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     message(FATAL_ERROR "cuDF requires GCC. Found ${CMAKE_CXX_COMPILER_ID}.")
   elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.3)
-    message(FATAL_ERROR "cuDF requires GCC >= 13.3. Found GCC ${CMAKE_CXX_COMPILER_VERSION}.")
+    message(
+      FATAL_ERROR
+      "cuDF requires GCC >= 13.3. Found GCC ${CMAKE_CXX_COMPILER_VERSION}."
+    )
   endif()
-  message(STATUS "Building curl from source to satisfy cuDF curl version requirement")
+  message(
+    STATUS
+    "Building curl from source to satisfy cuDF curl version requirement"
+  )
   set(CURL_SOURCE BUNDLED)
   velox_resolve_dependency(CURL)
 endif()
@@ -234,7 +264,11 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(VELOX_ENABLE_PARSE ON)
 endif()
 
-if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
+if(
+  ${VELOX_BUILD_TESTING}
+  OR ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+  OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+)
   set(VELOX_ENABLE_COMPRESSION_LZ4 ON)
 endif()
 
@@ -351,7 +385,8 @@ if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
 endif()
 
 # MacOSX enables two-level namespace by default:
-# http://mirror.informatimago.com/next/developer.apple.com/releasenotes/DeveloperTools/TwoLevelNamespaces.html
+# http://mirror.informatimago.com/next/developer.apple.com/releasenotes/
+# DeveloperTools/TwoLevelNamespaces.html
 # Enables -flat_namespace so type_info can be deduplicated across .so boundaries
 if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   add_link_options("-Wl,-flat_namespace")
@@ -386,14 +421,16 @@ if(
 )
   message(
     FATAL_ERROR
-    "Unsupported compiler ${CMAKE_CXX_COMPILER_ID} with version ${CMAKE_CXX_COMPILER_VERSION} found."
+    "Unsupported compiler ${CMAKE_CXX_COMPILER_ID}
+     with version ${CMAKE_CXX_COMPILER_VERSION} found."
   )
 endif()
 
 execute_process(
   COMMAND
     bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh \
+       && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
   OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
   RESULT_VARIABLE COMMAND_STATUS
 )
@@ -414,13 +451,20 @@ endif()
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
-  set_property(GLOBAL PROPERTY JOB_POOLS "high_memory_pool=${MAX_HIGH_MEM_JOBS}")
+  set_property(
+    GLOBAL
+    PROPERTY JOB_POOLS "high_memory_pool=${MAX_HIGH_MEM_JOBS}"
+  )
 else()
   set_property(GLOBAL PROPERTY JOB_POOLS high_memory_pool=1000)
 endif()
 
 if("${MAX_LINK_JOBS}")
-  set_property(GLOBAL APPEND PROPERTY JOB_POOLS "link_job_pool=${MAX_LINK_JOBS}")
+  set_property(
+    GLOBAL
+    APPEND
+    PROPERTY JOB_POOLS "link_job_pool=${MAX_LINK_JOBS}"
+  )
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
@@ -452,9 +496,17 @@ if(ENABLE_ALL_WARNINGS)
       string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
     endif()
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
+      string(
+        APPEND
+        KNOWN_COMPILER_SPECIFIC_WARNINGS
+        " -Wno-error=template-id-cdtor"
+      )
       string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
+      string(
+        APPEND
+        KNOWN_COMPILER_SPECIFIC_WARNINGS
+        " -Wno-error=tautological-compare"
+      )
     endif()
   endif()
 
@@ -494,7 +546,8 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
       if(arch LESS 70)
         message(
           FATAL_ERROR
-          "CUDA architecture ${arch} is below 70. CUDF requires Volta (SM 70) or newer GPUs."
+          "CUDA architecture ${arch} is below 70.
+           CUDF requires Volta (SM 70) or newer GPUs."
         )
       endif()
     endforeach()
@@ -502,8 +555,13 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)
     if(TARGET aws-cpp-sdk-core)
-      # Fix for AWS SDK CPP using hardcoded system curl instead of soft link to curl
-      get_target_property(override_curl_lib aws-cpp-sdk-core INTERFACE_LINK_LIBRARIES)
+      # Fix for AWS SDK CPP using hardcoded system curl instead of
+      # soft link to curl
+      get_target_property(
+        override_curl_lib
+        aws-cpp-sdk-core
+        INTERFACE_LINK_LIBRARIES
+      )
       list(REMOVE_ITEM override_curl_lib "/usr/lib64/libcurl.so")
       list(APPEND override_curl_lib "\$<LINK_ONLY:CURL::libcurl>")
       set_target_properties(
@@ -596,7 +654,8 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   find_package(ZLIB REQUIRED)
   find_package(zstd REQUIRED)
   find_package(Snappy REQUIRED)
-  # Ensure zstd::zstd target exists - handle different zstd package configurations
+  # Ensure zstd::zstd target exists - handle different zstd package
+  # configurations
   if(NOT TARGET zstd::zstd)
     if(TARGET zstd::libzstd_static)
       add_library(zstd::zstd ALIAS zstd::libzstd_static)
@@ -619,7 +678,11 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
 endif()
 
 # DWIO (ORC/DWRF) depends on protobuf.
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_ENABLE_GCS)
+if(
+  ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+  OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+  OR VELOX_ENABLE_GCS
+)
   # Locate or build protobuf.
   velox_set_source(Protobuf)
   velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
@@ -675,7 +738,8 @@ endif()
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
   message(
     FATAL_ERROR
-    "Unit tests require duckDB to be enabled (VELOX_ENABLE_DUCKDB=ON or VELOX_BUILD_TESTING=OFF)"
+    "Unit tests require duckDB to be enabled
+     (VELOX_ENABLE_DUCKDB=ON or VELOX_BUILD_TESTING=OFF)"
   )
 endif()
 
@@ -695,7 +759,10 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   if(BREW_BISON EQUAL 0 AND EXISTS "${BREW_BISON_PREFIX}")
-    message(STATUS "Found Bison keg installed by Homebrew at ${BREW_BISON_PREFIX}")
+    message(
+      STATUS
+      "Found Bison keg installed by Homebrew at ${BREW_BISON_PREFIX}"
+    )
     set(BISON_EXECUTABLE "${BREW_BISON_PREFIX}/bin/bison")
   endif()
 
@@ -706,7 +773,10 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   if(BREW_FLEX EQUAL 0 AND EXISTS "${BREW_FLEX_PREFIX}")
-    message(STATUS "Found Flex keg installed by Homebrew at ${BREW_FLEX_PREFIX}")
+    message(
+      STATUS
+      "Found Flex keg installed by Homebrew at ${BREW_FLEX_PREFIX}"
+    )
     set(FLEX_EXECUTABLE "${BREW_FLEX_PREFIX}/bin/flex")
     set(FLEX_INCLUDE_DIR "${BREW_FLEX_PREFIX}/include")
   endif()

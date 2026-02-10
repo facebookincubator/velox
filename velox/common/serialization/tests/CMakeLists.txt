@@ -17,5 +17,11 @@ add_test(velox_serialization_test velox_serialization_test)
 
 target_link_libraries(
   velox_serialization_test
-  PRIVATE velox_exception velox_serialization Folly::folly glog::glog GTest::gtest GTest::gtest_main
+  PRIVATE
+    velox_exception
+    velox_serialization
+    Folly::folly
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
 )

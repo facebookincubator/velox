@@ -45,7 +45,10 @@ add_library(velox_py_init init/PyInit.cpp)
 
 target_link_libraries(velox_py_init PRIVATE velox_memory)
 # This should not be necessary but the xxhash header is not part of any target
-target_include_directories(velox_py_init PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
+target_include_directories(
+  velox_py_init
+  PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash
+)
 
 # pyvelox.type library:
 add_library(velox_py_type_lib type/PyType.cpp)
@@ -56,7 +59,12 @@ target_link_libraries(type PRIVATE velox_py_type_lib)
 
 # pyvelox.file library:
 add_library(velox_py_file_lib file/PyFile.cpp)
-target_link_libraries(velox_py_file_lib velox_dwio_common velox_py_init pybind11::module)
+target_link_libraries(
+  velox_py_file_lib
+  velox_dwio_common
+  velox_py_init
+  pybind11::module
+)
 
 pyvelox_add_module(file MODULE file/file.cpp)
 target_link_libraries(file PRIVATE velox_py_file_lib)
@@ -124,7 +132,10 @@ target_link_libraries(
   velox_dwio_dwrf_writer
   pybind11::module
 )
-target_compile_options(velox_py_local_runner_lib PRIVATE -Wno-missing-field-initializers)
+target_compile_options(
+  velox_py_local_runner_lib
+  PRIVATE -Wno-missing-field-initializers
+)
 
 pyvelox_add_module(runner MODULE runner/runner.cpp)
 target_link_libraries(runner PRIVATE velox_py_local_runner_lib)
@@ -139,9 +150,18 @@ set_target_properties(arrow_module PROPERTIES OUTPUT_NAME "arrow")
 # This ensures the dynamic linker can find libarrow* dependencies at runtime
 # from the installed pyarrow package without requiring LD_LIBRARY_PATH to be set
 velox_get_rpath_origin(_origin)
-set_property(TARGET arrow_module PROPERTY INSTALL_RPATH "${_origin}/../pyarrow" APPEND)
+set_property(
+  TARGET arrow_module
+  PROPERTY INSTALL_RPATH "${_origin}/../pyarrow"
+  APPEND
+)
 
 target_link_libraries(
   arrow_module
-  PRIVATE velox_py_init velox_py_vector_lib velox_arrow_bridge pyarrow::dev pybind11::module
+  PRIVATE
+    velox_py_init
+    velox_py_vector_lib
+    velox_arrow_bridge
+    pyarrow::dev
+    pybind11::module
 )

@@ -14,7 +14,10 @@
 
 add_executable(velox_presto_type_parser_test TypeParserTest.cpp)
 
-add_test(NAME velox_presto_type_parser_test COMMAND velox_presto_type_parser_test)
+add_test(
+  NAME velox_presto_type_parser_test
+  COMMAND velox_presto_type_parser_test
+)
 
 target_link_libraries(
   velox_presto_type_parser_test

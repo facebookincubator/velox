@@ -23,5 +23,11 @@ add_executable(velox_read_benchmark ReadBenchmarkMain.cpp)
 
 target_link_libraries(
   velox_read_benchmark
-  PRIVATE velox_read_benchmark_lib velox_hive_config velox_s3fs velox_hdfs velox_abfs velox_gcs
+  PRIVATE
+    velox_read_benchmark_lib
+    velox_hive_config
+    velox_s3fs
+    velox_hdfs
+    velox_abfs
+    velox_gcs
 )

@@ -19,9 +19,15 @@
 include_directories(${CMAKE_SOURCE_DIR})
 
 add_library(test_main test_main.cpp)
-target_link_libraries(test_main PUBLIC gtest $<$<BOOL:${BUILD_TRACING}>:perfetto>)
+target_link_libraries(
+  test_main
+  PUBLIC gtest $<$<BOOL:${BUILD_TRACING}>:perfetto>
+)
 target_compile_features(test_main PRIVATE cxx_std_17)
-target_compile_options(test_main PRIVATE ${CMAKE_CXX_FLAGS} ${WARN_FLAGS} ${SANITIZE_COMPILE_FLAGS})
+target_compile_options(
+  test_main
+  PRIVATE ${CMAKE_CXX_FLAGS} ${WARN_FLAGS} ${SANITIZE_COMPILE_FLAGS}
+)
 
 function(breeze_add_tests dir type suite filetype)
   if(BUILD_OPENCL)
@@ -152,7 +158,8 @@ function(
   add_custom_command(
     OUTPUT ${outfile}
     COMMAND
-      ${CMAKE_CURRENT_SOURCE_DIR}/test_fixture_generator.py --backend="${backend}"
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_fixture_generator.py
+      --backend="${backend}"
       --template="${CMAKE_CURRENT_SOURCE_DIR}/${dir}/${type}_test.template.h"
       --out="${CMAKE_CURRENT_BINARY_DIR}/${outfile}" ${LLVM_FLAG}
     DEPENDS

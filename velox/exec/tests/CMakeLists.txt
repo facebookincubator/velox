@@ -134,7 +134,11 @@ add_executable(
   TreeOfLosersTest.cpp
 )
 
-add_test(NAME velox_exec_test COMMAND velox_exec_test WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(
+  NAME velox_exec_test
+  COMMAND velox_exec_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 # TODO: Revert back to 3000 once is fixed.
 # https://github.com/facebookincubator/velox/issues/13879
@@ -306,7 +310,11 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_library(velox_simple_aggregate SimpleAverageAggregate.cpp SimpleArrayAggAggregate.cpp)
+add_library(
+  velox_simple_aggregate
+  SimpleAverageAggregate.cpp
+  SimpleArrayAggAggregate.cpp
+)
 
 target_link_libraries(
   velox_simple_aggregate
@@ -316,7 +324,11 @@ target_link_libraries(
   velox_aggregates
 )
 
-add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp Main.cpp)
+add_executable(
+  velox_simple_aggregate_test
+  SimpleAggregateAdapterTest.cpp
+  Main.cpp
+)
 
 target_link_libraries(
   velox_simple_aggregate_test
@@ -371,7 +383,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     pthread
   )
 
-  add_executable(velox_spiller_aggregate_benchmark SpillerAggregateBenchmarkTest.cpp)
+  add_executable(
+    velox_spiller_aggregate_benchmark
+    SpillerAggregateBenchmarkTest.cpp
+  )
   target_link_libraries(
     velox_spiller_aggregate_benchmark
     velox_exec
@@ -387,4 +402,9 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(velox_driver_test velox_exec velox_exec_test_lib GTest::gtest)
+target_link_libraries(
+  velox_driver_test
+  velox_exec
+  velox_exec_test_lib
+  GTest::gtest
+)

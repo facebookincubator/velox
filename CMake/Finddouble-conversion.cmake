@@ -12,7 +12,11 @@ if(double-conversion_FOUND)
   endif()
 endif()
 
-find_path(DOUBLE_CONVERSION_INCLUDE_DIR NAMES double-conversion.h PATH_SUFFIXES double-conversion)
+find_path(
+  DOUBLE_CONVERSION_INCLUDE_DIR
+  NAMES double-conversion.h
+  PATH_SUFFIXES double-conversion
+)
 find_library(DOUBLE_CONVERSION_LIBRARY NAMES double-conversion)
 
 include(FindPackageHandleStandardArgs)

@@ -33,7 +33,11 @@ target_link_libraries(
   fmt::fmt
 )
 
-add_executable(velox_parquet_writer_test ParquetWriterFieldIdTest.cpp ParquetWriterTest.cpp)
+add_executable(
+  velox_parquet_writer_test
+  ParquetWriterFieldIdTest.cpp
+  ParquetWriterTest.cpp
+)
 
 add_test(
   NAME velox_parquet_writer_test

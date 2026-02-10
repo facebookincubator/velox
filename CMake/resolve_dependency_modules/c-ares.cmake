@@ -33,7 +33,9 @@ FetchContent_Declare(
   c-ares
   URL ${VELOX_CARES_SOURCE_URL}
   URL_HASH ${VELOX_CARES_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git init && git apply ${CMAKE_CURRENT_LIST_DIR}/c-ares/c-ares-random-file.patch
+  PATCH_COMMAND
+    git init && git apply
+    ${CMAKE_CURRENT_LIST_DIR}/c-ares/c-ares-random-file.patch
   OVERRIDE_FIND_PACKAGE
   EXCLUDE_FROM_ALL
   SYSTEM

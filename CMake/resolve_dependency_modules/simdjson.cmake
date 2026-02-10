@@ -18,9 +18,11 @@ set(
   VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
   78115e37b2e88ec63e6ae20bb148063a9112c55bcd71404c8572078fd8a6ac3e
 )
-set(
+string(
+  CONCAT
   VELOX_SIMDJSON_SOURCE_URL
-  "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
+  "https://github.com/simdjson/simdjson/archive/refs/tags/"
+  "v${VELOX_SIMDJSON_VERSION}.tar.gz"
 )
 
 velox_resolve_dependency_url(SIMDJSON)

@@ -62,7 +62,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_hash_join_list_result_benchmark HashJoinListResultBenchmark.cpp)
+add_executable(
+  velox_hash_join_list_result_benchmark
+  HashJoinListResultBenchmark.cpp
+)
 
 target_link_libraries(
   velox_hash_join_list_result_benchmark
@@ -83,7 +86,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_hash_join_prepare_join_table_benchmark HashJoinPrepareJoinTableBenchmark.cpp)
+add_executable(
+  velox_hash_join_prepare_join_table_benchmark
+  HashJoinPrepareJoinTableBenchmark.cpp
+)
 
 target_link_libraries(
   velox_hash_join_prepare_join_table_benchmark
@@ -110,7 +116,11 @@ endif()
 
 add_library(velox_orderby_benchmark_util OrderByBenchmarkUtil.cpp)
 
-target_link_libraries(velox_orderby_benchmark_util velox_vector_fuzzer velox_vector_test_lib)
+target_link_libraries(
+  velox_orderby_benchmark_util
+  velox_vector_fuzzer
+  velox_vector_test_lib
+)
 
 add_executable(velox_prefixsort_benchmark PrefixSortBenchmark.cpp)
 
@@ -121,7 +131,11 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_orderby_benchmark OrderByBenchmark.cpp OrderByBenchmarkUtil.cpp)
+add_executable(
+  velox_orderby_benchmark
+  OrderByBenchmark.cpp
+  OrderByBenchmarkUtil.cpp
+)
 
 target_link_libraries(
   velox_orderby_benchmark
@@ -147,7 +161,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_window_sub_partitioned_sort_benchmark WindowSubPartitionedSortBenchmark.cpp)
+add_executable(
+  velox_window_sub_partitioned_sort_benchmark
+  WindowSubPartitionedSortBenchmark.cpp
+)
 
 target_link_libraries(
   velox_window_sub_partitioned_sort_benchmark
@@ -161,7 +178,10 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_streaming_aggregation_benchmark StreamingAggregationBenchmark.cpp)
+add_executable(
+  velox_streaming_aggregation_benchmark
+  StreamingAggregationBenchmark.cpp
+)
 
 target_link_libraries(
   velox_streaming_aggregation_benchmark
@@ -191,7 +211,10 @@ target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
 if(VELOX_ENABLE_GEO)
   add_executable(velox_spatial_join_benchmark SpatialJoinBenchmark.cpp)
 
-  target_compile_definitions(velox_spatial_join_benchmark PRIVATE VELOX_ENABLE_GEO)
+  target_compile_definitions(
+    velox_spatial_join_benchmark
+    PRIVATE VELOX_ENABLE_GEO
+  )
 
   target_link_libraries(
     velox_spatial_join_benchmark

@@ -28,7 +28,10 @@ add_executable(
   TypesTest.cpp
 )
 
-add_test(velox_dwio_arrow_parquet_writer_test velox_dwio_arrow_parquet_writer_test)
+add_test(
+  velox_dwio_arrow_parquet_writer_test
+  velox_dwio_arrow_parquet_writer_test
+)
 
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_test

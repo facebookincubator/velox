@@ -59,7 +59,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     glog::glog
   )
 
-  add_executable(velox_negated_values_filter_benchmark NegatedValuesFilterBenchmark.cpp)
+  add_executable(
+    velox_negated_values_filter_benchmark
+    NegatedValuesFilterBenchmark.cpp
+  )
 
   target_link_libraries(
     velox_negated_values_filter_benchmark
@@ -72,7 +75,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     glog::glog
   )
 
-  add_executable(velox_negated_bytes_values_benchmark NegatedBytesValuesBenchmark.cpp)
+  add_executable(
+    velox_negated_bytes_values_benchmark
+    NegatedBytesValuesBenchmark.cpp
+  )
 
   target_link_libraries(
     velox_negated_bytes_values_benchmark
@@ -85,7 +91,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     glog::glog
   )
 
-  add_executable(velox_negated_bigint_range_benchmark NegatedBigintRangeBenchmark.cpp)
+  add_executable(
+    velox_negated_bigint_range_benchmark
+    NegatedBigintRangeBenchmark.cpp
+  )
 
   target_link_libraries(
     velox_negated_bigint_range_benchmark
@@ -98,7 +107,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     glog::glog
   )
 
-  add_executable(velox_negated_bytes_range_benchmark NegatedBytesRangeBenchmark.cpp)
+  add_executable(
+    velox_negated_bytes_range_benchmark
+    NegatedBytesRangeBenchmark.cpp
+  )
 
   target_link_libraries(
     velox_negated_bytes_range_benchmark

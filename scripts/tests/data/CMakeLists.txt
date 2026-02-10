@@ -9,7 +9,19 @@ set(CMAKE_CXX_FLAGS
     "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt")
 
 set(Boost_USE_MULTITHREADED TRUE)
-find_package(Boost 1.72.0 REQUIRED program_options context filesystem regex thread system date_time atomic)
+find_package(
+  Boost
+  1.72.0
+  REQUIRED
+  program_options
+  context
+  filesystem
+  regex
+  thread
+  system
+  date_time
+  atomic
+)
 include_directories(${Boost_INCLUDE_DIRS})
 
 find_package(GTest REQUIRED)
@@ -31,7 +43,8 @@ include_directories(${FOLLY_INCLUDE_DIRS})
 include_directories(third_party)
 include_directories(src)
 
-include(CTest)              # include after project() but before add_subdirectory()
+# include after project() but before add_subdirectory()
+include(CTest)
 
 add_subdirectory(scripts)
 add_subdirectory(src)

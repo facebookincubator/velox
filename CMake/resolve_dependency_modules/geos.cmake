@@ -34,7 +34,8 @@ block()
     geos
     URL ${VELOX_GEOS_SOURCE_URL}
     URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
-    PATCH_COMMAND git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-cmakelists.patch"
+    PATCH_COMMAND
+      git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-cmakelists.patch"
     OVERRIDE_FIND_PACKAGE
     SYSTEM
     EXCLUDE_FROM_ALL

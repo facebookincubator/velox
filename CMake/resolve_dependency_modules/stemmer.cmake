@@ -44,7 +44,9 @@ ExternalProject_Add(
   INSTALL_COMMAND ""
   PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/libstemmer/Makefile.patch
   BUILD_BYPRODUCTS
+    # cmake-format: off
     ${STEMMER_PREFIX}/src/libstemmer/${CMAKE_STATIC_LIBRARY_PREFIX}stemmer${CMAKE_STATIC_LIBRARY_SUFFIX}
+  # cmake-format: on
 )
 
 add_library(stemmer STATIC IMPORTED GLOBAL)
@@ -53,8 +55,10 @@ file(MAKE_DIRECTORY ${STEMMER_INCLUDE_PATH})
 set_target_properties(
   stemmer
   PROPERTIES
+    # cmake-format: off
     IMPORTED_LOCATION
       ${STEMMER_PREFIX}/src/libstemmer/${CMAKE_STATIC_LIBRARY_PREFIX}stemmer${CMAKE_STATIC_LIBRARY_SUFFIX}
+    # cmake-format: on
     INTERFACE_INCLUDE_DIRECTORIES ${STEMMER_INCLUDE_PATH}
 )
 

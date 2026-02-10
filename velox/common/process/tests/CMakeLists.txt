@@ -24,5 +24,11 @@ add_test(velox_process_test velox_process_test)
 
 target_link_libraries(
   velox_process_test
-  PRIVATE velox_process velox_profiler fmt::fmt velox_time GTest::gtest GTest::gtest_main
+  PRIVATE
+    velox_process
+    velox_profiler
+    fmt::fmt
+    velox_time
+    GTest::gtest
+    GTest::gtest_main
 )

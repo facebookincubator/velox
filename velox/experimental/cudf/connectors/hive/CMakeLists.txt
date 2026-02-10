@@ -23,7 +23,10 @@ add_library(
   CudfHiveTableHandle.cpp
 )
 
-set_target_properties(velox_cudf_hive_connector PROPERTIES CUDA_ARCHITECTURES native)
+set_target_properties(
+  velox_cudf_hive_connector
+  PROPERTIES CUDA_ARCHITECTURES native
+)
 
 target_link_libraries(
   velox_cudf_hive_connector

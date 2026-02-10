@@ -20,6 +20,13 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(velox_text_reader_test velox_dwio_text_reader_register ${TEST_LINK_LIBS})
+target_link_libraries(
+  velox_text_reader_test
+  velox_dwio_text_reader_register
+  ${TEST_LINK_LIBS}
+)
 
-file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+file(
+  COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+  DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
+)

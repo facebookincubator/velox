@@ -70,7 +70,10 @@ if(VELOX_ENABLE_ARROW)
     set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
   endif()
 
-  set_property(TARGET thrift PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${THRIFT_INCLUDE_DIR})
+  set_property(
+    TARGET thrift
+    PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${THRIFT_INCLUDE_DIR}
+  )
   set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
 
   set(VELOX_ARROW_BUILD_VERSION 15.0.0)
@@ -78,9 +81,11 @@ if(VELOX_ENABLE_ARROW)
     VELOX_ARROW_BUILD_SHA256_CHECKSUM
     ab74c60c46938505c8cd7599b1d2826c68450645d5860d0ff40f67e371a5d0b5
   )
-  set(
+  string(
+    CONCAT
     VELOX_ARROW_SOURCE_URL
-    "https://github.com/apache/arrow/archive/refs/tags/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
+    "https://github.com/apache/arrow/archive/refs/tags/"
+    "apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
   )
 
   velox_resolve_dependency_url(ARROW)
@@ -92,7 +97,10 @@ if(VELOX_ENABLE_ARROW)
     URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
-    BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB}
+    BUILD_BYPRODUCTS
+      ${ARROW_LIBDIR}/libarrow.a
+      ${ARROW_LIBDIR}/libarrow_testing.a
+      ${THRIFT_LIB}
     PATCH_COMMAND
       git apply ${CMAKE_CURRENT_LIST_DIR}/thrift-download.patch && git apply
       ${CMAKE_CURRENT_LIST_DIR}/cmake-compatibility.patch
@@ -108,7 +116,10 @@ if(VELOX_ENABLE_ARROW)
     arrow_testing
     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${ARROW_PREFIX}/install/include
   )
-  set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow.a)
+  set_target_properties(
+    arrow
+    PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow.a
+  )
   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
   set_target_properties(
     arrow_testing

@@ -39,7 +39,12 @@ print(pyarrow.get_library_dirs()[0])
 
 find_library(_libarrow arrow PATHS ${_pyarrow_lib_dir} NO_DEFAULT_PATH)
 
-find_library(_libarrow_py arrow_python PATHS ${_pyarrow_lib_dir} NO_DEFAULT_PATH)
+find_library(
+  _libarrow_py
+  arrow_python
+  PATHS ${_pyarrow_lib_dir}
+  NO_DEFAULT_PATH
+)
 
 set(pyarrow_LIBARROW ${_libarrow})
 set(pyarrow_LIBARROW_PYTHON ${_libarrow_py})

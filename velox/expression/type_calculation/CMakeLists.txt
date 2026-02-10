@@ -32,7 +32,9 @@ add_flex_bison_dependency(TypeCalculationScanner TypeCalculationParser)
 if(VELOX_MONO_LIBRARY)
   add_custom_target(
     velox_type_calculation_gen_src
-    DEPENDS ${BISON_TypeCalculationParser_OUTPUTS} ${FLEX_TypeCalculationScanner_OUTPUTS}
+    DEPENDS
+      ${BISON_TypeCalculationParser_OUTPUTS}
+      ${FLEX_TypeCalculationScanner_OUTPUTS}
   )
   add_dependencies(velox velox_type_calculation_gen_src)
 endif()

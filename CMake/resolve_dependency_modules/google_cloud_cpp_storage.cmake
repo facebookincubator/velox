@@ -42,5 +42,10 @@ FetchContent_Declare(
 )
 
 set(GOOGLE_CLOUD_CPP_ENABLE_EXAMPLES OFF)
-set(GOOGLE_CLOUD_CPP_ENABLE "storage" CACHE STRING "The list of libraries to build.")
+set(
+  GOOGLE_CLOUD_CPP_ENABLE
+  "storage"
+  CACHE STRING
+  "The list of libraries to build."
+)
 FetchContent_MakeAvailable(google_cloud_cpp)

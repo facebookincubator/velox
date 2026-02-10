@@ -16,7 +16,13 @@ add_executable(simple_lru_cache_test SimpleLRUCacheTest.cpp)
 add_test(simple_lru_cache_test simple_lru_cache_test)
 target_link_libraries(
   simple_lru_cache_test
-  PRIVATE velox_common_base Folly::folly velox_time glog::glog GTest::gtest GTest::gtest_main
+  PRIVATE
+    velox_common_base
+    Folly::folly
+    velox_time
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
 )
 
 add_executable(
@@ -47,5 +53,11 @@ add_executable(cached_factory_test CachedFactoryTest.cpp)
 add_test(cached_factory_test cached_factory_test)
 target_link_libraries(
   cached_factory_test
-  PRIVATE velox_common_base Folly::folly velox_time glog::glog GTest::gtest GTest::gtest_main
+  PRIVATE
+    velox_common_base
+    Folly::folly
+    velox_time
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
 )

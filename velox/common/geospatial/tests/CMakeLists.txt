@@ -15,7 +15,10 @@
 if(VELOX_ENABLE_GEO)
   add_executable(velox_common_geospatial_serde_test GeometrySerdeTest.cpp)
 
-  add_test(velox_common_geospatial_serde_test velox_common_geospatial_serde_test)
+  add_test(
+    velox_common_geospatial_serde_test
+    velox_common_geospatial_serde_test
+  )
 
   target_link_libraries(
     velox_common_geospatial_serde_test

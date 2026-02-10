@@ -40,9 +40,15 @@ target_link_libraries(
     GTest::gtest_main
 )
 
-add_executable(velox_core_plan_consistency_checker_test PlanConsistencyCheckerTest.cpp)
+add_executable(
+  velox_core_plan_consistency_checker_test
+  PlanConsistencyCheckerTest.cpp
+)
 
-add_test(velox_core_plan_consistency_checker_test velox_core_plan_consistency_checker_test)
+add_test(
+  velox_core_plan_consistency_checker_test
+  velox_core_plan_consistency_checker_test
+)
 
 target_link_libraries(
   velox_core_plan_consistency_checker_test
