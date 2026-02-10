@@ -235,8 +235,8 @@ HiveIndexSource::HiveIndexSource(
       requestType_(requestType),
       outputType_(outputType),
       executor_(executor),
-      ioStats_(std::make_shared<io::IoStatistics>()),
-      fsStats_(std::make_shared<filesystems::File::IoStats>()) {
+      ioStatistics_(std::make_shared<io::IoStatistics>()),
+      ioStats_(std::make_shared<IoStats>()) {
   init(columnHandles, joinConditions);
 }
 
@@ -515,8 +515,8 @@ void HiveIndexSource::createHiveIndexReader(
       joinConditions_,
       requestType_,
       readerOutputType_,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       fileHandleFactory_,
       executor_);
 }
