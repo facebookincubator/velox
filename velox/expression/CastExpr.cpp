@@ -47,49 +47,6 @@ const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
 
 } // namespace
 
-VectorPtr CastExpr::castFromIntervalDayTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output =
-              INTERVAL_DAY_TIME()->valueToString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          INTERVAL_DAY_TIME()->toString(),
-          toType->toString());
-  }
-}
-
 VectorPtr CastExpr::castFromTime(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -715,12 +672,11 @@ void CastExpr::applyPeeled(
     result =
         kernel_->castToDate(rows, input, context, setNullInResultAtError());
   } else if (fromType->isIntervalDayTime()) {
-    result = castFromIntervalDayTime(rows, input, context, toType);
+    result = kernel_->castFromIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isIntervalDayTime()) {
-    VELOX_UNSUPPORTED(
-        "Cast from {} to {} is not supported",
-        fromType->toString(),
-        toType->toString());
+    result = kernel_->castToIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isTime()) {
     result = castFromTime(rows, input, context, toType);
   } else if (toType->isTime()) {
