@@ -24,7 +24,31 @@ class PrestoCastKernel : public CastKernel {
  public:
   explicit PrestoCastKernel(const core::QueryConfig& config);
 
+  VectorPtr castFromDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError) const override;
+
  private:
+  static inline const tz::TimeZone* FOLLY_NULLABLE
+  getTimeZoneFromConfig(const core::QueryConfig& config) {
+    if (config.adjustTimestampToTimezone()) {
+      const auto sessionTzName = config.sessionTimezone();
+      if (!sessionTzName.empty()) {
+        return tz::locateZone(sessionTzName);
+      }
+    }
+    return nullptr;
+  }
+
   const bool legacyCast_;
 };
 } // namespace facebook::velox::exec
