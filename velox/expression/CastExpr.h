@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/expression/CastHooks.h"
+#include "velox/expression/CastKernel.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
@@ -86,7 +87,8 @@ class CastExpr : public SpecialForm {
       ExprPtr&& expr,
       bool trackCpuUsage,
       bool isTryCast,
-      std::shared_ptr<CastHooks> hooks)
+      std::shared_ptr<CastHooks> hooks,
+      std::shared_ptr<CastKernel> kernel)
       : SpecialForm(
             SpecialFormKind::kCast,
             type,
@@ -95,7 +97,8 @@ class CastExpr : public SpecialForm {
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
         isTryCast_(isTryCast),
-        hooks_(std::move(hooks)) {}
+        hooks_(std::move(hooks)),
+        kernel_(std::move(kernel)) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -329,6 +332,7 @@ class CastExpr : public SpecialForm {
 
   bool isTryCast_;
   std::shared_ptr<CastHooks> hooks_;
+  std::shared_ptr<CastKernel> kernel_;
 
   bool inTopLevel = false;
 };
