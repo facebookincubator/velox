@@ -532,11 +532,6 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
-  // TODO(mh): Enable this when we start using split's `start` and `length`
-  // fields in the `CudfHiveDataSource`. Currently temporarily disabled until we
-  // figure out why Presto-GPU passes incorrect values for split `start` and
-  // `length` fields.
-#if 0
   // Note that the number of row groups selected within `halfFileSize` may
   // change in the future and this test may start failing. In such a case,
   // just adjust the duckdb sql string accordingly.
@@ -567,13 +562,4 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       tableScanNode(),
       makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
-#else
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(tableScanNode())
-          .splits(
-              {makeCudfHiveConnectorSplit(filePath->getPath(), 1 /* start */)})
-          .assertEmptyResults(),
-      "CudfHiveDataSource cannot process splits with non-zero offset");
-#endif
 }

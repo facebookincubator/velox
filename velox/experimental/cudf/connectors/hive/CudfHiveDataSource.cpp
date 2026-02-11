@@ -580,9 +580,6 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
-  // TODO(mh): Temporarily disable these until we figure out why Presto-GPU
-  // passes incorrect values for split `start` and `length` fields
-#if 0
   // Set skip_bytes and num_bytes if available
   if (split_->start != 0) {
     readerOptions_.set_skip_bytes(split_->start);
@@ -590,16 +587,6 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
   if (split_->size() != std::numeric_limits<uint64_t>::max()) {
     readerOptions_.set_num_bytes(split_->size());
   }
-#else
-  VELOX_CHECK_EQ(
-      split_->start,
-      0,
-      "CudfHiveDataSource cannot process splits with non-zero offset");
-  VELOX_CHECK_EQ(
-      split_->size(),
-      std::numeric_limits<uint64_t>::max(),
-      "CudfHiveDataSource cannot process splits with finite length");
-#endif
 
   if (subfieldFilterExpr_ != nullptr) {
     readerOptions_.set_filter(*subfieldFilterExpr_);
