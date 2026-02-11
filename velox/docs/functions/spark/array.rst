@@ -292,6 +292,17 @@ Array Functions
         SELECT shuffle(array(0, 0, 0), 0); -- [0, 0, 0]
         SELECT shuffle(array(1, NULL, 1, NULL, 2), 0); -- [2, 1, NULL, NULL, 1]
 
+.. spark:function:: sequence(start, stop) -> array(bigint)
+                    sequence(start, stop, step) -> array(bigint)
+
+    Generates an array of integers from ``start`` to ``stop``, incrementing by
+    ``step`` (default 1 if ``start <= stop``, otherwise -1). Also supports date
+    and timestamp inputs with interval step. ::
+
+        SELECT sequence(1, 5); -- [1, 2, 3, 4, 5]
+        SELECT sequence(5, 1); -- [5, 4, 3, 2, 1]
+        SELECT sequence(1, 10, 3); -- [1, 4, 7, 10]
+
 .. spark:function:: size(array(E), legacySizeOfNull) -> integer
 
     Returns the size of the array. Returns null for null input if `legacySizeOfNull`
