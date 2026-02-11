@@ -175,9 +175,6 @@ TEST_F(TextReaderTest, basic) {
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {
-  tzset();
-  const auto tzOffsetPST = 28'800;
-  const auto tzOffsetPDT = 25'200;
   auto expected = makeRowVector({
       makeFlatVector<std::string>(
           {"FOO",
@@ -209,19 +206,19 @@ TEST_F(TextReaderTest, headerAndCustomNullString) {
            43.66,
            std::nullopt}),
       makeNullableFlatVector<Timestamp>({
-          Timestamp{1'695'378'095 + tzOffsetPDT, 148'000'000},
-          Timestamp{1'695'690'351 + tzOffsetPDT, 0},
-          Timestamp{1'695'686'400 + tzOffsetPDT, 0},
-          Timestamp{1'695'083'400 + tzOffsetPDT, 0},
+          Timestamp{1'695'378'095, 148'000'000},
+          Timestamp{1'695'690'351, 0},
+          Timestamp{1'695'686'400, 0},
+          Timestamp{1'695'083'400, 0},
           std::nullopt,
-          Timestamp{1'695'657'091 + tzOffsetPDT, 209'000'000},
-          Timestamp{1'695'690'437 + tzOffsetPDT, 469'123'000},
-          Timestamp{1'696'540'679 + tzOffsetPDT, 976'000'000},
-          Timestamp{1'695'657'171 + tzOffsetPDT, 637'000'000},
-          Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'000},
+          Timestamp{1'695'657'091, 209'000'000},
+          Timestamp{1'695'690'437, 469'123'000},
+          Timestamp{1'696'540'679, 976'000'000},
+          Timestamp{1'695'657'171, 637'000'000},
+          Timestamp{1'695'693'225, 745'123'000},
           std::nullopt,
-          Timestamp{1'695'406'246 + tzOffsetPDT, 0},
-          Timestamp{1'699'392'124 + tzOffsetPST, 736'000'000},
+          Timestamp{1'695'406'246, 0},
+          Timestamp{1'699'392'124, 736'000'000},
       }),
   });
 
@@ -1101,9 +1098,6 @@ TEST_F(TextReaderTest, readFloatAsInt) {
 }
 
 TEST_F(TextReaderTest, simpleTypes) {
-  const auto tzOffsetPST = 28'800;
-  const auto tzOffsetPDT = 25'200;
-
   auto expected = makeRowVector({
       makeFlatVector<std::string>(
           {"FOO",
@@ -1148,19 +1142,19 @@ TEST_F(TextReaderTest, simpleTypes) {
            false,
            true}),
       makeNullableFlatVector<Timestamp>(
-          {Timestamp{1'695'378'095 + tzOffsetPDT, 148'000'000},
-           Timestamp{1'695'690'351 + tzOffsetPDT, 0},
-           Timestamp{1'695'686'400 + tzOffsetPDT, 0},
-           Timestamp{1'695'083'400 + tzOffsetPDT, 0},
+          {Timestamp{1'695'378'095, 148'000'000},
+           Timestamp{1'695'690'351, 0},
+           Timestamp{1'695'686'400, 0},
+           Timestamp{1'695'083'400, 0},
            std::nullopt,
-           Timestamp{1'695'657'091 + tzOffsetPDT, 209'000'000},
-           Timestamp{1'695'690'437 + tzOffsetPDT, 469'123'000},
-           Timestamp{1'696'540'679 + tzOffsetPDT, 976'000'000},
-           Timestamp{1'695'657'171 + tzOffsetPDT, 637'000'000},
-           Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'000},
+           Timestamp{1'695'657'091, 209'000'000},
+           Timestamp{1'695'690'437, 469'123'000},
+           Timestamp{1'696'540'679, 976'000'000},
+           Timestamp{1'695'657'171, 637'000'000},
+           Timestamp{1'695'693'225, 745'123'000},
            std::nullopt,
-           Timestamp{1'695'406'246 + tzOffsetPDT, 0},
-           Timestamp{1'699'392'124 + tzOffsetPST, 736'000'000}}),
+           Timestamp{1'695'406'246, 0},
+           Timestamp{1'699'392'124, 736'000'000}}),
   });
 
   auto type = ROW(
