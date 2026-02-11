@@ -89,7 +89,8 @@ hdfsWriteFileSinkGenerator() {
               fileSystem->openFileForWrite(pathSuffix),
               fileURI,
               options.metricLogger,
-              options.stats);
+              options.stats,
+              options.fileSystemStats);
         }
         return static_cast<std::unique_ptr<dwio::common::WriteFileSink>>(
             nullptr);
