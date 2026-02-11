@@ -204,14 +204,52 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARBINARY(),
       TIMESTAMP(),
       TIMESTAMP_WITH_TIME_ZONE(),
+      IPADDRESS(),
   };
   return kScalarTypes;
 }
+
+namespace {
+// Checks if a type contains array(IPADDRESS) at any nesting level.
+// Presto's Int128ArrayBlock doesn't support compareTo(), causing failures
+// when array(IPADDRESS) is used in aggregations.
+// See: https://github.com/prestodb/presto/issues/26836
+bool containsIPAddressArray(const TypePtr& type) {
+  if (type->isArray()) {
+    const auto& elementType = type->asArray().elementType();
+    if (isIPAddressType(elementType)) {
+      return true;
+    }
+    return containsIPAddressArray(elementType);
+  }
+
+  if (type->isMap()) {
+    return containsIPAddressArray(type->asMap().keyType()) ||
+        containsIPAddressArray(type->asMap().valueType());
+  }
+
+  if (type->isRow()) {
+    for (auto i = 0; i < type->size(); ++i) {
+      if (containsIPAddressArray(type->childAt(i))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+} // namespace
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
   if (type->isDate() || type->isIntervalDayTime() || type->isUnknown() ||
       isGeometryType(type)) {
+    return false;
+  }
+
+  // Block array(IPADDRESS) due to Presto Int128ArrayBlock
+  // not supporting compareTo().
+  if (containsIPAddressArray(type)) {
     return false;
   }
 
@@ -362,7 +400,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
       usesTypeName(signature, "p4hyperloglog") ||
-      usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
 }
