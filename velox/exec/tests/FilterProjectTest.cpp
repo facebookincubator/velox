@@ -458,7 +458,7 @@ TEST_F(FilterProjectTest, barrierMulti) {
           barrierExecution,
           numOutputRows);
     }
-  } testSettings[] = {{true, 23}};
+  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
     auto task =
