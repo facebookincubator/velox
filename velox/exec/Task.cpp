@@ -1654,7 +1654,7 @@ void Task::addSplitToStoreLocked(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   if (split.isBarrier()) {
-    splitsStore->requestBarrier(split.numBarrierDrivers_, promises);
+    splitsStore->requestBarrier(split.numBarrierDrivers, promises);
     return;
   }
   auto* queueSplitsStore =

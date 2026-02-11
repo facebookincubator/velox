@@ -24,7 +24,7 @@ void SplitsStore::addSplit(
   VELOX_CHECK(!noMoreSplits_);
   VELOX_CHECK(!(remoteSplit_ && split.isBarrier()));
   if (split.isBarrier()) {
-    for (auto i = 0; i < split.numBarrierDrivers_; ++i) {
+    for (auto i = 0; i < split.numBarrierDrivers; ++i) {
       barrierSplits_[i] = Split::createBarrier();
     }
     while (!promises_.empty()) {

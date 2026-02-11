@@ -27,7 +27,7 @@ struct Split {
   /// barrier processing which adds one barrier split to each leaf source node
   /// to signal the output drain processing.
   bool barrier{false};
-  uint32_t numBarrierDrivers_{0};
+  uint32_t numBarrierDrivers{0};
 
   Split() = default;
 
@@ -37,15 +37,10 @@ struct Split {
       : connectorSplit(std::move(connectorSplit)), groupId(groupId) {}
 
   /// Called by the task barrier to create a special barrier split.
-  static Split createBarrier() {
-    static Split barrierSplit;
+  static Split createBarrier(uint32_t numDrivers = 1) {
+    Split barrierSplit;
     barrierSplit.barrier = true;
-    return barrierSplit;
-  }
-
-  static Split createBarrier(uint32_t numDrivers) {
-    auto barrierSplit = createBarrier();
-    barrierSplit.numBarrierDrivers_ = numDrivers;
+    barrierSplit.numBarrierDrivers = numDrivers;
     return barrierSplit;
   }
 
