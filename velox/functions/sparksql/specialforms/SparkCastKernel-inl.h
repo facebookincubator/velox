@@ -623,4 +623,142 @@ void SparkCastKernel::applyStringToFloatingPointCast(
         }
       });
 }
+
+template <TypeKind FromTypeKind>
+void SparkCastKernel::applyNumberToTimestampCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    bool setNullInResultAtError,
+    VectorPtr& result) const {
+  using FromNativeType = typename TypeTraits<FromTypeKind>::NativeType;
+
+  auto sourceVector = input.as<SimpleVector<FromNativeType>>();
+  auto* resultFlatVector = result->as<FlatVector<Timestamp>>();
+
+  applyToSelectedNoThrowLocal(
+      rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+        const auto value = sourceVector->valueAt(row);
+
+        if constexpr (
+            FromTypeKind == TypeKind::REAL ||
+            FromTypeKind == TypeKind::DOUBLE) {
+          if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+            resultFlatVector->setNull(row, true);
+
+            return;
+          }
+
+          resultFlatVector->set(
+              row, castNumberToTimestamp(static_cast<double>(value)));
+          return;
+        } else {
+          resultFlatVector->set(row, castNumberToTimestamp(value));
+        }
+      });
+}
+
+template <typename T>
+Timestamp SparkCastKernel::castNumberToTimestamp(T seconds) const {
+  // Spark internally use microsecond precision for timestamp.
+  // To avoid overflow, we need to check the range of seconds.
+  static constexpr int64_t maxSeconds =
+      std::numeric_limits<int64_t>::max() / Timestamp::kMicrosecondsInSecond;
+  if (seconds > maxSeconds) {
+    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
+  }
+  if (seconds < -maxSeconds) {
+    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
+  }
+
+  if constexpr (std::is_floating_point_v<T>) {
+    return Timestamp::fromMicrosNoError(
+        static_cast<int64_t>(seconds * Timestamp::kMicrosecondsInSecond));
+  }
+
+  return Timestamp(seconds, 0);
+}
+
+template <TypeKind FromTypeKind>
+VectorPtr SparkCastKernel::castToTimestampImpl(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  if constexpr (
+      FromTypeKind == TypeKind::TINYINT || FromTypeKind == TypeKind::SMALLINT ||
+      FromTypeKind == TypeKind::INTEGER || FromTypeKind == TypeKind::BIGINT ||
+      FromTypeKind == TypeKind::REAL || FromTypeKind == TypeKind::DOUBLE) {
+    VectorPtr result;
+    initializeResultVector(rows, toType, context, result);
+
+    applyNumberToTimestampCast<FromTypeKind>(
+        rows, input, context, setNullInResultAtError, result);
+
+    return result;
+  } else if constexpr (FromTypeKind == TypeKind::BOOLEAN) {
+    VectorPtr result;
+    initializeResultVector(rows, toType, context, result);
+
+    const auto simpleInput = input.as<SimpleVector<bool>>();
+    auto* resultFlatVector = result->as<FlatVector<Timestamp>>();
+
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+          resultFlatVector->set(
+              row,
+              Timestamp::fromMicrosNoError(simpleInput->valueAt(row) ? 1 : 0));
+        });
+
+    return result;
+  } else if constexpr (
+      FromTypeKind == TypeKind::VARCHAR ||
+      FromTypeKind == TypeKind::VARBINARY) {
+    VectorPtr result;
+    initializeResultVector(rows, toType, context, result);
+
+    const auto simpleInput = input.as<SimpleVector<StringView>>();
+    auto* resultFlatVector = result->as<FlatVector<Timestamp>>();
+    auto sessionTimezone = config_.sessionTimezone().empty()
+        ? nullptr
+        : tz::locateZone(config_.sessionTimezone());
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+          StringView inputStr = simpleInput->valueAt(row);
+          inputStr = removeWhiteSpaces(inputStr);
+
+          auto conversionResult = util::fromTimestampWithTimezoneString(
+              inputStr.data(),
+              inputStr.size(),
+              util::TimestampParseMode::kSparkCast);
+          if (conversionResult.hasError()) {
+            if (setNullInResultAtError) {
+              resultFlatVector->setNull(row, true);
+            } else if (context.captureErrorDetails()) {
+              const auto errorDetails = makeErrorMessage(
+                  input,
+                  row,
+                  result->type(),
+                  conversionResult.error().message());
+              context.setStatus(row, Status::UserError("{}", errorDetails));
+            } else {
+              context.setStatus(row, Status::UserError());
+            }
+
+            return;
+          }
+
+          resultFlatVector->set(
+              row,
+              util::fromParsedTimestampWithTimeZone(
+                  conversionResult.value(), sessionTimezone));
+        });
+
+    return result;
+  } else {
+    return exec::PrestoCastKernel::castToTimestamp(
+        rows, input, context, toType, setNullInResultAtError);
+  }
+}
 } // namespace facebook::velox::functions::sparksql

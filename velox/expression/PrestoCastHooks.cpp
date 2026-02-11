@@ -38,39 +38,6 @@ PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
   }
 }
 
-Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
-    const StringView& view) const {
-  const auto conversionResult = util::fromTimestampWithTimezoneString(
-      view.data(),
-      view.size(),
-      legacyCast_ ? util::TimestampParseMode::kLegacyCast
-                  : util::TimestampParseMode::kPrestoCast);
-  if (conversionResult.hasError()) {
-    return folly::makeUnexpected(conversionResult.error());
-  }
-
-  return util::fromParsedTimestampWithTimeZone(
-      conversionResult.value(), options_.timeZone);
-}
-
-Expected<Timestamp> PrestoCastHooks::castIntToTimestamp(
-    int64_t /*seconds*/) const {
-  return folly::makeUnexpected(
-      Status::UserError("Conversion to Timestamp is not supported"));
-}
-
-Expected<std::optional<Timestamp>> PrestoCastHooks::castDoubleToTimestamp(
-    double /*seconds*/) const {
-  return folly::makeUnexpected(
-      Status::UserError("Conversion to Timestamp is not supported"));
-}
-
-Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
-    bool /*seconds*/) const {
-  return folly::makeUnexpected(
-      Status::UserError("Conversion to Timestamp is not supported"));
-}
-
 StringView PrestoCastHooks::removeWhiteSpaces(const StringView& view) const {
   return view;
 }

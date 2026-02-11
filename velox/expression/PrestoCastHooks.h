@@ -26,17 +26,6 @@ class PrestoCastHooks : public CastHooks {
  public:
   explicit PrestoCastHooks(const core::QueryConfig& config);
 
-  // Uses the default implementation of 'castFromDateString'.
-  Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const override;
-
-  Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
-
-  Expected<Timestamp> castBooleanToTimestamp(bool seconds) const override;
-
-  Expected<std::optional<Timestamp>> castDoubleToTimestamp(
-      double seconds) const override;
-
   // Returns the input as is.
   StringView removeWhiteSpaces(const StringView& view) const override;
 

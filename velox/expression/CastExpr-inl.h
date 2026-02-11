@@ -117,72 +117,8 @@ void CastExpr::applyCastKernel(
     }
   };
 
-  // If castResult has an error, set the error in context. Otherwise, set the
-  // value in castResult directly to result. This lambda should be called only
-  // when ToKind is primitive and is not VARCHAR or VARBINARY.
-  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
-                              INLINE_LAMBDA {
-                                if (castResult.hasError()) {
-                                  setError(castResult.error().message());
-                                } else {
-                                  result->set(row, castResult.value());
-                                }
-                              };
-
   try {
     auto inputRowValue = input->valueAt(row);
-
-    if constexpr (
-        (FromKind == TypeKind::TINYINT || FromKind == TypeKind::SMALLINT ||
-         FromKind == TypeKind::INTEGER || FromKind == TypeKind::BIGINT) &&
-        ToKind == TypeKind::TIMESTAMP) {
-      const auto castResult =
-          hooks_->castIntToTimestamp((int64_t)inputRowValue);
-      setResultOrError(castResult, row);
-      return;
-    }
-
-    if constexpr (
-        (FromKind == TypeKind::BOOLEAN) && ToKind == TypeKind::TIMESTAMP) {
-      const auto castResult = hooks_->castBooleanToTimestamp(inputRowValue);
-      setResultOrError(castResult, row);
-      return;
-    }
-
-    if constexpr (
-        (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
-        ToKind == TypeKind::TIMESTAMP) {
-      const auto castResult =
-          hooks_->castDoubleToTimestamp(static_cast<double>(inputRowValue));
-      if (castResult.hasError()) {
-        setError(castResult.error().message());
-      } else {
-        if (castResult.value().has_value()) {
-          result->set(row, castResult.value().value());
-        } else {
-          result->setNull(row, true);
-        }
-      }
-      return;
-    }
-
-    // Optimize empty input strings casting by avoiding throwing exceptions.
-    if constexpr (is_string_kind(FromKind)) {
-      if constexpr (
-          TypeTraits<ToKind>::isPrimitiveType &&
-          TypeTraits<ToKind>::isFixedWidth) {
-        inputRowValue = hooks_->removeWhiteSpaces(inputRowValue);
-        if (inputRowValue.size() == 0) {
-          setError("Empty string");
-          return;
-        }
-      }
-      if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        setResultOrError(castResult, row);
-        return;
-      }
-    }
 
     const auto castResult =
         util::Converter<ToKind, void, TPolicy>::tryCast(inputRowValue);
