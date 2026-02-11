@@ -27,6 +27,7 @@
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/SequenceFunction.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
 
 namespace facebook::velox::functions {
@@ -254,6 +255,10 @@ void registerArrayFunctions(const std::string& prefix) {
       makeArrayShuffleWithCustomSeed,
       getMetadataForArrayShuffle());
   registerIntegerSliceFunction(prefix);
+  exec::registerStatefulVectorFunction(
+      prefix + "sequence",
+      sparksql::sparkSequenceSignatures(),
+      sparksql::makeSparkSequence);
   registerFunction<
       ArrayAppendFunction,
       Array<Generic<T1>>,
