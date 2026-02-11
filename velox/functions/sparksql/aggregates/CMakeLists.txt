@@ -13,8 +13,8 @@
 # limitations under the License.
 velox_add_library(
   velox_functions_spark_aggregates
-  AverageAggregate.cpp
   ApproxPercentileAggregate.cpp
+  AverageAggregate.cpp
   BitwiseXorAggregate.cpp
   BloomFilterAggAggregate.cpp
   CentralMomentsAggregate.cpp

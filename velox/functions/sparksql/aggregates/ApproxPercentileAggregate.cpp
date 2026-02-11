@@ -1,18 +1,19 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-*     http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
@@ -26,135 +27,142 @@ using velox::aggregate::kMinValue;
 namespace {
 
 template <typename T>
-using SparkApproxPercentileAggregate =
-   ApproxPercentileAggregateBase<T, /*kIsPresto=*/false>;
+using SparkApproxPercentileAggregate = ApproxPercentileAggregateBase<
+    T,
+    /*kHasWeight=*/false,
+    /*kAccuracyIsDouble=*/false>;
 
 void addSignatures(
-   const std::string& inputType,
-   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
-       signatures) {
- std::string intermediateType = fmt::format(
-     "row(array(double), boolean, double, integer, bigint, {0}, {0}, array({0}), array(integer))",
-     inputType);
+    const std::string& inputType,
+    std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
+        signatures) {
+  std::string intermediateType = fmt::format(
+      "row(array(double), boolean, double, integer, bigint, {0}, {0}, array({0}), array(integer))",
+      inputType);
 
- // Signature 1: approx_percentile(T, double) -> T (single percentile, default
- // accuracy)
- signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                          .returnType(inputType)
-                          .intermediateType(intermediateType)
-                          .argumentType(inputType)
-                          .argumentType("double")
-                          .build());
- // Signature 2: approx_percentile(T, double, integer) -> T (single percentile,
- // explicit accuracy)
- signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                          .returnType(inputType)
-                          .intermediateType(intermediateType)
-                          .argumentType(inputType)
-                          .argumentType("double")
-                          .argumentType("integer")
-                          .build());
- signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                          .returnType(inputType)
-                          .intermediateType(intermediateType)
-                          .argumentType(inputType)
-                          .argumentType("double")
-                          .argumentType("bigint")
-                          .build());
- // Signature 3: approx_percentile(T, array(double)) -> array(T) (percentile
- // array, default accuracy)
- std::string arrayReturnType = fmt::format("array({})", inputType);
- signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                          .returnType(arrayReturnType)
-                          .intermediateType(intermediateType)
-                          .argumentType(inputType)
-                          .argumentType("array(double)")
-                          .build());
- // Signature 4: approx_percentile(T, array(double), integer) -> array(T)
- // (percentile array, explicit accuracy)
- signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                          .returnType(arrayReturnType)
-                          .intermediateType(intermediateType)
-                          .argumentType(inputType)
-                          .argumentType("array(double)")
-                          .argumentType("integer")
-                          .build());
- signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                          .returnType(arrayReturnType)
-                          .intermediateType(intermediateType)
-                          .argumentType(inputType)
-                          .argumentType("array(double)")
-                          .argumentType("bigint")
-                          .build());
+  // Signature 1: approx_percentile(T, double) -> T (single percentile, default
+  // accuracy)
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(inputType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("double")
+          .build());
+  // Signature 2: approx_percentile(T, double, integer) -> T (single percentile,
+  // explicit accuracy)
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(inputType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("double")
+          .argumentType("integer")
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(inputType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("double")
+          .argumentType("bigint")
+          .build());
+  // Signature 3: approx_percentile(T, array(double)) -> array(T) (percentile
+  // array, default accuracy)
+  std::string arrayReturnType = fmt::format("array({})", inputType);
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(arrayReturnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("array(double)")
+          .build());
+  // Signature 4: approx_percentile(T, array(double), integer) -> array(T)
+  // (percentile array, explicit accuracy)
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(arrayReturnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("array(double)")
+          .argumentType("integer")
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType(arrayReturnType)
+          .intermediateType(intermediateType)
+          .argumentType(inputType)
+          .argumentType("array(double)")
+          .argumentType("bigint")
+          .build());
 }
 
 } // namespace
 
 exec::AggregateRegistrationResult registerApproxPercentileAggregate(
-   const std::string& prefix,
-   bool withCompanionFunctions,
-   bool overwrite) {
- std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
- const std::vector<std::string> kSupportedInputTypes = {
-     "tinyint", "smallint", "integer", "bigint", "real", "double"};
- for (const auto& inputType : kSupportedInputTypes) {
-   addSignatures(inputType, signatures);
- }
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
+  const std::vector<std::string> kSupportedInputTypes = {
+      "tinyint", "smallint", "integer", "bigint", "real", "double"};
+  for (const auto& inputType : kSupportedInputTypes) {
+    addSignatures(inputType, signatures);
+  }
 
- auto functionName = prefix + velox::aggregate::kApproxPercentile;
- return exec::registerAggregateFunction(
-     functionName,
-     std::move(signatures),
-     [functionName = functionName](
-         core::AggregationNode::Step step,
-         const std::vector<TypePtr>& argTypes,
-         const TypePtr& resultType,
-         const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-       auto isRawInput = exec::isRawInput(step);
-       auto fixedRandomSeed =
-           config.debugAggregationApproxPercentileFixedRandomSeed();
-       bool hasWeight = false;
-       bool hasAccuracy = isRawInput ? (argTypes.size() == 3) : false;
+  auto functionName = prefix + velox::aggregate::kApproxPercentile;
+  return exec::registerAggregateFunction(
+      functionName,
+      std::move(signatures),
+      [functionName = functionName](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
+        const auto isRawInput = exec::isRawInput(step);
+        const auto fixedRandomSeed =
+            config.debugAggregationApproxPercentileFixedRandomSeed();
+        const bool hasAccuracy = isRawInput ? (argTypes.size() == 3) : false;
 
-       TypePtr type;
-       if (!isRawInput && exec::isPartialOutput(step)) {
-         type = argTypes[0]->asRow().childAt(kMinValue);
-       } else if (isRawInput) {
-         type = argTypes[0];
-       } else if (resultType->isArray()) {
-         type = resultType->as<TypeKind::ARRAY>().elementType();
-       } else {
-         type = resultType;
-       }
+        TypePtr type;
+        if (!isRawInput && exec::isPartialOutput(step)) {
+          type = argTypes[0]->asRow().childAt(kMinValue);
+        } else if (isRawInput) {
+          type = argTypes[0];
+        } else if (resultType->isArray()) {
+          type = resultType->as<TypeKind::ARRAY>().elementType();
+        } else {
+          type = resultType;
+        }
 
-       switch (type->kind()) {
-         case TypeKind::TINYINT:
-           return std::make_unique<SparkApproxPercentileAggregate<int8_t>>(
-               hasWeight, hasAccuracy, resultType, fixedRandomSeed);
-         case TypeKind::SMALLINT:
-           return std::make_unique<SparkApproxPercentileAggregate<int16_t>>(
-               hasWeight, hasAccuracy, resultType, fixedRandomSeed);
-         case TypeKind::INTEGER:
-           return std::make_unique<SparkApproxPercentileAggregate<int32_t>>(
-               hasWeight, hasAccuracy, resultType, fixedRandomSeed);
-         case TypeKind::BIGINT:
-           return std::make_unique<SparkApproxPercentileAggregate<int64_t>>(
-               hasWeight, hasAccuracy, resultType, fixedRandomSeed);
-         case TypeKind::REAL:
-           return std::make_unique<SparkApproxPercentileAggregate<float>>(
-               hasWeight, hasAccuracy, resultType, fixedRandomSeed);
-         case TypeKind::DOUBLE:
-           return std::make_unique<SparkApproxPercentileAggregate<double>>(
-               hasWeight, hasAccuracy, resultType, fixedRandomSeed);
-         default:
-           VELOX_USER_FAIL(
-               "Unsupported input type for {}: {}",
-               functionName,
-               argTypes[0]->toString());
-       }
-     },
-     withCompanionFunctions,
-     overwrite);
+        switch (type->kind()) {
+          case TypeKind::TINYINT:
+            return std::make_unique<SparkApproxPercentileAggregate<int8_t>>(
+                /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
+          case TypeKind::SMALLINT:
+            return std::make_unique<SparkApproxPercentileAggregate<int16_t>>(
+                /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
+          case TypeKind::INTEGER:
+            return std::make_unique<SparkApproxPercentileAggregate<int32_t>>(
+                /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
+          case TypeKind::BIGINT:
+            return std::make_unique<SparkApproxPercentileAggregate<int64_t>>(
+                /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
+          case TypeKind::REAL:
+            return std::make_unique<SparkApproxPercentileAggregate<float>>(
+                /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
+          case TypeKind::DOUBLE:
+            return std::make_unique<SparkApproxPercentileAggregate<double>>(
+                /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
+          default:
+            VELOX_USER_FAIL(
+                "Unsupported input type for {}: {}",
+                functionName,
+                argTypes[0]->toString());
+        }
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql
