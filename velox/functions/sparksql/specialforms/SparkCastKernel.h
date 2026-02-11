@@ -117,6 +117,13 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castToTimestamp(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
   template <typename FromNativeType, TypeKind ToKind>
   VectorPtr applyDecimalToIntegralCast(
@@ -193,7 +200,29 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       bool setNullInResultAtError,
       VectorPtr& result) const;
 
+  template <TypeKind FromTypeKind>
+  void applyNumberToTimestampCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
+
+  template <TypeKind FromTypeKind>
+  VectorPtr castToTimestampImpl(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
   StringView removeWhiteSpaces(const StringView& view) const;
+
+  // Casts a number to a timestamp. The number is treated as the number of
+  // seconds since the epoch (1970-01-01 00:00:00 UTC).
+  // Supports integer and floating-point types.
+  template <typename T>
+  Timestamp castNumberToTimestamp(T seconds) const;
 
   const core::QueryConfig& config_;
 

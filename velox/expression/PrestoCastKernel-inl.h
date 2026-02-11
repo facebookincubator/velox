@@ -429,6 +429,30 @@ FOLLY_ALWAYS_INLINE void PrestoCastKernel::applyCastPrimitives(
       }
     }
 
+    if constexpr (ToKind == TypeKind::TIMESTAMP) {
+      const auto conversionResult = util::fromTimestampWithTimezoneString(
+          inputRowValue.data(),
+          inputRowValue.size(),
+          legacyCast_ ? util::TimestampParseMode::kLegacyCast
+                      : util::TimestampParseMode::kPrestoCast);
+      if (conversionResult.hasError()) {
+        setError(
+            *input,
+            context,
+            *result,
+            row,
+            conversionResult.error().message(),
+            setNullInResultAtError);
+      } else {
+        result->set(
+            row,
+            util::fromParsedTimestampWithTimeZone(
+                conversionResult.value(), timestampToStringOptions_.timeZone));
+      }
+
+      return;
+    }
+
     if constexpr (ToKind == TypeKind::REAL || ToKind == TypeKind::DOUBLE) {
       const auto castResult =
           doCastToFloatingPoint<typename TypeTraits<ToKind>::NativeType>(
@@ -502,6 +526,31 @@ PrestoCastKernel::applyCastPrimitivesPolicyDispatch(
     bool setNullInResultAtError) const {
   using To = typename TypeTraits<ToKind>::NativeType;
   using From = typename TypeTraits<FromKind>::NativeType;
+
+  if constexpr (
+      (FromKind == TypeKind::TINYINT || FromKind == TypeKind::SMALLINT ||
+       FromKind == TypeKind::INTEGER || FromKind == TypeKind::BIGINT ||
+       FromKind == TypeKind::BOOLEAN || FromKind == TypeKind::DOUBLE ||
+       FromKind == TypeKind::REAL) &&
+      ToKind == TypeKind::TIMESTAMP) {
+    if (setNullInResultAtError) {
+      return BaseVector::createNullConstant(toType, rows.end(), context.pool());
+    }
+
+    VectorPtr result;
+    context.setStatuses(
+        rows,
+        Status::UserError(
+            "{}",
+            makeErrorMessage(
+                input,
+                rows.begin(),
+                toType,
+                "Conversion to Timestamp is not supported")));
+    context.ensureWritable(rows, toType, result);
+
+    return result;
+  }
 
   VectorPtr result;
   context.ensureWritable(rows, toType, result);

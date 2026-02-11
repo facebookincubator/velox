@@ -402,4 +402,20 @@ StringView SparkCastKernel::removeWhiteSpaces(const StringView& view) const {
       output, view);
   return output;
 }
+
+VectorPtr SparkCastKernel::castToTimestamp(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      castToTimestampImpl,
+      input.type()->kind(),
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
 } // namespace facebook::velox::functions::sparksql

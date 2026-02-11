@@ -31,58 +31,6 @@ SparkCastHooks::SparkCastHooks(
   }
 }
 
-Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
-    const StringView& view) const {
-  auto conversionResult = util::fromTimestampWithTimezoneString(
-      view.data(), view.size(), util::TimestampParseMode::kSparkCast);
-  if (conversionResult.hasError()) {
-    return folly::makeUnexpected(conversionResult.error());
-  }
-
-  auto sessionTimezone = config_.sessionTimezone().empty()
-      ? nullptr
-      : tz::locateZone(config_.sessionTimezone());
-  return util::fromParsedTimestampWithTimeZone(
-      conversionResult.value(), sessionTimezone);
-}
-
-template <typename T>
-Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(T seconds) const {
-  // Spark internally use microsecond precision for timestamp.
-  // To avoid overflow, we need to check the range of seconds.
-  static constexpr int64_t maxSeconds =
-      std::numeric_limits<int64_t>::max() / Timestamp::kMicrosecondsInSecond;
-  if (seconds > maxSeconds) {
-    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
-  }
-  if (seconds < -maxSeconds) {
-    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
-  }
-
-  if constexpr (std::is_floating_point_v<T>) {
-    return Timestamp::fromMicrosNoError(
-        static_cast<int64_t>(seconds * Timestamp::kMicrosecondsInSecond));
-  }
-
-  return Timestamp(seconds, 0);
-}
-
-Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
-  return castNumberToTimestamp(seconds);
-}
-
-Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
-    double value) const {
-  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
-    return std::nullopt;
-  }
-  return castNumberToTimestamp(value);
-}
-
-Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
-  return Timestamp::fromMicrosNoError(val ? 1 : 0);
-}
-
 StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
   StringView output;
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(

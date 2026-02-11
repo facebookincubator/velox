@@ -177,6 +177,16 @@ class PrestoCastKernel : public CastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castToTimestamp(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::TIMESTAMP>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
  private:
   template <typename FromNativeType>
   VectorPtr applyDecimalToVarcharCast(
