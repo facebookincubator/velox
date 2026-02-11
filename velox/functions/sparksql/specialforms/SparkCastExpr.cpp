@@ -31,7 +31,14 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& toType) {
   // String to Boolean, Integer, or Date types support ANSI mode.
   if (fromType->isVarchar()) {
-    return toType->isBoolean() || isIntegralType(toType) || toType->isDate();
+    if (toType->isBoolean() || toType->isDate()) {
+      return true;
+    }
+    if (isIntegralType(toType)) {
+      // For string-to-integral casts, ANSI mode rejects invalid formats (e.g.
+      // decimal points) instead of returning NULL.
+      return true;
+    }
   }
 
   return false;
@@ -56,11 +63,8 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   const bool isTryCast =
       !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
 
-  // For string-to-integer casts with ANSI enabled, we need to disallow
-  // decimal points. This is controlled by allowOverflow: when false, it
-  // uses SparkTryCastPolicy (truncate=false, no decimals allowed).
-  // The distinction between CAST (ANSI off) and TRY_CAST is limited to
-  // overflow handling, which is managed by the 'allowOverflow' flag in
+  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
+  // The distinction is controlled by the 'allowOverflow' flag in
   // SparkCastHooks.
   return std::make_shared<SparkCastExpr>(
       type,
@@ -81,10 +85,7 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       "TRY_CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
 
-  // TRY_CAST always uses allowOverflow=false to:
-  // 1. Return NULL on overflow (instead of wrapping)
-  // 2. Return NULL on invalid string formats like "125.5" for integers
-  // This uses SparkTryCastPolicy which handles both cases correctly.
+  // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
