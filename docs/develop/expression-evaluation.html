@@ -436,6 +436,23 @@ most often first.</p>
 are expected to use this flag to decide whether the partially populated result
 vector must be preserved or can be overwritten.</p>
 </section>
+<section id="expression-hashing">
+<h4>Expression Hashing<a class="headerlink" href="#expression-hashing" title="Link to this heading">¶</a></h4>
+<p>Each expression node provides a <code class="docutils literal notranslate"><span class="pre">hash()</span></code> method that computes a stable hash
+value for the expression tree. This hash can be used for deduplication
+and expression comparison.</p>
+<p><strong>Stability Guarantee</strong>: Expression hashes are stable across different
+processes, builds, and machines. This is achieved by using a stable hasher
+like <code class="docutils literal notranslate"><span class="pre">folly::hasher</span></code>.</p>
+<p>The hash is computed recursively:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">localHash()</span></code> computes a hash for the expression node itself (type name,
+function name, field name, etc.)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hash()</span></code> combines <code class="docutils literal notranslate"><span class="pre">localHash()</span></code> with the type’s hash and the hashes of
+all input expressions</p></li>
+</ul>
+<p>This enables use cases like expression-based sampling and deduplication.</p>
+</section>
 </section>
 </section>
 </section>
@@ -471,6 +488,7 @@ vector must be preserved or can be overwritten.</p>
 <li><a class="reference internal" href="#error-handling-in-and-or-try">Error Handling in AND, OR, TRY</a></li>
 <li><a class="reference internal" href="#adaptive-conjunct-reordering-in-and-and-or">Adaptive Conjunct Reordering in AND and OR</a></li>
 <li><a class="reference internal" href="#evaluation-of-if-switch">Evaluation of IF, SWITCH</a></li>
+<li><a class="reference internal" href="#expression-hashing">Expression Hashing</a></li>
 </ul>
 </li>
 </ul>
