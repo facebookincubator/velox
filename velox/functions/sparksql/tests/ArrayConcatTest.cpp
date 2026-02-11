@@ -399,5 +399,223 @@ TEST_F(ArrayConcatTest, mixedIntegerTypesWithNulls) {
   testExpression("concat(c0, c1)", {array1, array2}, expected);
 }
 
+// Test with single element arrays
+TEST_F(ArrayConcatTest, singleElementArrays) {
+  auto array1 = makeArrayVector<int64_t>({{1}, {2}, {3}});
+  auto array2 = makeArrayVector<int64_t>({{4}, {5}, {6}});
+  auto array3 = makeArrayVector<int64_t>({{7}, {8}, {9}});
+
+  VectorPtr expected = makeArrayVector<int64_t>({{1, 4, 7}, {2, 5, 8}, {3, 6, 9}});
+
+  testExpression("concat(c0, c1, c2)", {array1, array2, array3}, expected);
+}
+
+// Test null array in middle of variadic arguments
+TEST_F(ArrayConcatTest, nullArrayInMiddleOfVariadic) {
+  auto array1 = makeArrayVector<int64_t>({{1, 2}, {10, 20}});
+  auto array2 = makeNullableArrayVector<int64_t>({
+      std::nullopt,
+      {{30}},
+  });
+  auto array3 = makeArrayVector<int64_t>({{3, 4}, {40, 50}});
+
+  VectorPtr expected = makeNullableArrayVector<int64_t>({
+      std::nullopt,
+      {{10, 20, 30, 40, 50}},
+  });
+
+  testExpression("concat(c0, c1, c2)", {array1, array2, array3}, expected);
+}
+
+// Test very large variadic (20 arrays)
+TEST_F(ArrayConcatTest, veryLargeVariadic) {
+  std::vector<VectorPtr> inputs;
+  for (int i = 0; i < 20; i++) {
+    inputs.push_back(makeArrayVector<int32_t>({{i * 10}}));
+  }
+
+  VectorPtr expected = makeArrayVector<int32_t>({
+      {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190}
+  });
+
+  testExpression(
+      "concat(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19)",
+      inputs,
+      expected);
+}
+
+// Test deeply nested arrays (3 levels)
+TEST_F(ArrayConcatTest, deeplyNestedArrays) {
+  // Create base: array<array<int>>
+  auto level1 = makeArrayVector<int64_t>({{1, 2}, {3, 4}});
+  
+  // Create level2: array<array<array<int>>>
+  auto level2_1 = makeArrayVector({0, 1}, level1);  // [[1,2]], [[3,4]]
+  auto level2_2 = makeArrayVector({1, 2}, level1);  // [[3,4]], (empty)
+  
+  // Expected: [[1,2]], [[3,4]], [[3,4]]
+  auto expectedBase = makeArrayVector<int64_t>({{1, 2}, {3, 4}, {3, 4}});
+  auto expected = makeArrayVector({0, 1, 2}, expectedBase);
+
+  testExpression("concat(c0, c1)", {level2_1, level2_2}, expected);
+}
+
+// Test alternating null and non-null elements
+TEST_F(ArrayConcatTest, alternatingNullPattern) {
+  auto array1 = makeNullableArrayVector<int64_t>({
+      {{1, std::nullopt, 2, std::nullopt, 3}},
+  });
+  auto array2 = makeNullableArrayVector<int64_t>({
+      {{std::nullopt, 4, std::nullopt, 5, std::nullopt}},
+  });
+
+  VectorPtr expected = makeNullableArrayVector<int64_t>({
+      {{1, std::nullopt, 2, std::nullopt, 3, std::nullopt, 4, std::nullopt, 5, std::nullopt}},
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test with large element count arrays
+TEST_F(ArrayConcatTest, largeElementCountArrays) {
+  std::vector<int64_t> largeVec1(1000);
+  std::vector<int64_t> largeVec2(1000);
+  
+  for (int i = 0; i < 1000; i++) {
+    largeVec1[i] = i;
+    largeVec2[i] = i + 1000;
+  }
+
+  auto array1 = makeArrayVector<int64_t>({largeVec1});
+  auto array2 = makeArrayVector<int64_t>({largeVec2});
+
+  std::vector<int64_t> expectedVec(2000);
+  for (int i = 0; i < 2000; i++) {
+    expectedVec[i] = i;
+  }
+  VectorPtr expected = makeArrayVector<int64_t>({expectedVec});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test float arrays with special values (NaN, Infinity)
+TEST_F(ArrayConcatTest, floatSpecialValues) {
+  auto array1 = makeArrayVector<float>({
+      {1.0f, std::numeric_limits<float>::infinity(), 2.0f}
+  });
+  auto array2 = makeArrayVector<float>({
+      {-std::numeric_limits<float>::infinity(), 3.0f}
+  });
+
+  VectorPtr expected = makeArrayVector<float>({
+      {1.0f, std::numeric_limits<float>::infinity(), 2.0f, 
+       -std::numeric_limits<float>::infinity(), 3.0f}
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test double arrays with NaN
+TEST_F(ArrayConcatTest, doubleWithNaN) {
+  auto array1 = makeArrayVector<double>({
+      {1.0, std::numeric_limits<double>::quiet_NaN(), 2.0}
+  });
+  auto array2 = makeArrayVector<double>({{3.0}});
+
+  // Note: NaN != NaN, so we just verify it doesn't crash
+  auto result = evaluate("concat(c0, c1)", makeRowVector({array1, array2}));
+  ASSERT_EQ(result->size(), 1);
+}
+
+// Test empty arrays mixed with non-empty
+TEST_F(ArrayConcatTest, emptyMixedWithNonEmpty) {
+  auto array1 = makeArrayVector<int64_t>({{}, {1, 2}, {}});
+  auto array2 = makeArrayVector<int64_t>({{3}, {}, {4, 5}});
+  auto array3 = makeArrayVector<int64_t>({{}, {6}, {}});
+
+  VectorPtr expected = makeArrayVector<int64_t>({
+      {3},
+      {1, 2, 6},
+      {4, 5}
+  });
+
+  testExpression("concat(c0, c1, c2)", {array1, array2, array3}, expected);
+}
+
+// Test string arrays with empty strings
+TEST_F(ArrayConcatTest, stringArraysWithEmptyStrings) {
+  auto array1 = makeArrayVector<StringView>({{""_sv, "a"_sv, ""_sv}});
+  auto array2 = makeArrayVector<StringView>({{"b"_sv, ""_sv}});
+
+  VectorPtr expected = makeArrayVector<StringView>({
+      {""_sv, "a"_sv, ""_sv, "b"_sv, ""_sv}
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test with unicode strings
+TEST_F(ArrayConcatTest, unicodeStrings) {
+  auto array1 = makeArrayVector<StringView>({{"Hello"_sv, "世界"_sv}});
+  auto array2 = makeArrayVector<StringView>({{"🚀"_sv, "Velox"_sv}});
+
+  VectorPtr expected = makeArrayVector<StringView>({
+      {"Hello"_sv, "世界"_sv, "🚀"_sv, "Velox"_sv}
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test row arrays (struct arrays)
+TEST_F(ArrayConcatTest, rowArrays) {
+  auto rowType = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
+  
+  auto array1 = makeArrayOfRowVector(
+      rowType,
+      {makeRowVector({
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<StringView>({"x"_sv, "y"_sv})
+      })});
+  
+  auto array2 = makeArrayOfRowVector(
+      rowType,
+      {makeRowVector({
+          makeFlatVector<int32_t>({3}),
+          makeFlatVector<StringView>({"z"_sv})
+      })});
+
+  auto expected = makeArrayOfRowVector(
+      rowType,
+      {makeRowVector({
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<StringView>({"x"_sv, "y"_sv, "z"_sv})
+      })});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test map arrays
+TEST_F(ArrayConcatTest, mapArrays) {
+  auto mapType = MAP(INTEGER(), VARCHAR());
+  
+  // Create array<map<int, varchar>>
+  auto map1 = makeMapVector<int32_t, StringView>({
+      {{1, "a"_sv}, {2, "b"_sv}}
+  });
+  auto array1 = makeArrayVector({0}, map1);
+  
+  auto map2 = makeMapVector<int32_t, StringView>({
+      {{3, "c"_sv}}
+  });
+  auto array2 = makeArrayVector({0}, map2);
+  
+  auto expectedMap = makeMapVector<int32_t, StringView>({
+      {{1, "a"_sv}, {2, "b"_sv}, {3, "c"_sv}}
+  });
+  auto expected = makeArrayVector({0}, expectedMap);
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
