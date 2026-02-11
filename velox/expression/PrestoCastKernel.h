@@ -139,6 +139,26 @@ class PrestoCastKernel : public CastKernel {
         rows, input, context, input.type(), toType, setNullInResultAtError);
   }
 
+  VectorPtr castToReal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::REAL>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
+  VectorPtr castToDouble(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::DOUBLE>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
  private:
   template <typename FromNativeType>
   VectorPtr applyDecimalToVarcharCast(
@@ -231,6 +251,9 @@ class PrestoCastKernel : public CastKernel {
       const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
       bool setNullInResultAtError,
       FlatVector<typename TypeTraits<ToKind>::NativeType>* result) const;
+
+  template <typename T>
+  static Expected<T> doCastToFloatingPoint(const StringView& data);
 
   static inline const tz::TimeZone* FOLLY_NULLABLE
   getTimeZoneFromConfig(const core::QueryConfig& config) {

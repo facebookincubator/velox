@@ -318,6 +318,79 @@ VectorPtr SparkCastKernel::castToHugeInt(
       setNullInResultAtError);
 }
 
+VectorPtr SparkCastKernel::castToReal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  switch (fromType->kind()) {
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
+      VectorPtr result;
+      initializeResultVector(rows, toType, context, result);
+
+      applyStringToFloatingPointCast<TypeKind::REAL>(
+          rows, input, context, setNullInResultAtError, result);
+
+      return result;
+    }
+    case TypeKind::DOUBLE: {
+      if (!allowOverflow_) {
+        return exec::PrestoCastKernel::castToReal(
+            rows, input, context, toType, setNullInResultAtError);
+      }
+
+      VectorPtr result;
+      initializeResultVector(rows, toType, context, result);
+
+      const auto simpleInput = input.as<SimpleVector<double>>();
+      auto* resultFlatVector = result->as<FlatVector<float>>();
+
+      applyToSelectedNoThrowLocal(
+          rows,
+          context,
+          result,
+          setNullInResultAtError,
+          [&](vector_size_t row) {
+            resultFlatVector->set(row, simpleInput->valueAt(row));
+          });
+
+      return result;
+    }
+    default:
+      return exec::PrestoCastKernel::castToReal(
+          rows, input, context, toType, setNullInResultAtError);
+  }
+}
+
+VectorPtr SparkCastKernel::castToDouble(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  const auto& fromType = input.type();
+
+  switch (fromType->kind()) {
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
+      VectorPtr result;
+      initializeResultVector(rows, toType, context, result);
+
+      applyStringToFloatingPointCast<TypeKind::DOUBLE>(
+          rows, input, context, setNullInResultAtError, result);
+
+      return result;
+    }
+    default:
+      return exec::PrestoCastKernel::castToDouble(
+          rows, input, context, toType, setNullInResultAtError);
+  }
+}
+
 StringView SparkCastKernel::removeWhiteSpaces(const StringView& view) const {
   StringView output;
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(

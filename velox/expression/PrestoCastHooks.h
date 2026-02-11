@@ -37,14 +37,6 @@ class PrestoCastHooks : public CastHooks {
   Expected<std::optional<Timestamp>> castDoubleToTimestamp(
       double seconds) const override;
 
-  // Allows casting 'NaN', 'Infinity', and '-Infinity' to real, but not 'Inf' or
-  // these strings with different letter cases.
-  Expected<float> castStringToReal(const StringView& data) const override;
-
-  // Allows casting 'NaN', 'Infinity', and '-Infinity' to double, but not 'Inf'
-  // or these strings with different letter cases.
-  Expected<double> castStringToDouble(const StringView& data) const override;
-
   // Returns the input as is.
   StringView removeWhiteSpaces(const StringView& view) const override;
 

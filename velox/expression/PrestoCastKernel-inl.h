@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/expression/PrestoCastKernel.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::exec {
 template <typename FromNativeType>
@@ -326,6 +327,43 @@ VectorPtr PrestoCastKernel::applyVarcharToDecimalCast(
   return result;
 }
 
+template <typename T>
+FOLLY_ALWAYS_INLINE Expected<T> PrestoCastKernel::doCastToFloatingPoint(
+    const StringView& data) {
+  static const T kNan = std::numeric_limits<T>::quiet_NaN();
+  static const double_conversion::StringToDoubleConverter
+      stringToDoubleConverter{
+          double_conversion::StringToDoubleConverter::ALLOW_TRAILING_SPACES,
+          /*empty_string_value*/ kNan,
+          /*junk_string_value*/ kNan,
+          "Infinity",
+          "NaN"};
+  int processedCharactersCount;
+  T result;
+  auto* begin = std::find_if_not(data.begin(), data.end(), [](char c) {
+    return functions::stringImpl::isAsciiWhiteSpace(c);
+  });
+  auto length = data.end() - begin;
+  if (length == 0) {
+    // 'data' only contains white spaces.
+    return folly::makeUnexpected(Status::UserError());
+  }
+  if constexpr (std::is_same_v<T, float>) {
+    result = stringToDoubleConverter.StringToFloat(
+        begin, length, &processedCharactersCount);
+  } else if constexpr (std::is_same_v<T, double>) {
+    result = stringToDoubleConverter.StringToDouble(
+        begin, length, &processedCharactersCount);
+  }
+  // Since we already removed leading space, if processedCharactersCount == 0,
+  // it means the remaining string is either empty or a junk string. So return a
+  // user error in this case.
+  if UNLIKELY (processedCharactersCount == 0) {
+    return folly::makeUnexpected(Status::UserError());
+  }
+  return result;
+}
+
 /// The per-row level Kernel
 /// @tparam ToKind The cast target type
 /// @tparam FromKind The expression type
@@ -357,6 +395,24 @@ FOLLY_ALWAYS_INLINE void PrestoCastKernel::applyCastPrimitives(
             setNullInResultAtError);
         return;
       }
+    }
+
+    if constexpr (ToKind == TypeKind::REAL || ToKind == TypeKind::DOUBLE) {
+      const auto castResult =
+          doCastToFloatingPoint<typename TypeTraits<ToKind>::NativeType>(
+              inputRowValue);
+      if (castResult.hasError()) {
+        setError(
+            *input,
+            context,
+            *result,
+            row,
+            castResult.error().message(),
+            setNullInResultAtError);
+      } else {
+        result->set(row, castResult.value());
+      }
+      return;
     }
 
     if constexpr (
