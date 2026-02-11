@@ -62,7 +62,7 @@ class TaskQueue {
     return pool_.get();
   }
 
-  std::atomic<int32_t> producersDrainFinished_ = 0;
+  std::atomic_int32_t producersDrainFinished_ = 0;
 
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
@@ -88,11 +88,10 @@ exec::BlockingReason TaskQueue::enqueue(
     velox::ContinueFuture* future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
-
-    if (!drained) {
-      ++producersFinished_;
-    } else {
+    if (drained) {
       ++producersDrainFinished_;
+    } else {
+      ++producersFinished_;
     }
     if (consumerBlocked_) {
       consumerBlocked_ = false;
@@ -301,7 +300,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(queryCtx_),
         Task::ExecutionMode::kParallel,
         // consumer
-        [this, queueHolder, copyResult = params.copyResult, taskId = taskId_](
+        [queueHolder, copyResult = params.copyResult, taskId = taskId_](
             const RowVectorPtr& vector,
             bool drained,
             velox::ContinueFuture* future) {
