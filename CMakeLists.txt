@@ -511,6 +511,7 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
         PROPERTIES INTERFACE_LINK_LIBRARIES "${override_curl_lib}"
       )
     endif()
+    add_compile_definitions(VELOX_ENABLE_CUDF)
   endif()
 endif()
 

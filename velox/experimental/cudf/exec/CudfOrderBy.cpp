@@ -18,6 +18,8 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/core/Expressions.h"
+
 #include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -25,29 +27,43 @@ namespace facebook::velox::cudf_velox {
 CudfOrderBy::CudfOrderBy(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::OrderByNode>& orderByNode)
+    const std::shared_ptr<const core::PlanNode>& planNode)
     : exec::Operator(
           driverCtx,
-          orderByNode->outputType(),
+          planNode->outputType(),
           operatorId,
-          orderByNode->id(),
+          planNode->id(),
           "CudfOrderBy"),
       NvtxHelper(
           nvtx3::rgb{64, 224, 208}, // Turquoise
           operatorId,
-          fmt::format("[{}]", orderByNode->id())),
-      orderByNode_(orderByNode) {
-  sortKeys_.reserve(orderByNode->sortingKeys().size());
-  columnOrder_.reserve(orderByNode->sortingKeys().size());
-  nullOrder_.reserve(orderByNode->sortingKeys().size());
-  for (int i = 0; i < orderByNode->sortingKeys().size(); ++i) {
-    const auto channel =
-        exec::exprToChannel(orderByNode->sortingKeys()[i].get(), outputType_);
+          fmt::format("[{}]", planNode->id())) {
+  VELOX_CHECK(
+      std::dynamic_pointer_cast<const core::OrderByNode>(planNode) ||
+      std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode));
+  const std::vector<facebook::velox::core::FieldAccessTypedExprPtr>&
+      sortingKeys = std::dynamic_pointer_cast<const core::OrderByNode>(planNode)
+      ? std::dynamic_pointer_cast<const core::OrderByNode>(planNode)
+            ->sortingKeys()
+      : std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode)
+            ->sortingKeys();
+  const std::vector<facebook::velox::core::SortOrder>& sortingOrders =
+      std::dynamic_pointer_cast<const core::OrderByNode>(planNode)
+      ? std::dynamic_pointer_cast<const core::OrderByNode>(planNode)
+            ->sortingOrders()
+      : std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode)
+            ->sortingOrders();
+
+  sortKeys_.reserve(sortingKeys.size());
+  columnOrder_.reserve(sortingKeys.size());
+  nullOrder_.reserve(sortingKeys.size());
+  for (int i = 0; i < sortingKeys.size(); ++i) {
+    const auto channel = exec::exprToChannel(sortingKeys[i].get(), outputType_);
     VELOX_CHECK(
         channel != kConstantChannel,
         "OrderBy doesn't allow constant sorting keys");
     sortKeys_.push_back(channel);
-    auto const& sortingOrder = orderByNode->sortingOrders()[i];
+    auto const& sortingOrder = sortingOrders[i];
     columnOrder_.push_back(
         sortingOrder.isAscending() ? cudf::order::ASCENDING
                                    : cudf::order::DESCENDING);

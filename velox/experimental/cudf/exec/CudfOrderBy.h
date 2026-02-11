@@ -31,7 +31,7 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
   CudfOrderBy(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::OrderByNode>& orderByNode);
+      const std::shared_ptr<const core::PlanNode>& planNode);
 
   bool needsInput() const override {
     return !finished_;
@@ -55,7 +55,6 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
 
  private:
   CudfVectorPtr outputTable_;
-  std::shared_ptr<const core::OrderByNode> orderByNode_;
   std::vector<CudfVectorPtr> inputs_;
   std::vector<cudf::size_type> sortKeys_;
   std::vector<cudf::order> columnOrder_;
