@@ -20,34 +20,41 @@
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::serializer {
+namespace {
+
+bool validateBound(
+    const IndexBound& indexBound,
+    const std::vector<std::string>& indexColumns) {
+  if (indexBound.bound == nullptr || indexBound.bound->size() == 0) {
+    return false;
+  }
+
+  const auto& rowType = asRowType(indexBound.bound->type());
+  if (rowType->size() != indexColumns.size()) {
+    return false;
+  }
+  for (const auto& columnName : indexColumns) {
+    if (!rowType->containsChild(columnName)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 bool IndexBounds::validate() const {
   if (!lowerBound.has_value() && !upperBound.has_value()) {
     return false;
   }
 
-  const auto validateBound = [this](const IndexBound& bound) {
-    if (bound.bound == nullptr || bound.bound->size() == 0) {
-      return false;
-    }
-
-    const auto& rowType = asRowType(bound.bound->type());
-    if (rowType->size() != indexColumns.size()) {
-      return false;
-    }
-    for (const auto& columnName : indexColumns) {
-      if (!rowType->containsChild(columnName)) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  if (lowerBound.has_value() && !validateBound(lowerBound.value())) {
+  if (lowerBound.has_value() &&
+      !validateBound(lowerBound.value(), indexColumns)) {
     return false;
   }
 
-  if (upperBound.has_value() && !validateBound(upperBound.value())) {
+  if (upperBound.has_value() &&
+      !validateBound(upperBound.value(), indexColumns)) {
     return false;
   }
 
