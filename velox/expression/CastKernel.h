@@ -36,6 +36,9 @@ class CastKernel {
  public:
   virtual ~CastKernel() = default;
 
+  /// Returns the options to cast from timestamp to string.
+  virtual const TimestampToStringOptions& timestampToStringOptions() const = 0;
+
   virtual VectorPtr castFromDate(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -141,6 +144,20 @@ class CastKernel {
       bool setNullInResultAtError) const = 0;
 
   virtual VectorPtr castToDouble(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
+  virtual VectorPtr castToVarchar(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const = 0;
+
+  virtual VectorPtr castToVarbinary(
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
