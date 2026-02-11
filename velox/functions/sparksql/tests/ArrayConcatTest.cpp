@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox::test;
@@ -155,6 +156,132 @@ TEST_F(ArrayConcatTest, unknown) {
 
   const auto expected =
       makeArrayVectorFromJson<UnknownValue>({"[null, null, null]"});
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test concatenating arrays containing only null elements
+TEST_F(ArrayConcatTest, allNullElements) {
+  auto array1 = makeNullableArrayVector<int64_t>({
+      {{std::nullopt, std::nullopt}},
+      {{std::nullopt}},
+  });
+  auto array2 = makeNullableArrayVector<int64_t>({
+      {{std::nullopt}},
+      {{std::nullopt, std::nullopt, std::nullopt}},
+  });
+
+  VectorPtr expected = makeNullableArrayVector<int64_t>({
+      {{std::nullopt, std::nullopt, std::nullopt}},
+      {{std::nullopt, std::nullopt, std::nullopt, std::nullopt}},
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test concatenating only empty arrays
+TEST_F(ArrayConcatTest, allEmptyArrays) {
+  auto array1 = makeArrayVector<int64_t>({{}, {}});
+  auto array2 = makeArrayVector<int64_t>({{}, {}});
+  auto array3 = makeArrayVector<int64_t>({{}, {}});
+
+  VectorPtr expected = makeArrayVector<int64_t>({{}, {}});
+
+  testExpression("concat(c0, c1, c2)", {array1, array2, array3}, expected);
+}
+
+// Test float arrays with nulls
+TEST_F(ArrayConcatTest, floatArraysWithNulls) {
+  auto array1 = makeNullableArrayVector<float>({
+      {{1.5f, std::nullopt, 2.5f}},
+      {{std::nullopt}},
+  });
+  auto array2 = makeNullableArrayVector<float>({
+      {{std::nullopt, 3.5f}},
+      {{4.5f}},
+  });
+
+  VectorPtr expected = makeNullableArrayVector<float>({
+      {{1.5f, std::nullopt, 2.5f, std::nullopt, 3.5f}},
+      {{std::nullopt, 4.5f}},
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test string/VARCHAR arrays with nulls
+TEST_F(ArrayConcatTest, stringArraysWithNulls) {
+  auto array1 = makeNullableArrayVector<StringView>({
+      {{"a"_sv, std::nullopt, "b"_sv}},
+      {{std::nullopt, "c"_sv}},
+  });
+  auto array2 = makeNullableArrayVector<StringView>({
+      {{std::nullopt, "d"_sv}},
+      {{"e"_sv}},
+  });
+
+  VectorPtr expected = makeNullableArrayVector<StringView>({
+      {{"a"_sv, std::nullopt, "b"_sv, std::nullopt, "d"_sv}},
+      {{std::nullopt, "c"_sv, "e"_sv}},
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test variadic with many arrays (10 arrays)
+TEST_F(ArrayConcatTest, manyArrays) {
+  std::vector<VectorPtr> inputs;
+  for (int i = 0; i < 10; i++) {
+    inputs.push_back(makeArrayVector<int64_t>({{i}}));
+  }
+
+  VectorPtr expected =
+      makeArrayVector<int64_t>({{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}});
+
+  testExpression(
+      "concat(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9)", inputs, expected);
+}
+
+// Test size limit enforcement
+TEST_F(ArrayConcatTest, sizeLimit) {
+  // Create two large arrays that would exceed the limit when concatenated
+  constexpr int32_t kMaxElements = INT32_MAX - 15;
+  constexpr int32_t kHalfSize = kMaxElements / 2 + 1;
+
+  std::vector<int64_t> largeArray1(kHalfSize, 1);
+  std::vector<int64_t> largeArray2(kHalfSize, 2);
+
+  auto array1 = makeArrayVector<int64_t>({largeArray1});
+  auto array2 = makeArrayVector<int64_t>({largeArray2});
+
+  VELOX_ASSERT_THROW(
+      evaluate("concat(c0, c1)", makeRowVector({array1, array2})),
+      "Unsuccessful try to concat arrays with");
+}
+
+// Test concatenation with boolean arrays
+TEST_F(ArrayConcatTest, booleanArrays) {
+  auto array1 = makeArrayVector<bool>({{true, false, true}});
+  auto array2 = makeArrayVector<bool>({{false, true}});
+
+  VectorPtr expected =
+      makeArrayVector<bool>({{true, false, true, false, true}});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test with timestamp arrays
+TEST_F(ArrayConcatTest, timestampArrays) {
+  auto array1 = makeArrayVector<Timestamp>({
+      {Timestamp(1000, 0), Timestamp(2000, 0)},
+  });
+  auto array2 = makeArrayVector<Timestamp>({
+      {Timestamp(3000, 0)},
+  });
+
+  VectorPtr expected = makeArrayVector<Timestamp>({
+      {Timestamp(1000, 0), Timestamp(2000, 0), Timestamp(3000, 0)},
+  });
+
   testExpression("concat(c0, c1)", {array1, array2}, expected);
 }
 
