@@ -108,14 +108,12 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Cache debug flag to avoid repeated getInstance() calls
   const bool debugEnabled = CudfConfig::getInstance().debugEnabled;
 
+  // Cache "before" operator descriptions so we can print before/after together.
+  std::vector<std::pair<int32_t, std::string>> beforeOperators;
   if (debugEnabled) {
-    LOG(INFO) << "Operators " << RED << "before adapting for cuDF" << RESET
-              << ": count [" << operators.size() << "]";
-    for (auto& op : operators) {
-      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString();
+    for (const auto& op : operators) {
+      beforeOperators.emplace_back(op->operatorId(), op->toString());
     }
-    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
   }
 
   bool replacementsMade = false;
@@ -130,36 +128,29 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Use adapter registry for GPU Operator Replacement
   auto& registry = OperatorAdapterRegistry::getInstance();
 
-  // Operator properties to cache adapter->canRunOnGPU, acceptsGpuInput,
-  // producesGpuOutput
-  struct OperatorProperties {
-    bool canRunOnGPU = false;
-    bool acceptsGpuInput = false;
-    bool producesGpuOutput = false;
+  // Cached operator properties including adapter pointer.
+  struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
   };
 
-  auto getOperatorProperties = [&registry, this, &isValidPlanNodeId, ctx](
-                                   const exec::Operator* op) {
-    OperatorProperties props;
-    auto adapter = registry.findAdapter(op);
-    props.adapter = adapter;
-    if (adapter && isValidPlanNodeId(op->planNodeId())) {
-      props.canRunOnGPU =
-          adapter->canRunOnGPU(op, getPlanNode(op->planNodeId()), ctx);
-      props.acceptsGpuInput = props.canRunOnGPU && adapter->acceptsGpuInput();
-      props.producesGpuOutput =
-          props.canRunOnGPU && adapter->producesGpuOutput();
-    }
-    if (isAnyOf<CudfOperator>(op)) {
-      // CudfOperator is always fully GPU compatible
-      // (runs on GPU, accepts GPU input, produces GPU output).
-      props.canRunOnGPU = true;
-      props.acceptsGpuInput = true;
-      props.producesGpuOutput = true;
-    }
-    return props;
-  };
+  auto getOperatorProperties =
+      [&registry, this, &isValidPlanNodeId, ctx](const exec::Operator* op) {
+        OperatorProperties props;
+        auto adapter = registry.findAdapter(op);
+        props.adapter = adapter;
+        if (adapter && isValidPlanNodeId(op->planNodeId())) {
+          static_cast<OperatorAdapter::Properties&>(props) =
+              adapter->properties(op, getPlanNode(op->planNodeId()), ctx);
+        }
+        if (isAnyOf<CudfOperator>(op)) {
+          // CudfOperator is always fully GPU compatible
+          // (runs on GPU, accepts GPU input, produces GPU output).
+          props.canRunOnGPU = true;
+          props.acceptsGpuInput = true;
+          props.producesGpuOutput = true;
+        }
+        return props;
+      };
 
   // caching operator properties
   std::vector<OperatorProperties> opProps(operators.size());
@@ -255,19 +246,19 @@ bool CompileState::compile(bool allowCpuFallback) {
     }
 
     if (debugEnabled) {
-      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
-                << oper->toString() << ", keepOperator = " << keepOperator
-                << ", isPureCpuOperator = " << isPureCpuOperator
-                << ", replaceOp.size() = " << replaceOp.size()
-                << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
-                << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
-                << ", isLastOperatorOfTask = " << isLastOperatorOfTask
-                << ", canRunOnGPU[" << operatorIndex
-                << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
-                << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
-                << ", producesGpuOutput[" << operatorIndex
-                << "] = " << thisOpProps.producesGpuOutput
-                << ", planNode = " << bool(planNode);
+      VLOG(1) << "Operator: ID " << oper->operatorId() << ": "
+              << oper->toString() << ", keepOperator = " << keepOperator
+              << ", isPureCpuOperator = " << isPureCpuOperator
+              << ", replaceOp.size() = " << replaceOp.size()
+              << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
+              << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
+              << ", isLastOperatorOfTask = " << isLastOperatorOfTask
+              << ", canRunOnGPU[" << operatorIndex
+              << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
+              << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
+              << ", producesGpuOutput[" << operatorIndex
+              << "] = " << thisOpProps.producesGpuOutput
+              << ", planNode = " << bool(planNode);
     }
     if (!allowCpuFallback) {
       // condition is if GPU replacement success or if CPU operators itself is
@@ -296,10 +287,18 @@ bool CompileState::compile(bool allowCpuFallback) {
   }
 
   if (debugEnabled) {
+    // Print before/after together for easy comparison.
+    LOG(INFO) << "Operators " << RED << "before adapting for cuDF" << RESET
+              << ": count [" << beforeOperators.size() << "]";
+    for (const auto& [id, desc] : beforeOperators) {
+      LOG(INFO) << "  Operator: ID " << id << ": " << desc;
+    }
+    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
+
     operators = driver_.operators();
     LOG(INFO) << "Operators " << GREEN << "after adapting for cuDF" << RESET
               << ": count [" << operators.size() << "]";
-    for (auto& op : operators) {
+    for (const auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString();
     }

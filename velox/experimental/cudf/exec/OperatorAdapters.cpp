@@ -79,6 +79,8 @@ void OperatorAdapterRegistry::clear() {
 /// TableScanAdapter - Keeps original operator (produces GPU output)
 class TableScanAdapter : public OperatorAdapter {
  public:
+  TableScanAdapter() : OperatorAdapter("TableScan") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::TableScan*>(op) != nullptr;
   }
@@ -119,15 +121,13 @@ class TableScanAdapter : public OperatorAdapter {
   bool keepOperator() const override {
     return true;
   }
-
-  std::string name() const override {
-    return "TableScan";
-  }
 };
 
 /// FilterProjectAdapter - Replaces with CudfFilterProject
 class FilterProjectAdapter : public OperatorAdapter {
  public:
+  FilterProjectAdapter() : OperatorAdapter("FilterProject") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::FilterProject*>(op) != nullptr;
   }
@@ -194,15 +194,13 @@ class FilterProjectAdapter : public OperatorAdapter {
             operatorId, ctx, filterPlanNode, projectPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "FilterProject";
-  }
 };
 
 /// AggregationAdapter - Replaces with CudfHashAggregation
 class AggregationAdapter : public OperatorAdapter {
  public:
+  AggregationAdapter() : OperatorAdapter("Aggregation") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::HashAggregation*>(op) != nullptr ||
         dynamic_cast<const exec::StreamingAggregation*>(op) != nullptr;
@@ -254,14 +252,12 @@ class AggregationAdapter : public OperatorAdapter {
             operatorId, ctx, aggregationPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "Aggregation";
-  }
 };
 
 class CudfHashJoinBaseAdapter : public OperatorAdapter {
  public:
+  using OperatorAdapter::OperatorAdapter;
+
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -299,6 +295,8 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
 /// HashJoinBuildAdapter - Replaces with CudfHashJoinBuild
 class HashJoinBuildAdapter : public CudfHashJoinBaseAdapter {
  public:
+  HashJoinBuildAdapter() : CudfHashJoinBaseAdapter("HashJoinBuild") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::HashBuild*>(op) != nullptr;
   }
@@ -324,15 +322,13 @@ class HashJoinBuildAdapter : public CudfHashJoinBaseAdapter {
         std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "HashJoinBuild";
-  }
 };
 
 /// HashJoinProbeAdapter - Replaces with CudfHashJoinProbe
 class HashJoinProbeAdapter : public CudfHashJoinBaseAdapter {
  public:
+  HashJoinProbeAdapter() : CudfHashJoinBaseAdapter("HashJoinProbe") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::HashProbe*>(op) != nullptr;
   }
@@ -358,15 +354,13 @@ class HashJoinProbeAdapter : public CudfHashJoinBaseAdapter {
         std::make_unique<CudfHashJoinProbe>(operatorId, ctx, joinPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "HashJoinProbe";
-  }
 };
 
 /// OrderByAdapter - Replaces with CudfOrderBy
 class OrderByAdapter : public OperatorAdapter {
  public:
+  OrderByAdapter() : OperatorAdapter("OrderBy") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::OrderBy*>(op) != nullptr;
   }
@@ -400,15 +394,13 @@ class OrderByAdapter : public OperatorAdapter {
         std::make_unique<CudfOrderBy>(operatorId, ctx, orderByPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "OrderBy";
-  }
 };
 
 /// TopNAdapter - Replaces with CudfTopN
 class TopNAdapter : public OperatorAdapter {
  public:
+  TopNAdapter() : OperatorAdapter("TopN") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::TopN*>(op) != nullptr;
   }
@@ -440,15 +432,13 @@ class TopNAdapter : public OperatorAdapter {
     result.push_back(std::make_unique<CudfTopN>(operatorId, ctx, topNPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "TopN";
-  }
 };
 
 /// LimitAdapter - Replaces with CudfLimit
 class LimitAdapter : public OperatorAdapter {
  public:
+  LimitAdapter() : OperatorAdapter("Limit") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::Limit*>(op) != nullptr;
   }
@@ -482,15 +472,13 @@ class LimitAdapter : public OperatorAdapter {
         std::make_unique<CudfLimit>(operatorId, ctx, limitPlanNode));
     return result;
   }
-
-  std::string name() const override {
-    return "Limit";
-  }
 };
 
 /// LocalPartitionAdapter - Conditionally replaces with CudfLocalPartition
 class LocalPartitionAdapter : public OperatorAdapter {
  public:
+  LocalPartitionAdapter() : OperatorAdapter("LocalPartition") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::LocalPartition*>(op) != nullptr;
   }
@@ -525,22 +513,19 @@ class LocalPartitionAdapter : public OperatorAdapter {
     result.push_back(
         std::make_unique<CudfLocalPartition>(
             operatorId, ctx, localPartitionPlanNode));
-    // }
     return result;
   }
 
   bool keepOperator() const override {
     return false;
   }
-
-  std::string name() const override {
-    return "LocalPartition";
-  }
 };
 
 /// LocalExchangeAdapter - Keeps original operator
 class LocalExchangeAdapter : public OperatorAdapter {
  public:
+  LocalExchangeAdapter() : OperatorAdapter("LocalExchange") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::LocalExchange*>(op) != nullptr;
   }
@@ -571,15 +556,13 @@ class LocalExchangeAdapter : public OperatorAdapter {
   bool keepOperator() const override {
     return true;
   }
-
-  std::string name() const override {
-    return "LocalExchange";
-  }
 };
 
 /// AssignUniqueIdAdapter - Replaces with CudfAssignUniqueId
 class AssignUniqueIdAdapter : public OperatorAdapter {
  public:
+  AssignUniqueIdAdapter() : OperatorAdapter("AssignUniqueId") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::AssignUniqueId*>(op) != nullptr;
   }
@@ -618,15 +601,13 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
             assignUniqueIdPlanNode->uniqueIdCounter()));
     return result;
   }
-
-  std::string name() const override {
-    return "AssignUniqueId";
-  }
 };
 
 /// ValuesAdapter - Keeps original operator
 class ValuesAdapter : public OperatorAdapter {
  public:
+  ValuesAdapter() : OperatorAdapter("Values") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::Values*>(op) != nullptr;
   }
@@ -657,15 +638,13 @@ class ValuesAdapter : public OperatorAdapter {
   bool keepOperator() const override {
     return true;
   }
-
-  std::string name() const override {
-    return "Values";
-  }
 };
 
 /// CallbackSinkAdapter - Keeps original operator
 class CallbackSinkAdapter : public OperatorAdapter {
  public:
+  CallbackSinkAdapter() : OperatorAdapter("CallbackSink") {}
+
   bool canHandle(const exec::Operator* op) const override {
     return dynamic_cast<const exec::CallbackSink*>(op) != nullptr;
   }
@@ -695,10 +674,6 @@ class CallbackSinkAdapter : public OperatorAdapter {
 
   bool keepOperator() const override {
     return true;
-  }
-
-  std::string name() const override {
-    return "CallbackSink";
   }
 };
 
