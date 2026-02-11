@@ -71,13 +71,6 @@ Expected<std::optional<Timestamp>> PrestoCastHooks::castDoubleToTimestamp(
       Status::UserError("Conversion to Timestamp is not supported"));
 }
 
-Expected<int32_t> PrestoCastHooks::castStringToDate(
-    const StringView& dateString) const {
-  // Cast from string to date allows only complete ISO 8601 formatted strings:
-  // [+-](YYYY-MM-DD).
-  return util::fromDateString(dateString, util::ParseMode::kPrestoCast);
-}
-
 Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
     bool /*seconds*/) const {
   return folly::makeUnexpected(
