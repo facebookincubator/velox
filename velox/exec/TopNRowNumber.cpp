@@ -133,7 +133,7 @@ TopNRowNumber::TopNRowNumber(
           node->id(),
           "TopNRowNumber",
           node->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "TopNRowNumber")
               : std::nullopt),
       rankFunction_(node->rankFunction()),
       limit_{node->limit()},
@@ -482,7 +482,7 @@ void TopNRowNumber::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        *spillConfig_, pool(), spillStats_.get(), spillFsStats());
+        *spillConfig_, pool(), spillStats_.get());
   } else {
     outputRows_.resize(outputBatchSize_);
   }
@@ -1071,8 +1071,7 @@ void TopNRowNumber::setupSpiller() {
       inputType_,
       sortingKeys,
       &spillConfig_.value(),
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 }
 
 // Using the underlying vector of the priority queue for the algorithms to

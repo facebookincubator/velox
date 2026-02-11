@@ -31,7 +31,7 @@ class TestReadFile : public velox::ReadFile {
   TestReadFile(
       uint64_t seed,
       uint64_t length,
-      std::shared_ptr<filesystems::File::IoStats> ioStats)
+      std::shared_ptr<velox::IoStats> ioStats)
       : seed_(seed), length_(length), ioStats_(std::move(ioStats)) {}
 
   uint64_t size() const override {
@@ -103,7 +103,7 @@ class TestReadFile : public velox::ReadFile {
  private:
   const uint64_t seed_;
   const uint64_t length_;
-  std::shared_ptr<filesystems::File::IoStats> ioStats_;
+  std::shared_ptr<velox::IoStats> ioStats_;
   mutable std::atomic<int64_t> numIos_{0};
 };
 
