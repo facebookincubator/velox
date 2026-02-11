@@ -84,9 +84,9 @@ class CudfHiveConfig {
       "cudf.hive.use_buffered_input";
 
   static constexpr const char* kUseExperimentalCudfReader =
-      "cudf.hive.use-old-reader";
+      "cudf.hive.use-experimental-reader";
   static constexpr const char* kUseExperimentalCudfReaderSession =
-      "cudf.hive.use_old_reader";
+      "cudf.hive.use_experimental_reader";
 
   // Writer config options
 

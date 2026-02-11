@@ -188,7 +188,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(
-      exptSplitReader_ or splitReader_, "No split reader present");
+      splitReader_ or exptSplitReader_, "No split reader present");
 
   std::unique_ptr<cudf::table> cudfTable;
   cudf::io::table_metadata metadata;
