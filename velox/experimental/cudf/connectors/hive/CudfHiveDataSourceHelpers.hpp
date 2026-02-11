@@ -86,27 +86,43 @@ struct HybridScanState {
   std::unique_ptr<std::once_flag> isHybridScanSetup_;
 };
 
-// Fetch a host buffer containing parquet source footer from a data source.
+/**
+ * @brief Fetches a host buffer of Parquet footer bytes from the input data
+ * source
+ *
+ * @param dataSource Input data source
+ * @return Host buffer containing footer bytes
+ */
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource);
 
 /**
- * @brief Converts a list of byte ranges into lists of device buffers, device
- * spans corresponding to each byte range, and a future to wait for all reads to
- * complete
+ * @brief Fetches a host buffer of Parquet page index from the input data source
  *
- * @param dataSource Data source
+ * @param dataSource Input datasource
+ * @param pageIndexBytes Byte range of page index
+ * @return Host buffer containing page index bytes
+ */
+std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::io::text::byte_range_info const pageIndexBytes);
+
+/**
+ * @brief Fetches a list of byte ranges from a host buffer into device buffers
+ *
+ * @param dataSource Input datasource
  * @param byteRanges Byte ranges to fetch
  * @param stream CUDA stream
  * @param mr Device memory resource
- * @return Device buffers, device spans corresponding to each byte range, and a
- * future to wait for all reads to complete
+ *
+ * @return A tuple containing the device buffers, the device spans of the
+ * fetched data, and a future to wait on the read tasks
  */
 std::tuple<
     std::vector<rmm::device_buffer>,
     std::vector<cudf::device_span<uint8_t const>>,
     std::future<void>>
-fetchByteRanges(
+fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
     rmm::cuda_stream_view stream,

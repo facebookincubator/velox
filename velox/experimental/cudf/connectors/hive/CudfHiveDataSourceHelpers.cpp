@@ -24,6 +24,7 @@
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
+#include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/types.hpp>
 
 #include <folly/futures/Future.h>
@@ -134,129 +135,30 @@ void BufferedInputDataSource::readContiguous(
 
 std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
     std::shared_ptr<cudf::io::datasource> dataSource) {
-  using namespace cudf::io::parquet;
+  // Using libcudf utility but may have custom implementation in the future
+  return cudf::io::parquet::fetch_footer_to_host(*dataSource);
+}
 
-  constexpr auto header_len = sizeof(file_header_s);
-  constexpr auto ender_len = sizeof(file_ender_s);
-  const size_t len = dataSource->size();
-
-  const auto header_buffer = dataSource->host_read(0, header_len);
-  const auto ender_buffer = dataSource->host_read(len - ender_len, ender_len);
-  const auto header =
-      reinterpret_cast<const file_header_s*>(header_buffer->data());
-  const auto ender =
-      reinterpret_cast<const file_ender_s*>(ender_buffer->data());
-  VELOX_CHECK(len > header_len + ender_len, "Incorrect data source");
-  constexpr uint32_t parquet_magic =
-      (('P' << 0) | ('A' << 8) | ('R' << 16) | ('1' << 24));
-  VELOX_CHECK(
-      header->magic == parquet_magic && ender->magic == parquet_magic,
-      "Corrupted header or footer");
-  VELOX_CHECK(
-      ender->footer_len != 0 &&
-          ender->footer_len <= (len - header_len - ender_len),
-      "Incorrect footer length");
-
-  return dataSource->host_read(
-      len - ender->footer_len - ender_len, ender->footer_len);
+std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
+    std::shared_ptr<cudf::io::datasource> dataSource,
+    cudf::io::text::byte_range_info const pageIndexBytes) {
+  // Using libcudf utility but may have custom implementation in the future
+  return cudf::io::parquet::fetch_page_index_to_host(
+      *dataSource, pageIndexBytes);
 }
 
 std::tuple<
     std::vector<rmm::device_buffer>,
     std::vector<cudf::device_span<uint8_t const>>,
     std::future<void>>
-fetchByteRanges(
-    std::shared_ptr<cudf::io::datasource> dataSource,
+fetchByteRangesAsync(
+    std::shared_ptr<cudf::io::datasource> datasource,
     cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  static std::mutex mutex;
-  std::vector<cudf::device_span<uint8_t const>> columnChunkData(
-      byteRanges.size());
-  std::vector<std::future<size_t>> readTasks{};
-  std::vector<rmm::device_buffer> columnChunkBuffers{};
-  readTasks.reserve(byteRanges.size());
-  columnChunkBuffers.reserve(byteRanges.size());
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    for (size_t chunk = 0; chunk < byteRanges.size();) {
-      auto const ioOffset = static_cast<size_t>(byteRanges[chunk].offset());
-      auto ioSize = static_cast<size_t>(byteRanges[chunk].size());
-      size_t nextChunk = chunk + 1;
-      while (nextChunk < byteRanges.size()) {
-        size_t const nextOffset = byteRanges[nextChunk].offset();
-        if (nextOffset != ioOffset + ioSize) {
-          break;
-        }
-        ioSize += byteRanges[nextChunk].size();
-        nextChunk++;
-      }
-
-      // Padding is necessary for input/output buffers of several
-      // compression/decompression kernels Such kernels operate on aligned data
-      // pointers, which require padding to the buffers so that the pointers can
-      // shift along the address space to satisfy their alignment requirement.
-      constexpr size_t bufferPaddingMultiple = 8;
-
-      if (ioSize != 0) {
-        columnChunkBuffers.emplace_back(
-            cudf::util::round_up_safe(ioSize, bufferPaddingMultiple),
-            stream,
-            mr);
-        // Directly read the column chunk data to the device buffer if
-        // supported
-        if (dataSource->supports_device_read() and
-            dataSource->is_device_read_preferred(ioSize)) {
-          readTasks.emplace_back(dataSource->device_read_async(
-              ioOffset,
-              ioSize,
-              static_cast<uint8_t*>(columnChunkBuffers.back().data()),
-              stream));
-        } else {
-          // Asynchronously read the column chunk data to the host buffer and
-          // copy it to the device buffer
-          readTasks.emplace_back(
-              std::async(
-                  std::launch::deferred,
-                  [dataSource,
-                   ioOffset,
-                   ioSize,
-                   stream,
-                   dest = columnChunkBuffers.back().data()]() {
-                    auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
-                    CUDF_CUDA_TRY(cudaMemcpyAsync(
-                        dest,
-                        hostBuffer->data(),
-                        ioSize,
-                        cudaMemcpyHostToDevice,
-                        stream.value()));
-                    return ioSize;
-                  }));
-        }
-        auto chunkDeviceSpanPtr =
-            static_cast<uint8_t const*>(columnChunkBuffers.back().data());
-        do {
-          columnChunkData[chunk] = cudf::device_span<uint8_t const>{
-              chunkDeviceSpanPtr,
-              static_cast<size_t>(byteRanges[chunk].size())};
-          chunkDeviceSpanPtr += byteRanges[chunk].size();
-        } while (++chunk != nextChunk);
-      } else {
-        chunk = nextChunk;
-      }
-    }
-  }
-
-  auto syncFunction = [](decltype(readTasks) readTasks) {
-    for (auto& task : readTasks) {
-      task.get();
-    }
-  };
-
-  return {
-      std::move(columnChunkBuffers),
-      std::move(columnChunkData),
-      std::async(std::launch::deferred, syncFunction, std::move(readTasks))};
+  // Using libcudf utility but may have custom implementation in the future
+  return cudf::io::parquet::fetch_byte_ranges_to_device_async(
+      *dataSource, byteRanges, stream, mr);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

@@ -232,7 +232,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // Tuple containing a vector of device buffers, a vector of device spans
       // for each input byte range, and a future to wait for all reads to
       // complete
-      auto ioData = fetchByteRanges(
+      auto ioData = fetchByteRangesAsync(
           dataSource_,
           columnChunkByteRanges,
           stream_,
@@ -532,21 +532,20 @@ CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
   stream_ = cudfGlobalStreamPool().get_stream();
 
   // Create a hybrid scan reader
-  nvtxRangePush("fetchFooterBytes");
-  auto const footerBytes = fetchFooterBytes(dataSource_);
+  nvtxRangePush("hybridScanReader");
+  auto const footerBuffer = fetchFooterBytes(dataSource_);
+  auto splitReader =
+      std::make_unique<CudfHybridScanReader>(*footerBuffer, readerOptions_);
   nvtxRangePop();
-  auto splitReader = std::make_unique<CudfHybridScanReader>(
-      cudf::host_span<uint8_t const>{footerBytes->data(), footerBytes->size()},
-      readerOptions_);
 
   // Setup page index if available
   auto const pageIndexByteRange = splitReader->page_index_byte_range();
   if (not pageIndexByteRange.is_empty()) {
-    auto const pageIndexBytes = dataSource_->host_read(
-        pageIndexByteRange.offset(), pageIndexByteRange.size());
-    splitReader->setup_page_index(
-        cudf::host_span<uint8_t const>{
-            pageIndexBytes->data(), pageIndexBytes->size()});
+    nvtxRangePush("setupPageIndex");
+    auto const pageIndexBuffer =
+        fetchPageIndexBytes(dataSource_, pageIndexByteRange);
+    splitReader->setup_page_index(*pageIndexBuffer);
+    nvtxRangePop();
   }
 
   return splitReader;
