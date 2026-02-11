@@ -219,6 +219,15 @@ Array Functions
 
         SELECT arrays_zip(ARRAY[1, 2], ARRAY['1b', null, '3b']); -- [ROW(1, '1b'), ROW(2, null), ROW(null, '3b')]
 
+.. spark:function:: cardinality(x) -> integer
+
+    Returns the size of an array or a map.
+    Returns NULL if the input is NULL. ::
+
+        SELECT cardinality(array(1, 2, 3)); -- 3
+        SELECT cardinality(map(1, 'a', 2, 'b')); -- 2
+        SELECT cardinality(array()); -- 0
+
 .. spark:function:: concat(array1, array2, ..., arrayN) -> array
 
     Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. All parameters have the same type.

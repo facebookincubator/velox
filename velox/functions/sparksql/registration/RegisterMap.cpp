@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/Cardinality.h"
 #include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions {
@@ -43,6 +44,12 @@ void registerMapFunctions(const std::string& prefix) {
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
   registerSize(prefix + "size");
+  registerFunction<sparksql::CardinalityFunction, int32_t, Array<Generic<T1>>>(
+      {prefix + "cardinality"});
+  registerFunction<
+      sparksql::CardinalityFunction,
+      int32_t,
+      Map<Generic<T1>, Generic<T2>>>({prefix + "cardinality"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

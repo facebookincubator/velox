@@ -29,6 +29,7 @@ add_executable(
   ArgTypesGeneratorTest.cpp
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
+  CardinalityTest.cpp
   BitwiseTest.cpp
   CharTypeWriteSideCheckTest.cpp
   ComparisonsTest.cpp
