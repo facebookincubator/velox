@@ -25,6 +25,7 @@ add_executable(
   ArrayPrependTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
+  ArraysOverlapTest.cpp
   ArrayUnionTest.cpp
   ArgTypesGeneratorTest.cpp
   AtLeastNNonNullsTest.cpp

@@ -44,6 +44,7 @@ void registerSparkArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_intersect, prefix + "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, prefix + "arrays_overlap");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "arrays_zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "exists");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");

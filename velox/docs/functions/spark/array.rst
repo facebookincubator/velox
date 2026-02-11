@@ -211,6 +211,16 @@ Array Functions
         SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
         SELECT array_union(array(array(1)), array(array(null))); -- [[1], [null]]
 
+.. spark:function:: arrays_overlap(x, y) -> boolean
+
+    Tests if arrays ``x`` and ``y`` have any non-null elements in common.
+    Returns null if there are no non-null elements in common but either array contains null.
+    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
+
+        SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5)); -- true
+        SELECT arrays_overlap(array(1, 2, 3), array(4, 5, 6)); -- false
+        SELECT arrays_overlap(array(1, 2, NULL), array(4, 5, NULL)); -- NULL
+
 .. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
     Returns the merge of the given arrays, element-wise into a single array of rows.
