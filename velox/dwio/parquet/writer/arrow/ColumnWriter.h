@@ -290,10 +290,10 @@ constexpr int64_t kJulianEpochOffsetDays = INT64_C(2440588);
 
 template <int64_t UnitPerDay, int64_t NanosecondsPerUnit>
 inline void arrowTimestampToImpalaTimestamp(
-    const int64_t Time,
+    const int64_t time,
     Int96* impalaTimestamp) {
-  int64_t julianDays = (Time / UnitPerDay) + kJulianEpochOffsetDays;
-  int64_t lastDayUnits = Time % UnitPerDay;
+  int64_t julianDays = (time / UnitPerDay) + kJulianEpochOffsetDays;
+  int64_t lastDayUnits = time % UnitPerDay;
 
   // Avoid negative nanos.
   if (lastDayUnits < 0) {
@@ -301,7 +301,7 @@ inline void arrowTimestampToImpalaTimestamp(
     julianDays -= 1;
   }
 
-  (*impalaTimestamp).value[2] = julianDays;
+  (*impalaTimestamp).value[2] = static_cast<uint32_t>(julianDays);
 
   auto lastDayNanos = lastDayUnits * NanosecondsPerUnit;
   // impalaTimestamp will be unaligned every other entry so do memcpy instead
