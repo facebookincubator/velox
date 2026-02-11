@@ -211,5 +211,17 @@ TEST_F(ReaderTest, projectColumnsMutation) {
   EXPECT_NE(0, numNonMax);
 }
 
+TEST_F(ReaderTest, rowRangeEmpty) {
+  // Empty when startRow >= endRow
+  EXPECT_TRUE((RowRange{0, 0}.empty()));
+  EXPECT_TRUE((RowRange{5, 5}.empty()));
+  EXPECT_TRUE((RowRange{10, 5}.empty()));
+
+  // Not empty when startRow < endRow
+  EXPECT_FALSE((RowRange{0, 1}.empty()));
+  EXPECT_FALSE((RowRange{0, 10}.empty()));
+  EXPECT_FALSE((RowRange{5, 10}.empty()));
+}
+
 } // namespace
 } // namespace facebook::velox::dwio::common
