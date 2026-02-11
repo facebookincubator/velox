@@ -279,7 +279,14 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
                 cudf::get_current_device_resource_ref());
             // Directly read the column chunk data to the device buffer if
             // supported
-            if (dataSource_->supports_device_read() and
+            if (auto bufferedInput =
+                    dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
+              bufferedInput->enqueueForDevice(
+                  static_cast<uint64_t>(byteRange.offset()),
+                  static_cast<uint64_t>(byteRange.size()),
+                  static_cast<uint8_t*>(buffer.data()));
+            } else if (
+                dataSource_->supports_device_read() and
                 dataSource_->is_device_read_preferred(byteRange.size())) {
               ioFutures.emplace_back(dataSource_->device_read_async(
                   byteRange.offset(),
@@ -299,6 +306,11 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
                   stream_.value()));
             }
           });
+
+      if (auto bufferedInput =
+              dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
+        bufferedInput->load(stream_);
+      }
 
       // Wait for all IO futures to complete
       std::for_each(ioFutures.begin(), ioFutures.end(), [](auto& future) {
