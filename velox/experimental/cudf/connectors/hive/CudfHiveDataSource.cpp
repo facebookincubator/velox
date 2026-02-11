@@ -317,6 +317,21 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
         future.get();
       });
 
+      // Convert device buffers to device spans
+      auto columnChunkData = [&]() {
+        std::vector<cudf::device_span<uint8_t const>> columnChunkData;
+        columnChunkData.reserve(columnChunkBuffers.size());
+        std::transform(
+            columnChunkBuffers.begin(),
+            columnChunkBuffers.end(),
+            std::back_inserter(columnChunkData),
+            [](auto& buffer) {
+              return cudf::device_span<uint8_t const>{
+                  static_cast<uint8_t*>(buffer.data()), buffer.size()};
+            });
+        return columnChunkData;
+      }();
+
       // Create an all true row mask to read the table in one go without output
       // filtering. TODO(mh): Remove this once PR
       // https://github.com/rapidsai/cudf/pull/20604 is merged
@@ -330,11 +345,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // Read the table in one go
       auto tableWithMetadata = exptSplitReader_->materialize_payload_columns(
           rowGroupIndices,
-          std::move(columnChunkBuffers),
+          columnChunkData,
           allTrueRowMask->view(),
           cudf::io::parquet::experimental::use_data_page_mask::NO,
           readerOptions_,
-          stream_);
+          stream_,
+          cudf::get_current_device_resource_ref());
 
       // Store the read metadata
       metadata = std::move(tableWithMetadata.metadata);
@@ -604,7 +620,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
 
   // Set column projection if needed
   if (readColumnNames_.size()) {
-    readerOptions_.set_columns(readColumnNames_);
+    readerOptions_.set_column_names(readColumnNames_);
   }
 }
 
