@@ -150,15 +150,6 @@ void CastExpr::applyCastKernel(
     }
 
     if constexpr (
-        (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
-         ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
-        FromKind == TypeKind::TIMESTAMP) {
-      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      setResultOrError(castResult, row);
-      return;
-    }
-
-    if constexpr (
         (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
         ToKind == TypeKind::TIMESTAMP) {
       const auto castResult =
@@ -200,19 +191,6 @@ void CastExpr::applyCastKernel(
         const auto castResult = hooks_->castStringToDouble(inputRowValue);
         setResultOrError(castResult, row);
         return;
-      }
-
-      if constexpr (
-          ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
-          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT ||
-          ToKind == TypeKind::HUGEINT) {
-        if constexpr (TPolicy::throwOnUnicode) {
-          if (!functions::stringCore::isAscii(
-                  inputRowValue.data(), inputRowValue.size())) {
-            VELOX_USER_FAIL(
-                "Unicode characters are not supported for conversion to integer types");
-          }
-        }
       }
     }
 

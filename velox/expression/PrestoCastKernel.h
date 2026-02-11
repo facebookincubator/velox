@@ -89,6 +89,56 @@ class PrestoCastKernel : public CastKernel {
         rows, input, context, input.type(), toType, setNullInResultAtError);
   }
 
+  VectorPtr castToTinyInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::TINYINT>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
+  VectorPtr castToSmallInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::SMALLINT>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
+  VectorPtr castToInteger(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::INTEGER>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
+  VectorPtr castToBigInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::BIGINT>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
+  VectorPtr castToHugeInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return applyCastPrimitivesDispatch<TypeKind::HUGEINT>(
+        rows, input, context, input.type(), toType, setNullInResultAtError);
+  }
+
  private:
   template <typename FromNativeType>
   VectorPtr applyDecimalToVarcharCast(

@@ -358,6 +358,25 @@ FOLLY_ALWAYS_INLINE void PrestoCastKernel::applyCastPrimitives(
         return;
       }
     }
+
+    if constexpr (
+        ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
+        ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT ||
+        ToKind == TypeKind::HUGEINT) {
+      if constexpr (TPolicy::throwOnUnicode) {
+        if (!functions::stringCore::isAscii(
+                inputRowValue.data(), inputRowValue.size())) {
+          setError(
+              *input,
+              context,
+              *result,
+              row,
+              "Unicode characters are not supported for conversion to integer types",
+              setNullInResultAtError);
+          return;
+        }
+      }
+    }
   }
 
   const auto castResult =
