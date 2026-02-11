@@ -243,4 +243,352 @@ VectorPtr SparkCastKernel::castToBooleanImpl(
         rows, input, context, toType, setNullInResultAtError);
   }
 }
+
+template <TypeKind ToTypeKind>
+void SparkCastKernel::applyTimestampToIntegerCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    bool setNullInResultAtError,
+    VectorPtr& result) const {
+  auto sourceVector = input.as<SimpleVector<Timestamp>>();
+  auto* resultFlatVector =
+      result->as<FlatVector<typename TypeTraits<ToTypeKind>::NativeType>>();
+
+  applyToSelectedNoThrowLocal(
+      rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+        auto micros = sourceVector->valueAt(row).toMicros();
+        if (micros < 0) {
+          resultFlatVector->set(
+              row,
+              static_cast<int64_t>(std::floor(
+                  static_cast<double>(micros) /
+                  Timestamp::kMicrosecondsInSecond)));
+        } else {
+          resultFlatVector->set(row, micros / Timestamp::kMicrosecondsInSecond);
+        }
+      });
+}
+
+template <TypeKind ToTypeKind>
+void SparkCastKernel::applyStringToIntegerCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    bool setNullInResultAtError,
+    VectorPtr& result) const {
+  using ToNativeType = typename TypeTraits<ToTypeKind>::NativeType;
+
+  auto sourceVector = input.as<SimpleVector<StringView>>();
+  auto* resultFlatVector = result->as<FlatVector<ToNativeType>>();
+
+  if (allowOverflow_) {
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+          auto inputStr = sourceVector->valueAt(row);
+          inputStr = removeWhiteSpaces(inputStr);
+          const auto len = inputStr.size();
+          const auto data = inputStr.data();
+
+          ToNativeType result = 0;
+          int index = 0;
+          if (len == 0) {
+            setError(
+                input,
+                context,
+                *resultFlatVector,
+                row,
+                "Cannot cast an empty string to an integral value.",
+                setNullInResultAtError);
+
+            return;
+          }
+
+          // Setting negative flag
+          bool negative = false;
+          // Setting decimalPoint flag
+          bool decimalPoint = false;
+          if (data[0] == '-' || data[0] == '+') {
+            if (len == 1) {
+              setError(
+                  input,
+                  context,
+                  *resultFlatVector,
+                  row,
+                  "Cannot cast a single sign character to an integral value.",
+                  setNullInResultAtError);
+
+              return;
+            }
+            negative = data[0] == '-';
+            index = 1;
+          }
+          if (negative) {
+            for (; index < len; index++) {
+              // Truncate the decimal
+              if (!decimalPoint && data[index] == '.') {
+                decimalPoint = true;
+                if (++index == len) {
+                  break;
+                }
+              }
+              if (!std::isdigit(data[index])) {
+                setError(
+                    input,
+                    context,
+                    *resultFlatVector,
+                    row,
+                    "Encountered a non-digit character",
+                    setNullInResultAtError);
+
+                return;
+              }
+              if (!decimalPoint) {
+                result = checkedMultiply<ToNativeType>(
+                    result, 10, CppToType<ToNativeType>::name);
+                result = checkedMinus<ToNativeType>(
+                    result, data[index] - '0', CppToType<ToNativeType>::name);
+              }
+            }
+          } else {
+            for (; index < len; index++) {
+              // Truncate the decimal
+              if (!decimalPoint && data[index] == '.') {
+                decimalPoint = true;
+                if (++index == len) {
+                  break;
+                }
+              }
+              if (!std::isdigit(data[index])) {
+                setError(
+                    input,
+                    context,
+                    *resultFlatVector,
+                    row,
+                    "Encountered a non-digit character",
+                    setNullInResultAtError);
+
+                return;
+              }
+              if (!decimalPoint) {
+                result = checkedMultiply<ToNativeType>(
+                    result, 10, CppToType<ToNativeType>::name);
+                result = checkedPlus<ToNativeType>(
+                    result, data[index] - '0', CppToType<ToNativeType>::name);
+              }
+            }
+          }
+
+          resultFlatVector->set(row, result);
+        });
+  } else {
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+          auto inputStr = sourceVector->valueAt(row);
+          inputStr = removeWhiteSpaces(inputStr);
+          auto trimmed = util::trimWhiteSpace(inputStr.data(), inputStr.size());
+          const auto result = folly::tryTo<ToNativeType>(trimmed);
+          if (result.hasError()) {
+            setError(
+                input,
+                context,
+                *resultFlatVector,
+                row,
+                folly::makeConversionError(result.error(), "").what(),
+                setNullInResultAtError);
+          } else {
+            resultFlatVector->set(row, result.value());
+          }
+        });
+  }
+}
+
+template <TypeKind FromTypeKind, TypeKind ToTypeKind>
+void SparkCastKernel::applyIntegerToIntegerCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    bool setNullInResultAtError,
+    VectorPtr& result) const {
+  using FromNativeType = typename TypeTraits<FromTypeKind>::NativeType;
+  using ToNativeType = typename TypeTraits<ToTypeKind>::NativeType;
+
+  auto sourceVector = input.as<SimpleVector<FromNativeType>>();
+  auto* resultFlatVector = result->as<FlatVector<ToNativeType>>();
+
+  applyToSelectedNoThrowLocal(
+      rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+        resultFlatVector->set(row, sourceVector->valueAt(row));
+      });
+}
+
+template <typename T>
+struct LimitType {
+  static constexpr bool kByteOrSmallInt =
+      std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>;
+
+  static int64_t minLimit() {
+    if (kByteOrSmallInt) {
+      return std::numeric_limits<int32_t>::min();
+    }
+    return std::numeric_limits<T>::min();
+  }
+
+  static int64_t maxLimit() {
+    if (kByteOrSmallInt) {
+      return std::numeric_limits<int32_t>::max();
+    }
+    return std::numeric_limits<T>::max();
+  }
+
+  static T min() {
+    if (kByteOrSmallInt) {
+      return 0;
+    }
+    return std::numeric_limits<T>::min();
+  }
+
+  static T max() {
+    if (kByteOrSmallInt) {
+      return -1;
+    }
+    return std::numeric_limits<T>::max();
+  }
+
+  template <typename FP>
+  static T tryCast(const FP& v) {
+    if (kByteOrSmallInt) {
+      return T(int32_t(v));
+    }
+    return T(v);
+  }
+};
+
+template <TypeKind FromTypeKind, TypeKind ToTypeKind>
+void SparkCastKernel::applyFloatingPointToIntegerCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    bool setNullInResultAtError,
+    VectorPtr& result) const {
+  using FromNativeType = typename TypeTraits<FromTypeKind>::NativeType;
+  using ToNativeType = typename TypeTraits<ToTypeKind>::NativeType;
+
+  auto sourceVector = input.as<SimpleVector<FromNativeType>>();
+  auto* resultFlatVector = result->as<FlatVector<ToNativeType>>();
+
+  if (allowOverflow_) {
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+          auto value = sourceVector->valueAt(row);
+
+          if (std::isnan(value)) {
+            resultFlatVector->set(row, 0);
+            return;
+          }
+
+          if constexpr (std::is_same_v<ToNativeType, int128_t>) {
+            resultFlatVector->set(row, std::numeric_limits<int128_t>::max());
+            return;
+          } else if (value > LimitType<ToNativeType>::maxLimit()) {
+            resultFlatVector->set(row, LimitType<ToNativeType>::max());
+            return;
+          } else if (value < LimitType<ToNativeType>::minLimit()) {
+            resultFlatVector->set(row, LimitType<ToNativeType>::min());
+            return;
+          }
+
+          resultFlatVector->set(row, LimitType<ToNativeType>::tryCast(value));
+        });
+  } else {
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+          auto value = sourceVector->valueAt(row);
+
+          if (std::isnan(value)) {
+            setError(
+                input,
+                context,
+                *resultFlatVector,
+                row,
+                "Cannot cast a NaN to an integral value.",
+                setNullInResultAtError);
+
+            return;
+          }
+
+          const auto castResult = folly::tryTo<ToNativeType>(std::trunc(value));
+          if (castResult.hasError()) {
+            setError(
+                input,
+                context,
+                *resultFlatVector,
+                row,
+                folly::makeConversionError(castResult.error(), "").what(),
+                setNullInResultAtError);
+            return;
+          }
+
+          resultFlatVector->set(row, castResult.value());
+        });
+  }
+}
+
+template <TypeKind ToTypeKind, TypeKind FromTypeKind>
+VectorPtr SparkCastKernel::castToIntegerImpl(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  auto prestoCast = [&]() {
+    if constexpr (ToTypeKind == TypeKind::TINYINT) {
+      return exec::PrestoCastKernel::castToTinyInt(
+          rows, input, context, toType, setNullInResultAtError);
+    } else if constexpr (ToTypeKind == TypeKind::SMALLINT) {
+      return exec::PrestoCastKernel::castToSmallInt(
+          rows, input, context, toType, setNullInResultAtError);
+    } else if constexpr (ToTypeKind == TypeKind::INTEGER) {
+      return exec::PrestoCastKernel::castToInteger(
+          rows, input, context, toType, setNullInResultAtError);
+    } else if constexpr (ToTypeKind == TypeKind::BIGINT) {
+      return exec::PrestoCastKernel::castToBigInt(
+          rows, input, context, toType, setNullInResultAtError);
+    } else {
+      static_assert(ToTypeKind == TypeKind::HUGEINT);
+      return exec::PrestoCastKernel::castToHugeInt(
+          rows, input, context, toType, setNullInResultAtError);
+    }
+  };
+
+  if constexpr (
+      FromTypeKind == TypeKind::VARCHAR ||
+      FromTypeKind == TypeKind::VARBINARY) {
+    VectorPtr result;
+    initializeResultVector(rows, toType, context, result);
+    applyStringToIntegerCast<ToTypeKind>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  } else if constexpr (
+      FromTypeKind == TypeKind::TINYINT || FromTypeKind == TypeKind::SMALLINT ||
+      FromTypeKind == TypeKind::INTEGER || FromTypeKind == TypeKind::BIGINT) {
+    if (!allowOverflow_) {
+      return prestoCast();
+    }
+    VectorPtr result;
+    initializeResultVector(rows, toType, context, result);
+    applyIntegerToIntegerCast<FromTypeKind, ToTypeKind>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  } else if constexpr (
+      FromTypeKind == TypeKind::REAL || FromTypeKind == TypeKind::DOUBLE) {
+    VectorPtr result;
+    initializeResultVector(rows, toType, context, result);
+    applyFloatingPointToIntegerCast<FromTypeKind, ToTypeKind>(
+        rows, input, context, setNullInResultAtError, result);
+    return result;
+  } else {
+    return prestoCast();
+  }
+}
 } // namespace facebook::velox::functions::sparksql

@@ -63,6 +63,41 @@ class SparkCastKernel : public exec::PrestoCastKernel {
         setNullInResultAtError);
   }
 
+  VectorPtr castToTinyInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToSmallInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToInteger(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToBigInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
+  VectorPtr castToHugeInt(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override;
+
  private:
   template <typename FromNativeType, TypeKind ToKind>
   VectorPtr applyDecimalToIntegralCast(
@@ -84,6 +119,47 @@ class SparkCastKernel : public exec::PrestoCastKernel {
 
   template <TypeKind FromTypeKind>
   VectorPtr castToBooleanImpl(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
+
+  template <TypeKind ToTypeKind>
+  void applyTimestampToIntegerCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
+
+  template <TypeKind ToTypeKind>
+  void applyStringToIntegerCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
+
+  template <TypeKind FromTypeKind, TypeKind ToTypeKind>
+  void applyIntegerToIntegerCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
+
+  template <TypeKind FromTypeKind, TypeKind ToTypeKind>
+  void applyFloatingPointToIntegerCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      bool setNullInResultAtError,
+      VectorPtr& result) const;
+
+  /// Handles cast from various source types to an integer type.
+  template <TypeKind ToTypeKind, TypeKind FromTypeKind>
+  VectorPtr castToIntegerImpl(
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,

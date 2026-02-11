@@ -461,6 +461,26 @@ void CastExpr::applyPeeled(
         result = kernel_->castToBoolean(
             rows, input, context, toType, setNullInResultAtError());
         break;
+      case TypeKind::TINYINT:
+        result = kernel_->castToTinyInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::SMALLINT:
+        result = kernel_->castToSmallInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::INTEGER:
+        result = kernel_->castToInteger(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::BIGINT:
+        result = kernel_->castToBigInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::HUGEINT:
+        result = kernel_->castToHugeInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
       default: {
         // Handle primitive type conversions.
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
