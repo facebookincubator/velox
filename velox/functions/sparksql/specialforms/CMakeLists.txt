@@ -21,7 +21,6 @@ velox_add_library(
   GetStructField.cpp
   MakeDecimal.cpp
   SparkCastExpr.cpp
-  SparkCastHooks.cpp
   SparkCastKernel.cpp
 )
 

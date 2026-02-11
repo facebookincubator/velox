@@ -16,19 +16,13 @@
 
 #include "velox/expression/CastExpr.h"
 
-#include <fmt/format.h>
-
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/PeeledEncoding.h"
-#include "velox/expression/PrestoCastHooks.h"
 #include "velox/expression/PrestoCastKernel.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/Type.h"
-#include "velox/vector/ComplexVector.h"
-#include "velox/vector/FunctionVector.h"
 #include "velox/vector/LazyVector.h"
-#include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
 
@@ -351,7 +345,7 @@ void CastExpr::applyPeeled(
 
     auto applyCustomCast = [&]() {
       if (castToOperator) {
-        castToOperator->castTo(input, context, rows, toType, result, hooks_);
+        castToOperator->castTo(input, context, rows, toType, result, kernel_);
       } else {
         castFromOperator->castFrom(input, context, rows, toType, result);
       }
@@ -477,16 +471,10 @@ void CastExpr::applyPeeled(
             rows, input, context, toType, setNullInResultAtError());
         break;
       default: {
-        // Handle primitive type conversions.
-        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            applyCastPrimitivesDispatch,
-            toType->kind(),
-            fromType,
-            toType,
-            rows,
-            context,
-            input,
-            result);
+        VELOX_UNREACHABLE(
+            "Unsupported cast from {} to {}.",
+            fromType->toString(),
+            toType->toString());
       }
     }
   }
@@ -653,7 +641,6 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       false,
-      std::make_shared<PrestoCastHooks>(config),
       std::make_shared<PrestoCastKernel>(config));
 }
 
@@ -677,7 +664,6 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<PrestoCastHooks>(config),
       std::make_shared<PrestoCastKernel>(config));
 }
 } // namespace facebook::velox::exec

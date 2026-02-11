@@ -44,17 +44,15 @@ namespace sparksql {
 
 void registerToPrettyStringFunctions(const std::string& prefix) {
   const std::vector<std::string> aliases = {prefix + "to_pretty_string"};
-  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(aliases);
-  registerUnaryFloatingPointWithTReturn<ToPrettyStringFunction, Varchar>(
-      aliases);
-  registerFunction<ToPrettyStringFunction, Varchar, bool>(aliases);
-  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(aliases);
+  exec::registerStatefulVectorFunction(
+      aliases[0],
+      toPrettyStringSignatures(),
+      makeToPrettyString,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
   registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
       aliases);
-  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
   registerFunction<ToPrettyStringTimestampFunction, Varchar, Timestamp>(
       aliases);
-  registerFunction<ToPrettyStringFunction, Varchar, UnknownValue>(aliases);
   registerFunction<
       ToPrettyStringDecimalFunction,
       Varchar,

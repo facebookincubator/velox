@@ -16,9 +16,8 @@
 #pragma once
 
 #include <fmt/format.h>
-#include "velox/expression/CastExpr.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/Udf.h"
-#include "velox/type/Conversions.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -28,56 +27,20 @@ static const StringView kNull = "NULL";
 }
 
 /// to_pretty_string(x) -> varchar
-/// Returns pretty string for int8, int16, int32, int64, bool, Date, Varchar. It
-/// has one difference with casting value to string:
+/// Returns pretty string for int8, int16, int32, int64, float, double, bool,
+/// Date, Varchar, and Unknown types. It has one difference with casting value
+/// to string:
 /// 1) It prints null input as "NULL" rather than producing null output.
-template <typename TExec>
-struct ToPrettyStringFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  // Results refer to strings in the first argument.
-  static constexpr int32_t reuse_strings_from_arg = 0;
+/// Returns signatures for to_pretty_string vector function.
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+toPrettyStringSignatures();
 
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/) {
-    inputType_ = inputTypes[0];
-  }
-
-  template <typename TInput>
-  Status callNullable(out_type<Varchar>& result, const TInput* input) {
-    if (input) {
-      if constexpr (std::is_same_v<TInput, StringView>) {
-        result.setNoCopy(*input);
-        return Status::OK();
-      }
-      if constexpr (std::is_same_v<TInput, int32_t>) {
-        if (inputType_->isDate()) {
-          try {
-            auto output = DATE()->toString(*input);
-            result.append(output);
-          } catch (const std::exception& e) {
-            return Status::Invalid(e.what());
-          }
-          return Status::OK();
-        }
-      }
-      const auto castResult =
-          util::Converter<TypeKind::VARCHAR, void, util::SparkCastPolicy>::
-              tryCast(*input);
-      VELOX_DCHECK(!castResult.hasError());
-      result.copy_from(castResult.value());
-    } else {
-      result.setNoCopy(detail::kNull);
-    }
-    return Status::OK();
-  }
-
- private:
-  TypePtr inputType_;
-};
+/// Factory function for to_pretty_string vector function.
+std::unique_ptr<exec::VectorFunction> makeToPrettyString(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
 
 /// Returns pretty string for varbinary. It has several differences with
 /// cast(varbinary as string):

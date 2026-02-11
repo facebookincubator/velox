@@ -36,6 +36,11 @@ class CastKernel {
  public:
   virtual ~CastKernel() = default;
 
+  /// Returns whether to apply try_cast recursively rather than only at the top
+  /// level. E.g. if true, an element inside an array would be null rather than
+  /// the entire array if the cast of that element fails.
+  virtual bool applyTryCastRecursively() const = 0;
+
   /// Returns the options to cast from timestamp to string.
   virtual const TimestampToStringOptions& timestampToStringOptions() const = 0;
 

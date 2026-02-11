@@ -24,6 +24,10 @@ class PrestoCastKernel : public CastKernel {
  public:
   explicit PrestoCastKernel(const core::QueryConfig& config);
 
+  bool applyTryCastRecursively() const override {
+    return false;
+  }
+
   const TimestampToStringOptions& timestampToStringOptions() const override {
     return timestampToStringOptions_;
   }

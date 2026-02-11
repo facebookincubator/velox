@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/expression/CastHooks.h"
 #include "velox/expression/CastKernel.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
@@ -57,7 +56,7 @@ class CastOperator {
       const SelectivityVector& rows,
       const TypePtr& resultType,
       VectorPtr& result,
-      const std::shared_ptr<CastHooks>& /* hooks */) const {
+      const std::shared_ptr<CastKernel>& /* kernel */) const {
     castTo(input, context, rows, resultType, result);
   }
 
@@ -87,7 +86,6 @@ class CastExpr : public SpecialForm {
       ExprPtr&& expr,
       bool trackCpuUsage,
       bool isTryCast,
-      std::shared_ptr<CastHooks> hooks,
       std::shared_ptr<CastKernel> kernel)
       : SpecialForm(
             SpecialFormKind::kCast,
@@ -97,7 +95,6 @@ class CastExpr : public SpecialForm {
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
         isTryCast_(isTryCast),
-        hooks_(std::move(hooks)),
         kernel_(std::move(kernel)) {}
 
   void evalSpecialForm(
@@ -156,49 +153,12 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
-  template <typename Func>
-  void applyToSelectedNoThrowLocal(
-      EvalCtx& context,
-      const SelectivityVector& rows,
-      VectorPtr& result,
-      Func&& func);
-
-  /// The per-row level Kernel
-  /// @tparam ToKind The cast target type
-  /// @tparam FromKind The expression type
-  /// @tparam TPolicy The policy used by the cast
-  /// @param row The index of the current row
-  /// @param input The input vector (of type FromKind)
-  /// @param result The output vector (of type ToKind)
-  template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
-  void applyCastKernel(
-      vector_size_t row,
-      EvalCtx& context,
-      const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
-      FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
-
-  template <TypeKind ToKind, TypeKind FromKind>
-  void applyCastPrimitives(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
-  template <TypeKind ToKind>
-  void applyCastPrimitivesDispatch(
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
   bool isTryCast() const {
     return isTryCast_;
   }
 
   bool setNullInResultAtError() const {
-    return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
+    return isTryCast() && (inTopLevel || kernel_->applyTryCastRecursively());
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);
@@ -207,7 +167,6 @@ class CastExpr : public SpecialForm {
   folly::F14FastMap<std::string, CastOperatorPtr> castOperators_;
 
   bool isTryCast_;
-  std::shared_ptr<CastHooks> hooks_;
   std::shared_ptr<CastKernel> kernel_;
 
   bool inTopLevel = false;
@@ -235,5 +194,3 @@ class TryCastCallToSpecialForm : public FunctionCallToSpecialForm {
       const core::QueryConfig& config) override;
 };
 } // namespace facebook::velox::exec
-
-#include "velox/expression/CastExpr-inl.h"
