@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/expression/PrestoCastKernel.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::exec {
@@ -327,6 +328,37 @@ VectorPtr PrestoCastKernel::applyVarcharToDecimalCast(
   return result;
 }
 
+template <typename TInput>
+VectorPtr PrestoCastKernel::applyIntToBinaryCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  auto result = BaseVector::create(toType, rows.end(), context.pool());
+  const auto flatResult = result->asFlatVector<StringView>();
+  const auto simpleInput = input.as<SimpleVector<TInput>>();
+
+  // The created string view is always inlined for int types.
+  char inlined[sizeof(TInput)];
+  applyToSelectedNoThrowLocal(
+      rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+        TInput input = simpleInput->valueAt(row);
+        if constexpr (std::is_same_v<TInput, int8_t>) {
+          inlined[0] = static_cast<char>(input & 0xFF);
+        } else {
+          for (int i = sizeof(TInput) - 1; i >= 0; --i) {
+            inlined[i] = static_cast<char>(input & 0xFF);
+            input >>= 8;
+          }
+        }
+        const auto stringView = StringView(inlined, sizeof(TInput));
+        flatResult->setNoCopy(row, stringView);
+      });
+
+  return result;
+}
+
 template <typename T>
 FOLLY_ALWAYS_INLINE Expected<T> PrestoCastKernel::doCastToFloatingPoint(
     const StringView& data) {
@@ -450,7 +482,14 @@ FOLLY_ALWAYS_INLINE void PrestoCastKernel::applyCastPrimitives(
 
   const auto& output = castResult.value();
 
-  result->set(row, output);
+  if constexpr (is_string_kind(ToKind)) {
+    // Write the result output to the output vector
+    auto writer = exec::StringWriter(result, row);
+    writer.copy_from(output);
+    writer.finalize();
+  } else {
+    result->set(row, output);
+  }
 }
 
 template <TypeKind ToKind, TypeKind FromKind>
