@@ -57,26 +57,6 @@
 
 #include <iostream>
 
-#ifndef NDEBUG
-#define RESET "\033[0m"
-#define RED "\033[31m"
-#define GREEN "\033[32m"
-#define YELLOW "\033[33m"
-#define BLUE "\033[34m"
-#define MAGENTA "\033[35m"
-#define CYAN "\033[36m"
-#define WHITE "\033[37m"
-#else
-#define RESET ""
-#define RED ""
-#define GREEN ""
-#define YELLOW ""
-#define BLUE ""
-#define MAGENTA ""
-#define CYAN ""
-#define WHITE ""
-#endif
-
 static const std::string kCudfAdapterName = "cuDF";
 
 namespace facebook::velox::cudf_velox {
@@ -288,7 +268,7 @@ bool CompileState::compile(bool allowCpuFallback) {
 
   if (debugEnabled) {
     // Print before/after together for easy comparison.
-    LOG(INFO) << "Operators " << RED << "before adapting for cuDF" << RESET
+    LOG(INFO) << "Operators " << "before adapting for cuDF"
               << ": count [" << beforeOperators.size() << "]";
     for (const auto& [id, desc] : beforeOperators) {
       LOG(INFO) << "  Operator: ID " << id << ": " << desc;
@@ -296,7 +276,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
 
     operators = driver_.operators();
-    LOG(INFO) << "Operators " << GREEN << "after adapting for cuDF" << RESET
+    LOG(INFO) << "Operators " << "after adapting for cuDF"
               << ": count [" << operators.size() << "]";
     for (const auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
