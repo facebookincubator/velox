@@ -270,7 +270,7 @@ TEST_F(RegexpReplaceTest, lambda) {
   test::assertEqualVectors(expected, result);
 }
 
-// Make sure we do not compile more than "expression.max_compiled_regexes".
+// LRUCache supports compile more than "expression.max_compiled_regexes".
 TEST_F(RegexpReplaceTest, limit) {
   const auto maxCompiledRegexes =
       core::QueryConfig({}).exprMaxCompiledRegexes();
@@ -282,16 +282,22 @@ TEST_F(RegexpReplaceTest, limit) {
            [](auto row) { return fmt::format("Apples and oranges {}", row); }),
        makeFlatVector<std::string>(
            aboveMaxCompiledRegexes,
-           [](auto row) { return fmt::format("\\d+[ab]{}", row); }),
+           [](auto row) { return fmt::format("{}", row); }),
        makeFlatVector<std::string>(aboveMaxCompiledRegexes, [&](auto row) {
-         return fmt::format("Apples (.*) oranges {}", row % maxCompiledRegexes);
+         return fmt::format("{}", row % maxCompiledRegexes);
        })});
 
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_replace(c0, c1, c2)", data),
-      "Max number of regex reached");
-  VELOX_ASSERT_THROW(
-      evaluate("regexp_replace(c0, c1)", data), "Max number of regex reached");
+  auto result = evaluate("regexp_replace(c0, c1, c2)", data);
+  auto expected =
+      makeFlatVector<std::string>(aboveMaxCompiledRegexes, [&](auto row) {
+        return fmt::format("Apples and oranges {}", row % maxCompiledRegexes);
+      });
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("regexp_replace(c0, c1)", data);
+  expected = makeFlatVector<std::string>(
+      aboveMaxCompiledRegexes, [&](auto) { return "Apples and oranges "; });
+  test::assertEqualVectors(expected, result);
 }
 
 } // namespace
