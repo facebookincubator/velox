@@ -519,6 +519,7 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
     testCast<std::string, bool>("boolean", {"tru"}, {std::nullopt});
     testCast<std::string, bool>("boolean", {"on"}, {std::nullopt});
     testCast<std::string, bool>("boolean", {"off"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"infinity"}, {std::nullopt});
   }
 }
 
@@ -628,6 +629,11 @@ TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
 
     testCast<int32_t, int8_t>("tinyint", {1234567}, {-121});
     testCast<int32_t, int8_t>("tinyint", {-1234567}, {121});
+    testCast<int32_t, int8_t>("tinyint", {1111111}, {71});
+    testCast<int32_t, int8_t>("tinyint", {2}, {2});
+    testCast<int32_t, int8_t>("tinyint", {3}, {3});
+    testCast<int32_t, int8_t>("tinyint", {1000}, {-24});
+    testCast<int32_t, int8_t>("tinyint", {-100101}, {-5});
     testCast<double, int8_t>("tinyint", {12345.67}, {57});
     testCast<double, int8_t>("tinyint", {-12345.67}, {-57});
     testCast<double, int8_t>("tinyint", {127.1}, {127});
@@ -639,6 +645,21 @@ TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
 
     testCast<double, int64_t>("bigint", {12345.12}, {12345});
     testCast<double, int64_t>("bigint", {12345.67}, {12345});
+    testCast<double, int32_t>("integer", {1.888}, {1});
+    testCast<double, int32_t>("integer", {2.5}, {2});
+    testCast<double, int32_t>("integer", {3.6}, {3});
+    testCast<double, int32_t>("integer", {100.44}, {100});
+    testCast<double, int32_t>("integer", {-100.101}, {-100});
+    testCast<double, int8_t>("tinyint", {1}, {1});
+    testCast<double, int8_t>("tinyint", {256}, {0});
+    testCast<double, int8_t>("tinyint", {257}, {1});
+    testCast<double, int8_t>("tinyint", {2147483646}, {-2});
+    testCast<double, int8_t>("tinyint", {2147483647}, {-1});
+    testCast<double, int8_t>("tinyint", {2147483648}, {-1});
+    testCast<double, int8_t>("tinyint", {-2147483646}, {2});
+    testCast<double, int8_t>("tinyint", {-2147483647}, {1});
+    testCast<double, int8_t>("tinyint", {-2147483648}, {0});
+    testCast<double, int8_t>("tinyint", {-2147483649}, {0});
   }
 
   // To floating-point.
@@ -1094,6 +1115,10 @@ TEST_F(SparkCastExprTest, decimalToString) {
   }
 }
 
+TEST_F(SparkCastExprTest, timestampToBool) {
+  testCast<Timestamp, bool>(
+      "boolean", {Timestamp(946729316, 123)}, {std::nullopt});
+}
 TEST_F(SparkCastExprTest, recursiveTryCast) {
   // Test array elements.
   testCast(

@@ -17,392 +17,20 @@
 #include "velox/expression/CastExpr.h"
 
 #include <fmt/format.h>
-#include <stdexcept>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/PrestoCastHooks.h"
+#include "velox/expression/PrestoCastKernel.h"
 #include "velox/expression/ScopedVarSetter.h"
-#include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/Type.h"
-#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
-
-namespace {
-
-const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    const auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return tz::locateZone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
-
-} // namespace
-
-VectorPtr CastExpr::castFromDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int32_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output = DATE()->toString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      static const int64_t kMillisPerDay{86'400'000};
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timestamp = Timestamp::fromMillis(
-            inputFlatVector->valueAt(row) * kMillisPerDay);
-        if (timeZone) {
-          timestamp.toGMT(*timeZone);
-        }
-        resultFlatVector->set(row, timestamp);
-      });
-
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from DATE to {} is not supported", toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castToDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, DATE(), castResult);
-  (*castResult).clearNulls(rows);
-  auto* resultFlatVector = castResult->as<FlatVector<int32_t>>();
-  switch (fromType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* inputVector = input.as<SimpleVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        bool wrapException = true;
-        try {
-          const auto result =
-              hooks_->castStringToDate(inputVector->valueAt(row));
-          if (result.hasError()) {
-            wrapException = false;
-            if (setNullInResultAtError()) {
-              resultFlatVector->setNull(row, true);
-            } else {
-              if (context.captureErrorDetails()) {
-                context.setStatus(
-                    row,
-                    Status::UserError(
-                        "{} {}",
-                        makeErrorMessage(input, row, DATE()),
-                        result.error().message()));
-              } else {
-                context.setStatus(row, Status::UserError());
-              }
-            }
-          } else {
-            resultFlatVector->set(row, result.value());
-          }
-        } catch (const VeloxUserError& ue) {
-          if (!wrapException) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, DATE()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, DATE()) + " " + e.what());
-        }
-      });
-
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      auto* inputVector = input.as<SimpleVector<Timestamp>>();
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        const auto days = util::toDate(inputVector->valueAt(row), timeZone);
-        resultFlatVector->set(row, days);
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to DATE is not supported", fromType->toString());
-  }
-}
-
-VectorPtr CastExpr::castFromIntervalDayTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output =
-              INTERVAL_DAY_TIME()->valueToString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          INTERVAL_DAY_TIME()->toString(),
-          toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castFromTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      // Get session timezone
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      // Get session start time
-      const auto startTimeMs =
-          context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
-      auto systemDay = std::chrono::milliseconds{startTimeMs} / kMillisInDay;
-
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-
-      Buffer* buffer = resultFlatVector->getBufferWithSpace(
-          rows.countSelected() * TimeType::kTimeToVarcharRowSize,
-          true /*exactSize*/);
-      char* rawBuffer = buffer->asMutable<char>() + buffer->size();
-
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // Use timezone-aware conversion
-          auto systemTime =
-              systemDay.count() * kMillisInDay + inputFlatVector->valueAt(row);
-
-          int64_t adjustedTime{0};
-          if (timeZone) {
-            adjustedTime =
-                (timeZone->to_local(std::chrono::milliseconds{systemTime}) %
-                 kMillisInDay)
-                    .count();
-          } else {
-            adjustedTime = systemTime % kMillisInDay;
-          }
-
-          if (adjustedTime < 0) {
-            adjustedTime += kMillisInDay;
-          }
-
-          auto output = TIME()->valueToString(adjustedTime, rawBuffer);
-          resultFlatVector->setNoCopy(row, output);
-          rawBuffer += output.size();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-
-      buffer->setSize(rawBuffer - buffer->asMutable<char>());
-      return castResult;
-    }
-    case TypeKind::BIGINT: {
-      // if input is constant, create a constant output vector
-      if (input.isConstantEncoding()) {
-        auto constantInput = input.as<ConstantVector<int64_t>>();
-        if (constantInput->isNullAt(0)) {
-          return BaseVector::createNullConstant(
-              toType, rows.end(), context.pool());
-        } else {
-          auto constantValue = constantInput->valueAt(0);
-          return std::make_shared<ConstantVector<int64_t>>(
-              context.pool(),
-              rows.end(),
-              false, // isNull
-              toType,
-              std::move(constantValue));
-        }
-      }
-
-      // fallback to element-wise copy for non-constant inputs
-      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        resultFlatVector->set(row, inputFlatVector->valueAt(row));
-      });
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      // if input is constant, create a constant output vector
-      if (input.isConstantEncoding()) {
-        auto constantInput = input.as<ConstantVector<int64_t>>();
-        if (constantInput->isNullAt(0)) {
-          return BaseVector::createNullConstant(
-              toType, rows.end(), context.pool());
-        } else {
-          auto timeMillis = constantInput->valueAt(0);
-          return std::make_shared<ConstantVector<Timestamp>>(
-              context.pool(),
-              rows.end(),
-              false, // isNull
-              toType,
-              Timestamp::fromMillis(timeMillis));
-        }
-      }
-
-      // fallback to element-wise copy for non-constant inputs
-      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timeMillis = inputFlatVector->valueAt(row);
-        resultFlatVector->set(row, Timestamp::fromMillis(timeMillis));
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from TIME to {} is not supported", toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castToTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType) {
-  switch (fromType->kind()) {
-    case TypeKind::VARCHAR: {
-      VectorPtr castResult;
-      context.ensureWritable(rows, TIME(), castResult);
-      (*castResult).clearNulls(rows);
-
-      // Get session timezone and start time for timezone conversions
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      const auto sessionStartTimeMs =
-          context.execCtx()->queryCtx()->queryConfig().sessionStartTimeMs();
-
-      auto* inputVector = input.as<SimpleVector<StringView>>();
-      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
-
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
-        }
-      });
-
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      VectorPtr castResult;
-      context.ensureWritable(rows, TIME(), castResult);
-      (*castResult).clearNulls(rows);
-
-      auto* inputVector = input.as<SimpleVector<Timestamp>>();
-      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
-
-      // Cast from TIMESTAMP to TIME extracts the time-of-day component
-      // (milliseconds since midnight) from the timestamp
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        const auto timestamp = inputVector->valueAt(row);
-        // Extract time-of-day using std::chrono.
-        // floor() also rounds towards negative infinity, so this correctly
-        // handles negative timestamps.
-        auto millis = std::chrono::milliseconds{timestamp.toMillis()};
-        auto timeOfDay = millis - std::chrono::floor<std::chrono::days>(millis);
-        resultFlatVector->set(row, timeOfDay.count());
-      });
-
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to TIME is not supported", fromType->toString());
-  }
-}
 
 namespace {
 void propagateErrorsOrSetNulls(
@@ -425,16 +53,6 @@ void propagateErrorsOrSetNulls(
   }
 }
 } // namespace
-
-#define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
-    TEMPLATE_FUNC, decimalTypePtr, ...)            \
-  [&]() {                                          \
-    if (decimalTypePtr->isLongDecimal()) {         \
-      return TEMPLATE_FUNC<int128_t>(__VA_ARGS__); \
-    } else {                                       \
-      return TEMPLATE_FUNC<int64_t>(__VA_ARGS__);  \
-    }                                              \
-  }()
 
 VectorPtr CastExpr::applyMap(
     const SelectivityVector& rows,
@@ -706,74 +324,6 @@ VectorPtr CastExpr::applyRow(
   return result;
 }
 
-template <typename toDecimalType>
-VectorPtr CastExpr::applyDecimal(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  // toType is a decimal
-  switch (fromType->kind()) {
-    case TypeKind::BOOLEAN:
-      applyIntToDecimalCastKernel<bool, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::TINYINT:
-      applyIntToDecimalCastKernel<int8_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::SMALLINT:
-      applyIntToDecimalCastKernel<int16_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::INTEGER:
-      applyIntToDecimalCastKernel<int32_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::REAL:
-      applyFloatingPointToDecimalCastKernel<float, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::DOUBLE:
-      applyFloatingPointToDecimalCastKernel<double, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    case TypeKind::BIGINT: {
-      if (fromType->isShortDecimal()) {
-        applyDecimalCastKernel<int64_t, toDecimalType>(
-            rows, input, context, fromType, toType, castResult);
-        break;
-      }
-      applyIntToDecimalCastKernel<int64_t, toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    }
-    case TypeKind::HUGEINT: {
-      if (fromType->isLongDecimal()) {
-        applyDecimalCastKernel<int128_t, toDecimalType>(
-            rows, input, context, fromType, toType, castResult);
-        break;
-      }
-      [[fallthrough]];
-    }
-    case TypeKind::VARCHAR:
-      applyVarcharToDecimalCastKernel<toDecimalType>(
-          rows, input, context, toType, castResult);
-      break;
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-  }
-  return castResult;
-}
-
 void CastExpr::applyPeeled(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -833,45 +383,29 @@ void CastExpr::applyPeeled(
       applyCustomCast();
     }
   } else if (fromType->isDate()) {
-    result = castFromDate(rows, input, context, toType);
+    result = kernel_->castFromDate(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isDate()) {
-    result = castToDate(rows, input, context, fromType);
+    result =
+        kernel_->castToDate(rows, input, context, setNullInResultAtError());
   } else if (fromType->isIntervalDayTime()) {
-    result = castFromIntervalDayTime(rows, input, context, toType);
+    result = kernel_->castFromIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isIntervalDayTime()) {
-    VELOX_UNSUPPORTED(
-        "Cast from {} to {} is not supported",
-        fromType->toString(),
-        toType->toString());
+    result = kernel_->castToIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isTime()) {
-    result = castFromTime(rows, input, context, toType);
+    result = kernel_->castFromTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isTime()) {
-    result = castToTime(rows, input, context, fromType);
-  } else if (toType->isShortDecimal()) {
-    result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
-  } else if (toType->isLongDecimal()) {
-    result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+    result = kernel_->castToTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isDecimal()) {
-    switch (toType->kind()) {
-      case TypeKind::VARCHAR:
-        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-            applyDecimalToVarcharCast,
-            fromType,
-            rows,
-            input,
-            context,
-            fromType);
-        break;
-      default:
-        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-            applyDecimalToPrimitiveCast,
-            fromType,
-            rows,
-            input,
-            context,
-            fromType,
-            toType);
-    }
+    result = kernel_->castFromDecimal(
+        rows, input, context, toType, setNullInResultAtError());
+  } else if (toType->isDecimal()) {
+    result = kernel_->castToDecimal(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&
       (toType->kind() == TypeKind::VARCHAR ||
@@ -922,6 +456,30 @@ void CastExpr::applyPeeled(
             context,
             fromType->asRow(),
             toType);
+        break;
+      case TypeKind::BOOLEAN:
+        result = kernel_->castToBoolean(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::TINYINT:
+        result = kernel_->castToTinyInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::SMALLINT:
+        result = kernel_->castToSmallInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::INTEGER:
+        result = kernel_->castToInteger(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::BIGINT:
+        result = kernel_->castToBigInt(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
+      case TypeKind::HUGEINT:
+        result = kernel_->castToHugeInt(
+            rows, input, context, toType, setNullInResultAtError());
         break;
       default: {
         // Handle primitive type conversions.
@@ -1166,7 +724,8 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       false,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastHooks>(config),
+      std::make_shared<PrestoCastKernel>(config));
 }
 
 TypePtr TryCastCallToSpecialForm::resolveType(
@@ -1189,6 +748,7 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastHooks>(config),
+      std::make_shared<PrestoCastKernel>(config));
 }
 } // namespace facebook::velox::exec

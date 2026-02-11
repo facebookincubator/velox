@@ -76,8 +76,7 @@ struct Converter {
 /// Casts a string to a boolean. Allows a fixed set of strings. Casting from
 /// other strings throws.
 /// @tparam TPolicy PrestoCastPolicy and LegacyCastPolicy allow `t, f, 1, 0,
-/// true, false` and their upper case equivalents. SparkCastPolicy additionally
-/// allows 'y, n, yes, no' and their upper case equivalents.
+/// true, false` and their upper case equivalents.
 template <typename TPolicy>
 Expected<bool> castToBoolean(const char* data, size_t len) {
   const auto& TU = static_cast<int (*)(int)>(std::toupper);
@@ -89,16 +88,6 @@ Expected<bool> castToBoolean(const char* data, size_t len) {
     }
     if (character == 'F' || character == '0') {
       return false;
-    }
-    if constexpr (
-        std::is_same_v<TPolicy, SparkCastPolicy> ||
-        std::is_same_v<TPolicy, SparkTryCastPolicy>) {
-      if (character == 'Y') {
-        return true;
-      }
-      if (character == 'N') {
-        return false;
-      }
     }
   }
 
@@ -112,21 +101,6 @@ Expected<bool> castToBoolean(const char* data, size_t len) {
   if ((len == 5) && (TU(data[0]) == 'F') && (TU(data[1]) == 'A') &&
       (TU(data[2]) == 'L') && (TU(data[3]) == 'S') && (TU(data[4]) == 'E')) {
     return false;
-  }
-
-  if constexpr (
-      std::is_same_v<TPolicy, SparkCastPolicy> ||
-      std::is_same_v<TPolicy, SparkTryCastPolicy>) {
-    // Case-insensitive 'yes'.
-    if ((len == 3) && (TU(data[0]) == 'Y') && (TU(data[1]) == 'E') &&
-        (TU(data[2]) == 'S')) {
-      return true;
-    }
-
-    // Case-insensitive 'no'.
-    if ((len == 2) && (TU(data[0]) == 'N') && (TU(data[1]) == 'O')) {
-      return false;
-    }
   }
 
   return folly::makeUnexpected(
@@ -158,13 +132,7 @@ template <typename TPolicy>
 struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   using T = bool;
 
-  template <typename TFrom>
-  static Expected<T> tryCast(const TFrom& v) {
-    if constexpr (TPolicy::truncate) {
-      return folly::makeUnexpected(
-          Status::UserError("Conversion to BOOLEAN is not supported"));
-    }
-
+  static Expected<T> tryCast(const int128_t& v) {
     return detail::callFollyTo<T>(v);
   }
 
@@ -185,57 +153,27 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   }
 
   static Expected<T> tryCast(const float& v) {
-    if constexpr (TPolicy::truncate) {
-      if (std::isnan(v)) {
-        return false;
-      }
-      return v != 0;
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const double& v) {
-    if constexpr (TPolicy::truncate) {
-      if (std::isnan(v)) {
-        return false;
-      }
-      return v != 0;
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int8_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int16_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int32_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int64_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const Timestamp&) {
@@ -270,96 +208,19 @@ struct Converter<
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
   }
 
-  static Expected<T> convertStringToInt(const std::string_view v) {
-    // Handling integer target cases
-    T result = 0;
-    int index = 0;
-    int len = v.size();
-    if (len == 0) {
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Cannot cast an empty string to an integral value."));
-    }
-
-    // Setting negative flag
-    bool negative = false;
-    // Setting decimalPoint flag
-    bool decimalPoint = false;
-    if (v[0] == '-' || v[0] == '+') {
-      if (len == 1) {
-        return folly::makeUnexpected(
-            Status::UserError(
-                "Cannot cast an '{}' string to an integral value.", v[0]));
-      }
-      negative = v[0] == '-';
-      index = 1;
-    }
-    if (negative) {
-      for (; index < len; index++) {
-        // Truncate the decimal
-        if (!decimalPoint && v[index] == '.') {
-          decimalPoint = true;
-          if (++index == len) {
-            break;
-          }
-        }
-        if (!std::isdigit(v[index])) {
-          return folly::makeUnexpected(
-              Status::UserError("Encountered a non-digit character"));
-        }
-        if (!decimalPoint) {
-          result = checkedMultiply<T>(result, 10, CppToType<T>::name);
-          result = checkedMinus<T>(result, v[index] - '0', CppToType<T>::name);
-        }
-      }
-    } else {
-      for (; index < len; index++) {
-        // Truncate the decimal
-        if (!decimalPoint && v[index] == '.') {
-          decimalPoint = true;
-          if (++index == len) {
-            break;
-          }
-        }
-        if (!std::isdigit(v[index])) {
-          return folly::makeUnexpected(
-              Status::UserError("Encountered a non-digit character"));
-        }
-        if (!decimalPoint) {
-          result = checkedMultiply<T>(result, 10, CppToType<T>::name);
-          result = checkedPlus<T>(result, v[index] - '0', CppToType<T>::name);
-        }
-      }
-    }
-    // Final result
-    return result;
-  }
-
   static Expected<T> tryCast(std::string_view v) {
-    if constexpr (TPolicy::truncate) {
-      return convertStringToInt(v);
-    } else {
-      auto trimmed = trimWhiteSpace(v.data(), v.size());
-      return detail::callFollyTo<T>(trimmed);
-    }
+    auto trimmed = trimWhiteSpace(v.data(), v.size());
+    return detail::callFollyTo<T>(trimmed);
   }
 
   static Expected<T> tryCast(const StringView& v) {
-    if constexpr (TPolicy::truncate) {
-      return convertStringToInt(std::string_view(v));
-    } else {
-      auto trimmed = trimWhiteSpace(v.data(), v.size());
-      return detail::callFollyTo<T>(trimmed);
-    }
+    auto trimmed = trimWhiteSpace(v.data(), v.size());
+    return detail::callFollyTo<T>(trimmed);
   }
 
   static Expected<T> tryCast(const std::string& v) {
-    if constexpr (TPolicy::truncate) {
-      return convertStringToInt(v);
-    } else {
-      auto trimmed = trimWhiteSpace(v.data(), v.length());
-      return detail::callFollyTo<T>(trimmed);
-    }
+    auto trimmed = trimWhiteSpace(v.data(), v.length());
+    return detail::callFollyTo<T>(trimmed);
   }
 
   static Expected<T> tryCast(const bool& v) {
@@ -408,89 +269,35 @@ struct Converter<
   };
 
   static Expected<T> tryCast(const float& v) {
-    if constexpr (TPolicy::truncate) {
-      if (std::isnan(v)) {
-        return 0;
-      }
-
-      if constexpr (std::is_same_v<T, int128_t>) {
-        return std::numeric_limits<int128_t>::max();
-      } else if (v > LimitType::maxLimit()) {
-        return LimitType::max();
-      } else if (v < LimitType::minLimit()) {
-        return LimitType::min();
-      }
-
-      return LimitType::tryCast(v);
-    } else {
-      if (std::isnan(v)) {
-        return folly::makeUnexpected(
-            Status::UserError("Cannot cast NaN to an integral value."));
-      }
-      if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
-        return detail::callFollyTo<T>(std::trunc(v));
-      }
-      return detail::callFollyTo<T>(std::round(v));
+    if (std::isnan(v)) {
+      return folly::makeUnexpected(
+          Status::UserError("Cannot cast NaN to an integral value."));
     }
+    return detail::callFollyTo<T>(std::round(v));
   }
 
   static Expected<T> tryCast(const double& v) {
-    if constexpr (TPolicy::truncate) {
-      if (std::isnan(v)) {
-        return 0;
-      }
-
-      if constexpr (std::is_same_v<T, int128_t>) {
-        return std::numeric_limits<int128_t>::max();
-      } else if (v > LimitType::maxLimit()) {
-        return LimitType::max();
-      } else if (v < LimitType::minLimit()) {
-        return LimitType::min();
-      }
-
-      return LimitType::tryCast(v);
-    } else {
-      if (std::isnan(v)) {
-        return folly::makeUnexpected(
-            Status::UserError("Cannot cast NaN to an integral value."));
-      }
-      if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
-        return detail::callFollyTo<T>(std::trunc(v));
-      }
-      return detail::callFollyTo<T>(std::round(v));
+    if (std::isnan(v)) {
+      return folly::makeUnexpected(
+          Status::UserError("Cannot cast NaN to an integral value."));
     }
+    return detail::callFollyTo<T>(std::round(v));
   }
 
   static Expected<T> tryCast(const int8_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int16_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int32_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const int64_t& v) {
-    if constexpr (TPolicy::truncate) {
-      return T(v);
-    } else {
-      return detail::callFollyTo<T>(v);
-    }
+    return detail::callFollyTo<T>(v);
   }
 };
 
