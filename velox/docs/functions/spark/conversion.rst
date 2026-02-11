@@ -44,8 +44,9 @@ Integral types include bigint, integer, smallint, and tinyint.
 From integral types
 ^^^^^^^^^^^^^^^^^^^
 
-Casting one integral type to another is allowed. When the input value exceeds the range of result type,
-a value of the result type is created forcedly with the input value.
+Casting one integral type to another is allowed. When ANSI mode is enabled,
+an overflow throws an error. When ANSI mode is disabled, the value wraps to fit
+the result type.
 
 Valid examples:
 
@@ -60,7 +61,9 @@ From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Casting from floating-point input to an integral type truncates the input value.
-It is allowed when the truncated result exceeds the range of result type.
+When ANSI mode is enabled, out-of-range or NaN values throw an error. When ANSI
+mode is disabled, the cast succeeds even if the truncated result exceeds the
+range of result type.
 
 Valid examples
 
@@ -134,7 +137,11 @@ Valid examples
 From timestamp
 ^^^^^^^^^^^^^^
 
-Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
+Casting timestamp as integral types returns the number of seconds by converting
+timestamp as microseconds, dividing by the number of microseconds in a second,
+and then rounding down to the nearest second since the epoch (1970-01-01
+00:00:00 UTC). When ANSI mode is enabled, casting to tinyint, smallint, or
+integer throws on overflow; when ANSI mode is disabled, the value wraps.
 
 Valid examples
 

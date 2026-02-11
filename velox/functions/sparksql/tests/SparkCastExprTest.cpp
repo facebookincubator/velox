@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <limits>
+
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
@@ -1143,6 +1145,329 @@ TEST_F(SparkCastExprTest, recursiveTryCast) {
           "[[1, 2, 3], [4, null, 6]]",
           "[[null, null, null], [null, 7, null]]",
       }));
+}
+
+// ANSI Mode Tests
+TEST_F(SparkCastExprTest, numericToIntegralAnsiMode) {
+  // Enable ANSI mode
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Test int32 to tinyint overflow - should throw in ANSI mode
+  EXPECT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<int32_t>({256})})),
+      VeloxUserError);
+
+  EXPECT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<int32_t>({-129})})),
+      VeloxUserError);
+
+  // Test int64 to smallint overflow - should throw in ANSI mode
+  EXPECT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<int64_t>({100000})})),
+      VeloxUserError);
+
+  EXPECT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<int64_t>({-40000})})),
+      VeloxUserError);
+
+  // Test int64 to int32 overflow - should throw in ANSI mode
+  EXPECT_THROW(
+      evaluateOnce<int32_t>(
+          "cast(c0 as integer)",
+          makeRowVector({makeFlatVector<int64_t>({3000000000L})})),
+      VeloxUserError);
+
+  // Test double to tinyint overflow - should throw in ANSI mode
+  EXPECT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<double>({200.5})})),
+      VeloxUserError);
+
+  EXPECT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<double>({-200.5})})),
+      VeloxUserError);
+
+  // Test float to smallint overflow - should throw in ANSI mode
+  EXPECT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<float>({50000.0f})})),
+      VeloxUserError);
+
+  // Valid casts should still work in ANSI mode
+  auto result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)", makeRowVector({makeFlatVector<int32_t>({127})}));
+  EXPECT_EQ(result.value(), 127);
+
+  result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)", makeRowVector({makeFlatVector<int32_t>({-128})}));
+  EXPECT_EQ(result.value(), -128);
+}
+
+TEST_F(SparkCastExprTest, numericToIntegralNonAnsiMode) {
+  // Disable ANSI mode (default behavior)
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Test int32 to tinyint overflow - should wrap in non-ANSI mode
+  auto result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)", makeRowVector({makeFlatVector<int32_t>({256})}));
+  EXPECT_EQ(result.value(), 0); // 256 % 256 = 0
+
+  result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)", makeRowVector({makeFlatVector<int32_t>({456})}));
+  EXPECT_EQ(result.value(), -56); // Wrapping behavior
+
+  // Test int64 to smallint overflow - should wrap in non-ANSI mode
+  auto result16 = evaluateOnce<int16_t>(
+      "cast(c0 as smallint)",
+      makeRowVector({makeFlatVector<int64_t>({1234567})}));
+  EXPECT_EQ(result16.value(), -10617); // Wrapping behavior
+
+  // Test double to tinyint overflow - should wrap in non-ANSI mode
+  result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)", makeRowVector({makeFlatVector<double>({129.9})}));
+  EXPECT_EQ(result.value(), -127); // Wrapping behavior
+}
+
+TEST_F(SparkCastExprTest, timestampToIntegralAnsiMode) {
+  // Enable ANSI mode
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Create a large timestamp that overflows int32 (year 2065)
+  auto largeTimestamp = Timestamp(3000000000L, 0);
+
+  // Test timestamp to int32 overflow - should throw in ANSI mode
+  EXPECT_THROW(
+      evaluateOnce<int32_t>(
+          "cast(c0 as integer)",
+          makeRowVector({makeFlatVector<Timestamp>({largeTimestamp})})),
+      VeloxUserError);
+
+  // Test timestamp to smallint overflow - should throw in ANSI mode
+  auto mediumTimestamp = Timestamp(100000L, 0);
+  EXPECT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<Timestamp>({mediumTimestamp})})),
+      VeloxUserError);
+
+  // Test timestamp to tinyint overflow - should throw in ANSI mode
+  auto smallTimestamp = Timestamp(200L, 0);
+  EXPECT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<Timestamp>({smallTimestamp})})),
+      VeloxUserError);
+
+  // Valid casts should work in ANSI mode
+  auto validTimestamp = Timestamp(100L, 0);
+  auto result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)",
+      makeRowVector({makeFlatVector<Timestamp>({validTimestamp})}));
+  EXPECT_EQ(result.value(), 100);
+
+  // Timestamp to bigint should always work (no overflow)
+  auto resultBigint = evaluateOnce<int64_t>(
+      "cast(c0 as bigint)",
+      makeRowVector({makeFlatVector<Timestamp>({largeTimestamp})}));
+  EXPECT_EQ(resultBigint.value(), 3000000000L);
+}
+
+TEST_F(SparkCastExprTest, timestampToIntegralNonAnsiMode) {
+  // Disable ANSI mode
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Create a large timestamp that overflows int32
+  auto largeTimestamp = Timestamp(3000000000L, 0);
+
+  // Test timestamp to int32 overflow - should wrap in non-ANSI mode
+  auto result32 = evaluateOnce<int32_t>(
+      "cast(c0 as integer)",
+      makeRowVector({makeFlatVector<Timestamp>({largeTimestamp})}));
+  // Should wrap around (3000000000 as int32)
+  EXPECT_EQ(result32.value(), static_cast<int32_t>(3000000000L));
+
+  // Test timestamp to smallint overflow - should wrap in non-ANSI mode
+  auto mediumTimestamp = Timestamp(100000L, 0);
+  auto result16 = evaluateOnce<int16_t>(
+      "cast(c0 as smallint)",
+      makeRowVector({makeFlatVector<Timestamp>({mediumTimestamp})}));
+  // Should wrap around
+  EXPECT_EQ(result16.value(), static_cast<int16_t>(100000L));
+
+  // Test timestamp to tinyint overflow - should wrap in non-ANSI mode
+  auto smallTimestamp = Timestamp(200L, 0);
+  auto result8 = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)",
+      makeRowVector({makeFlatVector<Timestamp>({smallTimestamp})}));
+  // Should wrap around
+  EXPECT_EQ(result8.value(), static_cast<int8_t>(200L));
+}
+
+// Test ANSI mode overflow checks for numeric to integral casts
+TEST_F(SparkCastExprTest, castNumericToIntegralAnsiOverflow) {
+  // Set up scope guard to restore ANSI mode after test
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Test with ANSI mode OFF - should wrap/truncate without error
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // INT32 -> TINYINT overflow (wraps in non-ANSI mode)
+  auto result = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)", makeRowVector({makeFlatVector<int32_t>({256})}));
+  // 256 wraps to 0 in TINYINT range
+  EXPECT_EQ(result.value(), static_cast<int8_t>(256));
+
+  // INT64 -> SMALLINT overflow (wraps in non-ANSI mode)
+  auto result16 = evaluateOnce<int16_t>(
+      "cast(c0 as smallint)",
+      makeRowVector({makeFlatVector<int64_t>({100000})}));
+  // Wraps around in SMALLINT range
+  EXPECT_EQ(result16.value(), static_cast<int16_t>(100000));
+
+  // DOUBLE -> INTEGER overflow (saturates to INT32_MAX in non-ANSI mode)
+  auto resultInt = evaluateOnce<int32_t>(
+      "cast(c0 as int)", makeRowVector({makeFlatVector<double>({3.0e10})}));
+  // Saturates to INT32_MAX when value exceeds range
+  EXPECT_EQ(resultInt.value(), std::numeric_limits<int32_t>::max());
+
+  // Test with ANSI mode ON - should throw on overflow
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // INT32 -> TINYINT overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<int32_t>({256})})),
+      "Cannot cast INTEGER '256' to TINYINT");
+
+  // INT64 -> SMALLINT overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<int64_t>({100000})})),
+      "Cannot cast BIGINT '100000' to SMALLINT");
+
+  // DOUBLE -> INTEGER overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "cast(c0 as int)", makeRowVector({makeFlatVector<double>({3.0e10})})),
+      "Cannot cast DOUBLE");
+
+  // DOUBLE -> BIGINT overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "cast(c0 as bigint)",
+          makeRowVector({makeFlatVector<double>({1.0e20})})),
+      "Cannot cast DOUBLE");
+
+  // Negative overflow tests
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<int32_t>({-200})})),
+      "Cannot cast INTEGER '-200' to TINYINT");
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<int64_t>({-50000})})),
+      "Cannot cast BIGINT '-50000' to SMALLINT");
+}
+
+// Test ANSI mode overflow checks for timestamp to integral casts
+TEST_F(SparkCastExprTest, castTimestampToIntegralAnsiOverflow) {
+  // Set up scope guard to restore ANSI mode after test
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Test with ANSI mode OFF - should wrap without error
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Timestamp -> INTEGER overflow (wraps in non-ANSI mode)
+  auto largeTimestamp = Timestamp(3000000000L, 0);
+  auto result32 = evaluateOnce<int32_t>(
+      "cast(c0 as int)",
+      makeRowVector({makeFlatVector<Timestamp>({largeTimestamp})}));
+  EXPECT_EQ(result32.value(), static_cast<int32_t>(3000000000L));
+
+  // Timestamp -> SMALLINT overflow (wraps in non-ANSI mode)
+  auto mediumTimestamp = Timestamp(100000L, 0);
+  auto result16 = evaluateOnce<int16_t>(
+      "cast(c0 as smallint)",
+      makeRowVector({makeFlatVector<Timestamp>({mediumTimestamp})}));
+  EXPECT_EQ(result16.value(), static_cast<int16_t>(100000L));
+
+  // Timestamp -> TINYINT overflow (wraps in non-ANSI mode)
+  auto smallTimestamp = Timestamp(200L, 0);
+  auto result8 = evaluateOnce<int8_t>(
+      "cast(c0 as tinyint)",
+      makeRowVector({makeFlatVector<Timestamp>({smallTimestamp})}));
+  EXPECT_EQ(result8.value(), static_cast<int8_t>(200L));
+
+  // Test with ANSI mode ON - should throw on overflow
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Timestamp -> INTEGER overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "cast(c0 as int)",
+          makeRowVector({makeFlatVector<Timestamp>({largeTimestamp})})),
+      "Cannot cast TIMESTAMP");
+
+  // Timestamp -> SMALLINT overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "cast(c0 as smallint)",
+          makeRowVector({makeFlatVector<Timestamp>({mediumTimestamp})})),
+      "Cannot cast TIMESTAMP");
+
+  // Timestamp -> TINYINT overflow (should throw in ANSI mode)
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<Timestamp>({smallTimestamp})})),
+      "Cannot cast TIMESTAMP");
+
+  // Negative timestamp overflow
+  auto negativeTimestamp = Timestamp(-200L, 0);
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "cast(c0 as tinyint)",
+          makeRowVector({makeFlatVector<Timestamp>({negativeTimestamp})})),
+      "Cannot cast TIMESTAMP");
 }
 
 } // namespace

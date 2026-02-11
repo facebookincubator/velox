@@ -16,6 +16,24 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
+namespace {
+
+bool isIntegralType(const facebook::velox::TypePtr& type) {
+  return type == facebook::velox::TINYINT() ||
+      type == facebook::velox::SMALLINT() ||
+      type == facebook::velox::INTEGER() || type == facebook::velox::BIGINT();
+}
+
+bool isFloatingPointType(const facebook::velox::TypePtr& type) {
+  return type == facebook::velox::REAL() || type == facebook::velox::DOUBLE();
+}
+
+bool isNumericType(const facebook::velox::TypePtr& type) {
+  return isIntegralType(type) || isFloatingPointType(type);
+}
+
+} // namespace
+
 namespace facebook::velox::functions::sparksql {
 
 bool SparkCastCallToSpecialForm::isAnsiSupported(
@@ -28,6 +46,16 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
 
   // String to Date cast supports ANSI mode.
   if (fromType->isVarchar() && toType->isDate()) {
+    return true;
+  }
+
+  // Numeric types to integral types cast supports ANSI mode (overflow check).
+  if (isNumericType(fromType) && isIntegralType(toType)) {
+    return true;
+  }
+
+  // Timestamp to integral types cast supports ANSI mode (overflow check).
+  if (fromType->isTimestamp() && isIntegralType(toType)) {
     return true;
   }
 
@@ -49,18 +77,18 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
   // the specific cast operation doesn't support ANSI mode.
-  // The distinction between CAST (ANSI off) and TRY_CAST is limited to
-  // overflow handling, which is managed by the 'allowOverflow' flag in
-  // SparkCastHooks.
   const bool isTryCast =
       !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
 
+  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
+  // The distinction is controlled by the 'allowOverflow' flag in
+  // SparkCastHooks.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, true));
+      std::make_shared<SparkCastHooks>(config, isTryCast));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
