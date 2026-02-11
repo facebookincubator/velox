@@ -325,4 +325,117 @@ VectorPtr PrestoCastKernel::applyVarcharToDecimalCast(
 
   return result;
 }
+
+/// The per-row level Kernel
+/// @tparam ToKind The cast target type
+/// @tparam FromKind The expression type
+/// @tparam TPolicy The policy used by the cast
+/// @param row The index of the current row
+/// @param input The input vector (of type FromKind)
+/// @param result The output vector (of type ToKind)
+template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
+FOLLY_ALWAYS_INLINE void PrestoCastKernel::applyCastPrimitives(
+    vector_size_t row,
+    EvalCtx& context,
+    const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
+    bool setNullInResultAtError,
+    FlatVector<typename TypeTraits<ToKind>::NativeType>* result) const {
+  auto inputRowValue = input->valueAt(row);
+
+  // Optimize empty input strings casting by avoiding throwing exceptions.
+  if constexpr (is_string_kind(FromKind)) {
+    if constexpr (
+        TypeTraits<ToKind>::isPrimitiveType &&
+        TypeTraits<ToKind>::isFixedWidth) {
+      if (inputRowValue.size() == 0) {
+        setError(
+            *input,
+            context,
+            *result,
+            row,
+            "Empty string",
+            setNullInResultAtError);
+        return;
+      }
+    }
+  }
+
+  const auto castResult =
+      util::Converter<ToKind, void, TPolicy>::tryCast(inputRowValue);
+  if (castResult.hasError()) {
+    setError(
+        *input,
+        context,
+        *result,
+        row,
+        castResult.error().message(),
+        setNullInResultAtError);
+    return;
+  }
+
+  const auto& output = castResult.value();
+
+  result->set(row, output);
+}
+
+template <TypeKind ToKind, TypeKind FromKind>
+FOLLY_ALWAYS_INLINE VectorPtr
+PrestoCastKernel::applyCastPrimitivesPolicyDispatch(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  using To = typename TypeTraits<ToKind>::NativeType;
+  using From = typename TypeTraits<FromKind>::NativeType;
+
+  VectorPtr result;
+  context.ensureWritable(rows, toType, result);
+  auto* resultFlatVector = result->as<FlatVector<To>>();
+  auto* inputSimpleVector = input.as<SimpleVector<From>>();
+
+  if (legacyCast_) {
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](int row) {
+          applyCastPrimitives<ToKind, FromKind, util::LegacyCastPolicy>(
+              row,
+              context,
+              inputSimpleVector,
+              setNullInResultAtError,
+              resultFlatVector);
+        });
+  } else {
+    applyToSelectedNoThrowLocal(
+        rows, context, result, setNullInResultAtError, [&](int row) {
+          applyCastPrimitives<ToKind, FromKind, util::PrestoCastPolicy>(
+              row,
+              context,
+              inputSimpleVector,
+              setNullInResultAtError,
+              resultFlatVector);
+        });
+  }
+
+  return result;
+}
+
+template <TypeKind ToKind>
+VectorPtr PrestoCastKernel::applyCastPrimitivesDispatch(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType,
+    bool setNullInResultAtError) const {
+  // This already excludes complex types, hugeint and unknown from type kinds.
+  return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+      applyCastPrimitivesPolicyDispatch,
+      ToKind,
+      fromType->kind() /*dispatched*/,
+      rows,
+      input,
+      context,
+      toType,
+      setNullInResultAtError);
+}
 } // namespace facebook::velox::exec

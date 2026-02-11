@@ -47,6 +47,22 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError) const override;
 
+  VectorPtr castToBoolean(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const override {
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        castToBooleanImpl,
+        input.type()->kind(),
+        rows,
+        input,
+        context,
+        toType,
+        setNullInResultAtError);
+  }
+
  private:
   template <typename FromNativeType, TypeKind ToKind>
   VectorPtr applyDecimalToIntegralCast(
@@ -65,6 +81,14 @@ class SparkCastKernel : public exec::PrestoCastKernel {
       const TypePtr& toType,
       bool setNullInResultAtError,
       VectorPtr& result) const;
+
+  template <TypeKind FromTypeKind>
+  VectorPtr castToBooleanImpl(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      bool setNullInResultAtError) const;
 
   StringView removeWhiteSpaces(const StringView& view) const;
 
