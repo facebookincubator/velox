@@ -25,6 +25,10 @@
 
 namespace facebook::velox::simd {
 
+template <typename T, typename A = xsimd::default_arch>
+using xbatch =
+    xsimd::batch<std::conditional_t<std::is_same_v<T, bool>, uint64_t, T>, A>;
+
 // Return width of the widest store.
 template <typename A = xsimd::default_arch>
 constexpr int32_t batchByteSize(const A& = {}) {
@@ -434,14 +438,9 @@ xsimd::batch<T, A> iota(const A& = {});
 // Returns a batch with all elements set to value.  For batch<bool> we
 // use one bit to represent one element.
 template <typename T, typename A = xsimd::default_arch>
-xsimd::batch<T, A> setAll(T value, const A& = {}) {
+xbatch<T, A> setAll(T value, const A& = {}) {
   if constexpr (std::is_same_v<T, bool>) {
-#if defined(__aarch64__)
-    return xsimd::batch<T, A>(
-        xsimd::broadcast<unsigned char, A>(value ? -1 : 0));
-#else
-    return xsimd::batch<T, A>(xsimd::broadcast<int64_t, A>(value ? -1 : 0));
-#endif
+    return xsimd::broadcast<uint64_t, A>(value ? 0xFFFFFFFFFFFFFFFFul : 0x0ul);
   } else {
     return xsimd::broadcast<T, A>(value);
   }
