@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <limits>
 
 #include "velox/connectors/tpcds/TpcdsConnector.h"
 #include "velox/tpcds/gen/DSDGenIterator.h"
@@ -103,8 +104,10 @@ void TpcdsDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   currentSplit_ = std::dynamic_pointer_cast<tpcds::TpcdsConnectorSplit>(split);
   VELOX_CHECK(currentSplit_, "Wrong type of split for TpcdsDataSource.");
 
+  // Returns tables have a row count of max uint64_t, which causes a ubsan
+  // failure. Cap to an arbitrary large number that does not fail ubsan.
   size_t partSize = std::ceil(
-      static_cast<double>(rowCount_) /
+			      static_cast<double>(std::min(std::numeric_limits<uint64_t>::max() / 2, rowCount_)) /
       static_cast<double>(currentSplit_->totalParts_));
 
   splitOffset_ = partSize * currentSplit_->partNumber_;
