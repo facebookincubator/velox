@@ -45,7 +45,6 @@ void registerSparkArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "arrays_zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "exists");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "forall");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
 }
@@ -216,6 +215,8 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions(prefix);
   registerArrayPrependFunctions(prefix);
   registerSparkArrayFunctions(prefix);
+  // Register Spark-specific filter with index support.
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_filter, prefix + "filter");
   // Register Spark-specific transform with index support.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_transform, prefix + "transform");
   // Register array sort functions.
