@@ -282,7 +282,7 @@ TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
   // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
-TEST_F(TableScanTest, allColumnsUsingExperimentalCudfReader) {
+TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
@@ -299,7 +299,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalCudfReader) {
       {filePath, filePath, filePath, filePath, filePath});
 
   // Helper to test scan all columns for the given splits
-  auto testScanAllColumnsUsingExperimentalCudfReader =
+  auto testScanAllColumnsUsingExperimentalReader =
       [&](const core::PlanNodePtr& plan) {
         auto task = AssertQueryBuilder(duckDbQueryRunner_)
                         .plan(plan)
@@ -322,7 +322,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalCudfReader) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Reset the CudfHiveConnector config to use the old cudf reader
+  // Reset the CudfHiveConnector config to use the experimental cudf reader
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseExperimentalCudfReader,
@@ -333,7 +333,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalCudfReader) {
   // Test scan all columns with buffered input datasource(s)
   {
     auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalCudfReader(plan);
+    testScanAllColumnsUsingExperimentalReader(plan);
   }
 
   // Test scan all columns with kvikIO datasource(s)
@@ -345,7 +345,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalCudfReader) {
     resetCudfHiveConnector(
         std::make_shared<config::ConfigBase>(std::move(config)));
     auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalCudfReader(plan);
+    testScanAllColumnsUsingExperimentalReader(plan);
   }
 }
 

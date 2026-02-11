@@ -152,7 +152,7 @@ std::tuple<
     std::vector<cudf::device_span<uint8_t const>>,
     std::future<void>>
 fetchByteRangesAsync(
-    std::shared_ptr<cudf::io::datasource> datasource,
+    std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
