@@ -301,6 +301,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_intersect", // Velox-only function, not available in Presto
     "map_keys_overlap", // Velox-only function, not available in Presto
     "map_append", // Velox-only function, not available in Presto
+    "map_remove_outliers", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
