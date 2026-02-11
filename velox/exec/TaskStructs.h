@@ -98,14 +98,8 @@ class SplitsStore {
       Split& split,
       ContinueFuture& future,
       int maxPreloadSplits,
-      const ConnectorSplitPreloadFunc& preload) = 0;
-
-  virtual bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
-      int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
-      uint32_t driverId) = 0;
+      uint32_t driverId = -1) = 0;
 
   /// Return whether all splits has been consumed and there will be no more
   /// splits.
@@ -155,7 +149,7 @@ class SplitsStore {
 
   // Arrived (added), but not distributed yet, splits.
   std::deque<Split> splits_;
-
+  // DriverId to barrier split.
   std::unordered_map<uint32_t, Split> barrierSplits_;
 
   // Signal, that no more splits will arrive.

@@ -202,22 +202,6 @@ class QueueSplitsStore : public SplitsStore {
       Split& split,
       ContinueFuture& future,
       int maxPreloadSplits,
-      const ConnectorSplitPreloadFunc& preload) override {
-    if (!splits_.empty()) {
-      split = getSplit(maxPreloadSplits, preload);
-      return true;
-    }
-    if (noMoreSplits_) {
-      return true;
-    }
-    future = makeFuture();
-    return false;
-  }
-
-  bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
-      int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
       uint32_t driverId) override {
     if (!splits_.empty()) {
