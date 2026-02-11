@@ -953,7 +953,6 @@ bool Driver::shouldDropOutput(int32_t operatorId) const {
 }
 
 void Driver::finishBarrier() {
-  LOG(ERROR) << "Driver " << ctx_->driverId << " finish barrier";
   VELOX_CHECK(isDraining());
   VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operators_.size());
   barrier_.reset();

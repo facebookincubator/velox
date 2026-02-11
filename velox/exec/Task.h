@@ -95,19 +95,6 @@ class Task : public std::enable_shared_from_this<Task> {
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
-      Consumer consumer,
-      int32_t memoryArbitrationPriority,
-      std::optional<common::SpillDiskOptions> spillDiskOpts,
-      std::function<void(std::exception_ptr)> onError,
-      uint32_t maxDrivers,
-      uint32_t concurrentSplitGroups);
-
-  static std::shared_ptr<Task> create(
-      const std::string& taskId,
-      core::PlanFragment planFragment,
-      int destination,
-      std::shared_ptr<core::QueryCtx> queryCtx,
-      ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
@@ -191,27 +178,6 @@ class Task : public std::enable_shared_from_this<Task> {
   /// all upstream source nodes' splits of this 'planNode' are consumed, and no
   /// more splits are expected.
   bool allSplitsConsumed(const core::PlanNode* planNode) const;
-
-  /// Phase 1 of Task startup: Initialization.
-  /// This method performs the local planning to convert the PlanFragment into
-  /// DriverFactories and initializes global structures like the
-  /// OutputBufferManager and ExchangeClients.
-  ///
-  /// NOTE: This does NOT create or start any Driver threads.
-  ///
-  /// @param maxDrivers The maximum number of drivers (parallelism) per
-  /// pipeline.
-
-  void initExecution(uint32_t maxDrivers, uint32_t concurrentSplitGroups);
-  /// Phase 2 of Task startup: Execution.
-  /// This method instantiates the actual Driver objects based on the factories
-  /// created in initExecution() and submits them to the Executor.
-  ///
-  /// NOTE: initExecution() must be called before calling this method.
-  ///
-  /// @param concurrentSplitGroups The number of split groups to process
-  /// concurrently.
-  void startDrivers();
 
   /// Starts executing the plan fragment specified in the constructor. If leaf
   /// nodes require splits (e.g. TableScan, Exchange, etc.), these splits can be
@@ -346,10 +312,6 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns a future which is realized when the task has been deleted, and all
   /// the background activities have finished at that point.
   ContinueFuture taskDeletionFuture();
-
-  /// Helper to handle exceptions during the start-up phases (init or start).
-  /// Ensures proper state transition and cleanup if the task fails to launch.
-  void handleStartException(const std::exception_ptr& e);
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
