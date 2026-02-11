@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/DecimalUtils.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -199,21 +200,6 @@ bool isOpAndInputsSupported(
     return returnCudfType.id() != cudf::type_id::EMPTY;
   } catch (...) {
     // no matching cuDF implementation
-  }
-  return false;
-}
-
-bool containsDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (!expr) {
-    return false;
-  }
-  if (expr->type() && expr->type()->isDecimal()) {
-    return true;
-  }
-  for (const auto& input : expr->inputs()) {
-    if (containsDecimalType(input)) {
-      return true;
-    }
   }
   return false;
 }

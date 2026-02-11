@@ -19,6 +19,7 @@ add_library(
   ExpressionEvaluator.cpp
   JitExpression.cpp
   SubfieldFiltersToAst.cpp
+  DecimalUtils.cpp
 )
 
 target_link_libraries(
