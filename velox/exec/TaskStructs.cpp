@@ -27,7 +27,6 @@ void SplitsStore::addSplit(
     for (auto i = 0; i < split.numBarrierDrivers_; ++i) {
       barrierSplits_[i] = Split::createBarrier();
     }
-
     while (!promises_.empty()) {
       promises.push_back(std::move(promises_.back()));
       promises_.pop_back();
@@ -39,11 +38,6 @@ void SplitsStore::addSplit(
       promises_.pop_back();
     }
   }
-  /*if (promises_.empty()) {
-    return;
-  }
-  promises.push_back(std::move(promises_.back()));
-  promises_.pop_back();*/
 }
 
 ContinueFuture SplitsStore::makeFuture() {

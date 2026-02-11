@@ -91,14 +91,10 @@ exec::BlockingReason TaskQueue::enqueue(
 
     if (!drained) {
       ++producersFinished_;
-      LOG(ERROR) << "MADUAN enqueue producer finished " << producersFinished_;
     } else {
       ++producersDrainFinished_;
-      LOG(ERROR) << "MADUAN enqueue producer barrier finished "
-                 << producersDrainFinished_;
     }
     if (consumerBlocked_) {
-      LOG(ERROR) << "Vector is null set promise";
       consumerBlocked_ = false;
       consumerPromise_.setValue();
     }
@@ -116,7 +112,6 @@ exec::BlockingReason TaskQueue::enqueue(
   queue_.push_back(std::move(entry));
   totalBytes_ += bytes;
   if (consumerBlocked_) {
-    LOG(ERROR) << "Vector valid set promise";
     consumerBlocked_ = false;
     consumerPromise_.setValue();
   }
@@ -150,17 +145,12 @@ RowVectorPtr TaskQueue::dequeue() {
         }
       } else if (
           numProducers_.has_value() && producersFinished_ == numProducers_) {
-        LOG(ERROR) << "MADUAN dequeue producersFinished_ == numProducers_";
         return nullptr;
       } else if (producersDrainFinished_ == numProducers_) {
-        LOG(ERROR)
-            << "MADUAN dequeue producersDrainFinished_ == numProducers_ = "
-            << producersDrainFinished_;
         return nullptr;
       }
 
       if (!vector) {
-        LOG(ERROR) << "Vector is null add promise";
         consumerBlocked_ = true;
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
         consumerFuture_ = consumerPromise_.getFuture();
@@ -173,9 +163,7 @@ RowVectorPtr TaskQueue::dequeue() {
     if (vector) {
       return vector;
     }
-    LOG(ERROR) << "MADUAN dequeue consumer wait";
     consumerFuture_.wait();
-    LOG(ERROR) << "MADUAN dequeue consumer finish";
   }
 }
 
