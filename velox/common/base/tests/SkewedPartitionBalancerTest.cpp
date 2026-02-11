@@ -28,10 +28,6 @@ using namespace facebook::velox::common::testutil;
 namespace facebook::velox::common::test {
 class SkewedPartitionRebalancerTestHelper {
  public:
-  static void SetUpTestCase() {
-    TestValue::enable();
-  }
-
   explicit SkewedPartitionRebalancerTestHelper(
       SkewedPartitionRebalancer* balancer)
       : balancer_(balancer) {
@@ -76,6 +72,10 @@ class SkewedPartitionRebalancerTestHelper {
 
 class SkewedPartitionRebalancerTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    TestValue::enable();
+  }
+
   std::unique_ptr<SkewedPartitionRebalancer> createBalancer(
       uint32_t numPartitions = 128,
       uint32_t numTasks = 8,
