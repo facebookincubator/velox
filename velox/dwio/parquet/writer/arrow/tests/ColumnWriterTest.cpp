@@ -908,42 +908,37 @@ TEST_F(TestByteArrayValuesWriter, CheckDefaultStats) {
 }
 
 TEST_F(TestTimestampValuesWriter, TimestampConventions) {
-  auto testTimestamp = [](int64_t seconds, Int96 expected) {
-    Int96 actual;
-    arrow::internal::secondsToImpalaTimestamp(seconds, &actual);
-    EXPECT_EQ(actual, expected);
-  };
-
-  auto makeInt96 = [](int32_t julianDay, uint64_t nanoseconds) {
+  auto testTimestamp =
+      [](int64_t seconds, int32_t dayDelta, uint64_t nanoseconds) {
+        Int96 actual;
+        arrow::internal::secondsToImpalaTimestamp(seconds, &actual);
+        auto julianDay = kJulianEpochOffsetDays + dayDelta;
 #if ARROW_LITTLE_ENDIAN
-    return Int96{
-        {static_cast<uint32_t>(nanoseconds),
-         static_cast<uint32_t>(nanoseconds >> 32),
-         static_cast<uint32_t>(julianDay)}};
+        Int96 expected = {
+            {static_cast<uint32_t>(nanoseconds),
+             static_cast<uint32_t>(nanoseconds >> 32),
+             static_cast<uint32_t>(julianDay)}};
 #else
-    return Int96{
-        {static_cast<uint32_t>(nanoseconds >> 32),
-         static_cast<uint32_t>(nanoseconds),
-         static_cast<uint32_t>(julianDay)}};
+        Int96 expected = {
+            {static_cast<uint32_t>(nanoseconds >> 32),
+             static_cast<uint32_t>(nanoseconds),
+             static_cast<uint32_t>(julianDay)}};
 #endif
-  };
+        EXPECT_EQ(actual, expected);
+      };
 
   // Positive timestamps.
-  testTimestamp(0, makeInt96(kJulianEpochOffsetDays, 0));
-  testTimestamp(1, makeInt96(kJulianEpochOffsetDays, 1'000'000'000));
-  testTimestamp(3600, makeInt96(kJulianEpochOffsetDays, 3'600'000'000'000));
-  testTimestamp(86400, makeInt96(kJulianEpochOffsetDays + 1, 0));
-  testTimestamp(
-      1767229259, makeInt96(kJulianEpochOffsetDays + 20454, 3'659'000'000'000));
+  testTimestamp(0, 0, 0);
+  testTimestamp(1, 0, 1'000'000'000);
+  testTimestamp(3600, 0, 3'600'000'000'000);
+  testTimestamp(86400, 1, 0);
+  testTimestamp(1767229259, 20454, 3'659'000'000'000);
 
-  // negative timestamps.
-  testTimestamp(-1, makeInt96(kJulianEpochOffsetDays - 1, 86'399'000'000'000));
-  testTimestamp(
-      -3600,
-      makeInt96(kJulianEpochOffsetDays - 1, 23LL * 3600 * 1'000'000'000));
-  testTimestamp(-86400, makeInt96(kJulianEpochOffsetDays - 1, 0));
-  testTimestamp(
-      -86401, makeInt96(kJulianEpochOffsetDays - 2, 86'399'000'000'000));
+  // Negative timestamps.
+  testTimestamp(-1, -1, 86'399'000'000'000);
+  testTimestamp(-3600, -1, 23LL * 3600 * 1'000'000'000);
+  testTimestamp(-86400, -1, 0);
+  testTimestamp(-86401, -2, 86'399'000'000'000);
 }
 
 TEST(TestColumnWriter, RepeatedListsUpdateSpacedBug) {
