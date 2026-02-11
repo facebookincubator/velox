@@ -26,10 +26,15 @@
 
 namespace facebook::velox::serializer {
 
-/// A single index bound (lower or upper) with a single row and inclusive flag.
+/// A single index bound (lower or upper) with inclusive flag.
 /// Used to represent either a lower or upper bound for index filtering.
+/// The bound vector must be non-null with at least 1 row. To represent an
+/// unbounded range, use std::nullopt in the host IndexBounds instead of a
+/// null bound vector.
 struct IndexBound {
-  /// Single row containing the bound values. Must have exactly 1 row.
+  /// Bound values. For single-row bounds, this contains exactly 1 row.
+  /// For multi-row bounds (batch processing), this may contain N rows.
+  /// Must be non-null with at least 1 row.
   RowVectorPtr bound;
   /// Whether this bound is inclusive. If true, the bound value is included
   /// in the range; if false, it's excluded.
@@ -43,21 +48,35 @@ struct IndexBounds {
   /// The top-level column names that form the index. These columns must exist
   /// in the input data and define the order of columns in the encoded key.
   std::vector<std::string> indexColumns;
-  /// Optional lower bound for the index range.
+  /// Lower bound for the index range. std::nullopt means unbounded (no lower
+  /// bound).
   std::optional<IndexBound> lowerBound;
-  /// Optional upper bound for the index range.
+  /// Upper bound for the index range. std::nullopt means unbounded (no upper
+  /// bound).
   std::optional<IndexBound> upperBound;
 
-  /// Validates that the bounds are well-formed:
-  /// - At least one bound (lower or upper) must be present
-  /// - Each bound must have exactly 1 row
-  /// Returns true if valid, false otherwise.
-  bool validate() const;
+  /// Sets both bounds and validates them. Throws if validation fails.
+  /// The indexColumns must be set before calling this method.
+  void set(IndexBound lower, IndexBound upper);
+
+  /// Clears both lower and upper bounds. The indexColumns are preserved.
+  void clear();
 
   /// Returns the type from the bound vectors.
   /// Extracts the type from lowerBound if available, otherwise from upperBound.
-  /// At least one bound must be present.
+  /// At least one bound must be present (non-null).
   TypePtr type() const;
+
+  /// Returns the number of rows in the bounds. Requires at least one bound
+  /// to be present. If both bounds exist, they must have the same row count.
+  vector_size_t numRows() const;
+
+  /// Validates that the bounds are well-formed:
+  /// - At least one bound (lower or upper) must be present (non-null)
+  /// - Each non-null bound must have at least 1 row
+  /// - If both bounds are present, they must have the same number of rows
+  /// Returns true if valid, false otherwise.
+  bool validate() const;
 
   /// Returns a human-readable string representation of the bounds.
   std::string toString() const;
@@ -146,20 +165,22 @@ class KeyEncoder {
   ///   - Inclusive upper bound (x <= 10) → incremented to exclusive (x < 11)
   ///   - Exclusive upper bound (x < 10) → stays as is
   ///
-  /// Increment failure handling (asymmetric behavior):
-  /// - Lower bound increment fails → returns std::nullopt (cannot establish
-  ///   valid range start)
+  /// Increment failure handling:
+  /// - Lower bound increment fails → returns std::nullopt (encoding failed,
+  ///   cannot establish valid range start)
   /// - Upper bound increment fails → upperKey set to std::nullopt (treated as
   ///   unbounded upper range)
   ///
   /// Increment fails when values are at their maximum (e.g., INT_MAX, strings
   /// with all \xFF characters, or nulls in NULLS_LAST ordering).
   ///
-  /// @param indexBounds Index bounds containing lower/upper bounds with
-  ///                    inclusive flags
-  /// @return std::nullopt if lower bound increment fails; otherwise
-  ///         EncodedKeyBounds with encoded keys in [lower, upper) format
-  std::optional<EncodedKeyBounds> encodeIndexBounds(
+  /// Takes an IndexBounds containing lower and/or upper bounds and encodes them
+  /// into EncodedKeyBounds for efficient range comparison. Returns a vector
+  /// with one EncodedKeyBounds per row in 'indexBounds'. Each row is encoded
+  /// into a byte-comparable key string. Throws if any lower bound fails to bump
+  /// up (for exclusive bounds). For upper bound bump up failures, the upperKey
+  /// is set to std::nullopt (unbounded).
+  std::vector<EncodedKeyBounds> encodeIndexBounds(
       const IndexBounds& indexBounds);
 
   /// Returns the sort orders for each index column.
@@ -180,12 +201,12 @@ class KeyEncoder {
   // Each row in the input vector produces one encoded key string.
   std::vector<std::string> encode(const RowVectorPtr& input);
 
-  // Creates a new row vector with the key columns incremented by 1.
-  // Similar to Apache Kudu's IncrementKey, this increments from the
-  // rightmost (least significant) column. Returns std::nullopt if all columns
-  // overflow (key is at maximum value).
-  std::optional<RowVectorPtr> createIncrementedBound(
-      const RowVectorPtr& bound) const;
+  // Creates a new row vector with the key columns incremented by 1 for multiple
+  // rows. For each row, the increment takes place from the rightmost (least
+  // significant) column.
+  // Returns nullptr if any row fails to increment (all key columns overflow),
+  // otherwise returns RowVectorPtr with incremented values.
+  RowVectorPtr createIncrementedBounds(const RowVectorPtr& bounds) const;
 
   // Encodes a single column for all rows.
   void encodeColumn(
@@ -198,7 +219,6 @@ class KeyEncoder {
   const RowTypePtr inputType_;
   const std::vector<core::SortOrder> sortOrders_;
   const std::vector<vector_size_t> keyChannels_;
-  const RowTypePtr keyType_;
   memory::MemoryPool* const pool_;
 
   // Reusable buffers.

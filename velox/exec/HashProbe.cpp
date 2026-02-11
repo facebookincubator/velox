@@ -120,7 +120,7 @@ HashProbe::HashProbe(
           joinNode->id(),
           "HashProbe",
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "HashProbe")
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
