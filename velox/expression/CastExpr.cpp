@@ -457,6 +457,10 @@ void CastExpr::applyPeeled(
             fromType->asRow(),
             toType);
         break;
+      case TypeKind::BOOLEAN:
+        result = kernel_->castToBoolean(
+            rows, input, context, toType, setNullInResultAtError());
+        break;
       default: {
         // Handle primitive type conversions.
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(

@@ -519,6 +519,7 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
     testCast<std::string, bool>("boolean", {"tru"}, {std::nullopt});
     testCast<std::string, bool>("boolean", {"on"}, {std::nullopt});
     testCast<std::string, bool>("boolean", {"off"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"infinity"}, {std::nullopt});
   }
 }
 
@@ -1094,6 +1095,10 @@ TEST_F(SparkCastExprTest, decimalToString) {
   }
 }
 
+TEST_F(SparkCastExprTest, timestampToBool) {
+  testCast<Timestamp, bool>(
+      "boolean", {Timestamp(946729316, 123)}, {std::nullopt});
+}
 TEST_F(SparkCastExprTest, recursiveTryCast) {
   // Test array elements.
   testCast(
