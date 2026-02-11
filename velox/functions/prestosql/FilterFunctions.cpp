@@ -16,15 +16,14 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/LambdaExpr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/functions/lib/ArrayFilterFunctionBase.h"
 #include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-class FilterFunctionBase : public exec::VectorFunction {
+class MapFilterFunctionHelper : public exec::VectorFunction {
  protected:
   // Applies filter functions to elements of maps or arrays and returns the
   // number of elements that passed the filters. Stores the number of elements
@@ -106,74 +105,12 @@ class FilterFunctionBase : public exec::VectorFunction {
 //    - https://prestodb.io/docs/current/functions/array.html
 //    - https://prestodb.io/docs/current/functions/lambda.html
 //    - https://prestodb.io/blog/2020/03/02/presto-lambda
-class ArrayFilterFunction : public FilterFunctionBase {
- public:
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
-    exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
-    auto& decodedArray = *arrayDecoder.get();
-
-    auto flatArray = flattenArray(rows, args[0], decodedArray);
-
-    VectorPtr elements = flatArray->elements();
-    BufferPtr resultSizes;
-    BufferPtr resultOffsets;
-    BufferPtr selectedIndices;
-    auto numSelected = doApply(
-        rows,
-        flatArray,
-        args[1],
-        {elements},
-        context,
-        resultOffsets,
-        resultSizes,
-        selectedIndices);
-
-    // Filter can pass along very large elements vectors that can hold onto
-    // memory and copy operations on them can further put memory pressure. We
-    // try to flatten them if the dictionary layer is much smaller than the
-    // elements vector.
-    auto wrappedElements = numSelected ? BaseVector::wrapInDictionary(
-                                             BufferPtr(nullptr),
-                                             std::move(selectedIndices),
-                                             numSelected,
-                                             std::move(elements),
-                                             true /*flattenIfRedundant*/)
-                                       : nullptr;
-    // Set nulls for rows not present in 'rows'.
-    BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
-    auto localResult = std::make_shared<ArrayVector>(
-        flatArray->pool(),
-        flatArray->type(),
-        std::move(newNulls),
-        rows.end(),
-        std::move(resultOffsets),
-        std::move(resultSizes),
-        wrappedElements);
-    context.moveOrCopyResult(localResult, rows, result);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // array(T), function(T, boolean) -> array(T)
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("array(T)")
-                .argumentType("array(T)")
-                .argumentType("function(T,boolean)")
-                .build()};
-  }
-};
 
 // See documentation at
 //    - https://prestodb.io/docs/current/functions/map.html
 //    - https://prestodb.io/docs/current/functions/lambda.html
 //    - https://prestodb.io/blog/2020/03/02/presto-lambda
-class MapFilterFunction : public FilterFunctionBase {
+class MapFilterFunction : public MapFilterFunctionHelper {
  private:
   // Builds a SelectivityVector based upon FlatMapVector's inMap buffer. This
   // buffer indicates whether or not a particular key is present in that map's
@@ -440,9 +377,9 @@ class MapFilterFunction : public FilterFunctionBase {
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_array_filter,
-    ArrayFilterFunction::signatures(),
+    ArrayFilterFunctionBase::signatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-    std::make_unique<ArrayFilterFunction>());
+    std::make_unique<ArrayFilterFunctionBase>());
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_map_filter,
