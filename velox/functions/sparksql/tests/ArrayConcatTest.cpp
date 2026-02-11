@@ -285,5 +285,119 @@ TEST_F(ArrayConcatTest, timestampArrays) {
   testExpression("concat(c0, c1)", {array1, array2}, expected);
 }
 
+// Test double arrays with nulls
+TEST_F(ArrayConcatTest, doubleArraysWithNulls) {
+  auto array1 = makeNullableArrayVector<double>({
+      {{1.5, std::nullopt, 2.5}},
+      {{std::nullopt}},
+  });
+  auto array2 = makeNullableArrayVector<double>({
+      {{std::nullopt, 3.5}},
+      {{4.5}},
+  });
+
+  VectorPtr expected = makeNullableArrayVector<double>({
+      {{1.5, std::nullopt, 2.5, std::nullopt, 3.5}},
+      {{std::nullopt, 4.5}},
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test date arrays
+TEST_F(ArrayConcatTest, dateArrays) {
+  auto array1 = makeArrayVector<int32_t>(
+      {{0, 1, 2}}, ARRAY(DATE()));
+  auto array2 = makeArrayVector<int32_t>(
+      {{3, 4}}, ARRAY(DATE()));
+
+  VectorPtr expected = makeArrayVector<int32_t>(
+      {{0, 1, 2, 3, 4}}, ARRAY(DATE()));
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test int8 arrays (TINYINT)
+TEST_F(ArrayConcatTest, int8Arrays) {
+  auto array1 = makeArrayVector<int8_t>({{1, 2, 3}});
+  auto array2 = makeArrayVector<int8_t>({{4, 5}});
+
+  VectorPtr expected = makeArrayVector<int8_t>({{1, 2, 3, 4, 5}});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test int16 arrays (SMALLINT)
+TEST_F(ArrayConcatTest, int16Arrays) {
+  auto array1 = makeArrayVector<int16_t>({{100, 200, 300}});
+  auto array2 = makeArrayVector<int16_t>({{400, 500}});
+
+  VectorPtr expected = makeArrayVector<int16_t>({{100, 200, 300, 400, 500}});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test int32 arrays (INTEGER)
+TEST_F(ArrayConcatTest, int32Arrays) {
+  auto array1 = makeArrayVector<int32_t>({{1000, 2000, 3000}});
+  auto array2 = makeArrayVector<int32_t>({{4000, 5000}});
+
+  VectorPtr expected = makeArrayVector<int32_t>({{1000, 2000, 3000, 4000, 5000}});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test int128 arrays (HUGEINT)
+TEST_F(ArrayConcatTest, int128Arrays) {
+  auto array1 = makeArrayVector<int128_t>({{
+      HugeInt::build(0, 1),
+      HugeInt::build(0, 2),
+  }});
+  auto array2 = makeArrayVector<int128_t>({{
+      HugeInt::build(0, 3),
+  }});
+
+  VectorPtr expected = makeArrayVector<int128_t>({{
+      HugeInt::build(0, 1),
+      HugeInt::build(0, 2),
+      HugeInt::build(0, 3),
+  }});
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test varbinary arrays
+TEST_F(ArrayConcatTest, varbinaryArrays) {
+  auto array1 = makeArrayVector<StringView>(
+      {{"\x01\x02\x03"_sv, "\x04\x05"_sv}},
+      ARRAY(VARBINARY()));
+  auto array2 = makeArrayVector<StringView>(
+      {{"\x06\x07"_sv}},
+      ARRAY(VARBINARY()));
+
+  VectorPtr expected = makeArrayVector<StringView>(
+      {{"\x01\x02\x03"_sv, "\x04\x05"_sv, "\x06\x07"_sv}},
+      ARRAY(VARBINARY()));
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
+// Test mixed nulls across different integer types
+TEST_F(ArrayConcatTest, mixedIntegerTypesWithNulls) {
+  // Test int32 with nulls
+  auto array1 = makeNullableArrayVector<int32_t>({
+      {{1, std::nullopt, 3}},
+  });
+  auto array2 = makeNullableArrayVector<int32_t>({
+      {{std::nullopt, 5}},
+  });
+
+  VectorPtr expected = makeNullableArrayVector<int32_t>({
+      {{1, std::nullopt, 3, std::nullopt, 5}},
+  });
+
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
