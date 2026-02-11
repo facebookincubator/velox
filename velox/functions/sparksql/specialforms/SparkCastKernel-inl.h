@@ -591,4 +591,36 @@ VectorPtr SparkCastKernel::castToIntegerImpl(
     return prestoCast();
   }
 }
+
+template <TypeKind ToTypeKind>
+void SparkCastKernel::applyStringToFloatingPointCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    bool setNullInResultAtError,
+    VectorPtr& result) const {
+  using ToNativeType = typename TypeTraits<ToTypeKind>::NativeType;
+
+  auto sourceVector = input.as<SimpleVector<StringView>>();
+  auto* resultFlatVector = result->as<FlatVector<ToNativeType>>();
+
+  applyToSelectedNoThrowLocal(
+      rows, context, result, setNullInResultAtError, [&](vector_size_t row) {
+        auto inputStr = sourceVector->valueAt(row);
+        inputStr = removeWhiteSpaces(inputStr);
+
+        auto value = util::Converter<ToTypeKind>::tryCast(inputStr);
+        if (value.hasError()) {
+          setError(
+              input,
+              context,
+              *resultFlatVector,
+              row,
+              value.error().message(),
+              setNullInResultAtError);
+        } else {
+          resultFlatVector->set(row, value.value());
+        }
+      });
+}
 } // namespace facebook::velox::functions::sparksql
