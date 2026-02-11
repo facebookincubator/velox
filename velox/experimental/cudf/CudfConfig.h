@@ -39,6 +39,9 @@ struct CudfConfig {
       "cudf.jit_expression_priority"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+  static constexpr const char* kCudfExchange{"cudf.exchange"};
+  static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
+  static constexpr const char* kUcxxBlockingPolling{"ucxx.blocking_polling"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -49,7 +52,7 @@ struct CudfConfig {
 
   /// Enable cudf by default.
   /// Clients can disable here and enable it via the QueryConfig as well.
-  bool enabled{true};
+  bool enabled{false};
 
   /// Enable debug printing.
   bool debugEnabled{false};
@@ -88,6 +91,15 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  /// Whether cudf exchange is enabled.
+  bool exchange{false};
+
+  /// Whether to enable error handling in UCXX endpoints.
+  bool ucxxErrorHandling{true};
+
+  /// Whether to use blocking polling in UCXX.
+  bool ucxxBlockingPolling{true};
 };
 
 } // namespace facebook::velox::cudf_velox
