@@ -84,11 +84,8 @@ struct VariantEquality<TypeKind::ARRAY> {
       // todo(youknowjack): switch outside the loop
       auto compareResult = dispatchDynamicVariantEquality(
           aArray[i], bArray[i], nullHandlingMode);
-      if (!compareResult.has_value()) {
-        return std::nullopt;
-      }
-      if (!compareResult.value()) {
-        return false;
+      if (!compareResult.value_or(false)) {
+        return compareResult;
       }
     }
     return true;
@@ -113,11 +110,8 @@ struct VariantEquality<TypeKind::ROW> {
     for (size_t i = 0; i != aRow.size(); ++i) {
       auto compareResult =
           dispatchDynamicVariantEquality(aRow[i], bRow[i], nullHandlingMode);
-      if (!compareResult.has_value()) {
-        return std::nullopt;
-      }
-      if (!compareResult.value()) {
-        return false;
+      if (!compareResult.value_or(false)) {
+        return compareResult;
       }
     }
     return true;
@@ -144,20 +138,14 @@ struct VariantEquality<TypeKind::MAP> {
          ++it_a, ++it_b) {
       auto keysCompareResult = dispatchDynamicVariantEquality(
           it_a->first, it_b->first, nullHandlingMode);
-      if (!keysCompareResult.has_value()) {
-        return std::nullopt;
-      }
-      if (!keysCompareResult.value()) {
-        return false;
+      if (!keysCompareResult.value_or(false)) {
+        return keysCompareResult;
       }
 
       auto valuesCompareResult = dispatchDynamicVariantEquality(
           it_a->second, it_b->second, nullHandlingMode);
-      if (!valuesCompareResult.has_value()) {
-        return std::nullopt;
-      }
-      if (!valuesCompareResult.value()) {
-        return false;
+      if (!valuesCompareResult.value_or(false)) {
+        return valuesCompareResult;
       }
     }
     return true;

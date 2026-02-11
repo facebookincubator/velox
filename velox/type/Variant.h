@@ -649,12 +649,25 @@ class Variant {
 
   bool operator<(const Variant& other) const;
 
+  /// Compares two `Variant`s using the provided `nullHandlingMode`.
+  ///
+  /// Returns:
+  ///  - `std::nullopt` when `nullHandlingMode` is `kNullAsIndeterminate` and
+  ///     the comparison is indeterminate.
+  ///  - `true` or `false` when `nullHandlingMode` is `kNullAsValue` and the
+  ///     comparison is determinate.
+  ///
+  /// See `CompareFlags::NullHandlingMode` for the interpretation of the
+  /// null-handling semantics for different types.
   std::optional<bool> equals(
       const Variant& other,
       CompareFlags::NullHandlingMode nullHandlingMode) const;
 
   bool equals(const Variant& other) const;
 
+  /// @deprecated Prefer `equals(..., CompareFlags::NullHandlingMode::
+  /// kNullAsValue)` instead. This function is retained for backward
+  /// compatibility and delegates to `equals(..., kNullAsValue)`.
   bool equalsWithNullEqualsNull(const Variant& other) const;
 
   std::string toJson(const TypePtr& type) const;

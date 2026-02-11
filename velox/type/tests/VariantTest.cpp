@@ -803,11 +803,10 @@ TEST(VariantTest, equalsWithNullAsIndeterminate) {
   auto testNullEquality = [](const TypeKind& kind) {
     const auto null = Variant::null(kind);
     ASSERT_EQ(
-        Variant::null(kind).equals(
-            null, CompareFlags::NullHandlingMode::kNullAsIndeterminate),
+        null.equals(null, CompareFlags::NullHandlingMode::kNullAsIndeterminate),
         std::nullopt);
-    auto compareResult = Variant::null(kind).equals(
-        null, CompareFlags::NullHandlingMode::kNullAsValue);
+    auto compareResult =
+        null.equals(null, CompareFlags::NullHandlingMode::kNullAsValue);
     ASSERT_TRUE(compareResult.has_value());
     ASSERT_TRUE(compareResult.value());
   };
