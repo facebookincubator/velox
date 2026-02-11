@@ -44,6 +44,14 @@ class CollectListAggregate {
   // aggregation uses the accumulator path, which correctly respects the config.
   bool ignoreNulls_{true};
 
+  void initialize(
+      core::AggregationNode::Step /*step*/,
+      const std::vector<TypePtr>& /*argTypes*/,
+      const TypePtr& /*resultType*/,
+      const core::QueryConfig& config) {
+    ignoreNulls_ = config.sparkCollectListIgnoreNulls();
+  }
+
   struct AccumulatorType {
     ValueList elements_;
 
@@ -127,11 +135,8 @@ AggregateRegistrationResult registerCollectList(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes at most one argument", name);
-        auto aggregate =
-            std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
-                step, argTypes, resultType);
-        aggregate->fn()->ignoreNulls_ = config.sparkCollectListIgnoreNulls();
-        return aggregate;
+        return std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
+            step, argTypes, resultType, &config);
       },
       withCompanionFunctions,
       overwrite);

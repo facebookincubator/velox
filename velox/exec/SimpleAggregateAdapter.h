@@ -44,9 +44,15 @@ class SimpleAggregateAdapter : public Aggregate {
   explicit SimpleAggregateAdapter(
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
-      TypePtr resultType)
+      TypePtr resultType,
+      const core::QueryConfig* config = nullptr)
       : Aggregate(std::move(resultType)), fn_{std::make_unique<FUNC>()} {
-    if constexpr (support_initialize_) {
+    if constexpr (support_initialize_with_config_) {
+      VELOX_CHECK_NOT_NULL(
+          config,
+          "QueryConfig is required to initialize this aggregate function.");
+      fn_->initialize(step, argTypes, resultType_, *config);
+    } else if constexpr (support_initialize_) {
       fn_->initialize(step, argTypes, resultType_);
     }
   }
@@ -159,6 +165,20 @@ class SimpleAggregateAdapter : public Aggregate {
   struct support_initialize<T, std::void_t<decltype(&T::initialize)>>
       : std::true_type {};
 
+  // Whether the function defines an initialize() method that accepts a
+  // QueryConfig parameter. If so, the config is forwarded during construction.
+  template <typename T, typename = void>
+  struct support_initialize_with_config : std::false_type {};
+
+  template <typename T>
+  struct support_initialize_with_config<
+      T,
+      std::void_t<decltype(std::declval<T&>().initialize(
+          std::declval<core::AggregationNode::Step>(),
+          std::declval<const std::vector<TypePtr>&>(),
+          std::declval<const TypePtr&>(),
+          std::declval<const core::QueryConfig&>()))>> : std::true_type {};
+
   // Whether the accumulator requires aligned access. If it is defined,
   // SimpleAggregateAdapter::accumulatorAlignmentSize() returns
   // alignof(typename FUNC::AccumulatorType).
@@ -187,6 +207,9 @@ class SimpleAggregateAdapter : public Aggregate {
       support_to_intermediate<FUNC>::value;
 
   static constexpr bool support_initialize_ = support_initialize<FUNC>::value;
+
+  static constexpr bool support_initialize_with_config_ =
+      support_initialize_with_config<FUNC>::value;
 
   static constexpr bool accumulator_is_aligned_ =
       accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
@@ -589,12 +612,6 @@ class SimpleAggregateAdapter : public Aggregate {
   std::vector<DecodedVector> inputDecoded_;
   DecodedVector intermediateDecoded_;
 
- public:
-  FUNC* fn() {
-    return fn_.get();
-  }
-
- private:
   std::unique_ptr<FUNC> fn_;
 };
 
