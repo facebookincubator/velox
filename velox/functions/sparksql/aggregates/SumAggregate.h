@@ -27,4 +27,9 @@ exec::AggregateRegistrationResult registerSum(
     bool withCompanionFunctions,
     bool overwrite);
 
+exec::AggregateRegistrationResult registerCheckedSum(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite);
+
 } // namespace facebook::velox::functions::aggregate::sparksql
