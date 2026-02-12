@@ -51,7 +51,7 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   // the specific cast operation doesn't support ANSI mode.
   // The distinction between CAST (ANSI off) and TRY_CAST is limited to
   // overflow handling, which is managed by the 'allowOverflow' flag in
-  // SparkCastHooks.
+  // SparkCastKernel.
   const bool isTryCast =
       !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
 
@@ -60,7 +60,7 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, true));
+      std::make_shared<SparkCastKernel>(config, true));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -78,6 +78,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<SparkCastHooks>(config, false));
+      std::make_shared<SparkCastKernel>(config, false));
 }
 } // namespace facebook::velox::functions::sparksql
