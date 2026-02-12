@@ -27,4 +27,9 @@ exec::AggregateRegistrationResult registerAverage(
     bool withCompanionFunctions,
     bool overwrite);
 
+exec::AggregateRegistrationResult registerCheckedAverage(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite);
+
 } // namespace facebook::velox::functions::aggregate::sparksql

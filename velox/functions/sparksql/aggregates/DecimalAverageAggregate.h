@@ -36,7 +36,7 @@ inline TypePtr getSumType(const TypePtr& rawInputType) {
 
 /// @tparam TInputType The raw input data type.
 /// @tparam TResultType The type of the output average value.
-template <typename TInputType, typename TResultType>
+template <typename TInputType, typename TResultType, bool throwOnOverflow = false>
 class DecimalAverageAggregate {
  public:
   using InputType = Row<TInputType>;
@@ -86,7 +86,7 @@ class DecimalAverageAggregate {
     int64_t overflow{0};
     int64_t count{0};
 
-    DecimalAverageAggregate* fn;
+    DecimalAverageAggregate<TInputType, TResultType, throwOnOverflow>* fn;
 
     static constexpr bool is_aligned_ = true;
 
@@ -94,7 +94,7 @@ class DecimalAverageAggregate {
 
     AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        DecimalAverageAggregate* fn)
+        DecimalAverageAggregate<TInputType, TResultType, throwOnOverflow>* fn)
         : fn(fn) {}
 
     bool addInput(
@@ -186,6 +186,9 @@ class DecimalAverageAggregate {
       if (finalResult.has_value()) {
         out = static_cast<TResultType>(finalResult.value());
         return true;
+      }
+      if constexpr (throwOnOverflow) {
+        VELOX_USER_FAIL("Decimal overflow in average");
       }
       // Sum should be set to null on overflow.
       return false;

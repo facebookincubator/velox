@@ -15,9 +15,11 @@
  */
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -356,6 +358,31 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMergeExtract) {
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>(std::vector<int64_t>{2000000}, DECIMAL(16, 5))});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// checked_avg throws on decimal overflow instead of returning null.
+TEST_F(AverageAggregationTest, checkedDecimalAvgOverflow) {
+  std::vector<int128_t> rawVector;
+  for (int i = 0; i < 10; ++i) {
+    rawVector.push_back(DecimalUtil::kLongDecimalMax);
+  }
+  auto input = makeRowVector(
+      {makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))});
+  auto dummy = makeRowVector({makeNullableFlatVector(
+      std::vector<std::optional<int128_t>>{std::nullopt}, DECIMAL(38, 4))});
+  VELOX_ASSERT_THROW(
+      testAggregations({input}, {}, {"spark_checked_avg(c0)"}, {dummy}),
+      "Decimal overflow in average");
+}
+
+// checked_avg works for normal decimal values.
+TEST_F(AverageAggregationTest, checkedDecimalAvgNormal) {
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(12, 1))});
+  int64_t kRescale = 10000;
+  auto expected = makeRowVector(
+      {makeConstant<int64_t>(200 * kRescale, 1, DECIMAL(16, 5))});
+  testAggregations({input}, {}, {"spark_checked_avg(c0)"}, {expected});
 }
 
 } // namespace
