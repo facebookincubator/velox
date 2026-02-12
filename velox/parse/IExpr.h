@@ -16,6 +16,8 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <memory>
 #include <optional>
 #include <string>
@@ -163,6 +165,15 @@ struct IExprEqual {
     return *lhs == *rhs;
   }
 };
+
+/// Hash set for ExprPtr using semantic equality (compares expression values,
+/// not pointers).
+using ExprSet = folly::F14FastSet<ExprPtr, IExprHash, IExprEqual>;
+
+/// Hash map with ExprPtr keys using semantic equality (compares expression
+/// values, not pointers).
+template <typename V>
+using ExprMap = folly::F14FastMap<ExprPtr, V, IExprHash, IExprEqual>;
 
 } // namespace facebook::velox::core
 

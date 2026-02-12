@@ -60,218 +60,218 @@ class PARQUET_EXPORT LevelEncoder {
   LevelEncoder();
   ~LevelEncoder();
 
-  static int MaxBufferSize(
+  static int maxBufferSize(
       Encoding::type encoding,
-      int16_t max_level,
-      int num_buffered_values);
+      int16_t maxLevel,
+      int numBufferedValues);
 
   // Initialize the LevelEncoder.
-  void Init(
+  void init(
       Encoding::type encoding,
-      int16_t max_level,
-      int num_buffered_values,
+      int16_t maxLevel,
+      int numBufferedValues,
       uint8_t* data,
-      int data_size);
+      int dataSize);
 
   // Encodes a batch of levels from an array and returns the number of levels
-  // encoded
-  int Encode(int batch_size, const int16_t* levels);
+  // encoded.
+  int encode(int batchSize, const int16_t* levels);
 
   int32_t len() {
-    if (encoding_ != Encoding::RLE) {
+    if (encoding_ != Encoding::kRle) {
       throw ParquetException("Only implemented for RLE encoding");
     }
-    return rle_length_;
+    return rleLength_;
   }
 
  private:
-  int bit_width_;
-  int rle_length_;
+  int bitWidth_;
+  int rleLength_;
   Encoding::type encoding_;
-  std::unique_ptr<RleEncoder> rle_encoder_;
-  std::unique_ptr<BitWriter> bit_packed_encoder_;
+  std::unique_ptr<RleEncoder> rleEncoder_;
+  std::unique_ptr<BitWriter> bitPackedEncoder_;
 };
 
 class PARQUET_EXPORT PageWriter {
  public:
   virtual ~PageWriter() {}
 
-  static std::unique_ptr<PageWriter> Open(
+  static std::unique_ptr<PageWriter> open(
       std::shared_ptr<ArrowOutputStream> sink,
       Compression::type codec,
       ColumnChunkMetaDataBuilder* metadata,
-      int16_t row_group_ordinal = -1,
-      int16_t column_chunk_ordinal = -1,
+      int16_t rowGroupOrdinal = -1,
+      int16_t columnChunkOrdinal = -1,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
-      bool buffered_row_group = false,
-      std::shared_ptr<Encryptor> header_encryptor = NULLPTR,
-      std::shared_ptr<Encryptor> data_encryptor = NULLPTR,
-      bool page_write_checksum_enabled = false,
-      // column_index_builder MUST outlive the PageWriter
-      ColumnIndexBuilder* column_index_builder = NULLPTR,
-      // offset_index_builder MUST outlive the PageWriter
-      OffsetIndexBuilder* offset_index_builder = NULLPTR,
-      const util::CodecOptions& codec_options = util::CodecOptions{});
+      bool bufferedRowGroup = false,
+      std::shared_ptr<Encryptor> headerEncryptor = NULLPTR,
+      std::shared_ptr<Encryptor> dataEncryptor = NULLPTR,
+      bool pageWriteChecksumEnabled = false,
+      // columnIndexBuilder must outlive the PageWriter.
+      ColumnIndexBuilder* columnIndexBuilder = NULLPTR,
+      // offsetIndexBuilder must outlive the PageWriter.
+      OffsetIndexBuilder* offsetIndexBuilder = NULLPTR,
+      const util::CodecOptions& codecOptions = util::CodecOptions{});
 
   // TODO: remove this and port to new signature.
   // ARROW_DEPRECATED(
-  //    "Deprecated in 13.0.0. Use CodecOptions-taking overload instead.")
-  static std::unique_ptr<PageWriter> Open(
+  //    "Deprecated in 13.0.0. Use codecOptions-taking overload instead.")
+  static std::unique_ptr<PageWriter> open(
       std::shared_ptr<ArrowOutputStream> sink,
       Compression::type codec,
-      int compression_level,
+      int compressionLevel,
       ColumnChunkMetaDataBuilder* metadata,
-      int16_t row_group_ordinal = -1,
-      int16_t column_chunk_ordinal = -1,
+      int16_t rowGroupOrdinal = -1,
+      int16_t columnChunkOrdinal = -1,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
-      bool buffered_row_group = false,
-      std::shared_ptr<Encryptor> header_encryptor = NULLPTR,
-      std::shared_ptr<Encryptor> data_encryptor = NULLPTR,
-      bool page_write_checksum_enabled = false,
-      // column_index_builder MUST outlive the PageWriter
-      ColumnIndexBuilder* column_index_builder = NULLPTR,
-      // offset_index_builder MUST outlive the PageWriter
-      OffsetIndexBuilder* offset_index_builder = NULLPTR);
+      bool bufferedRowGroup = false,
+      std::shared_ptr<Encryptor> headerEncryptor = NULLPTR,
+      std::shared_ptr<Encryptor> dataEncryptor = NULLPTR,
+      bool pageWriteChecksumEnabled = false,
+      // columnIndexBuilder must outlive the PageWriter.
+      ColumnIndexBuilder* columnIndexBuilder = NULLPTR,
+      // offsetIndexBuilder must outlive the PageWriter.
+      OffsetIndexBuilder* offsetIndexBuilder = NULLPTR);
 
-  // The Column Writer decides if dictionary encoding is used if set and
+  // The column writer decides if dictionary encoding is used, if set, and
   // if the dictionary encoding has fallen back to default encoding on reaching
-  // dictionary page limit
-  virtual void Close(bool has_dictionary, bool fallback) = 0;
+  // dictionary page limit.
+  virtual void close(bool hasDictionary, bool fallback) = 0;
 
-  // Return the number of uncompressed bytes written (including header size)
-  virtual int64_t WriteDataPage(const DataPage& page) = 0;
+  // Return the number of uncompressed bytes written (including header size).
+  virtual int64_t writeDataPage(const DataPage& page) = 0;
 
-  // Return the number of uncompressed bytes written (including header size)
-  virtual int64_t WriteDictionaryPage(const DictionaryPage& page) = 0;
+  // Return the number of uncompressed bytes written (including header size).
+  virtual int64_t writeDictionaryPage(const DictionaryPage& page) = 0;
 
   /// \brief The total number of bytes written as serialized data and
   /// dictionary pages to the sink so far.
-  virtual int64_t total_compressed_bytes_written() const = 0;
+  virtual int64_t totalCompressedBytesWritten() const = 0;
 
-  virtual bool has_compressor() = 0;
+  virtual bool hasCompressor() = 0;
 
-  virtual void Compress(
-      const ::arrow::Buffer& src_buffer,
-      ::arrow::ResizableBuffer* dest_buffer) = 0;
+  virtual void compress(
+      const ::arrow::Buffer& srcBuffer,
+      ::arrow::ResizableBuffer* destBuffer) = 0;
 };
 
 class PARQUET_EXPORT ColumnWriter {
  public:
   virtual ~ColumnWriter() = default;
 
-  static std::shared_ptr<ColumnWriter> Make(
+  static std::shared_ptr<ColumnWriter> make(
       ColumnChunkMetaDataBuilder*,
       std::unique_ptr<PageWriter>,
       const WriterProperties* properties);
 
   /// \brief Closes the ColumnWriter, commits any buffered values to pages.
-  /// \return Total size of the column in bytes
-  virtual int64_t Close() = 0;
+  /// \return Total size of the column in bytes.
+  virtual int64_t close() = 0;
 
-  /// \brief The physical Parquet type of the column
+  /// \brief The physical Parquet type of the column.
   virtual Type::type type() const = 0;
 
-  /// \brief The schema for the column
+  /// \brief The schema for the column.
   virtual const ColumnDescriptor* descr() const = 0;
 
-  /// \brief The number of rows written so far
-  virtual int64_t rows_written() const = 0;
+  /// \brief The number of rows written so far.
+  virtual int64_t rowsWritten() const = 0;
 
   /// \brief The total size of the compressed pages + page headers. Values
-  /// are still buffered and not written to a pager yet
+  /// are still buffered and not written to a pager yet.
   ///
-  /// So in un-buffered mode, it always returns 0
-  virtual int64_t total_compressed_bytes() const = 0;
+  /// So in unbuffered mode, it always returns 0.
+  virtual int64_t totalCompressedBytes() const = 0;
 
   /// \brief The total number of bytes written as serialized data and
-  /// dictionary pages to the ColumnChunk so far
+  /// dictionary pages to the ColumnChunk so far.
   /// These bytes are uncompressed bytes.
-  virtual int64_t total_bytes_written() const = 0;
+  virtual int64_t totalBytesWritten() const = 0;
 
   /// \brief The total number of bytes written as serialized data and
   /// dictionary pages to the ColumnChunk so far.
   /// If the column is uncompressed, the value would be equal to
-  /// total_bytes_written().
-  virtual int64_t total_compressed_bytes_written() const = 0;
+  /// totalBytesWritten().
+  virtual int64_t totalCompressedBytesWritten() const = 0;
 
-  /// \brief The file-level writer properties
+  /// \brief The file-level writer properties.
   virtual const WriterProperties* properties() = 0;
 
   /// \brief Write Apache Arrow columnar data directly to ColumnWriter. Returns
   /// error status if the array data type is not compatible with the concrete
   /// writer type.
   ///
-  /// leaf_array is always a primitive (possibly dictionary encoded type).
-  /// Leaf_field_nullable indicates whether the leaf array is considered
+  /// leafArray is always a primitive (possibly dictionary encoded type).
+  /// leafFieldNullable indicates whether the leaf array is considered
   /// nullable according to its schema in a Table or its parent array.
-  virtual ::arrow::Status WriteArrow(
-      const int16_t* def_levels,
-      const int16_t* rep_levels,
-      int64_t num_levels,
-      const ::arrow::Array& leaf_array,
+  virtual ::arrow::Status writeArrow(
+      const int16_t* defLevels,
+      const int16_t* repLevels,
+      int64_t numLevels,
+      const ::arrow::Array& leafArray,
       ArrowWriteContext* ctx,
-      bool leaf_field_nullable) = 0;
-
-  /// \brief Estimated size of the values that are not written to a page yet.
-  virtual int64_t EstimatedBufferedValueBytes() const = 0;
+      bool leafFieldNullable) = 0;
 };
 
 // API to write values to a single column. This is the main client facing API.
 template <typename DType>
 class TypedColumnWriter : public ColumnWriter {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   // Write a batch of repetition levels, definition levels, and values to the
   // column.
-  // `num_values` is the number of logical leaf values.
-  // `def_levels` (resp. `rep_levels`) can be null if the column's max
+  // 'numValues' is the number of logical leaf values.
+  // `defLevels` (resp. `repLevels`) can be null if the column's max
   // definition level (resp. max repetition level) is 0. If not null, each of
-  // `def_levels` and `rep_levels` must have at least `num_values`.
+  // `defLevels` and `repLevels` must have at least `numValues`.
   //
   // The number of physical values written (taken from `values`) is returned.
-  // It can be smaller than `num_values` is there are some undefined values.
-  virtual int64_t WriteBatch(
-      int64_t num_values,
-      const int16_t* def_levels,
-      const int16_t* rep_levels,
+  // It can be smaller than `numValues` if there are some undefined values.
+  virtual int64_t writeBatch(
+      int64_t numValues,
+      const int16_t* defLevels,
+      const int16_t* repLevels,
       const T* values) = 0;
 
   /// Write a batch of repetition levels, definition levels, and values to the
   /// column.
   ///
-  /// In comparison to WriteBatch the length of repetition and definition levels
-  /// is the same as of the number of values read for max_definition_level == 1.
-  /// In the case of max_definition_level > 1, the repetition and definition
-  /// levels are larger than the values but the values include the null entries
-  /// with definition_level == (max_definition_level - 1). Thus we have to
-  /// differentiate in the parameters of this function if the input has the
-  /// length of num_values or the _number of rows in the lowest nesting level_.
+  /// In comparison to writeBatch() the length of repetition and definition
+  /// levels is the same as of the number of values read for
+  /// maxDefinitionLevel == 1. In the case of maxDefinitionLevel > 1, the
+  /// repetition and definition levels are larger than the values but the values
+  /// include the null entries with definitionLevel == (maxDefinitionLevel -
+  /// 1). Thus we have to differentiate in the parameters of this function if
+  /// the input has the length of numValues or the _number of rows in the lowest
+  /// nesting level.
   ///
   /// In the case that the most inner node in the Parquet is required, the
   /// _number of rows in the lowest nesting level_ is equal to the number of
   /// non-null values. If the inner-most schema node is optional, the _number of
   /// rows in the lowest nesting level_ also includes all values with
-  /// definition_level == (max_definition_level - 1).
+  /// definitionLevel == (maxDefinitionLevel - 1).
   ///
-  /// @param num_values number of levels to write.
-  /// @param def_levels The Parquet definition levels, length is num_values
-  /// @param rep_levels The Parquet repetition levels, length is num_values
-  /// @param valid_bits Bitmap that indicates if the row is null on the lowest
-  /// nesting
-  ///   level. The length is number of rows in the lowest nesting level.
-  /// @param valid_bits_offset The offset in bits of the valid_bits where the
+  /// @param numValues Number of levels to write.
+  /// @param defLevels The Parquet definition levels, length is numValues.
+  /// @param repLevels The Parquet repetition levels, length is numValues.
+  /// @param validBits Bitmap that indicates if the row is null on the lowest
+  /// nesting level. The length is number of rows in the lowest nesting level.
+  /// @param validBitsOffset The offset in bits of the validBits where the
   ///   first relevant bit resides.
   /// @param values The values in the lowest nested level including
   ///   spacing for nulls on the lowest levels; input has the length
   ///   of the number of rows on the lowest nesting level.
-  virtual void WriteBatchSpaced(
-      int64_t num_values,
-      const int16_t* def_levels,
-      const int16_t* rep_levels,
-      const uint8_t* valid_bits,
-      int64_t valid_bits_offset,
+  virtual void writeBatchSpaced(
+      int64_t numValues,
+      const int16_t* defLevels,
+      const int16_t* repLevels,
+      const uint8_t* validBits,
+      int64_t validBitsOffset,
       const T* values) = 0;
+
+  // Estimated size of the values that are not written to a page yet
+  virtual int64_t estimatedBufferedValueBytes() const = 0;
 };
 
 using BoolWriter = TypedColumnWriter<BooleanType>;
@@ -285,57 +285,57 @@ using FixedLenByteArrayWriter = TypedColumnWriter<FLBAType>;
 
 namespace internal {
 
-// Timestamp conversion constants
+// Timestamp conversion constants.
 constexpr int64_t kJulianEpochOffsetDays = INT64_C(2440588);
 
 template <int64_t UnitPerDay, int64_t NanosecondsPerUnit>
-inline void ArrowTimestampToImpalaTimestamp(
-    const int64_t time,
-    Int96* impala_timestamp) {
-  int64_t julian_days = (time / UnitPerDay) + kJulianEpochOffsetDays;
-  (*impala_timestamp).value[2] = (uint32_t)julian_days;
+inline void arrowTimestampToImpalaTimestamp(
+    const int64_t Time,
+    Int96* impalaTimestamp) {
+  int64_t julianDays = (Time / UnitPerDay) + kJulianEpochOffsetDays;
+  (*impalaTimestamp).value[2] = (uint32_t)julianDays;
 
-  int64_t last_day_units = time % UnitPerDay;
-  auto last_day_nanos = last_day_units * NanosecondsPerUnit;
-  // impala_timestamp will be unaligned every other entry so do memcpy instead
+  int64_t lastDayUnits = Time % UnitPerDay;
+  auto lastDayNanos = lastDayUnits * NanosecondsPerUnit;
+  // impalaTimestamp will be unaligned every other entry so do memcpy instead
   // of assign and reinterpret cast to avoid undefined behavior.
-  std::memcpy(impala_timestamp, &last_day_nanos, sizeof(int64_t));
+  std::memcpy(impalaTimestamp, &lastDayNanos, sizeof(int64_t));
 }
 
 constexpr int64_t kSecondsInNanos = INT64_C(1000000000);
 
-inline void SecondsToImpalaTimestamp(
+inline void secondsToImpalaTimestamp(
     const int64_t seconds,
-    Int96* impala_timestamp) {
-  ArrowTimestampToImpalaTimestamp<kSecondsPerDay, kSecondsInNanos>(
-      seconds, impala_timestamp);
+    Int96* impalaTimestamp) {
+  arrowTimestampToImpalaTimestamp<kSecondsPerDay, kSecondsInNanos>(
+      seconds, impalaTimestamp);
 }
 
 constexpr int64_t kMillisecondsInNanos = kSecondsInNanos / INT64_C(1000);
 
-inline void MillisecondsToImpalaTimestamp(
+inline void millisecondsToImpalaTimestamp(
     const int64_t milliseconds,
-    Int96* impala_timestamp) {
-  ArrowTimestampToImpalaTimestamp<kMillisecondsPerDay, kMillisecondsInNanos>(
-      milliseconds, impala_timestamp);
+    Int96* impalaTimestamp) {
+  arrowTimestampToImpalaTimestamp<kMillisecondsPerDay, kMillisecondsInNanos>(
+      milliseconds, impalaTimestamp);
 }
 
 constexpr int64_t kMicrosecondsInNanos = kMillisecondsInNanos / INT64_C(1000);
 
-inline void MicrosecondsToImpalaTimestamp(
+inline void microsecondsToImpalaTimestamp(
     const int64_t microseconds,
-    Int96* impala_timestamp) {
-  ArrowTimestampToImpalaTimestamp<kMicrosecondsPerDay, kMicrosecondsInNanos>(
-      microseconds, impala_timestamp);
+    Int96* impalaTimestamp) {
+  arrowTimestampToImpalaTimestamp<kMicrosecondsPerDay, kMicrosecondsInNanos>(
+      microseconds, impalaTimestamp);
 }
 
 constexpr int64_t kNanosecondsInNanos = INT64_C(1);
 
-inline void NanosecondsToImpalaTimestamp(
+inline void nanosecondsToImpalaTimestamp(
     const int64_t nanoseconds,
-    Int96* impala_timestamp) {
-  ArrowTimestampToImpalaTimestamp<kNanosecondsPerDay, kNanosecondsInNanos>(
-      nanoseconds, impala_timestamp);
+    Int96* impalaTimestamp) {
+  arrowTimestampToImpalaTimestamp<kNanosecondsPerDay, kNanosecondsInNanos>(
+      nanoseconds, impalaTimestamp);
 }
 
 } // namespace internal

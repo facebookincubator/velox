@@ -25,6 +25,7 @@
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
+#include "velox/functions/sparksql/RandStr.h"
 #include "velox/functions/sparksql/ReadSidePaddingFunction.h"
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
@@ -64,6 +65,27 @@ void registerToPrettyStringFunctions(const std::string& prefix) {
 
 void registerStringFunctions(const std::string& prefix) {
   registerSparkStringFunctions(prefix);
+  // randstr(length, seed) - Spark's analyzer always provides a seed.
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int16_t>,
+      Constant<int32_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int16_t>,
+      Constant<int64_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int32_t>,
+      Constant<int32_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int32_t>,
+      Constant<int64_t>>({prefix + "randstr"});
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
       {prefix + "startswith"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(

@@ -146,11 +146,36 @@ CudfHiveDataSource::CudfHiveDataSource(
     // readColumnNames_
   }
 
+  // Build a combined AST for all subfield filters once. This is query-constant
+  // and doesn't depend on split-specific state.
+  if (!subfieldFilters_.empty()) {
+    const RowTypePtr readerFilterType = [&] {
+      if (tableHandle_->dataColumns()) {
+        std::vector<std::string> newNames;
+        std::vector<TypePtr> newTypes;
+
+        for (const auto& name : readColumnNames_) {
+          // Ensure all columns being read are available to the filter.
+          auto parsedType = tableHandle_->dataColumns()->findChild(name);
+          newNames.emplace_back(std::move(name));
+          newTypes.push_back(parsedType);
+        }
+
+        return ROW(std::move(newNames), std::move(newTypes));
+      } else {
+        return outputType_;
+      }
+    }();
+
+    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
+        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
+  }
+
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
 
   // Create empty IOStats and FsStats for later use
-  ioStats_ = std::make_shared<io::IoStatistics>();
-  fsStats_ = std::make_shared<filesystems::File::IoStats>();
+  ioStatistics_ = std::make_shared<io::IoStatistics>();
+  ioStats_ = std::make_shared<facebook::velox::IoStats>();
 
   // Whether to use the experimental split reader
   useExperimentalSplitReader_ =
@@ -254,7 +279,14 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
                 cudf::get_current_device_resource_ref());
             // Directly read the column chunk data to the device buffer if
             // supported
-            if (dataSource_->supports_device_read() and
+            if (auto bufferedInput =
+                    dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
+              bufferedInput->enqueueForDevice(
+                  static_cast<uint64_t>(byteRange.offset()),
+                  static_cast<uint64_t>(byteRange.size()),
+                  static_cast<uint8_t*>(buffer.data()));
+            } else if (
+                dataSource_->supports_device_read() and
                 dataSource_->is_device_read_preferred(byteRange.size())) {
               ioFutures.emplace_back(dataSource_->device_read_async(
                   byteRange.offset(),
@@ -275,10 +307,30 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
             }
           });
 
+      if (auto bufferedInput =
+              dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
+        bufferedInput->load(stream_);
+      }
+
       // Wait for all IO futures to complete
       std::for_each(ioFutures.begin(), ioFutures.end(), [](auto& future) {
         future.get();
       });
+
+      // Convert device buffers to device spans
+      auto columnChunkData = [&]() {
+        std::vector<cudf::device_span<uint8_t const>> columnChunkData;
+        columnChunkData.reserve(columnChunkBuffers.size());
+        std::transform(
+            columnChunkBuffers.begin(),
+            columnChunkBuffers.end(),
+            std::back_inserter(columnChunkData),
+            [](auto& buffer) {
+              return cudf::device_span<uint8_t const>{
+                  static_cast<uint8_t*>(buffer.data()), buffer.size()};
+            });
+        return columnChunkData;
+      }();
 
       // Create an all true row mask to read the table in one go without output
       // filtering. TODO(mh): Remove this once PR
@@ -293,11 +345,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // Read the table in one go
       auto tableWithMetadata = exptSplitReader_->materialize_payload_columns(
           rowGroupIndices,
-          std::move(columnChunkBuffers),
+          columnChunkData,
           allTrueRowMask->view(),
           cudf::io::parquet::experimental::use_data_page_mask::NO,
           readerOptions_,
-          stream_);
+          stream_,
+          cudf::get_current_device_resource_ref());
 
       // Store the read metadata
       metadata = std::move(tableWithMetadata.metadata);
@@ -323,7 +376,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   }
 
   TotalScanTimeCallbackData* callbackData =
-      new TotalScanTimeCallbackData{startTimeUs, ioStats_};
+      new TotalScanTimeCallbackData{startTimeUs, ioStatistics_};
 
   // Launch host callback to calculate timing when scan completes
   cudaLaunchHostFunc(
@@ -336,20 +389,16 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   if (remainingFilterExprSet_) {
     MicrosecondTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
-    const auto originalNumColumns = cudfTableColumns.size();
-    // Filter may need addtional computed columns which are added to
-    // cudfTableColumns
+    // Filter may need additional computed columns
+    std::vector<cudf::column_view> inputViews;
+    inputViews.reserve(cudfTableColumns.size());
+    for (auto& col : cudfTableColumns) {
+      inputViews.push_back(col->view());
+    }
     auto filterResult = cudfExpressionEvaluator_->eval(
-        cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
-    // discard computed columns
-    std::vector<std::unique_ptr<cudf::column>> originalColumns;
-    originalColumns.reserve(originalNumColumns);
-    std::move(
-        cudfTableColumns.begin(),
-        cudfTableColumns.begin() + originalNumColumns,
-        std::back_inserter(originalColumns));
+        inputViews, stream_, cudf::get_current_device_resource_ref());
     auto originalTable =
-        std::make_unique<cudf::table>(std::move(originalColumns));
+        std::make_unique<cudf::table>(std::move(cudfTableColumns));
     // Keep only rows where the filter is true
     cudfTable = cudf::apply_boolean_mask(
         *originalTable,
@@ -408,7 +457,7 @@ void CudfHiveDataSource::totalScanTimeCalculator(void* userData) {
   auto elapsedNs = elapsedUs * 1000; // Convert microseconds to nanoseconds
 
   // Update totalScanTime
-  data->ioStats->incTotalScanTime(elapsedNs);
+  data->ioStatistics->incTotalScanTime(elapsedNs);
 
   delete data;
 }
@@ -477,7 +526,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
     auto fileProperties = FileProperties{};
     auto const fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+        fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     if (fileHandleCachePtr.get() and fileHandleCachePtr.get()->file) {
       completedBytes_ += fileHandleCachePtr->file->size();
     }
@@ -505,7 +554,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
       auto fileProperties = FileProperties{};
       fileHandleCachePtr = fileHandleFactory_->generate(
-          fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+          fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
       VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
     } catch (const VeloxRuntimeError& e) {
       LOG(WARNING) << fmt::format(
@@ -527,8 +576,8 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
             *fileHandleCachePtr,
             baseReaderOpts_,
             connectorQueryCtx_,
+            ioStatistics_,
             ioStats_,
-            fsStats_,
             executor_);
     if (not bufferedInput) {
       LOG(WARNING) << fmt::format(
@@ -561,35 +610,13 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     readerOptions_.set_num_bytes(split_->size());
   }
 
-  if (subfieldFilters_.size()) {
-    const RowTypePtr readerFilterType = [&] {
-      if (tableHandle_->dataColumns()) {
-        std::vector<std::string> newNames;
-        std::vector<TypePtr> newTypes;
-
-        for (const auto& name : readColumnNames_) {
-          // Ensure all columns being read are available to the filter
-          auto parsedType = tableHandle_->dataColumns()->findChild(name);
-          newNames.emplace_back(std::move(name));
-          newTypes.push_back(parsedType);
-        }
-
-        return ROW(std::move(newNames), std::move(newTypes));
-      } else {
-        return outputType_;
-      }
-    }();
-
-    // Build a combined AST for all subfield filters.
-    auto const& combinedExpr = createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
-
-    readerOptions_.set_filter(combinedExpr);
+  if (subfieldFilterExpr_ != nullptr) {
+    readerOptions_.set_filter(*subfieldFilterExpr_);
   }
 
   // Set column projection if needed
   if (readColumnNames_.size()) {
-    readerOptions_.set_columns(readColumnNames_);
+    readerOptions_.set_column_names(readColumnNames_);
   }
 }
 
@@ -642,14 +669,15 @@ CudfHiveDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert({
       {"totalScanTime",
-       RuntimeMetric(ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       RuntimeMetric(
+           ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
       {"totalRemainingFilterTime",
        RuntimeMetric(
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},
   });
-  const auto& fsStats = fsStats_->stats();
-  for (const auto& storageStats : fsStats) {
+  const auto& ioStats = ioStats_->stats();
+  for (const auto& storageStats : ioStats) {
     res.emplace(storageStats.first, storageStats.second);
   }
   return res;

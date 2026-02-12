@@ -30,7 +30,7 @@ TableWriter::TableWriter(
           tableWriteNode->id(),
           "TableWrite",
           tableWriteNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "TableWrite")
               : std::nullopt),
       driverCtx_(driverCtx),
       connectorPool_(driverCtx_->task->addConnectorPoolLocked(
@@ -318,7 +318,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
             currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
-    *spillStats_->wlock() += stats.spillStats;
+    *spillStats_ += stats.spillStats;
   }
 }
 

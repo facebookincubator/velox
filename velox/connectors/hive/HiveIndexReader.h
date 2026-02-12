@@ -54,8 +54,8 @@ class HiveIndexReader {
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& requestType,
       const RowTypePtr& outputType,
-      const std::shared_ptr<io::IoStatistics>& ioStats,
-      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+      const std::shared_ptr<io::IoStatistics>& ioStatistics,
+      const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor);
 
@@ -127,8 +127,8 @@ class HiveIndexReader {
   const RowTypePtr requestType_;
   const RowTypePtr outputType_;
 
-  const std::shared_ptr<io::IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<io::IoStatistics> ioStatistics_;
+  const std::shared_ptr<IoStats> ioStats_;
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
 

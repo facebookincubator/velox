@@ -823,9 +823,7 @@ CudfHashAggregation::CudfHashAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "CudfPartialAggregation"
               : "CudfAggregation",
-          aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
-              : std::nullopt),
+          std::nullopt),
       NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
           operatorId,
