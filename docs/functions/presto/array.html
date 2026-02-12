@@ -361,6 +361,37 @@ The output maintains the order of the indices array.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="l2_norm">
+<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#l2_norm" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Euclidean norm (L2 norm) of an array of numeric values.
+The L2 norm is calculated as the square root of the sum of squares of all elements: sqrt(sum(x^2)).
+Returns 0.0 for empty arrays. Null elements are skipped in the calculation.
+Supports integer and floating point types.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">3.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[]);</span> <span class="o">--</span> <span class="mf">0.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="mf">5.0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">l2_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Euclidean norm (L2 norm) of the values in a map.
+The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
+Keys are ignored; only values are used in the calculation.
+Returns 0.0 for empty maps. Null values are skipped in the calculation.
+Supports maps with numeric value types (integer or floating point).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">]));</span> <span class="o">--</span> <span class="mf">5.0</span>
+<span class="n">SELECT</span> <span class="n">l2_norm</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[],</span> <span class="n">ARRAY</span><span class="p">[]));</span> <span class="o">--</span> <span class="mf">0.0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_sum">
 <span class="sig-name descname"><span class="pre">array_sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint/double</span></span></span><a class="headerlink" href="#array_sum" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
@@ -681,6 +712,8 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_sort_desc"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a></li>
 <li><a class="reference internal" href="#array_subset"><code class="docutils literal notranslate"><span class="pre">array_subset()</span></code></a></li>
+<li><a class="reference internal" href="#l2_norm"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">l2_norm()</span></code></a></li>
 <li><a class="reference internal" href="#array_sum"><code class="docutils literal notranslate"><span class="pre">array_sum()</span></code></a></li>
 <li><a class="reference internal" href="#array_top_n"><code class="docutils literal notranslate"><span class="pre">array_top_n()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
