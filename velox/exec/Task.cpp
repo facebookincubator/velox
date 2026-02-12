@@ -1621,8 +1621,10 @@ void Task::addSplitLocked(
     addSplitToStoreLocked(splitsState, kUngroupedGroupId, split, promises);
     return;
   }
-  VELOX_CHECK(
-      !barrierRequested_, "Can't add new split under barrier processing");
+  if (barrierRequested_) {
+    VELOX_CHECK(
+        !barrierRequested_, "Can't add new split under barrier processing");
+  }
 
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
