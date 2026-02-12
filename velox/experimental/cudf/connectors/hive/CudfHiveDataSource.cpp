@@ -279,7 +279,14 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
                 cudf::get_current_device_resource_ref());
             // Directly read the column chunk data to the device buffer if
             // supported
-            if (dataSource_->supports_device_read() and
+            if (auto bufferedInput =
+                    dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
+              bufferedInput->enqueueForDevice(
+                  static_cast<uint64_t>(byteRange.offset()),
+                  static_cast<uint64_t>(byteRange.size()),
+                  static_cast<uint8_t*>(buffer.data()));
+            } else if (
+                dataSource_->supports_device_read() and
                 dataSource_->is_device_read_preferred(byteRange.size())) {
               ioFutures.emplace_back(dataSource_->device_read_async(
                   byteRange.offset(),
@@ -300,10 +307,30 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
             }
           });
 
+      if (auto bufferedInput =
+              dynamic_cast<BufferedInputDataSource*>(dataSource_.get())) {
+        bufferedInput->load(stream_);
+      }
+
       // Wait for all IO futures to complete
       std::for_each(ioFutures.begin(), ioFutures.end(), [](auto& future) {
         future.get();
       });
+
+      // Convert device buffers to device spans
+      auto columnChunkData = [&]() {
+        std::vector<cudf::device_span<uint8_t const>> columnChunkData;
+        columnChunkData.reserve(columnChunkBuffers.size());
+        std::transform(
+            columnChunkBuffers.begin(),
+            columnChunkBuffers.end(),
+            std::back_inserter(columnChunkData),
+            [](auto& buffer) {
+              return cudf::device_span<uint8_t const>{
+                  static_cast<uint8_t*>(buffer.data()), buffer.size()};
+            });
+        return columnChunkData;
+      }();
 
       // Create an all true row mask to read the table in one go without output
       // filtering. TODO(mh): Remove this once PR
@@ -318,11 +345,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // Read the table in one go
       auto tableWithMetadata = exptSplitReader_->materialize_payload_columns(
           rowGroupIndices,
-          std::move(columnChunkBuffers),
+          columnChunkData,
           allTrueRowMask->view(),
           cudf::io::parquet::experimental::use_data_page_mask::NO,
           readerOptions_,
-          stream_);
+          stream_,
+          cudf::get_current_device_resource_ref());
 
       // Store the read metadata
       metadata = std::move(tableWithMetadata.metadata);
@@ -594,7 +622,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
 
   // Set column projection if needed
   if (readColumnNames_.size()) {
-    readerOptions_.set_columns(readColumnNames_);
+    readerOptions_.set_column_names(readColumnNames_);
   }
 }
 
