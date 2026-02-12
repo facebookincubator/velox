@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
 #include "velox/functions/prestosql/MapKeysOverlap.h"
 #include "velox/functions/prestosql/MapNormalize.h"
+#include "velox/functions/prestosql/MapRemoveOutliers.h"
 #include "velox/functions/prestosql/MapSubset.h"
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
@@ -286,6 +287,35 @@ void registerMapFunctions(const std::string& prefix) {
       MapNormalizeFunction,
       Map<Varchar, double>,
       Map<Varchar, double>>({prefix + "map_normalize"});
+
+  // Register map_remove_outliers for various key/value type combinations
+  // Helper lambda to reduce registration boilerplate
+  auto registerMapRemoveOutliers = [&prefix]<typename K, typename V>() {
+    registerFunction<
+        ParameterBinder<MapRemoveOutliersFunction, K, V>,
+        Map<K, V>,
+        Map<K, V>,
+        V,
+        V>({prefix + "map_remove_outliers"});
+  };
+
+  registerMapRemoveOutliers.template operator()<int64_t, int64_t>();
+  registerMapRemoveOutliers.template operator()<int64_t, double>();
+  registerMapRemoveOutliers.template operator()<int64_t, float>();
+  registerMapRemoveOutliers.template operator()<int32_t, int32_t>();
+  registerMapRemoveOutliers.template operator()<int32_t, double>();
+  registerMapRemoveOutliers.template operator()<int32_t, float>();
+  registerMapRemoveOutliers.template operator()<Varchar, int64_t>();
+  registerMapRemoveOutliers.template operator()<Varchar, double>();
+  registerMapRemoveOutliers.template operator()<Varchar, float>();
+
+  // Generic fallback for complex key types
+  registerFunction<
+      MapRemoveOutliersGenericFunction,
+      Map<Generic<T1>, double>,
+      Map<Generic<T1>, double>,
+      double,
+      double>({prefix + "map_remove_outliers"});
 }
 
 void registerMapAllowingDuplicates(
