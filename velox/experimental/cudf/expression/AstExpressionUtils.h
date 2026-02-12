@@ -387,7 +387,7 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     auto nestedIndices = getNestedColumnIndices(
         inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
     precomputeInstructions[sideIdx].get().emplace_back(
-        columnIndex, instruction, newColumnIndex, nestedIndices, node);
+        columnIndex, instruction, newColumnIndex, std::move(nestedIndices), node);
   }
   auto side = static_cast<cudf::ast::table_reference>(sideIdx);
   return tree.push(cudf::ast::column_reference(newColumnIndex, side));

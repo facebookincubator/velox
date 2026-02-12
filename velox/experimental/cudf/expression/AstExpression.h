@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 

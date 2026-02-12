@@ -22,6 +22,7 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
@@ -32,7 +33,17 @@ cudf::ast::literal makeLiteralFromScalar(
     cudf::scalar& scalar,
     const TypePtr& type) {
   if constexpr (cudf::is_fixed_width<T>()) {
-    if (type->isIntervalDayTime()) {
+    if (type->isDecimal()) {
+      if (type->kind() == TypeKind::BIGINT) {
+        using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal64>;
+        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+      }
+      if (type->kind() == TypeKind::HUGEINT) {
+        using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal128>;
+        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+      }
+      VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
+    } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
         using CudfScalarType = cudf::duration_scalar<CudfDurationType>;
