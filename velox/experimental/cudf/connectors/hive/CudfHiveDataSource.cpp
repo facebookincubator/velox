@@ -389,20 +389,16 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   if (remainingFilterExprSet_) {
     MicrosecondTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
-    const auto originalNumColumns = cudfTableColumns.size();
-    // Filter may need addtional computed columns which are added to
-    // cudfTableColumns
+    // Filter may need additional computed columns
+    std::vector<cudf::column_view> inputViews;
+    inputViews.reserve(cudfTableColumns.size());
+    for (auto& col : cudfTableColumns) {
+      inputViews.push_back(col->view());
+    }
     auto filterResult = cudfExpressionEvaluator_->eval(
-        cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
-    // discard computed columns
-    std::vector<std::unique_ptr<cudf::column>> originalColumns;
-    originalColumns.reserve(originalNumColumns);
-    std::move(
-        cudfTableColumns.begin(),
-        cudfTableColumns.begin() + originalNumColumns,
-        std::back_inserter(originalColumns));
+        inputViews, stream_, cudf::get_current_device_resource_ref());
     auto originalTable =
-        std::make_unique<cudf::table>(std::move(originalColumns));
+        std::make_unique<cudf::table>(std::move(cudfTableColumns));
     // Keep only rows where the filter is true
     cudfTable = cudf::apply_boolean_mask(
         *originalTable,

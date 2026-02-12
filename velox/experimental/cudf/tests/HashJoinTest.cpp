@@ -3492,6 +3492,92 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
       "Replacement with cuDF operator failed");
 }
 
+// Tests for join filters that require precomputation (non-AST operations)
+TEST_P(MultiThreadedHashJoinTest, innerJoinWithMixedFilterPrecomputation) {
+  // Test combining AST-supported operations with precomputation
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(
+            100, [](auto row) { return row % 2 == 0 ? "ABC" : "abc"; }),
+        makeFlatVector<int64_t>(100, [](auto row) { return row * 10; }),
+    });
+  });
+
+  std::vector<RowVectorPtr> buildVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(100, [batch](auto row) { return row + batch; }),
+        makeFlatVector<std::string>(100, [](auto /*row*/) { return "ABC"; }),
+        makeFlatVector<int64_t>(100, [](auto row) { return row * 10; }),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Combine string function (precomputation) with arithmetic comparison (AST)
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"t_c0"})
+      .probeVectors(std::move(probeVectors))
+      .probeProjections({"c0 AS t_c0", "c1 AS t_str", "c2 AS t_val"})
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_str", "c2 AS u_val"})
+      .joinFilter("upper(t_str) = u_str AND t_val = u_val")
+      .joinOutputLayout({"t_c0", "t_str", "t_val", "u_c0", "u_str", "u_val"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, t.c2, u.c0, u.c1, u.c2 FROM t, u "
+          "WHERE t.c0 = u.c0 AND upper(t.c1) = u.c1 AND t.c2 = u.c2")
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, leftJoinWithStringFunctionFilter) {
+  // Create probe vectors with string data
+  std::vector<RowVectorPtr> probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int64_t>(
+                100, [batch](auto row) { return row + batch; }),
+            makeFlatVector<std::string>(
+                100, [](auto row) { return row % 2 == 0 ? "HELLO" : "hello"; }),
+        });
+  });
+
+  // Create build vectors with fewer rows to ensure some left rows don't match
+  std::vector<RowVectorPtr> buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int64_t>(
+                50, [batch](auto row) { return row * 2 + batch; }),
+            makeFlatVector<std::string>(
+                50, [](auto row) { return row % 2 == 0 ? "hello" : "HELLO"; }),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Test left join with lower() function in filter - requires precomputation
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kLeft)
+      .joinFilter("lower(t1) = lower(u1)")
+      .joinOutputLayout({"t0", "t1", "u0", "u1"})
+      .referenceQuery(
+          "SELECT t.t0, t.t1, u.u0, u.u1 FROM t LEFT JOIN u "
+          "ON t.t0 = u.u0 AND lower(t.t1) = lower(u.u1)")
+      .run();
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashJoinTest,
     MultiThreadedHashJoinTest,
