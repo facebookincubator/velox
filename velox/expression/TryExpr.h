@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <unordered_set>
+
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
@@ -24,14 +26,18 @@ namespace facebook::velox::exec {
 class TryExpr : public SpecialForm {
  public:
   /// Try expression adds nulls, hence, doesn't support flat-no-nulls fast path.
-  TryExpr(TypePtr type, ExprPtr&& input)
+  TryExpr(
+      TypePtr type,
+      ExprPtr&& input,
+      std::unordered_set<std::string> catchableErrorCodes = {})
       : SpecialForm(
             SpecialFormKind::kTry,
             std::move(type),
             {std::move(input)},
             expression::kTry,
             false /* supportsFlatNoNullsFastPath */,
-            false /* trackCpuUsage */) {}
+            false /* trackCpuUsage */),
+        catchableErrorCodes_(std::move(catchableErrorCodes)) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -54,6 +60,10 @@ class TryExpr : public SpecialForm {
   void computePropagatesNulls() override {
     propagatesNulls_ = inputs_[0]->propagatesNulls();
   }
+
+  bool shouldCatchError(const std::exception_ptr& exPtr) const;
+
+  const std::unordered_set<std::string> catchableErrorCodes_;
 };
 
 class TryCallToSpecialForm : public FunctionCallToSpecialForm {
