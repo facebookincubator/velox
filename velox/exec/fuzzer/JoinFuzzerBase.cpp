@@ -51,10 +51,11 @@ JoinFuzzerBase::JoinFuzzerBase(
     size_t initialSeed,
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
     const std::string& poolName)
-    : rootPool_(memory::memoryManager()->addRootPool(
-          poolName,
-          memory::kMaxMemory,
-          memory::MemoryReclaimer::create())),
+    : rootPool_(
+          memory::memoryManager()->addRootPool(
+              poolName,
+              memory::kMaxMemory,
+              memory::MemoryReclaimer::create())),
       pool_(rootPool_->addLeafChild(
           poolName + "Leaf",
           true,
