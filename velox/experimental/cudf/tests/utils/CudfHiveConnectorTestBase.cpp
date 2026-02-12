@@ -295,6 +295,8 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
     uint64_t start,
     uint64_t length) {
   return facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
+      .connectorId(kCudfHiveConnectorId)
+      .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
       .infoColumn("$file_size", fmt::format("{}", fileSize))
       .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
       .start(start)

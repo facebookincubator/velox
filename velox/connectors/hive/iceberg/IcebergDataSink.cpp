@@ -238,7 +238,7 @@ IcebergDataSink::IcebergDataSink(
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const std::string& functionPrefix)
+    const IcebergConfigPtr& icebergConfig)
     : IcebergDataSink(
           std::move(inputType),
           insertTableHandle,
@@ -250,7 +250,7 @@ IcebergDataSink::IcebergDataSink(
               insertTableHandle->partitionSpec()),
           createDataChannels(insertTableHandle),
           createPartitionRowType(insertTableHandle->partitionSpec()),
-          functionPrefix) {}
+          icebergConfig) {}
 
 IcebergDataSink::IcebergDataSink(
     RowTypePtr inputType,
@@ -261,7 +261,7 @@ IcebergDataSink::IcebergDataSink(
     const std::vector<column_index_t>& partitionChannels,
     const std::vector<column_index_t>& dataChannels,
     RowTypePtr partitionRowType,
-    const std::string& functionPrefix)
+    const IcebergConfigPtr& icebergConfig)
     : HiveDataSink(
           inputType,
           insertTableHandle,
@@ -295,7 +295,7 @@ IcebergDataSink::IcebergDataSink(
                                                partitionSpec_,
                                                partitionChannels_,
                                                inputType_,
-                                               functionPrefix),
+                                               icebergConfig->functionPrefix()),
                                            connectorQueryCtx_)
                                      : nullptr),
       icebergPartitionName_(

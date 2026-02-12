@@ -724,15 +724,34 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
+  // Note that the number of row groups selected within `halfFileSize` may
+  // change in the future and this test may start failing. In such a case,
+  // just adjust the duckdb sql string accordingly.
+  const auto halfFileSize = fs::file_size(filePath->getPath()) / 2;
+
+  // First half of file - OFFSET 0 LIMIT 6000
   assertQuery(
       tableScanNode(),
-      makeCudfHiveConnectorSplit(
-          filePath->getPath(), 0, fs::file_size(filePath->getPath()) / 2),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, halfFileSize),
+      "SELECT * FROM tmp OFFSET 0 LIMIT 6000");
+
+  // Second half of file - OFFSET 6000 LIMIT 4000
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), halfFileSize),
+      "SELECT * FROM tmp OFFSET 6000 LIMIT 4000");
+
+  const auto fileSize = fs::file_size(filePath->getPath());
+
+  // All row groups
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, fileSize),
       "SELECT * FROM tmp");
 
+  // No row groups
   assertQuery(
       tableScanNode(),
-      makeCudfHiveConnectorSplit(
-          filePath->getPath(), fs::file_size(filePath->getPath()) / 2),
+      makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
 }

@@ -389,20 +389,16 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   if (remainingFilterExprSet_) {
     MicrosecondTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
-    const auto originalNumColumns = cudfTableColumns.size();
-    // Filter may need addtional computed columns which are added to
-    // cudfTableColumns
+    // Filter may need additional computed columns
+    std::vector<cudf::column_view> inputViews;
+    inputViews.reserve(cudfTableColumns.size());
+    for (auto& col : cudfTableColumns) {
+      inputViews.push_back(col->view());
+    }
     auto filterResult = cudfExpressionEvaluator_->eval(
-        cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
-    // discard computed columns
-    std::vector<std::unique_ptr<cudf::column>> originalColumns;
-    originalColumns.reserve(originalNumColumns);
-    std::move(
-        cudfTableColumns.begin(),
-        cudfTableColumns.begin() + originalNumColumns,
-        std::back_inserter(originalColumns));
+        inputViews, stream_, cudf::get_current_device_resource_ref());
     auto originalTable =
-        std::make_unique<cudf::table>(std::move(originalColumns));
+        std::make_unique<cudf::table>(std::move(cudfTableColumns));
     // Keep only rows where the filter is true
     cudfTable = cudf::apply_boolean_mask(
         *originalTable,
@@ -635,7 +631,6 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
-          .skip_bytes(split_->start)
           .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
@@ -643,7 +638,10 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
-  // Set num_bytes only if available
+  // Set skip_bytes and num_bytes if available
+  if (split_->start != 0) {
+    readerOptions_.set_skip_bytes(split_->start);
+  }
   if (split_->size() != std::numeric_limits<uint64_t>::max()) {
     readerOptions_.set_num_bytes(split_->size());
   }

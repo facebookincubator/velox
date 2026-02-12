@@ -28,25 +28,20 @@ void JitExpression::close() {
 }
 
 ColumnOrView JitExpression::eval(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    std::vector<cudf::column_view> inputColumnViews,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   auto precomputedColumns = precomputeSubexpressions(
-      inputTableColumns,
+      inputColumnViews,
       expr_.precomputeInstructions_,
       expr_.scalars_,
       expr_.inputRowSchema_,
       stream);
 
   // Make table_view from input columns and precomputed columns
-  std::vector<cudf::column_view> allColumnViews;
-  allColumnViews.reserve(inputTableColumns.size() + precomputedColumns.size());
-
-  for (const auto& col : inputTableColumns) {
-    allColumnViews.push_back(col->view());
-  }
-
+  std::vector<cudf::column_view> allColumnViews(inputColumnViews);
+  allColumnViews.reserve(inputColumnViews.size() + precomputedColumns.size());
   for (auto& precomputedCol : precomputedColumns) {
     allColumnViews.push_back(asView(precomputedCol));
   }
@@ -57,12 +52,12 @@ ColumnOrView JitExpression::eval(
     if (auto colRefPtr = dynamic_cast<cudf::ast::column_reference const*>(
             &expr_.cudfTree_.back())) {
       auto columnIndex = colRefPtr->get_column_index();
-      if (columnIndex < inputTableColumns.size()) {
-        return inputTableColumns[columnIndex]->view();
+      if (columnIndex < inputColumnViews.size()) {
+        return inputColumnViews[columnIndex];
       } else {
         // Referencing a precomputed column return as it is (view or owned)
         return std::move(
-            precomputedColumns[columnIndex - inputTableColumns.size()]);
+            precomputedColumns[columnIndex - inputColumnViews.size()]);
       }
     } else {
       return cudf::compute_column_jit(
