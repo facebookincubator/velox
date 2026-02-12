@@ -83,7 +83,7 @@ add_executable(
   PrefixSortTest.cpp
   PrintPlanWithStatsTest.cpp
   ProbeOperatorStateTest.cpp
-  TpcdsPlanFromJsonTest.cpp
+  VeloxPlanLoaderTest.cpp
   TraceUtilTest.cpp
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp

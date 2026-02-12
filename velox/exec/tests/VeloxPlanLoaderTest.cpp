@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/tests/utils/TpcdsPlanFromJson.h"
+#include "velox/exec/tests/utils/VeloxPlanLoader.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -29,7 +29,7 @@
 
 namespace facebook::velox::exec::test {
 
-class TpcdsPlanFromJsonTest : public HiveConnectorTestBase {
+class VeloxPlanLoaderTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -61,9 +61,11 @@ class TpcdsPlanFromJsonTest : public HiveConnectorTestBase {
   }
 };
 
-TEST_F(TpcdsPlanFromJsonTest, resolvePlanDirectoryUsesEnv) {
+TEST_F(VeloxPlanLoaderTest, resolvePlanDirectoryUsesEnv) {
   const std::string defaultDir = "/tmp/";
-  std::string resolved = TpcdsPlanFromJson::resolvePlanDirectory(defaultDir);
+  // Test with TPCDS_PLAN_DIR env var.
+  std::string resolved =
+      VeloxPlanLoader::resolvePlanDirectory(defaultDir, "TPCDS_PLAN_DIR");
   EXPECT_FALSE(resolved.empty());
   const char* envDir = std::getenv("TPCDS_PLAN_DIR");
   if (envDir && *envDir != '\0') {
@@ -71,18 +73,22 @@ TEST_F(TpcdsPlanFromJsonTest, resolvePlanDirectoryUsesEnv) {
   } else {
     EXPECT_EQ(resolved, defaultDir);
   }
+
+  // Test with no env var name -> always returns default.
+  std::string resolved2 = VeloxPlanLoader::resolvePlanDirectory(defaultDir);
+  EXPECT_EQ(resolved2, defaultDir);
 }
 
-TEST_F(TpcdsPlanFromJsonTest, getQueryPlanLoadsAndDeserializes) {
+TEST_F(VeloxPlanLoaderTest, getQueryPlanLoadsAndDeserializes) {
   const char* envDir = std::getenv("TPCDS_PLAN_DIR");
   const std::string planDir =
       envDir && *envDir ? std::string(envDir) : "tpcds_plans";
 
-  TpcdsPlanFromJson loader(planDir, pool());
+  VeloxPlanLoader loader(planDir, pool());
   for (int queryId = 1; queryId <= 99; ++queryId) {
-    TpcdsPlan plan;
+    VeloxPlan plan;
     try {
-      plan = loader.getQueryPlan(queryId);
+      plan = loader.loadPlanByQueryId(queryId);
     } catch (const std::exception& e) {
       GTEST_SKIP() << "Plan for Q" << queryId
                    << ".json not available: " << e.what();
@@ -91,7 +97,7 @@ TEST_F(TpcdsPlanFromJsonTest, getQueryPlanLoadsAndDeserializes) {
     ASSERT_TRUE(plan.plan != nullptr);
     EXPECT_GT(plan.plan->id().size(), 0u);
     EXPECT_TRUE(plan.plan->outputType() != nullptr);
-    auto tableScanNodes = TpcdsPlanFromJson::collectTableScanNodes(plan.plan);
+    auto tableScanNodes = VeloxPlanLoader::collectTableScanNodes(plan.plan);
     EXPECT_GT(tableScanNodes.size(), 0u);
     std::cout << "TPCDS TableScanNodes for Q" << queryId << ":" << std::endl;
     for (const auto& tableScanNode : tableScanNodes) {
@@ -99,29 +105,26 @@ TEST_F(TpcdsPlanFromJsonTest, getQueryPlanLoadsAndDeserializes) {
                 << std::endl;
     }
 #ifndef NDEBUG
-    // print the plan without stats
     std::cout << "TPCDS Plan for Q" << queryId << ":" << std::endl
               << plan.plan->toString(true, true) << std::endl;
 #endif
   }
 }
 
-TEST_F(TpcdsPlanFromJsonTest, getQueryPlanInvalidIdThrows) {
+TEST_F(VeloxPlanLoaderTest, getQueryPlanInvalidIdThrows) {
   const char* envDir = std::getenv("TPCDS_PLAN_DIR");
   const std::string planDir =
       envDir && *envDir ? std::string(envDir) : "tpcds_plans";
 
-  TpcdsPlanFromJson loader(planDir, pool());
-  EXPECT_THROW(loader.getQueryPlan(0), velox::VeloxUserError);
-  EXPECT_THROW(loader.getQueryPlan(100), velox::VeloxUserError);
+  VeloxPlanLoader loader(planDir, pool());
+  EXPECT_THROW(loader.loadPlanByQueryId(0), velox::VeloxUserError);
+  EXPECT_THROW(loader.loadPlanByQueryId(100), velox::VeloxUserError);
 }
 
 /// Runs TPC-DS query 1 using TpcdsQueryBuilder which loads the plan from JSON
 /// and populates splits from a data directory. Requires TPCDS_PLAN_DIR and
 /// TPCDS_DATA_DIR environment variables to be set.
-/// When CUDF_ENABLED=1 is set (and built with VELOX_ENABLE_CUDF), uses the
-/// CudfHiveConnector and cuDF GPU operators.
-TEST_F(TpcdsPlanFromJsonTest, runTpcdsQuery1WithBuilder) {
+TEST_F(VeloxPlanLoaderTest, runTpcdsQuery1WithBuilder) {
   const char* envPlanDir = std::getenv("TPCDS_PLAN_DIR");
   if (!envPlanDir || !*envPlanDir) {
     GTEST_SKIP() << "Set TPCDS_PLAN_DIR to run this test";
@@ -137,33 +140,26 @@ TEST_F(TpcdsPlanFromJsonTest, runTpcdsQuery1WithBuilder) {
   TpcdsQueryBuilder builder;
   builder.initialize(dataDir);
 
-#ifdef VELOX_ENABLE_CUDF
-  const char* cudfEnv = std::getenv("CUDF_ENABLED");
-  if (cudfEnv && std::string(cudfEnv) == "1") {
-    builder.enableCudf(executor_.get());
-  }
-#endif
-
-  auto tpcdsPlan = builder.getQueryPlan(1, planDir, pool());
-  ASSERT_NE(tpcdsPlan.plan, nullptr);
+  auto veloxPlan = builder.getQueryPlan(1, planDir, pool());
+  ASSERT_NE(veloxPlan.plan, nullptr);
 
   std::cout << "TpcdsQueryBuilder: connector ID from plan = '"
             << builder.connectorId() << "'" << std::endl;
 
   // Print scan nodes and matched data files for debugging.
-  auto scanNodes = TpcdsPlanFromJson::collectTableScanNodes(tpcdsPlan.plan);
+  auto scanNodes = VeloxPlanLoader::collectTableScanNodes(veloxPlan.plan);
   for (const auto& scan : scanNodes) {
     const auto& tbl = scan->tableHandle()->name();
-    auto it = tpcdsPlan.dataFiles.find(scan->id());
+    auto it = veloxPlan.dataFiles.find(scan->id());
     std::cout << "  TableScan " << scan->id() << " table='" << tbl << "' files="
-              << (it != tpcdsPlan.dataFiles.end()
+              << (it != veloxPlan.dataFiles.end()
                       ? std::to_string(it->second.size())
                       : "NONE")
               << std::endl;
   }
 
   // Verify that we found data files for at least some scan nodes.
-  if (tpcdsPlan.dataFiles.empty()) {
+  if (veloxPlan.dataFiles.empty()) {
     builder.shutdown();
     GTEST_SKIP() << "No data files matched any TableScan node for query 1. "
                  << "Check that TPCDS_DATA_DIR subdirectory names match the "
@@ -171,8 +167,8 @@ TEST_F(TpcdsPlanFromJsonTest, runTpcdsQuery1WithBuilder) {
   }
 
   // Build the query with splits for each TableScan node.
-  auto queryBuilder = AssertQueryBuilder(tpcdsPlan.plan);
-  for (const auto& [nodeId, files] : tpcdsPlan.dataFiles) {
+  auto queryBuilder = AssertQueryBuilder(veloxPlan.plan);
+  for (const auto& [nodeId, files] : veloxPlan.dataFiles) {
     for (const auto& file : files) {
       queryBuilder.split(nodeId, exec::Split(builder.makeSplit(file)));
     }

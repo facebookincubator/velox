@@ -17,15 +17,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-
-#ifdef VELOX_ENABLE_CUDF
-#include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#endif
 
 #if __has_include("filesystem")
 #include <filesystem>
@@ -51,7 +43,6 @@ void TpcdsQueryBuilder::initialize(const std::string& dataPath) {
     if (!tableEntry.is_directory()) {
       continue;
     }
-    // Directory name is the table name (e.g. "store_sales", "customer").
     const std::string tableName = tableEntry.path().filename().string();
 
     // Skip hidden directories.
@@ -84,17 +75,6 @@ void TpcdsQueryBuilder::initialize(const std::string& dataPath) {
       dataPath);
 }
 
-#ifdef VELOX_ENABLE_CUDF
-void TpcdsQueryBuilder::enableCudf(folly::Executor* ioExecutor) {
-  // Register cuDF GPU operator replacements.
-  cudf_velox::registerCudf();
-  cudfEnabled_ = true;
-  ioExecutor_ = ioExecutor;
-  // Note: the CudfHiveConnector is registered lazily in getQueryPlan()
-  // once we know the connector ID from the deserialized plan.
-}
-#endif
-
 const std::vector<std::string>* TpcdsQueryBuilder::findDataFiles(
     const std::string& tableName) const {
   // Try exact match first.
@@ -117,31 +97,25 @@ const std::vector<std::string>* TpcdsQueryBuilder::findDataFiles(
   return nullptr;
 }
 
-TpcdsPlan TpcdsQueryBuilder::getQueryPlan(
+void TpcdsQueryBuilder::registerHiveConnector(
+    const std::string& connectorId,
+    folly::Executor* /*ioExecutor*/) {
+  auto hiveConnector = connector::hive::HiveConnectorFactory().newConnector(
+      connectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+  connector::registerConnector(hiveConnector);
+}
+
+VeloxPlan TpcdsQueryBuilder::getQueryPlan(
     int queryId,
     const std::string& planDir,
     memory::MemoryPool* pool) {
-  TpcdsPlanFromJson loader(planDir, pool);
-  auto tpcdsPlan = loader.getQueryPlan(queryId);
-
-  // Strip PartitionedOutput root if present. Presto-dumped plans always have
-  // PartitionedOutput at the root (for distributed shuffle), but when running
-  // locally via AssertQueryBuilder / TaskCursor, PartitionedOutput causes the
-  // task to hang because data goes into an output buffer instead of the
-  // consumer callback. We replace it with its single child.
-  if (auto partitionedOutput =
-          std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
-              tpcdsPlan.plan)) {
-    VELOX_CHECK_EQ(
-        partitionedOutput->sources().size(),
-        1,
-        "PartitionedOutput should have exactly one source");
-    tpcdsPlan.plan = partitionedOutput->sources()[0];
-    LOG(INFO) << "TpcdsQueryBuilder: stripped PartitionedOutput root from plan";
-  }
+  VeloxPlanLoader loader(planDir, pool);
+  auto veloxPlan = loader.loadPlanByQueryId(queryId);
 
   // Collect all TableScan nodes from the plan tree.
-  auto scanNodes = TpcdsPlanFromJson::collectTableScanNodes(tpcdsPlan.plan);
+  auto scanNodes = VeloxPlanLoader::collectTableScanNodes(veloxPlan.plan);
 
   // Detect connector ID from the plan's TableScan nodes.
   // Presto plans typically use "hive" while the test fixture registers
@@ -152,33 +126,10 @@ TpcdsPlan TpcdsQueryBuilder::getQueryPlan(
               << "' from plan";
 
     if (!connector::hasConnector(connectorId_)) {
-#ifdef VELOX_ENABLE_CUDF
-      if (cudfEnabled_) {
-        auto cudfHiveConfigValues =
-            std::unordered_map<std::string, std::string>();
-        cudfHiveConfigValues[cudf_velox::connector::hive::CudfHiveConfig::
-                                 kAllowMismatchedCudfHiveSchemas] = "true";
-        auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
-            std::move(cudfHiveConfigValues));
-
-        cudf_velox::connector::hive::CudfHiveConnectorFactory factory;
-        auto c =
-            factory.newConnector(connectorId_, cudfHiveProperties, ioExecutor_);
-        connector::registerConnector(c);
-      } else
-#endif
-      {
-        auto hiveConnector =
-            connector::hive::HiveConnectorFactory().newConnector(
-                connectorId_,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
-        connector::registerConnector(hiveConnector);
-      }
+      registerHiveConnector(connectorId_);
       ownedConnector_ = true;
-      LOG(INFO) << "TpcdsQueryBuilder: registered "
-                << (cudfEnabled_ ? "CudfHive" : "Hive")
-                << "Connector under ID '" << connectorId_ << "'";
+      LOG(INFO) << "TpcdsQueryBuilder: registered connector under ID '"
+                << connectorId_ << "'";
     }
   }
 
@@ -188,15 +139,15 @@ TpcdsPlan TpcdsQueryBuilder::getQueryPlan(
 
     const auto* files = findDataFiles(tableName);
     if (files) {
-      tpcdsPlan.dataFiles[scanNode->id()] = *files;
+      veloxPlan.dataFiles[scanNode->id()] = *files;
     } else {
       LOG(WARNING) << "TpcdsQueryBuilder: no data files found for table '"
                    << tableName << "' (scan node " << scanNode->id() << ")";
     }
   }
 
-  tpcdsPlan.dataFileFormat = format_;
-  return tpcdsPlan;
+  veloxPlan.dataFileFormat = format_;
+  return veloxPlan;
 }
 
 std::shared_ptr<connector::ConnectorSplit> TpcdsQueryBuilder::makeSplit(
@@ -209,12 +160,6 @@ std::shared_ptr<connector::ConnectorSplit> TpcdsQueryBuilder::makeSplit(
 }
 
 void TpcdsQueryBuilder::shutdown() {
-#ifdef VELOX_ENABLE_CUDF
-  if (cudfEnabled_) {
-    cudf_velox::unregisterCudf();
-    cudfEnabled_ = false;
-  }
-#endif
   if (ownedConnector_ && !connectorId_.empty()) {
     connector::unregisterConnector(connectorId_);
     ownedConnector_ = false;

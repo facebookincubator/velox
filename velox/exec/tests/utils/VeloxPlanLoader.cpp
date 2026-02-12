@@ -13,8 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/tests/utils/TpcdsPlanFromJson.h"
-#include <folly/FileUtil.h>
+#include "velox/exec/tests/utils/VeloxPlanLoader.h"
 #include <folly/json.h>
 #include <cstdlib>
 #include <fstream>
@@ -22,6 +21,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/core/PlanNode.h"
+
 #if __has_include("filesystem")
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -29,8 +29,6 @@ namespace fs = std::filesystem;
 #include <experimental/filesystem>
 namespace fs = std::experimental::filesystem;
 #endif
-#include <algorithm>
-#include <vector>
 
 namespace facebook::velox::exec::test {
 
@@ -59,37 +57,57 @@ std::string readFileToString(const std::string& path) {
 
 } // namespace
 
-std::string TpcdsPlanFromJson::resolvePlanDirectory(
-    const std::string& planDirectory) {
-  const char* env = std::getenv("TPCDS_PLAN_DIR");
-  if (env && *env != '\0') {
-    return std::string(env);
+// static
+std::string VeloxPlanLoader::resolvePlanDirectory(
+    const std::string& defaultDir,
+    const std::string& envVarName) {
+  if (!envVarName.empty()) {
+    const char* env = std::getenv(envVarName.c_str());
+    if (env && *env != '\0') {
+      return std::string(env);
+    }
   }
-  return planDirectory;
+  return defaultDir;
 }
 
-TpcdsPlanFromJson::TpcdsPlanFromJson(
+VeloxPlanLoader::VeloxPlanLoader(
     const std::string& planDirectory,
-    memory::MemoryPool* pool)
-    : planDir_(resolvePlanDirectory(planDirectory)), pool_(pool) {
+    memory::MemoryPool* pool,
+    bool stripPartitionedOutput)
+    : planDir_(planDirectory),
+      pool_(pool),
+      stripPartitionedOutput_(stripPartitionedOutput) {
   if (pool_ == nullptr) {
-    ownedPool_ = memory::memoryManager()->addLeafPool("TpcdsPlanFromJson");
+    ownedPool_ = memory::memoryManager()->addLeafPool("VeloxPlanLoader");
     pool_ = ownedPool_.get();
   }
 }
 
-std::string TpcdsPlanFromJson::pathForQuery(int queryId) const {
-  // Check for planDir_/Q{queryId}.json file, return if exists.
-  const std::string q1Path =
-      planDir_ + "/Q" + std::to_string(queryId) + ".json";
-  if (fs::exists(q1Path)) {
-    return q1Path;
-  } else {
-    VELOX_FAIL("Plan file does not exist: {}", q1Path);
+std::string VeloxPlanLoader::pathForQuery(int queryId) const {
+  const std::string path = planDir_ + "/Q" + std::to_string(queryId) + ".json";
+  if (fs::exists(path)) {
+    return path;
+  }
+  VELOX_FAIL("Plan file does not exist: {}", path);
+}
+
+void VeloxPlanLoader::maybeStripPartitionedOutput(
+    core::PlanNodePtr& plan) const {
+  if (!stripPartitionedOutput_ || !plan) {
+    return;
+  }
+  if (auto partitionedOutput =
+          std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plan)) {
+    VELOX_CHECK_EQ(
+        partitionedOutput->sources().size(),
+        1,
+        "PartitionedOutput should have exactly one source");
+    plan = partitionedOutput->sources()[0];
+    LOG(INFO) << "VeloxPlanLoader: stripped PartitionedOutput root from plan";
   }
 }
 
-TpcdsPlan TpcdsPlanFromJson::loadPlanFromPath(const std::string& path) const {
+VeloxPlan VeloxPlanLoader::loadPlan(const std::string& path) const {
   const std::string contents = readFileToString(path);
   folly::dynamic planJson;
   try {
@@ -103,28 +121,23 @@ TpcdsPlan TpcdsPlanFromJson::loadPlanFromPath(const std::string& path) const {
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to deserialize plan from {}: {}", path, e.what());
   }
-  TpcdsPlan result;
+  maybeStripPartitionedOutput(plan);
+  VeloxPlan result;
   result.plan = std::move(plan);
   result.dataFiles = {};
   result.dataFileFormat = dwio::common::FileFormat::PARQUET;
   return result;
 }
 
-TpcdsPlan TpcdsPlanFromJson::getQueryPlan(int queryId) const {
+VeloxPlan VeloxPlanLoader::loadPlanByQueryId(int queryId) const {
   VELOX_USER_CHECK(
-      queryId >= 1 && queryId <= 99,
-      "TPC-DS queryId must be 1..99, got {}",
-      queryId);
+      queryId >= 1 && queryId <= 99, "queryId must be 1..99, got {}", queryId);
   std::string path = pathForQuery(queryId);
-  VELOX_USER_CHECK(
-      !path.empty(),
-      "No plan file(s) found for TPC-DS query {} in {}",
-      queryId,
-      planDir_);
-  return loadPlanFromPath(path);
+  return loadPlan(path);
 }
 
-std::vector<core::TableScanNodePtr> TpcdsPlanFromJson::collectTableScanNodes(
+// static
+std::vector<core::TableScanNodePtr> VeloxPlanLoader::collectTableScanNodes(
     const core::PlanNodePtr& plan) {
   std::vector<core::TableScanNodePtr> out;
   if (plan) {
