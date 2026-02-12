@@ -216,6 +216,14 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     std::call_once(*hybridScanState_->isHybridScanSetup_, [&]() {
       auto rowGroupIndices = exptSplitReader_->all_row_groups(readerOptions_);
 
+      // Filter row groups using row group byte ranges
+      if (readerOptions_.get_skip_bytes() > 0 or
+          readerOptions_.get_num_bytes().has_value()) {
+        rowGroupIndices = exptSplitReader_->filter_row_groups_with_byte_range(
+            rowGroupIndices, readerOptions_);
+      }
+
+      // Filter row groups using column chunk statistics
       if (readerOptions_.get_filter().has_value()) {
         rowGroupIndices = exptSplitReader_->filter_row_groups_with_stats(
             rowGroupIndices, readerOptions_, stream_);
