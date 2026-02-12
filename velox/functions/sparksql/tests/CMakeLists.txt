@@ -57,6 +57,7 @@ add_executable(
   MapConcatTest.cpp
   MapFromEntriesTest.cpp
   MapTest.cpp
+  MapZipWithTest.cpp
   MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
