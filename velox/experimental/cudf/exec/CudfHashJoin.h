@@ -153,7 +153,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
         joinType == core::JoinType::kAnti ||
         joinType == core::JoinType::kLeftSemiFilter ||
         joinType == core::JoinType::kRight ||
-        joinType == core::JoinType::kRightSemiFilter;
+        joinType == core::JoinType::kRightSemiFilter ||
+        joinType == core::JoinType::kFull;
   }
 
   bool isFinished() override;
@@ -242,6 +243,15 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    * @return Vector of result tables (multiple if build data was batched)
    */
   std::vector<std::unique_ptr<cudf::table>> rightJoin(
+      cudf::table_view leftTableView,
+      rmm::cuda_stream_view stream);
+  /**
+   * @brief Performs full outer join between probe table and all build tables.
+   * @param leftTableView Probe-side table view to join
+   * @param stream CUDA stream for operations
+   * @return Vector of result tables (multiple if build data was batched)
+   */
+  std::vector<std::unique_ptr<cudf::table>> fullJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
