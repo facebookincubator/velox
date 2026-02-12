@@ -19,11 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
 
-namespace cudf {
-namespace io {
-struct source_info;
-}
-} // namespace cudf
+#include <cudf/io/types.hpp>
 
 #include <memory>
 #include <string>
