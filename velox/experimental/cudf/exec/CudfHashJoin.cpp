@@ -1358,7 +1358,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           auto outIdx = leftColumnOutputIndices_[li];
           auto probeChannel = leftColumnIndicesToGather_[li];
           auto leftCudfDataType =
-              veloxToCudfDataType(probeType->childAt(probeChannel));
+              veloxToCudfDataType(probeType_->childAt(probeChannel));
           auto nullScalar = cudf::make_default_constructed_scalar(leftCudfDataType);
           outCols[outIdx] = cudf::make_column_from_scalar(
               *nullScalar, m, stream, cudf::get_current_device_resource_ref());
