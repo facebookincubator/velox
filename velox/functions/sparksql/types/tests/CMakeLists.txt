@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_spark_types_test TimestampNTZTypeTest.cpp)
+add_executable(velox_spark_types_test TimestampNTZCastTest.cpp TimestampNTZTypeTest.cpp)
 
-target_link_libraries(velox_spark_types_test velox_spark_types GTest::gtest_main)
+target_link_libraries(
+  velox_spark_types_test
+  velox_spark_types
+  velox_vector_test_lib
+  GTest::gtest_main
+)

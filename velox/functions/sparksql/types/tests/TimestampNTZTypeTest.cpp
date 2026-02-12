@@ -17,7 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/types/TimestampNTZRegistration.h"
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions::sparksql::test {
 
 class TimestampNTZTypeTest : public testing::Test {
  public:
@@ -47,4 +47,4 @@ TEST_F(TimestampNTZTypeTest, serde) {
   ASSERT_EQ(*type, *copy);
 }
 
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::functions::sparksql::test
