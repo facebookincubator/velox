@@ -68,6 +68,27 @@ DEFINE_int64(
     "Initial seed for random number generator used to reproduce previous "
     "results (0 means start with random seed).");
 
+DEFINE_int32(steps, 10, "Number of plans to generate and test.");
+
+DEFINE_int32(
+    duration_sec,
+    0,
+    "For how long it should run (in seconds). If zero, "
+    "it executes exactly --steps iterations and exits.");
+
+DEFINE_int32(
+    batch_size,
+    100,
+    "The number of elements on each generated vector.");
+
+DEFINE_int32(num_batches, 10, "The number of generated vectors.");
+
+DEFINE_double(
+    null_ratio,
+    0.1,
+    "Chance of adding a null value in a vector "
+    "(expressed as double from 0 to 1).");
+
 DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
 DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");

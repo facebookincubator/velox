@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec {
@@ -73,14 +74,14 @@ class JoinFuzzerBase {
 
   /// Returns randomly generated probe input with up to 3 additional payload
   /// columns.
-  std::vector<RowVectorPtr> generateProbeInput(
+  virtual std::vector<RowVectorPtr> generateProbeInput(
       const std::vector<std::string>& keyNames,
       const std::vector<TypePtr>& keyTypes);
 
   /// Same as generateProbeInput() but copies over 10% of the input in the probe
   /// columns to ensure some matches during joining. Also generates an empty
   /// input with a 10% chance.
-  std::vector<RowVectorPtr> generateBuildInput(
+  virtual std::vector<RowVectorPtr> generateBuildInput(
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<std::string>& probeKeys,
       const std::vector<std::string>& buildKeys);
