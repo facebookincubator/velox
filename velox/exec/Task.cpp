@@ -484,6 +484,17 @@ void Task::ensureBarrierSupport() const {
       "Task doesn't support barriered execution. Name of the first node that "
       "doesn't support barriered execution: {}",
       firstNodeNotSupportingBarrier_->name());
+  VELOX_CHECK_GT(
+      drivers_.size(),
+      0,
+      "Drivers must be created before requesting a barrier.");
+  VELOX_CHECK(
+      isRunningLocked(),
+      "Task must be in a running state to request a barrier.");
+  VELOX_CHECK_EQ(
+      numDriversPerSplitGroup_,
+      0,
+      "Barrier does not support grouped execution.");
 }
 
 void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {

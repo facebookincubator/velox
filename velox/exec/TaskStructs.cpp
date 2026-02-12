@@ -27,6 +27,7 @@ void SplitsStore::addSplit(
     for (auto i = 0; i < split.numBarrierDrivers; ++i) {
       barrierSplits_[i] = Split::createBarrier();
     }
+    VELOX_CHECK_LE(promises_.size(), split.numBarrierDrivers);
     while (!promises_.empty()) {
       promises.push_back(std::move(promises_.back()));
       promises_.pop_back();
