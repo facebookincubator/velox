@@ -34,6 +34,7 @@
 #include <cudf/utilities/default_stream.hpp>
 
 #include <cuda_runtime_api.h>
+
 #include <optional>
 #include <type_traits>
 
@@ -46,8 +47,7 @@ int64_t computeAvgRaw(const std::vector<int64_t>& values) {
     sum += value;
   }
   int128_t avg = 0;
-  facebook::velox::DecimalUtil::computeAverage(
-      avg, sum, values.size(), 0);
+  facebook::velox::DecimalUtil::computeAverage(avg, sum, values.size(), 0);
   return static_cast<int64_t>(avg);
 }
 
@@ -121,9 +121,8 @@ std::unique_ptr<cudf::column> makeDecimalColumn(
     int32_t scale,
     const std::vector<bool>* valid,
     rmm::cuda_stream_view stream) {
-  cudf::type_id typeId =
-      std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
-                                 : cudf::type_id::DECIMAL128;
+  cudf::type_id typeId = std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
+                                                    : cudf::type_id::DECIMAL128;
   cudf::data_type type{typeId, -scale};
   return makeFixedWidthColumn(type, values, valid, stream);
 }
@@ -227,20 +226,21 @@ TEST_F(CudfDecimalTest, decimal64And128ArithmeticAndComparison) {
       {"d64_a", "d64_b", "d128_a", "d128_b"},
       {
           makeFlatVector<int64_t>(
-              {12345, -2500, 999999}, DECIMAL(12, 2)), // 123.45, -25.00, 9999.99
+              {12345, -2500, 999999},
+              DECIMAL(12, 2)), // 123.45, -25.00, 9999.99
           makeFlatVector<int64_t>(
               {6789, 1500, -50000}, DECIMAL(12, 2)), // 67.89, 15.00, -500.00
           makeFlatVector<int128_t>(
               {
-                  static_cast<int128_t>(123'456'789'012),   // 12.3456789012
+                  static_cast<int128_t>(123'456'789'012), // 12.3456789012
                   static_cast<int128_t>(-987'654'321'098), // -98.7654321098
-                  static_cast<int128_t>(555'000'000'000),  // 55.5000000000
+                  static_cast<int128_t>(555'000'000'000), // 55.5000000000
               },
               DECIMAL(38, 10)),
           makeFlatVector<int128_t>(
               {
-                  static_cast<int128_t>(222'222'222'222),  // 22.2222222222
-                  static_cast<int128_t>(333'333'333'333),  // 33.3333333333
+                  static_cast<int128_t>(222'222'222'222), // 22.2222222222
+                  static_cast<int128_t>(333'333'333'333), // 33.3333333333
                   static_cast<int128_t>(-111'111'111'111), // -11.1111111111
               },
               DECIMAL(38, 10)),
@@ -263,13 +263,13 @@ TEST_F(CudfDecimalTest, decimal64And128ArithmeticAndComparison) {
 
   facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
-      "SELECT d64_a + d64_b AS sum64, "
-      "d64_a - d64_b AS diff64, "
-      "d64_a > d64_b AS gt64, "
-      "d128_a + d128_b AS sum128, "
-      "d128_a - d128_b AS diff128, "
-      "d128_a < d128_b AS lt128 "
-      "FROM tmp");
+          "SELECT d64_a + d64_b AS sum64, "
+          "d64_a - d64_b AS diff64, "
+          "d64_a > d64_b AS gt64, "
+          "d128_a + d128_b AS sum128, "
+          "d128_a - d128_b AS diff128, "
+          "d128_a < d128_b AS lt128 "
+          "FROM tmp");
 }
 
 TEST_F(CudfDecimalTest, decimalIdentityProjection64And128) {
@@ -287,30 +287,31 @@ TEST_F(CudfDecimalTest, decimalIdentityProjection64And128) {
           makeFlatVector<int64_t>(
               {
                   // Near max/min for DECIMAL(12,2): +/- 99,999,999,999.99
-                  9'999'999'999'999,   // 99,999,999,999.99
-                  -9'999'999'999'999,  // -99,999,999,999.99
-                  // Mid-range values
-                  123'45,    // 1,23.45
-                  -2'500,    // -25.00
-                  999'999,   // 9,999.99
-                  -1'000,    // -10.00
+                  9'999'999'999'999, // 99,999,999,999.99
+                  -9'999'999'999'999, // -99,999,999,999.99
+                                      // Mid-range values
+                  123'45, // 1,23.45
+                  -2'500, // -25.00
+                  999'999, // 9,999.99
+                  -1'000, // -10.00
                   0,
-                  1,         // 0.01
-                  -1,        // -0.01
+                  1, // 0.01
+                  -1, // -0.01
               },
               DECIMAL(12, 2)),
           makeFlatVector<int128_t>(
               {
-                  // Near max/min for DECIMAL(38,10): +/- (10^28 - 1) with scale 10
+                  // Near max/min for DECIMAL(38,10): +/- (10^28 - 1) with scale
+                  // 10
                   max38p10,
                   -max38p10,
                   // Mid-range values
-                  static_cast<int128_t>(123'456'789'012),   // 12.3456789012
+                  static_cast<int128_t>(123'456'789'012), // 12.3456789012
                   static_cast<int128_t>(-987'654'321'098), // -98.7654321098
-                  static_cast<int128_t>(555'000'000'000),  // 55.5000000000
-                  static_cast<int128_t>(44'388'888'889),   // 4.4388888889
-                  static_cast<int128_t>(1),                // 0.0000000001
-                  static_cast<int128_t>(-1),               // -0.0000000001
+                  static_cast<int128_t>(555'000'000'000), // 55.5000000000
+                  static_cast<int128_t>(44'388'888'889), // 4.4388888889
+                  static_cast<int128_t>(1), // 0.0000000001
+                  static_cast<int128_t>(-1), // -0.0000000001
                   static_cast<int128_t>(0),
               },
               DECIMAL(38, 10)),
@@ -344,37 +345,37 @@ TEST_F(CudfDecimalTest, decimalAddition64And128) {
       {
           makeFlatVector<int64_t>(
               {
-                  9'999'999'999'99,   // 9,999,999,999.99 (near max for 12,2)
-                  -9'999'999'999'99,  // -9,999,999,999.99
-                  123'45,             // 1,23.45
-                  -2'500,             // -25.00
+                  9'999'999'999'99, // 9,999,999,999.99 (near max for 12,2)
+                  -9'999'999'999'99, // -9,999,999,999.99
+                  123'45, // 1,23.45
+                  -2'500, // -25.00
                   0,
               },
               DECIMAL(12, 2)),
           makeFlatVector<int64_t>(
               {
-                  1,     // 0.01
-                  -1,    // -0.01
+                  1, // 0.01
+                  -1, // -0.01
                   9'999, // 99.99
-                  -100,  // -1.00
-                  50,    // 0.50
+                  -100, // -1.00
+                  50, // 0.50
               },
               DECIMAL(12, 2)),
           makeFlatVector<int128_t>(
               {
                   max38p10,
                   min38p10,
-                  static_cast<int128_t>(123'456'789'012),   // 12.3456789012
+                  static_cast<int128_t>(123'456'789'012), // 12.3456789012
                   static_cast<int128_t>(-987'654'321'098), // -98.7654321098
                   static_cast<int128_t>(0),
               },
               DECIMAL(38, 10)),
           makeFlatVector<int128_t>(
               {
-                  static_cast<int128_t>(1),                // 0.0000000001
-                  static_cast<int128_t>(-1),               // -0.0000000001
-                  static_cast<int128_t>(44'388'888'889),   // 4.4388888889
-                  static_cast<int128_t>(555'000'000'000),  // 55.5000000000
+                  static_cast<int128_t>(1), // 0.0000000001
+                  static_cast<int128_t>(-1), // -0.0000000001
+                  static_cast<int128_t>(44'388'888'889), // 4.4388888889
+                  static_cast<int128_t>(555'000'000'000), // 55.5000000000
                   max38p10,
               },
               DECIMAL(38, 10)),
@@ -407,11 +408,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyPromotesToLong) {
       {"a", "b"},
       {
           makeFlatVector<int64_t>(
-              {9'999'999'999, 1'234'567'890, -2'000'000'000},
-              DECIMAL(10, 0)),
-          makeFlatVector<int64_t>(
-              {9'999'999'999, -2, 4},
-              DECIMAL(10, 0)),
+              {9'999'999'999, 1'234'567'890, -2'000'000'000}, DECIMAL(10, 0)),
+          makeFlatVector<int64_t>({9'999'999'999, -2, 4}, DECIMAL(10, 0)),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
@@ -421,8 +419,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyPromotesToLong) {
                   .project({"a * b AS prod"})
                   .planNode();
 
-  const int128_t expected0 =
-      static_cast<int128_t>(9'999'999'999LL) * static_cast<int128_t>(9'999'999'999LL);
+  const int128_t expected0 = static_cast<int128_t>(9'999'999'999LL) *
+      static_cast<int128_t>(9'999'999'999LL);
   auto expected = makeRowVector(
       {"prod"},
       {makeFlatVector<int128_t>(
@@ -433,8 +431,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyPromotesToLong) {
 
   // CPU (no cuDF adapter registered).
   unregisterCudf();
-  auto cpuResult = facebook::velox::exec::test::AssertQueryBuilder(plan)
-                       .copyResults(pool());
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   // GPU (enable cuDF, no fallback).
@@ -487,8 +485,8 @@ TEST_F(CudfDecimalTest, decimalAddPromotesToLong) {
 
   // CPU (no cuDF adapter registered).
   unregisterCudf();
-  auto cpuResult = facebook::velox::exec::test::AssertQueryBuilder(plan)
-                       .copyResults(pool());
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   registerCudf();
 
   // GPU (cuDF enabled).
@@ -617,18 +615,12 @@ TEST_F(CudfDecimalTest, decimalCompareDecimalDecimal) {
   auto expected = makeRowVector(
       {"eq", "neq", "lt", "lte", "gt", "gte"},
       {
-          makeNullableFlatVector<bool>(
-              {false, true, false}, BOOLEAN()),
-          makeNullableFlatVector<bool>(
-              {true, false, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>(
-              {false, false, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>(
-              {false, true, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>(
-              {true, false, false}, BOOLEAN()),
-          makeNullableFlatVector<bool>(
-              {true, true, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, true, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, false, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({false, true, true}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, false, false}, BOOLEAN()),
+          makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
       });
 
   auto result =
@@ -720,10 +712,8 @@ TEST_F(CudfDecimalTest, decimalLogicalAndOrProject) {
   auto input = makeRowVector(
       {"a", "b"},
       {
-          makeFlatVector<int64_t>(
-              {100, 200, 300, 400, 500}, DECIMAL(10, 2)),
-          makeFlatVector<int64_t>(
-              {250, 150, 350, 100, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({100, 200, 300, 400, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({250, 150, 350, 100, 500}, DECIMAL(10, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
@@ -766,10 +756,8 @@ TEST_F(CudfDecimalTest, decimalLogicalAndOrFilter) {
   auto input = makeRowVector(
       {"a", "b"},
       {
-          makeFlatVector<int64_t>(
-              {100, 200, 300, 400, 500}, DECIMAL(10, 2)),
-          makeFlatVector<int64_t>(
-              {250, 150, 350, 100, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({100, 200, 300, 400, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({250, 150, 350, 100, 500}, DECIMAL(10, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
@@ -857,20 +845,20 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCast) {
 
   std::vector<RowVectorPtr> vectors = {input};
 
-  auto expected = makeRowVector(
-      {"prod"},
-      {makeFlatVector<double>({2.5, 10.0, 0.0})});
+  auto expected =
+      makeRowVector({"prod"}, {makeFlatVector<double>({2.5, 10.0, 0.0})});
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
       unregisterCudf();
     }
-  auto plan = exec::test::PlanBuilder()
+    auto plan = exec::test::PlanBuilder()
                     .values(vectors)
                     .project({"cast(d as double) * x AS prod"})
                     .planNode();
-    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
-                      .copyResults(pool());
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -893,20 +881,20 @@ TEST_F(CudfDecimalTest, decimalMultiplyDoubleCastRight) {
 
   std::vector<RowVectorPtr> vectors = {input};
 
-  auto expected = makeRowVector(
-      {"prod"},
-      {makeFlatVector<double>({2.5, 10.0, 0.0})});
+  auto expected =
+      makeRowVector({"prod"}, {makeFlatVector<double>({2.5, 10.0, 0.0})});
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
       unregisterCudf();
     }
-  auto plan = exec::test::PlanBuilder()
+    auto plan = exec::test::PlanBuilder()
                     .values(vectors)
                     .project({"x * cast(d as double) AS prod"})
                     .planNode();
-    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
-                      .copyResults(pool());
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -931,9 +919,8 @@ TEST_F(CudfDecimalTest, decimalAstRecursiveMixedScaleAdd) {
 
   std::vector<RowVectorPtr> vectors = {input};
 
-  auto expected = makeRowVector(
-      {"prod"},
-      {makeFlatVector<double>({126.45, -31.5, 1.3})});
+  auto expected =
+      makeRowVector({"prod"}, {makeFlatVector<double>({126.45, -31.5, 1.3})});
 
   auto plan = exec::test::PlanBuilder()
                   .values(vectors)
@@ -951,14 +938,12 @@ TEST_F(CudfDecimalTest, decimalCastToDoubleProjection) {
   });
 
   auto input = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
+      {"d"}, {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
 
   std::vector<RowVectorPtr> vectors = {input};
 
-  auto expected = makeRowVector(
-      {"d_double"},
-      {makeFlatVector<double>({1.25, -2.5, 0.5})});
+  auto expected =
+      makeRowVector({"d_double"}, {makeFlatVector<double>({1.25, -2.5, 0.5})});
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -968,8 +953,9 @@ TEST_F(CudfDecimalTest, decimalCastToDoubleProjection) {
                     .values(vectors)
                     .project({"cast(d as double) AS d_double"})
                     .planNode();
-    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
-                      .copyResults(pool());
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -983,14 +969,12 @@ TEST_F(CudfDecimalTest, decimalCastToRealProjection) {
   });
 
   auto input = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
+      {"d"}, {makeFlatVector<int64_t>({125, -250, 50}, DECIMAL(10, 2))});
 
   std::vector<RowVectorPtr> vectors = {input};
 
-  auto expected = makeRowVector(
-      {"d_real"},
-      {makeFlatVector<float>({1.25f, -2.5f, 0.5f})});
+  auto expected =
+      makeRowVector({"d_real"}, {makeFlatVector<float>({1.25f, -2.5f, 0.5f})});
 
   auto runAndAssert = [&](bool useCudf) {
     if (!useCudf) {
@@ -1000,8 +984,9 @@ TEST_F(CudfDecimalTest, decimalCastToRealProjection) {
                     .values(vectors)
                     .project({"cast(d as real) AS d_real"})
                     .planNode();
-    auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
-                      .copyResults(pool());
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
     facebook::velox::test::assertEqualVectors(expected, result);
   };
 
@@ -1031,10 +1016,14 @@ TEST_F(CudfDecimalTest, decimalDivideRounds) {
 
   auto computeDiv = [](int64_t a, int64_t b) {
     __int128_t out = 0;
-    facebook::velox::DecimalUtil::divideWithRoundUp<
-        __int128_t,
-        __int128_t,
-        __int128_t>(out, static_cast<__int128_t>(a), static_cast<__int128_t>(b), false, 2, 0);
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, __int128_t>(
+            out,
+            static_cast<__int128_t>(a),
+            static_cast<__int128_t>(b),
+            false,
+            2,
+            0);
     return static_cast<int64_t>(out);
   };
 
@@ -1096,8 +1085,7 @@ TEST_F(CudfDecimalTest, DISABLED_decimalAvgAndSumTimesDouble) {
                   .values(vectors)
                   .project({"l_quantity * 2.0 AS qty2"})
                   .singleAggregation(
-                      {},
-                      {"avg(qty2) AS avg_qty", "sum(qty2) AS sum_qty"})
+                      {}, {"avg(qty2) AS avg_qty", "sum(qty2) AS sum_qty"})
                   .planNode();
 
   facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -1126,8 +1114,7 @@ TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {
                   .planNode();
 
   auto expected = makeRowVector(
-      {"avg_d"},
-      {makeFlatVector<int64_t>({250}, DECIMAL(12, 2))}); // 2.50
+      {"avg_d"}, {makeFlatVector<int64_t>({250}, DECIMAL(12, 2))}); // 2.50
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1153,8 +1140,7 @@ TEST_F(CudfDecimalTest, decimalAvgDecimalInputRounds) {
 
   auto expected = makeRowVector(
       {"avg_d"},
-      {makeFlatVector<int64_t>(
-          {computeAvgRaw(rawValues)}, DECIMAL(12, 2))});
+      {makeFlatVector<int64_t>({computeAvgRaw(rawValues)}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1224,8 +1210,7 @@ TEST_F(CudfDecimalTest, decimalAvgIntermediateVarbinaryRounds) {
       {"k", "d"},
       {
           makeFlatVector<int32_t>({1, 1, 1, 1, 1, 2, 3}),
-          makeFlatVector<int64_t>(
-              {10, 10, 10, 10, 10, 1, -1}, DECIMAL(12, 2)),
+          makeFlatVector<int64_t>({10, 10, 10, 10, 10, 1, -1}, DECIMAL(12, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input1, input2};
@@ -1281,8 +1266,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalPartialFinalVarbinaryRounds) {
   std::vector<int64_t> allValues = {100, 10, 10, 10, 10, 10, 10};
   auto expected = makeRowVector(
       {"a"},
-      {makeFlatVector<int64_t>(
-          {computeAvgRaw(allValues)}, DECIMAL(12, 2))});
+      {makeFlatVector<int64_t>({computeAvgRaw(allValues)}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1311,8 +1295,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalIntermediateVarbinaryRounds) {
   std::vector<int64_t> allValues = {100, 10, 10, 10, 10, 10, 10};
   auto expected = makeRowVector(
       {"a"},
-      {makeFlatVector<int64_t>(
-          {computeAvgRaw(allValues)}, DECIMAL(12, 2))});
+      {makeFlatVector<int64_t>({computeAvgRaw(allValues)}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1326,8 +1309,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleRounds) {
 
   auto input = makeRowVector(
       {"d"},
-      {makeFlatVector<int64_t>(
-          {100, 10, 10, 10, 10, 10, 10}, DECIMAL(12, 2))});
+      {makeFlatVector<int64_t>({100, 10, 10, 10, 10, 10, 10}, DECIMAL(12, 2))});
 
   std::vector<RowVectorPtr> vectors = {input};
 
@@ -1339,8 +1321,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleRounds) {
   std::vector<int64_t> allValues = {100, 10, 10, 10, 10, 10, 10};
   auto expected = makeRowVector(
       {"a"},
-      {makeFlatVector<int64_t>(
-          {computeAvgRaw(allValues)}, DECIMAL(12, 2))});
+      {makeFlatVector<int64_t>({computeAvgRaw(allValues)}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1365,8 +1346,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleAllNulls) {
                   .planNode();
 
   auto expected = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+      {"a"}, {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1392,8 +1372,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalPartialFinalVarbinaryAllNulls) {
                   .planNode();
 
   auto expected = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+      {"a"}, {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1420,8 +1399,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalIntermediateVarbinaryAllNulls) {
                   .planNode();
 
   auto expected = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+      {"a"}, {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
@@ -1520,8 +1498,7 @@ TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinary) {
       {
           makeFlatVector<int32_t>({1, 1, 2, 2, 2}),
           makeFlatVector<int64_t>(
-              {12345, -2500, 10000, 200, -300},
-              DECIMAL(12, 2)),
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input};
@@ -1543,8 +1520,7 @@ TEST_F(CudfDecimalTest, decimalPartialSumVarbinaryToVeloxRoundTrip) {
   });
 
   auto input = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(12, 2))});
+      {"d"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(12, 2))});
 
   std::vector<RowVectorPtr> vectors = {input};
 
@@ -1584,8 +1560,7 @@ TEST_F(CudfDecimalTest, decimalSumPartialFinalEmptyInput) {
                   .planNode();
 
   facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults(
-          "SELECT k, sum(d) AS s FROM tmp WHERE k < 0 GROUP BY k");
+      .assertResults("SELECT k, sum(d) AS s FROM tmp WHERE k < 0 GROUP BY k");
 }
 
 TEST_F(CudfDecimalTest, decimalSumIntermediateVarbinary) {
@@ -1598,17 +1573,13 @@ TEST_F(CudfDecimalTest, decimalSumIntermediateVarbinary) {
       {"k", "d"},
       {
           makeFlatVector<int32_t>({1, 1, 2}),
-          makeFlatVector<int64_t>(
-              {12345, -2500, 10000},
-              DECIMAL(12, 2)),
+          makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2)),
       });
   auto input2 = makeRowVector(
       {"k", "d"},
       {
           makeFlatVector<int32_t>({2, 3}),
-          makeFlatVector<int64_t>(
-              {200, -300},
-              DECIMAL(12, 2)),
+          makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2)),
       });
 
   std::vector<RowVectorPtr> vectors = {input1, input2};
@@ -1631,11 +1602,9 @@ TEST_F(CudfDecimalTest, decimalSumGlobalPartialFinalVarbinary) {
   });
 
   auto input1 = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2))});
+      {"d"}, {makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2))});
   auto input2 = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2))});
+      {"d"}, {makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2))});
 
   std::vector<RowVectorPtr> vectors = {input1, input2};
   createDuckDbTable(vectors);
@@ -1656,11 +1625,9 @@ TEST_F(CudfDecimalTest, decimalSumGlobalIntermediateVarbinary) {
   });
 
   auto input1 = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2))});
+      {"d"}, {makeFlatVector<int64_t>({12345, -2500, 10000}, DECIMAL(12, 2))});
   auto input2 = makeRowVector(
-      {"d"},
-      {makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2))});
+      {"d"}, {makeFlatVector<int64_t>({200, -300}, DECIMAL(12, 2))});
 
   std::vector<RowVectorPtr> vectors = {input1, input2};
   createDuckDbTable(vectors);
@@ -1684,8 +1651,7 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
   auto input = makeRowVector(
       {"d"},
       {makeFlatVector<int64_t>(
-          {12345, -2500, 10000, 200, -300},
-          DECIMAL(12, 2))});
+          {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2))});
 
   std::vector<RowVectorPtr> vectors = {input};
   createDuckDbTable(vectors);
@@ -1852,8 +1818,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
-  auto sumOnly =
-      deserializeDecimalSumState(stateCol->view(), 2, stream);
+  auto sumOnly = deserializeDecimalSumState(stateCol->view(), 2, stream);
 
   auto stateMask = copyNullMask(stateCol->view(), stream);
   auto sumMask = copyNullMask(sumOnly->view(), stream);
@@ -1884,8 +1849,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
-  auto sumOnly =
-      deserializeDecimalSumState(stateCol->view(), 3, stream);
+  auto sumOnly = deserializeDecimalSumState(stateCol->view(), 3, stream);
 
   auto stateMask = copyNullMask(stateCol->view(), stream);
   auto sumMask = copyNullMask(sumOnly->view(), stream);
@@ -1910,18 +1874,16 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol =
-      computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
 
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
 
   auto avgUnscaled = [](int128_t sum, int64_t count) {
     __int128_t out = 0;
-    facebook::velox::DecimalUtil::divideWithRoundUp<
-        __int128_t,
-        __int128_t,
-        int64_t>(out, sum, count, false, 0, 0);
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
     return static_cast<int64_t>(out);
   };
 
@@ -1947,18 +1909,16 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol =
-      computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
 
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
 
   auto avgUnscaled = [](int128_t sum, int64_t count) {
     __int128_t out = 0;
-    facebook::velox::DecimalUtil::divideWithRoundUp<
-        __int128_t,
-        __int128_t,
-        int64_t>(out, sum, count, false, 0, 0);
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
     return out;
   };
 
@@ -2065,8 +2025,7 @@ TEST_F(CudfDecimalTest, cudfVarbinaryArrowRoundTrip) {
   auto expected = makeRowVector(
       {"rt_0"},
       {makeNullableFlatVector<std::string>(
-          {std::string("abc"), std::nullopt, std::string("xyz")},
-          VARCHAR())});
+          {std::string("abc"), std::nullopt, std::string("xyz")}, VARCHAR())});
 
   facebook::velox::test::assertEqualVectors(expected, roundTrip);
 }

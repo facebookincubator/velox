@@ -24,10 +24,10 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime.h>
+#include <thrust/iterator/counting_iterator.h>
 
 #include <cstdint>
 #include <limits>
-#include <thrust/iterator/counting_iterator.h>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -43,18 +43,14 @@ struct DecimalSumStateDevice {
 
 static_assert(sizeof(DecimalSumStateDevice) == kStateSize);
 
-__device__ __forceinline__ void splitToWords(
-    int64_t value,
-    int64_t& upper,
-    uint64_t& lower) {
+__device__ __forceinline__ void
+splitToWords(int64_t value, int64_t& upper, uint64_t& lower) {
   lower = static_cast<uint64_t>(value);
   upper = value < 0 ? -1 : 0;
 }
 
-__device__ __forceinline__ void splitToWords(
-    __int128_t value,
-    int64_t& upper,
-    uint64_t& lower) {
+__device__ __forceinline__ void
+splitToWords(__int128_t value, int64_t& upper, uint64_t& lower) {
   lower = static_cast<uint64_t>(value);
   upper = static_cast<int64_t>(value >> 64);
 }
@@ -78,8 +74,7 @@ __global__ void packStateKernel(
     return;
   }
   int32_t offset = offsets[idx];
-  auto* state =
-      reinterpret_cast<DecimalSumStateDevice*>(chars + offset);
+  auto* state = reinterpret_cast<DecimalSumStateDevice*>(chars + offset);
   int64_t upper;
   uint64_t lower;
   splitToWords(sums[idx], upper, lower);
@@ -100,8 +95,7 @@ __global__ void unpackStateKernel(
     return;
   }
   int32_t offset = offsets[idx];
-  auto* state =
-      reinterpret_cast<const DecimalSumStateDevice*>(chars + offset);
+  auto* state = reinterpret_cast<const DecimalSumStateDevice*>(chars + offset);
   counts[idx] = state->count;
   sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
 }
@@ -154,11 +148,7 @@ std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
   auto begin = thrust::make_counting_iterator<cudf::size_type>(0);
   auto end = begin + numRows;
   return cudf::detail::valid_if(
-      begin,
-      end,
-      pred,
-      stream,
-      cudf::get_current_device_resource_ref());
+      begin, end, pred, stream, cudf::get_current_device_resource_ref());
 }
 
 } // namespace
@@ -265,7 +255,8 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       stream);
   auto offsetsView = offsetsCol->mutable_view();
 
-  rmm::device_buffer charsBuf(static_cast<size_t>(numRows) * kStateSize, stream);
+  rmm::device_buffer charsBuf(
+      static_cast<size_t>(numRows) * kStateSize, stream);
 
   int32_t blockSize = 256;
   int32_t offsetGridSize = (numRows + 1 + blockSize - 1) / blockSize;
@@ -298,8 +289,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
-  auto [nullMask, nullCount] =
-      buildStateValidityMask(sumCol, countCol, stream);
+  auto [nullMask, nullCount] = buildStateValidityMask(sumCol, countCol, stream);
   return cudf::make_strings_column(
       static_cast<cudf::size_type>(numRows),
       std::move(offsetsCol),
@@ -346,8 +336,7 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
-  auto [nullMask, nullCount] =
-      buildStateValidityMask(sumCol, countCol, stream);
+  auto [nullMask, nullCount] = buildStateValidityMask(sumCol, countCol, stream);
   if (nullCount > 0) {
     out->set_null_mask(std::move(nullMask), nullCount);
   } else if (nullMask.size() > 0) {

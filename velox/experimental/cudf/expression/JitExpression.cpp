@@ -65,7 +65,8 @@ ColumnOrView JitExpression::eval(
     }
   }();
   if (finalize) {
-    const auto requestedType = cudf_velox::veloxToCudfDataType(expr_.expr_->type());
+    const auto requestedType =
+        cudf_velox::veloxToCudfDataType(expr_.expr_->type());
     auto resultView = asView(result);
     if (resultView.type() != requestedType) {
       result = cudf::cast(resultView, requestedType, stream, mr);

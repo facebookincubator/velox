@@ -88,11 +88,7 @@ void launchDivideKernel(
   int32_t gridSize = (lhs.size() + blockSize - 1) / blockSize;
   auto scale = pow10Int128(aRescale);
   decimalDivideKernel<<<gridSize, blockSize, 0, stream.value()>>>(
-      lhs.data<InT>(),
-      rhs.data<InT>(),
-      out.data<OutT>(),
-      lhs.size(),
-      scale);
+      lhs.data<InT>(), rhs.data<InT>(), out.data<OutT>(), lhs.size(), scale);
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -109,17 +105,12 @@ std::unique_ptr<cudf::column> decimalDivide(
       lhs.type().id() == rhs.type().id(),
       "Decimal divide requires matching input types");
   CUDF_EXPECTS(
-      aRescale >= 0,
-      "Decimal divide requires non-negative rescale factor");
+      aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
   auto [nullMask, nullCount] =
       cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream);
   auto out = cudf::make_fixed_width_column(
-      outputType,
-      lhs.size(),
-      std::move(nullMask),
-      nullCount,
-      stream);
+      outputType, lhs.size(), std::move(nullMask), nullCount, stream);
 
   if (lhs.type().id() == cudf::type_id::DECIMAL64) {
     if (outputType.id() == cudf::type_id::DECIMAL64) {

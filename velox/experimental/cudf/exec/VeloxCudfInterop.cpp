@@ -59,7 +59,8 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::BIGINT:
       // BIGINT is used for both INT64 and DECIMAL64
       if (type->isDecimal()) {
-        auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
+        auto const decimalType =
+            std::dynamic_pointer_cast<const ShortDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         return cudf::data_type{cudf::type_id::DECIMAL64, cudfScale};
@@ -69,8 +70,10 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
       // HUGEINT is used only for DECIMAL128
       // per facebookincubator/velox PR 4434 (May 2, 2023)
       // although see commented-out HUGEINT -> DURATION_DAYS below
-      VELOX_CHECK(type->isDecimal(), "HUGEINT should only be used for DECIMAL128");
-      auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
+      VELOX_CHECK(
+          type->isDecimal(), "HUGEINT should only be used for DECIMAL128");
+      auto const decimalType =
+          std::dynamic_pointer_cast<const LongDecimalType>(type);
       VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
       auto const cudfScale = numeric::scale_type{-decimalType->scale()};
       return cudf::data_type{cudf::type_id::DECIMAL128, cudfScale};
@@ -102,7 +105,9 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     default:
       break;
   }
-  CUDF_FAIL("Unsupported Velox type: " + std::string(TypeKindName::toName(type->kind())));
+  CUDF_FAIL(
+      "Unsupported Velox type: " +
+      std::string(TypeKindName::toName(type->kind())));
   return cudf::data_type{cudf::type_id::EMPTY};
 }
 
@@ -165,7 +170,6 @@ RowVectorPtr toVeloxColumn(
     const std::vector<cudf::column_metadata>& metadata,
     const RowTypePtr* expectedType,
     rmm::cuda_stream_view stream) {
-
   // To avoid ownership issues, we make copies of the Arrow objects
   // returned from CUDF as unique_ptrs, then mark the originals as
   // released so their destructors don't try to free the resources.

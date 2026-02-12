@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
- #include "velox/experimental/cudf/expression/DecimalUtils.h"
+#include "velox/experimental/cudf/expression/DecimalUtils.h"
 
 namespace facebook::velox::cudf_velox {
 

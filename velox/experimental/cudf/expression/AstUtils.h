@@ -42,7 +42,8 @@ cudf::ast::literal makeLiteralFromScalar(
         using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal128>;
         return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
       }
-      VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
+      VELOX_UNREACHABLE(
+          "Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
@@ -96,19 +97,24 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       // cuDF scale is negative for fractional digits
       // @TODO check the bigger picture here!
       if (type->kind() == TypeKind::BIGINT) {
-        auto const decimalType = std::dynamic_pointer_cast<const ShortDecimalType>(type);
+        auto const decimalType =
+            std::dynamic_pointer_cast<const ShortDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal64>;
-        return std::make_unique<CudfDecimalType>(value, cudfScale, !isNull, stream, mr);
+        return std::make_unique<CudfDecimalType>(
+            value, cudfScale, !isNull, stream, mr);
       } else if (type->kind() == TypeKind::HUGEINT) {
-        auto const decimalType = std::dynamic_pointer_cast<const LongDecimalType>(type);
+        auto const decimalType =
+            std::dynamic_pointer_cast<const LongDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal128>;
-        return std::make_unique<CudfDecimalType>(value, cudfScale, !isNull, stream, mr);
+        return std::make_unique<CudfDecimalType>(
+            value, cudfScale, !isNull, stream, mr);
       }
-      VELOX_UNREACHABLE("Invalid Decimal Type (bad TypeKind: {})", type->kind());
+      VELOX_UNREACHABLE(
+          "Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {

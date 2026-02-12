@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/Fs.h"
@@ -38,7 +39,6 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -76,8 +76,7 @@ StatsFilterMetrics readParquetWithStatsFilter(
       createAstFromSubfieldFilters(filters, tree, scalars, rowType);
 
   auto options =
-      cudf::io::parquet_reader_options::builder(
-          cudf::io::source_info(filePath))
+      cudf::io::parquet_reader_options::builder(cudf::io::source_info(filePath))
           .use_jit_filter(useJitFilter)
           .build();
   options.set_filter(expr);
@@ -562,8 +561,7 @@ TEST_F(TableScanTest, filterPushdown) {
 }
 
 TEST_F(TableScanTest, decimalFilterPushdown) {
-  auto rowType =
-      ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
 
   auto vector = makeRowVector(
       {"c0", "c1"},
@@ -624,12 +622,10 @@ TEST_F(TableScanTest, decimalFilterPushdown) {
 }
 
 TEST_F(TableScanTest, decimalStatsFilterIoPruning) {
-  auto rowType =
-      ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
   auto vec0 = makeRowVector(
       {"c0", "c1"},
-      {makeFlatVector<int64_t>(
-           {100, 200}, DECIMAL(12, 2)),
+      {makeFlatVector<int64_t>({100, 200}, DECIMAL(12, 2)),
        makeFlatVector<int128_t>(
            {int128_t{1000}, int128_t{2000}}, DECIMAL(20, 2))});
   auto vec1 = makeRowVector(

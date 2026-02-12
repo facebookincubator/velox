@@ -785,16 +785,16 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
             cudf::join_kind::INNER_JOIN,
             stream));
       } else {
-        auto filterFunc = [stream](
-                              std::vector<std::unique_ptr<cudf::column>>&&
-                                  joinedCols,
-                              cudf::column_view filterColumn) {
-          auto filterTable =
-              std::make_unique<cudf::table>(std::move(joinedCols));
-          auto filteredTable =
-              cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
-          return filteredTable->release();
-        };
+        auto filterFunc =
+            [stream](
+                std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
+                cudf::column_view filterColumn) {
+              auto filterTable =
+                  std::make_unique<cudf::table>(std::move(joinedCols));
+              auto filteredTable =
+                  cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
+              return filteredTable->release();
+            };
         cudfOutputs.push_back(filteredOutput(
             leftTableView,
             leftIndicesCol,
@@ -879,16 +879,16 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
             cudf::join_kind::LEFT_JOIN,
             stream));
       } else {
-        auto filterFunc = [stream](
-                              std::vector<std::unique_ptr<cudf::column>>&&
-                                  joinedCols,
-                              cudf::column_view filterColumn) {
-          auto filterTable =
-              std::make_unique<cudf::table>(std::move(joinedCols));
-          auto filteredTable =
-              cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
-          return filteredTable->release();
-        };
+        auto filterFunc =
+            [stream](
+                std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
+                cudf::column_view filterColumn) {
+              auto filterTable =
+                  std::make_unique<cudf::table>(std::move(joinedCols));
+              auto filteredTable =
+                  cudf::apply_boolean_mask(*filterTable, filterColumn, stream);
+              return filteredTable->release();
+            };
         cudfOutputs.push_back(filteredOutput(
             leftTableView,
             leftIndicesCol,
@@ -1177,9 +1177,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
 
     if (joinNode_->filter()) {
-    if (!useAstFilter_) {
-      VELOX_NYI("Join filter requires AST for semi joins");
-    }
+      if (!useAstFilter_) {
+        VELOX_NYI("Join filter requires AST for semi joins");
+      }
       leftJoinIndices = cudf::mixed_left_semi_join(
           leftTableView.select(leftKeyIndices_),
           rightTableView.select(rightKeyIndices_),
@@ -1401,7 +1401,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           auto probeChannel = leftColumnIndicesToGather_[li];
           auto leftCudfDataType =
               veloxToCudfDataType(probeType_->childAt(probeChannel));
-          auto nullScalar = cudf::make_default_constructed_scalar(leftCudfDataType);
+          auto nullScalar =
+              cudf::make_default_constructed_scalar(leftCudfDataType);
           outCols[outIdx] = cudf::make_column_from_scalar(
               *nullScalar, m, stream, cudf::get_current_device_resource_ref());
         }

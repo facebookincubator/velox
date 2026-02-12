@@ -721,8 +721,8 @@ TEST_F(CudfFilterProjectTest, roundDecimal) {
              .values({decimalData})
              .project({"round(c0) as c1"})
              .planNode();
-  decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
+  decimalExpected =
+      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
   // Round to -1 decimal places.

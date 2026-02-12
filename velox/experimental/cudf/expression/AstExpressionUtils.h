@@ -226,7 +226,8 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   // reject anything with DECIMAL for now
   // @TODO implement DECIMAL in AST and JIT
   if (containsDecimalType(expr)) {
-    LOG(WARNING) << "DECIMAL expression not supported by AST/JIT: " << expr->toString();
+    LOG(WARNING) << "DECIMAL expression not supported by AST/JIT: "
+                 << expr->toString();
     return false;
   }
 
@@ -390,7 +391,11 @@ cudf::ast::expression const& AstContext::addPrecomputeInstructionOnSide(
     auto nestedIndices = getNestedColumnIndices(
         inputRowSchema[sideIdx].get()->childAt(columnIndex), fieldName);
     precomputeInstructions[sideIdx].get().emplace_back(
-        columnIndex, instruction, newColumnIndex, std::move(nestedIndices), node);
+        columnIndex,
+        instruction,
+        newColumnIndex,
+        std::move(nestedIndices),
+        node);
   }
   auto side = static_cast<cudf::ast::table_reference>(sideIdx);
   return tree.push(cudf::ast::column_reference(newColumnIndex, side));

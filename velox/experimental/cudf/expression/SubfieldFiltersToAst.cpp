@@ -223,7 +223,8 @@ std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
   const cudf::ast::expression* lowerExpr = nullptr;
   if (!skipLowerBound) {
     auto const& lowerLiteral = addLiteral(lower);
-    lowerExpr = &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+    lowerExpr =
+        &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
   }
 
   const cudf::ast::expression* upperExpr = nullptr;
@@ -263,8 +264,8 @@ const cudf::ast::expression& buildHashInListExpr(
   std::vector<const cudf::ast::expression*> exprVec;
   for (const auto& value : values) {
     variant veloxVariant = static_cast<ValueT>(value);
-    auto const& literal = tree.push(makeScalarAndLiteral<Kind>(
-        columnTypePtr, veloxVariant, scalars));
+    auto const& literal = tree.push(
+        makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars));
     auto const& equalExpr = tree.push(
         Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
     exprVec.push_back(&equalExpr);
@@ -272,10 +273,11 @@ const cudf::ast::expression& buildHashInListExpr(
 
   const cudf::ast::expression* result = exprVec[0];
   for (size_t i = 1; i < exprVec.size(); ++i) {
-    result = &tree.push(Operation{
-        isNegated ? Op::NULL_LOGICAL_AND : Op::NULL_LOGICAL_OR,
-        *result,
-        *exprVec[i]});
+    result = &tree.push(
+        Operation{
+            isNegated ? Op::NULL_LOGICAL_AND : Op::NULL_LOGICAL_OR,
+            *result,
+            *exprVec[i]});
   }
 
   return *result;
@@ -458,8 +460,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kHugeintRange: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      auto const& expr = buildHugeintRangeExpr(
-          filter, tree, scalars, columnRef, columnType);
+      auto const& expr =
+          buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
       return expr.get();
     }
 
