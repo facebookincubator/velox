@@ -426,6 +426,8 @@ struct HiveFileInfo {
   std::string targetFileName;
   /// Size of the file in bytes.
   uint64_t fileSize{0};
+  /// Number of rows in the file.
+  uint64_t numRows{0};
 };
 
 struct HiveWriterInfo {
@@ -449,8 +451,11 @@ struct HiveWriterInfo {
   const std::shared_ptr<memory::MemoryPool> writerPool;
   const std::shared_ptr<memory::MemoryPool> sinkPool;
   const std::shared_ptr<memory::MemoryPool> sortPool;
-  int64_t numWrittenRows = 0;
-  int64_t inputSizeInBytes = 0;
+  /// Total rows written by this writer across all files.
+  uint64_t numWrittenRows = 0;
+  /// Rows written to the current file; reset to 0 when the file is finalized.
+  uint64_t currentFileWrittenRows{0};
+  uint64_t inputSizeInBytes = 0;
   /// File sequence number for tracking multiple files written due to size-based
   /// splitting. Incremented each time the writer rotates to a new file.
   /// Used to generate sequenced file names (e.g., file_1.orc, file_2.orc).
