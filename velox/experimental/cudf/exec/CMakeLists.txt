@@ -25,6 +25,7 @@ add_library(
   CudfOrderBy.cpp
   CudfTopN.cpp
   DebugUtil.cpp
+  OperatorAdapters.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp

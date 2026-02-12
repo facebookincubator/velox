@@ -203,7 +203,7 @@ target_link_libraries(
   gtest_main
 )
 
-target_link_libraries(velox_cudf_config_test velox_cudf_exec gtest gtest_main)
+target_link_libraries(velox_cudf_config_test velox_cudf_exec Folly::folly gtest gtest_main)
 
 target_link_libraries(
   velox_cudf_expression_selection_test

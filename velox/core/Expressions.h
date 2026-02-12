@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/hash/Hash.h>
+
 #include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/ITypedExpr.h"
@@ -36,7 +38,8 @@ class InputTypedExpr : public ITypedExpr {
   }
 
   size_t localHash() const override {
-    static const size_t kBaseHash = std::hash<const char*>()("InputTypedExpr");
+    static const size_t kBaseHash =
+        folly::hasher<std::string_view>()("InputTypedExpr");
     return kBaseHash;
   }
 
@@ -226,8 +229,9 @@ class CallTypedExpr : public ITypedExpr {
   std::string toString() const override;
 
   size_t localHash() const override {
-    static const size_t kBaseHash = std::hash<const char*>()("CallTypedExpr");
-    return bits::hashMix(kBaseHash, std::hash<std::string>()(name_));
+    static const size_t kBaseHash =
+        folly::hasher<std::string_view>()("CallTypedExpr");
+    return bits::hashMix(kBaseHash, folly::hasher<std::string_view>()(name_));
   }
 
   void accept(
@@ -295,8 +299,8 @@ class FieldAccessTypedExpr : public ITypedExpr {
 
   size_t localHash() const override {
     static const size_t kBaseHash =
-        std::hash<const char*>()("FieldAccessTypedExpr");
-    return bits::hashMix(kBaseHash, std::hash<std::string>()(name_));
+        folly::hasher<std::string_view>()("FieldAccessTypedExpr");
+    return bits::hashMix(kBaseHash, folly::hasher<std::string_view>()(name_));
   }
 
   void accept(
@@ -378,7 +382,7 @@ class DereferenceTypedExpr : public ITypedExpr {
 
   size_t localHash() const override {
     static const size_t kBaseHash =
-        std::hash<const char*>()("DereferenceTypedExpr");
+        folly::hasher<std::string_view>()("DereferenceTypedExpr");
     return bits::hashMix(kBaseHash, index_);
   }
 
@@ -433,7 +437,8 @@ class ConcatTypedExpr : public ITypedExpr {
   std::string toString() const override;
 
   size_t localHash() const override {
-    static const size_t kBaseHash = std::hash<const char*>()("ConcatTypedExpr");
+    static const size_t kBaseHash =
+        folly::hasher<std::string_view>()("ConcatTypedExpr");
     return kBaseHash;
   }
 
@@ -497,7 +502,8 @@ class LambdaTypedExpr : public ITypedExpr {
   }
 
   size_t localHash() const override {
-    static const size_t kBaseHash = std::hash<const char*>()("LambdaTypedExpr");
+    static const size_t kBaseHash =
+        folly::hasher<std::string_view>()("LambdaTypedExpr");
     return bits::hashMix(kBaseHash, body_->hash());
   }
 
@@ -535,7 +541,7 @@ using LambdaTypedExprPtr = std::shared_ptr<const LambdaTypedExpr>;
 class CastTypedExpr : public ITypedExpr {
  public:
   /// @param type Type to convert to. This is the return type of the CAST
-  /// expresion.
+  /// expression.
   /// @param input Single input. The type of input is referred to as from-type
   /// and expected to be different from to-type.
   /// @param isTryCast Whether this expression is used for `try_cast`.
@@ -561,7 +567,8 @@ class CastTypedExpr : public ITypedExpr {
   std::string toString() const override;
 
   size_t localHash() const override {
-    static const size_t kBaseHash = std::hash<const char*>()("CastTypedExpr");
+    static const size_t kBaseHash =
+        folly::hasher<std::string_view>()("CastTypedExpr");
     return bits::hashMix(kBaseHash, std::hash<bool>()(isTryCast_));
   }
 
