@@ -364,6 +364,7 @@ target_link_libraries(
   velox_cudf_exec
   velox_exec
   velox_exec_test_lib
+  velox_join_fuzzer_base
   velox_fuzzer_util
   velox_vector_fuzzer
   velox_functions_prestosql
