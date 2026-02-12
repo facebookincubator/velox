@@ -503,7 +503,7 @@ class QueryConfig {
 
   /// If true, collect_list aggregate function will ignore nulls in the input.
   /// Defaults to true to match Spark's default behavior. Set to false to
-  /// include nulls (RESPECT NULLS).
+  /// include nulls (RESPECT NULLS). Introduced in Spark 4.2 (SPARK-55256).
   static constexpr const char* kSparkCollectListIgnoreNulls =
       "spark.collect_list.ignore_nulls";
 
