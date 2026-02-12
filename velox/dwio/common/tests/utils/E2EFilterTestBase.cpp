@@ -17,6 +17,7 @@
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 
 #include <fmt/format.h>
+#include <random>
 
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/expression/Expr.h"
@@ -238,6 +239,169 @@ VectorPtr E2EFilterTestBase::generateStrictSortedVector(
       VELOX_UNREACHABLE(
           "Unsupported type for generateStrictSortedVector: {}",
           type->toString());
+  }
+  VELOX_UNREACHABLE();
+}
+
+namespace {
+
+// Computes which unique key a given row belongs to when generating data with
+// duplicates. Each unique key is repeated 1-3 times (randomly determined).
+//
+// The function simulates generating keys from the beginning (row 0) and counts
+// how many unique keys we've passed to reach the given globalRow.
+//
+// Example with seed=42 (which generates duplicate counts: 2, 1, 2, 3, 1, ...):
+//   Row 0 -> Key 0 (first of 2 duplicates)
+//   Row 1 -> Key 0 (second of 2 duplicates)
+//   Row 2 -> Key 1 (first of 1 duplicate, i.e., no duplicate)
+//   Row 3 -> Key 2 (first of 2 duplicates)
+//   Row 4 -> Key 2 (second of 2 duplicates)
+//   Row 5 -> Key 3 (first of 3 duplicates)
+//   Row 6 -> Key 3 (second of 3 duplicates)
+//   Row 7 -> Key 3 (third of 3 duplicates)
+//   Row 8 -> Key 4 (first of 1 duplicate)
+//   ...
+//
+// @param globalRow The row index (0-based) to find the key for
+// @param seed Random seed for reproducibility (default 42)
+// @return The unique key index that this row maps to
+size_t computeUniqueKeyIndex(size_t globalRow, uint32_t seed = 42) {
+  std::mt19937 rng(seed);
+  std::uniform_int_distribution<int> dupDist(1, 3);
+
+  size_t currentRow = 0;
+  size_t uniqueKeyIdx = 0;
+  while (currentRow <= globalRow) {
+    int duplicates = dupDist(rng);
+    if (currentRow + duplicates > globalRow) {
+      return uniqueKeyIdx;
+    }
+    currentRow += duplicates;
+    ++uniqueKeyIdx;
+  }
+  return uniqueKeyIdx;
+}
+
+// Computes the largest unique key index that would be assigned to any row
+// in a dataset of totalRows.
+//
+// This is needed for descending order: to generate descending keys, we need
+// to know the maximum key index so we can reverse the sequence
+// (maxKey - currentKey gives us the descending value).
+//
+// Example: For totalRows=9 with the sequence above:
+//   Row 8 (the last row) maps to Key 4
+//   So computeMaxUniqueKeyIndex(9) returns 4
+//
+// @param totalRows Total number of rows in the dataset
+// @param seed Random seed (must match computeUniqueKeyIndex for consistency)
+// @return The maximum unique key index
+size_t computeMaxUniqueKeyIndex(size_t totalRows, uint32_t seed = 42) {
+  if (totalRows == 0) {
+    return 0;
+  }
+  return computeUniqueKeyIndex(totalRows - 1, seed);
+}
+
+// Generates values with duplicates (1-3 copies per unique key).
+template <typename T>
+VectorPtr generateSortedVectorImpl(
+    size_t numRows,
+    size_t rowOffset,
+    size_t totalRows,
+    int64_t startValue,
+    bool ascending,
+    memory::MemoryPool* pool) {
+  auto flatVector = BaseVector::create<FlatVector<T>>(
+      CppToType<T>::create(), static_cast<vector_size_t>(numRows), pool);
+
+  // For descending order, we need to know the max unique key index
+  const size_t maxUniqueKeyIdx =
+      ascending ? 0 : computeMaxUniqueKeyIndex(totalRows);
+
+  for (vector_size_t i = 0; i < static_cast<vector_size_t>(numRows); ++i) {
+    const size_t globalRow = rowOffset + i;
+    // Get the unique key index for this row position
+    const size_t uniqueKeyIdx = computeUniqueKeyIndex(globalRow);
+    // For descending order, reverse the key index relative to max
+    const size_t adjustedKeyIdx =
+        ascending ? uniqueKeyIdx : (maxUniqueKeyIdx - uniqueKeyIdx);
+
+    if constexpr (std::is_same_v<T, bool>) {
+      flatVector->set(i, adjustedKeyIdx % 2 == 1);
+    } else if constexpr (std::is_same_v<T, Timestamp>) {
+      flatVector->set(
+          i, Timestamp(startValue + static_cast<int64_t>(adjustedKeyIdx), 0));
+    } else {
+      flatVector->set(i, static_cast<T>(startValue + adjustedKeyIdx));
+    }
+  }
+  return flatVector;
+}
+
+} // namespace
+
+VectorPtr E2EFilterTestBase::generateSortedVector(
+    const TypePtr& type,
+    size_t size,
+    size_t globalRowOffset,
+    int64_t startValue,
+    size_t totalRows,
+    bool ascending,
+    memory::MemoryPool* pool) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+      return generateSortedVectorImpl<bool>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::TINYINT:
+      return generateSortedVectorImpl<int8_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::SMALLINT:
+      return generateSortedVectorImpl<int16_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::INTEGER:
+      return generateSortedVectorImpl<int32_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::BIGINT:
+      return generateSortedVectorImpl<int64_t>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::REAL:
+      return generateSortedVectorImpl<float>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::DOUBLE:
+      return generateSortedVectorImpl<double>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::TIMESTAMP:
+      return generateSortedVectorImpl<Timestamp>(
+          size, globalRowOffset, totalRows, startValue, ascending, pool);
+    case TypeKind::VARCHAR: {
+      // Generate string keys with duplicates
+      auto flatVector = BaseVector::create<FlatVector<StringView>>(
+          VARCHAR(), static_cast<vector_size_t>(size), pool);
+      const size_t maxUniqueKeyIdx =
+          ascending ? 0 : computeMaxUniqueKeyIndex(totalRows);
+      for (vector_size_t i = 0; i < static_cast<vector_size_t>(size); ++i) {
+        const size_t globalRow = globalRowOffset + i;
+        const size_t uniqueKeyIdx = computeUniqueKeyIndex(globalRow);
+        const size_t adjustedIdx =
+            ascending ? uniqueKeyIdx : (maxUniqueKeyIdx - uniqueKeyIdx);
+        auto str = fmt::format("key_{:08d}", startValue + adjustedIdx);
+        flatVector->set(i, StringView(str));
+      }
+      return flatVector;
+    }
+    case TypeKind::VARBINARY:
+    case TypeKind::HUGEINT:
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW:
+    case TypeKind::UNKNOWN:
+    case TypeKind::FUNCTION:
+    case TypeKind::OPAQUE:
+    case TypeKind::INVALID:
+      VELOX_UNREACHABLE(
+          "Unsupported type for generateSortedVector: {}", type->toString());
   }
   VELOX_UNREACHABLE();
 }
