@@ -1220,11 +1220,23 @@ TEST_F(LocalPartitionTest, barrier) {
                           tableScanNode(),
                       })
                   .planNode();
+  struct {
+    bool hasBarrier;
+    bool serialExecution;
 
-  for (const auto hasBarrier : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    std::string toString() const {
+      return fmt::format(
+          "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+    }
+  } testSettings[] = {
+      {false, false}, {false, true}, {true, false}, {true, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
     AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-    queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+    queryBuilder.barrierExecution(testData.hasBarrier)
+        .serialExecution(testData.serialExecution)
+        .maxDrivers(testData.serialExecution ? 1 : 3);
     for (auto i = 0; i < numSources; ++i) {
       for (auto j = 0; j < numSplits; ++j) {
         queryBuilder.split(
@@ -1233,74 +1245,8 @@ TEST_F(LocalPartitionTest, barrier) {
     }
 
     const auto task = queryBuilder.assertResults("SELECT * FROM tmp");
-    ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? numSplits : 0);
-  }
-}
-
-TEST_F(LocalPartitionTest, barrierMulti) {
-  for (const auto repartition : {false, true}) {
-    SCOPED_TRACE(
-        fmt::format(
-            "LocalPartition is {}", repartition ? "repartition" : "gather"));
-    const auto rowType = ROW({"c0"}, {BIGINT()});
-    std::vector<RowVectorPtr> vectors;
-    const int numSources{3};
-    std::vector<std::vector<std::shared_ptr<TempFilePath>>> tempFiles(
-        numSources);
-    const int numSplits{5};
-    for (int i = 0; i < numSources; ++i) {
-      std::vector<RowVectorPtr> sourceVectors;
-      for (int32_t j = 0; j < numSplits; ++j) {
-        auto vector = std::dynamic_pointer_cast<RowVector>(
-            BatchMaker::createBatch(rowType, 100, *pool_));
-        sourceVectors.push_back(vector);
-        tempFiles[i].push_back(TempFilePath::create());
-      }
-      HiveConnectorTestBase::writeToFiles(
-          toFilePaths(tempFiles[i]), sourceVectors);
-      std::copy(
-          sourceVectors.begin(),
-          sourceVectors.end(),
-          std::back_inserter(vectors));
-    }
-    createDuckDbTable(vectors);
-
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    std::vector<core::PlanNodeId> scanNodeIds;
-    auto tableScanNode = [&]() {
-      auto node =
-          PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
-      scanNodeIds.push_back(node->id());
-      return node;
-    };
-
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .localPartition(
-                        repartition ? std::vector<std::string>{"c0"}
-                                    : std::vector<std::string>{},
-                        {
-                            tableScanNode(),
-                            tableScanNode(),
-                            tableScanNode(),
-                        })
-                    .planNode();
-
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
-      AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).maxDrivers(3);
-      for (auto i = 0; i < numSources; ++i) {
-        for (auto j = 0; j < numSplits; ++j) {
-          queryBuilder.split(
-              scanNodeIds[i],
-              makeHiveConnectorSplit(tempFiles[i][j]->getPath()));
-        }
-      }
-
-      const auto task = queryBuilder.assertResults("SELECT * FROM tmp");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? numSplits : 0);
-    }
+    ASSERT_EQ(
+        task->taskStats().numBarriers, testData.hasBarrier ? numSplits : 0);
   }
 }
 

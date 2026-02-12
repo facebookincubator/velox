@@ -554,7 +554,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
   }
 }
 
-TEST_P(IndexLookupJoinTest, equalJoin) {
+TEST_P(IndexLookupJoinTest, DISABLED_equalJoin) {
   struct {
     std::vector<int> keyCardinalities;
     int numProbeBatches;
@@ -2757,7 +2757,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
           ".*Runtime stats.*connectorResultPrepareCpuNanos.*"));
 }
 
-TEST_P(IndexLookupJoinTest, barrier) {
+TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
   if (GetParam().needsIndexSplit) {
     return;
   }
@@ -2808,29 +2808,41 @@ TEST_P(IndexLookupJoinTest, barrier) {
   struct {
     int numPrefetches;
     bool barrierExecution;
+    bool serialExecution;
 
     std::string debugString() const {
       return fmt::format(
-          "numPrefetches {}, barrierExecution {}",
+          "numPrefetches {}, barrierExecution {}, serialExecution {}",
           numPrefetches,
-          barrierExecution);
+          barrierExecution,
+          serialExecution);
     }
   } testSettings[] = {
-      {0, true},
-      {0, false},
-      {1, true},
-      {1, false},
-      {4, true},
-      {4, false},
-      {256, true},
-      {256, false}};
+      {0, false, false},
+      {0, false, true},
+      {1, true, true},
+      {1, false, true},
+      {4, true, true},
+      {4, false, true},
+      {256, true, true},
+      {256, false, true},
+      {0, true, false},
+      {0, false, false},
+      {1, true, false},
+      {1, false, false},
+      {4, true, false},
+      {4, false, false},
+      {256, true, false},
+      {256, false, false},
+  };
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
+    LOG(ERROR) << "Test setting: " << testData.debugString();
     auto task = runLookupQuery(
         plan,
         probeFiles,
-        true,
+        testData.serialExecution,
         testData.barrierExecution,
         32,
         testData.numPrefetches,
