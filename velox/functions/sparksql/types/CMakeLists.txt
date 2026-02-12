@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_spark_types TimestampNTZRegistration.cpp)
+velox_add_library(velox_spark_types TimestampNTZCastUtil.cpp TimestampNTZRegistration.cpp)
 
 velox_link_libraries(velox_spark_types velox_type velox_memory velox_expression)
 

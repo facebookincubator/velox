@@ -17,6 +17,7 @@
 #include "velox/functions/sparksql/types/TimestampNTZRegistration.h"
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
+#include "velox/functions/sparksql/types/TimestampNTZCastUtil.h"
 #include "velox/functions/sparksql/types/TimestampNTZType.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -31,25 +32,44 @@ class TimestampNTZCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
+  // Returns true if casting from other type to TIMESTAMP_NTZ type is supported.
   bool isSupportedFromType(const TypePtr& other) const override {
-    return false;
+    switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        return true;
+      default:
+        return false;
+    }
   }
 
+  // Return true if casting from TIMESTAMP_NTZ type to other type is supported.
   bool isSupportedToType(const TypePtr& other) const override {
     return false;
   }
 
+  // Casts the input vector to the TIMESTAMP_NTZ type.
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       const TypePtr& resultType,
       VectorPtr& result) const override {
-    VELOX_UNSUPPORTED(
-        "Cast from {} to TIMESTAMP WITHOUT TIME ZONE not yet supported",
-        resultType->toString());
+    context.ensureWritable(rows, resultType, result);
+    auto* timestampNTZResult = result->asFlatVector<int64_t>();
+    timestampNTZResult->clearNulls(rows);
+
+    auto* rawResults = timestampNTZResult->mutableRawValues();
+    if (input.typeKind() == TypeKind::VARCHAR) {
+      const auto inputVector = input.as<SimpleVector<StringView>>();
+      castFromString(*inputVector, context, rows, rawResults);
+    } else {
+      VELOX_UNSUPPORTED(
+          "Cast from {} to TIMESTAMP WITHOUT TIME ZONE not yet supported",
+          resultType->toString());
+    }
   }
 
+  // Casts the input vector of the TIMESTAMP_NTZ type to result type.
   void castFrom(
       const BaseVector& input,
       exec::EvalCtx& context,
