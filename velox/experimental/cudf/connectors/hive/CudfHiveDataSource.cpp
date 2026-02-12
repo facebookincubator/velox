@@ -487,7 +487,6 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
-          .skip_bytes(split_->start)
           .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
@@ -495,7 +494,10 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
-  // Set num_bytes only if available
+  // Set skip_bytes and num_bytes if available
+  if (split_->start != 0) {
+    readerOptions_.set_skip_bytes(split_->start);
+  }
   if (split_->size() != std::numeric_limits<uint64_t>::max()) {
     readerOptions_.set_num_bytes(split_->size());
   }
