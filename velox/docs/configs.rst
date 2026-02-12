@@ -161,6 +161,10 @@ Generic Configuration
      - bool
      - true
      - Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.
+   * - hash_probe_string_dynamic_filter_pushdown_enabled
+     - bool
+     - false
+     - Whether hash probe can generate dynamic filter for string types and push down to upstream operators.
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
