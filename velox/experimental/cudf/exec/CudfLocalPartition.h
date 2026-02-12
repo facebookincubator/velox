@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Operator.h"
@@ -25,6 +26,7 @@ namespace facebook::velox::cudf_velox {
 enum class PartitionFunctionType {
   kHash,
   kRoundRobin,
+  kRoundRobinRow,
 };
 
 class CudfLocalPartition : public exec::Operator, public NvtxHelper {
@@ -62,6 +64,7 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
  private:
+  void enqueuePartition(int partitionIndex, const CudfVectorPtr& cudfVector);
   void flushVectorPool();
 
  protected:

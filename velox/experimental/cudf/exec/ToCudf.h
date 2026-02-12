@@ -32,6 +32,9 @@ class CompileState {
     return driver_;
   }
 
+  // Get plan node by id lookup.
+  core::PlanNodePtr getPlanNode(const core::PlanNodeId& id) const;
+
   // Replaces sequences of Operators in the Driver given at construction with
   // cuDF equivalents. Returns true if the Driver was changed.
   bool compile(bool allow_cpu_fallback);

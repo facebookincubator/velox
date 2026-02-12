@@ -61,6 +61,28 @@ size_t BufferedInputDataSource::size() const {
   return fileSize_;
 }
 
+void BufferedInputDataSource::enqueueForDevice(
+    uint64_t offset,
+    uint64_t size,
+    uint8_t* dst) {
+  auto inputStream = input_->enqueue({offset, size});
+  std::shared_ptr sharedStream(std::move(inputStream));
+  pendingDeviceLoads_.push_back(
+      [dst, size, sharedStream](rmm::cuda_stream_view stream) {
+        std::vector<uint8_t> buffer(size);
+        sharedStream->readFully(reinterpret_cast<char*>(buffer.data()), size);
+        CUDF_CUDA_TRY(cudaMemcpyAsync(
+            dst, buffer.data(), size, cudaMemcpyHostToDevice, stream.value()));
+      });
+}
+
+void BufferedInputDataSource::load(rmm::cuda_stream_view stream) {
+  input_->load(velox::dwio::common::LogType::FILE);
+  for (auto& deviceLoad : pendingDeviceLoads_) {
+    deviceLoad(stream);
+  }
+}
+
 std::unique_ptr<cudf::io::datasource::buffer>
 BufferedInputDataSource::host_read(size_t offset, size_t size) {
   if (offset >= fileSize_) {
