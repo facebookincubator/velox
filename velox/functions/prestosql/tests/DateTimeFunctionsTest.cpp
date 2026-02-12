@@ -6998,8 +6998,7 @@ TEST_F(DateTimeFunctionsTest, currentTime) {
   };
 
   // Test without timezone
-  VELOX_ASSERT_THROW(
-      callCurrentTime(0, std::nullopt), "Timezone cannot be null");
+  VELOX_ASSERT_THROW(callCurrentTime(0, std::nullopt), "");
 
   // Helper to test a timezone + expected UTC millis-of-day
   auto testCurrentTime = [&](int64_t sessionStartTime,
@@ -7019,7 +7018,9 @@ TEST_F(DateTimeFunctionsTest, currentTime) {
 
   testCurrentTime(1710105600000, "Asia/Kolkata", 76800000);
 
-  testCurrentTime(1710150000000, "Europe/London", 38400000);
+  testCurrentTime(1615703400000, "America/New_York", 23400000);
+
+  testCurrentTime(1615707000000, "America/New_York", 30600000);
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimezone) {

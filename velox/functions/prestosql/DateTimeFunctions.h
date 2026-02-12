@@ -2121,16 +2121,13 @@ struct CurrentTimeFunction {
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
     auto sessionStartTimeMs = config.sessionStartTimeMs();
-    int64_t currentTimeSinceMidnight = sessionStartTimeMs % kMillisInDay;
     const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
-    if (timeZone == nullptr) {
-      VELOX_USER_FAIL("Timezone cannot be null");
-    }
+    // Java/Presto session always provides a timezone (TimeZoneKey is required).
+    VELOX_CHECK_NOT_NULL(timeZone);
 
-    int64_t utcMillisOfDay = sessionStartTimeMs % kMillisInDay;
-    if (utcMillisOfDay < 0) {
-      utcMillisOfDay += kMillisInDay;
-    }
+    auto millis = std::chrono::milliseconds{sessionStartTimeMs};
+    auto timeOfDay = millis - std::chrono::floor<std::chrono::days>(millis);
+    int64_t utcMillisOfDay = timeOfDay.count();
 
     int32_t offsetAtInstant =
         timeZone->to_local(std::chrono::milliseconds{sessionStartTimeMs})
@@ -2140,7 +2137,7 @@ struct CurrentTimeFunction {
     int32_t offsetAtEpoch =
         timeZone->to_local(std::chrono::milliseconds{0}).count();
 
-    int64_t adjustedMillis = utcMillisOfDay - (offsetAtInstant - offsetAtEpoch);
+    int64_t adjustedMillis = utcMillisOfDay - (offsetAtEpoch - offsetAtInstant);
 
     currentTime_ = pack(adjustedMillis, timeZone->id());
   }
