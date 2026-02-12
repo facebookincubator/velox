@@ -116,6 +116,27 @@ class GeometryFunctionsTest : public FunctionBaseTest {
     double scale = std::max(std::abs(a), std::abs(b));
     return diff <= std::max(1e-5, 1e-5 * scale);
   }
+
+  // Generic helper for testing geometry functions that return a result of type
+  // T. Builds the expression as funcName(ST_GeometryFromText(c0)), or
+  // ST_AsText(funcName(ST_GeometryFromText(c0))) when wrapWithAsText is true.
+  template <typename T>
+  void assertResult(
+      const std::string& funcName,
+      const std::optional<std::string>& wkt,
+      const std::optional<T>& expected,
+      bool wrapWithAsText = false) {
+    std::string expr = wrapWithAsText
+        ? "ST_AsText(" + funcName + "(ST_GeometryFromText(c0)))"
+        : funcName + "(ST_GeometryFromText(c0))";
+    std::optional<T> result = evaluateOnce<T>(expr, wkt);
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expected.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  }
 };
 
 TEST_F(GeometryFunctionsTest, errorStGeometryFromTextAndParsing) {
@@ -1337,40 +1358,29 @@ TEST_F(GeometryFunctionsTest, testStIsSimpleValid) {
 }
 
 TEST_F(GeometryFunctionsTest, testStArea) {
-  const auto testStAreaFunc = [&](std::optional<std::string> wkt,
-                                  std::optional<double> expectedArea) {
-    std::optional<double> result =
-        evaluateOnce<double>("ST_Area(ST_GeometryFromText(c0))", wkt);
-
-    if (wkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_TRUE(expectedArea.has_value());
-      ASSERT_EQ(result.value(), expectedArea.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStAreaFunc("POLYGON ((2 2, 2 6, 6 6, 6 2, 2 2))", 16.0);
-  testStAreaFunc("POLYGON EMPTY", 0.0);
-  testStAreaFunc("LINESTRING (1 4, 2 5)", 0.0);
-  testStAreaFunc("LINESTRING EMPTY", 0.0);
-  testStAreaFunc("POINT (1 4)", 0.0);
-  testStAreaFunc("POINT EMPTY", 0.0);
-  testStAreaFunc("GEOMETRYCOLLECTION EMPTY", 0.0);
+  assertResult<double>("ST_Area", "POLYGON ((2 2, 2 6, 6 6, 6 2, 2 2))", 16.0);
+  assertResult<double>("ST_Area", "POLYGON EMPTY", 0.0);
+  assertResult<double>("ST_Area", "LINESTRING (1 4, 2 5)", 0.0);
+  assertResult<double>("ST_Area", "LINESTRING EMPTY", 0.0);
+  assertResult<double>("ST_Area", "POINT (1 4)", 0.0);
+  assertResult<double>("ST_Area", "POINT EMPTY", 0.0);
+  assertResult<double>("ST_Area", "GEOMETRYCOLLECTION EMPTY", 0.0);
 
   // Test basic geometry collection. Area is the area of the polygon.
-  testStAreaFunc(
+  assertResult<double>(
+      "ST_Area",
       "GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1)))",
       6.0);
 
   // Test overlapping geometries. Area is the sum of the individual elements
-  testStAreaFunc(
+  assertResult<double>(
+      "ST_Area",
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)))",
       8.0);
 
   // Test nested geometry collection
-  testStAreaFunc(
+  assertResult<double>(
+      "ST_Area",
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
       14.0);
 }
@@ -1538,38 +1548,42 @@ TEST_F(GeometryFunctionsTest, testStBoundary) {
 }
 
 TEST_F(GeometryFunctionsTest, testStCentroid) {
-  const auto testStCentroidFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(ST_Centroid(ST_GeometryFromText(c0)))", wkt);
-
-        if (wkt.has_value()) {
-          ASSERT_EQ(result, expected);
-        } else {
-          ASSERT_FALSE(expected.has_value());
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStCentroidFunc("LINESTRING EMPTY", std::nullopt);
-  testStCentroidFunc("POINT (3 5)", "POINT (3 5)");
-  testStCentroidFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POINT (2.5 5)");
-  testStCentroidFunc("LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)");
-  testStCentroidFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", "POINT (3 2)");
-  testStCentroidFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", "POINT (2.5 2.5)");
-  testStCentroidFunc("POLYGON ((1 1, 5 1, 3 4, 1 1))", "POINT (3 2)");
-  testStCentroidFunc(
+  assertResult<std::string>(
+      "ST_Centroid", "LINESTRING EMPTY", std::nullopt, true);
+  assertResult<std::string>("ST_Centroid", "POINT (3 5)", "POINT (3 5)", true);
+  assertResult<std::string>(
+      "ST_Centroid", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POINT (2.5 5)", true);
+  assertResult<std::string>(
+      "ST_Centroid", "LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)", true);
+  assertResult<std::string>(
+      "ST_Centroid",
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))",
+      "POINT (3 2)",
+      true);
+  assertResult<std::string>(
+      "ST_Centroid",
+      "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))",
+      "POINT (2.5 2.5)",
+      true);
+  assertResult<std::string>(
+      "ST_Centroid", "POLYGON ((1 1, 5 1, 3 4, 1 1))", "POINT (3 2)", true);
+  assertResult<std::string>(
+      "ST_Centroid",
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
-      "POINT (3.3333333333333335 4)");
-  testStCentroidFunc(
+      "POINT (3.3333333333333335 4)",
+      true);
+  assertResult<std::string>(
+      "ST_Centroid",
       "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 1 2, 2 2, 2 1, 1 1))",
-      "POINT (2.5416666666666665 2.5416666666666665)");
+      "POINT (2.5416666666666665 2.5416666666666665)",
+      true);
 
   VELOX_ASSERT_USER_THROW(
-      testStCentroidFunc(
+      assertResult<std::string>(
+          "ST_Centroid",
           "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
-          std::nullopt),
+          std::nullopt,
+          true),
       "ST_Centroid only applies to Point or MultiPoint or LineString or MultiLineString or Polygon or MultiPolygon. Input type is: GeometryCollection");
 }
 
@@ -1642,39 +1656,37 @@ TEST_F(GeometryFunctionsTest, testSTMax) {
 }
 
 TEST_F(GeometryFunctionsTest, testStGeometryType) {
-  const auto testStGeometryTypeFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_GeometryType(ST_GeometryFromText(c0))", wkt);
-
-        if (wkt.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_TRUE(expected.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStGeometryTypeFunc("POINT EMPTY", "ST_Point");
-  testStGeometryTypeFunc("POINT (3 5)", "ST_Point");
-  testStGeometryTypeFunc("LINESTRING EMPTY", "ST_LineString");
-  testStGeometryTypeFunc("LINESTRING (1 1, 2 2, 3 3)", "ST_LineString");
-  testStGeometryTypeFunc("LINEARRING EMPTY", "ST_LineString");
-  testStGeometryTypeFunc("POLYGON EMPTY", "ST_Polygon");
-  testStGeometryTypeFunc("POLYGON ((1 1, 4 1, 1 4, 1 1))", "ST_Polygon");
-  testStGeometryTypeFunc("MULTIPOINT EMPTY", "ST_MultiPoint");
-  testStGeometryTypeFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "ST_MultiPoint");
-  testStGeometryTypeFunc("MULTILINESTRING EMPTY", "ST_MultiLineString");
-  testStGeometryTypeFunc(
-      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", "ST_MultiLineString");
-  testStGeometryTypeFunc("MULTIPOLYGON EMPTY", "ST_MultiPolygon");
-  testStGeometryTypeFunc(
+  assertResult<std::string>("ST_GeometryType", "POINT EMPTY", "ST_Point");
+  assertResult<std::string>("ST_GeometryType", "POINT (3 5)", "ST_Point");
+  assertResult<std::string>(
+      "ST_GeometryType", "LINESTRING EMPTY", "ST_LineString");
+  assertResult<std::string>(
+      "ST_GeometryType", "LINESTRING (1 1, 2 2, 3 3)", "ST_LineString");
+  assertResult<std::string>(
+      "ST_GeometryType", "LINEARRING EMPTY", "ST_LineString");
+  assertResult<std::string>("ST_GeometryType", "POLYGON EMPTY", "ST_Polygon");
+  assertResult<std::string>(
+      "ST_GeometryType", "POLYGON ((1 1, 4 1, 1 4, 1 1))", "ST_Polygon");
+  assertResult<std::string>(
+      "ST_GeometryType", "MULTIPOINT EMPTY", "ST_MultiPoint");
+  assertResult<std::string>(
+      "ST_GeometryType", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "ST_MultiPoint");
+  assertResult<std::string>(
+      "ST_GeometryType", "MULTILINESTRING EMPTY", "ST_MultiLineString");
+  assertResult<std::string>(
+      "ST_GeometryType",
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))",
+      "ST_MultiLineString");
+  assertResult<std::string>(
+      "ST_GeometryType", "MULTIPOLYGON EMPTY", "ST_MultiPolygon");
+  assertResult<std::string>(
+      "ST_GeometryType",
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
       "ST_MultiPolygon");
-  testStGeometryTypeFunc("GEOMETRYCOLLECTION EMPTY", "ST_GeomCollection");
-  testStGeometryTypeFunc(
+  assertResult<std::string>(
+      "ST_GeometryType", "GEOMETRYCOLLECTION EMPTY", "ST_GeomCollection");
+  assertResult<std::string>(
+      "ST_GeometryType",
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
       "ST_GeomCollection");
 }
@@ -1807,92 +1819,47 @@ TEST_F(GeometryFunctionsTest, testStPolygon) {
 }
 
 TEST_F(GeometryFunctionsTest, testStIsClosed) {
-  const auto testStIsClosedFunc = [&](const std::optional<std::string>& wkt,
-                                      const std::optional<bool>& expected) {
-    std::optional<bool> result =
-        evaluateOnce<bool>("ST_IsClosed(ST_GeometryFromText(c0))", wkt);
-
-    if (wkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStIsClosedFunc("LINESTRING (1 1, 2 2, 1 3, 1 1)", true);
-  testStIsClosedFunc("LINESTRING (1 1, 2 2, 1 3)", false);
-  testStIsClosedFunc(
-      "MULTILINESTRING ((1 1, 2 2, 1 3, 1 1), (4 4, 5 5))", false);
-  testStIsClosedFunc(
+  assertResult<bool>("ST_IsClosed", "LINESTRING (1 1, 2 2, 1 3, 1 1)", true);
+  assertResult<bool>("ST_IsClosed", "LINESTRING (1 1, 2 2, 1 3)", false);
+  assertResult<bool>(
+      "ST_IsClosed",
+      "MULTILINESTRING ((1 1, 2 2, 1 3, 1 1), (4 4, 5 5))",
+      false);
+  assertResult<bool>(
+      "ST_IsClosed",
       "MULTILINESTRING ((1 1, 2 2, 1 3, 1 1), (4 4, 5 4, 5 5, 4 5, 4 4))",
       true);
 
   VELOX_ASSERT_USER_THROW(
-      testStIsClosedFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", std::nullopt),
+      assertResult<bool>(
+          "ST_IsClosed", "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", std::nullopt),
       "ST_IsClosed only applies to LineString or MultiLineString. Input type is: Polygon");
 }
 
 TEST_F(GeometryFunctionsTest, testStIsEmpty) {
-  const auto testStIsClosedFunc = [&](const std::optional<std::string>& wkt,
-                                      const std::optional<bool>& expected) {
-    std::optional<bool> result =
-        evaluateOnce<bool>("ST_IsEmpty(ST_GeometryFromText(c0))", wkt);
-
-    if (wkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStIsClosedFunc("POINT (1.5 2.5)", false);
-  testStIsClosedFunc("POLYGON EMPTY", true);
+  assertResult<bool>("ST_IsEmpty", "POINT (1.5 2.5)", false);
+  assertResult<bool>("ST_IsEmpty", "POLYGON EMPTY", true);
 }
 
 TEST_F(GeometryFunctionsTest, testStIsRing) {
-  const auto testStIsRingFunc = [&](const std::optional<std::string>& wkt,
-                                    const std::optional<bool>& expected) {
-    std::optional<bool> result =
-        evaluateOnce<bool>("ST_IsRing(ST_GeometryFromText(c0))", wkt);
-
-    if (wkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStIsRingFunc("LINESTRING (8 4, 4 8)", false);
-  testStIsRingFunc("LINESTRING (0 0, 1 1, 0 2, 0 0)", true);
+  assertResult<bool>("ST_IsRing", "LINESTRING (8 4, 4 8)", false);
+  assertResult<bool>("ST_IsRing", "LINESTRING (0 0, 1 1, 0 2, 0 0)", true);
 
   VELOX_ASSERT_USER_THROW(
-      testStIsRingFunc("POLYGON ((2 0, 2 1, 3 1, 2 0))", true),
+      assertResult<bool>("ST_IsRing", "POLYGON ((2 0, 2 1, 3 1, 2 0))", true),
       "ST_IsRing only applies to LineString. Input type is: Polygon");
 }
 
 TEST_F(GeometryFunctionsTest, testStLength) {
-  const auto testStLengthFunc = [&](const std::optional<std::string>& wkt,
-                                    const std::optional<double>& expected) {
-    std::optional<double> result =
-        evaluateOnce<double>("ST_Length(ST_GeometryFromText(c0))", wkt);
-
-    if (wkt.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStLengthFunc("LINESTRING EMPTY", 0.0);
-  testStLengthFunc("LINESTRING (0 0, 2 2)", 2.8284271247461903);
-  testStLengthFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 6.0);
+  assertResult<double>("ST_Length", "LINESTRING EMPTY", 0.0);
+  assertResult<double>(
+      "ST_Length", "LINESTRING (0 0, 2 2)", 2.8284271247461903);
+  assertResult<double>(
+      "ST_Length", "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 6.0);
 
   VELOX_ASSERT_USER_THROW(
-      testStLengthFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", std::nullopt),
+      assertResult<double>(
+          "ST_Length", "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", std::nullopt),
       "ST_Length only applies to LineString or MultiLineString. Input type is: Polygon");
 }
 
@@ -1924,52 +1891,34 @@ TEST_F(GeometryFunctionsTest, testStPointN) {
 }
 
 TEST_F(GeometryFunctionsTest, testStStartPoint) {
-  const auto testStStartPointFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(ST_StartPoint(ST_GeometryFromText(c0)))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStStartPointFunc("LINESTRING (8 4, 4 8, 5 6)", "POINT (8 4)");
-  testStStartPointFunc("LINESTRING (8 2, 4 12, 0 0)", "POINT (8 2)");
-  testStStartPointFunc("LINESTRING (0 0, 4 12, 2 2)", "POINT (0 0)");
-  testStStartPointFunc("LINESTRING EMPTY", std::nullopt);
+  assertResult<std::string>(
+      "ST_StartPoint", "LINESTRING (8 4, 4 8, 5 6)", "POINT (8 4)", true);
+  assertResult<std::string>(
+      "ST_StartPoint", "LINESTRING (8 2, 4 12, 0 0)", "POINT (8 2)", true);
+  assertResult<std::string>(
+      "ST_StartPoint", "LINESTRING (0 0, 4 12, 2 2)", "POINT (0 0)", true);
+  assertResult<std::string>(
+      "ST_StartPoint", "LINESTRING EMPTY", std::nullopt, true);
 
   VELOX_ASSERT_USER_THROW(
-      testStStartPointFunc("POINT (1 2)", std::nullopt),
+      assertResult<std::string>(
+          "ST_StartPoint", "POINT (1 2)", std::nullopt, true),
       "ST_StartPoint only applies to LineString. Input type is: Point");
 }
 
 TEST_F(GeometryFunctionsTest, testStEndPoint) {
-  const auto testStEndPointFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(ST_EndPoint(ST_GeometryFromText(c0)))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStEndPointFunc("LINESTRING (8 4, 4 8, 5 6)", "POINT (5 6)");
-  testStEndPointFunc("LINESTRING (8 2, 4 12, 0 0)", "POINT (0 0)");
-  testStEndPointFunc("LINESTRING (0 0, 4 12, 2 2)", "POINT (2 2)");
-  testStEndPointFunc("LINESTRING EMPTY", std::nullopt);
+  assertResult<std::string>(
+      "ST_EndPoint", "LINESTRING (8 4, 4 8, 5 6)", "POINT (5 6)", true);
+  assertResult<std::string>(
+      "ST_EndPoint", "LINESTRING (8 2, 4 12, 0 0)", "POINT (0 0)", true);
+  assertResult<std::string>(
+      "ST_EndPoint", "LINESTRING (0 0, 4 12, 2 2)", "POINT (2 2)", true);
+  assertResult<std::string>(
+      "ST_EndPoint", "LINESTRING EMPTY", std::nullopt, true);
 
   VELOX_ASSERT_USER_THROW(
-      testStEndPointFunc("POINT (1 2)", std::nullopt),
+      assertResult<std::string>(
+          "ST_EndPoint", "POINT (1 2)", std::nullopt, true),
       "ST_EndPoint only applies to LineString. Input type is: Point");
 }
 
@@ -2108,214 +2057,227 @@ TEST_F(GeometryFunctionsTest, testStInteriorRingN) {
 }
 
 TEST_F(GeometryFunctionsTest, testStNumInteriorRing) {
-  const auto testStNumInteriorRingFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<int64_t>& expected) {
-        std::optional<int64_t> result = evaluateOnce<int64_t>(
-            "ST_NumInteriorRing(ST_GeometryFromText(c0))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStNumInteriorRingFunc("POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0))", 0);
-  testStNumInteriorRingFunc(
-      "POLYGON ((0 0, 8 0, 0 8, 0 0), (1 1, 1 5, 5 1, 1 1))", 1);
-  testStNumInteriorRingFunc("POLYGON EMPTY", std::nullopt);
+  assertResult<int64_t>(
+      "ST_NumInteriorRing", "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0))", 0);
+  assertResult<int64_t>(
+      "ST_NumInteriorRing",
+      "POLYGON ((0 0, 8 0, 0 8, 0 0), (1 1, 1 5, 5 1, 1 1))",
+      1);
+  assertResult<int64_t>("ST_NumInteriorRing", "POLYGON EMPTY", std::nullopt);
 
   VELOX_ASSERT_USER_THROW(
-      testStNumInteriorRingFunc("LINESTRING (8 4, 5 7)", std::nullopt),
+      assertResult<int64_t>(
+          "ST_NumInteriorRing", "LINESTRING (8 4, 5 7)", std::nullopt),
       "ST_NumInteriorRing only applies to Polygon. Input type is: LineString");
 }
 
 TEST_F(GeometryFunctionsTest, testStNumGeometries) {
-  const auto testStNumGeometriesFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<int32_t>& expected) {
-        std::optional<int32_t> result = evaluateOnce<int32_t>(
-            "ST_NumGeometries(ST_GeometryFromText(c0))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
   // GeometryCollections with only empty geometries always return 0
-  testStNumGeometriesFunc("GEOMETRYCOLLECTION (POINT EMPTY, POINT EMPTY)", 0);
-  testStNumGeometriesFunc("GEOMETRYCOLLECTION (POINT EMPTY)", 0);
+  assertResult<int32_t>(
+      "ST_NumGeometries", "GEOMETRYCOLLECTION (POINT EMPTY, POINT EMPTY)", 0);
+  assertResult<int32_t>(
+      "ST_NumGeometries", "GEOMETRYCOLLECTION (POINT EMPTY)", 0);
   // GeometryCollections with at least 1 non-empty geometry return the number of
   // geometries
-  testStNumGeometriesFunc("GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))", 2);
+  assertResult<int32_t>(
+      "ST_NumGeometries", "GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))", 2);
 
-  testStNumGeometriesFunc("POINT EMPTY", 0);
-  testStNumGeometriesFunc("GEOMETRYCOLLECTION EMPTY", 0);
-  testStNumGeometriesFunc("MULTIPOLYGON EMPTY", 0);
-  testStNumGeometriesFunc("POINT (1 2)", 1);
-  testStNumGeometriesFunc(
-      "LINESTRING(77.29 29.07,77.42 29.26,77.27 29.31,77.29 29.07)", 1);
-  testStNumGeometriesFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 1);
-  testStNumGeometriesFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
-  testStNumGeometriesFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2);
-  testStNumGeometriesFunc(
+  assertResult<int32_t>("ST_NumGeometries", "POINT EMPTY", 0);
+  assertResult<int32_t>("ST_NumGeometries", "GEOMETRYCOLLECTION EMPTY", 0);
+  assertResult<int32_t>("ST_NumGeometries", "MULTIPOLYGON EMPTY", 0);
+  assertResult<int32_t>("ST_NumGeometries", "POINT (1 2)", 1);
+  assertResult<int32_t>(
+      "ST_NumGeometries",
+      "LINESTRING(77.29 29.07,77.42 29.26,77.27 29.31,77.29 29.07)",
+      1);
+  assertResult<int32_t>(
+      "ST_NumGeometries", "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 1);
+  assertResult<int32_t>(
+      "ST_NumGeometries", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
+  assertResult<int32_t>(
+      "ST_NumGeometries", "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2);
+  assertResult<int32_t>(
+      "ST_NumGeometries",
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
       2);
-  testStNumGeometriesFunc(
-      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))", 2);
+  assertResult<int32_t>(
+      "ST_NumGeometries",
+      "GEOMETRYCOLLECTION(POINT(2 3), LINESTRING (2 3, 3 4))",
+      2);
 }
 
 TEST_F(GeometryFunctionsTest, testStConvexHull) {
-  const auto testStConvexHullFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(ST_ConvexHull(ST_GeometryFromText(c0)))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
   // test empty geometry
-  testStConvexHullFunc("POINT EMPTY", "POINT EMPTY");
-  testStConvexHullFunc(
-      "GEOMETRYCOLLECTION (POINT (1 1), POINT EMPTY)", "POINT (1 1)");
-  testStConvexHullFunc(
+  assertResult<std::string>(
+      "ST_ConvexHull", "POINT EMPTY", "POINT EMPTY", true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "GEOMETRYCOLLECTION (POINT (1 1), POINT EMPTY)",
+      "POINT (1 1)",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (POINT (1 5), POINT (4 5), GEOMETRYCOLLECTION (POINT (3 4), POINT EMPTY))))",
-      "POLYGON ((1 1, 1 5, 4 5, 1 1))");
+      "POLYGON ((1 1, 1 5, 4 5, 1 1))",
+      true);
 
   // test single geometry
-  testStConvexHullFunc("POINT (1 1)", "POINT (1 1)");
-  testStConvexHullFunc(
-      "LINESTRING (1 1, 1 9, 2 2)", "POLYGON ((1 1, 1 9, 2 2, 1 1))");
+  assertResult<std::string>(
+      "ST_ConvexHull", "POINT (1 1)", "POINT (1 1)", true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "LINESTRING (1 1, 1 9, 2 2)",
+      "POLYGON ((1 1, 1 9, 2 2, 1 1))",
+      true);
 
   // convex single geometry
-  testStConvexHullFunc(
-      "LINESTRING (1 1, 1 9, 2 2, 1 1)", "POLYGON ((1 1, 1 9, 2 2, 1 1))");
-  testStConvexHullFunc(
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "LINESTRING (1 1, 1 9, 2 2, 1 1)",
+      "POLYGON ((1 1, 1 9, 2 2, 1 1))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "POLYGON ((0 0, 0 3, 2 4, 4 2, 3 0, 0 0))",
-      "POLYGON ((0 0, 0 3, 2 4, 4 2, 3 0, 0 0))");
+      "POLYGON ((0 0, 0 3, 2 4, 4 2, 3 0, 0 0))",
+      true);
 
   // non-convex geometry
-  testStConvexHullFunc(
-      "LINESTRING (1 1, 1 9, 2 2, 1 1, 4 0)", "POLYGON ((4 0, 1 1, 1 9, 4 0))");
-  testStConvexHullFunc(
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "LINESTRING (1 1, 1 9, 2 2, 1 1, 4 0)",
+      "POLYGON ((4 0, 1 1, 1 9, 4 0))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "POLYGON ((0 0, 0 3, 4 4, 1 1, 3 0, 0 0))",
-      "POLYGON ((0 0, 0 3, 4 4, 3 0, 0 0))");
+      "POLYGON ((0 0, 0 3, 4 4, 3 0, 0 0))",
+      true);
 
   // all points are on the same line
-  testStConvexHullFunc(
-      "LINESTRING (20 20, 30 30)", "LINESTRING (20 20, 30 30)");
-  testStConvexHullFunc(
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "LINESTRING (20 20, 30 30)",
+      "LINESTRING (20 20, 30 30)",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTILINESTRING ((0 0, 3 3), (1 1, 2 2), (2 2, 4 4), (5 5, 8 8))",
-      "LINESTRING (0 0, 8 8)");
-  testStConvexHullFunc(
-      "MULTIPOINT (0 1, 1 2, 2 3, 3 4, 4 5, 5 6)", "LINESTRING (0 1, 5 6)");
-  testStConvexHullFunc(
+      "LINESTRING (0 0, 8 8)",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "MULTIPOINT (0 1, 1 2, 2 3, 3 4, 4 5, 5 6)",
+      "LINESTRING (0 1, 5 6)",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (2 2), POINT (1 1)), POINT(3 3))",
-      "LINESTRING (1 1, 3 3)");
+      "LINESTRING (1 1, 3 3)",
+      true);
 
   // not all points are on the same line
-  testStConvexHullFunc(
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTILINESTRING ((1 1, 5 1, 6 6), (2 4, 4 0), (2 -4, 4 4), (3 -2, 4 -3))",
-      "POLYGON ((2 -4, 1 1, 2 4, 6 6, 5 1, 4 -3, 2 -4))");
-  testStConvexHullFunc(
+      "POLYGON ((2 -4, 1 1, 2 4, 6 6, 5 1, 4 -3, 2 -4))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTIPOINT (0 2, 1 0, 3 0, 4 0, 4 2, 2 2, 2 4)",
-      "POLYGON ((1 0, 0 2, 2 4, 4 2, 4 0, 1 0))");
-  testStConvexHullFunc(
+      "POLYGON ((1 0, 0 2, 2 4, 4 2, 4 0, 1 0))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTIPOLYGON (((0 3, 2 0, 3 6, 0 3), (2 1, 2 3, 5 3, 5 1, 2 1), (1 7, 2 4, 4 2, 5 6, 3 8, 1 7)))",
-      "POLYGON ((2 0, 0 3, 1 7, 3 8, 5 6, 5 1, 2 0))");
-  testStConvexHullFunc(
+      "POLYGON ((2 0, 0 3, 1 7, 3 8, 5 6, 5 1, 2 0))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (POINT (2 3), LINESTRING (2 8, 7 10), POINT (8 10), POLYGON ((4 4, 4 8, 9 8, 6 6, 6 4, 8 3, 6 1, 4 4)), POINT (4 2), LINESTRING (3 6, 5 5), POLYGON ((7 5, 7 6, 8 6, 8 5, 7 5)))",
-      "POLYGON ((6 1, 2 3, 2 8, 7 10, 8 10, 9 8, 8 3, 6 1))");
-  testStConvexHullFunc(
+      "POLYGON ((6 1, 2 3, 2 8, 7 10, 8 10, 9 8, 8 3, 6 1))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (2 3), LINESTRING (2 8, 7 10), GEOMETRYCOLLECTION (POINT (8 10))), POLYGON ((4 4, 4 8, 9 8, 6 6, 6 4, 8 3, 6 1, 4 4)), POINT (4 2), LINESTRING (3 6, 5 5), POLYGON ((7 5, 7 6, 8 6, 8 5, 7 5)))",
-      "POLYGON ((6 1, 2 3, 2 8, 7 10, 8 10, 9 8, 8 3, 6 1))");
+      "POLYGON ((6 1, 2 3, 2 8, 7 10, 8 10, 9 8, 8 3, 6 1))",
+      true);
 
   // single-element multi-geometries and geometry collections
-  testStConvexHullFunc(
-      "MULTILINESTRING ((1 1, 5 1, 6 6))", "POLYGON ((1 1, 6 6, 5 1, 1 1))");
-  testStConvexHullFunc(
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "MULTILINESTRING ((1 1, 5 1, 6 6))",
+      "POLYGON ((1 1, 6 6, 5 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTILINESTRING ((1 1, 5 1, 1 4, 5 4))",
-      "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))");
-  testStConvexHullFunc("MULTIPOINT (0 2)", "POINT (0 2)");
-  testStConvexHullFunc(
+      "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull", "MULTIPOINT (0 2)", "POINT (0 2)", true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTIPOLYGON (((0 3, 3 6, 2 0, 0 3)))",
-      "POLYGON ((2 0, 0 3, 3 6, 2 0))");
-  testStConvexHullFunc(
+      "POLYGON ((2 0, 0 3, 3 6, 2 0))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 2 2, 0 0)))",
-      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))");
-  testStConvexHullFunc("GEOMETRYCOLLECTION (POINT (2 3))", "POINT (2 3)");
-  testStConvexHullFunc(
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull", "GEOMETRYCOLLECTION (POINT (2 3))", "POINT (2 3)", true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (LINESTRING (1 1, 5 1, 6 6))",
-      "POLYGON ((1 1, 6 6, 5 1, 1 1))");
-  testStConvexHullFunc(
+      "POLYGON ((1 1, 6 6, 5 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (LINESTRING (1 1, 5 1, 1 4, 5 4))",
-      "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))");
-  testStConvexHullFunc(
+      "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (POLYGON ((0 3, 3 6, 2 0, 0 3)))",
-      "POLYGON ((2 0, 0 3, 3 6, 2 0))");
-  testStConvexHullFunc(
+      "POLYGON ((2 0, 0 3, 3 6, 2 0))",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 4 0, 4 4, 0 4, 2 2, 0 0)))",
-      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))");
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      true);
 
   // Geometries that should be bounded by a line or point
-  testStConvexHullFunc("LINESTRING (20 20, 20 20)", "POINT (20 20)");
-  testStConvexHullFunc(
-      "POLYGON ((20 20, 20 20, 20 20, 20 20))", "POINT (20 20)");
-  testStConvexHullFunc(
-      "POLYGON ((0 0, 0 20, 0 40, 0 60, 0 0))", "LINESTRING (0 0, 0 60)");
+  assertResult<std::string>(
+      "ST_ConvexHull", "LINESTRING (20 20, 20 20)", "POINT (20 20)", true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "POLYGON ((20 20, 20 20, 20 20, 20 20))",
+      "POINT (20 20)",
+      true);
+  assertResult<std::string>(
+      "ST_ConvexHull",
+      "POLYGON ((0 0, 0 20, 0 40, 0 60, 0 0))",
+      "LINESTRING (0 0, 0 60)",
+      true);
 }
 
 TEST_F(GeometryFunctionsTest, testStCoordDim) {
-  const auto testStCoordDimFunc = [&](const std::optional<std::string>& wkt,
-                                      const std::optional<int8_t>& expected) {
-    std::optional<int8_t> result =
-        evaluateOnce<int8_t>("ST_CoordDim(ST_GeometryFromText(c0))", wkt);
-
-    if (expected.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStCoordDimFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", 2);
-  testStCoordDimFunc("POLYGON EMPTY))", 2);
-  testStCoordDimFunc("LINESTRING (1 1, 1 2)", 2);
-  testStCoordDimFunc("POINT (1 4)", 2);
-
-  testStCoordDimFunc("LINESTRING EMPTY", 2);
+  assertResult<int8_t>("ST_CoordDim", "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", 2);
+  assertResult<int8_t>("ST_CoordDim", "POLYGON EMPTY))", 2);
+  assertResult<int8_t>("ST_CoordDim", "LINESTRING (1 1, 1 2)", 2);
+  assertResult<int8_t>("ST_CoordDim", "POINT (1 4)", 2);
+  assertResult<int8_t>("ST_CoordDim", "LINESTRING EMPTY", 2);
 }
 
 TEST_F(GeometryFunctionsTest, testStDimension) {
-  const auto testStDimensionFunc = [&](const std::optional<std::string>& wkt,
-                                       const std::optional<int8_t>& expected) {
-    std::optional<int8_t> result =
-        evaluateOnce<int8_t>("ST_Dimension(ST_GeometryFromText(c0))", wkt);
-
-    if (expected.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStDimensionFunc("POLYGON EMPTY", 2);
-  testStDimensionFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", 2);
-  testStDimensionFunc("LINESTRING EMPTY", 1);
-  testStDimensionFunc("POINT (1 4))", 0);
+  assertResult<int8_t>("ST_Dimension", "POLYGON EMPTY", 2);
+  assertResult<int8_t>(
+      "ST_Dimension", "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", 2);
+  assertResult<int8_t>("ST_Dimension", "LINESTRING EMPTY", 1);
+  assertResult<int8_t>("ST_Dimension", "POINT (1 4))", 0);
 }
 
 TEST_F(GeometryFunctionsTest, testStBuffer) {
@@ -2372,85 +2334,95 @@ TEST_F(GeometryFunctionsTest, testStBuffer) {
 }
 
 TEST_F(GeometryFunctionsTest, testStExteriorRing) {
-  const auto testStExteriorRingFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(ST_ExteriorRing(ST_GeometryFromText(c0)))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStExteriorRingFunc("POLYGON EMPTY", std::nullopt);
-  testStExteriorRingFunc(
-      "POLYGON ((1 1, 1 4, 4 1, 1 1))", "LINESTRING (1 1, 1 4, 4 1, 1 1)");
-
-  testStExteriorRingFunc(
+  assertResult<std::string>(
+      "ST_ExteriorRing", "POLYGON EMPTY", std::nullopt, true);
+  assertResult<std::string>(
+      "ST_ExteriorRing",
+      "POLYGON ((1 1, 1 4, 4 1, 1 1))",
+      "LINESTRING (1 1, 1 4, 4 1, 1 1)",
+      true);
+  assertResult<std::string>(
+      "ST_ExteriorRing",
       "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 1 2, 2 2, 2 1, 1 1))",
-      "LINESTRING (0 0, 0 5, 5 5, 5 0, 0 0)");
+      "LINESTRING (0 0, 0 5, 5 5, 5 0, 0 0)",
+      true);
 
   VELOX_ASSERT_USER_THROW(
-      testStExteriorRingFunc("LINESTRING (1 1, 2 2, 1 3)", std::nullopt),
+      assertResult<std::string>(
+          "ST_ExteriorRing", "LINESTRING (1 1, 2 2, 1 3)", std::nullopt, true),
       "ST_ExteriorRing only applies to Polygon. Input type is: LineString");
   VELOX_ASSERT_USER_THROW(
-      testStExteriorRingFunc(
+      assertResult<std::string>(
+          "ST_ExteriorRing",
           "MULTIPOLYGON (((1 1, 2 2, 1 3, 1 1)), ((4 4, 5 5, 4 6, 4 4)))",
-          std::nullopt),
+          std::nullopt,
+          true),
       "ST_ExteriorRing only applies to Polygon. Input type is: MultiPolygon");
 }
 
 TEST_F(GeometryFunctionsTest, testStEnvelope) {
-  const auto testStEnvelopeFunc =
-      [&](const std::optional<std::string>& wkt,
-          const std::optional<std::string>& expected) {
-        std::optional<std::string> result = evaluateOnce<std::string>(
-            "ST_AsText(st_envelope(ST_GeometryFromText(c0)))", wkt);
-
-        if (expected.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
-        } else {
-          ASSERT_FALSE(result.has_value());
-        }
-      };
-
-  testStEnvelopeFunc(
-      "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POLYGON ((1 2, 1 8, 4 8, 4 2, 1 2))");
-  testStEnvelopeFunc(
-      "LINESTRING (1 1, 2 2, 1 3)", "POLYGON ((1 1, 1 3, 2 3, 2 1, 1 1))");
-  testStEnvelopeFunc(
-      "LINESTRING (8 4, 5 7)", "POLYGON ((5 4, 5 7, 8 7, 8 4, 5 4))");
-  testStEnvelopeFunc(
+  assertResult<std::string>(
+      "st_envelope",
+      "MULTIPOINT (1 2, 2 4, 3 6, 4 8)",
+      "POLYGON ((1 2, 1 8, 4 8, 4 2, 1 2))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
+      "LINESTRING (1 1, 2 2, 1 3)",
+      "POLYGON ((1 1, 1 3, 2 3, 2 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
+      "LINESTRING (8 4, 5 7)",
+      "POLYGON ((5 4, 5 7, 8 7, 8 4, 5 4))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
       "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))",
-      "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))");
-  testStEnvelopeFunc(
-      "POLYGON ((1 1, 4 1, 1 4, 1 1))", "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))");
-  testStEnvelopeFunc(
+      "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
+      "POLYGON ((1 1, 4 1, 1 4, 1 1))",
+      "POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 2, 2 2, 2 0, 0 0)))",
-      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0))");
-  testStEnvelopeFunc(
+      "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
       "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
-      "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))");
-  testStEnvelopeFunc(
+      "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))",
+      true);
+  assertResult<std::string>(
+      "st_envelope",
       "MULTIPOLYGON (((119.094024 -27.2871725, 119.094124 -27.2846569, 119.094124 -27.2868119, 119.094024 -27.2871725)))",
-      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094124 -27.2846569, 119.094124 -27.2871725, 119.094024 -27.2871725))");
+      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094124 -27.2846569, 119.094124 -27.2871725, 119.094024 -27.2871725))",
+      true);
 
   // Zero area envelope is valid
-  testStEnvelopeFunc(
-      "LINESTRING (1 1, 1 2)", "POLYGON ((1 1, 1 2, 1 2, 1 1, 1 1))");
+  assertResult<std::string>(
+      "st_envelope",
+      "LINESTRING (1 1, 1 2)",
+      "POLYGON ((1 1, 1 2, 1 2, 1 1, 1 1))",
+      true);
 
-  testStEnvelopeFunc("POLYGON EMPTY", "POLYGON EMPTY");
-  testStEnvelopeFunc("MULTIPOLYGON EMPTY", "POLYGON EMPTY");
-  testStEnvelopeFunc("GEOMETRYCOLLECTION EMPTY", "POLYGON EMPTY");
-  testStEnvelopeFunc("POINT EMPTY", "POLYGON EMPTY");
-  testStEnvelopeFunc("MULTIPOINT EMPTY", "POLYGON EMPTY");
-  testStEnvelopeFunc("LINESTRING EMPTY", "POLYGON EMPTY");
-  testStEnvelopeFunc("MULTILINESTRING EMPTY", "POLYGON EMPTY");
+  assertResult<std::string>(
+      "st_envelope", "POLYGON EMPTY", "POLYGON EMPTY", true);
+  assertResult<std::string>(
+      "st_envelope", "MULTIPOLYGON EMPTY", "POLYGON EMPTY", true);
+  assertResult<std::string>(
+      "st_envelope", "GEOMETRYCOLLECTION EMPTY", "POLYGON EMPTY", true);
+  assertResult<std::string>(
+      "st_envelope", "POINT EMPTY", "POLYGON EMPTY", true);
+  assertResult<std::string>(
+      "st_envelope", "MULTIPOINT EMPTY", "POLYGON EMPTY", true);
+  assertResult<std::string>(
+      "st_envelope", "LINESTRING EMPTY", "POLYGON EMPTY", true);
+  assertResult<std::string>(
+      "st_envelope", "MULTILINESTRING EMPTY", "POLYGON EMPTY", true);
 }
 
 TEST_F(GeometryFunctionsTest, testStPoints) {
@@ -2607,38 +2579,30 @@ TEST_F(GeometryFunctionsTest, testStEnvelopeAsPts) {
 }
 
 TEST_F(GeometryFunctionsTest, testStNumPoints) {
-  const auto testStNumPointsFunc = [&](const std::optional<std::string>& wkt,
-                                       const std::optional<int64_t>& expected) {
-    std::optional<int64_t> result =
-        evaluateOnce<int64_t>("ST_NumPoints(ST_GeometryFromText(c0))", wkt);
+  assertResult<int64_t>("ST_NumPoints", "POINT EMPTY", 0);
+  assertResult<int64_t>("ST_NumPoints", "MULTIPOINT EMPTY", 0);
+  assertResult<int64_t>("ST_NumPoints", "LINESTRING EMPTY", 0);
+  assertResult<int64_t>("ST_NumPoints", "MULTILINESTRING EMPTY", 0);
+  assertResult<int64_t>("ST_NumPoints", "POLYGON EMPTY", 0);
+  assertResult<int64_t>("ST_NumPoints", "MULTIPOLYGON EMPTY", 0);
+  assertResult<int64_t>("ST_NumPoints", "GEOMETRYCOLLECTION EMPTY", 0);
 
-    if (expected.has_value()) {
-      ASSERT_TRUE(result.has_value());
-      ASSERT_EQ(result.value(), expected.value());
-    } else {
-      ASSERT_FALSE(result.has_value());
-    }
-  };
-
-  testStNumPointsFunc("POINT EMPTY", 0);
-  testStNumPointsFunc("MULTIPOINT EMPTY", 0);
-  testStNumPointsFunc("LINESTRING EMPTY", 0);
-  testStNumPointsFunc("MULTILINESTRING EMPTY", 0);
-  testStNumPointsFunc("POLYGON EMPTY", 0);
-  testStNumPointsFunc("MULTIPOLYGON EMPTY", 0);
-  testStNumPointsFunc("GEOMETRYCOLLECTION EMPTY", 0);
-
-  testStNumPointsFunc("POINT (1 2)", 1);
-  testStNumPointsFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
-  testStNumPointsFunc("LINESTRING (8 4, 5 7)", 2);
-  testStNumPointsFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 4);
-  testStNumPointsFunc("POLYGON ((0 0, 8 0, 0 8, 0 0))", 3);
-  testStNumPointsFunc(
-      "POLYGON ((0 0, 8 0, 0 8, 0 0), (1 1, 1 5, 5 1, 1 1))", 6);
-  testStNumPointsFunc(
+  assertResult<int64_t>("ST_NumPoints", "POINT (1 2)", 1);
+  assertResult<int64_t>("ST_NumPoints", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
+  assertResult<int64_t>("ST_NumPoints", "LINESTRING (8 4, 5 7)", 2);
+  assertResult<int64_t>(
+      "ST_NumPoints", "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 4);
+  assertResult<int64_t>("ST_NumPoints", "POLYGON ((0 0, 8 0, 0 8, 0 0))", 3);
+  assertResult<int64_t>(
+      "ST_NumPoints",
+      "POLYGON ((0 0, 8 0, 0 8, 0 0), (1 1, 1 5, 5 1, 1 1))",
+      6);
+  assertResult<int64_t>(
+      "ST_NumPoints",
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
       8);
-  testStNumPointsFunc(
+  assertResult<int64_t>(
+      "ST_NumPoints",
       "GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), GEOMETRYCOLLECTION (POLYGON ((2 2, 2 3, 3 3, 3 2, 2 2)))))",
       7);
 }
