@@ -33,6 +33,8 @@ add_library(
   TableScanTestBase.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
+  TpcdsPlanFromJson.cpp
+  TpcdsQueryBuilder.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
   SerializedPageUtil.cpp
@@ -63,3 +65,8 @@ target_link_libraries(
   velox_functions_prestosql
   velox_aggregates
 )
+
+if(VELOX_ENABLE_CUDF)
+  target_compile_definitions(velox_exec_test_lib PUBLIC VELOX_ENABLE_CUDF)
+  target_link_libraries(velox_exec_test_lib velox_cudf_exec velox_cudf_hive_connector)
+endif()
