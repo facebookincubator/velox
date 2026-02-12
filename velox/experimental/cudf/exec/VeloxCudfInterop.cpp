@@ -16,12 +16,12 @@
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/exec/NanoArrowBridge.h"
 
 #include "velox/common/memory/Memory.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/arrow/Bridge.h"
 
 #include <cudf/interop.hpp>
 #include <cudf/table/table.hpp>
@@ -115,14 +115,16 @@ std::unique_ptr<cudf::table> toCudfTable(
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
   // in the null mask.
   ArrowOptions arrowOptions{true, true};
+  // libcudf does not support Arrow binary; export VARBINARY as UTF-8.
+  arrowOptions.exportVarbinaryAsString = true;
   ArrowArray arrowArray;
-  cudf_velox::exportToArrow(
+  exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
       arrowArray,
       pool,
       arrowOptions);
   ArrowSchema arrowSchema;
-  cudf_velox::exportToArrow(
+  exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
       arrowSchema,
       arrowOptions);
@@ -230,7 +232,7 @@ RowVectorPtr toVeloxColumn(
         applyExpectedArrowFormat, &schemaCopy, *expectedType);
   }
 
-  auto veloxTable = cudf_velox::importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
+  auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
 
   // BaseVector to RowVector
   auto castedPtr =
