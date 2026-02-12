@@ -14,12 +14,14 @@
 
 --- a/cpp/thirdparty/versions.txt
 +++ b/cpp/thirdparty/versions.txt
-@@ -108,7 +108,7 @@
+@@ -107,8 +107,8 @@
+ ARROW_SUBSTRAIT_BUILD_SHA256_CHECKSUM=f989a862f694e7dbb695925ddb7c4ce06aa6c51aca945105c075139aed7e55a2
  ARROW_S2N_TLS_BUILD_VERSION=v1.3.35
  ARROW_S2N_TLS_BUILD_SHA256_CHECKSUM=9d32b26e6bfcc058d98248bf8fc231537e347395dd89cf62bb432b55c5da990d
- ARROW_THRIFT_BUILD_VERSION=0.16.0
+-ARROW_THRIFT_BUILD_VERSION=0.16.0
 -ARROW_THRIFT_BUILD_SHA256_CHECKSUM=f460b5c1ca30d8918ff95ea3eb6291b3951cf518553566088f3f2be8981f6209
-+ARROW_THRIFT_BUILD_SHA256_CHECKSUM=df2931de646a366c2e5962af679018bca2395d586e00ba82d09c0379f14f8e7b
++ARROW_THRIFT_BUILD_VERSION=0.19.0
++ARROW_THRIFT_BUILD_SHA256_CHECKSUM=6428911db505702c51f7d993155a4a4c8afee83fdd021b52f2eccd8d34780629
  ARROW_UCX_BUILD_VERSION=1.12.1
  ARROW_UCX_BUILD_SHA256_CHECKSUM=9bef31aed0e28bf1973d28d74d9ac4f8926c43ca3b7010bd22a084e164e31b71
  ARROW_UTF8PROC_BUILD_VERSION=v2.7.0
@@ -28,13 +30,13 @@
    "ARROW_S2N_TLS_URL s2n-${ARROW_S2N_TLS_BUILD_VERSION}.tar.gz https://github.com/aws/s2n-tls/archive/${ARROW_S2N_TLS_BUILD_VERSION}.tar.gz"
    "ARROW_SNAPPY_URL snappy-${ARROW_SNAPPY_BUILD_VERSION}.tar.gz https://github.com/google/snappy/archive/${ARROW_SNAPPY_BUILD_VERSION}.tar.gz"
 -  "ARROW_THRIFT_URL thrift-${ARROW_THRIFT_BUILD_VERSION}.tar.gz https://archive.apache.org/dist/thrift/${ARROW_THRIFT_BUILD_VERSION}/thrift-${ARROW_THRIFT_BUILD_VERSION}.tar.gz"
-+  "ARROW_THRIFT_URL thrift-${ARROW_THRIFT_BUILD_VERSION}.tar.gz https://github.com/apache/thrift/archive/refs/tags/v${ARROW_THRIFT_BUILD_VERSION}.tar.gz
++  "ARROW_THRIFT_URL thrift-${ARROW_THRIFT_BUILD_VERSION}.tar.gz https://github.com/apache/thrift/archive/refs/tags/v${ARROW_THRIFT_BUILD_VERSION}.tar.gz"
    "ARROW_UCX_URL ucx-${ARROW_UCX_BUILD_VERSION}.tar.gz https://github.com/openucx/ucx/archive/v${ARROW_UCX_BUILD_VERSION}.tar.gz"
    "ARROW_UTF8PROC_URL utf8proc-${ARROW_UTF8PROC_BUILD_VERSION}.tar.gz https://github.com/JuliaStrings/utf8proc/archive/${ARROW_UTF8PROC_BUILD_VERSION}.tar.gz"
    "ARROW_XSIMD_URL xsimd-${ARROW_XSIMD_BUILD_VERSION}.tar.gz https://github.com/xtensor-stack/xsimd/archive/${ARROW_XSIMD_BUILD_VERSION}.tar.gz"
 --- a/cpp/cmake_modules/ThirdpartyToolchain.cmake
 +++ b/cpp/cmake_modules/ThirdpartyToolchain.cmake
-@@ -809,20 +809,7 @@
+@@ -817,20 +817,7 @@
    set(THRIFT_SOURCE_URL "$ENV{ARROW_THRIFT_URL}")
  else()
    set_urls(THRIFT_SOURCE_URL
@@ -54,5 +56,5 @@
 -           "${THIRDPARTY_MIRROR_URL}/thrift-${ARROW_THRIFT_BUILD_VERSION}.tar.gz")
 +           "https://github.com/apache/thrift/archive/refs/tags/v${ARROW_THRIFT_BUILD_VERSION}.tar.gz")
  endif()
- 
+
  if(DEFINED ENV{ARROW_UCX_URL})
