@@ -143,30 +143,101 @@ struct PModFloatFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct UnaryMinusFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a) {
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput& a) {
     if constexpr (std::is_integral_v<TInput>) {
-      // Avoid undefined integer overflow.
-      result = a == std::numeric_limits<TInput>::min() ? a : -a;
+      if (FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min())) {
+        if (ansiEnabled_) {
+          // In ANSI mode, returns an overflow error.
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError("Arithmetic overflow: -({}))", a);
+        }
+        // In ANSI off mode, returns the same minimum value.
+        result = a;
+        return Status::OK();
+      }
+      result = -a;
     } else {
       result = -a;
     }
-    return true;
+    return Status::OK();
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
+// Floating point division - returns NULL on division by zero.
 template <typename T>
 struct DivideFunction {
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
-  call(double& result, const double num, const double denom) {
+  call(TInput& result, const TInput num, const TInput denom) {
     if (UNLIKELY(denom == 0)) {
       return false;
     }
     result = num / denom;
     return true;
   }
+};
+
+// Integer division with ANSI mode support.
+template <typename TExec>
+struct IntegerDivideFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool callNullable(T& result, const T* a, const T* b) {
+    if (a == nullptr || b == nullptr) {
+      return false;
+    }
+
+    // Check division by zero.
+    if (FOLLY_UNLIKELY(*b == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
+      // Non-ANSI mode: division by zero returns NULL.
+      return false;
+    }
+
+    // Check overflow: MIN_VALUE / -1.
+    if (FOLLY_UNLIKELY(*a == std::numeric_limits<T>::min() && *b == -1)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Arithmetic overflow: {} / {}", *a, *b);
+      }
+      // Non-ANSI mode: wraparound (MIN_VALUE / -1 = MIN_VALUE).
+      result = *a;
+      return true;
+    }
+
+    result = *a / *b;
+    return true;
+  }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 /*
@@ -664,6 +735,321 @@ struct CheckedIntegralDivideFunction {
     result = a / b;
     return Status::OK();
   }
+};
+
+// Spark-specific binary arithmetic functions with ANSI mode support.
+// These wrap the existing checked functions when ANSI is enabled,
+// or use standard Presto functions when ANSI is disabled.
+
+template <typename TExec>
+struct AddFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      if (ansiEnabled_) {
+        // Use checked arithmetic in ANSI mode.
+        T res;
+        VELOX_USER_RETURN(
+            __builtin_add_overflow(a, b, &res),
+            "Arithmetic overflow: {} + {}",
+            a,
+            b);
+        result = res;
+      } else {
+        // Standard addition without overflow check.
+        result = a + b;
+      }
+    } else {
+      // Floating point addition doesn't overflow.
+      result = a + b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+template <typename TExec>
+struct SubtractFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      if (ansiEnabled_) {
+        // Use checked arithmetic in ANSI mode.
+        VELOX_USER_RETURN(
+            __builtin_sub_overflow(a, b, &result),
+            "Arithmetic overflow: {} - {}",
+            a,
+            b);
+      } else {
+        // Standard subtraction without overflow check.
+        result = a - b;
+      }
+    } else {
+      // Floating point subtraction doesn't overflow.
+      result = a - b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+template <typename TExec>
+struct MultiplyFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const T* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      if (ansiEnabled_) {
+        // Use checked arithmetic in ANSI mode.
+        VELOX_USER_RETURN(
+            __builtin_mul_overflow(a, b, &result),
+            "Arithmetic overflow: {} * {}",
+            a,
+            b);
+      } else {
+        // Standard multiplication without overflow check.
+        result = a * b;
+      }
+    } else {
+      // Floating point multiplication doesn't overflow.
+      result = a * b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+// ============================================================================
+// Interval Arithmetic Functions with ANSI Support
+// ============================================================================
+
+// Unary minus for IntervalDayTime (milliseconds stored as int64_t).
+template <typename TExec>
+struct IntervalDayTimeUnaryMinusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int64_t* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const int64_t& a) {
+    if (FOLLY_UNLIKELY(a == std::numeric_limits<int64_t>::min())) {
+      if (ansiEnabled_) {
+        if (threadSkipErrorDetails()) {
+          return Status::UserError();
+        }
+        return Status::UserError(
+            "Arithmetic overflow: cannot negate minimum interval value");
+      }
+      // In non-ANSI mode, allow wraparound.
+      result = a;
+    } else {
+      result = -a;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+// Unary minus for IntervalYearMonth (months stored as int32_t).
+template <typename TExec>
+struct IntervalYearMonthUnaryMinusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  FOLLY_ALWAYS_INLINE Status call(int32_t& result, const int32_t& a) {
+    if (FOLLY_UNLIKELY(a == std::numeric_limits<int32_t>::min())) {
+      if (ansiEnabled_) {
+        if (threadSkipErrorDetails()) {
+          return Status::UserError();
+        }
+        return Status::UserError(
+            "Arithmetic overflow: cannot negate minimum interval value");
+      }
+      // In non-ANSI mode, allow wraparound.
+      result = a;
+    } else {
+      result = -a;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+// Add for IntervalDayTime.
+template <typename TExec>
+struct IntervalDayTimeAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int64_t* /*a*/,
+      const int64_t* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  FOLLY_ALWAYS_INLINE Status
+  call(int64_t& result, const int64_t& a, const int64_t& b) {
+    if (ansiEnabled_) {
+      int64_t res;
+      VELOX_USER_RETURN(
+          __builtin_add_overflow(a, b, &res),
+          "Arithmetic overflow: {} + {}",
+          a,
+          b);
+      result = res;
+    } else {
+      result = a + b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+// Subtract for IntervalDayTime.
+template <typename TExec>
+struct IntervalDayTimeSubtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int64_t* /*a*/,
+      const int64_t* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  FOLLY_ALWAYS_INLINE Status
+  call(int64_t& result, const int64_t& a, const int64_t& b) {
+    if (ansiEnabled_) {
+      int64_t res;
+      VELOX_USER_RETURN(
+          __builtin_sub_overflow(a, b, &res),
+          "Arithmetic overflow: {} - {}",
+          a,
+          b);
+      result = res;
+    } else {
+      result = a - b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+// Add for IntervalYearMonth.
+template <typename TExec>
+struct IntervalYearMonthAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*a*/,
+      const int32_t* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  FOLLY_ALWAYS_INLINE Status
+  call(int32_t& result, const int32_t& a, const int32_t& b) {
+    if (ansiEnabled_) {
+      int32_t res;
+      VELOX_USER_RETURN(
+          __builtin_add_overflow(a, b, &res),
+          "Arithmetic overflow: {} + {}",
+          a,
+          b);
+      result = res;
+    } else {
+      result = a + b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+// Subtract for IntervalYearMonth.
+template <typename TExec>
+struct IntervalYearMonthSubtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*a*/,
+      const int32_t* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  FOLLY_ALWAYS_INLINE Status
+  call(int32_t& result, const int32_t& a, const int32_t& b) {
+    if (ansiEnabled_) {
+      int32_t res;
+      VELOX_USER_RETURN(
+          __builtin_sub_overflow(a, b, &res),
+          "Arithmetic overflow: {} - {}",
+          a,
+          b);
+      result = res;
+    } else {
+      result = a - b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 } // namespace facebook::velox::functions::sparksql
