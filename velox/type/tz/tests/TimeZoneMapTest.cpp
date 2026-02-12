@@ -44,6 +44,7 @@ TEST(TimeZoneMapTest, locateZoneID) {
   EXPECT_EQ(2141, locateZoneID("Pacific/Marquesas"));
   EXPECT_EQ(2215, locateZoneID("Asia/Chita"));
   EXPECT_EQ(2233, locateZoneID("America/Ciudad_Juarez"));
+  EXPECT_EQ(2234, locateZoneID("America/Coyhaique"));
 }
 
 TEST(TimeZoneMapTest, locateZoneUTCAlias) {
@@ -165,6 +166,7 @@ TEST(TimeZoneMapTest, getTimeZoneName) {
   EXPECT_EQ("Pacific/Kanton", getTimeZoneName(2231));
   EXPECT_EQ("Europe/Kyiv", getTimeZoneName(2232));
   EXPECT_EQ("America/Ciudad_Juarez", getTimeZoneName(2233));
+  EXPECT_EQ("America/Coyhaique", getTimeZoneName(2234));
   EXPECT_EQ("-00:01", getTimeZoneName(840));
   EXPECT_EQ("UTC", getTimeZoneName(0));
 }
@@ -175,6 +177,7 @@ TEST(TimeZoneMapTest, getTimeZoneID) {
   EXPECT_EQ(2231, getTimeZoneID("Pacific/Kanton"));
   EXPECT_EQ(2232, getTimeZoneID("Europe/Kyiv"));
   EXPECT_EQ(2233, getTimeZoneID("America/Ciudad_Juarez"));
+  EXPECT_EQ(2234, getTimeZoneID("America/Coyhaique"));
   EXPECT_EQ(0, getTimeZoneID("UTC"));
   EXPECT_EQ(0, getTimeZoneID("GMT"));
   EXPECT_EQ(0, getTimeZoneID("Z"));
