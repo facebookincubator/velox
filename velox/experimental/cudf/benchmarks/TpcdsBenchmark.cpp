@@ -24,6 +24,7 @@
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/parse/TypeResolver.h"
 
 #include <iostream>
@@ -78,6 +79,7 @@ void TpcdsBenchmark::initialize() {
   // TPC-DS plans from Presto use "presto.default." prefix for functions.
   functions::prestosql::registerAllScalarFunctions("presto.default.");
   aggregate::prestosql::registerAllAggregateFunctions("presto.default.");
+  window::prestosql::registerAllWindowFunctions("presto.default.");
 
   // Register serialization/deserialization for plan nodes.
   Type::registerSerDe();

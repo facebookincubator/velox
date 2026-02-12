@@ -47,6 +47,7 @@ target_link_libraries(
   velox_caching
   velox_vector_test_lib
   velox_aggregates
+  velox_window
   Folly::follybenchmark
   Folly::folly
   fmt::fmt
