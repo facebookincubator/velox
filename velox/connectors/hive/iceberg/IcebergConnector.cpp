@@ -17,13 +17,11 @@
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-const std::string_view kIcebergFunctionPrefixConfig{"presto.iceberg-namespace"};
-const std::string_view kDefaultIcebergFunctionPrefix{"$internal$.iceberg."};
 
 namespace {
 
@@ -46,10 +44,8 @@ IcebergConnector::IcebergConnector(
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
     : HiveConnector(id, config, ioExecutor),
-      functionPrefix_(config->get<std::string>(
-          std::string(kIcebergFunctionPrefixConfig),
-          std::string(kDefaultIcebergFunctionPrefix))) {
-  registerIcebergInternalFunctions(functionPrefix_);
+      icebergConfig_(std::make_shared<IcebergConfig>(connectorConfig())) {
+  registerIcebergInternalFunctions(icebergConfig_->functionPrefix());
 }
 
 std::unique_ptr<DataSource> IcebergConnector::createDataSource(
@@ -81,7 +77,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
       connectorQueryCtx,
       commitStrategy,
       hiveConfig_,
-      functionPrefix_);
+      icebergConfig_);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
