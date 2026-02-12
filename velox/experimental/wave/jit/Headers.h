@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ bool registerHeader(const char* text);
 const char* velox_experimental_wave_common_BitUtil_cuh =
     "velox/experimental/wave/common/BitUtil.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -130,7 +130,7 @@ bool velox_experimental_wave_common_BitUtil_cuh_reg =
 const char* velox_experimental_wave_common_Scan_cuh =
     "velox/experimental/wave/common/Scan.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -320,7 +320,7 @@ bool velox_experimental_wave_common_Scan_cuh_reg =
 const char* velox_experimental_wave_vector_Operand_h =
     "velox/experimental/wave/vector/Operand.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -522,7 +522,7 @@ bool velox_experimental_wave_vector_Operand_h_reg =
 const char* velox_experimental_wave_exec_ErrorCode_h =
     "velox/experimental/wave/exec/ErrorCode.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -547,7 +547,7 @@ bool velox_experimental_wave_exec_ErrorCode_h_reg =
 const char* velox_experimental_wave_exec_WaveCore_cuh =
     "velox/experimental/wave/exec/WaveCore.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -1099,7 +1099,7 @@ bool velox_experimental_wave_exec_WaveCore_cuh_reg =
 const char* velox_experimental_wave_exec_ExprKernel_h =
     "velox/experimental/wave/exec/ExprKernel.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -1312,7 +1312,7 @@ bool velox_experimental_wave_exec_ExprKernel_h_reg =
 const char* velox_experimental_wave_exec_Accumulators_cuh =
     "velox/experimental/wave/exec/Accumulators.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -1436,7 +1436,7 @@ bool velox_experimental_wave_exec_Accumulators_cuh_reg =
 const char* velox_experimental_wave_exec_Join_cuh =
     "velox/experimental/wave/exec/Join.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -1608,7 +1608,7 @@ bool velox_experimental_wave_exec_Join_cuh_reg =
 const char* velox_experimental_wave_common_HashTable_h =
     "velox/experimental/wave/common/HashTable.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -1907,7 +1907,7 @@ bool velox_experimental_wave_common_HashTable_h_reg =
 const char* velox_experimental_wave_common_HashTable_cuh =
     "velox/experimental/wave/common/HashTable.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -2398,7 +2398,7 @@ bool velox_experimental_wave_common_hash_cuh_reg =
 const char* velox_experimental_wave_common_StringView_cuh =
     "velox/experimental/wave/common/StringView.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -2431,7 +2431,7 @@ bool velox_experimental_wave_common_StringView_cuh_reg =
 const char* velox_experimental_wave_common_StringView_h =
     "velox/experimental/wave/common/StringView.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -2545,7 +2545,7 @@ bool velox_experimental_wave_common_StringView_h_reg =
 const char* velox_experimental_wave_common_Hash_h =
     "velox/experimental/wave/common/Hash.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -2697,7 +2697,7 @@ bool velox_experimental_wave_common_Hash_h_reg =
 const char* velox_experimental_wave_common_CompilerDefines_h =
     "velox/experimental/wave/common/CompilerDefines.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -2728,7 +2728,7 @@ bool velox_experimental_wave_common_CompilerDefines_h_reg =
 const char* velox_experimental_wave_common_Atomic_cuh =
     "velox/experimental/wave/common/Atomic.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -2895,7 +2895,7 @@ bool velox_experimental_wave_common_Atomic_cuh_reg =
 const char* breeze_platforms_cuda_cuh =
     "breeze/platforms/cuda.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -3603,7 +3603,7 @@ bool breeze_platforms_cuda_cuh_reg = registerHeader(breeze_platforms_cuda_cuh);
 const char* breeze_platforms_specialization_cuda_ptx_cuh =
     "breeze/platforms/specialization/cuda-ptx.cuh\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -3692,7 +3692,7 @@ bool breeze_platforms_specialization_cuda_ptx_cuh_reg =
 const char* breeze_platforms_platform_h =
     "breeze/platforms/platform.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
@@ -3738,7 +3738,7 @@ bool breeze_platforms_platform_h_reg =
 const char* breeze_utils_types_h =
     "breeze/utils/types.h\n"
     "/*\n"
-    " * Copyright (c) Facebook, Inc. and its affiliates.\n"
+    " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
     " *\n"
     " * Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     " * you may not use this file except in compliance with the License.\n"
