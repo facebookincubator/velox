@@ -116,6 +116,25 @@ class E2EFilterTestBase : public testing::Test {
       bool ascending,
       memory::MemoryPool* pool);
 
+  // Generates a vector with monotonically increasing/decreasing values that
+  // may contain duplicates (non-strictly sorted). Each unique value is
+  // repeated 1-3 times randomly.
+  // @param type The scalar type of the vector to generate.
+  // @param size The number of rows in this batch.
+  // @param globalRowOffset The starting row offset across all batches.
+  // @param startValue The starting value for the sequence.
+  // @param totalRows The total number of rows across all batches.
+  // @param ascending If true, values increase; if false, values decrease.
+  // @param pool The memory pool to allocate the vector from.
+  static VectorPtr generateSortedVector(
+      const TypePtr& type,
+      size_t size,
+      size_t globalRowOffset,
+      int64_t startValue,
+      size_t totalRows,
+      bool ascending,
+      memory::MemoryPool* pool);
+
  protected:
   static constexpr int32_t kRowsInGroup = 10'000;
 

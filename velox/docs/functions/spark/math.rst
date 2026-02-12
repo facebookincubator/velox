@@ -51,7 +51,7 @@ Mathematical Functions
     Returns the result of adding x to y. The types of x and y must be the same.
     For integral types, overflow returns NULL when ANSI mode is disabled;
     throws an error otherwise.
-    
+
     Corresponds to Spark's operator ``+``. ::
 
         SELECT 2147483647 + 1; -- -2147483648 (ANSI OFF) / ERROR (ANSI ON)
@@ -158,7 +158,7 @@ Mathematical Functions
     Supported types are TINYINT, SMALLINT, INTEGER, and BIGINT.
     Division by zero returns NULL when ANSI mode is disabled; throws an error otherwise.
     Overflow (MIN_VALUE / -1) returns MIN_VALUE when ANSI mode is disabled; throws an error otherwise.
-    
+
     Corresponds to Spark's operator ``/``. ::
 
         SELECT 10 / 3; -- 3
@@ -258,7 +258,7 @@ Mathematical Functions
     Returns the result of multiplying x by y. The types of x and y must be the same.
     For integral types, overflow returns NULL when ANSI mode is disabled;
     throws an error otherwise.
-    
+
     Corresponds to Spark's operator ``*``. ::
 
         SELECT 2147483647 * 2; -- -2 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
@@ -361,7 +361,7 @@ Mathematical Functions
     Returns the result of subtracting y from x. The types of x and y must be the same.
     For integral types, overflow returns NULL when ANSI mode is disabled;
     throws an error otherwise.
-    
+
     Corresponds to Spark's operator ``-``. ::
 
         SELECT -2147483648 - 1; -- 2147483647 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
@@ -383,7 +383,7 @@ Mathematical Functions
 
     Returns the negative of ``x``. For integral types, negating the minimum value
     returns the same minimum value when ANSI mode is disabled; throws an error otherwise.
-    
+
     Corresponds to Spark's unary operator ``-``. ::
 
         SELECT -42; -- -42
