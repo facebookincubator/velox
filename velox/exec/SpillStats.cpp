@@ -24,7 +24,7 @@
 namespace facebook::velox::exec {
 namespace {
 std::vector<SpillStats>& allSpillStats() {
-  static std::vector<SpillStats> spillStatsList(folly::hardware_concurrency());
+  static std::vector<SpillStats> spillStatsList(folly::available_concurrency());
   return spillStatsList;
 }
 

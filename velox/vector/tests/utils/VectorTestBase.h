@@ -849,10 +849,10 @@ class VectorTestBase {
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
 };
 
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
