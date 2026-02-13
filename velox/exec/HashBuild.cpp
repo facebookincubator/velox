@@ -58,7 +58,7 @@ HashBuild::HashBuild(
           joinNode->id(),
           "HashBuild",
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "HashBuild")
               : std::nullopt),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
