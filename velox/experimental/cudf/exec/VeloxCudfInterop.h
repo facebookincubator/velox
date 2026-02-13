@@ -26,7 +26,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-cudf::type_id veloxToCudfTypeId(const TypePtr& type);
+cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
 namespace with_arrow {
 
@@ -38,6 +38,13 @@ std::unique_ptr<cudf::table> toCudfTable(
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
+    std::string namePrefix,
+    rmm::cuda_stream_view stream);
+
+facebook::velox::RowVectorPtr toVeloxColumn(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    const facebook::velox::RowTypePtr& expectedType,
     std::string namePrefix,
     rmm::cuda_stream_view stream);
 

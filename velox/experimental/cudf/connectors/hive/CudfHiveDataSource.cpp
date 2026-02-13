@@ -44,7 +44,6 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
-#include <cudf/transform.hpp>
 
 #include <cuda_runtime.h>
 
@@ -95,17 +94,18 @@ CudfHiveDataSource::CudfHiveDataSource(
   VELOX_CHECK_NOT_NULL(
       tableHandle_, "TableHandle must be an instance of HiveTableHandle");
 
-  // Copy subfield filters
+  // Copy subfield filters.
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
     subfieldFilters_.emplace(k.clone(), v->clone());
-    // Add fields in the filter to the columns to read if not there
-    for (const auto& [field, _] : subfieldFilters_) {
-      if (std::find(
-              readColumnNames_.begin(),
-              readColumnNames_.end(),
-              field.toString()) == readColumnNames_.end()) {
-        readColumnNames_.push_back(field.toString());
-      }
+  }
+
+  // Add fields in the filter to the columns to read if not there.
+  for (const auto& [field, _] : subfieldFilters_) {
+    if (std::find(
+            readColumnNames_.begin(),
+            readColumnNames_.end(),
+            field.toString()) == readColumnNames_.end()) {
+      readColumnNames_.push_back(field.toString());
     }
   }
 
@@ -358,11 +358,11 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // Apply the subfield filter manually since we passed an all true row mask
       if (readerOptions_.get_filter().has_value()) {
         std::unique_ptr<cudf::table> table = std::move(tableWithMetadata.tbl);
-        auto filterMask = cudf::compute_column(
-            *table, readerOptions_.get_filter().value(), stream_);
-        cudfTable = cudf::apply_boolean_mask(
+        auto const& filterExpr = readerOptions_.get_filter().value().get();
+        cudfTable = cudf::filter(
             table->view(),
-            filterMask->view(),
+            filterExpr,
+            table->view(),
             stream_,
             cudf::get_current_device_resource_ref());
       } else {
@@ -594,6 +594,40 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     dataSource_ = std::move(makeDataSourcesFromSourceInfo(sourceInfo).front());
   }
 
+  RowTypePtr readerFilterType = nullptr;
+  bool hasDecimalFilter = false;
+  if (subfieldFilters_.size()) {
+    readerFilterType = [&] {
+      if (tableHandle_->dataColumns()) {
+        std::vector<std::string> newNames;
+        std::vector<TypePtr> newTypes;
+
+        for (const auto& name : readColumnNames_) {
+          // Ensure all columns being read are available to the filter
+          auto parsedType = tableHandle_->dataColumns()->findChild(name);
+          newNames.emplace_back(std::move(name));
+          newTypes.push_back(parsedType);
+        }
+
+        return ROW(std::move(newNames), std::move(newTypes));
+      } else {
+        return outputType_;
+      }
+    }();
+
+    for (const auto& [field, _] : subfieldFilters_) {
+      if (!field.valid()) {
+        continue;
+      }
+      const auto& fieldName = field.baseName();
+      const auto fieldType = readerFilterType->findChild(fieldName);
+      if (fieldType && fieldType->isDecimal()) {
+        hasDecimalFilter = true;
+        break;
+      }
+    }
+  }
+
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
@@ -612,6 +646,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
     readerOptions_.set_num_bytes(split_->size());
   }
 
+  // Set filter expression created in constructor if any subfield filters
   if (subfieldFilterExpr_ != nullptr) {
     readerOptions_.set_filter(*subfieldFilterExpr_);
   }
