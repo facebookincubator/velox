@@ -560,6 +560,26 @@ converted to leverage file index structures for row pruning.</p></td>
 metric helps track the I/O efficiency of index-based reads, where lower
 values indicate better stripe reuse across lookups.</p></td>
 </tr>
+<tr class="row-odd"><td><p>numIndexLookupRequests</p></td>
+<td></td>
+<td><p>The number of index lookup requests submitted in startLookup(). Each
+request corresponds to one set of index bounds and may match rows across
+multiple stripes.</p></td>
+</tr>
+<tr class="row-even"><td><p>numIndexLookupStripes</p></td>
+<td></td>
+<td><p>The total number of stripes that need to be read for all index lookup
+requests. Multiple requests may share the same stripe, and each shared
+stripe is counted once per request that needs it.</p></td>
+</tr>
+<tr class="row-odd"><td><p>numIndexLookupReadSegments</p></td>
+<td></td>
+<td><p>The total number of read segments across all stripes during index lookup.
+A read segment is a contiguous row range within a stripe that needs to be
+read. When filters are present, overlapping request ranges are split at
+boundaries to enable per-request output tracking. Without filters,
+overlapping ranges are merged to minimize I/O.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
