@@ -457,3 +457,23 @@ SWITCH expression evaluation goes through the following steps:
 SWITCH expression sets EvalCtx::isFinalSelection flag to false. The expressions
 are expected to use this flag to decide whether the partially populated result
 vector must be preserved or can be overwritten.
+
+Expression Hashing
+``````````````````
+
+Each expression node provides a ``hash()`` method that computes a stable hash
+value for the expression tree. This hash can be used for deduplication
+and expression comparison.
+
+**Stability Guarantee**: Expression hashes are stable across different
+processes, builds, and machines. This is achieved by using a stable hasher
+like ``folly::hasher``.
+
+The hash is computed recursively:
+
+* ``localHash()`` computes a hash for the expression node itself (type name,
+  function name, field name, etc.)
+* ``hash()`` combines ``localHash()`` with the type's hash and the hashes of
+  all input expressions
+
+This enables use cases like expression-based sampling and deduplication.

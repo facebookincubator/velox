@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -108,7 +109,7 @@ class IcebergDataSink : public HiveDataSink {
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -142,7 +143,7 @@ class IcebergDataSink : public HiveDataSink {
       const std::vector<column_index_t>& partitionChannels,
       const std::vector<column_index_t>& dataChannels,
       RowTypePtr partitionRowType,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   // Computes partition IDs for each row in the input batch by applying Iceberg
   // partition transforms and generating unique partition identifiers.

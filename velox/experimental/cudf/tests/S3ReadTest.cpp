@@ -65,8 +65,9 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
 } // namespace
 
 TEST_F(S3ReadTest, s3ReadTest) {
-  const auto sourceFile =
-      "/velox/velox/dwio/parquet/tests/examples/int.parquet";
+  const auto sourceFile = test::getDataFilePath(
+      "velox/experimental/cudf/tests",
+      "../../../dwio/parquet/tests/examples/int.parquet");
   const char* bucketName = "data";
   const auto destinationFile = S3Test::localPath(bucketName) + "/int.parquet";
   minioServer_->addBucket(bucketName);
