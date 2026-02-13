@@ -16,6 +16,8 @@
 
 #pragma once
 
+#ifdef ENABLE_HW_TIMER
+
 #if !defined(__x86_64__)
 #error "HardwareTimer requires x86-64 architecture (RDTSCP instruction)"
 #endif
@@ -224,3 +226,21 @@ class HardwareTimer {
 };
 
 } // namespace facebook::velox
+
+// Convenience macros for HardwareTimer instrumentation.
+// Results are printed via LOG(INFO) when the timer goes out of scope.
+//
+// HWT(name)       - Declare a timer (for loop accumulation pattern).
+// HWT_START(name) - Start (or restart) a declared timer.
+// HWT_END(name)   - End a measurement interval.
+//
+// Single-shot: HWT(t); HWT_START(t); ... HWT_END(t);
+// Loop:        HWT(t); for (...) { HWT_START(t); ... HWT_END(t); }
+//
+// All call sites must be wrapped in #ifdef ENABLE_HW_TIMER
+// so that these macros are invisible to the IDE when the flag is off.
+#define HWT(name) facebook::velox::HardwareTimer name(#name)
+#define HWT_START(name) (name).start()
+#define HWT_END(name) (name).end()
+
+#endif // ENABLE_HW_TIMER
