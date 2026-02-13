@@ -25,6 +25,9 @@
 #include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
+
+#include <common/Casts.h>
+
 #include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::parquet {
@@ -701,6 +704,35 @@ void WriterOptions::processConfigs(
   if (!createdBy) {
     createdBy =
         getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
+  }
+
+  // Parquet only updates ioStats_->rawBytesWritten() when a row group is
+  // flushed. With the default flush policy (1M rows / 128MB), small
+  // maxTargetFileBytes_ would never trigger rotation because rawBytesWritten()
+  // stays at 0 while data is buffered. To honor maxTargetFileBytes_, cap the
+  // row group byte threshold so we flush earlier and rawBytesWritten() grows
+  // during writes.
+  auto maxTargetFileSize =
+      getParquetPageSize(session, kParquetSessionMaxTargetFileSize).has_value()
+      ? getParquetPageSize(session, kParquetSessionMaxTargetFileSize)
+      : getParquetPageSize(connectorConfig, kParquetConnectorMaxTargetFileSize);
+  if (maxTargetFileSize.has_value()) {
+    auto bytesInRowGroup = DefaultFlushPolicy::kDefaultBytesInRowGroup;
+    auto rowsInRowGroup = DefaultFlushPolicy::kDefaultRowsInGroup;
+    if (flushPolicyFactory) {
+      std::unique_ptr<DefaultFlushPolicy> policy;
+      castUniquePointer(flushPolicyFactory(), policy);
+      bytesInRowGroup = policy->bytesInRowGroup();
+      rowsInRowGroup = policy->rowsInRowGroup();
+    }
+    bytesInRowGroup =
+        std::min<int64_t>(bytesInRowGroup, maxTargetFileSize.value());
+    if (!flushPolicyFactory) {
+      flushPolicyFactory = [rowsInRowGroup, bytesInRowGroup]() {
+        return std::make_unique<DefaultFlushPolicy>(
+            rowsInRowGroup, bytesInRowGroup);
+      };
+    }
   }
 }
 

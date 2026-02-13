@@ -657,14 +657,16 @@ void HiveDataSink::finalizeWriterFile(size_t index) {
   const auto currentFileBytes = getCurrentFileBytes(index);
 
   // Finalize the current file into writtenFiles using the stored names.
-  HiveFileInfo fileInfo;
-  fileInfo.writeFileName = info->currentWriteFileName;
-  fileInfo.targetFileName = info->currentTargetFileName;
-  fileInfo.fileSize = currentFileBytes;
-  fileInfo.numRows = info->currentFileWrittenRows;
-  // Reset for next file.
-  info->currentFileWrittenRows = 0;
-  info->writtenFiles.push_back(std::move(fileInfo));
+  if (currentFileBytes > 0) {
+    HiveFileInfo fileInfo;
+    fileInfo.writeFileName = info->currentWriteFileName;
+    fileInfo.targetFileName = info->currentTargetFileName;
+    fileInfo.fileSize = currentFileBytes;
+    fileInfo.numRows = info->currentFileWrittenRows;
+    // Reset for next file.
+    info->currentFileWrittenRows = 0;
+    info->writtenFiles.push_back(std::move(fileInfo));
+  }
 
   // Update cumulative stats as a snapshot of total stats so far.
   // This becomes the baseline for the next file.
