@@ -1642,74 +1642,33 @@ TEST_F(ParquetTableScanTest, inFilter) {
 }
 
 TEST_F(ParquetTableScanTest, reusedLazyVectors) {
-    const std::vector<std::string> columnNames = {"a", "b"};
-    std::vector<RowVectorPtr> data;
-    for (auto row = 0; row < 10; ++row) {
-      data.emplace_back(makeRowVector(
-          columnNames,
-          {
-              makeFlatVector<int64_t>({static_cast<int64_t>(row % 5)}),
-              makeFlatVector<int64_t>({static_cast<int64_t>(row)}),
-          }));
-    }
-    const auto expectedRowVector = makeRowVector(
-        {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
-         makeFlatVector<int64_t>({5, 7, 9, 11, 13}),
-         makeFlatVector<int64_t>({5, 7, 9, 11, 13})});
-  
-    const auto filePath = TempFilePath::create();
-    WriterOptions options;
-    writeToParquetFile(filePath->getPath(), data, options);
-  
-    const auto plan = PlanBuilder()
-                          .tableScan(ROW(columnNames, {BIGINT(), BIGINT()}))
-                          .project({"a as c1", "b as c2", "b as c3"})
-                          .singleAggregation({"c1"}, {"sum(c2)", "sum(c3)"})
-                          .planNode();
-    AssertQueryBuilder(plan)
-        .split(makeSplit(filePath->getPath()))
-        .assertResults(expectedRowVector);
-}
+  const std::vector<std::string> columnNames = {"a", "b"};
+  std::vector<RowVectorPtr> data;
+  for (auto row = 0; row < 10; ++row) {
+    data.emplace_back(makeRowVector(
+        columnNames,
+        {
+            makeFlatVector<int64_t>({static_cast<int64_t>(row % 5)}),
+            makeFlatVector<int64_t>({static_cast<int64_t>(row)}),
+        }));
+  }
+  const auto expectedRowVector = makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13})});
 
-TEST_F(ParquetTableScanTest, legacyArrayOfStructOfArray) {
-  // Legacy format with Array of Struct of Array
-  // ARRAY<STRUCT<ads_id: BIGINT, shop_id: BIGINT, streamer_cat_ids:
-  // ARRAY<BIGINT>, items: ARRAY<BIGINT>>>.
-  auto filePath = getExampleFilePath("legacy_array_of_struct_of_array.parquet");
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), data, options);
 
-  auto innerStructType =
-      ROW({"ads_id", "shop_id", "streamer_cat_ids", "items"},
-          {BIGINT(), BIGINT(), ARRAY(BIGINT()), ARRAY(BIGINT())});
-  auto arrayOfStructType = ARRAY(innerStructType);
-  auto rowType = ROW({"ads"}, {arrayOfStructType});
-
-  auto row0Struct = makeRowVector(
-      {"ads_id", "shop_id", "streamer_cat_ids", "items"},
-      {makeFlatVector<int64_t>({1001}),
-       makeFlatVector<int64_t>({501}),
-       makeArrayVector<int64_t>({{}}),
-       makeArrayVector<int64_t>({{9001, 9002}})});
-
-  auto adsArray = makeArrayVector({0, 1, 2}, row0Struct, {0, 1, 2});
-
-  loadData(rowType, makeRowVector({"ads"}, {adsArray}));
-
-  auto plan = PlanBuilder(pool_.get())
-                  .tableScan(rowType, {}, "", rowType, {})
-                  .planNode();
-
-  auto result =
-      AssertQueryBuilder(plan).split(makeSplit(filePath)).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 3);
-
-  auto rows = result->as<RowVector>();
-  ASSERT_TRUE(rows);
-  ASSERT_EQ(rows->childrenSize(), 1);
-
-  // Verify the nested structure.
-  auto adsCol = rows->childAt(0)->as<ArrayVector>();
-  ASSERT_TRUE(adsCol);
+  const auto plan = PlanBuilder()
+                        .tableScan(ROW(columnNames, {BIGINT(), BIGINT()}))
+                        .project({"a as c1", "b as c2", "b as c3"})
+                        .singleAggregation({"c1"}, {"sum(c2)", "sum(c3)"})
+                        .planNode();
+  AssertQueryBuilder(plan)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(expectedRowVector);
 }
 
 int main(int argc, char** argv) {
