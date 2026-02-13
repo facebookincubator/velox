@@ -445,7 +445,7 @@ class CoalescedLoad {
     return state_;
   }
 
-  void cancel() {
+  virtual void cancel() {
     setEndState(State::kCancelled);
   }
 
