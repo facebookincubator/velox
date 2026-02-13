@@ -489,7 +489,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   // The machine page counts corresponding to different sizes in order
   // of increasing size.
   const std::vector<MachinePageCount>
-      sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256};
+      sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
 
   // Tracks the number of allocated pages. Allocated pages are the memory
   // pages that are currently being used.

@@ -97,7 +97,7 @@ class MemoryManager {
     bool useMmapAllocator{false};
 
     /// Number of pages in the largest size class in MmapAllocator.
-    int32_t largestSizeClassPages{256};
+    int32_t largestSizeClassPages{4096};
 
     /// If true, allocations larger than largest size class size will be
     /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
