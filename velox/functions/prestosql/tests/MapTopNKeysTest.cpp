@@ -36,6 +36,12 @@ TEST_F(MapTopNKeysTest, emptyMap) {
       makeArrayVectorFromJson<int32_t>({
           "[]",
       }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[]",
+      }));
 }
 
 TEST_F(MapTopNKeysTest, multipleMaps) {
@@ -54,6 +60,22 @@ TEST_F(MapTopNKeysTest, multipleMaps) {
           "[3, 2, 1]",
           "[2, 1]",
       }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[5, 4, 3]",
+          "[3, 2, 1]",
+          "[2, 1]",
+      }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> -1 * x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[1, 2, 3]",
+          "[1, 2]",
+      }));
 }
 
 TEST_F(MapTopNKeysTest, nIsZero) {
@@ -66,6 +88,10 @@ TEST_F(MapTopNKeysTest, nIsZero) {
   assertEqualVectors(
       evaluate("map_top_n_keys(c0, 0)", input),
       makeArrayVectorFromJson<int32_t>({"[]"}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 0, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({"[]"}));
 }
 
 TEST_F(MapTopNKeysTest, nIsNegative) {
@@ -77,6 +103,10 @@ TEST_F(MapTopNKeysTest, nIsNegative) {
 
   VELOX_ASSERT_THROW(
       evaluate("map_top_n_keys(c0, -1)", input),
+      "n must be greater than or equal to 0");
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_top_n_keys(c0, -1, (x,y) -> x)", input),
       "n must be greater than or equal to 0");
 }
 
@@ -92,8 +122,11 @@ TEST_F(MapTopNKeysTest, timestampWithTimeZone) {
         {0}, makeFlatVector(expectedKeys, TIMESTAMP_WITH_TIME_ZONE()));
 
     const auto result = evaluate("map_top_n_keys(c0, 3)", makeRowVector({map}));
+    const auto resultWithLambda =
+        evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", makeRowVector({map}));
 
     assertEqualVectors(expected, result);
+    assertEqualVectors(expected, resultWithLambda);
   };
 
   testMapTopNKeys(
