@@ -47,6 +47,8 @@ class JitExpression : public CudfExpression {
   // JitExpression
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
+  static bool canEvaluate(const velox::core::TypedExprPtr& expr);
+
  private:
   ASTExpression expr_;
 };

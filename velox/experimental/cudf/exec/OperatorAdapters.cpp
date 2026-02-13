@@ -26,6 +26,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/plan/CudfPlanNodeChecker.h"
 
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
@@ -94,12 +95,7 @@ class TableScanAdapter : public OperatorAdapter {
     if (!tableScanNode) {
       return false;
     }
-    auto const& connector = velox::connector::getConnector(
-        tableScanNode->tableHandle()->connectorId());
-    auto cudfHiveConnector = std::dynamic_pointer_cast<
-        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
-        connector);
-    return cudfHiveConnector != nullptr;
+    return isTableScanNodeSupported(tableScanNode.get());
   }
 
   bool acceptsGpuInput() const override {
@@ -141,32 +137,18 @@ class FilterProjectAdapter : public OperatorAdapter {
       return false;
     }
 
-    auto projectPlanNode =
-        std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
-    auto filterNode = filterProjectOp->filterNode();
-
-    if (projectPlanNode) {
-      if (projectPlanNode->sources()[0]->outputType()->size() == 0 ||
-          projectPlanNode->outputType()->size() == 0) {
+    if (auto projectPlanNode =
+            std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
+      if (!isProjectNodeSupported(projectPlanNode.get())) {
+        return false;
+      }
+    }
+    if (auto filterNode = filterProjectOp->filterNode()) {
+      if (!isFilterNodeSupported(filterNode.get())) {
         return false;
       }
     }
 
-    // Check filter separately
-    if (filterNode) {
-      if (!canBeEvaluatedByCudf(
-              {filterNode->filter()}, ctx->task->queryCtx().get())) {
-        return false;
-      }
-    }
-
-    // Check projects separately
-    if (projectPlanNode) {
-      if (!canBeEvaluatedByCudf(
-              projectPlanNode->projections(), ctx->task->queryCtx().get())) {
-        return false;
-      }
-    }
     return true;
   }
 
@@ -213,21 +195,13 @@ class AggregationAdapter : public OperatorAdapter {
     if (!canHandle(op)) {
       return false;
     }
-
     auto aggregationPlanNode =
         std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
     if (!aggregationPlanNode) {
       return false;
     }
 
-    if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
-      // We cannot handle RowVectors with a length but no data.
-      // This is the case with count(*) global (without groupby)
-      return false;
-    }
-
-    return canBeEvaluatedByCudf(
-        *aggregationPlanNode, ctx->task->queryCtx().get());
+    return isAggregationNodeSupported(aggregationPlanNode.get());
   }
 
   bool acceptsGpuInput() const override {
@@ -272,23 +246,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (!CudfHashJoinProbe::isSupportedJoinType(joinPlanNode->joinType())) {
-      return false;
-    }
-
-    // Disabling null-aware anti join with filter until we implement it right
-    if (joinPlanNode->joinType() == core::JoinType::kAnti &&
-        joinPlanNode->isNullAware() && joinPlanNode->filter()) {
-      return false;
-    }
-
-    if (joinPlanNode->filter()) {
-      if (!canBeEvaluatedByCudf(
-              {joinPlanNode->filter()}, ctx->task->queryCtx().get())) {
-        return false;
-      }
-    }
-    return true;
+    return isHashJoinNodeSupported(joinPlanNode.get());
   }
 };
 
