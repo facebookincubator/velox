@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import java.util.Locale;
 public class GenTimeZoneNames {
   public static void main(String[] args) {
     System.out.println("/*");
-    System.out.println(" * Copyright (c) Facebook, Inc. and its affiliates.");
+    System.out.println(" * Copyright (c) Meta Platforms, Inc. and affiliates.");
     System.out.println(" *");
     System.out.println(" * Licensed under the Apache License, Version 2.0 (the \"License\");");
     System.out.println(" * you may not use this file except in compliance with the License.");
