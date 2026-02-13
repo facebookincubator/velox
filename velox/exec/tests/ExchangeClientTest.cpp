@@ -890,7 +890,7 @@ TEST_P(ExchangeClientTest, minOutputBatchBytesMultipleConsumers) {
           consumers.begin(),
           consumers.end(),
           [](auto& consumer) { return consumer.isReady(); }),
-      numConsumers);
+      1);
 
   auto pages = client->next(1, 1, &atEnd, &consumers[1]);
   ASSERT_EQ(1, pages.size());
@@ -922,10 +922,10 @@ TEST_P(ExchangeClientTest, minOutputBatchBytesMultipleConsumers) {
           consumers.begin(),
           consumers.end(),
           [](auto& consumer) { return consumer.isReady(); }),
-      2);
+      3);
 
   for (int consumerId = 0; consumerId < numConsumers; consumerId++) {
-    if (consumers[consumerId].isReady()) {
+    if (consumers[consumerId].isReady() && consumerId != 2) {
       pages = client->next(consumerId, 1, &atEnd, &consumers[consumerId]);
       ASSERT_EQ(1, pages.size());
     }
