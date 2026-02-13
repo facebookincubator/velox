@@ -635,7 +635,7 @@ std::unique_ptr<Node> unflatten(
       NodeVector fields;
       for (int i = 0; i < element.num_children; ++i) {
         std::unique_ptr<Node> field = nextNode();
-        fields.push_back(NodePtr(field.release()));
+        fields.emplace_back(field.release());
       }
       return GroupNode::fromParquet(opaqueElement, std::move(fields));
     }
@@ -924,7 +924,7 @@ void SchemaDescriptor::buildTree(
         static_cast<int>(leaves_.size());
 
     // Primitive node, append to leaves.
-    leaves_.push_back(ColumnDescriptor(Node, maxDefLevel, maxRepLevel, this));
+    leaves_.emplace_back(Node, maxDefLevel, maxRepLevel, this);
     leafToBase_.emplace(static_cast<int>(leaves_.size()) - 1, base);
     leafToIdx_.emplace(
         Node->path()->toDotString(), static_cast<int>(leaves_.size()) - 1);
