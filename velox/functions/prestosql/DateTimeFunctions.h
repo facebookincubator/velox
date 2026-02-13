@@ -2113,4 +2113,41 @@ struct LocalTimeFunction {
   int64_t localTimeSinceMidnight_;
 };
 
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+    const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
+    // Java/Presto session always provides a timezone (TimeZoneKey is required).
+    VELOX_CHECK_NOT_NULL(timeZone);
+
+    auto millis = std::chrono::milliseconds{sessionStartTimeMs};
+    auto timeOfDay = millis - std::chrono::floor<std::chrono::days>(millis);
+    int64_t utcMillisOfDay = timeOfDay.count();
+
+    int32_t offsetAtInstant =
+        timeZone->to_local(std::chrono::milliseconds{sessionStartTimeMs})
+            .count() -
+        sessionStartTimeMs;
+
+    int32_t offsetAtEpoch =
+        timeZone->to_local(std::chrono::milliseconds{0}).count();
+
+    int64_t adjustedMillis = utcMillisOfDay - (offsetAtEpoch - offsetAtInstant);
+
+    currentTime_ = pack(adjustedMillis, timeZone->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    result = currentTime_;
+  }
+
+ private:
+  int64_t currentTime_{0};
+};
+
 } // namespace facebook::velox::functions
