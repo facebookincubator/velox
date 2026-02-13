@@ -18,6 +18,9 @@
 #include "velox/connectors/Connector.h"
 
 namespace facebook::velox::exec {
+struct BarrierSplit {
+  uint32_t numDrivers;
+};
 
 struct Split {
   std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit{nullptr};
@@ -26,8 +29,7 @@ struct Split {
   /// Indicates if this is a barrier split. A barrier split is used by task
   /// barrier processing which adds one barrier split to each leaf source node
   /// to signal the output drain processing.
-  bool barrier{false};
-  uint32_t numBarrierDrivers{0};
+  std::optional<BarrierSplit> barrier;
 
   Split() = default;
 
@@ -39,8 +41,8 @@ struct Split {
   /// Called by the task barrier to create a special barrier split.
   static Split createBarrier(uint32_t numDrivers = 1) {
     Split barrierSplit;
-    barrierSplit.barrier = true;
-    barrierSplit.numBarrierDrivers = numDrivers;
+    barrierSplit.barrier = BarrierSplit{numDrivers};
+    VELOX_CHECK_NULL(barrierSplit.connectorSplit);
     return barrierSplit;
   }
 
@@ -50,7 +52,7 @@ struct Split {
   Split& operator=(const Split& other) = default;
 
   bool isBarrier() const {
-    return barrier;
+    return barrier.has_value();
   }
 
   inline bool hasConnectorSplit() const {

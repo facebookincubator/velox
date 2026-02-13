@@ -24,10 +24,10 @@ void SplitsStore::addSplit(
   VELOX_CHECK(!noMoreSplits_);
   VELOX_CHECK(!(remoteSplit_ && split.isBarrier()));
   if (split.isBarrier()) {
-    for (auto i = 0; i < split.numBarrierDrivers; ++i) {
+    for (auto i = 0; i < split.barrier->numDrivers; ++i) {
       barrierSplits_[i] = Split::createBarrier();
     }
-    VELOX_CHECK_LE(promises_.size(), split.numBarrierDrivers);
+    VELOX_CHECK_LE(promises_.size(), split.barrier->numDrivers);
     while (!promises_.empty()) {
       promises.push_back(std::move(promises_.back()));
       promises_.pop_back();

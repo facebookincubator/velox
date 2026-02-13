@@ -439,21 +439,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// so many of splits at the head of the queue are preloading. If
   /// they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
+      uint32_t driverId,
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
-      exec::Split& split,
-      ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      const ConnectorSplitPreloadFunc& preload = nullptr);
-
-  BlockingReason getSplitOrFuture(
-      uint32_t splitGroupId,
-      const core::PlanNodeId& planNodeId,
-      exec::Split& split,
-      ContinueFuture& future,
       int32_t maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
-      uint32_t driverId);
+      exec::Split& split,
+      ContinueFuture& future);
 
   /// Returns the scaled scan controller for a given table scan node if the
   /// query has configured.
@@ -797,6 +789,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns true if all the splits have finished.
   bool testingAllSplitsFinished();
+
+  /// Return true if the task is under barrier processing.
+  bool testingBarrierProcessing() const;
 
  private:
   // Hook of system-wide running task list.

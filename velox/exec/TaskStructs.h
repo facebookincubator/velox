@@ -149,7 +149,7 @@ class SplitsStore {
 
   // Arrived (added), but not distributed yet, splits.
   std::deque<Split> splits_;
-  // DriverId to barrier split.
+  // The map from driver id to barrier splits.
   std::unordered_map<uint32_t, Split> barrierSplits_;
 
   // Signal, that no more splits will arrive.

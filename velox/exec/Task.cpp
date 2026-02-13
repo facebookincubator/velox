@@ -1655,7 +1655,7 @@ void Task::addSplitToStoreLocked(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   if (split.isBarrier()) {
-    splitsStore->requestBarrier(split.numBarrierDrivers, promises);
+    splitsStore->requestBarrier(split.barrier->numDrivers, promises);
     return;
   }
   auto* queueSplitsStore =
@@ -1968,39 +1968,23 @@ bool Task::testingAllSplitsFinished() {
   return isAllSplitsFinishedLocked();
 }
 
+bool Task::testingBarrierProcessing() const {
+  return barrierRequested_;
+}
+
 bool Task::isAllSplitsFinishedLocked() {
   return (taskStats_.numFinishedSplits == taskStats_.numTotalSplits) &&
       allNodesReceivedNoMoreSplitsMessageLocked();
 }
 
 BlockingReason Task::getSplitOrFuture(
+    uint32_t driverId,
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId,
-    exec::Split& split,
-    ContinueFuture& future,
-    int32_t maxPreloadSplits,
-    const ConnectorSplitPreloadFunc& preload) {
-  std::lock_guard<std::timed_mutex> l(mutex_);
-  auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-  auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
-  if (!splitsStore) {
-    setSplitsStore(
-        splitsStore,
-        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
-  }
-  return splitsStore->nextSplit(-1, maxPreloadSplits, preload, split, future)
-      ? BlockingReason::kNotBlocked
-      : BlockingReason::kWaitForSplit;
-}
-
-BlockingReason Task::getSplitOrFuture(
-    uint32_t splitGroupId,
-    const core::PlanNodeId& planNodeId,
-    exec::Split& split,
-    ContinueFuture& future,
     int32_t maxPreloadSplits,
     const ConnectorSplitPreloadFunc& preload,
-    uint32_t driverId) {
+    exec::Split& split,
+    ContinueFuture& future) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
   auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
@@ -2586,7 +2570,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
             VELOX_CHECK(store->nextSplit(
-                -1, 0, nullptr, splits.emplace_back(), future));
+                /*driverId*/ -1,
+                /*maxPreloadSplits*/ 0,
+                /*preload*/ nullptr,
+                splits.emplace_back(),
+                future));
           }
         }
         if (!splits.empty()) {
