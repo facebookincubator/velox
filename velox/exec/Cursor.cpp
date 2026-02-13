@@ -62,14 +62,14 @@ class TaskQueue {
     return pool_.get();
   }
 
-  std::atomic_int32_t producersDrainFinished_ = 0;
+  std::atomic_int32_t numDrainedProducers_{0};
 
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
   std::optional<int32_t> numProducers_;
-  int32_t producersFinished_ = 0;
+  int32_t numFinishedProducers_ = 0;
   uint64_t totalBytes_ = 0;
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
   // adding the result.
@@ -89,9 +89,9 @@ exec::BlockingReason TaskQueue::enqueue(
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
     if (drained) {
-      ++producersDrainFinished_;
+      ++numDrainedProducers_;
     } else {
-      ++producersFinished_;
+      ++numFinishedProducers_;
     }
     if (consumerBlocked_) {
       consumerBlocked_ = false;
@@ -143,9 +143,9 @@ RowVectorPtr TaskQueue::dequeue() {
           mayContinue = std::move(producerUnblockPromises_);
         }
       } else if (
-          numProducers_.has_value() && producersFinished_ == numProducers_) {
+          numProducers_.has_value() && numFinishedProducers_ == numProducers_) {
         return nullptr;
-      } else if (producersDrainFinished_ == numProducers_) {
+      } else if (numDrainedProducers_ == numProducers_) {
         return nullptr;
       }
 
@@ -374,8 +374,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     checkTaskError();
     if (!current_) {
-      if (queue_->producersDrainFinished_ > 0) {
-        queue_->producersDrainFinished_ = 0;
+      if (queue_->numDrainedProducers_ > 0) {
+        queue_->numDrainedProducers_ = 0;
         return false;
       }
       atEnd_ = true;

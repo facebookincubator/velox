@@ -358,10 +358,7 @@ AssertQueryBuilder::readCursor() {
             numSplits,
             splits_.size(),
             "Barrier task execution mode requires all the sources have the same number of splits");
-        auto future = task->requestBarrier();
-        if (!params_.serialExecution) {
-          future.wait();
-        }
+        task->requestBarrier();
       } else {
         taskCursor->setNoMoreSplits();
       }

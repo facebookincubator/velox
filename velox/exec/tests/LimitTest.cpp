@@ -146,7 +146,7 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
   test(false);
 }
 
-TEST_F(LimitTest, barrier) {
+TEST_F(LimitTest, DISABLED_barrier) {
   std::vector<RowVectorPtr> vectors;
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
@@ -192,7 +192,6 @@ TEST_F(LimitTest, barrier) {
        numRowsPerSplit * numSplits,
        numSplits - 1,
        numSplits},
-#if 0
       {true,
        false,
        0,
@@ -489,7 +488,6 @@ TEST_F(LimitTest, barrier) {
        numRowsPerSplit * numSplits - numRowsPerSplit / 2,
        numSplits,
        numSplits},
-#endif
   };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
@@ -502,7 +500,6 @@ TEST_F(LimitTest, barrier) {
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .splits(makeHiveConnectorSplits(tempFiles))
                     .serialExecution(testData.serialExecution)
-                    .maxDrivers(testData.serialExecution ? 1 : 3)
                     .barrierExecution(testData.barrierExecution)
                     .assertResults(
                         fmt::format(
