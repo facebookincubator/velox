@@ -99,8 +99,7 @@ class HiveIndexSource : public IndexSource,
   // Validates and initializes join conditions:
   // - Converts filter conditions (with constant values) to filters_.
   // - Non-filter conditions are stored in joinConditions_.
-  // Returns a list of index column names used by joinConditions_.
-  std::vector<std::string> initJoinConditions(
+  void initJoinConditions(
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const ColumnHandleMap& assignments);
 
