@@ -118,10 +118,13 @@ std::unique_ptr<cudf::table> toCudfTable(
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream) {
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
-  // in the null mask.
-  ArrowOptions arrowOptions{true, true};
-  // libcudf does not support Arrow binary; export VARBINARY as UTF-8.
-  arrowOptions.exportVarbinaryAsString = true;
+  // in the null mask. Also, libcudf does not support Arrow binary, so we export
+  // VARBINARY as UTF-8.
+  ArrowOptions arrowOptions{
+      .flattenDictionary = true,
+      .flattenConstant = true,
+      .exportVarbinaryAsString = true,
+      .supportDecimal64Type = true};
   ArrowArray arrowArray;
   exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),

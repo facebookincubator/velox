@@ -264,12 +264,15 @@ const char* exportArrowFormatStr(
     std::string& formatBuffer) {
   if (type->isDecimal()) {
     // Decimal types encode the precision and scale values.
-    // Use the optional bitWidth suffix to preserve the on-wire representation:
-    // - Velox short decimals (int64)  -> Arrow decimal64  (8 bytes)
-    // - Velox long decimals  (int128) -> Arrow decimal128 (16 bytes)
     const auto& [precision, scale] = getDecimalPrecisionScale(*type);
-    const int bitWidth = type->isShortDecimal() ? 64 : 128;
-    formatBuffer = fmt::format("d:{},{},{}", precision, scale, bitWidth);
+    if (options.supportDecimal64Type) {
+      // Add the (optional) bit-width suffix.
+      const int bitWidth = type->isShortDecimal() ? 64 : 128;
+      formatBuffer = fmt::format("d:{},{},{}", precision, scale, bitWidth);
+    } else {
+      // Assume default 128.
+      formatBuffer = fmt::format("d:{},{}", precision, scale);
+    }
     return formatBuffer.c_str();
   }
 
@@ -501,6 +504,11 @@ void gatherFromBuffer(
     rows.apply([&](vector_size_t i) {
       bits::setBit(dst, j++, bits::isBitSet(src, i));
     });
+  } else if (type.isShortDecimal() && !options.supportDecimal64Type) {
+    rows.apply([&](vector_size_t i) {
+      int128_t value = buf.as<int64_t>()[i];
+      memcpy(dst + (j++) * sizeof(int128_t), &value, sizeof(int128_t));
+    });
   } else {
     auto typeSize = type.cppSizeInBytes();
     rows.apply([&](vector_size_t i) {
@@ -716,17 +724,25 @@ void exportValidityBitmap(
   }
 }
 
-bool isFlatScalarZeroCopy(const TypePtr& type) {
+bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // - Velox's Timestamp representation (2x 64bit values) does not have an
   // equivalent in Arrow.
   // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
-  return !type->isTimestamp() && !type->isTime();
+  if (options.supportDecimal64Type) {
+    // short decimal is zero-copy
+    return !type->isTimestamp() && !type->isTime();
+  } else {
+    // short decimal requires conversion
+    return !type->isShortDecimal() && !type->isTimestamp() && !type->isTime();
+  }
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
 // buffer.
-size_t getArrowElementSize(const TypePtr& type) {
-  if (type->isTimestamp()) {
+size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
+  if (type->isShortDecimal() && !options.supportDecimal64Type) {
+    return sizeof(int128_t);
+  } else if (type->isTimestamp()) {
     return sizeof(int64_t);
   } else if (type->isTime()) {
     // TIME is exported as Arrow time32 (int32_t).
@@ -746,7 +762,7 @@ void exportValues(
   const auto& type = vec.type();
   out.n_buffers = 2;
 
-  if (!rows.changed() && isFlatScalarZeroCopy(type)) {
+  if (!rows.changed() && isFlatScalarZeroCopy(type, options)) {
     // Arrow does not allow a nullptr for the values buffer. If the input vector
     // has no values buffer (all-null case), allocate an empty buffer of size 0.
     auto values =
@@ -756,7 +772,7 @@ void exportValues(
   }
 
   // Otherwise we will need a new buffer and copy the data.
-  auto size = getArrowElementSize(type);
+  auto size = getArrowElementSize(type, options);
   auto values = type->isBoolean()
       ? AlignedBuffer::allocate<bool>(out.length, pool)
       : AlignedBuffer::allocate<uint8_t>(
@@ -2239,6 +2255,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.null_count,
         isTime32);
   } else if (type->isShortDecimal()) {
+    // Validate the format bitWidth
     const int32_t bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
     if (bitWidth == 64) {
       // Arrow decimal64 uses 8-byte values. Keep Velox short decimals (int64)
@@ -2257,6 +2274,7 @@ VectorPtr importFromArrowImpl(
           values,
           arrowArray.null_count);
     }
+    // otherwise convert to 128
     VELOX_USER_CHECK_EQ(
         bitWidth,
         128,
@@ -2271,6 +2289,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.length,
         arrowArray.null_count);
   } else if (type->isLongDecimal()) {
+    // Validate that the format is actually 128.
     const int32_t bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
     VELOX_USER_CHECK_EQ(
         bitWidth,
