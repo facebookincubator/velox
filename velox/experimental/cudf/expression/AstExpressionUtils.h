@@ -349,6 +349,9 @@ struct AstContext {
   cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
+  // Determines which side (0=left, 1=right) an expression references by
+  // examining its field references. Returns -1 if no fields found.
+  int findExpressionSide(const std::shared_ptr<velox::exec::Expr>& expr) const;
 };
 
 // get nested column indices
@@ -569,16 +572,33 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   } else if (!allowPureAstOnly && canBeEvaluatedByCudf(expr, /*deep=*/false)) {
     // Shallow check: only verify this operation is supported
     // Children will be recursively handled by createCudfExpression
+    // Determine which side this expression references
+    int sideIdx = findExpressionSide(expr);
+    if (sideIdx < 0) {
+      sideIdx = 0; // Default to left side if no fields found
+    }
     auto node =
-        createCudfExpression(expr, inputRowSchema[0], kAstEvaluatorName);
-    return addPrecomputeInstructionOnSide(0, 0, name, "", node);
+        createCudfExpression(expr, inputRowSchema[sideIdx], kAstEvaluatorName);
+    return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
   } else {
     VELOX_FAIL("Unsupported expression: " + name);
   }
 }
 
+int AstContext::findExpressionSide(
+    const std::shared_ptr<velox::exec::Expr>& expr) const {
+  for (const auto* field : expr->distinctFields()) {
+    for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+      if (inputRowSchema[sideIdx].get()->containsChild(field->field())) {
+        return static_cast<int>(sideIdx);
+      }
+    }
+  }
+  return -1;
+}
+
 std::vector<ColumnOrView> precomputeSubexpressions(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    const std::vector<cudf::column_view>& inputColumnViews,
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
@@ -597,7 +617,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
     // If a compiled cudf node is available, evaluate it directly.
     if (cudf_expression) {
       auto result = cudf_expression->eval(
-          inputTableColumns,
+          inputColumnViews,
           stream,
           cudf::get_current_device_resource_ref(),
           /*finalize=*/true);
@@ -609,13 +629,13 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           std::stoi(ins_name.substr(5)); // "fill " is 5 characters
       auto newColumn = cudf::make_column_from_scalar(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
-          inputTableColumns[dependent_column_index]->size(),
+          inputColumnViews[dependent_column_index].size(),
           stream,
           cudf::get_current_device_resource_ref());
       precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.
-      auto view = inputTableColumns[dependent_column_index]->view().child(
+      auto view = inputColumnViews[dependent_column_index].child(
           nested_dependent_column_indices[0]);
       precomputedColumns.push_back(view);
     } else {

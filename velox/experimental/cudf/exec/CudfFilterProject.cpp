@@ -273,8 +273,13 @@ void CudfFilterProject::filter(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
   // Evaluate the Filter
+  std::vector<cudf::column_view> inputViews;
+  inputViews.reserve(inputTableColumns.size());
+  for (auto& col : inputTableColumns) {
+    inputViews.push_back(col->view());
+  }
   auto filterColumn = filterEvaluator_->eval(
-      inputTableColumns, stream, cudf::get_current_device_resource_ref(), true);
+      inputViews, stream, cudf::get_current_device_resource_ref(), true);
   auto filterColumnView = asView(filterColumn);
   bool shouldApplyFilter = [&]() {
     if (filterColumnView.has_nulls()) {
@@ -304,13 +309,15 @@ void CudfFilterProject::filter(
 std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
+  std::vector<cudf::column_view> inputViews;
+  inputViews.reserve(inputTableColumns.size());
+  for (auto& col : inputTableColumns) {
+    inputViews.push_back(col->view());
+  }
   std::vector<ColumnOrView> columns;
   for (auto& projectEvaluator : projectEvaluators_) {
     columns.push_back(projectEvaluator->eval(
-        inputTableColumns,
-        stream,
-        cudf::get_current_device_resource_ref(),
-        true));
+        inputViews, stream, cudf::get_current_device_resource_ref(), true));
   }
 
   // Rearrange columns to match outputType_
