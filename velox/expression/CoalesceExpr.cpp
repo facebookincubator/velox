@@ -40,7 +40,7 @@ TypePtr resolveTypeInt(
   auto resultType = argTypes[0];
 
   for (auto i = 1; i < numArgs; i++) {
-    if (*resultType == *argTypes[i]) {
+    if (resultType->equivalent(*argTypes[i])) {
       continue;
     }
 
@@ -58,8 +58,8 @@ TypePtr resolveTypeInt(
     }
 
     VELOX_USER_CHECK(
-        *argTypes[0] == *argTypes[i],
-        "Inputs to coalesce must have the same type. Expected {}, but got {}.",
+        argTypes[0]->equivalent(*argTypes[i]),
+        "Inputs to coalesce must have an equivalent type. Expected {}, but got {}.",
         argTypes[0]->toString(),
         argTypes[i]->toString());
   }

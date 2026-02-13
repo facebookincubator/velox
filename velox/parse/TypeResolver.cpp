@@ -95,7 +95,13 @@ TypePtr resolveScalarFunctionType(
   if (returnType) {
     return returnType;
   }
-
+  /*
+    std::vector<TypePtr> coercion;
+    returnType = resolveFunctionWithCoercions(name, argTypes, coercion);
+    if (returnType) {
+      return returnType;
+    }
+    */
   if (nullOnFailure) {
     return nullptr;
   }
@@ -161,6 +167,9 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
       [[fallthrough]];
     case TypeKind::DOUBLE:
       break;
+    // case TypeKind::VARCHAR:
+    //    targetTypes.emplace_back(VARCHAR()); // different lengths
+    //    break;
     case TypeKind::ARRAY: {
       auto childTargetTypes = implicitCastTargets(type->childAt(0));
       for (const auto& childTarget : childTargetTypes) {
