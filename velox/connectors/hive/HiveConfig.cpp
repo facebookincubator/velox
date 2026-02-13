@@ -316,4 +316,9 @@ std::string HiveConfig::schema(const config::ConfigBase* session) const {
       kSchema, config_->get<std::string>(kSchema, ""));
 }
 
+bool HiveConfig::fanoutEnabled(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kFanoutEnabledSession, config_->get<bool>(kFanoutEnabled, true));
+}
+
 } // namespace facebook::velox::connector::hive

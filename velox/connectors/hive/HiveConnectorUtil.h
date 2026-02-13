@@ -256,4 +256,6 @@ std::unique_ptr<common::Filter> createRangeFilter(
     const variant& lower,
     const variant& upper);
 
+std::string makeUuid();
+
 } // namespace facebook::velox::connector::hive

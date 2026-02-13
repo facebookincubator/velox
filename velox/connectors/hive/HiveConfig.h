@@ -254,6 +254,12 @@ class HiveConfig {
   static constexpr const char* kSource = "source";
   static constexpr const char* kSchema = "schema";
 
+  /// Controls the writer mode, whether the fanout mode writer is enabled,
+  /// default value is true, setting to false means clustered mode.
+  /// Currently applies only to the Iceberg writer.
+  static constexpr const char* kFanoutEnabled = "fanout-enabled";
+  static constexpr const char* kFanoutEnabledSession = "fanout_enabled";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
@@ -363,6 +369,9 @@ class HiveConfig {
 
   /// Schema of the query. Used for storage logging.
   std::string schema(const config::ConfigBase* session) const;
+
+  /// Return if fanout writer mode is enabled.
+  bool fanoutEnabled(const config::ConfigBase* session) const;
 
   HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(

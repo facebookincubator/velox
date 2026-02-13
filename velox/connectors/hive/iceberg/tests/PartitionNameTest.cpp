@@ -17,7 +17,6 @@
 #include <numeric>
 
 #include "velox/common/encode/Base64.h"
-#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
@@ -60,7 +59,7 @@ class PartitionNameTest : public test::IcebergTestBase {
         partitionSpec,
         partitionChannels,
         rowType,
-        std::string(IcebergConfig::kDefaultFunctionPrefix));
+        std::string(test::kDefaultTestIcebergFunctionNamePrefix));
     auto transformEvaluator = std::make_unique<TransformEvaluator>(
         transformExpressions, connectorQueryCtx_.get());
 

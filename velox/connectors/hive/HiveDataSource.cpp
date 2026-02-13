@@ -215,6 +215,8 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_,
+      expressionEvaluator_,
+      totalRemainingFilterTime_,
       /*subfieldFiltersForValidation=*/&filters_);
 }
 

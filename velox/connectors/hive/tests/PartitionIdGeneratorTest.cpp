@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/HivePartitionName.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -35,7 +34,7 @@ class PartitionIdGeneratorTest : public ::testing::Test,
 TEST_F(PartitionIdGeneratorTest, consecutiveIdsSingleKey) {
   auto numPartitions = 100;
 
-  PartitionIdGenerator idGenerator(ROW({VARCHAR()}), {0}, 100, pool());
+  PartitionIdGenerator idGenerator(ROW({VARCHAR()}), {0}, 100, pool(), true);
 
   auto input = makeRowVector(
       {makeFlatVector<StringView>(numPartitions * 3, [&](auto row) {
@@ -57,7 +56,7 @@ TEST_F(PartitionIdGeneratorTest, consecutiveIdsSingleKey) {
 
 TEST_F(PartitionIdGeneratorTest, consecutiveIdsMultipleKeys) {
   PartitionIdGenerator idGenerator(
-      ROW({VARCHAR(), INTEGER()}), {0, 1}, 100, pool());
+      ROW({VARCHAR(), INTEGER()}), {0, 1}, 100, pool(), true);
 
   auto input = makeRowVector({
       makeFlatVector<StringView>(
@@ -84,7 +83,7 @@ TEST_F(PartitionIdGeneratorTest, consecutiveIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, multipleBoolKeys) {
   PartitionIdGenerator idGenerator(
-      ROW({BOOLEAN(), BOOLEAN()}), {0, 1}, 100, pool());
+      ROW({BOOLEAN(), BOOLEAN()}), {0, 1}, 100, pool(), true);
 
   auto input = makeRowVector({
       makeFlatVector<bool>(
@@ -110,7 +109,7 @@ TEST_F(PartitionIdGeneratorTest, multipleBoolKeys) {
 }
 
 TEST_F(PartitionIdGeneratorTest, stableIdsSingleKey) {
-  PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool());
+  PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool(), true);
 
   auto numPartitions = 40;
   auto input = makeRowVector({
@@ -137,7 +136,7 @@ TEST_F(PartitionIdGeneratorTest, stableIdsSingleKey) {
 
 TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
   PartitionIdGenerator idGenerator(
-      ROW({BIGINT(), VARCHAR(), INTEGER()}), {1, 2}, 100, pool());
+      ROW({BIGINT(), VARCHAR(), INTEGER()}), {1, 2}, 100, pool(), true);
 
   const vector_size_t size = 1'000;
   auto input = makeRowVector({
@@ -176,7 +175,7 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
 
 TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
   PartitionIdGenerator idGenerator(
-      ROW({"cc0", "Cc+1"}, {BIGINT(), VARCHAR()}), {1}, 100, pool());
+      ROW({"cc0", "Cc1"}, {BIGINT(), VARCHAR()}), {1}, 100, pool(), false);
 
   auto input = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
@@ -185,19 +184,12 @@ TEST_F(PartitionIdGeneratorTest, partitionKeysCaseSensitive) {
 
   raw_vector<uint64_t> firstTimeIds;
   idGenerator.run(input, firstTimeIds);
-
-  EXPECT_EQ(
-      "Cc+1=apple",
-      HivePartitionName::partitionName(
-          0, idGenerator.partitionValues(), /*partitionKeyAsLowerCase=*/false));
-  EXPECT_EQ(
-      "Cc+1=orange",
-      HivePartitionName::partitionName(
-          1, idGenerator.partitionValues(), /*partitionKeyAsLowerCase=*/false));
+  EXPECT_EQ("Cc1=apple", idGenerator.partitionName(0));
+  EXPECT_EQ("Cc1=orange", idGenerator.partitionName(1));
 }
 
 TEST_F(PartitionIdGeneratorTest, numPartitions) {
-  PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool());
+  PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool(), true);
 
   // First run to process partition 0,..,9. Total num of partitions processed by
   // far is 10.
@@ -232,7 +224,7 @@ TEST_F(PartitionIdGeneratorTest, limitOfPartitionNumber) {
   auto maxPartitions = 100;
 
   PartitionIdGenerator idGenerator(
-      ROW({INTEGER()}), {0}, maxPartitions, pool());
+      ROW({INTEGER()}), {0}, maxPartitions, pool(), true);
 
   auto input = makeRowVector({
       makeFlatVector<int32_t>(maxPartitions + 1, [](auto row) { return row; }),
@@ -247,7 +239,7 @@ TEST_F(PartitionIdGeneratorTest, limitOfPartitionNumber) {
 
 TEST_F(PartitionIdGeneratorTest, timestampPartitionKeyComparasion) {
   PartitionIdGenerator idGenerator(
-      ROW({"timestamp_col"}, {TIMESTAMP()}), {0}, 100, pool());
+      ROW({"timestamp_col"}, {TIMESTAMP()}), {0}, 100, pool(), true);
   auto timestampResult = util::fromTimestampString(
       "2025-01-02 00:00:00.0", util::TimestampParseMode::kPrestoCast);
   auto input = makeRowVector({
@@ -255,17 +247,13 @@ TEST_F(PartitionIdGeneratorTest, timestampPartitionKeyComparasion) {
   });
   raw_vector<uint64_t> testTimeIds;
   idGenerator.run(input, testTimeIds);
-
   EXPECT_EQ(
-      HivePartitionName::partitionName(
-          testTimeIds[0],
-          idGenerator.partitionValues(),
-          /*partitionKeyAsLowerCase=*/true),
+      idGenerator.partitionName(testTimeIds[0]),
       "timestamp_col=2025-01-01 16%3A00%3A00.0");
 }
 
 TEST_F(PartitionIdGeneratorTest, timestampPartitionKey) {
-  PartitionIdGenerator idGenerator(ROW({TIMESTAMP()}), {0}, 100, pool());
+  PartitionIdGenerator idGenerator(ROW({TIMESTAMP()}), {0}, 100, pool(), true);
 
   auto numPartitions = 50;
   auto input = makeRowVector({
@@ -337,7 +325,8 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
         }),
         {0, 1, 2, 3, 4, 5, 6, 7},
         100,
-        pool());
+        pool(),
+        true);
 
     auto input = makeRowVector(
         {makeNullableFlatVector<StringView>(
@@ -373,7 +362,8 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
 
     for (column_index_t i = 1; i < input->childrenSize(); i++) {
       VELOX_ASSERT_THROW(
-          PartitionIdGenerator(asRowType(input->type()), {i}, 100, pool()),
+          PartitionIdGenerator(
+              asRowType(input->type()), {i}, 100, pool(), true),
           fmt::format(
               "Unsupported partition type: {}.",
               input->childAt(i)->type()->toString()));

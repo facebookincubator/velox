@@ -90,7 +90,9 @@ std::unique_ptr<FileMetadata> SortingWriter::close() {
   VELOX_CHECK(isFinishing());
   setState(State::kClosed);
   VELOX_CHECK_NULL(sortBuffer_);
-  return outputWriter_->close();
+  auto metadata = outputWriter_->close();
+  dataFileStats_ = outputWriter_->dataFileStats();
+  return metadata;
 }
 
 void SortingWriter::abort() {

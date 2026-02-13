@@ -17,12 +17,7 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <filesystem>
-
-#include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
-#include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
@@ -51,21 +46,15 @@ void IcebergTestBase::SetUp() {
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), true);
 
-  hiveConfig_ =
+  connectorConfig_ =
       std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
-
-  icebergConfig_ =
-      std::make_shared<IcebergConfig>(std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>{
-              {IcebergConfig::kFunctionPrefixConfig,
-               IcebergConfig::kDefaultFunctionPrefix}}));
 
   setupMemoryPools();
 
   fuzzerOptions_.vectorSize = 100;
   fuzzerOptions_.nullRatio = 0.1;
-  fuzzer_ = std::make_unique<VectorFuzzer>(fuzzerOptions_, opPool_.get(), 1);
+  fuzzer_ = std::make_unique<VectorFuzzer>(fuzzerOptions_, opPool_.get());
 }
 
 void IcebergTestBase::TearDown() {
@@ -74,7 +63,6 @@ void IcebergTestBase::TearDown() {
   connectorPool_.reset();
   opPool_.reset();
   root_.reset();
-  queryCtx_.reset();
   unregisterConnector(kIcebergConnectorId);
   HiveConnectorTestBase::TearDown();
 }
@@ -84,7 +72,6 @@ void IcebergTestBase::setupMemoryPools() {
   opPool_.reset();
   connectorPool_.reset();
   connectorQueryCtx_.reset();
-  queryCtx_.reset();
 
   root_ = memory::memoryManager()->addRootPool(
       "IcebergTest", 1L << 30, exec::MemoryReclaimer::create());
@@ -92,17 +79,13 @@ void IcebergTestBase::setupMemoryPools() {
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
 
-  queryCtx_ = core::QueryCtx::create(nullptr, core::QueryConfig({}));
-  auto expressionEvaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
-      queryCtx_.get(), opPool_.get());
-
-  connectorQueryCtx_ = std::make_unique<ConnectorQueryCtx>(
+  connectorQueryCtx_ = std::make_unique<connector::ConnectorQueryCtx>(
       opPool_.get(),
       connectorPool_.get(),
       connectorSessionProperties_.get(),
       nullptr,
       common::PrefixSortConfig(),
-      std::move(expressionEvaluator),
+      nullptr,
       nullptr,
       "query.IcebergTest",
       "task.IcebergTest",
@@ -140,8 +123,8 @@ void IcebergTestBase::setConnectorSessionProperty(
 }
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
-    const RowTypePtr& rowType,
-    const std::vector<PartitionField>& partitionFields) {
+    const std::vector<PartitionField>& partitionFields,
+    const RowTypePtr& rowType) {
   std::vector<IcebergPartitionSpec::Field> fields;
   for (const auto& partitionField : partitionFields) {
     fields.push_back(
@@ -152,55 +135,72 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
             partitionField.parameter});
   }
 
-  return fields.empty() ? nullptr
-                        : std::make_shared<IcebergPartitionSpec>(1, fields);
-}
-
-namespace {
-
-parquet::ParquetFieldId makeField(const TypePtr& type, int32_t& fieldId) {
-  const int32_t currentId = fieldId++;
-  std::vector<parquet::ParquetFieldId> children;
-  children.reserve(type->size());
-  for (auto i = 0; i < type->size(); ++i) {
-    children.push_back(makeField(type->childAt(i), fieldId));
-  }
-  return parquet::ParquetFieldId{currentId, children};
+  return std::make_shared<IcebergPartitionSpec>(1, fields);
 }
 
 void addColumnHandles(
     const RowTypePtr& rowType,
     const std::vector<PartitionField>& partitionFields,
-    std::vector<IcebergColumnHandlePtr>& columnHandles) {
+    std::vector<std::shared_ptr<const IcebergColumnHandle>>& columnHandles) {
   std::unordered_set<int32_t> partitionColumnIds;
   for (const auto& field : partitionFields) {
     partitionColumnIds.insert(field.id);
   }
+  HiveColumnHandle::ColumnParseParameters columnParseParameters;
 
-  int32_t fieldId = 1;
-  columnHandles.reserve(rowType->size());
+  std::function<IcebergNestedField(const TypePtr&, int32_t&)>
+      collectNestedField = [&](const TypePtr& type,
+                               int32_t& columnOrdinal) -> IcebergNestedField {
+    int32_t currentId = columnOrdinal++;
+    std::vector<IcebergNestedField> children;
+    if (type->isRow()) {
+      auto rowType = asRowType(type);
+      for (auto i = 0; i < rowType->size(); ++i) {
+        children.push_back(
+            collectNestedField(rowType->childAt(i), columnOrdinal));
+      }
+    } else if (type->isArray()) {
+      auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
+      for (auto i = 0; i < arrayType->size(); ++i) {
+        children.push_back(
+            collectNestedField(arrayType->childAt(i), columnOrdinal));
+      }
+    } else if (type->isMap()) {
+      auto mapType = std::dynamic_pointer_cast<const MapType>(type);
+      for (auto i = 0; i < mapType->size(); ++i) {
+        children.push_back(
+            collectNestedField(mapType->childAt(i), columnOrdinal));
+      }
+    }
+
+    return IcebergNestedField{currentId, children};
+  };
+
+  int32_t startIndex = 1;
   for (auto i = 0; i < rowType->size(); ++i) {
-    const auto& columnName = rowType->nameOf(i);
-    const auto& type = rowType->childAt(i);
-    auto field = makeField(type, fieldId);
+    auto columnName = rowType->nameOf(i);
+    auto type = rowType->childAt(i);
+    auto field = collectNestedField(type, startIndex);
     columnHandles.push_back(
-        std::make_shared<const IcebergColumnHandle>(
+        std::make_shared<IcebergColumnHandle>(
             columnName,
-            partitionColumnIds.contains(i)
+            partitionColumnIds.count(i) > 0
                 ? HiveColumnHandle::ColumnType::kPartitionKey
                 : HiveColumnHandle::ColumnType::kRegular,
             type,
-            field));
+            type,
+            field,
+            std::vector<common::Subfield>{},
+            columnParseParameters));
   }
 }
 
-} // namespace
-
-IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
+IcebergInsertTableHandlePtr IcebergTestBase::createIcebergInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<PartitionField>& partitionFields) {
-  std::vector<IcebergColumnHandlePtr> columnHandles;
+    const std::vector<PartitionField>& partitionFields,
+    const std::vector<std::string>& sortedBy) {
+  std::vector<std::shared_ptr<const IcebergColumnHandle>> columnHandles;
   addColumnHandles(rowType, partitionFields, columnHandles);
 
   auto locationHandle = std::make_shared<LocationHandle>(
@@ -208,45 +208,62 @@ IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
       outputDirectoryPath,
       LocationHandle::TableType::kNew);
 
-  auto partitionSpec = createPartitionSpec(rowType, partitionFields);
+  auto partitionSpec = createPartitionSpec(partitionFields, rowType);
 
-  return std::make_shared<const IcebergInsertTableHandle>(
-      /*inputColumns=*/columnHandles,
+  // Create sorting columns if specified
+  std::vector<IcebergSortingColumn> sortingColumns;
+  for (const auto& sortExpr : sortedBy) {
+    std::string columnName;
+    bool isAscending = true;
+    bool isNullsFirst = true;
+
+    // Parse sort expression
+    std::istringstream iss(sortExpr);
+    iss >> columnName;
+
+    std::string token;
+    if (iss >> token) {
+      if (token == "DESC") {
+        isAscending = false;
+      } else if (token != "ASC") {
+        // If not ASC, put it back (might be NULLS)
+        iss.seekg(-(int)token.length(), std::ios_base::cur);
+      }
+
+      if (iss >> token && token == "NULLS") {
+        if (iss >> token && token == "LAST") {
+          isNullsFirst = false;
+        }
+      }
+    }
+
+    core::SortOrder sortOrder(isAscending, isNullsFirst);
+    sortingColumns.push_back(IcebergSortingColumn(columnName, sortOrder));
+  }
+
+  return std::make_shared<IcebergInsertTableHandle>(
+      columnHandles,
       locationHandle,
-      /*tableStorageFormat=*/fileFormat_,
       partitionSpec,
-      /*compressionKind=*/common::CompressionKind::CompressionKind_ZSTD);
+      opPool_.get(),
+      fileFormat_,
+      sortingColumns,
+      common::CompressionKind::CompressionKind_ZSTD);
 }
 
-std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
+std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<PartitionField>& partitionFields) {
-  auto tableHandle =
-      createInsertTableHandle(rowType, outputDirectoryPath, partitionFields);
+    const std::vector<PartitionField>& partitionFields,
+    const std::vector<std::string>& sortedBy) {
+  auto tableHandle = createIcebergInsertTableHandle(
+      rowType, outputDirectoryPath, partitionFields, sortedBy);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,
       connectorQueryCtx_.get(),
-      CommitStrategy::kNoCommit,
-      hiveConfig_,
-      icebergConfig_);
-}
-
-std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
-    const std::vector<RowVectorPtr>& vectors,
-    const std::string& dataPath,
-    const std::vector<PartitionField>& partitionFields) {
-  VELOX_CHECK(!vectors.empty(), "vectors cannot be empty");
-
-  auto rowType = vectors.front()->rowType();
-  auto dataSink = createDataSink(rowType, dataPath, partitionFields);
-
-  for (const auto& vector : vectors) {
-    dataSink->appendData(vector);
-  }
-  EXPECT_TRUE(dataSink->finish());
-  return dataSink;
+      connector::CommitStrategy::kNoCommit,
+      connectorConfig_);
 }
 
 std::vector<std::string> IcebergTestBase::listFiles(
@@ -265,36 +282,31 @@ std::vector<std::string> IcebergTestBase::listFiles(
   return files;
 }
 
-std::unordered_map<std::string, std::optional<std::string>>
-IcebergTestBase::extractPartitionKeys(const std::string& filePath) {
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-
-  std::vector<std::string> pathComponents;
-  folly::split("/", filePath, pathComponents);
-  for (const auto& component : pathComponents) {
-    if (component.find('=') != std::string::npos) {
-      std::vector<std::string> keys;
-      folly::split('=', component, keys);
-      if (keys.size() == 2) {
-        if (keys[1] == "null") {
-          partitionKeys[keys[0]] = std::nullopt;
-        } else {
-          partitionKeys[keys[0]] = keys[1];
-        }
-      }
-    }
-  }
-
-  return partitionKeys;
-}
-
 std::vector<std::shared_ptr<ConnectorSplit>>
 IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  std::unordered_map<std::string, std::string> customSplitInfo;
+  customSplitInfo["table_format"] = "hive-iceberg";
 
   auto files = listFiles(directory);
   for (const auto& filePath : files) {
-    auto partitionKeys = extractPartitionKeys(filePath);
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+
+    // Extract partition keys from path if any.
+    std::vector<std::string> pathComponents;
+    folly::split("/", filePath, pathComponents);
+    for (const auto& component : pathComponents) {
+      if (component.find('=') != std::string::npos) {
+        std::vector<std::string> keys;
+        folly::split('=', component, keys);
+        if (keys.size() == 2) {
+          partitionKeys[keys[0]] = keys[1];
+          if (keys[1] == "null") {
+            partitionKeys[keys[0]] = std::nullopt;
+          }
+        }
+      }
+    }
 
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
@@ -307,9 +319,9 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
             file->size(),
             partitionKeys,
             std::nullopt,
-            std::unordered_map<std::string, std::string>{},
+            customSplitInfo,
             nullptr,
-            /*cacheable=*/true,
+            true,
             std::vector<IcebergDeleteFile>()));
   }
 

@@ -17,11 +17,13 @@
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
-#include "velox/connectors/hive/iceberg/IcebergDataSource.h"
+#include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+const std::string_view kIcebergFunctionPrefixConfig{"presto.iceberg-namespace"};
+const std::string_view kDefaultIcebergFunctionPrefix{"$internal$.iceberg."};
 
 namespace {
 
@@ -44,23 +46,10 @@ IcebergConnector::IcebergConnector(
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
     : HiveConnector(id, config, ioExecutor),
-      icebergConfig_(std::make_shared<IcebergConfig>(connectorConfig())) {
-  registerIcebergInternalFunctions(icebergConfig_->functionPrefix());
-}
-
-std::unique_ptr<DataSource> IcebergConnector::createDataSource(
-    const RowTypePtr& outputType,
-    const ConnectorTableHandlePtr& tableHandle,
-    const ColumnHandleMap& columnHandles,
-    ConnectorQueryCtx* connectorQueryCtx) {
-  return std::make_unique<IcebergDataSource>(
-      outputType,
-      tableHandle,
-      columnHandles,
-      &fileHandleFactory_,
-      ioExecutor_,
-      connectorQueryCtx,
-      hiveConfig_);
+      functionPrefix_(config->get<std::string>(
+          std::string(kIcebergFunctionPrefixConfig),
+          std::string(kDefaultIcebergFunctionPrefix))) {
+  registerIcebergInternalFunctions(functionPrefix_);
 }
 
 std::unique_ptr<DataSink> IcebergConnector::createDataSink(
@@ -76,8 +65,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
       icebergInsertHandle,
       connectorQueryCtx,
       commitStrategy,
-      hiveConfig_,
-      icebergConfig_);
+      hiveConfig_);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

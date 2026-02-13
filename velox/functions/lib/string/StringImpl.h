@@ -788,21 +788,6 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
   return true;
 }
 
-// Increments a Unicode code point to the next valid Unicode scalar value.
-// Returns 0 if overflow (input is max code point).
-FOLLY_ALWAYS_INLINE int32_t incrementCodePoint(int32_t codePoint) {
-  static constexpr int32_t kMaxCodePoint = 0x10FFFF;
-  static constexpr int32_t kMinSurrogate = 0xD800;
-  static constexpr int32_t kMaxSurrogate = 0xDFFF;
-  if (codePoint == (kMinSurrogate - 1)) {
-    // Skip the surrogate range.
-    return kMaxSurrogate + 1;
-  } else if (codePoint == kMaxCodePoint) {
-    return 0;
-  }
-  return codePoint + 1;
-}
-
 // ASCII fast-path for roundUp.
 FOLLY_ALWAYS_INLINE std::optional<std::string> roundUpAscii(
     std::string_view input,
@@ -829,6 +814,21 @@ FOLLY_ALWAYS_INLINE std::optional<std::string> roundUpAscii(
 
   // All bytes are 0x7F (DEL character), no valid upper bound.
   return std::nullopt;
+}
+
+// Increments a Unicode code point to the next valid Unicode scalar value.
+// Returns 0 if overflow (input is max code point).
+FOLLY_ALWAYS_INLINE int32_t incrementCodePoint(int32_t codePoint) {
+  static constexpr int32_t kMaxCodePoint = 0x10FFFF;
+  static constexpr int32_t kMinSurrogate = 0xD800;
+  static constexpr int32_t kMaxSurrogate = 0xDFFF;
+  if (codePoint == (kMinSurrogate - 1)) {
+    // Skip the surrogate range.
+    return kMaxSurrogate + 1;
+  } else if (codePoint == kMaxCodePoint) {
+    return 0;
+  }
+  return codePoint + 1;
 }
 
 // Unicode path for roundUp.

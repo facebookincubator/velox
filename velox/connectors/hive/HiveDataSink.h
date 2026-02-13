@@ -18,7 +18,6 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HivePartitionName.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Options.h"
@@ -254,7 +253,37 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       // engine handles ensuring a 1 to 1 mapping from task to bucket.
       const bool ensureFiles = false,
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const HiveInsertFileNameGenerator>());
+          std::make_shared<const HiveInsertFileNameGenerator>())
+      : inputColumns_(std::move(inputColumns)),
+        locationHandle_(std::move(locationHandle)),
+        storageFormat_(storageFormat),
+        bucketProperty_(std::move(bucketProperty)),
+        compressionKind_(compressionKind),
+        serdeParameters_(serdeParameters),
+        writerOptions_(writerOptions),
+        ensureFiles_(ensureFiles),
+        fileNameGenerator_(std::move(fileNameGenerator)) {
+    if (compressionKind.has_value()) {
+      VELOX_CHECK(
+          compressionKind.value() != common::CompressionKind_MAX,
+          "Unsupported compression type: CompressionKind_MAX");
+    }
+
+    if (ensureFiles_) {
+      // If ensureFiles is set and either the bucketProperty is set or some
+      // partition keys are in the data, there is not a 1:1 mapping from Task to
+      // files so we can't proactively create writers.
+      VELOX_CHECK(
+          bucketProperty_ == nullptr || bucketProperty_->bucketCount() == 0,
+          "ensureFiles is not supported with bucketing");
+
+      for (const auto& inputColumn : inputColumns_) {
+        VELOX_CHECK(
+            !inputColumn->isPartitionKey(),
+            "ensureFiles is not supported with partition keys in the data");
+      }
+    }
+  }
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -754,7 +783,7 @@ class HiveDataSink : public DataSink {
   // to each corresponding (bucketed) partition based on the partition and
   // bucket ids calculated by 'computePartitionAndBucketIds'. The function also
   // ensures that there is a writer created for each (bucketed) partition.
-  void splitInputRowsAndEnsureWriters();
+  virtual void splitInputRowsAndEnsureWriters(RowVectorPtr input);
 
   // Makes sure to create one writer for the given writer id. The function
   // returns the corresponding index in 'writers_'.
@@ -768,23 +797,20 @@ class HiveDataSink : public DataSink {
   std::unique_ptr<facebook::velox::dwio::common::Writer> createWriterForIndex(
       size_t writerIndex);
 
+  virtual std::optional<std::string> getPartitionName(
+      const HiveWriterId& id) const;
+
   // Creates and configures WriterOptions based on file format.
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
   // The no-argument overload uses the last writer's info (for appendWriter).
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions() const;
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions() const;
 
   // Creates WriterOptions for a specific writer index. Use this overload
   // during writer rotation to ensure the correct writer's memory pool and
   // nonReclaimableSection are used.
   virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
       size_t writerIndex) const;
-
-  // Returns the Hive partition directory name for the given partition ID.
-  // Converts the partition values associated with the partition ID into a
-  // Hive-formatted directory path. Returns std::nullopt if the table is
-  // unpartitioned. Should be called only when writing to a partitioned table.
-  virtual std::string getPartitionName(uint32_t partitionId) const;
 
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
@@ -798,6 +824,8 @@ class HiveDataSink : public DataSink {
   // accommodate all rows.
   void
   updatePartitionRows(uint32_t index, vector_size_t numRows, vector_size_t row);
+
+  void extendBuffersForPartitionedTables();
 
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,
@@ -822,6 +850,7 @@ class HiveDataSink : public DataSink {
   // Invoked to write 'input' to the specified file writer.
   void write(size_t index, RowVectorPtr input);
 
+  virtual void closeInternal();
   /// Rotates the writer at the given index to a new file. This is called when
   /// the current file exceeds maxTargetFileBytes_. The old writer is closed
   /// and a new writer is created for the same partition/bucket.
@@ -831,8 +860,6 @@ class HiveDataSink : public DataSink {
   /// Captures file stats and adds the file info to writtenFiles.
   /// Called by rotateWriter() and closeInternal().
   void finalizeWriterFile(size_t index);
-
-  virtual void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. HiveDataSink
   // owns the lifetime of these objects, and therefore must destroy them last.

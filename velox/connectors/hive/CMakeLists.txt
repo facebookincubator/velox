@@ -31,7 +31,7 @@ velox_add_library(
   HiveDataSource.cpp
   FileIndexReader.cpp
   HiveIndexSource.cpp
-  HivePartitionName.cpp
+  HivePartitionUtil.cpp
   PartitionIdGenerator.cpp
   SplitReader.cpp
   TableHandle.cpp
@@ -45,6 +45,7 @@ velox_link_libraries(
     velox_dwio_catalog_fbhive
     velox_hive_partition_function
     velox_key_encoder
+  PUBLIC velox_hive_iceberg_splitreader
 )
 
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)

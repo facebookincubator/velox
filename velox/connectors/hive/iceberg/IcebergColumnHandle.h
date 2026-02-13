@@ -15,15 +15,14 @@
  */
 #pragma once
 
-#include <string>
-#include <vector>
-
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/parquet/ParquetFieldId.h"
-#include "velox/type/Subfield.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+struct IcebergNestedField {
+  int32_t id;
+  std::vector<IcebergNestedField> children;
+};
 
 class IcebergColumnHandle : public HiveColumnHandle {
  public:
@@ -31,13 +30,15 @@ class IcebergColumnHandle : public HiveColumnHandle {
       const std::string& name,
       ColumnType columnType,
       TypePtr dataType,
-      parquet::ParquetFieldId icebergField,
-      std::vector<common::Subfield> requiredSubfields = {});
+      TypePtr hiveType,
+      const IcebergNestedField& nestedField,
+      std::vector<common::Subfield> requiredSubfields = {},
+      ColumnParseParameters columnParseParameters = {});
 
-  const parquet::ParquetFieldId& field() const;
+  const IcebergNestedField& nestedField() const;
 
  private:
-  const parquet::ParquetFieldId field_;
+  const IcebergNestedField nestedField_;
 };
 
 using IcebergColumnHandlePtr = std::shared_ptr<const IcebergColumnHandle>;

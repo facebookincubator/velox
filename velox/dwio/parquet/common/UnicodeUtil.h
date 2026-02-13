@@ -14,22 +14,28 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/iceberg/IcebergConfig.h"
+#pragma once
 
-#include "velox/common/config/Config.h"
+#include <cstdint>
+#include <optional>
+#include <string>
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::parquet {
 
-IcebergConfig::IcebergConfig(
-    const std::shared_ptr<const config::ConfigBase>& config)
-    : config_(config) {
-  VELOX_CHECK_NOT_NULL(
-      config_, "Config is null for IcebergConfig initialization");
-}
+class UnicodeUtil {
+ public:
+  static std::string_view truncateStringMin(
+      const char* input,
+      int32_t inputLength,
+      int32_t numCodePoints);
 
-std::string IcebergConfig::functionPrefix() const {
-  return config_->get<std::string>(
-      kFunctionPrefixConfig, kDefaultFunctionPrefix);
-}
+  static std::string truncateStringMax(
+      const char* input,
+      int32_t inputLength,
+      int32_t numCodePoints);
 
-} // namespace facebook::velox::connector::hive::iceberg
+ private:
+  UnicodeUtil() = delete;
+};
+
+} // namespace facebook::velox::parquet

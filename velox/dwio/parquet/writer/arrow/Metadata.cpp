@@ -102,11 +102,11 @@ static std::shared_ptr<Statistics> makeTypedColumnStats(
         metadata.num_values - stats.null_count,
         stats.null_count,
         stats.distinct_count,
+        /*nan_count=*/0,
         stats.__isset.max_value || stats.__isset.min_value,
         stats.__isset.null_count,
         stats.__isset.distinct_count,
-        false,
-        0);
+        /*has_nan_count=*/false);
   }
   // Default behavior.
   return makeStatistics<DType>(
@@ -116,11 +116,11 @@ static std::shared_ptr<Statistics> makeTypedColumnStats(
       metadata.num_values - stats.null_count,
       stats.null_count,
       stats.distinct_count,
+      /*nan_count=*/0,
       stats.__isset.max || stats.__isset.min,
       stats.__isset.null_count,
       stats.__isset.distinct_count,
-      false,
-      0);
+      false);
 }
 
 std::shared_ptr<Statistics> makeColumnStats(
@@ -1019,8 +1019,8 @@ class FileMetaData::FileMetaDataImpl {
   // Set NaN counts from the builder (called during Finish)
   // This stores total NaN counts per field ID across all row groups.
   void setNaNCounts(
-      std::unordered_map<int32_t, std::pair<int64_t, bool>> nan_counts) {
-    fieldNanCounts_ = std::move(nan_counts);
+      std::unordered_map<int32_t, std::pair<int64_t, bool>> nanCounts) {
+    fieldNanCounts_ = std::move(nanCounts);
   }
 
   // Get total NaN count for a specific field ID across all row groups.

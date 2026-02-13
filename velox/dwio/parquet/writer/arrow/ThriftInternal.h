@@ -362,31 +362,34 @@ static inline facebook::velox::parquet::thrift::SortingColumn toThrift(
 
 static inline facebook::velox::parquet::thrift::Statistics toThrift(
     const EncodedStatistics& stats) {
-  facebook::velox::parquet::thrift::Statistics Statistics;
+  facebook::velox::parquet::thrift::Statistics statistics;
   if (stats.hasMin) {
-    Statistics.__set_min_value(stats.min());
+    statistics.__set_min_value(stats.min());
     // If the order is SIGNED, then the old min value must be set too.
     // This for backward compatibility.
     if (stats.isSigned()) {
-      Statistics.__set_min(stats.min());
+      statistics.__set_min(stats.min());
     }
   }
   if (stats.hasMax) {
-    Statistics.__set_max_value(stats.max());
+    statistics.__set_max_value(stats.max());
     // If the order is SIGNED, then the old max value must be set too.
     // This for backward compatibility.
     if (stats.isSigned()) {
-      Statistics.__set_max(stats.max());
+      statistics.__set_max(stats.max());
     }
   }
   if (stats.hasNullCount) {
-    Statistics.__set_null_count(stats.nullCount);
+    statistics.__set_null_count(stats.nullCount);
   }
   if (stats.hasDistinctCount) {
-    Statistics.__set_distinct_count(stats.distinctCount);
+    statistics.__set_distinct_count(stats.distinctCount);
+  }
+  if (stats.hasNanCount) {
+    statistics.__set_nan_count(stats.nanCount);
   }
 
-  return Statistics;
+  return statistics;
 }
 
 static inline facebook::velox::parquet::thrift::AesGcmV1 toAesGcmV1Thrift(

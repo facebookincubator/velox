@@ -1108,7 +1108,7 @@ std::unique_ptr<Filter> createBigintValuesFilter(
 std::unique_ptr<Filter> createBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed) {
-  return createBigintValuesFilter(values, nullAllowed, false);
+  return common::createBigintValuesFilter(values, nullAllowed, false);
 }
 
 std::unique_ptr<Filter> createHugeintValues(
@@ -1124,7 +1124,7 @@ std::unique_ptr<Filter> createHugeintValues(
 std::unique_ptr<Filter> createNegatedBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed) {
-  return createBigintValuesFilter(values, nullAllowed, true);
+  return common::createBigintValuesFilter(values, nullAllowed, true);
 }
 
 BigintMultiRange::BigintMultiRange(

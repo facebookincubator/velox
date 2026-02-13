@@ -84,9 +84,9 @@ class StreamingAggregationBenchmark : public VectorTestBase {
         std::to_string(params.numGroups));
 
     folly::addBenchmark(__FILE__, name, [plan = &test->plan]() {
-      exec::test::AssertQueryBuilder(*plan)
-          .serialExecution(true)
-          .countResults();
+      std::shared_ptr<Task> task;
+      exec::test::AssertQueryBuilder(*plan).serialExecution(true).countResults(
+          task);
       return 1;
     });
 

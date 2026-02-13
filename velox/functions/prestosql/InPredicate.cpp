@@ -139,40 +139,6 @@ class VectorSetInPredicate : public exec::VectorFunction {
   const VectorPtr originalValues_;
 };
 
-// Read 'size' values from 'valuesVector' starting at 'offset', de-duplicate
-// remove nulls and sort. Return a list of unique non-null values sorted in
-// ascending order and a boolean indicating whether there were any null values.
-template <typename T, typename U = T>
-std::pair<std::vector<T>, bool> toValues(
-    const VectorPtr& valuesVector,
-    vector_size_t offset,
-    vector_size_t size) {
-  auto simpleValues = valuesVector->as<SimpleVector<U>>();
-
-  bool nullAllowed = false;
-  std::vector<T> values;
-  values.reserve(size);
-
-  for (auto i = offset; i < offset + size; i++) {
-    if (simpleValues->isNullAt(i)) {
-      nullAllowed = true;
-    } else {
-      if constexpr (std::is_same_v<U, Timestamp>) {
-        values.emplace_back(simpleValues->valueAt(i).toMillis());
-      } else {
-        values.emplace_back(simpleValues->valueAt(i));
-      }
-    }
-  }
-
-  // In-place sort, remove duplicates, and later std::move to save memory
-  std::sort(values.begin(), values.end());
-  auto last = std::unique(values.begin(), values.end());
-  values.resize(std::distance(values.begin(), last));
-
-  return {std::move(values), nullAllowed};
-}
-
 // Creates a filter for constant values. A null filter means either
 // no values or only null values. The boolean is true if the list is
 // non-empty and consists of nulls only.
@@ -181,7 +147,8 @@ std::pair<std::unique_ptr<common::Filter>, bool> createBigintValuesFilter(
     const VectorPtr& valuesVector,
     vector_size_t offset,
     vector_size_t size) {
-  auto valuesPair = toValues<int64_t, T>(valuesVector, offset, size);
+  auto valuesPair =
+      common::deDuplicateValues<int64_t, T>(valuesVector, offset, size);
 
   const auto& values = valuesPair.first;
   bool nullAllowed = valuesPair.second;
@@ -210,7 +177,7 @@ createFloatingPointValuesFilter(
     const VectorPtr& valuesVector,
     vector_size_t offset,
     vector_size_t size) {
-  auto valuesPair = toValues<T, T>(valuesVector, offset, size);
+  auto valuesPair = common::deDuplicateValues<T, T>(valuesVector, offset, size);
 
   auto& values = valuesPair.first;
   bool nullAllowed = valuesPair.second;
@@ -252,7 +219,8 @@ std::pair<std::unique_ptr<common::Filter>, bool> createHugeintValuesFilter(
     const VectorPtr& valuesVector,
     vector_size_t offset,
     vector_size_t size) {
-  auto valuesPair = toValues<int128_t, T>(valuesVector, offset, size);
+  auto valuesPair =
+      common::deDuplicateValues<int128_t, T>(valuesVector, offset, size);
 
   const auto& values = valuesPair.first;
   bool nullAllowed = valuesPair.second;
@@ -278,8 +246,8 @@ std::pair<std::unique_ptr<common::Filter>, bool> createBytesValuesFilter(
     const VectorPtr& valuesVector,
     vector_size_t offset,
     vector_size_t size) {
-  auto valuesPair =
-      toValues<std::string, StringView>(valuesVector, offset, size);
+  auto valuesPair = common::deDuplicateValues<std::string, StringView>(
+      valuesVector, offset, size);
 
   const auto& values = valuesPair.first;
   bool nullAllowed = valuesPair.second;

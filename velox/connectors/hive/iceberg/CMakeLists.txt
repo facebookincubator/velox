@@ -14,24 +14,27 @@
 
 set(
   ICEBERG_SOURCES
-  IcebergConfig.cpp
-  IcebergColumnHandle.cpp
   IcebergConnector.cpp
   IcebergDataFileStatistics.cpp
+  DataFileStatsCollector.cpp
+  EqualityDeleteFileReader.cpp
+  FilterUtil.cpp
+  IcebergColumnHandle.cpp
   IcebergDataSink.cpp
-  IcebergDataSource.cpp
-  IcebergPartitionName.cpp
+  IcebergDeleteFile.cpp
+  IcebergPartitionIdGenerator.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
+  Murmur3.cpp
   PartitionSpec.cpp
   PositionalDeleteFileReader.cpp
-  TransformEvaluator.cpp
-  TransformExprBuilder.cpp
+  TransformFactory.cpp
+  Transforms.cpp
 )
 
-if(VELOX_ENABLE_PARQUET)
-  list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
-endif()
+#if(VELOX_ENABLE_PARQUET)
+#  list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
+#endif()
 
 velox_add_library(velox_hive_iceberg_splitreader ${ICEBERG_SOURCES})
 
@@ -42,6 +45,10 @@ velox_link_libraries(
   velox_functions_iceberg
   Folly::folly
 )
+
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_arrow_parquet_writer)
+endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

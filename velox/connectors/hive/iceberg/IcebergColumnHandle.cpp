@@ -20,7 +20,7 @@
 
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
-#include "velox/dwio/parquet/ParquetFieldId.h"
+#include "velox/dwio/parquet/writer/ParquetFieldId.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -30,20 +30,21 @@ IcebergColumnHandle::IcebergColumnHandle(
     const std::string& name,
     ColumnType columnType,
     TypePtr dataType,
-    parquet::ParquetFieldId icebergField,
-    std::vector<common::Subfield> requiredSubfields)
+    TypePtr hiveType,
+    const IcebergNestedField& nestedField,
+    std::vector<common::Subfield> requiredSubfields,
+    ColumnParseParameters columnParseParameters)
     : HiveColumnHandle(
           name,
           columnType,
           dataType,
-          dataType,
+          hiveType,
           std::move(requiredSubfields),
-          ColumnParseParameters{ColumnParseParameters::
-                                    PartitionDateValueFormat::kDaysSinceEpoch}),
-      field_(std::move(icebergField)) {}
+          columnParseParameters),
+      nestedField_(nestedField) {}
 
-const parquet::ParquetFieldId& IcebergColumnHandle::field() const {
-  return field_;
+const IcebergNestedField& IcebergColumnHandle::nestedField() const {
+  return nestedField_;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

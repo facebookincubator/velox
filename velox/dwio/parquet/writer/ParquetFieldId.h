@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <vector>
-
 namespace facebook::velox::parquet {
 /// Parquet field IDs during write operations. Each ID must be unique positive
 /// number, do not need to be sequential.

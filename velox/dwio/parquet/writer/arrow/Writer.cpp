@@ -394,9 +394,7 @@ class FileWriterImpl : public FileWriter {
   Status writeTable(const Table& table, int64_t chunkSize) override {
     RETURN_NOT_OK(table.Validate());
 
-    if (chunkSize <= 0 && table.num_rows() > 0) {
-      return Status::Invalid("chunk size per row_group must be greater than 0");
-    } else if (!table.schema()->Equals(*schema_, false)) {
+    if (!table.schema()->Equals(*schema_, false)) {
       return Status::Invalid(
           "table schema does not match this writer's. table:'",
           table.schema()->ToString(),
@@ -405,6 +403,19 @@ class FileWriterImpl : public FileWriter {
           "'");
     } else if (chunkSize > this->properties().maxRowGroupLength()) {
       chunkSize = this->properties().maxRowGroupLength();
+    }
+    // maxRowGroupBytes is applied only after the row group has accumulated
+    // data.
+    if (rowGroupWriter_ != nullptr && rowGroupWriter_->numRows() > 0) {
+      double avgRowSize = rowGroupWriter_->totalBufferedBytes() * 1.0 /
+          rowGroupWriter_->numRows();
+      chunkSize = std::min(
+          chunkSize,
+          static_cast<int64_t>(
+              this->properties().maxRowGroupBytes() / avgRowSize));
+    }
+    if (chunkSize <= 0 && table.num_rows() > 0) {
+      return Status::Invalid("rows per row_group must be greater than 0");
     }
 
     auto writeRowGroup = [&](int64_t offset, int64_t size) {
@@ -443,11 +454,7 @@ class FileWriterImpl : public FileWriter {
       return Status::OK();
     }
 
-    // Max number of rows allowed in a row group.
-    const int64_t maxRowGroupLength = this->properties().maxRowGroupLength();
-
-    if (rowGroupWriter_ == nullptr || !rowGroupWriter_->buffered() ||
-        rowGroupWriter_->numRows() >= maxRowGroupLength) {
+    if (rowGroupWriter_ == nullptr || !rowGroupWriter_->buffered()) {
       RETURN_NOT_OK(newBufferedRowGroup());
     }
 
@@ -488,16 +495,29 @@ class FileWriterImpl : public FileWriter {
       return Status::OK();
     };
 
+    // Max number of rows allowed in a row group.
+    const int64_t maxRowGroupLength = this->properties().maxRowGroupLength();
+    // Max number of bytes allowed in a row group.
+    const int64_t maxRowGroupBytes = this->properties().maxRowGroupBytes();
+
     int64_t offset = 0;
     while (offset < batch.num_rows()) {
-      const int64_t batchSize = std::min(
-          maxRowGroupLength - rowGroupWriter_->numRows(),
-          batch.num_rows() - offset);
-      RETURN_NOT_OK(writeBatch(offset, batchSize));
-      offset += batchSize;
-
-      // Flush current row group if it is full.
-      if (rowGroupWriter_->numRows() >= maxRowGroupLength) {
+      int64_t groupRows = rowGroupWriter_->numRows();
+      int64_t batchSize =
+          std::min(maxRowGroupLength - groupRows, batch.num_rows() - offset);
+      if (groupRows > 0) {
+        int64_t bufferedBytes = rowGroupWriter_->totalBufferedBytes();
+        double avgRowSize = bufferedBytes * 1.0 / groupRows;
+        batchSize = std::min(
+            batchSize,
+            static_cast<int64_t>(
+                (maxRowGroupBytes - bufferedBytes) / avgRowSize));
+      }
+      if (batchSize > 0) {
+        RETURN_NOT_OK(writeBatch(offset, batchSize));
+        offset += batchSize;
+      } else if (offset < batch.num_rows()) {
+        // Current row group is full, write remaining rows in a new group.
         RETURN_NOT_OK(newBufferedRowGroup());
       }
     }

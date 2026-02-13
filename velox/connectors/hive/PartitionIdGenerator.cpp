@@ -16,16 +16,23 @@
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
+#include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
+
+using namespace facebook::velox::dwio::catalog::fbhive;
+
 namespace facebook::velox::connector::hive {
 
 PartitionIdGenerator::PartitionIdGenerator(
     const RowTypePtr& inputType,
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
-    memory::MemoryPool* pool)
-    : pool_(pool),
-      partitionChannels_(std::move(partitionChannels)),
-      maxPartitions_(maxPartitions) {
+    memory::MemoryPool* pool,
+    bool partitionPathAsLowerCase)
+    : partitionChannels_(std::move(partitionChannels)),
+      maxPartitions_(maxPartitions),
+      partitionPathAsLowerCase_(partitionPathAsLowerCase),
+      pool_(pool) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
@@ -51,6 +58,19 @@ PartitionIdGenerator::PartitionIdGenerator(
   for (auto& key : partitionValues_->children()) {
     key->resize(maxPartitions_);
   }
+}
+
+PartitionIdGenerator::PartitionIdGenerator(
+    std::vector<column_index_t> partitionChannels,
+    uint32_t maxPartitions,
+    memory::MemoryPool* pool,
+    bool partitionPathAsLowerCase)
+    : partitionChannels_(std::move(partitionChannels)),
+      maxPartitions_(maxPartitions),
+      partitionPathAsLowerCase_(partitionPathAsLowerCase),
+      pool_(pool) {
+  VELOX_USER_CHECK(
+      !partitionChannels_.empty(), "There must be at least one partition key.");
 }
 
 void PartitionIdGenerator::run(
@@ -87,6 +107,13 @@ void PartitionIdGenerator::run(
       result[i] = nextPartitionId;
     }
   }
+}
+
+std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
+  return FileUtils::makePartName(
+      HivePartitionUtil::extractPartitionKeyValues(
+          partitionValues_, partitionId),
+      partitionPathAsLowerCase_);
 }
 
 void PartitionIdGenerator::computeValueIds(
@@ -156,7 +183,7 @@ void PartitionIdGenerator::updateValueToPartitionIdMapping() {
 }
 
 void PartitionIdGenerator::savePartitionValues(
-    uint64_t partitionId,
+    uint32_t partitionId,
     const RowVectorPtr& input,
     vector_size_t row) {
   for (auto i = 0; i < partitionChannels_.size(); ++i) {

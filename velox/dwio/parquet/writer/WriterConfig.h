@@ -59,14 +59,6 @@ struct WriterConfig {
       "max-target-file-size";
   static constexpr const char* kParquetSessionMaxTargetFileSize =
       "max_target_file_size";
-  // Serde parameter keys for timestamp settings. These can be set via
-  // serdeParameters map to override the default timestamp behavior.
-  // The timezone key accepts a timezone string or empty string to disable
-  // timezone conversion.
-  static constexpr const char* kParquetSerdeTimestampUnit =
-      "parquet.writer.timestamp.unit";
-  static constexpr const char* kParquetSerdeTimestampTimezone =
-      "parquet.writer.timestamp.timezone";
 };
 
 } // namespace facebook::velox::parquet

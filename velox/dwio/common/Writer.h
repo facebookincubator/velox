@@ -21,6 +21,8 @@
 
 #include "velox/common/base/Portability.h"
 #include "velox/dwio/common/FileMetadata.h"
+#include "velox/dwio/common/DataFileStatistics.h"
+#include "velox/dwio/common/DataFileStatsCollector.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::dwio::common {
@@ -81,6 +83,11 @@ class Writer {
   /// Data can no longer be written.
   virtual void abort() = 0;
 
+  /// Return statistics based on each Iceberg data file
+  std::shared_ptr<DataFileStatistics> dataFileStats() const {
+    return dataFileStats_;
+  };
+
  protected:
   bool isRunning() const;
   bool isFinishing() const;
@@ -94,6 +101,8 @@ class Writer {
   static void checkStateTransition(State oldState, State newState);
 
   tsan_atomic<State> state_{State::kInit};
+  std::shared_ptr<DataFileStatistics> dataFileStats_{nullptr};
+  dwio::common::FileStatsCollector* statsCollector_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
