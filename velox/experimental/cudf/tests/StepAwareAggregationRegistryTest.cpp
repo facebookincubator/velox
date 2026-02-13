@@ -137,10 +137,7 @@ TEST_F(StepAwareAggregationRegistryTest, avgSingleStepValidation) {
       "avg");
 
   bool singleStepSupported = canAggregationBeEvaluatedByCudf(
-      *avgSingleCall,
-      core::AggregationNode::Step::kSingle,
-      {DOUBLE()},
-      queryCtx_.get());
+      *avgSingleCall, core::AggregationNode::Step::kSingle);
 
   EXPECT_TRUE(singleStepSupported)
       << "Single step avg(DOUBLE) should be supported";
@@ -154,10 +151,7 @@ TEST_F(StepAwareAggregationRegistryTest, avgPartialStepValidation) {
       "avg");
 
   bool partialStepSupported = canAggregationBeEvaluatedByCudf(
-      *avgPartialCall,
-      core::AggregationNode::Step::kPartial,
-      {DOUBLE()},
-      queryCtx_.get());
+      *avgPartialCall, core::AggregationNode::Step::kPartial);
 
   EXPECT_TRUE(partialStepSupported)
       << "Partial step avg(DOUBLE) should be supported";
@@ -173,10 +167,7 @@ TEST_F(StepAwareAggregationRegistryTest, avgFinalStepValidation) {
       "avg");
 
   bool finalStepSupported = canAggregationBeEvaluatedByCudf(
-      *avgFinalCall,
-      core::AggregationNode::Step::kFinal,
-      {rowType},
-      queryCtx_.get());
+      *avgFinalCall, core::AggregationNode::Step::kFinal);
 
   EXPECT_TRUE(finalStepSupported)
       << "Final step avg(ROW(DOUBLE,BIGINT)) should be supported";
@@ -191,25 +182,13 @@ TEST_F(StepAwareAggregationRegistryTest, sumStepConsistency) {
       "sum");
 
   bool sumSingle = canAggregationBeEvaluatedByCudf(
-      *sumCall,
-      core::AggregationNode::Step::kSingle,
-      {DOUBLE()},
-      queryCtx_.get());
+      *sumCall, core::AggregationNode::Step::kSingle);
   bool sumPartial = canAggregationBeEvaluatedByCudf(
-      *sumCall,
-      core::AggregationNode::Step::kPartial,
-      {DOUBLE()},
-      queryCtx_.get());
+      *sumCall, core::AggregationNode::Step::kPartial);
   bool sumFinal = canAggregationBeEvaluatedByCudf(
-      *sumCall,
-      core::AggregationNode::Step::kFinal,
-      {DOUBLE()},
-      queryCtx_.get());
+      *sumCall, core::AggregationNode::Step::kFinal);
   bool sumIntermediate = canAggregationBeEvaluatedByCudf(
-      *sumCall,
-      core::AggregationNode::Step::kIntermediate,
-      {DOUBLE()},
-      queryCtx_.get());
+      *sumCall, core::AggregationNode::Step::kIntermediate);
 
   EXPECT_TRUE(sumSingle) << "Sum single step should be supported";
   EXPECT_TRUE(sumPartial) << "Sum partial step should be supported";
@@ -232,25 +211,13 @@ TEST_F(StepAwareAggregationRegistryTest, countStepConsistency) {
       "count");
 
   bool countSingle = canAggregationBeEvaluatedByCudf(
-      *countRawCall,
-      core::AggregationNode::Step::kSingle,
-      {DOUBLE()},
-      queryCtx_.get());
+      *countRawCall, core::AggregationNode::Step::kSingle);
   bool countPartial = canAggregationBeEvaluatedByCudf(
-      *countRawCall,
-      core::AggregationNode::Step::kPartial,
-      {DOUBLE()},
-      queryCtx_.get());
+      *countRawCall, core::AggregationNode::Step::kPartial);
   bool countFinal = canAggregationBeEvaluatedByCudf(
-      *countIntermediateCall,
-      core::AggregationNode::Step::kFinal,
-      {BIGINT()},
-      queryCtx_.get());
+      *countIntermediateCall, core::AggregationNode::Step::kFinal);
   bool countIntermediate = canAggregationBeEvaluatedByCudf(
-      *countIntermediateCall,
-      core::AggregationNode::Step::kIntermediate,
-      {BIGINT()},
-      queryCtx_.get());
+      *countIntermediateCall, core::AggregationNode::Step::kIntermediate);
 
   EXPECT_TRUE(countSingle) << "Count single step should be supported";
   EXPECT_TRUE(countPartial) << "Count partial step should be supported";
@@ -268,25 +235,13 @@ TEST_F(StepAwareAggregationRegistryTest, minStepConsistency) {
       "min");
 
   bool minSingle = canAggregationBeEvaluatedByCudf(
-      *minCall,
-      core::AggregationNode::Step::kSingle,
-      {DOUBLE()},
-      queryCtx_.get());
+      *minCall, core::AggregationNode::Step::kSingle);
   bool minPartial = canAggregationBeEvaluatedByCudf(
-      *minCall,
-      core::AggregationNode::Step::kPartial,
-      {DOUBLE()},
-      queryCtx_.get());
+      *minCall, core::AggregationNode::Step::kPartial);
   bool minFinal = canAggregationBeEvaluatedByCudf(
-      *minCall,
-      core::AggregationNode::Step::kFinal,
-      {DOUBLE()},
-      queryCtx_.get());
+      *minCall, core::AggregationNode::Step::kFinal);
   bool minIntermediate = canAggregationBeEvaluatedByCudf(
-      *minCall,
-      core::AggregationNode::Step::kIntermediate,
-      {DOUBLE()},
-      queryCtx_.get());
+      *minCall, core::AggregationNode::Step::kIntermediate);
 
   EXPECT_TRUE(minSingle) << "Min single step should be supported";
   EXPECT_TRUE(minPartial) << "Min partial step should be supported";
@@ -303,25 +258,13 @@ TEST_F(StepAwareAggregationRegistryTest, maxStepConsistency) {
       "max");
 
   bool maxSingle = canAggregationBeEvaluatedByCudf(
-      *maxCall,
-      core::AggregationNode::Step::kSingle,
-      {DOUBLE()},
-      queryCtx_.get());
+      *maxCall, core::AggregationNode::Step::kSingle);
   bool maxPartial = canAggregationBeEvaluatedByCudf(
-      *maxCall,
-      core::AggregationNode::Step::kPartial,
-      {DOUBLE()},
-      queryCtx_.get());
+      *maxCall, core::AggregationNode::Step::kPartial);
   bool maxFinal = canAggregationBeEvaluatedByCudf(
-      *maxCall,
-      core::AggregationNode::Step::kFinal,
-      {DOUBLE()},
-      queryCtx_.get());
+      *maxCall, core::AggregationNode::Step::kFinal);
   bool maxIntermediate = canAggregationBeEvaluatedByCudf(
-      *maxCall,
-      core::AggregationNode::Step::kIntermediate,
-      {DOUBLE()},
-      queryCtx_.get());
+      *maxCall, core::AggregationNode::Step::kIntermediate);
 
   EXPECT_TRUE(maxSingle) << "Max single step should be supported";
   EXPECT_TRUE(maxPartial) << "Max partial step should be supported";
