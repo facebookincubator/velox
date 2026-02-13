@@ -51,7 +51,6 @@ IcebergSplitReader::IcebergSplitReader(
           scanSpec),
       baseReadOffset_(0),
       splitOffset_(0),
-      splitRows_(0),
       deleteBitmap_(nullptr) {}
 
 void IcebergSplitReader::prepareSplit(
@@ -74,29 +73,18 @@ void IcebergSplitReader::prepareSplit(
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(hiveSplit_);
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
-  splitRows_ = baseReader_->numberOfRows().value_or(0);
   positionalDeleteFileReaders_.clear();
 
   const auto& deleteFiles = icebergSplit->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes) {
       if (deleteFile.recordCount > 0) {
-        // Skip the delete file if all delete positions are outside this split.
+        // Skip the delete file if all delete positions are before this split.
         auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
-        // Skip if all deletes are before this split.
         if (auto posUpperBoundIt = deleteFile.upperBounds.find(posColumn->id);
             posUpperBoundIt != deleteFile.upperBounds.end()) {
           const int64_t deleteUpperBound = std::stoll(posUpperBoundIt->second);
           if (deleteUpperBound < static_cast<int64_t>(splitOffset_)) {
-            continue;
-          }
-        }
-        // Skip if all deletes are after this split.
-        if (auto posLowerBoundIt = deleteFile.lowerBounds.find(posColumn->id);
-            posLowerBoundIt != deleteFile.lowerBounds.end()) {
-          const int64_t deleteLowerBound = std::stoll(posLowerBoundIt->second);
-          if (deleteLowerBound >=
-              static_cast<int64_t>(splitOffset_ + splitRows_)) {
             continue;
           }
         }
