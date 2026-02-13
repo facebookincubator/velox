@@ -4245,4 +4245,64 @@ TEST_F(AggregationTest, keysProvideCustomComparison) {
       {makeRowVector({c0, c1}), c1},
       {makeRowVector({e0, e1}), e1});
 }
+
+// Test that aggregation spill uses the aggregation_spill_file_create_config
+// when set, and other spillable operators use the default
+// spill_file_create_config.
+DEBUG_ONLY_TEST_F(AggregationTest, aggregationSpillFileCreateConfig) {
+  auto vectors = makeVectors(rowType_, 32, 100);
+  createDuckDbTable(vectors);
+
+  auto tempDirectory = exec::test::TempDirectoryPath::create();
+
+  std::atomic_bool aggregationConfigVerified{false};
+  std::atomic_bool defaultConfigVerified{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::isBlocked",
+      std::function<void(exec::Operator*)>([&](exec::Operator* op) {
+        const auto* spillConfig = op->testingSpillConfig();
+        if (spillConfig == nullptr) {
+          return;
+        }
+        const auto& opType = op->operatorType();
+        if (opType == "Aggregation" || opType == "PartialAggregation") {
+          // Aggregation operators should use
+          // aggregation_spill_file_create_config.
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_aggregation_config")
+              << "Operator: " << opType;
+          aggregationConfigVerified = true;
+        } else {
+          // Other spillable operators (e.g., OrderBy) should use the default
+          // spill_file_create_config.
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_default_config")
+              << "Operator: " << opType;
+          defaultConfigVerified = true;
+        }
+      }));
+
+  // Build a plan with aggregation and orderBy. Aggregation operators should use
+  // aggregation_spill_file_create_config and orderBy should use the default
+  // spill_file_create_config.
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(tempDirectory->getPath())
+      .config(QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kAggregationSpillEnabled, true)
+      .config(QueryConfig::kOrderBySpillEnabled, true)
+      .config(QueryConfig::kSpillFileCreateConfig, "test_default_config")
+      .config(
+          QueryConfig::kAggregationSpillFileCreateConfig,
+          "test_aggregation_config")
+      .plan(
+          PlanBuilder()
+              .values(vectors)
+              .singleAggregation({"c0", "c1"}, {"sum(c2)"})
+              .orderBy({"c0 ASC NULLS LAST"}, false)
+              .planNode())
+      .assertResults(
+          "SELECT c0, c1, sum(c2) FROM tmp GROUP BY c0, c1 ORDER BY c0 ASC NULLS LAST");
+
+  ASSERT_TRUE(aggregationConfigVerified.load());
+  ASSERT_TRUE(defaultConfigVerified.load());
+}
 } // namespace facebook::velox::exec::test

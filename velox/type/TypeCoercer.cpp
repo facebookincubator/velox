@@ -86,8 +86,8 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
 std::optional<int32_t> TypeCoercer::coercible(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  if (fromType->isUnKnown()) {
-    if (toType->isUnKnown()) {
+  if (fromType->isUnknown()) {
+    if (toType->isUnknown()) {
       return 0;
     }
     return 1;
@@ -152,11 +152,11 @@ TypePtr leastCommonSuperRowType(const RowType& a, const RowType& b) {
 
 // static
 TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
-  if (a->isUnKnown()) {
+  if (a->isUnknown()) {
     return b;
   }
 
-  if (b->isUnKnown()) {
+  if (b->isUnknown()) {
     return a;
   }
 

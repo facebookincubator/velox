@@ -28,11 +28,9 @@ namespace facebook::velox {
 namespace config {
 class ConfigBase;
 }
+class IoStats;
 class ReadFile;
 class WriteFile;
-namespace filesystems::File {
-class IoStats;
-}
 } // namespace facebook::velox
 
 namespace facebook::velox::filesystems {
@@ -74,7 +72,7 @@ struct FileOptions {
   std::optional<std::unordered_map<std::string, std::string>> properties{
       std::nullopt};
 
-  File::IoStats* stats{nullptr};
+  IoStats* stats{nullptr};
 
   /// A raw string that client can encode as anything they want to describe the
   /// file. For example, extraFileInfo can contain serialized file descriptors
@@ -113,49 +111,6 @@ struct FileSystemOptions {
   /// native async read-ahead support.
   bool readAheadEnabled{false};
 };
-
-/// Free form statistics for a file system. The keys are arbitrary strings, and
-/// values are RuntimeMetric. The underlying filesystem implementation can use
-/// this class to record observability about filesystem operations.
-namespace File {
-class IoStats {
- public:
-  IoStats() = default;
-
-  void addCounter(const std::string& name, RuntimeCounter counter) {
-    auto locked = stats_.wlock();
-    auto it = locked->find(name);
-    if (it == locked->end()) {
-      auto [ptr, inserted] = locked->emplace(name, RuntimeMetric(counter.unit));
-      VELOX_CHECK(inserted);
-      ptr->second.addValue(counter.value);
-    } else {
-      VELOX_CHECK_EQ(it->second.unit, counter.unit);
-      it->second.addValue(counter.value);
-    }
-  }
-
-  void merge(const IoStats& other) {
-    auto otherStats = other.stats();
-    auto locked = stats_.wlock();
-    for (const auto& [name, metric] : otherStats) {
-      auto it = locked->find(name);
-      if (it == locked->end()) {
-        locked->emplace(name, metric);
-      } else {
-        it->second.merge(metric);
-      }
-    }
-  }
-
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const {
-    return stats_.copy();
-  }
-
- private:
-  folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
-};
-} // namespace File
 
 /// An abstract FileSystem
 class FileSystem {

@@ -62,15 +62,15 @@ const ApplicationVersion& ApplicationVersion::PARQUET_MR_FIXED_STATS_VERSION() {
 
 const ApplicationVersion&
 ApplicationVersion::PARQUET_CPP_10353_FIXED_VERSION() {
-  // parquet-cpp versions released prior to Arrow 3.0 would write DataPageV2
-  // pages with is_compressed==0 but still write compressed data. (See:
-  // ARROW-10353). Parquet 1.5.1 had this problem, and after that we switched to
-  // the application name "parquet-cpp-arrow", so this version is fake.
+  // Parquet-cpp versions released prior to Arrow 3.0 would write DataPageV2.
+  // Pages with is_compressed==0 but still write compressed data. (See:
+  // ARROW-10353). Parquet 1.5.1 had this problem, and after that we switched
+  // to. The application name "parquet-cpp-arrow", so this version is fake.
   static ApplicationVersion version("parquet-cpp", 2, 0, 0);
   return version;
 }
 
-std::string ParquetVersionToString(ParquetVersion::type ver) {
+std::string parquetVersionToString(ParquetVersion::type ver) {
   switch (ver) {
     case ParquetVersion::PARQUET_1_0:
       return "1.0";
@@ -84,98 +84,101 @@ std::string ParquetVersionToString(ParquetVersion::type ver) {
       return "2.6";
   }
 
-  // This should be unreachable
+  // This should be unreachable.
   return "UNKNOWN";
 }
 
 template <typename DType>
-static std::shared_ptr<Statistics> MakeTypedColumnStats(
+static std::shared_ptr<Statistics> makeTypedColumnStats(
     const facebook::velox::parquet::thrift::ColumnMetaData& metadata,
     const ColumnDescriptor* descr) {
-  // If ColumnOrder is defined, return max_value and min_value
-  if (descr->column_order().get_order() == ColumnOrder::TYPE_DEFINED_ORDER) {
-    return MakeStatistics<DType>(
+  // If ColumnOrder is defined, return max_value and min_value.
+  const auto& stats = metadata.statistics;
+  if (descr->columnOrder().order() == ColumnOrder::kTypeDefinedOrder) {
+    return makeStatistics<DType>(
         descr,
-        metadata.statistics.min_value,
-        metadata.statistics.max_value,
-        metadata.num_values - metadata.statistics.null_count,
-        metadata.statistics.null_count,
-        metadata.statistics.distinct_count,
-        metadata.statistics.__isset.max_value ||
-            metadata.statistics.__isset.min_value,
-        metadata.statistics.__isset.null_count,
-        metadata.statistics.__isset.distinct_count);
+        stats.min_value,
+        stats.max_value,
+        metadata.num_values - stats.null_count,
+        stats.null_count,
+        stats.distinct_count,
+        stats.__isset.max_value || stats.__isset.min_value,
+        stats.__isset.null_count,
+        stats.__isset.distinct_count,
+        false,
+        0);
   }
-  // Default behavior
-  return MakeStatistics<DType>(
+  // Default behavior.
+  return makeStatistics<DType>(
       descr,
-      metadata.statistics.min,
-      metadata.statistics.max,
-      metadata.num_values - metadata.statistics.null_count,
-      metadata.statistics.null_count,
-      metadata.statistics.distinct_count,
-      metadata.statistics.__isset.max || metadata.statistics.__isset.min,
-      metadata.statistics.__isset.null_count,
-      metadata.statistics.__isset.distinct_count);
+      stats.min,
+      stats.max,
+      metadata.num_values - stats.null_count,
+      stats.null_count,
+      stats.distinct_count,
+      stats.__isset.max || stats.__isset.min,
+      stats.__isset.null_count,
+      stats.__isset.distinct_count,
+      false,
+      0);
 }
 
-std::shared_ptr<Statistics> MakeColumnStats(
+std::shared_ptr<Statistics> makeColumnStats(
     const facebook::velox::parquet::thrift::ColumnMetaData& meta_data,
     const ColumnDescriptor* descr) {
   switch (static_cast<Type::type>(meta_data.type)) {
-    case Type::BOOLEAN:
-      return MakeTypedColumnStats<BooleanType>(meta_data, descr);
-    case Type::INT32:
-      return MakeTypedColumnStats<Int32Type>(meta_data, descr);
-    case Type::INT64:
-      return MakeTypedColumnStats<Int64Type>(meta_data, descr);
-    case Type::INT96:
-      return MakeTypedColumnStats<Int96Type>(meta_data, descr);
-    case Type::DOUBLE:
-      return MakeTypedColumnStats<DoubleType>(meta_data, descr);
-    case Type::FLOAT:
-      return MakeTypedColumnStats<FloatType>(meta_data, descr);
-    case Type::BYTE_ARRAY:
-      return MakeTypedColumnStats<ByteArrayType>(meta_data, descr);
-    case Type::FIXED_LEN_BYTE_ARRAY:
-      return MakeTypedColumnStats<FLBAType>(meta_data, descr);
-    case Type::UNDEFINED:
+    case Type::kBoolean:
+      return makeTypedColumnStats<BooleanType>(meta_data, descr);
+    case Type::kInt32:
+      return makeTypedColumnStats<Int32Type>(meta_data, descr);
+    case Type::kInt64:
+      return makeTypedColumnStats<Int64Type>(meta_data, descr);
+    case Type::kInt96:
+      return makeTypedColumnStats<Int96Type>(meta_data, descr);
+    case Type::kDouble:
+      return makeTypedColumnStats<DoubleType>(meta_data, descr);
+    case Type::kFloat:
+      return makeTypedColumnStats<FloatType>(meta_data, descr);
+    case Type::kByteArray:
+      return makeTypedColumnStats<ByteArrayType>(meta_data, descr);
+    case Type::kFixedLenByteArray:
+      return makeTypedColumnStats<FLBAType>(meta_data, descr);
+    case Type::kUndefined:
       break;
   }
   throw ParquetException(
-      "Can't decode page statistics for selected column type");
+      "Can't decode page statistics for selected column type.");
 }
 
-// MetaData Accessor
+// MetaData Accessor.
 
-// ColumnCryptoMetaData
+// ColumnCryptoMetaData.
 class ColumnCryptoMetaData::ColumnCryptoMetaDataImpl {
  public:
   explicit ColumnCryptoMetaDataImpl(
       const facebook::velox::parquet::thrift::ColumnCryptoMetaData*
-          crypto_metadata)
-      : crypto_metadata_(crypto_metadata) {}
+          cryptoMetadata)
+      : cryptoMetadata_(cryptoMetadata) {}
 
-  bool encrypted_with_footer_key() const {
-    return crypto_metadata_->__isset.ENCRYPTION_WITH_FOOTER_KEY;
+  bool encryptedWithFooterKey() const {
+    return cryptoMetadata_->__isset.ENCRYPTION_WITH_FOOTER_KEY;
   }
-  bool encrypted_with_column_key() const {
-    return crypto_metadata_->__isset.ENCRYPTION_WITH_COLUMN_KEY;
+  bool encryptedWithColumnKey() const {
+    return cryptoMetadata_->__isset.ENCRYPTION_WITH_COLUMN_KEY;
   }
-  std::shared_ptr<schema::ColumnPath> path_in_schema() const {
+  std::shared_ptr<schema::ColumnPath> pathInSchema() const {
     return std::make_shared<schema::ColumnPath>(
-        crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
+        cryptoMetadata_->ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
   }
-  const std::string& key_metadata() const {
-    return crypto_metadata_->ENCRYPTION_WITH_COLUMN_KEY.key_metadata;
+  const std::string& keyMetadata() const {
+    return cryptoMetadata_->ENCRYPTION_WITH_COLUMN_KEY.key_metadata;
   }
 
  private:
-  const facebook::velox::parquet::thrift::ColumnCryptoMetaData*
-      crypto_metadata_;
+  const facebook::velox::parquet::thrift::ColumnCryptoMetaData* cryptoMetadata_;
 };
 
-std::unique_ptr<ColumnCryptoMetaData> ColumnCryptoMetaData::Make(
+std::unique_ptr<ColumnCryptoMetaData> ColumnCryptoMetaData::make(
     const uint8_t* metadata) {
   return std::unique_ptr<ColumnCryptoMetaData>(
       new ColumnCryptoMetaData(metadata));
@@ -189,189 +192,189 @@ ColumnCryptoMetaData::ColumnCryptoMetaData(const uint8_t* metadata)
 
 ColumnCryptoMetaData::~ColumnCryptoMetaData() = default;
 
-std::shared_ptr<schema::ColumnPath> ColumnCryptoMetaData::path_in_schema()
-    const {
-  return impl_->path_in_schema();
+std::shared_ptr<schema::ColumnPath> ColumnCryptoMetaData::pathInSchema() const {
+  return impl_->pathInSchema();
 }
-bool ColumnCryptoMetaData::encrypted_with_footer_key() const {
-  return impl_->encrypted_with_footer_key();
+bool ColumnCryptoMetaData::encryptedWithFooterKey() const {
+  return impl_->encryptedWithFooterKey();
 }
-const std::string& ColumnCryptoMetaData::key_metadata() const {
-  return impl_->key_metadata();
+const std::string& ColumnCryptoMetaData::keyMetadata() const {
+  return impl_->keyMetadata();
 }
 
-// ColumnChunk metadata
+// ColumnChunk metadata.
 class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
  public:
   explicit ColumnChunkMetaDataImpl(
       const facebook::velox::parquet::thrift::ColumnChunk* column,
       const ColumnDescriptor* descr,
-      int16_t row_group_ordinal,
-      int16_t column_ordinal,
+      int16_t rowGroupOrdinal,
+      int16_t columnOrdinal,
       const ReaderProperties& properties,
-      const ApplicationVersion* writer_version,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor)
+      const ApplicationVersion* writerVersion,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor)
       : column_(column),
         descr_(descr),
         properties_(properties),
-        writer_version_(writer_version) {
-    column_metadata_ = &column->meta_data;
+        writerVersion_(writerVersion) {
+    columnMetadata_ = &column->meta_data;
     if (column->__isset.crypto_metadata) { // column metadata is encrypted
       facebook::velox::parquet::thrift::ColumnCryptoMetaData ccmd =
           column->crypto_metadata;
 
       if (ccmd.__isset.ENCRYPTION_WITH_COLUMN_KEY) {
-        if (file_decryptor != nullptr &&
-            file_decryptor->properties() != nullptr) {
-          // should decrypt metadata
+        if (fileDecryptor != nullptr &&
+            fileDecryptor->properties() != nullptr) {
+          // Should decrypt metadata.
           std::shared_ptr<schema::ColumnPath> path =
               std::make_shared<schema::ColumnPath>(
                   ccmd.ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
           std::string key_metadata =
               ccmd.ENCRYPTION_WITH_COLUMN_KEY.key_metadata;
 
-          std::string aad_column_metadata = encryption::CreateModuleAad(
-              file_decryptor->file_aad(),
+          std::string aadColumnMetadata = encryption::createModuleAad(
+              fileDecryptor->fileAad(),
               encryption::kColumnMetaData,
-              row_group_ordinal,
-              column_ordinal,
+              rowGroupOrdinal,
+              columnOrdinal,
               static_cast<int16_t>(-1));
-          auto decryptor = file_decryptor->GetColumnMetaDecryptor(
-              path->ToDotString(), key_metadata, aad_column_metadata);
+          auto Decryptor = fileDecryptor->getColumnMetaDecryptor(
+              path->toDotString(), key_metadata, aadColumnMetadata);
           auto len =
               static_cast<uint32_t>(column->encrypted_column_metadata.size());
           ThriftDeserializer deserializer(properties_);
-          deserializer.DeserializeMessage(
+          deserializer.deserializeMessage(
               reinterpret_cast<const uint8_t*>(
                   column->encrypted_column_metadata.c_str()),
               &len,
-              &decrypted_metadata_,
-              decryptor);
-          column_metadata_ = &decrypted_metadata_;
+              &decryptedMetadata_,
+              Decryptor);
+          columnMetadata_ = &decryptedMetadata_;
         } else {
           throw ParquetException(
               "Cannot decrypt ColumnMetadata."
-              " FileDecryption is not setup correctly");
+              " FileDecryption is not setup correctly.");
         }
       }
     }
-    for (const auto& encoding : column_metadata_->encodings) {
-      encodings_.push_back(LoadEnumSafe(&encoding));
+    for (const auto& encoding : columnMetadata_->encodings) {
+      encodings_.push_back(loadenumSafe(&encoding));
     }
-    for (const auto& encoding_stats : column_metadata_->encoding_stats) {
-      encoding_stats_.push_back(
-          {LoadEnumSafe(&encoding_stats.page_type),
-           LoadEnumSafe(&encoding_stats.encoding),
-           encoding_stats.count});
+    for (const auto& encodingStats : columnMetadata_->encoding_stats) {
+      encodingStats_.push_back(
+          {loadenumSafe(&encodingStats.page_type),
+           loadenumSafe(&encodingStats.encoding),
+           encodingStats.count});
     }
-    possible_stats_ = nullptr;
+    possibleStats_ = nullptr;
   }
 
-  bool Equals(const ColumnChunkMetaDataImpl& other) const {
-    return *column_metadata_ == *other.column_metadata_;
+  bool equals(const ColumnChunkMetaDataImpl& other) const {
+    return *columnMetadata_ == *other.columnMetadata_;
   }
 
-  // column chunk
-  inline int64_t file_offset() const {
+  // Column chunk.
+  inline int64_t fileOffset() const {
     return column_->file_offset;
   }
-  inline const std::string& file_path() const {
+  inline const std::string& filePath() const {
     return column_->file_path;
   }
 
   inline Type::type type() const {
-    return LoadEnumSafe(&column_metadata_->type);
+    return loadenumSafe(&columnMetadata_->type);
   }
 
-  inline int64_t num_values() const {
-    return column_metadata_->num_values;
+  inline int64_t numValues() const {
+    return columnMetadata_->num_values;
   }
 
-  std::shared_ptr<schema::ColumnPath> path_in_schema() {
+  std::shared_ptr<schema::ColumnPath> pathInSchema() {
     return std::make_shared<schema::ColumnPath>(
-        column_metadata_->path_in_schema);
+        columnMetadata_->path_in_schema);
   }
 
-  // Check if statistics are set and are valid
-  // 1) Must be set in the metadata
-  // 2) Statistics must not be corrupted
-  inline bool is_stats_set() const {
-    VELOX_DCHECK_NOT_NULL(writer_version_);
-    // If the column statistics don't exist or column sort order is unknown
-    // we cannot use the column stats
-    if (!column_metadata_->__isset.statistics ||
-        descr_->sort_order() == SortOrder::UNKNOWN) {
+  // Check if statistics are set and are valid.
+  // 1) Must be set in the metadata.
+  // 2) Statistics must not be corrupted.
+  inline bool isStatsSet() const {
+    VELOX_DCHECK_NOT_NULL(writerVersion_);
+    // If the column statistics don't exist or column sort order is unknown,
+    // we cannot use the column stats.
+    if (!columnMetadata_->__isset.statistics ||
+        descr_->sortOrder() == SortOrder::kUnknown) {
       return false;
     }
-    if (possible_stats_ == nullptr) {
-      possible_stats_ = MakeColumnStats(*column_metadata_, descr_);
+    if (possibleStats_ == nullptr) {
+      possibleStats_ = makeColumnStats(*columnMetadata_, descr_);
     }
-    EncodedStatistics encodedStatistics = possible_stats_->Encode();
-    return writer_version_->HasCorrectStatistics(
-        type(), encodedStatistics, descr_->sort_order());
+    EncodedStatistics encodedStats = possibleStats_->encode();
+    return writerVersion_->hasCorrectStatistics(
+        type(), encodedStats, descr_->sortOrder());
   }
 
-  inline std::shared_ptr<Statistics> statistics() const {
-    return is_stats_set() ? possible_stats_ : nullptr;
+  inline std::shared_ptr<::facebook::velox::parquet::arrow::Statistics>
+  statistics() const {
+    return isStatsSet() ? possibleStats_ : nullptr;
   }
 
   inline Compression::type compression() const {
-    return LoadEnumSafe(&column_metadata_->codec);
+    return loadenumSafe(&columnMetadata_->codec);
   }
 
   const std::vector<Encoding::type>& encodings() const {
     return encodings_;
   }
 
-  const std::vector<PageEncodingStats>& encoding_stats() const {
-    return encoding_stats_;
+  const std::vector<PageEncodingStats>& encodingStats() const {
+    return encodingStats_;
   }
 
-  inline std::optional<int64_t> bloom_filter_offset() const {
-    if (column_metadata_->__isset.bloom_filter_offset) {
-      return column_metadata_->bloom_filter_offset;
+  inline std::optional<int64_t> bloomFilterOffset() const {
+    if (columnMetadata_->__isset.bloom_filter_offset) {
+      return columnMetadata_->bloom_filter_offset;
     }
     return std::nullopt;
   }
 
-  inline bool has_dictionary_page() const {
-    return column_metadata_->__isset.dictionary_page_offset;
+  inline bool hasDictionaryPage() const {
+    return columnMetadata_->__isset.dictionary_page_offset;
   }
 
-  inline int64_t dictionary_page_offset() const {
-    return column_metadata_->dictionary_page_offset;
+  inline int64_t dictionaryPageOffset() const {
+    return columnMetadata_->dictionary_page_offset;
   }
 
-  inline int64_t data_page_offset() const {
-    return column_metadata_->data_page_offset;
+  inline int64_t dataPageOffset() const {
+    return columnMetadata_->data_page_offset;
   }
 
-  inline bool has_index_page() const {
-    return column_metadata_->__isset.index_page_offset;
+  inline bool hasIndexPage() const {
+    return columnMetadata_->__isset.index_page_offset;
   }
 
-  inline int64_t index_page_offset() const {
-    return column_metadata_->index_page_offset;
+  inline int64_t indexPageOffset() const {
+    return columnMetadata_->index_page_offset;
   }
 
-  inline int64_t total_compressed_size() const {
-    return column_metadata_->total_compressed_size;
+  inline int64_t totalCompressedSize() const {
+    return columnMetadata_->total_compressed_size;
   }
 
-  inline int64_t total_uncompressed_size() const {
-    return column_metadata_->total_uncompressed_size;
+  inline int64_t totalUncompressedSize() const {
+    return columnMetadata_->total_uncompressed_size;
   }
 
-  inline std::unique_ptr<ColumnCryptoMetaData> crypto_metadata() const {
+  inline std::unique_ptr<ColumnCryptoMetaData> cryptoMetadata() const {
     if (column_->__isset.crypto_metadata) {
-      return ColumnCryptoMetaData::Make(
+      return ColumnCryptoMetaData::make(
           reinterpret_cast<const uint8_t*>(&column_->crypto_metadata));
     } else {
       return nullptr;
     }
   }
 
-  std::optional<IndexLocation> GetColumnIndexLocation() const {
+  std::optional<IndexLocation> getColumnIndexLocation() const {
     if (column_->__isset.column_index_offset &&
         column_->__isset.column_index_length) {
       return IndexLocation{
@@ -380,7 +383,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
     return std::nullopt;
   }
 
-  std::optional<IndexLocation> GetOffsetIndexLocation() const {
+  std::optional<IndexLocation> getOffsetIndexLocation() const {
     if (column_->__isset.offset_index_offset &&
         column_->__isset.offset_index_length) {
       return IndexLocation{
@@ -389,529 +392,529 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
     return std::nullopt;
   }
 
-  inline int32_t field_id() const {
-    return descr_->schema_node()->field_id();
+  inline int32_t fieldId() const {
+    return descr_->schemaNode()->fieldId();
   }
 
  private:
-  mutable std::shared_ptr<Statistics> possible_stats_;
+  mutable std::shared_ptr<::facebook::velox::parquet::arrow::Statistics>
+      possibleStats_;
   std::vector<Encoding::type> encodings_;
-  std::vector<PageEncodingStats> encoding_stats_;
+  std::vector<PageEncodingStats> encodingStats_;
   const facebook::velox::parquet::thrift::ColumnChunk* column_;
-  const facebook::velox::parquet::thrift::ColumnMetaData* column_metadata_;
-  facebook::velox::parquet::thrift::ColumnMetaData decrypted_metadata_;
+  const facebook::velox::parquet::thrift::ColumnMetaData* columnMetadata_;
+  facebook::velox::parquet::thrift::ColumnMetaData decryptedMetadata_;
   const ColumnDescriptor* descr_;
   const ReaderProperties properties_;
-  const ApplicationVersion* writer_version_;
+  const ApplicationVersion* writerVersion_;
 };
 
-std::unique_ptr<ColumnChunkMetaData> ColumnChunkMetaData::Make(
+std::unique_ptr<ColumnChunkMetaData> ColumnChunkMetaData::make(
     const void* metadata,
     const ColumnDescriptor* descr,
     const ReaderProperties& properties,
-    const ApplicationVersion* writer_version,
-    int16_t row_group_ordinal,
-    int16_t column_ordinal,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
+    const ApplicationVersion* writerVersion,
+    int16_t rowGroupOrdinal,
+    int16_t columnOrdinal,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
   return std::unique_ptr<ColumnChunkMetaData>(new ColumnChunkMetaData(
       metadata,
       descr,
-      row_group_ordinal,
-      column_ordinal,
+      rowGroupOrdinal,
+      columnOrdinal,
       properties,
-      writer_version,
-      std::move(file_decryptor)));
+      writerVersion,
+      std::move(fileDecryptor)));
 }
 
-std::unique_ptr<ColumnChunkMetaData> ColumnChunkMetaData::Make(
+std::unique_ptr<ColumnChunkMetaData> ColumnChunkMetaData::make(
     const void* metadata,
     const ColumnDescriptor* descr,
-    const ApplicationVersion* writer_version,
-    int16_t row_group_ordinal,
-    int16_t column_ordinal,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
+    const ApplicationVersion* writerVersion,
+    int16_t rowGroupOrdinal,
+    int16_t columnOrdinal,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
   return std::unique_ptr<ColumnChunkMetaData>(new ColumnChunkMetaData(
       metadata,
       descr,
-      row_group_ordinal,
-      column_ordinal,
-      default_reader_properties(),
-      writer_version,
-      std::move(file_decryptor)));
+      rowGroupOrdinal,
+      columnOrdinal,
+      defaultReaderProperties(),
+      writerVersion,
+      std::move(fileDecryptor)));
 }
 
 ColumnChunkMetaData::ColumnChunkMetaData(
     const void* metadata,
     const ColumnDescriptor* descr,
-    int16_t row_group_ordinal,
-    int16_t column_ordinal,
+    int16_t rowGroupOrdinal,
+    int16_t columnOrdinal,
     const ReaderProperties& properties,
-    const ApplicationVersion* writer_version,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor)
+    const ApplicationVersion* writerVersion,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor)
     : impl_{new ColumnChunkMetaDataImpl(
           reinterpret_cast<
               const facebook::velox::parquet::thrift::ColumnChunk*>(metadata),
           descr,
-          row_group_ordinal,
-          column_ordinal,
+          rowGroupOrdinal,
+          columnOrdinal,
           properties,
-          writer_version,
-          std::move(file_decryptor))} {}
+          writerVersion,
+          std::move(fileDecryptor))} {}
 
 ColumnChunkMetaData::~ColumnChunkMetaData() = default;
 
-// column chunk
-int64_t ColumnChunkMetaData::file_offset() const {
-  return impl_->file_offset();
+// Column chunk.
+int64_t ColumnChunkMetaData::fileOffset() const {
+  return impl_->fileOffset();
 }
 
-const std::string& ColumnChunkMetaData::file_path() const {
-  return impl_->file_path();
+const std::string& ColumnChunkMetaData::filePath() const {
+  return impl_->filePath();
 }
 
 Type::type ColumnChunkMetaData::type() const {
   return impl_->type();
 }
 
-int64_t ColumnChunkMetaData::num_values() const {
-  return impl_->num_values();
+int64_t ColumnChunkMetaData::numValues() const {
+  return impl_->numValues();
 }
 
-std::shared_ptr<schema::ColumnPath> ColumnChunkMetaData::path_in_schema()
-    const {
-  return impl_->path_in_schema();
+std::shared_ptr<schema::ColumnPath> ColumnChunkMetaData::pathInSchema() const {
+  return impl_->pathInSchema();
 }
 
 std::shared_ptr<Statistics> ColumnChunkMetaData::statistics() const {
   return impl_->statistics();
 }
 
-bool ColumnChunkMetaData::is_stats_set() const {
-  return impl_->is_stats_set();
+bool ColumnChunkMetaData::isStatsSet() const {
+  return impl_->isStatsSet();
 }
 
-std::optional<int64_t> ColumnChunkMetaData::bloom_filter_offset() const {
-  return impl_->bloom_filter_offset();
+std::optional<int64_t> ColumnChunkMetaData::bloomFilterOffset() const {
+  return impl_->bloomFilterOffset();
 }
 
-bool ColumnChunkMetaData::has_dictionary_page() const {
-  return impl_->has_dictionary_page();
+bool ColumnChunkMetaData::hasDictionaryPage() const {
+  return impl_->hasDictionaryPage();
 }
 
-int64_t ColumnChunkMetaData::dictionary_page_offset() const {
-  return impl_->dictionary_page_offset();
+int64_t ColumnChunkMetaData::dictionaryPageOffset() const {
+  return impl_->dictionaryPageOffset();
 }
 
-int64_t ColumnChunkMetaData::data_page_offset() const {
-  return impl_->data_page_offset();
+int64_t ColumnChunkMetaData::dataPageOffset() const {
+  return impl_->dataPageOffset();
 }
 
-bool ColumnChunkMetaData::has_index_page() const {
-  return impl_->has_index_page();
+bool ColumnChunkMetaData::hasIndexPage() const {
+  return impl_->hasIndexPage();
 }
 
-int64_t ColumnChunkMetaData::index_page_offset() const {
-  return impl_->index_page_offset();
+int64_t ColumnChunkMetaData::indexPageOffset() const {
+  return impl_->indexPageOffset();
 }
 
 Compression::type ColumnChunkMetaData::compression() const {
   return impl_->compression();
 }
 
-bool ColumnChunkMetaData::can_decompress() const {
-  return util::Codec::IsAvailable(compression());
+bool ColumnChunkMetaData::canDecompress() const {
+  return util::Codec::isAvailable(compression());
 }
 
 const std::vector<Encoding::type>& ColumnChunkMetaData::encodings() const {
   return impl_->encodings();
 }
 
-const std::vector<PageEncodingStats>& ColumnChunkMetaData::encoding_stats()
+const std::vector<PageEncodingStats>& ColumnChunkMetaData::encodingStats()
     const {
-  return impl_->encoding_stats();
+  return impl_->encodingStats();
 }
 
-int64_t ColumnChunkMetaData::total_uncompressed_size() const {
-  return impl_->total_uncompressed_size();
+int64_t ColumnChunkMetaData::totalUncompressedSize() const {
+  return impl_->totalUncompressedSize();
 }
 
-int64_t ColumnChunkMetaData::total_compressed_size() const {
-  return impl_->total_compressed_size();
+int64_t ColumnChunkMetaData::totalCompressedSize() const {
+  return impl_->totalCompressedSize();
 }
 
-int32_t ColumnChunkMetaData::field_id() const {
-  return impl_->field_id();
+int32_t ColumnChunkMetaData::fieldId() const {
+  return impl_->fieldId();
 }
 
-std::unique_ptr<ColumnCryptoMetaData> ColumnChunkMetaData::crypto_metadata()
+std::unique_ptr<ColumnCryptoMetaData> ColumnChunkMetaData::cryptoMetadata()
     const {
-  return impl_->crypto_metadata();
+  return impl_->cryptoMetadata();
 }
 
-std::optional<IndexLocation> ColumnChunkMetaData::GetColumnIndexLocation()
+std::optional<IndexLocation> ColumnChunkMetaData::getColumnIndexLocation()
     const {
-  return impl_->GetColumnIndexLocation();
+  return impl_->getColumnIndexLocation();
 }
 
-std::optional<IndexLocation> ColumnChunkMetaData::GetOffsetIndexLocation()
+std::optional<IndexLocation> ColumnChunkMetaData::getOffsetIndexLocation()
     const {
-  return impl_->GetOffsetIndexLocation();
+  return impl_->getOffsetIndexLocation();
 }
 
-bool ColumnChunkMetaData::Equals(const ColumnChunkMetaData& other) const {
-  return impl_->Equals(*other.impl_);
+bool ColumnChunkMetaData::equals(const ColumnChunkMetaData& other) const {
+  return impl_->equals(*other.impl_);
 }
 
-// row-group metadata
+// Row-group metadata.
 class RowGroupMetaData::RowGroupMetaDataImpl {
  public:
   explicit RowGroupMetaDataImpl(
-      const facebook::velox::parquet::thrift::RowGroup* row_group,
+      const facebook::velox::parquet::thrift::RowGroup* rowGroup,
       const SchemaDescriptor* schema,
       const ReaderProperties& properties,
-      const ApplicationVersion* writer_version,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor)
-      : row_group_(row_group),
+      const ApplicationVersion* writerVersion,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor)
+      : rowGroup_(rowGroup),
         schema_(schema),
         properties_(properties),
-        writer_version_(writer_version),
-        file_decryptor_(std::move(file_decryptor)) {
+        writerVersion_(writerVersion),
+        fileDecryptor_(std::move(fileDecryptor)) {
     if (ARROW_PREDICT_FALSE(
-            row_group_->columns.size() >
+            rowGroup_->columns.size() >
             static_cast<size_t>(std::numeric_limits<int>::max()))) {
       throw ParquetException(
-          "Row group had too many columns: ", row_group_->columns.size());
+          "Row group had too many columns: ", rowGroup_->columns.size());
     }
   }
 
-  bool Equals(const RowGroupMetaDataImpl& other) const {
-    return *row_group_ == *other.row_group_;
+  bool equals(const RowGroupMetaDataImpl& other) const {
+    return *rowGroup_ == *other.rowGroup_;
   }
 
-  inline int num_columns() const {
-    return static_cast<int>(row_group_->columns.size());
+  inline int numColumns() const {
+    return static_cast<int>(rowGroup_->columns.size());
   }
 
-  inline int64_t num_rows() const {
-    return row_group_->num_rows;
+  inline int64_t numRows() const {
+    return rowGroup_->num_rows;
   }
 
-  inline int64_t total_byte_size() const {
-    return row_group_->total_byte_size;
+  inline int64_t totalByteSize() const {
+    return rowGroup_->total_byte_size;
   }
 
-  inline int64_t total_compressed_size() const {
-    return row_group_->total_compressed_size;
+  inline int64_t totalCompressedSize() const {
+    return rowGroup_->total_compressed_size;
   }
 
-  inline int64_t file_offset() const {
-    return row_group_->file_offset;
+  inline int64_t fileOffset() const {
+    return rowGroup_->file_offset;
   }
 
   inline const SchemaDescriptor* schema() const {
     return schema_;
   }
 
-  std::unique_ptr<ColumnChunkMetaData> ColumnChunk(int i) {
-    if (i >= 0 && i < num_columns()) {
-      return ColumnChunkMetaData::Make(
-          &row_group_->columns[i],
-          schema_->Column(i),
+  std::unique_ptr<ColumnChunkMetaData> columnChunk(int i) {
+    if (i >= 0 && i < numColumns()) {
+      return ColumnChunkMetaData::make(
+          &rowGroup_->columns[i],
+          schema_->column(i),
           properties_,
-          writer_version_,
-          row_group_->ordinal,
+          writerVersion_,
+          rowGroup_->ordinal,
           i,
-          file_decryptor_);
+          fileDecryptor_);
     }
     throw ParquetException(
         "The file only has ",
-        num_columns(),
+        numColumns(),
         " columns, requested metadata for column: ",
         i);
   }
 
-  std::vector<SortingColumn> sorting_columns() const {
-    std::vector<SortingColumn> sorting_columns;
-    if (!row_group_->__isset.sorting_columns) {
-      return sorting_columns;
+  std::vector<SortingColumn> sortingColumns() const {
+    std::vector<SortingColumn> sortingColumns;
+    if (!rowGroup_->__isset.sorting_columns) {
+      return sortingColumns;
     }
-    sorting_columns.resize(row_group_->sorting_columns.size());
-    for (size_t i = 0; i < sorting_columns.size(); ++i) {
-      sorting_columns[i] = FromThrift(row_group_->sorting_columns[i]);
+    sortingColumns.resize(rowGroup_->sorting_columns.size());
+    for (size_t i = 0; i < sortingColumns.size(); ++i) {
+      sortingColumns[i] = fromThrift(rowGroup_->sorting_columns[i]);
     }
-    return sorting_columns;
+    return sortingColumns;
   }
 
  private:
-  const facebook::velox::parquet::thrift::RowGroup* row_group_;
+  const facebook::velox::parquet::thrift::RowGroup* rowGroup_;
   const SchemaDescriptor* schema_;
   const ReaderProperties properties_;
-  const ApplicationVersion* writer_version_;
-  std::shared_ptr<InternalFileDecryptor> file_decryptor_;
+  const ApplicationVersion* writerVersion_;
+  std::shared_ptr<InternalFileDecryptor> fileDecryptor_;
 };
 
-std::unique_ptr<RowGroupMetaData> RowGroupMetaData::Make(
+std::unique_ptr<RowGroupMetaData> RowGroupMetaData::make(
     const void* metadata,
     const SchemaDescriptor* schema,
-    const ApplicationVersion* writer_version,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
+    const ApplicationVersion* writerVersion,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
   return std::unique_ptr<RowGroupMetaData>(new RowGroupMetaData(
       metadata,
       schema,
-      default_reader_properties(),
-      writer_version,
-      std::move(file_decryptor)));
+      defaultReaderProperties(),
+      writerVersion,
+      std::move(fileDecryptor)));
 }
 
-std::unique_ptr<RowGroupMetaData> RowGroupMetaData::Make(
+std::unique_ptr<RowGroupMetaData> RowGroupMetaData::make(
     const void* metadata,
     const SchemaDescriptor* schema,
     const ReaderProperties& properties,
-    const ApplicationVersion* writer_version,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
+    const ApplicationVersion* writerVersion,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
   return std::unique_ptr<RowGroupMetaData>(new RowGroupMetaData(
-      metadata, schema, properties, writer_version, std::move(file_decryptor)));
+      metadata, schema, properties, writerVersion, std::move(fileDecryptor)));
 }
 
 RowGroupMetaData::RowGroupMetaData(
     const void* metadata,
     const SchemaDescriptor* schema,
     const ReaderProperties& properties,
-    const ApplicationVersion* writer_version,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor)
+    const ApplicationVersion* writerVersion,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor)
     : impl_{new RowGroupMetaDataImpl(
           reinterpret_cast<const facebook::velox::parquet::thrift::RowGroup*>(
               metadata),
           schema,
           properties,
-          writer_version,
-          std::move(file_decryptor))} {}
+          writerVersion,
+          std::move(fileDecryptor))} {}
 
 RowGroupMetaData::~RowGroupMetaData() = default;
 
-bool RowGroupMetaData::Equals(const RowGroupMetaData& other) const {
-  return impl_->Equals(*other.impl_);
+bool RowGroupMetaData::equals(const RowGroupMetaData& other) const {
+  return impl_->equals(*other.impl_);
 }
 
-int RowGroupMetaData::num_columns() const {
-  return impl_->num_columns();
+int RowGroupMetaData::numColumns() const {
+  return impl_->numColumns();
 }
 
-int64_t RowGroupMetaData::num_rows() const {
-  return impl_->num_rows();
+int64_t RowGroupMetaData::numRows() const {
+  return impl_->numRows();
 }
 
-int64_t RowGroupMetaData::total_byte_size() const {
-  return impl_->total_byte_size();
+int64_t RowGroupMetaData::totalByteSize() const {
+  return impl_->totalByteSize();
 }
 
-int64_t RowGroupMetaData::total_compressed_size() const {
-  return impl_->total_compressed_size();
+int64_t RowGroupMetaData::totalCompressedSize() const {
+  return impl_->totalCompressedSize();
 }
 
-int64_t RowGroupMetaData::file_offset() const {
-  return impl_->file_offset();
+int64_t RowGroupMetaData::fileOffset() const {
+  return impl_->fileOffset();
 }
 
 const SchemaDescriptor* RowGroupMetaData::schema() const {
   return impl_->schema();
 }
 
-std::unique_ptr<ColumnChunkMetaData> RowGroupMetaData::ColumnChunk(
+std::unique_ptr<ColumnChunkMetaData> RowGroupMetaData::columnChunk(
     int i) const {
-  return impl_->ColumnChunk(i);
+  return impl_->columnChunk(i);
 }
 
-bool RowGroupMetaData::can_decompress() const {
-  int n_columns = num_columns();
-  for (int i = 0; i < n_columns; i++) {
-    if (!ColumnChunk(i)->can_decompress()) {
+bool RowGroupMetaData::canDecompress() const {
+  int nColumns = numColumns();
+  for (int i = 0; i < nColumns; i++) {
+    if (!columnChunk(i)->canDecompress()) {
       return false;
     }
   }
   return true;
 }
 
-std::vector<SortingColumn> RowGroupMetaData::sorting_columns() const {
-  return impl_->sorting_columns();
+std::vector<SortingColumn> RowGroupMetaData::sortingColumns() const {
+  return impl_->sortingColumns();
 }
 
-// file metadata
+// File metadata.
 class FileMetaData::FileMetaDataImpl {
  public:
   FileMetaDataImpl() = default;
 
   explicit FileMetaDataImpl(
       const void* metadata,
-      uint32_t* metadata_len,
+      uint32_t* metadataLen,
       ReaderProperties properties,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = nullptr)
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = nullptr)
       : properties_(std::move(properties)),
-        file_decryptor_(std::move(file_decryptor)) {
+        fileDecryptor_(std::move(fileDecryptor)) {
     metadata_ =
         std::make_unique<facebook::velox::parquet::thrift::FileMetaData>();
 
-    auto footer_decryptor = file_decryptor_ != nullptr
-        ? file_decryptor_->GetFooterDecryptor()
+    auto footerDecryptor = fileDecryptor_ != nullptr
+        ? fileDecryptor_->getFooterDecryptor()
         : nullptr;
 
     ThriftDeserializer deserializer(properties_);
-    deserializer.DeserializeMessage(
+    deserializer.deserializeMessage(
         reinterpret_cast<const uint8_t*>(metadata),
-        metadata_len,
+        metadataLen,
         metadata_.get(),
-        footer_decryptor);
-    metadata_len_ = *metadata_len;
+        footerDecryptor);
+    metadataLen_ = *metadataLen;
 
     if (metadata_->__isset.created_by) {
-      writer_version_ = ApplicationVersion(metadata_->created_by);
+      writerVersion_ = ApplicationVersion(metadata_->created_by);
     } else {
-      writer_version_ = ApplicationVersion("unknown 0.0.0");
+      writerVersion_ = ApplicationVersion("unknown 0.0.0");
     }
 
-    InitSchema();
-    InitColumnOrders();
-    InitKeyValueMetadata();
+    initSchema();
+    initColumnOrders();
+    initKeyValueMetadata();
   }
 
-  bool VerifySignature(const void* signature) {
-    // verify decryption properties are set
-    if (file_decryptor_ == nullptr) {
+  bool verifySignature(const void* signature) {
+    // Verify decryption properties are set.
+    if (fileDecryptor_ == nullptr) {
       throw ParquetException(
-          "Decryption not set properly. cannot verify signature");
+          "Decryption not set properly. Cannot verify signature.");
     }
-    // serialize the footer
-    uint8_t* serialized_data;
-    uint32_t serialized_len = metadata_len_;
+    // Serialize the footer.
+    uint8_t* serializedData;
+    uint32_t serializedLen = metadataLen_;
     ThriftSerializer serializer;
-    serializer.SerializeToBuffer(
-        metadata_.get(), &serialized_len, &serialized_data);
+    serializer.serializeToBuffer(
+        metadata_.get(), &serializedLen, &serializedData);
 
-    // encrypt with nonce
+    // Encrypt with nonce.
     auto nonce =
         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(signature));
     auto tag =
         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(signature)) +
         encryption::kNonceLength;
 
-    std::string key = file_decryptor_->GetFooterKey();
-    std::string aad = encryption::CreateFooterAad(file_decryptor_->file_aad());
+    std::string key = fileDecryptor_->getFooterKey();
+    std::string aad = encryption::createFooterAad(fileDecryptor_->fileAad());
 
-    auto aes_encryptor = encryption::AesEncryptor::Make(
-        file_decryptor_->algorithm(),
+    auto aesEncryptor = encryption::AesEncryptor::make(
+        fileDecryptor_->algorithm(),
         static_cast<int>(key.size()),
         true,
         false /*write_length*/,
         nullptr);
 
-    std::shared_ptr<Buffer> encrypted_buffer =
-        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
-            file_decryptor_->pool(),
-            aes_encryptor->CiphertextSizeDelta() + serialized_len));
-    uint32_t encrypted_len = aes_encryptor->SignedFooterEncrypt(
-        serialized_data,
-        serialized_len,
+    std::shared_ptr<Buffer> encryptedBuffer =
+        std::static_pointer_cast<ResizableBuffer>(allocateBuffer(
+            fileDecryptor_->pool(),
+            aesEncryptor->ciphertextSizeDelta() + serializedLen));
+    uint32_t encryptedLen = aesEncryptor->signedFooterEncrypt(
+        serializedData,
+        serializedLen,
         str2bytes(key),
         static_cast<int>(key.size()),
         str2bytes(aad),
         static_cast<int>(aad.size()),
         nonce,
-        encrypted_buffer->mutable_data());
-    // Delete AES encryptor object. It was created only to verify the footer
-    // signature.
-    aes_encryptor->WipeOut();
-    delete aes_encryptor;
+        encryptedBuffer->mutable_data());
+    // Delete AES encryptor object. It was created only to verify the footer.
+    // Signature.
+    aesEncryptor->wipeOut();
+    delete aesEncryptor;
     return 0 ==
-        memcmp(encrypted_buffer->data() + encrypted_len -
+        memcmp(encryptedBuffer->data() + encryptedLen -
                    encryption::kGcmTagLength,
                tag,
                encryption::kGcmTagLength);
   }
 
   inline uint32_t size() const {
-    return metadata_len_;
+    return metadataLen_;
   }
-  inline int num_columns() const {
-    return schema_.num_columns();
+  inline int numColumns() const {
+    return schema_.numColumns();
   }
-  inline int64_t num_rows() const {
+  inline int64_t numRows() const {
     return metadata_->num_rows;
   }
-  inline int num_row_groups() const {
+  inline int numRowGroups() const {
     return static_cast<int>(metadata_->row_groups.size());
   }
   inline int32_t version() const {
     return metadata_->version;
   }
-  inline const std::string& created_by() const {
+  inline const std::string& createdBy() const {
     return metadata_->created_by;
   }
-  inline int num_schema_elements() const {
+  inline int numSchemaElements() const {
     return static_cast<int>(metadata_->schema.size());
   }
 
-  inline bool is_encryption_algorithm_set() const {
+  inline bool isEncryptionAlgorithmSet() const {
     return metadata_->__isset.encryption_algorithm;
   }
-  inline EncryptionAlgorithm encryption_algorithm() {
-    return FromThrift(metadata_->encryption_algorithm);
+  inline EncryptionAlgorithm encryptionAlgorithm() {
+    return fromThrift(metadata_->encryption_algorithm);
   }
-  inline const std::string& footer_signing_key_metadata() {
+  inline const std::string& footerSigningKeyMetadata() {
     return metadata_->footer_signing_key_metadata;
   }
 
-  const ApplicationVersion& writer_version() const {
-    return writer_version_;
+  const ApplicationVersion& writerVersion() const {
+    return writerVersion_;
   }
 
-  void WriteTo(
+  void writeTo(
       ::arrow::io::OutputStream* dst,
       const std::shared_ptr<Encryptor>& encryptor) const {
     ThriftSerializer serializer;
-    // Only in encrypted files with plaintext footers the
-    // encryption_algorithm is set in footer
-    if (is_encryption_algorithm_set()) {
-      uint8_t* serialized_data;
-      uint32_t serialized_len;
-      serializer.SerializeToBuffer(
-          metadata_.get(), &serialized_len, &serialized_data);
+    // Only in encrypted files with plaintext footers the.
+    // Encryption_algorithm is set in footer.
+    if (isEncryptionAlgorithmSet()) {
+      uint8_t* serializedData;
+      uint32_t serializedLen;
+      serializer.serializeToBuffer(
+          metadata_.get(), &serializedLen, &serializedData);
 
-      // encrypt the footer key
-      std::vector<uint8_t> encrypted_data(
-          encryptor->CiphertextSizeDelta() + serialized_len);
-      unsigned encrypted_len = encryptor->Encrypt(
-          serialized_data, serialized_len, encrypted_data.data());
+      // Encrypt the footer key.
+      std::vector<uint8_t> encryptedData(
+          encryptor->ciphertextSizeDelta() + serializedLen);
+      unsigned encryptedLen = encryptor->encrypt(
+          serializedData, serializedLen, encryptedData.data());
 
-      // write unencrypted footer
-      PARQUET_THROW_NOT_OK(dst->Write(serialized_data, serialized_len));
+      // Write unencrypted footer.
+      PARQUET_THROW_NOT_OK(dst->Write(serializedData, serializedLen));
       // Write signature (nonce and tag)
       PARQUET_THROW_NOT_OK(
-          dst->Write(encrypted_data.data() + 4, encryption::kNonceLength));
+          dst->Write(encryptedData.data() + 4, encryption::kNonceLength));
       PARQUET_THROW_NOT_OK(dst->Write(
-          encrypted_data.data() + encrypted_len - encryption::kGcmTagLength,
+          encryptedData.data() + encryptedLen - encryption::kGcmTagLength,
           encryption::kGcmTagLength));
     } else { // either plaintext file (when encryptor is null)
-      // or encrypted file with encrypted footer
-      serializer.Serialize(metadata_.get(), dst, encryptor);
+      // Or encrypted file with encrypted footer.
+      serializer.serialize(metadata_.get(), dst, encryptor);
     }
   }
 
-  std::unique_ptr<RowGroupMetaData> RowGroup(int i) {
-    if (!(i >= 0 && i < num_row_groups())) {
+  std::unique_ptr<RowGroupMetaData> rowGroup(int i) {
+    if (!(i >= 0 && i < numRowGroups())) {
       std::stringstream ss;
-      ss << "The file only has " << num_row_groups()
+      ss << "The file only has " << numRowGroups()
          << " row groups, requested metadata for row group: " << i;
       throw ParquetException(ss.str());
     }
-    return RowGroupMetaData::Make(
+    return RowGroupMetaData::make(
         &metadata_->row_groups[i],
         &schema_,
         properties_,
-        &writer_version_,
-        file_decryptor_);
+        &writerVersion_,
+        fileDecryptor_);
   }
 
-  bool Equals(const FileMetaDataImpl& other) const {
+  bool equals(const FileMetaDataImpl& other) const {
     return *metadata_ == *other.metadata_;
   }
 
@@ -919,61 +922,60 @@ class FileMetaData::FileMetaDataImpl {
     return &schema_;
   }
 
-  const std::shared_ptr<const KeyValueMetadata>& key_value_metadata() const {
-    return key_value_metadata_;
+  const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata() const {
+    return keyValueMetadata_;
   }
 
-  void set_file_path(const std::string& path) {
-    for (facebook::velox::parquet::thrift::RowGroup& row_group :
+  void setFilePath(const std::string& path) {
+    for (facebook::velox::parquet::thrift::RowGroup& rowGroup :
          metadata_->row_groups) {
       for (facebook::velox::parquet::thrift::ColumnChunk& chunk :
-           row_group.columns) {
+           rowGroup.columns) {
         chunk.__set_file_path(path);
       }
     }
   }
 
-  facebook::velox::parquet::thrift::RowGroup& row_group(int i) {
-    if (!(i >= 0 && i < num_row_groups())) {
+  facebook::velox::parquet::thrift::RowGroup& thriftRowGroup(int i) {
+    if (!(i >= 0 && i < numRowGroups())) {
       std::stringstream ss;
-      ss << "The file only has " << num_row_groups()
+      ss << "The file only has " << numRowGroups()
          << " row groups, requested metadata for row group: " << i;
       throw ParquetException(ss.str());
     }
     return metadata_->row_groups[i];
   }
 
-  void AppendRowGroups(const std::unique_ptr<FileMetaDataImpl>& other) {
-    std::ostringstream diff_output;
-    if (!schema()->Equals(*other->schema(), &diff_output)) {
-      auto msg =
-          "AppendRowGroups requires equal schemas.\n" + diff_output.str();
+  void appendRowGroups(const std::unique_ptr<FileMetaDataImpl>& other) {
+    std::ostringstream diffOutput;
+    if (!schema()->equals(*other->schema(), &diffOutput)) {
+      auto msg = "AppendRowGroups requires equal schemas.\n" + diffOutput.str();
       throw ParquetException(msg);
     }
 
-    // ARROW-13654: `other` may point to self, be careful not to enter an
-    // infinite loop
-    const int n = other->num_row_groups();
-    // ARROW-16613: do not use reserve() as that may suppress overallocation
-    // and incur O(n²) behavior on repeated calls to AppendRowGroups().
-    // (see https://en.cppreference.com/w/cpp/container/vector/reserve
-    //  about inappropriate uses of reserve()).
+    // ARROW-13654: `other` may point to self, be careful not to enter an.
+    // Infinite loop.
+    const int n = other->numRowGroups();
+    // ARROW-16613: do not use reserve() as that may suppress overallocation.
+    // And incur O(n²) behavior on repeated calls to AppendRowGroups().
+    // (See https://en.cppreference.com/w/cpp/container/vector/reserve.
+    //  About inappropriate uses of reserve()).
     const auto start = metadata_->row_groups.size();
     metadata_->row_groups.resize(start + n);
     for (int i = 0; i < n; i++) {
-      metadata_->row_groups[start + i] = other->row_group(i);
+      metadata_->row_groups[start + i] = other->thriftRowGroup(i);
       metadata_->num_rows += metadata_->row_groups[start + i].num_rows;
     }
   }
 
-  std::shared_ptr<FileMetaData> Subset(const std::vector<int>& row_groups) {
-    for (int i : row_groups) {
-      if (i < num_row_groups())
+  std::shared_ptr<FileMetaData> subset(const std::vector<int>& rowGroups) {
+    for (int i : rowGroups) {
+      if (i < numRowGroups())
         continue;
 
       throw ParquetException(
           "The file only has ",
-          num_row_groups(),
+          numRowGroups(),
           " row groups, but requested a subset including row group: ",
           i);
     }
@@ -987,11 +989,11 @@ class FileMetaData::FileMetaDataImpl {
     metadata->version = metadata_->version;
     metadata->schema = metadata_->schema;
 
-    metadata->row_groups.resize(row_groups.size());
+    metadata->row_groups.resize(rowGroups.size());
     int i = 0;
-    for (int selected_index : row_groups) {
-      metadata->num_rows += row_group(selected_index).num_rows;
-      metadata->row_groups[i++] = row_group(selected_index);
+    for (int selectedIndex : rowGroups) {
+      metadata->num_rows += thriftRowGroup(selectedIndex).num_rows;
+      metadata->row_groups[i++] = thriftRowGroup(selectedIndex);
     }
 
     metadata->key_value_metadata = metadata_->key_value_metadata;
@@ -1003,57 +1005,75 @@ class FileMetaData::FileMetaDataImpl {
     metadata->__isset = metadata_->__isset;
 
     out->impl_->schema_ = schema_;
-    out->impl_->writer_version_ = writer_version_;
-    out->impl_->key_value_metadata_ = key_value_metadata_;
-    out->impl_->file_decryptor_ = file_decryptor_;
+    out->impl_->writerVersion_ = writerVersion_;
+    out->impl_->keyValueMetadata_ = keyValueMetadata_;
+    out->impl_->fileDecryptor_ = fileDecryptor_;
 
     return out;
   }
 
-  void set_file_decryptor(
-      std::shared_ptr<InternalFileDecryptor> file_decryptor) {
-    file_decryptor_ = file_decryptor;
+  void setFileDecryptor(std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
+    fileDecryptor_ = fileDecryptor;
+  }
+
+  // Set NaN counts from the builder (called during Finish)
+  // This stores total NaN counts per field ID across all row groups.
+  void setNaNCounts(
+      std::unordered_map<int32_t, std::pair<int64_t, bool>> nan_counts) {
+    fieldNanCounts_ = std::move(nan_counts);
+  }
+
+  // Get total NaN count for a specific field ID across all row groups.
+  std::pair<int64_t, bool> getNaNCount(int32_t fieldId) const {
+    auto it = fieldNanCounts_.find(fieldId);
+    if (it != fieldNanCounts_.end()) {
+      return it->second;
+    }
+    return {0, false};
   }
 
  private:
   friend FileMetaDataBuilder;
-  uint32_t metadata_len_ = 0;
+  uint32_t metadataLen_ = 0;
   std::unique_ptr<facebook::velox::parquet::thrift::FileMetaData> metadata_;
   SchemaDescriptor schema_;
-  ApplicationVersion writer_version_;
-  std::shared_ptr<const KeyValueMetadata> key_value_metadata_;
+  ApplicationVersion writerVersion_;
+  std::shared_ptr<const KeyValueMetadata> keyValueMetadata_;
   const ReaderProperties properties_;
-  std::shared_ptr<InternalFileDecryptor> file_decryptor_;
+  std::shared_ptr<InternalFileDecryptor> fileDecryptor_;
+  // Total NaN counts per field ID across all row groups: field_id ->
+  // (nan_count, has_nan_count).
+  std::unordered_map<int32_t, std::pair<int64_t, bool>> fieldNanCounts_;
 
-  void InitSchema() {
+  void initSchema() {
     if (metadata_->schema.empty()) {
       throw ParquetException("Empty file schema (no root)");
     }
-    schema_.Init(
-        schema::Unflatten(
+    schema_.init(
+        schema::unflatten(
             &metadata_->schema[0], static_cast<int>(metadata_->schema.size())));
   }
 
-  void InitColumnOrders() {
-    // update ColumnOrder
-    std::vector<ColumnOrder> column_orders;
+  void initColumnOrders() {
+    // Update ColumnOrder.
+    std::vector<ColumnOrder> columnOrders;
     if (metadata_->__isset.column_orders) {
-      column_orders.reserve(metadata_->column_orders.size());
-      for (auto column_order : metadata_->column_orders) {
-        if (column_order.__isset.TYPE_ORDER) {
-          column_orders.push_back(ColumnOrder::type_defined_);
+      columnOrders.reserve(metadata_->column_orders.size());
+      for (auto columnOrder : metadata_->column_orders) {
+        if (columnOrder.__isset.TYPE_ORDER) {
+          columnOrders.push_back(ColumnOrder::typeDefined_);
         } else {
-          column_orders.push_back(ColumnOrder::undefined_);
+          columnOrders.push_back(ColumnOrder::undefined_);
         }
       }
     } else {
-      column_orders.resize(schema_.num_columns(), ColumnOrder::undefined_);
+      columnOrders.resize(schema_.numColumns(), ColumnOrder::undefined_);
     }
 
-    schema_.updateColumnOrders(column_orders);
+    schema_.updateColumnOrders(columnOrders);
   }
 
-  void InitKeyValueMetadata() {
+  void initKeyValueMetadata() {
     std::shared_ptr<KeyValueMetadata> metadata = nullptr;
     if (metadata_->__isset.key_value_metadata) {
       metadata = std::make_shared<KeyValueMetadata>();
@@ -1061,96 +1081,96 @@ class FileMetaData::FileMetaDataImpl {
         metadata->Append(it.key, it.value);
       }
     }
-    key_value_metadata_ = std::move(metadata);
+    keyValueMetadata_ = std::move(metadata);
   }
 };
 
-std::shared_ptr<FileMetaData> FileMetaData::Make(
+std::shared_ptr<FileMetaData> FileMetaData::make(
     const void* metadata,
-    uint32_t* metadata_len,
+    uint32_t* metadataLen,
     const ReaderProperties& properties,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
-  // This FileMetaData ctor is private, not compatible with std::make_shared
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
+  // This FileMetaData ctor is private, not compatible with std::make_shared.
   return std::shared_ptr<FileMetaData>(new FileMetaData(
-      metadata, metadata_len, properties, std::move(file_decryptor)));
+      metadata, metadataLen, properties, std::move(fileDecryptor)));
 }
 
-std::shared_ptr<FileMetaData> FileMetaData::Make(
+std::shared_ptr<FileMetaData> FileMetaData::make(
     const void* metadata,
-    uint32_t* metadata_len,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
+    uint32_t* metadataLen,
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
   return std::shared_ptr<FileMetaData>(new FileMetaData(
-      metadata, metadata_len, default_reader_properties(), file_decryptor));
+      metadata, metadataLen, defaultReaderProperties(), fileDecryptor));
 }
 
 FileMetaData::FileMetaData(
     const void* metadata,
-    uint32_t* metadata_len,
+    uint32_t* metadataLen,
     const ReaderProperties& properties,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor)
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor)
     : impl_(new FileMetaDataImpl(
           metadata,
-          metadata_len,
+          metadataLen,
           properties,
-          file_decryptor)) {}
+          fileDecryptor)) {}
 
 FileMetaData::FileMetaData() : impl_(new FileMetaDataImpl()) {}
 
 FileMetaData::~FileMetaData() = default;
 
-bool FileMetaData::Equals(const FileMetaData& other) const {
-  return impl_->Equals(*other.impl_);
+bool FileMetaData::equals(const FileMetaData& other) const {
+  return impl_->equals(*other.impl_);
 }
 
-std::unique_ptr<RowGroupMetaData> FileMetaData::RowGroup(int i) const {
-  return impl_->RowGroup(i);
+std::unique_ptr<RowGroupMetaData> FileMetaData::rowGroup(int i) const {
+  return impl_->rowGroup(i);
 }
 
-bool FileMetaData::VerifySignature(const void* signature) {
-  return impl_->VerifySignature(signature);
+bool FileMetaData::verifySignature(const void* signature) {
+  return impl_->verifySignature(signature);
 }
 
 uint32_t FileMetaData::size() const {
   return impl_->size();
 }
 
-int FileMetaData::num_columns() const {
-  return impl_->num_columns();
+int FileMetaData::numColumns() const {
+  return impl_->numColumns();
 }
 
-int64_t FileMetaData::num_rows() const {
-  return impl_->num_rows();
+int64_t FileMetaData::numRows() const {
+  return impl_->numRows();
 }
 
-int FileMetaData::num_row_groups() const {
-  return impl_->num_row_groups();
+int FileMetaData::numRowGroups() const {
+  return impl_->numRowGroups();
 }
 
-bool FileMetaData::can_decompress() const {
-  int n_row_groups = num_row_groups();
-  for (int i = 0; i < n_row_groups; i++) {
-    if (!RowGroup(i)->can_decompress()) {
+bool FileMetaData::canDecompress() const {
+  int nRowGroups = numRowGroups();
+  for (int i = 0; i < nRowGroups; i++) {
+    if (!rowGroup(i)->canDecompress()) {
       return false;
     }
   }
   return true;
 }
 
-bool FileMetaData::is_encryption_algorithm_set() const {
-  return impl_->is_encryption_algorithm_set();
+bool FileMetaData::isEncryptionAlgorithmSet() const {
+  return impl_->isEncryptionAlgorithmSet();
 }
 
-EncryptionAlgorithm FileMetaData::encryption_algorithm() const {
-  return impl_->encryption_algorithm();
+EncryptionAlgorithm FileMetaData::encryptionAlgorithm() const {
+  return impl_->encryptionAlgorithm();
 }
 
-const std::string& FileMetaData::footer_signing_key_metadata() const {
-  return impl_->footer_signing_key_metadata();
+const std::string& FileMetaData::footerSigningKeyMetadata() const {
+  return impl_->footerSigningKeyMetadata();
 }
 
-void FileMetaData::set_file_decryptor(
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
-  impl_->set_file_decryptor(file_decryptor);
+void FileMetaData::setFileDecryptor(
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
+  impl_->setFileDecryptor(fileDecryptor);
 }
 
 ParquetVersion::type FileMetaData::version() const {
@@ -1160,50 +1180,54 @@ ParquetVersion::type FileMetaData::version() const {
     case 2:
       return ParquetVersion::PARQUET_2_LATEST;
     default:
-      // Improperly set version, assuming Parquet 1.0
+      // Improperly set version, assuming Parquet 1.0.
       break;
   }
   return ParquetVersion::PARQUET_1_0;
 }
 
-const ApplicationVersion& FileMetaData::writer_version() const {
-  return impl_->writer_version();
+const ApplicationVersion& FileMetaData::writerVersion() const {
+  return impl_->writerVersion();
 }
 
-const std::string& FileMetaData::created_by() const {
-  return impl_->created_by();
+const std::string& FileMetaData::createdBy() const {
+  return impl_->createdBy();
 }
 
-int FileMetaData::num_schema_elements() const {
-  return impl_->num_schema_elements();
+int FileMetaData::numSchemaElements() const {
+  return impl_->numSchemaElements();
 }
 
 const SchemaDescriptor* FileMetaData::schema() const {
   return impl_->schema();
 }
 
-const std::shared_ptr<const KeyValueMetadata>&
-FileMetaData::key_value_metadata() const {
-  return impl_->key_value_metadata();
+const std::shared_ptr<const KeyValueMetadata>& FileMetaData::keyValueMetadata()
+    const {
+  return impl_->keyValueMetadata();
 }
 
-void FileMetaData::set_file_path(const std::string& path) {
-  impl_->set_file_path(path);
+void FileMetaData::setFilePath(const std::string& path) {
+  impl_->setFilePath(path);
 }
 
-void FileMetaData::AppendRowGroups(const FileMetaData& other) {
-  impl_->AppendRowGroups(other.impl_);
+void FileMetaData::appendRowGroups(const FileMetaData& other) {
+  impl_->appendRowGroups(other.impl_);
 }
 
-std::shared_ptr<FileMetaData> FileMetaData::Subset(
-    const std::vector<int>& row_groups) const {
-  return impl_->Subset(row_groups);
+std::shared_ptr<FileMetaData> FileMetaData::subset(
+    const std::vector<int>& rowGroups) const {
+  return impl_->subset(rowGroups);
 }
 
-void FileMetaData::WriteTo(
+std::pair<int64_t, bool> FileMetaData::getNaNCount(int32_t fieldId) const {
+  return impl_->getNaNCount(fieldId);
+}
+
+void FileMetaData::writeTo(
     ::arrow::io::OutputStream* dst,
     const std::shared_ptr<Encryptor>& encryptor) const {
-  return impl_->WriteTo(dst, encryptor);
+  return impl_->writeTo(dst, encryptor);
 }
 
 class FileCryptoMetaData::FileCryptoMetaDataImpl {
@@ -1212,55 +1236,55 @@ class FileCryptoMetaData::FileCryptoMetaDataImpl {
 
   explicit FileCryptoMetaDataImpl(
       const uint8_t* metadata,
-      uint32_t* metadata_len,
+      uint32_t* metadataLen,
       const ReaderProperties& properties) {
     ThriftDeserializer deserializer(properties);
-    deserializer.DeserializeMessage(metadata, metadata_len, &metadata_);
-    metadata_len_ = *metadata_len;
+    deserializer.deserializeMessage(metadata, metadataLen, &metadata_);
+    metadataLen_ = *metadataLen;
   }
 
-  EncryptionAlgorithm encryption_algorithm() const {
-    return FromThrift(metadata_.encryption_algorithm);
+  EncryptionAlgorithm encryptionAlgorithm() const {
+    return fromThrift(metadata_.encryption_algorithm);
   }
 
-  const std::string& key_metadata() const {
+  const std::string& keyMetadata() const {
     return metadata_.key_metadata;
   }
 
-  void WriteTo(::arrow::io::OutputStream* dst) const {
+  void writeTo(::arrow::io::OutputStream* dst) const {
     ThriftSerializer serializer;
-    serializer.Serialize(&metadata_, dst);
+    serializer.serialize(&metadata_, dst);
   }
 
  private:
   friend FileMetaDataBuilder;
   facebook::velox::parquet::thrift::FileCryptoMetaData metadata_;
-  uint32_t metadata_len_;
+  uint32_t metadataLen_;
 };
 
-EncryptionAlgorithm FileCryptoMetaData::encryption_algorithm() const {
-  return impl_->encryption_algorithm();
+EncryptionAlgorithm FileCryptoMetaData::encryptionAlgorithm() const {
+  return impl_->encryptionAlgorithm();
 }
 
-const std::string& FileCryptoMetaData::key_metadata() const {
-  return impl_->key_metadata();
+const std::string& FileCryptoMetaData::keyMetadata() const {
+  return impl_->keyMetadata();
 }
 
-std::shared_ptr<FileCryptoMetaData> FileCryptoMetaData::Make(
-    const uint8_t* serialized_metadata,
-    uint32_t* metadata_len,
+std::shared_ptr<FileCryptoMetaData> FileCryptoMetaData::make(
+    const uint8_t* serializedMetadata,
+    uint32_t* metadataLen,
     const ReaderProperties& properties) {
   return std::shared_ptr<FileCryptoMetaData>(
-      new FileCryptoMetaData(serialized_metadata, metadata_len, properties));
+      new FileCryptoMetaData(serializedMetadata, metadataLen, properties));
 }
 
 FileCryptoMetaData::FileCryptoMetaData(
-    const uint8_t* serialized_metadata,
-    uint32_t* metadata_len,
+    const uint8_t* serializedMetadata,
+    uint32_t* metadataLen,
     const ReaderProperties& properties)
     : impl_(new FileCryptoMetaDataImpl(
-          serialized_metadata,
-          metadata_len,
+          serializedMetadata,
+          metadataLen,
           properties)) {}
 
 FileCryptoMetaData::FileCryptoMetaData()
@@ -1268,18 +1292,18 @@ FileCryptoMetaData::FileCryptoMetaData()
 
 FileCryptoMetaData::~FileCryptoMetaData() = default;
 
-void FileCryptoMetaData::WriteTo(::arrow::io::OutputStream* dst) const {
-  impl_->WriteTo(dst);
+void FileCryptoMetaData::writeTo(::arrow::io::OutputStream* dst) const {
+  impl_->writeTo(dst);
 }
 
-std::string FileMetaData::SerializeToString() const {
-  // We need to pass in an initial size. Since it will automatically
-  // increase the buffer size to hold the metadata, we just leave it 0.
+std::string FileMetaData::serializeToString() const {
+  // We need to pass in an initial size. Since it will automatically.
+  // Increase the buffer size to hold the metadata, we just leave it 0.
   PARQUET_ASSIGN_OR_THROW(
       auto serializer, ::arrow::io::BufferOutputStream::Create(0));
-  WriteTo(serializer.get());
-  PARQUET_ASSIGN_OR_THROW(auto metadata_buffer, serializer->Finish());
-  return metadata_buffer->ToString();
+  writeTo(serializer.get());
+  PARQUET_ASSIGN_OR_THROW(auto metadataBuffer, serializer->Finish());
+  return metadataBuffer->ToString();
 }
 
 ApplicationVersion::ApplicationVersion(
@@ -1291,609 +1315,618 @@ ApplicationVersion::ApplicationVersion(
       version{major, minor, patch, "", "", ""} {}
 
 namespace {
-// Parse the application version format and set parsed values to
+// Parse the application version format and set parsed values to.
 // ApplicationVersion.
 //
-// The application version format must be compatible parquet-mr's
-// one. See also:
-//   * https://github.com/apache/parquet-mr/blob/master/parquet-common/src/main/java/org/apache/parquet/VersionParser.java
-//   * https://github.com/apache/parquet-mr/blob/master/parquet-common/src/main/java/org/apache/parquet/SemanticVersion.java
+// The application version format must be compatible parquet-mr's.
+// One. See also:
+//   * Https://github.com/apache/parquet-mr/blob/master/parquet-common/src/main/java/org/apache/parquet/VersionParser.java.
+//   * Https://github.com/apache/parquet-mr/blob/master/parquet-common/src/main/java/org/apache/parquet/SemanticVersion.java.
 //
 // The application version format:
-//   "${APPLICATION_NAME}"
-//   "${APPLICATION_NAME} version ${VERSION}"
-//   "${APPLICATION_NAME} version ${VERSION} (build ${BUILD_NAME})"
+//   "${APPLICATION_NAME}".
+//   "${APPLICATION_NAME} version ${VERSION}".
+//   "${APPLICATION_NAME} version ${VERSION} (build ${BUILD_NAME})".
 //
 // Eg:
-//   parquet-cpp
-//   parquet-cpp version 1.5.0ab-xyz5.5.0+cd
+//   Parquet-cpp.
+//   Parquet-cpp version 1.5.0ab-xyz5.5.0+cd.
 //   parquet-cpp version 1.5.0ab-xyz5.5.0+cd (build abcd)
 //
 // The VERSION format:
-//   "${MAJOR}"
-//   "${MAJOR}.${MINOR}"
-//   "${MAJOR}.${MINOR}.${PATCH}"
-//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}"
-//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}-${PRE_RELEASE}"
-//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}-${PRE_RELEASE}+${BUILD_INFO}"
-//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}+${BUILD_INFO}"
-//   "${MAJOR}.${MINOR}.${PATCH}-${PRE_RELEASE}"
-//   "${MAJOR}.${MINOR}.${PATCH}-${PRE_RELEASE}+${BUILD_INFO}"
-//   "${MAJOR}.${MINOR}.${PATCH}+${BUILD_INFO}"
+//   "${MAJOR}".
+//   "${MAJOR}.${MINOR}".
+//   "${MAJOR}.${MINOR}.${PATCH}".
+//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}".
+//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}-${PRE_RELEASE}".
+//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}-${PRE_RELEASE}+${BUILD_INFO}".
+//   "${MAJOR}.${MINOR}.${PATCH}${UNKNOWN}+${BUILD_INFO}".
+//   "${MAJOR}.${MINOR}.${PATCH}-${PRE_RELEASE}".
+//   "${MAJOR}.${MINOR}.${PATCH}-${PRE_RELEASE}+${BUILD_INFO}".
+//   "${MAJOR}.${MINOR}.${PATCH}+${BUILD_INFO}".
 //
 // Eg:
-//   1
-//   1.5
-//   1.5.0
-//   1.5.0ab
-//   1.5.0ab-cdh5.5.0
-//   1.5.0ab-cdh5.5.0+cd
-//   1.5.0ab+cd
-//   1.5.0-cdh5.5.0
-//   1.5.0-cdh5.5.0+cd
-//   1.5.0+cd
+//   1.
+//   1.5.
+//   1.5.0.
+//   1.5.0Ab.
+//   1.5.0Ab-cdh5.5.0.
+//   1.5.0Ab-cdh5.5.0+cd.
+//   1.5.0Ab+cd.
+//   1.5.0-Cdh5.5.0.
+//   1.5.0-Cdh5.5.0+cd.
+//   1.5.0+Cd.
 class ApplicationVersionParser {
  public:
   ApplicationVersionParser(
-      const std::string& created_by,
-      ApplicationVersion& application_version)
-      : created_by_(created_by),
-        application_version_(application_version),
+      const std::string& createdBy,
+      ApplicationVersion& ApplicationVersion)
+      : createdBy_(createdBy),
+        ApplicationVersion_(ApplicationVersion),
         spaces_(" \t\v\r\n\f"),
         digits_("0123456789") {}
 
-  void Parse() {
-    application_version_.application_ = "unknown";
-    application_version_.version = {0, 0, 0, "", "", ""};
+  void parse() {
+    ApplicationVersion_.application_ = "unknown";
+    ApplicationVersion_.version = {0, 0, 0, "", "", ""};
 
-    if (!ParseApplicationName()) {
+    if (!parseApplicationName()) {
       return;
     }
-    if (!ParseVersion()) {
+    if (!parseVersion()) {
       return;
     }
-    if (!ParseBuildName()) {
+    if (!parseBuildName()) {
       return;
     }
   }
 
  private:
-  bool IsSpace(const std::string& string, const size_t& offset) {
-    auto target = ::std::string_view(string).substr(offset, 1);
+  bool isSpace(const std::string& text, const size_t& offset) {
+    auto target = ::std::string_view(text).substr(offset, 1);
     return target.find_first_of(spaces_) != ::std::string_view::npos;
   }
 
-  void RemovePrecedingSpaces(
-      const std::string& string,
+  void removePrecedingSpaces(
+      const std::string& text,
       size_t& start,
       const size_t& end) {
-    while (start < end && IsSpace(string, start)) {
+    while (start < end && isSpace(text, start)) {
       ++start;
     }
   }
 
-  void RemoveTrailingSpaces(
-      const std::string& string,
+  void removeTrailingSpaces(
+      const std::string& text,
       const size_t& start,
       size_t& end) {
-    while (start < (end - 1) && (end - 1) < string.size() &&
-           IsSpace(string, end - 1)) {
+    while (start < (end - 1) && (end - 1) < text.size() &&
+           isSpace(text, end - 1)) {
       --end;
     }
   }
 
-  bool ParseApplicationName() {
-    std::string version_mark(" version ");
-    auto version_mark_position = created_by_.find(version_mark);
-    size_t application_name_end;
+  bool parseApplicationName() {
+    std::string versionMark(" version ");
+    auto versionMarkPosition = createdBy_.find(versionMark);
+    size_t applicationNameEnd;
     // No VERSION and BUILD_NAME.
-    if (version_mark_position == std::string::npos) {
-      version_start_ = std::string::npos;
-      application_name_end = created_by_.size();
+    if (versionMarkPosition == std::string::npos) {
+      versionStart_ = std::string::npos;
+      applicationNameEnd = createdBy_.size();
     } else {
-      version_start_ = version_mark_position + version_mark.size();
-      application_name_end = version_mark_position;
+      versionStart_ = versionMarkPosition + versionMark.size();
+      applicationNameEnd = versionMarkPosition;
     }
 
-    size_t application_name_start = 0;
-    RemovePrecedingSpaces(
-        created_by_, application_name_start, application_name_end);
-    RemoveTrailingSpaces(
-        created_by_, application_name_start, application_name_end);
-    application_version_.application_ = created_by_.substr(
-        application_name_start, application_name_end - application_name_start);
+    size_t applicationNameStart = 0;
+    removePrecedingSpaces(createdBy_, applicationNameStart, applicationNameEnd);
+    removeTrailingSpaces(createdBy_, applicationNameStart, applicationNameEnd);
+    ApplicationVersion_.application_ = createdBy_.substr(
+        applicationNameStart, applicationNameEnd - applicationNameStart);
 
     return true;
   }
 
-  bool ParseVersion() {
+  bool parseVersion() {
     // No VERSION.
-    if (version_start_ == std::string::npos) {
+    if (versionStart_ == std::string::npos) {
       return false;
     }
 
-    RemovePrecedingSpaces(created_by_, version_start_, created_by_.size());
-    version_end_ = created_by_.find(" (", version_start_);
+    removePrecedingSpaces(createdBy_, versionStart_, createdBy_.size());
+    versionEnd_ = createdBy_.find(" (", versionStart_);
     // No BUILD_NAME.
-    if (version_end_ == std::string::npos) {
-      version_end_ = created_by_.size();
+    if (versionEnd_ == std::string::npos) {
+      versionEnd_ = createdBy_.size();
     }
-    RemoveTrailingSpaces(created_by_, version_start_, version_end_);
+    removeTrailingSpaces(createdBy_, versionStart_, versionEnd_);
     // No VERSION.
-    if (version_start_ == version_end_) {
+    if (versionStart_ == versionEnd_) {
       return false;
     }
-    version_string_ =
-        created_by_.substr(version_start_, version_end_ - version_start_);
+    versionString_ =
+        createdBy_.substr(versionStart_, versionEnd_ - versionStart_);
 
-    if (!ParseVersionMajor()) {
+    if (!parseVersionMajor()) {
       return false;
     }
-    if (!ParseVersionMinor()) {
+    if (!parseVersionMinor()) {
       return false;
     }
-    if (!ParseVersionPatch()) {
+    if (!parseVersionPatch()) {
       return false;
     }
-    if (!ParseVersionUnknown()) {
+    if (!parseVersionUnknown()) {
       return false;
     }
-    if (!ParseVersionPreRelease()) {
+    if (!parseVersionPreRelease()) {
       return false;
     }
-    if (!ParseVersionBuildInfo()) {
+    if (!parseVersionBuildInfo()) {
       return false;
     }
 
     return true;
   }
 
-  bool ParseVersionMajor() {
-    size_t version_major_start = 0;
-    auto version_major_end = version_string_.find_first_not_of(digits_);
+  bool parseVersionMajor() {
+    size_t versionMajorStart = 0;
+    auto versionMajorEnd = versionString_.find_first_not_of(digits_);
     // MAJOR only.
-    if (version_major_end == std::string::npos) {
-      version_major_end = version_string_.size();
-      version_parsing_position_ = version_major_end;
+    if (versionMajorEnd == std::string::npos) {
+      versionMajorEnd = versionString_.size();
+      versionParsingPosition_ = versionMajorEnd;
     } else {
       // No ".".
-      if (version_string_[version_major_end] != '.') {
+      if (versionString_[versionMajorEnd] != '.') {
         return false;
       }
       // No MAJOR.
-      if (version_major_end == version_major_start) {
+      if (versionMajorEnd == versionMajorStart) {
         return false;
       }
-      version_parsing_position_ = version_major_end + 1; // +1 is for '.'.
+      versionParsingPosition_ = versionMajorEnd + 1; // +1 is for '.'.
     }
-    auto version_major_string = version_string_.substr(
-        version_major_start, version_major_end - version_major_start);
-    application_version_.version.major = atoi(version_major_string.c_str());
+    auto versionMajorString = versionString_.substr(
+        versionMajorStart, versionMajorEnd - versionMajorStart);
+    ApplicationVersion_.version.major = atoi(versionMajorString.c_str());
     return true;
   }
 
-  bool ParseVersionMinor() {
-    auto version_minor_start = version_parsing_position_;
-    auto version_minor_end =
-        version_string_.find_first_not_of(digits_, version_minor_start);
+  bool parseVersionMinor() {
+    auto versionMinorStart = versionParsingPosition_;
+    auto versionMinorEnd =
+        versionString_.find_first_not_of(digits_, versionMinorStart);
     // MAJOR.MINOR only.
-    if (version_minor_end == std::string::npos) {
-      version_minor_end = version_string_.size();
-      version_parsing_position_ = version_minor_end;
+    if (versionMinorEnd == std::string::npos) {
+      versionMinorEnd = versionString_.size();
+      versionParsingPosition_ = versionMinorEnd;
     } else {
       // No ".".
-      if (version_string_[version_minor_end] != '.') {
+      if (versionString_[versionMinorEnd] != '.') {
         return false;
       }
       // No MINOR.
-      if (version_minor_end == version_minor_start) {
+      if (versionMinorEnd == versionMinorStart) {
         return false;
       }
-      version_parsing_position_ = version_minor_end + 1; // +1 is for '.'.
+      versionParsingPosition_ = versionMinorEnd + 1; // +1 is for '.'.
     }
-    auto version_minor_string = version_string_.substr(
-        version_minor_start, version_minor_end - version_minor_start);
-    application_version_.version.minor = atoi(version_minor_string.c_str());
+    auto versionMinorString = versionString_.substr(
+        versionMinorStart, versionMinorEnd - versionMinorStart);
+    ApplicationVersion_.version.minor = atoi(versionMinorString.c_str());
     return true;
   }
 
-  bool ParseVersionPatch() {
-    auto version_patch_start = version_parsing_position_;
-    auto version_patch_end =
-        version_string_.find_first_not_of(digits_, version_patch_start);
+  bool parseVersionPatch() {
+    auto versionPatchStart = versionParsingPosition_;
+    auto versionPatchEnd =
+        versionString_.find_first_not_of(digits_, versionPatchStart);
     // No UNKNOWN, PRE_RELEASE and BUILD_INFO.
-    if (version_patch_end == std::string::npos) {
-      version_patch_end = version_string_.size();
+    if (versionPatchEnd == std::string::npos) {
+      versionPatchEnd = versionString_.size();
     }
     // No PATCH.
-    if (version_patch_end == version_patch_start) {
+    if (versionPatchEnd == versionPatchStart) {
       return false;
     }
-    auto version_patch_string = version_string_.substr(
-        version_patch_start, version_patch_end - version_patch_start);
-    application_version_.version.patch = atoi(version_patch_string.c_str());
-    version_parsing_position_ = version_patch_end;
+    auto versionPatchString = versionString_.substr(
+        versionPatchStart, versionPatchEnd - versionPatchStart);
+    ApplicationVersion_.version.patch = atoi(versionPatchString.c_str());
+    versionParsingPosition_ = versionPatchEnd;
     return true;
   }
 
-  bool ParseVersionUnknown() {
+  bool parseVersionUnknown() {
     // No UNKNOWN.
-    if (version_parsing_position_ == version_string_.size()) {
+    if (versionParsingPosition_ == versionString_.size()) {
       return true;
     }
-    auto version_unknown_start = version_parsing_position_;
-    auto version_unknown_end =
-        version_string_.find_first_of("-+", version_unknown_start);
-    // No PRE_RELEASE and BUILD_INFO
-    if (version_unknown_end == std::string::npos) {
-      version_unknown_end = version_string_.size();
+    auto versionUnknownStart = versionParsingPosition_;
+    auto versionUnknownEnd =
+        versionString_.find_first_of("-+", versionUnknownStart);
+    // No PRE_RELEASE and BUILD_INFO.
+    if (versionUnknownEnd == std::string::npos) {
+      versionUnknownEnd = versionString_.size();
     }
-    application_version_.version.unknown = version_string_.substr(
-        version_unknown_start, version_unknown_end - version_unknown_start);
-    version_parsing_position_ = version_unknown_end;
+    ApplicationVersion_.version.unknown = versionString_.substr(
+        versionUnknownStart, versionUnknownEnd - versionUnknownStart);
+    versionParsingPosition_ = versionUnknownEnd;
     return true;
   }
 
-  bool ParseVersionPreRelease() {
+  bool parseVersionPreRelease() {
     // No PRE_RELEASE.
-    if (version_parsing_position_ == version_string_.size() ||
-        version_string_[version_parsing_position_] != '-') {
+    if (versionParsingPosition_ == versionString_.size() ||
+        versionString_[versionParsingPosition_] != '-') {
       return true;
     }
 
-    auto version_pre_release_start =
-        version_parsing_position_ + 1; // +1 is for '-'.
-    auto version_pre_release_end =
-        version_string_.find_first_of("+", version_pre_release_start);
-    // No BUILD_INFO
-    if (version_pre_release_end == std::string::npos) {
-      version_pre_release_end = version_string_.size();
-    }
-    application_version_.version.pre_release = version_string_.substr(
-        version_pre_release_start,
-        version_pre_release_end - version_pre_release_start);
-    version_parsing_position_ = version_pre_release_end;
-    return true;
-  }
-
-  bool ParseVersionBuildInfo() {
+    auto versionPreReleaseStart = versionParsingPosition_ + 1; // +1 is for '-'.
+    auto versionPreReleaseEnd =
+        versionString_.find_first_of("+", versionPreReleaseStart);
     // No BUILD_INFO.
-    if (version_parsing_position_ == version_string_.size() ||
-        version_string_[version_parsing_position_] != '+') {
+    if (versionPreReleaseEnd == std::string::npos) {
+      versionPreReleaseEnd = versionString_.size();
+    }
+    ApplicationVersion_.version.preRelease = versionString_.substr(
+        versionPreReleaseStart, versionPreReleaseEnd - versionPreReleaseStart);
+    versionParsingPosition_ = versionPreReleaseEnd;
+    return true;
+  }
+
+  bool parseVersionBuildInfo() {
+    // No BUILD_INFO.
+    if (versionParsingPosition_ == versionString_.size() ||
+        versionString_[versionParsingPosition_] != '+') {
       return true;
     }
 
-    auto version_build_info_start =
-        version_parsing_position_ + 1; // +1 is for '+'.
-    application_version_.version.build_info =
-        version_string_.substr(version_build_info_start);
+    auto versionBuildInfoStart = versionParsingPosition_ + 1; // +1 is for '+'.
+    ApplicationVersion_.version.buildInfo =
+        versionString_.substr(versionBuildInfoStart);
     return true;
   }
 
-  bool ParseBuildName() {
-    std::string build_mark(" (build ");
-    auto build_mark_position = created_by_.find(build_mark, version_end_);
+  bool parseBuildName() {
+    std::string buildMark(" (build ");
+    auto buildMarkPosition = createdBy_.find(buildMark, versionEnd_);
     // No BUILD_NAME.
-    if (build_mark_position == std::string::npos) {
+    if (buildMarkPosition == std::string::npos) {
       return false;
     }
-    auto build_name_start = build_mark_position + build_mark.size();
-    RemovePrecedingSpaces(created_by_, build_name_start, created_by_.size());
-    auto build_name_end = created_by_.find_first_of(")", build_name_start);
+    auto buildNameStart = buildMarkPosition + buildMark.size();
+    removePrecedingSpaces(createdBy_, buildNameStart, createdBy_.size());
+    auto buildNameEnd = createdBy_.find_first_of(")", buildNameStart);
     // No end ")".
-    if (build_name_end == std::string::npos) {
+    if (buildNameEnd == std::string::npos) {
       return false;
     }
-    RemoveTrailingSpaces(created_by_, build_name_start, build_name_end);
-    application_version_.build_ =
-        created_by_.substr(build_name_start, build_name_end - build_name_start);
+    removeTrailingSpaces(createdBy_, buildNameStart, buildNameEnd);
+    ApplicationVersion_.build_ =
+        createdBy_.substr(buildNameStart, buildNameEnd - buildNameStart);
 
     return true;
   }
 
-  const std::string& created_by_;
-  ApplicationVersion& application_version_;
+  const std::string& createdBy_;
+  ApplicationVersion& ApplicationVersion_;
 
   // For parsing.
   std::string spaces_;
   std::string digits_;
-  size_t version_parsing_position_;
-  size_t version_start_;
-  size_t version_end_;
-  std::string version_string_;
+  size_t versionParsingPosition_;
+  size_t versionStart_;
+  size_t versionEnd_;
+  std::string versionString_;
 };
 } // namespace
 
-ApplicationVersion::ApplicationVersion(const std::string& created_by) {
-  ApplicationVersionParser parser(created_by, *this);
-  parser.Parse();
+ApplicationVersion::ApplicationVersion(const std::string& createdBy) {
+  ApplicationVersionParser parser(createdBy, *this);
+  parser.parse();
 }
 
-bool ApplicationVersion::VersionLt(
-    const ApplicationVersion& other_version) const {
-  if (application_ != other_version.application_)
+bool ApplicationVersion::versionLt(
+    const ApplicationVersion& otherVersion) const {
+  if (application_ != otherVersion.application_)
     return false;
 
-  if (version.major < other_version.version.major)
+  if (version.major < otherVersion.version.major)
     return true;
-  if (version.major > other_version.version.major)
+  if (version.major > otherVersion.version.major)
     return false;
-  VELOX_DCHECK_EQ(version.major, other_version.version.major);
-  if (version.minor < other_version.version.minor)
+  VELOX_DCHECK_EQ(version.major, otherVersion.version.major);
+  if (version.minor < otherVersion.version.minor)
     return true;
-  if (version.minor > other_version.version.minor)
+  if (version.minor > otherVersion.version.minor)
     return false;
-  VELOX_DCHECK_EQ(version.minor, other_version.version.minor);
-  return version.patch < other_version.version.patch;
+  VELOX_DCHECK_EQ(version.minor, otherVersion.version.minor);
+  return version.patch < otherVersion.version.patch;
 }
 
-bool ApplicationVersion::VersionEq(
-    const ApplicationVersion& other_version) const {
-  return application_ == other_version.application_ &&
-      version.major == other_version.version.major &&
-      version.minor == other_version.version.minor &&
-      version.patch == other_version.version.patch;
+bool ApplicationVersion::versionEq(
+    const ApplicationVersion& otherVersion) const {
+  return application_ == otherVersion.application_ &&
+      version.major == otherVersion.version.major &&
+      version.minor == otherVersion.version.minor &&
+      version.patch == otherVersion.version.patch;
 }
 
 // Reference:
-// parquet-mr/parquet-column/src/main/java/org/apache/parquet/CorruptStatistics.java
-// PARQUET-686 has more discussion on statistics
-bool ApplicationVersion::HasCorrectStatistics(
-    Type::type col_type,
+// Parquet-mr/parquet-column/src/main/java/org/apache/parquet/CorruptStatistics.java.
+// PARQUET-686 has more discussion on statistics.
+bool ApplicationVersion::hasCorrectStatistics(
+    Type::type colType,
     EncodedStatistics& statistics,
-    SortOrder::type sort_order) const {
-  // parquet-cpp version 1.3.0 and parquet-mr 1.10.0 onwards stats are computed
-  // correctly for all types
+    SortOrder::type sortOrder) const {
+  // Parquet-cpp version 1.3.0 and parquet-mr 1.10.0 onwards stats are computed
+  // correctly for all types.
   if ((application_ == "parquet-cpp" &&
-       VersionLt(PARQUET_CPP_FIXED_STATS_VERSION())) ||
+       versionLt(PARQUET_CPP_FIXED_STATS_VERSION())) ||
       (application_ == "parquet-mr" &&
-       VersionLt(PARQUET_MR_FIXED_STATS_VERSION()))) {
-    // Only SIGNED are valid unless max and min are the same
+       versionLt(PARQUET_MR_FIXED_STATS_VERSION()))) {
+    // Only SIGNED are valid unless max and min are the same.
     // (in which case the sort order does not matter)
-    bool max_equals_min = statistics.has_min && statistics.has_max
+    bool maxEqualsMin = statistics.hasMin && statistics.hasMax
         ? statistics.min() == statistics.max()
         : false;
-    if (SortOrder::SIGNED != sort_order && !max_equals_min) {
+    if (SortOrder::kSigned != sortOrder && !maxEqualsMin) {
       return false;
     }
 
-    // Statistics of other types are OK
-    if (col_type != Type::FIXED_LEN_BYTE_ARRAY &&
-        col_type != Type::BYTE_ARRAY) {
+    // Statistics of other types are OK.
+    if (colType != Type::kFixedLenByteArray && colType != Type::kByteArray) {
       return true;
     }
   }
-  // created_by is not populated, which could have been caused by
-  // parquet-mr during the same time as PARQUET-251, see PARQUET-297
+  // Created_by is not populated, which could have been caused by
+  // Parquet-mr during the same time as PARQUET-251, see PARQUET-297.
   if (application_ == "unknown") {
     return true;
   }
 
-  // Unknown sort order has incorrect stats
-  if (SortOrder::UNKNOWN == sort_order) {
+  // Unknown sort order has incorrect stats.
+  if (SortOrder::kUnknown == sortOrder) {
     return false;
   }
 
-  // PARQUET-251
-  if (VersionLt(PARQUET_251_FIXED_VERSION())) {
+  // PARQUET-251.
+  if (versionLt(PARQUET_251_FIXED_VERSION())) {
     return false;
   }
 
   return true;
 }
 
-// MetaData Builders
-// row-group metadata
+// MetaData Builders.
+// Row-group metadata.
 class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
  public:
   explicit ColumnChunkMetaDataBuilderImpl(
       std::shared_ptr<WriterProperties> props,
       const ColumnDescriptor* column)
-      : owned_column_chunk_(new facebook::velox::parquet::thrift::ColumnChunk),
+      : ownedColumnChunk_(new facebook::velox::parquet::thrift::ColumnChunk),
         properties_(std::move(props)),
         column_(column) {
-    Init(owned_column_chunk_.get());
+    init(ownedColumnChunk_.get());
   }
 
   explicit ColumnChunkMetaDataBuilderImpl(
       std::shared_ptr<WriterProperties> props,
       const ColumnDescriptor* column,
-      facebook::velox::parquet::thrift::ColumnChunk* column_chunk)
+      facebook::velox::parquet::thrift::ColumnChunk* columnChunk)
       : properties_(std::move(props)), column_(column) {
-    Init(column_chunk);
+    init(columnChunk);
   }
 
-  const void* contents() const {
-    return column_chunk_;
+  const void* Contents() const {
+    return columnChunk_;
   }
 
-  // column chunk
-  void set_file_path(const std::string& val) {
-    column_chunk_->__set_file_path(val);
+  // Column chunk.
+  void setFilePath(const std::string& val) {
+    columnChunk_->__set_file_path(val);
   }
 
-  // column metadata
-  void SetStatistics(const EncodedStatistics& val) {
-    column_chunk_->meta_data.__set_statistics(ToThrift(val));
+  // Column metadata.
+  void setStatistics(const EncodedStatistics& val) {
+    columnChunk_->meta_data.__set_statistics(toThrift(val));
+    // Store NaN count separately since it's not written to the parquet file.
+    if (val.hasNanCount) {
+      nanCount_ = val.nanCount;
+      hasNanCount_ = true;
+    }
   }
 
-  void Finish(
+  int64_t nanCount() const {
+    return nanCount_;
+  }
+
+  bool hasNanCount() const {
+    return hasNanCount_;
+  }
+
+  void finish(
       int64_t num_values,
       int64_t dictionary_page_offset,
       int64_t index_page_offset,
       int64_t data_page_offset,
-      int64_t compressed_size,
-      int64_t uncompressed_size,
-      bool has_dictionary,
-      bool dictionary_fallback,
-      const std::map<Encoding::type, int32_t>& dict_encoding_stats,
-      const std::map<Encoding::type, int32_t>& data_encoding_stats,
+      int64_t compressedSize,
+      int64_t uncompressedSize,
+      bool hasDictionary,
+      bool dictionaryFallback,
+      const std::map<Encoding::type, int32_t>& dictEncodingStats,
+      const std::map<Encoding::type, int32_t>& dataEncodingStats,
       const std::shared_ptr<Encryptor>& encryptor) {
     if (dictionary_page_offset > 0) {
-      column_chunk_->meta_data.__set_dictionary_page_offset(
+      columnChunk_->meta_data.__set_dictionary_page_offset(
           dictionary_page_offset);
-      column_chunk_->__set_file_offset(
-          dictionary_page_offset + compressed_size);
+      columnChunk_->__set_file_offset(dictionary_page_offset + compressedSize);
     } else {
-      column_chunk_->__set_file_offset(data_page_offset + compressed_size);
+      columnChunk_->__set_file_offset(data_page_offset + compressedSize);
     }
-    column_chunk_->__isset.meta_data = true;
-    column_chunk_->meta_data.__set_num_values(num_values);
+    columnChunk_->__isset.meta_data = true;
+    columnChunk_->meta_data.__set_num_values(num_values);
     if (index_page_offset >= 0) {
-      column_chunk_->meta_data.__set_index_page_offset(index_page_offset);
+      columnChunk_->meta_data.__set_index_page_offset(index_page_offset);
     }
-    column_chunk_->meta_data.__set_data_page_offset(data_page_offset);
-    column_chunk_->meta_data.__set_total_uncompressed_size(uncompressed_size);
-    column_chunk_->meta_data.__set_total_compressed_size(compressed_size);
+    columnChunk_->meta_data.__set_data_page_offset(data_page_offset);
+    columnChunk_->meta_data.__set_total_uncompressed_size(uncompressedSize);
+    columnChunk_->meta_data.__set_total_compressed_size(compressedSize);
 
     std::vector<facebook::velox::parquet::thrift::Encoding::type>
-        thrift_encodings;
+        thriftEncodings;
     std::vector<facebook::velox::parquet::thrift::PageEncodingStats>
-        thrift_encoding_stats;
-    auto add_encoding =
-        [&thrift_encodings](
+        thriftEncodingStats;
+    auto addEncoding =
+        [&thriftEncodings](
             facebook::velox::parquet::thrift::Encoding::type value) {
           auto it = std::find(
-              thrift_encodings.cbegin(), thrift_encodings.cend(), value);
-          if (it == thrift_encodings.cend()) {
-            thrift_encodings.push_back(value);
+              thriftEncodings.cbegin(), thriftEncodings.cend(), value);
+          if (it == thriftEncodings.cend()) {
+            thriftEncodings.push_back(value);
           }
         };
-    // Add dictionary page encoding stats
-    if (has_dictionary) {
-      for (const auto& entry : dict_encoding_stats) {
-        facebook::velox::parquet::thrift::PageEncodingStats dict_enc_stat;
-        dict_enc_stat.__set_page_type(
+    // Add dictionary page encoding stats.
+    if (hasDictionary) {
+      for (const auto& entry : dictEncodingStats) {
+        facebook::velox::parquet::thrift::PageEncodingStats dictEncStat;
+        dictEncStat.__set_page_type(
             facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE);
-        // Dictionary Encoding would be PLAIN_DICTIONARY in v1 and
+        // Dictionary encoding would be PLAIN_DICTIONARY in v1 and
         // PLAIN in v2.
-        facebook::velox::parquet::thrift::Encoding::type dict_encoding =
-            ToThrift(entry.first);
-        dict_enc_stat.__set_encoding(dict_encoding);
-        dict_enc_stat.__set_count(entry.second);
-        thrift_encoding_stats.push_back(dict_enc_stat);
-        add_encoding(dict_encoding);
+        facebook::velox::parquet::thrift::Encoding::type dictEncoding =
+            toThrift(entry.first);
+        dictEncStat.__set_encoding(dictEncoding);
+        dictEncStat.__set_count(entry.second);
+        thriftEncodingStats.push_back(dictEncStat);
+        addEncoding(dictEncoding);
       }
     }
     // Always add encoding for RL/DL.
-    // BIT_PACKED is supported in `LevelEncoder`, but would only be used
-    // in benchmark and testing.
+    // BIT_PACKED is supported in `LevelEncoder`, but would only be used.
+    // In benchmark and testing.
     // And for now, we always add RLE even if there are no levels at all,
     // while parquet-mr is more fine-grained.
-    add_encoding(facebook::velox::parquet::thrift::Encoding::RLE);
-    // Add data page encoding stats
-    for (const auto& entry : data_encoding_stats) {
-      facebook::velox::parquet::thrift::PageEncodingStats data_enc_stat;
-      data_enc_stat.__set_page_type(
+    addEncoding(facebook::velox::parquet::thrift::Encoding::RLE);
+    // Add data page encoding stats.
+    for (const auto& entry : dataEncodingStats) {
+      facebook::velox::parquet::thrift::PageEncodingStats dataEncStat;
+      dataEncStat.__set_page_type(
           facebook::velox::parquet::thrift::PageType::DATA_PAGE);
-      facebook::velox::parquet::thrift::Encoding::type data_encoding =
-          ToThrift(entry.first);
-      data_enc_stat.__set_encoding(data_encoding);
-      data_enc_stat.__set_count(entry.second);
-      thrift_encoding_stats.push_back(data_enc_stat);
-      add_encoding(data_encoding);
+      facebook::velox::parquet::thrift::Encoding::type dataEncoding =
+          toThrift(entry.first);
+      dataEncStat.__set_encoding(dataEncoding);
+      dataEncStat.__set_count(entry.second);
+      thriftEncodingStats.push_back(dataEncStat);
+      addEncoding(dataEncoding);
     }
-    column_chunk_->meta_data.__set_encodings(thrift_encodings);
-    column_chunk_->meta_data.__set_encoding_stats(thrift_encoding_stats);
+    columnChunk_->meta_data.__set_encodings(thriftEncodings);
+    columnChunk_->meta_data.__set_encoding_stats(thriftEncodingStats);
 
-    const auto& encrypt_md = properties_->column_encryption_properties(
-        column_->path()->ToDotString());
-    // column is encrypted
-    if (encrypt_md != nullptr && encrypt_md->is_encrypted()) {
-      column_chunk_->__isset.crypto_metadata = true;
+    const auto& encryptMd =
+        properties_->columnEncryptionProperties(column_->path()->toDotString());
+    // Column is encrypted.
+    if (encryptMd != nullptr && encryptMd->isEncrypted()) {
+      columnChunk_->__isset.crypto_metadata = true;
       facebook::velox::parquet::thrift::ColumnCryptoMetaData ccmd;
-      if (encrypt_md->is_encrypted_with_footer_key()) {
-        // encrypted with footer key
+      if (encryptMd->isEncryptedWithFooterKey()) {
+        // Encrypted with footer key.
         ccmd.__isset.ENCRYPTION_WITH_FOOTER_KEY = true;
         ccmd.__set_ENCRYPTION_WITH_FOOTER_KEY(
             facebook::velox::parquet::thrift::EncryptionWithFooterKey());
       } else { // encrypted with column key
         facebook::velox::parquet::thrift::EncryptionWithColumnKey eck;
-        eck.__set_key_metadata(encrypt_md->key_metadata());
-        eck.__set_path_in_schema(column_->path()->ToDotVector());
+        eck.__set_key_metadata(encryptMd->keyMetadata());
+        eck.__set_path_in_schema(column_->path()->toDotVector());
         ccmd.__isset.ENCRYPTION_WITH_COLUMN_KEY = true;
         ccmd.__set_ENCRYPTION_WITH_COLUMN_KEY(eck);
       }
-      column_chunk_->__set_crypto_metadata(ccmd);
+      columnChunk_->__set_crypto_metadata(ccmd);
 
-      bool encrypted_footer =
-          properties_->file_encryption_properties()->encrypted_footer();
-      bool encrypt_metadata =
-          !encrypted_footer || !encrypt_md->is_encrypted_with_footer_key();
-      if (encrypt_metadata) {
+      bool encryptedFooter =
+          properties_->fileEncryptionProperties()->encryptedFooter();
+      bool encryptMetadata =
+          !encryptedFooter || !encryptMd->isEncryptedWithFooterKey();
+      if (encryptMetadata) {
         ThriftSerializer serializer;
-        // Serialize and encrypt ColumnMetadata separately
+        // Serialize and encrypt ColumnMetadata separately.
         // Thrift-serialize the ColumnMetaData structure,
         // encrypt it with the column key, and write to
-        // encrypted_column_metadata
-        uint8_t* serialized_data;
-        uint32_t serialized_len;
+        // encrypted_column_metadata.
+        uint8_t* serializedData;
+        uint32_t serializedLen;
 
-        serializer.SerializeToBuffer(
-            &column_chunk_->meta_data, &serialized_len, &serialized_data);
+        serializer.serializeToBuffer(
+            &columnChunk_->meta_data, &serializedLen, &serializedData);
 
-        std::vector<uint8_t> encrypted_data(
-            encryptor->CiphertextSizeDelta() + serialized_len);
-        unsigned encrypted_len = encryptor->Encrypt(
-            serialized_data, serialized_len, encrypted_data.data());
+        std::vector<uint8_t> encryptedData(
+            encryptor->ciphertextSizeDelta() + serializedLen);
+        unsigned encryptedLen = encryptor->encrypt(
+            serializedData, serializedLen, encryptedData.data());
 
         const char* temp = const_cast<const char*>(
-            reinterpret_cast<char*>(encrypted_data.data()));
-        std::string encrypted_column_metadata(temp, encrypted_len);
-        column_chunk_->__set_encrypted_column_metadata(
+            reinterpret_cast<char*>(encryptedData.data()));
+        std::string encrypted_column_metadata(temp, encryptedLen);
+        columnChunk_->__set_encrypted_column_metadata(
             encrypted_column_metadata);
 
-        if (encrypted_footer) {
-          column_chunk_->__isset.meta_data = false;
+        if (encryptedFooter) {
+          columnChunk_->__isset.meta_data = false;
         } else {
-          // Keep redacted metadata version for old readers
-          column_chunk_->__isset.meta_data = true;
-          column_chunk_->meta_data.__isset.statistics = false;
-          column_chunk_->meta_data.__isset.encoding_stats = false;
+          // Keep redacted metadata version for old readers.
+          columnChunk_->__isset.meta_data = true;
+          columnChunk_->meta_data.__isset.statistics = false;
+          columnChunk_->meta_data.__isset.encoding_stats = false;
         }
       }
     }
   }
 
-  void WriteTo(::arrow::io::OutputStream* sink) {
+  void writeTo(::arrow::io::OutputStream* sink) {
     ThriftSerializer serializer;
-    serializer.Serialize(column_chunk_, sink);
+    serializer.serialize(columnChunk_, sink);
   }
 
   const ColumnDescriptor* descr() const {
     return column_;
   }
-  int64_t total_compressed_size() const {
-    return column_chunk_->meta_data.total_compressed_size;
+  int64_t totalCompressedSize() const {
+    return columnChunk_->meta_data.total_compressed_size;
   }
 
  private:
-  void Init(facebook::velox::parquet::thrift::ColumnChunk* column_chunk) {
-    column_chunk_ = column_chunk;
+  void init(facebook::velox::parquet::thrift::ColumnChunk* columnChunk) {
+    columnChunk_ = columnChunk;
 
-    column_chunk_->meta_data.__set_type(ToThrift(column_->physical_type()));
-    column_chunk_->meta_data.__set_path_in_schema(
-        column_->path()->ToDotVector());
-    column_chunk_->meta_data.__set_codec(
-        ToThrift(properties_->compression(column_->path())));
+    columnChunk_->meta_data.__set_type(toThrift(column_->physicalType()));
+    columnChunk_->meta_data.__set_path_in_schema(
+        column_->path()->toDotVector());
+    columnChunk_->meta_data.__set_codec(
+        toThrift(properties_->compression(column_->path())));
   }
 
-  facebook::velox::parquet::thrift::ColumnChunk* column_chunk_;
+  facebook::velox::parquet::thrift::ColumnChunk* columnChunk_;
   std::unique_ptr<facebook::velox::parquet::thrift::ColumnChunk>
-      owned_column_chunk_;
+      ownedColumnChunk_;
   const std::shared_ptr<WriterProperties> properties_;
   const ColumnDescriptor* column_;
+  // NaN count is stored separately since it's not written to the parquet file.
+  int64_t nanCount_ = 0;
+  bool hasNanCount_ = false;
 };
 
-std::unique_ptr<ColumnChunkMetaDataBuilder> ColumnChunkMetaDataBuilder::Make(
+std::unique_ptr<ColumnChunkMetaDataBuilder> ColumnChunkMetaDataBuilder::make(
     std::shared_ptr<WriterProperties> props,
     const ColumnDescriptor* column,
-    void* contents) {
+    void* Contents) {
   return std::unique_ptr<ColumnChunkMetaDataBuilder>(
-      new ColumnChunkMetaDataBuilder(std::move(props), column, contents));
+      new ColumnChunkMetaDataBuilder(std::move(props), column, Contents));
 }
 
-std::unique_ptr<ColumnChunkMetaDataBuilder> ColumnChunkMetaDataBuilder::Make(
+std::unique_ptr<ColumnChunkMetaDataBuilder> ColumnChunkMetaDataBuilder::make(
     std::shared_ptr<WriterProperties> props,
     const ColumnDescriptor* column) {
   return std::unique_ptr<ColumnChunkMetaDataBuilder>(
@@ -1909,65 +1942,73 @@ ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilder(
 ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilder(
     std::shared_ptr<WriterProperties> props,
     const ColumnDescriptor* column,
-    void* contents)
+    void* Contents)
     : impl_{std::unique_ptr<ColumnChunkMetaDataBuilderImpl>(
           new ColumnChunkMetaDataBuilderImpl(
               std::move(props),
               column,
               reinterpret_cast<facebook::velox::parquet::thrift::ColumnChunk*>(
-                  contents)))} {}
+                  Contents)))} {}
 
 ColumnChunkMetaDataBuilder::~ColumnChunkMetaDataBuilder() = default;
 
-const void* ColumnChunkMetaDataBuilder::contents() const {
-  return impl_->contents();
+const void* ColumnChunkMetaDataBuilder::Contents() const {
+  return impl_->Contents();
 }
 
-void ColumnChunkMetaDataBuilder::set_file_path(const std::string& path) {
-  impl_->set_file_path(path);
+void ColumnChunkMetaDataBuilder::setFilePath(const std::string& path) {
+  impl_->setFilePath(path);
 }
 
-void ColumnChunkMetaDataBuilder::Finish(
+void ColumnChunkMetaDataBuilder::finish(
     int64_t num_values,
     int64_t dictionary_page_offset,
     int64_t index_page_offset,
     int64_t data_page_offset,
-    int64_t compressed_size,
-    int64_t uncompressed_size,
-    bool has_dictionary,
-    bool dictionary_fallback,
-    const std::map<Encoding::type, int32_t>& dict_encoding_stats,
-    const std::map<Encoding::type, int32_t>& data_encoding_stats,
+    int64_t compressedSize,
+    int64_t uncompressedSize,
+    bool hasDictionary,
+    bool dictionaryFallback,
+    const std::map<Encoding::type, int32_t>& dictEncodingStats,
+    const std::map<Encoding::type, int32_t>& dataEncodingStats,
     const std::shared_ptr<Encryptor>& encryptor) {
-  impl_->Finish(
+  impl_->finish(
       num_values,
       dictionary_page_offset,
       index_page_offset,
       data_page_offset,
-      compressed_size,
-      uncompressed_size,
-      has_dictionary,
-      dictionary_fallback,
-      dict_encoding_stats,
-      data_encoding_stats,
+      compressedSize,
+      uncompressedSize,
+      hasDictionary,
+      dictionaryFallback,
+      dictEncodingStats,
+      dataEncodingStats,
       encryptor);
 }
 
-void ColumnChunkMetaDataBuilder::WriteTo(::arrow::io::OutputStream* sink) {
-  impl_->WriteTo(sink);
+void ColumnChunkMetaDataBuilder::writeTo(::arrow::io::OutputStream* sink) {
+  impl_->writeTo(sink);
 }
 
 const ColumnDescriptor* ColumnChunkMetaDataBuilder::descr() const {
   return impl_->descr();
 }
 
-void ColumnChunkMetaDataBuilder::SetStatistics(
+void ColumnChunkMetaDataBuilder::setStatistics(
     const EncodedStatistics& result) {
-  impl_->SetStatistics(result);
+  impl_->setStatistics(result);
 }
 
-int64_t ColumnChunkMetaDataBuilder::total_compressed_size() const {
-  return impl_->total_compressed_size();
+int64_t ColumnChunkMetaDataBuilder::totalCompressedSize() const {
+  return impl_->totalCompressedSize();
+}
+
+int64_t ColumnChunkMetaDataBuilder::nanCount() const {
+  return impl_->nanCount();
+}
+
+bool ColumnChunkMetaDataBuilder::hasNanCount() const {
+  return impl_->hasNanCount();
 }
 
 class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
@@ -1975,313 +2016,334 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
   explicit RowGroupMetaDataBuilderImpl(
       std::shared_ptr<WriterProperties> props,
       const SchemaDescriptor* schema,
-      void* contents)
-      : properties_(std::move(props)), schema_(schema), next_column_(0) {
-    row_group_ =
-        reinterpret_cast<facebook::velox::parquet::thrift::RowGroup*>(contents);
-    InitializeColumns(schema->num_columns());
+      void* Contents)
+      : properties_(std::move(props)), schema_(schema), nextColumn_(0) {
+    rowGroup_ =
+        reinterpret_cast<facebook::velox::parquet::thrift::RowGroup*>(Contents);
+    initializeColumns(schema->numColumns());
   }
 
-  ColumnChunkMetaDataBuilder* NextColumnChunk() {
-    if (!(next_column_ < num_columns())) {
+  ColumnChunkMetaDataBuilder* nextColumnChunk() {
+    if (!(nextColumn_ < numColumns())) {
       std::stringstream ss;
-      ss << "The schema only has " << num_columns()
-         << " columns, requested metadata for column: " << next_column_;
+      ss << "The schema only has " << numColumns()
+         << " columns, requested metadata for column: " << nextColumn_;
       throw ParquetException(ss.str());
     }
-    auto column = schema_->Column(next_column_);
-    auto column_builder = ColumnChunkMetaDataBuilder::Make(
-        properties_, column, &row_group_->columns[next_column_++]);
-    auto column_builder_ptr = column_builder.get();
-    column_builders_.push_back(std::move(column_builder));
-    return column_builder_ptr;
+    auto column = schema_->column(nextColumn_);
+    auto columnBuilder = ColumnChunkMetaDataBuilder::make(
+        properties_, column, &rowGroup_->columns[nextColumn_++]);
+    auto columnBuilderPtr = columnBuilder.get();
+    columnBuilders_.push_back(std::move(columnBuilder));
+    return columnBuilderPtr;
   }
 
-  int current_column() {
-    return next_column_ - 1;
+  int currentColumn() {
+    return nextColumn_ - 1;
   }
 
-  void Finish(int64_t total_bytes_written, int16_t row_group_ordinal) {
-    if (!(next_column_ == schema_->num_columns())) {
+  void finish(int64_t totalBytesWritten, int16_t rowGroupOrdinal) {
+    if (!(nextColumn_ == schema_->numColumns())) {
       std::stringstream ss;
-      ss << "Only " << next_column_ - 1 << " out of " << schema_->num_columns()
+      ss << "Only " << nextColumn_ - 1 << " out of " << schema_->numColumns()
          << " columns are initialized";
       throw ParquetException(ss.str());
     }
 
-    int64_t file_offset = 0;
+    int64_t fileOffset = 0;
     int64_t total_compressed_size = 0;
-    for (int i = 0; i < schema_->num_columns(); i++) {
-      if (!(row_group_->columns[i].file_offset >= 0)) {
+    for (int i = 0; i < schema_->numColumns(); i++) {
+      if (!(rowGroup_->columns[i].file_offset >= 0)) {
         std::stringstream ss;
         ss << "Column " << i << " is not complete.";
         throw ParquetException(ss.str());
       }
       if (i == 0) {
-        const facebook::velox::parquet::thrift::ColumnMetaData& first_col =
-            row_group_->columns[0].meta_data;
+        const facebook::velox::parquet::thrift::ColumnMetaData& firstCol =
+            rowGroup_->columns[0].meta_data;
         // As per spec, file_offset for the row group points to the first
         // dictionary or data page of the column.
-        if (first_col.__isset.dictionary_page_offset &&
-            first_col.dictionary_page_offset > 0) {
-          file_offset = first_col.dictionary_page_offset;
+        if (firstCol.__isset.dictionary_page_offset &&
+            firstCol.dictionary_page_offset > 0) {
+          fileOffset = firstCol.dictionary_page_offset;
         } else {
-          file_offset = first_col.data_page_offset;
+          fileOffset = firstCol.data_page_offset;
         }
       }
-      // sometimes column metadata is encrypted and not available to read,
-      // so we must get total_compressed_size from column builder
-      total_compressed_size += column_builders_[i]->total_compressed_size();
+      // Sometimes column metadata is encrypted and not available to read,
+      // so we must get total_compressed_size from column builder.
+      total_compressed_size += columnBuilders_[i]->totalCompressedSize();
     }
 
-    const auto& sorting_columns = properties_->sorting_columns();
-    if (!sorting_columns.empty()) {
+    const auto& sortingColumns = properties_->sortingColumns();
+    if (!sortingColumns.empty()) {
       std::vector<facebook::velox::parquet::thrift::SortingColumn>
-          thrift_sorting_columns(sorting_columns.size());
-      for (size_t i = 0; i < sorting_columns.size(); ++i) {
-        thrift_sorting_columns[i] = ToThrift(sorting_columns[i]);
+          thriftSortingColumns(sortingColumns.size());
+      for (size_t i = 0; i < sortingColumns.size(); ++i) {
+        thriftSortingColumns[i] = toThrift(sortingColumns[i]);
       }
-      row_group_->__set_sorting_columns(std::move(thrift_sorting_columns));
+      rowGroup_->__set_sorting_columns(std::move(thriftSortingColumns));
     }
 
-    row_group_->__set_file_offset(file_offset);
-    row_group_->__set_total_compressed_size(total_compressed_size);
-    row_group_->__set_total_byte_size(total_bytes_written);
-    row_group_->__set_ordinal(row_group_ordinal);
+    rowGroup_->__set_file_offset(fileOffset);
+    rowGroup_->__set_total_compressed_size(total_compressed_size);
+    rowGroup_->__set_total_byte_size(totalBytesWritten);
+    rowGroup_->__set_ordinal(rowGroupOrdinal);
   }
 
-  void set_num_rows(int64_t num_rows) {
-    row_group_->num_rows = num_rows;
+  void setNumRows(int64_t numRows) {
+    rowGroup_->num_rows = numRows;
   }
 
-  int num_columns() {
-    return static_cast<int>(row_group_->columns.size());
+  int numColumns() {
+    return static_cast<int>(rowGroup_->columns.size());
   }
 
-  int64_t num_rows() {
-    return row_group_->num_rows;
+  int64_t numRows() {
+    return rowGroup_->num_rows;
+  }
+
+  // Returns a map of field_id -> (nan_count, has_nan_count).
+  std::unordered_map<int32_t, std::pair<int64_t, bool>> nanCounts() const {
+    std::unordered_map<int32_t, std::pair<int64_t, bool>> result;
+    for (const auto& builder : columnBuilders_) {
+      int32_t field_id = builder->descr()->schemaNode()->fieldId();
+      result[field_id] = {builder->nanCount(), builder->hasNanCount()};
+    }
+    return result;
   }
 
  private:
-  void InitializeColumns(int ncols) {
-    row_group_->columns.resize(ncols);
+  void initializeColumns(int ncols) {
+    rowGroup_->columns.resize(ncols);
   }
 
-  facebook::velox::parquet::thrift::RowGroup* row_group_;
+  facebook::velox::parquet::thrift::RowGroup* rowGroup_;
   const std::shared_ptr<WriterProperties> properties_;
   const SchemaDescriptor* schema_;
-  std::vector<std::unique_ptr<ColumnChunkMetaDataBuilder>> column_builders_;
-  int next_column_;
+  std::vector<std::unique_ptr<ColumnChunkMetaDataBuilder>> columnBuilders_;
+  int nextColumn_;
 };
 
-std::unique_ptr<RowGroupMetaDataBuilder> RowGroupMetaDataBuilder::Make(
+std::unique_ptr<RowGroupMetaDataBuilder> RowGroupMetaDataBuilder::make(
     std::shared_ptr<WriterProperties> props,
     const SchemaDescriptor* schema_,
-    void* contents) {
+    void* Contents) {
   return std::unique_ptr<RowGroupMetaDataBuilder>(
-      new RowGroupMetaDataBuilder(std::move(props), schema_, contents));
+      new RowGroupMetaDataBuilder(std::move(props), schema_, Contents));
 }
 
 RowGroupMetaDataBuilder::RowGroupMetaDataBuilder(
     std::shared_ptr<WriterProperties> props,
     const SchemaDescriptor* schema_,
-    void* contents)
+    void* Contents)
     : impl_{new RowGroupMetaDataBuilderImpl(
           std::move(props),
           schema_,
-          contents)} {}
+          Contents)} {}
 
 RowGroupMetaDataBuilder::~RowGroupMetaDataBuilder() = default;
 
-ColumnChunkMetaDataBuilder* RowGroupMetaDataBuilder::NextColumnChunk() {
-  return impl_->NextColumnChunk();
+ColumnChunkMetaDataBuilder* RowGroupMetaDataBuilder::nextColumnChunk() {
+  return impl_->nextColumnChunk();
 }
 
-int RowGroupMetaDataBuilder::current_column() const {
-  return impl_->current_column();
+int RowGroupMetaDataBuilder::currentColumn() const {
+  return impl_->currentColumn();
 }
 
-int RowGroupMetaDataBuilder::num_columns() {
-  return impl_->num_columns();
+int RowGroupMetaDataBuilder::numColumns() {
+  return impl_->numColumns();
 }
 
-int64_t RowGroupMetaDataBuilder::num_rows() {
-  return impl_->num_rows();
+int64_t RowGroupMetaDataBuilder::numRows() {
+  return impl_->numRows();
 }
 
-void RowGroupMetaDataBuilder::set_num_rows(int64_t num_rows) {
-  impl_->set_num_rows(num_rows);
+void RowGroupMetaDataBuilder::setNumRows(int64_t numRows) {
+  impl_->setNumRows(numRows);
 }
 
-void RowGroupMetaDataBuilder::Finish(
-    int64_t total_bytes_written,
-    int16_t row_group_ordinal) {
-  impl_->Finish(total_bytes_written, row_group_ordinal);
+void RowGroupMetaDataBuilder::finish(
+    int64_t totalBytesWritten,
+    int16_t rowGroupOrdinal) {
+  impl_->finish(totalBytesWritten, rowGroupOrdinal);
 }
 
-// file metadata
+std::unordered_map<int32_t, std::pair<int64_t, bool>>
+RowGroupMetaDataBuilder::nanCounts() const {
+  return impl_->nanCounts();
+}
+
+// File metadata.
 class FileMetaDataBuilder::FileMetaDataBuilderImpl {
  public:
   explicit FileMetaDataBuilderImpl(
       const SchemaDescriptor* schema,
       std::shared_ptr<WriterProperties> props,
-      std::shared_ptr<const KeyValueMetadata> key_value_metadata)
+      std::shared_ptr<const KeyValueMetadata> keyValueMetadata)
       : metadata_(new facebook::velox::parquet::thrift::FileMetaData()),
         properties_(std::move(props)),
         schema_(schema),
-        key_value_metadata_(std::move(key_value_metadata)) {
-    if (properties_->file_encryption_properties() != nullptr &&
-        properties_->file_encryption_properties()->encrypted_footer()) {
+        keyValueMetadata_(std::move(keyValueMetadata)) {
+    if (properties_->fileEncryptionProperties() != nullptr &&
+        properties_->fileEncryptionProperties()->encryptedFooter()) {
       crypto_metadata_.reset(
           new facebook::velox::parquet::thrift::FileCryptoMetaData());
     }
   }
 
-  RowGroupMetaDataBuilder* AppendRowGroup() {
-    row_groups_.emplace_back();
-    current_row_group_builder_ = RowGroupMetaDataBuilder::Make(
-        properties_, schema_, &row_groups_.back());
-    return current_row_group_builder_.get();
+  RowGroupMetaDataBuilder* appendRowGroup() {
+    // Accumulate NaN counts from the previous row group before creating a new
+    // one.
+    accumulateNaNCountsFromCurrentRowGroup();
+    rowGroups_.emplace_back();
+    currentRowGroupBuilder_ =
+        RowGroupMetaDataBuilder::make(properties_, schema_, &rowGroups_.back());
+    return currentRowGroupBuilder_.get();
   }
 
-  void SetPageIndexLocation(const PageIndexLocation& location) {
-    auto set_index_location = [this](
-                                  size_t row_group_ordinal,
-                                  const PageIndexLocation::FileIndexLocation&
-                                      file_index_location,
-                                  bool column_index) {
-      auto& row_group_metadata = this->row_groups_.at(row_group_ordinal);
-      auto iter = file_index_location.find(row_group_ordinal);
-      if (iter != file_index_location.cend()) {
-        const auto& row_group_index_location = iter->second;
-        for (size_t i = 0; i < row_group_index_location.size(); ++i) {
-          if (i >= row_group_metadata.columns.size()) {
+  void setPageIndexLocation(const PageIndexLocation& location) {
+    auto setIndexLocation = [this](
+                                size_t rowGroupOrdinal,
+                                const PageIndexLocation::FileIndexLocation&
+                                    fileIndexLocation,
+                                bool columnIndex) {
+      auto& rowGroupMetadata = this->rowGroups_.at(rowGroupOrdinal);
+      auto iter = fileIndexLocation.find(rowGroupOrdinal);
+      if (iter != fileIndexLocation.cend()) {
+        const auto& rowGroupIndexLocation = iter->second;
+        for (size_t i = 0; i < rowGroupIndexLocation.size(); ++i) {
+          if (i >= rowGroupMetadata.columns.size()) {
             throw ParquetException(
                 "Cannot find metadata for column ordinal ", i);
           }
-          auto& column_metadata = row_group_metadata.columns.at(i);
-          const auto& index_location = row_group_index_location.at(i);
-          if (index_location.has_value()) {
-            if (column_index) {
-              column_metadata.__set_column_index_offset(index_location->offset);
-              column_metadata.__set_column_index_length(index_location->length);
+          auto& columnMetadata = rowGroupMetadata.columns.at(i);
+          const auto& indexLocation = rowGroupIndexLocation.at(i);
+          if (indexLocation.has_value()) {
+            if (columnIndex) {
+              columnMetadata.__set_column_index_offset(indexLocation->offset);
+              columnMetadata.__set_column_index_length(indexLocation->length);
             } else {
-              column_metadata.__set_offset_index_offset(index_location->offset);
-              column_metadata.__set_offset_index_length(index_location->length);
+              columnMetadata.__set_offset_index_offset(indexLocation->offset);
+              columnMetadata.__set_offset_index_length(indexLocation->length);
             }
           }
         }
       }
     };
 
-    for (size_t i = 0; i < row_groups_.size(); ++i) {
-      set_index_location(i, location.column_index_location, true);
-      set_index_location(i, location.offset_index_location, false);
+    for (size_t i = 0; i < rowGroups_.size(); ++i) {
+      setIndexLocation(i, location.columnIndexLocation, true);
+      setIndexLocation(i, location.offsetIndexLocation, false);
     }
   }
 
-  std::unique_ptr<FileMetaData> Finish(
-      const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
-    int64_t total_rows = 0;
-    for (auto row_group : row_groups_) {
-      total_rows += row_group.num_rows;
-    }
-    metadata_->__set_num_rows(total_rows);
-    metadata_->__set_row_groups(row_groups_);
+  std::unique_ptr<FileMetaData> finish(
+      const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata) {
+    // Accumulate NaN counts from the last row group.
+    accumulateNaNCountsFromCurrentRowGroup();
 
-    if (key_value_metadata_ || key_value_metadata) {
-      if (!key_value_metadata_) {
-        key_value_metadata_ = key_value_metadata;
-      } else if (key_value_metadata) {
-        key_value_metadata_ = key_value_metadata_->Merge(*key_value_metadata);
+    int64_t totalRows = 0;
+    for (auto rowGroup : rowGroups_) {
+      totalRows += rowGroup.num_rows;
+    }
+    metadata_->__set_num_rows(totalRows);
+    metadata_->__set_row_groups(rowGroups_);
+
+    if (keyValueMetadata_ || keyValueMetadata) {
+      if (!keyValueMetadata_) {
+        keyValueMetadata_ = keyValueMetadata;
+      } else if (keyValueMetadata) {
+        keyValueMetadata_ = keyValueMetadata_->Merge(*keyValueMetadata);
       }
       metadata_->key_value_metadata.clear();
-      metadata_->key_value_metadata.reserve(key_value_metadata_->size());
-      for (int64_t i = 0; i < key_value_metadata_->size(); ++i) {
-        facebook::velox::parquet::thrift::KeyValue kv_pair;
-        kv_pair.__set_key(key_value_metadata_->key(i));
-        kv_pair.__set_value(key_value_metadata_->value(i));
-        metadata_->key_value_metadata.push_back(kv_pair);
+      metadata_->key_value_metadata.reserve(keyValueMetadata_->size());
+      for (int64_t i = 0; i < keyValueMetadata_->size(); ++i) {
+        facebook::velox::parquet::thrift::KeyValue kvPair;
+        kvPair.__set_key(keyValueMetadata_->key(i));
+        kvPair.__set_value(keyValueMetadata_->value(i));
+        metadata_->key_value_metadata.push_back(kvPair);
       }
       metadata_->__isset.key_value_metadata = true;
     }
 
-    int32_t file_version = 0;
+    int32_t fileVersion = 0;
     switch (properties_->version()) {
       case ParquetVersion::PARQUET_1_0:
-        file_version = 1;
+        fileVersion = 1;
         break;
       default:
-        file_version = 2;
+        fileVersion = 2;
         break;
     }
-    metadata_->__set_version(file_version);
-    metadata_->__set_created_by(properties_->created_by());
+    metadata_->__set_version(fileVersion);
+    metadata_->__set_created_by(properties_->createdBy());
 
-    // Users cannot set the `ColumnOrder` since we do not have user defined sort
-    // order in the spec yet. We always default to `TYPE_DEFINED_ORDER`. We can
-    // expose it in the API once we have user defined sort orders in the Parquet
-    // format. TypeDefinedOrder implies choose SortOrder based on
-    // ConvertedType/PhysicalType
-    facebook::velox::parquet::thrift::TypeDefinedOrder type_defined_order;
-    facebook::velox::parquet::thrift::ColumnOrder column_order;
-    column_order.__set_TYPE_ORDER(type_defined_order);
-    column_order.__isset.TYPE_ORDER = true;
-    metadata_->column_orders.resize(schema_->num_columns(), column_order);
+    // Users cannot set the `ColumnOrder` since we do not have user-defined
+    // sort order in the spec yet. We always default to `TYPE_DEFINED_ORDER`.
+    // We can expose it in the API once we have user-defined sort orders in the
+    // Parquet format. TypeDefinedOrder implies choose SortOrder based on
+    // convertedType/physicalType.
+    facebook::velox::parquet::thrift::TypeDefinedOrder typeDefinedOrder;
+    facebook::velox::parquet::thrift::ColumnOrder columnOrder;
+    columnOrder.__set_TYPE_ORDER(typeDefinedOrder);
+    columnOrder.__isset.TYPE_ORDER = true;
+    metadata_->column_orders.resize(schema_->numColumns(), columnOrder);
     metadata_->__isset.column_orders = true;
 
-    // if plaintext footer, set footer signing algorithm
-    auto file_encryption_properties = properties_->file_encryption_properties();
-    if (file_encryption_properties &&
-        !file_encryption_properties->encrypted_footer()) {
-      EncryptionAlgorithm signing_algorithm;
-      EncryptionAlgorithm algo = file_encryption_properties->algorithm();
-      signing_algorithm.aad.aad_file_unique = algo.aad.aad_file_unique;
-      signing_algorithm.aad.supply_aad_prefix = algo.aad.supply_aad_prefix;
-      if (!algo.aad.supply_aad_prefix) {
-        signing_algorithm.aad.aad_prefix = algo.aad.aad_prefix;
+    // If plaintext footer, set footer signing algorithm.
+    auto fileEncryptionProperties = properties_->fileEncryptionProperties();
+    if (fileEncryptionProperties &&
+        !fileEncryptionProperties->encryptedFooter()) {
+      EncryptionAlgorithm signingAlgorithm;
+      EncryptionAlgorithm algo = fileEncryptionProperties->algorithm();
+      signingAlgorithm.aad.aadFileUnique = algo.aad.aadFileUnique;
+      signingAlgorithm.aad.supplyAadPrefix = algo.aad.supplyAadPrefix;
+      if (!algo.aad.supplyAadPrefix) {
+        signingAlgorithm.aad.aadPrefix = algo.aad.aadPrefix;
       }
-      signing_algorithm.algorithm = ParquetCipher::AES_GCM_V1;
+      signingAlgorithm.algorithm = ParquetCipher::kAesGcmV1;
 
-      metadata_->__set_encryption_algorithm(ToThrift(signing_algorithm));
-      const std::string& footer_signing_key_metadata =
-          file_encryption_properties->footer_key_metadata();
-      if (footer_signing_key_metadata.size() > 0) {
-        metadata_->__set_footer_signing_key_metadata(
-            footer_signing_key_metadata);
+      metadata_->__set_encryption_algorithm(toThrift(signingAlgorithm));
+      const std::string& footerSigningKeyMetadata =
+          fileEncryptionProperties->footerKeyMetadata();
+      if (footerSigningKeyMetadata.size() > 0) {
+        metadata_->__set_footer_signing_key_metadata(footerSigningKeyMetadata);
       }
     }
 
-    ToParquet(
-        static_cast<schema::GroupNode*>(schema_->schema_root().get()),
+    toParquet(
+        static_cast<schema::GroupNode*>(schema_->schemaRoot().get()),
         &metadata_->schema);
-    auto file_meta_data = std::unique_ptr<FileMetaData>(new FileMetaData());
-    file_meta_data->impl_->metadata_ = std::move(metadata_);
-    file_meta_data->impl_->InitSchema();
-    file_meta_data->impl_->InitKeyValueMetadata();
-    return file_meta_data;
+    auto fileMetaData = std::unique_ptr<FileMetaData>(new FileMetaData());
+    fileMetaData->impl_->metadata_ = std::move(metadata_);
+    fileMetaData->impl_->initSchema();
+    fileMetaData->impl_->initKeyValueMetadata();
+    // Pass total NaN counts per field ID to FileMetaData.
+    fileMetaData->impl_->setNaNCounts(std::move(fieldNanCounts_));
+    return fileMetaData;
   }
 
-  std::unique_ptr<FileCryptoMetaData> BuildFileCryptoMetaData() {
+  std::unique_ptr<FileCryptoMetaData> buildFileCryptoMetaData() {
     if (crypto_metadata_ == nullptr) {
       return nullptr;
     }
 
-    auto file_encryption_properties = properties_->file_encryption_properties();
+    auto fileEncryptionProperties = properties_->fileEncryptionProperties();
 
     crypto_metadata_->__set_encryption_algorithm(
-        ToThrift(file_encryption_properties->algorithm()));
-    std::string key_metadata =
-        file_encryption_properties->footer_key_metadata();
+        toThrift(fileEncryptionProperties->algorithm()));
+    std::string keyMetadata = fileEncryptionProperties->footerKeyMetadata();
 
-    if (!key_metadata.empty()) {
-      crypto_metadata_->__set_key_metadata(key_metadata);
+    if (!keyMetadata.empty()) {
+      crypto_metadata_->__set_key_metadata(keyMetadata);
     }
 
-    std::unique_ptr<FileCryptoMetaData> file_crypto_metadata(
+    std::unique_ptr<FileCryptoMetaData> fileCryptoMetadata(
         new FileCryptoMetaData());
-    file_crypto_metadata->impl_->metadata_ = std::move(*crypto_metadata_);
-    return file_crypto_metadata;
+    fileCryptoMetadata->impl_->metadata_ = std::move(*crypto_metadata_);
+    return fileCryptoMetadata;
   }
 
  protected:
@@ -2290,23 +2352,42 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
       crypto_metadata_;
 
  private:
-  const std::shared_ptr<WriterProperties> properties_;
-  std::vector<facebook::velox::parquet::thrift::RowGroup> row_groups_;
+  // Helper to accumulate NaN counts from the current row group builder.
+  void accumulateNaNCountsFromCurrentRowGroup() {
+    if (!currentRowGroupBuilder_) {
+      return;
+    }
+    auto rgNaNCounts = currentRowGroupBuilder_->nanCounts();
+    // Accumulate NaN counts from this row group (keyed by field ID).
+    for (const auto& [fieldId, countPair] : rgNaNCounts) {
+      const auto& [count, has_count] = countPair;
+      if (has_count) {
+        fieldNanCounts_[fieldId].first += count;
+        fieldNanCounts_[fieldId].second = true;
+      }
+    }
+  }
 
-  std::unique_ptr<RowGroupMetaDataBuilder> current_row_group_builder_;
+  const std::shared_ptr<WriterProperties> properties_;
+  std::vector<facebook::velox::parquet::thrift::RowGroup> rowGroups_;
+
+  std::unique_ptr<RowGroupMetaDataBuilder> currentRowGroupBuilder_;
   const SchemaDescriptor* schema_;
-  std::shared_ptr<const KeyValueMetadata> key_value_metadata_;
+  std::shared_ptr<const KeyValueMetadata> keyValueMetadata_;
+  // Total NaN counts per field ID across all row groups: field_id ->
+  // (nan_count, has_nan_count).
+  std::unordered_map<int32_t, std::pair<int64_t, bool>> fieldNanCounts_;
 };
 
-std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::Make(
+std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::make(
     const SchemaDescriptor* schema,
     std::shared_ptr<WriterProperties> props,
-    std::shared_ptr<const KeyValueMetadata> key_value_metadata) {
+    std::shared_ptr<const KeyValueMetadata> keyValueMetadata) {
   return std::unique_ptr<FileMetaDataBuilder>(new FileMetaDataBuilder(
-      schema, std::move(props), std::move(key_value_metadata)));
+      schema, std::move(props), std::move(keyValueMetadata)));
 }
 
-std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::Make(
+std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::make(
     const SchemaDescriptor* schema,
     std::shared_ptr<WriterProperties> props) {
   return std::unique_ptr<FileMetaDataBuilder>(
@@ -2316,31 +2397,31 @@ std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::Make(
 FileMetaDataBuilder::FileMetaDataBuilder(
     const SchemaDescriptor* schema,
     std::shared_ptr<WriterProperties> props,
-    std::shared_ptr<const KeyValueMetadata> key_value_metadata)
+    std::shared_ptr<const KeyValueMetadata> keyValueMetadata)
     : impl_{
           std::unique_ptr<FileMetaDataBuilderImpl>(new FileMetaDataBuilderImpl(
               schema,
               std::move(props),
-              std::move(key_value_metadata)))} {}
+              std::move(keyValueMetadata)))} {}
 
 FileMetaDataBuilder::~FileMetaDataBuilder() = default;
 
-RowGroupMetaDataBuilder* FileMetaDataBuilder::AppendRowGroup() {
-  return impl_->AppendRowGroup();
+RowGroupMetaDataBuilder* FileMetaDataBuilder::appendRowGroup() {
+  return impl_->appendRowGroup();
 }
 
-void FileMetaDataBuilder::SetPageIndexLocation(
+void FileMetaDataBuilder::setPageIndexLocation(
     const PageIndexLocation& location) {
-  impl_->SetPageIndexLocation(location);
+  impl_->setPageIndexLocation(location);
 }
 
-std::unique_ptr<FileMetaData> FileMetaDataBuilder::Finish(
-    const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
-  return impl_->Finish(key_value_metadata);
+std::unique_ptr<FileMetaData> FileMetaDataBuilder::finish(
+    const std::shared_ptr<const KeyValueMetadata>& keyValueMetadata) {
+  return impl_->finish(keyValueMetadata);
 }
 
-std::unique_ptr<FileCryptoMetaData> FileMetaDataBuilder::GetCryptoMetaData() {
-  return impl_->BuildFileCryptoMetaData();
+std::unique_ptr<FileCryptoMetaData> FileMetaDataBuilder::getCryptoMetaData() {
+  return impl_->buildFileCryptoMetaData();
 }
 
 } // namespace facebook::velox::parquet::arrow

@@ -912,7 +912,7 @@ ArrayVectorPtr deserializeArrays(
 
   VectorPtr elements;
   const auto& elementType = type->childAt(0);
-  if (elementType->isUnKnown()) {
+  if (elementType->isUnknown()) {
     elements = deserializeUnknownArrays(elementType, data, arraySizes, pool);
   } else if (isFixedWidth(elementType)) {
     elements = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(

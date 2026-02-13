@@ -133,6 +133,16 @@ std::shared_ptr<const core::CallExpr> callExpr(
     std::vector<core::ExprPtr> params,
     std::optional<std::string> alias,
     const ParseOptions& options) {
+  // DuckDB parser requires IF to have 3 arguments: condition, then-clause, and
+  // else-clause. For example, `IF(a > b, 10)` doesn't parse correctly and must
+  // be written as `IF(a > b, 10, null)`. Remove the redundant else-clause.
+  if (name == "if") {
+    if (params.back()->is(core::IExpr::Kind::kConstant) &&
+        params.back()->as<core::ConstantExpr>()->type()->isUnknown()) {
+      params.pop_back();
+    }
+  }
+
   return std::make_shared<const core::CallExpr>(
       toFullFunctionName(name, options.functionPrefix),
       std::move(params),

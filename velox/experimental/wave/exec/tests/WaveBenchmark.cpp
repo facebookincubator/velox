@@ -219,7 +219,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
       facebook::velox::parquet::WriterOptions options;
       options.memoryPool = childPool.get();
       int32_t flushCounter = 0;
-      options.encoding = parquet::arrow::Encoding::type::BIT_PACKED;
+      options.encoding = parquet::arrow::Encoding::type::kBitPacked;
       options.flushPolicyFactory = [&]() {
         return std::make_unique<facebook::velox::parquet::LambdaFlushPolicy>(
             1000000, 1000000000, [&]() { return (++flushCounter % 1 == 0); });

@@ -439,7 +439,7 @@ VectorPtr VectorFuzzer::fuzzConstant(
     if (coinToss(opts_.nullRatio)) {
       return BaseVector::createNullConstant(type, size, pool_);
     }
-    if (type->isUnKnown()) {
+    if (type->isUnknown()) {
       return BaseVector::createNullConstant(type, size, pool_);
     } else {
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -578,7 +578,7 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
   VELOX_CHECK(type->isPrimitiveType());
   auto vector = BaseVector::create(type, size, pool_);
 
-  if (type->isUnKnown()) {
+  if (type->isUnknown()) {
     auto* rawNulls = vector->mutableRawNulls();
     bits::fillBits(rawNulls, 0, size, bits::kNull);
   } else {

@@ -46,7 +46,7 @@ class FileSink : public Closeable {
     memory::MemoryPool* pool{nullptr};
     MetricsLogPtr metricLogger{MetricsLog::voidLog()};
     IoStatistics* stats{nullptr};
-    filesystems::File::IoStats* fileSystemStats{nullptr};
+    velox::IoStats* fileSystemStats{nullptr};
   };
 
   FileSink(std::string name, const Options& options)
@@ -105,6 +105,10 @@ class FileSink : public Closeable {
     return stats_;
   }
 
+  velox::IoStats* getFileSystemStats() {
+    return fileSystemStats_;
+  }
+
  protected:
   // General write wrapper with logging. All concrete subclasses gets logging
   // for free if they call a public method that goes through this method.
@@ -119,7 +123,7 @@ class FileSink : public Closeable {
   memory::MemoryPool* const pool_;
   const MetricsLogPtr metricLogger_;
   IoStatistics* const stats_;
-  filesystems::File::IoStats* const fileSystemStats_;
+  velox::IoStats* const fileSystemStats_;
 
   uint64_t size_;
 };
@@ -131,7 +135,8 @@ class WriteFileSink final : public FileSink {
       std::unique_ptr<WriteFile> writeFile,
       std::string name,
       MetricsLogPtr metricLogger = MetricsLog::voidLog(),
-      IoStatistics* stats = nullptr);
+      IoStatistics* stats = nullptr,
+      velox::IoStats* fileSystemStats = nullptr);
 
   ~WriteFileSink() override {
     destroy();

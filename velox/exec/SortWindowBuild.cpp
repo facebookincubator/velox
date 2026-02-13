@@ -47,8 +47,7 @@ SortWindowBuild::SortWindowBuild(
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
     folly::Synchronized<OperatorStats>* opStats,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    filesystems::File::IoStats* spillFsStats)
+    exec::SpillStats* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numPartitionKeys_{node->partitionKeys().size()},
       compareFlags_{makeCompareFlags(numPartitionKeys_, node->sortingOrders())},
@@ -56,7 +55,6 @@ SortWindowBuild::SortWindowBuild(
       prefixSortConfig_(prefixSortConfig),
       opStats_(opStats),
       spillStats_(spillStats),
-      spillFsStats_(spillFsStats),
       sortedRows_(0, memory::StlAllocator<char*>(*pool)),
       partitionStartRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_NOT_NULL(pool_);
@@ -194,12 +192,7 @@ void SortWindowBuild::setupSpiller() {
   VELOX_CHECK_NULL(spiller_);
   const auto sortingKeys = SpillState::makeSortingKeys(compareFlags_);
   spiller_ = std::make_unique<SortInputSpiller>(
-      data_.get(),
-      inputType_,
-      sortingKeys,
-      spillConfig_,
-      spillStats_,
-      spillFsStats_);
+      data_.get(), inputType_, sortingKeys, spillConfig_, spillStats_);
 }
 
 void SortWindowBuild::spill() {
@@ -212,7 +205,7 @@ void SortWindowBuild::spill() {
   data_->pool()->release();
 }
 
-std::optional<common::SpillStats> SortWindowBuild::spilledStats() const {
+std::optional<exec::SpillStats> SortWindowBuild::spilledStats() const {
   if (spiller_ == nullptr) {
     return std::nullopt;
   }
@@ -298,7 +291,7 @@ void SortWindowBuild::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        *spillConfig_, pool_, spillStats_, spillFsStats_);
+        *spillConfig_, pool_, spillStats_);
   } else {
     // At this point we have seen all the input rows. The operator is
     // being prepared to output rows now.

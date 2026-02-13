@@ -15,6 +15,7 @@
  */
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/UpperLower.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
@@ -24,10 +25,12 @@
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
+#include "velox/functions/sparksql/RandStr.h"
 #include "velox/functions/sparksql/ReadSidePaddingFunction.h"
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/ToPrettyString.h"
 #include "velox/functions/sparksql/UnBase64Function.h"
 #include "velox/functions/sparksql/VarcharTypeWriteSideCheck.h"
 
@@ -38,8 +41,51 @@ void registerSparkStringFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+
+void registerToPrettyStringFunctions(const std::string& prefix) {
+  const std::vector<std::string> aliases = {prefix + "to_pretty_string"};
+  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(aliases);
+  registerUnaryFloatingPointWithTReturn<ToPrettyStringFunction, Varchar>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, bool>(aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(aliases);
+  registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
+  registerFunction<ToPrettyStringTimestampFunction, Varchar, Timestamp>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, UnknownValue>(aliases);
+  registerFunction<
+      ToPrettyStringDecimalFunction,
+      Varchar,
+      ShortDecimal<P1, S1>>(aliases);
+  registerFunction<ToPrettyStringDecimalFunction, Varchar, LongDecimal<P1, S1>>(
+      aliases);
+}
+
 void registerStringFunctions(const std::string& prefix) {
   registerSparkStringFunctions(prefix);
+  // randstr(length, seed) - Spark's analyzer always provides a seed.
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int16_t>,
+      Constant<int32_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int16_t>,
+      Constant<int64_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int32_t>,
+      Constant<int32_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int32_t>,
+      Constant<int64_t>>({prefix + "randstr"});
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
       {prefix + "startswith"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
@@ -182,6 +228,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
 
   registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
+
+  registerToPrettyStringFunctions(prefix);
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

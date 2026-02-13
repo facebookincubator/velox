@@ -95,7 +95,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
   double bufferGrowRatio = 1.5;
 
-  arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
+  arrow::Encoding::type encoding = arrow::Encoding::kPlain;
 
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>

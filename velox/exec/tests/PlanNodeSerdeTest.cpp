@@ -177,6 +177,14 @@ TEST_F(PlanNodeSerdeTest, markDistinct) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, enforceDistinct) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .enforceDistinct({"c0", "c1", "c2"}, "Test error message")
+                  .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, nestedLoopJoin) {
   auto left = makeRowVector(
       {"t0", "t1", "t2"},

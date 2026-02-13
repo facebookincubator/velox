@@ -286,6 +286,27 @@ String Functions
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: randstr(length, seed) -> varchar
+
+    Returns a string of the specified ``length`` whose characters are chosen uniformly
+    at random from the following pool of characters: 0-9, a-z, A-Z.
+    Both ``length`` and ``seed`` must be non-null constants.
+    ``length`` must be a non-negative integer (SMALLINT or INT).
+    ``seed`` must be an integer (INT or BIGINT).
+    With the same ``seed`` and partition ID, the function produces a reproducible sequence
+    of outputs, though each row receives a different value from the sequence as the
+    internal generator advances.
+    The partition ID is retrieved from the ``spark_partition_id`` query configuration.
+    It's consistent with Spark's internal assignment for tasks.
+    Uses XORShift random number generator matching Spark's implementation.
+    Note: Spark's analyzer always provides a seed (either user-specified or
+    auto-generated), so only the seeded variant is implemented.
+    This function was added in Spark 4.0. ::
+
+        SELECT randstr(5, 0);  -- "ceV0P" (reproducible with seed)
+        SELECT randstr(10, 0); -- "ceV0PXaR2I"
+        SELECT randstr(0, 42); -- ""
+
 .. spark:function:: read_side_padding(string, limit) -> varchar
 
     Right-pads the given string with spaces to the specified length ``limit``.
@@ -457,6 +478,26 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 0); -- ""
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
+
+.. spark:function:: to_pretty_string(x) -> varchar
+
+    Returns pretty string for ``x``. All scalar types are supported.
+    Adjusts the timestamp input to the given time zone if set through ``session_timezone`` config.
+    The result is different from that of casting ``x`` as string in the following aspects.
+
+    - It prints null input as "NULL" rather than producing null output.
+
+    - It prints binary values using the hex format.
+
+    ::
+
+        SELECT to_pretty_string(4); -- "4"
+        SELECT to_pretty_string(cast("1.0" as float)); -- "1.0"
+        SELECT to_pretty_string("spark"); -- "spark"
+        SELECT to_pretty_string(cast('abcdef' as binary)); -- "[61 62 63 64 65 66]"
+        SELECT to_pretty_string(null); -- "NULL"
+        SELECT to_pretty_string(cast(2347589 as timestamp)); -- "1970-01-28 12:06:29"
+        SELECT to_pretty_string(cast('2024-05-08' as date)); -- "2024-05-08"
 
 .. spark:function:: translate(string, match, replace) -> varchar
 

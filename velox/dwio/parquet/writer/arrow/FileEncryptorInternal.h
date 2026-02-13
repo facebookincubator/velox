@@ -38,44 +38,44 @@ class ColumnEncryptionProperties;
 class PARQUET_EXPORT Encryptor {
  public:
   Encryptor(
-      encryption::AesEncryptor* aes_encryptor,
+      encryption::AesEncryptor* aesEncryptor,
       const std::string& key,
-      const std::string& file_aad,
+      const std::string& fileAad,
       const std::string& aad,
       ::arrow::MemoryPool* pool);
-  const std::string& file_aad() {
-    return file_aad_;
+  const std::string& fileAad() {
+    return fileAad_;
   }
-  void UpdateAad(const std::string& aad) {
+  void updateAad(const std::string& aad) {
     aad_ = aad;
   }
   ::arrow::MemoryPool* pool() {
     return pool_;
   }
 
-  int CiphertextSizeDelta();
-  int Encrypt(const uint8_t* plaintext, int plaintext_len, uint8_t* ciphertext);
+  int ciphertextSizeDelta();
+  int encrypt(const uint8_t* plaintext, int plaintextLen, uint8_t* ciphertext);
 
-  bool EncryptColumnMetaData(
-      bool encrypted_footer,
+  bool encryptColumnMetaData(
+      bool encryptedFooter,
       const std::shared_ptr<ColumnEncryptionProperties>&
-          column_encryption_properties) {
-    // if column is not encrypted then do not encrypt the column metadata
-    if (!column_encryption_properties ||
-        !column_encryption_properties->is_encrypted())
+          ColumnEncryptionProperties) {
+    // If column is not encrypted then do not encrypt the column metadata.
+    if (!ColumnEncryptionProperties ||
+        !ColumnEncryptionProperties->isEncrypted())
       return false;
-    // if plaintext footer then encrypt the column metadata
-    if (!encrypted_footer)
+    // If plaintext footer then encrypt the column metadata.
+    if (!encryptedFooter)
       return true;
-    // if column is not encrypted with footer key then encrypt the column
-    // metadata
-    return !column_encryption_properties->is_encrypted_with_footer_key();
+    // If column is not encrypted with footer key then encrypt the column.
+    // Metadata.
+    return !ColumnEncryptionProperties->isEncryptedWithFooterKey();
   }
 
  private:
-  encryption::AesEncryptor* aes_encryptor_;
+  encryption::AesEncryptor* aesEncryptor_;
   std::string key_;
-  std::string file_aad_;
+  std::string fileAad_;
   std::string aad_;
   ::arrow::MemoryPool* pool_;
 };
@@ -86,44 +86,44 @@ class InternalFileEncryptor {
       FileEncryptionProperties* properties,
       ::arrow::MemoryPool* pool);
 
-  std::shared_ptr<Encryptor> GetFooterEncryptor();
-  std::shared_ptr<Encryptor> GetFooterSigningEncryptor();
-  std::shared_ptr<Encryptor> GetColumnMetaEncryptor(
-      const std::string& column_path);
-  std::shared_ptr<Encryptor> GetColumnDataEncryptor(
-      const std::string& column_path);
-  void WipeOutEncryptionKeys();
+  std::shared_ptr<Encryptor> getFooterEncryptor();
+  std::shared_ptr<Encryptor> getFooterSigningEncryptor();
+  std::shared_ptr<Encryptor> getColumnMetaEncryptor(
+      const std::string& ColumnPath);
+  std::shared_ptr<Encryptor> getColumnDataEncryptor(
+      const std::string& ColumnPath);
+  void wipeOutEncryptionKeys();
 
  private:
   FileEncryptionProperties* properties_;
 
-  std::map<std::string, std::shared_ptr<Encryptor>> column_data_map_;
-  std::map<std::string, std::shared_ptr<Encryptor>> column_metadata_map_;
+  std::map<std::string, std::shared_ptr<Encryptor>> columnDataMap_;
+  std::map<std::string, std::shared_ptr<Encryptor>> columnMetadataMap_;
 
-  std::shared_ptr<Encryptor> footer_signing_encryptor_;
-  std::shared_ptr<Encryptor> footer_encryptor_;
+  std::shared_ptr<Encryptor> footerSigningEncryptor_;
+  std::shared_ptr<Encryptor> footerEncryptor_;
 
-  std::vector<encryption::AesEncryptor*> all_encryptors_;
+  std::vector<encryption::AesEncryptor*> allEncryptors_;
 
-  // Key must be 16, 24 or 32 bytes in length. Thus there could be up to three
-  // types of meta_encryptors and data_encryptors.
-  std::unique_ptr<encryption::AesEncryptor> meta_encryptor_[3];
-  std::unique_ptr<encryption::AesEncryptor> data_encryptor_[3];
+  // Key must be 16, 24 or 32 bytes in length. Thus there could be up to three.
+  // Types of meta_encryptors and data_encryptors.
+  std::unique_ptr<encryption::AesEncryptor> metaEncryptor_[3];
+  std::unique_ptr<encryption::AesEncryptor> dataEncryptor_[3];
 
   ::arrow::MemoryPool* pool_;
 
-  std::shared_ptr<Encryptor> GetColumnEncryptor(
-      const std::string& column_path,
+  std::shared_ptr<Encryptor> getColumnEncryptor(
+      const std::string& ColumnPath,
       bool metadata);
 
-  encryption::AesEncryptor* GetMetaAesEncryptor(
+  encryption::AesEncryptor* getMetaAesEncryptor(
       ParquetCipher::type algorithm,
-      size_t key_len);
-  encryption::AesEncryptor* GetDataAesEncryptor(
+      size_t keyLen);
+  encryption::AesEncryptor* getDataAesEncryptor(
       ParquetCipher::type algorithm,
-      size_t key_len);
+      size_t keyLen);
 
-  int MapKeyLenToEncryptorArrayIndex(int key_len);
+  int mapKeyLenToEncryptorArrayIndex(int keyLen);
 };
 
 } // namespace facebook::velox::parquet::arrow

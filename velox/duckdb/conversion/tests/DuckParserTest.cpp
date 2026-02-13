@@ -462,6 +462,8 @@ TEST(DuckParserTest, ifCase) {
       "if(\"a\",plus(\"b\",\"c\"),g(\"d\"))",
       parseExpr("if(a, b + c, g(d))")->toString());
 
+  EXPECT_EQ("if(gt(\"a\",0),10)", parseExpr("if(a > 0, 10, null)")->toString());
+
   // CASE statements.
   EXPECT_EQ(
       "if(1,null,0)",

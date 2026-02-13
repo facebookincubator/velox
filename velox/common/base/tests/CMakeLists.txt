@@ -31,7 +31,6 @@ add_executable(
   SimdUtilTest.cpp
   SkewedPartitionBalancerTest.cpp
   SpillConfigTest.cpp
-  SpillStatsTest.cpp
   SplitBlockBloomFilterTest.cpp
   StatsReporterTest.cpp
   StatusTest.cpp

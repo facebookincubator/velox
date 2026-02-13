@@ -64,11 +64,20 @@ class BufferedInputDataSource : public cudf::io::datasource {
       uint8_t* dst,
       rmm::cuda_stream_view stream) override;
 
+  // Use the enqueue API from dwio::common::BufferedInput.
+  // Pass a device buffer to copy to after load.
+  void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
+
+  // loads and copies to device.
+  void load(rmm::cuda_stream_view stream);
+
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
+  std::vector<std::function<void(rmm::cuda_stream_view stream)>>
+      pendingDeviceLoads_;
 };
 
 // ---------------- Internal helper ----------------

@@ -330,8 +330,8 @@ DataSink::Stats CudfHiveDataSink::stats() const {
   int64_t numWrittenBytes{0};
   int64_t writeIOTimeUs{0};
 
-  numWrittenBytes += ioStats_->rawBytesWritten();
-  writeIOTimeUs += ioStats_->writeIOTimeUs();
+  numWrittenBytes += ioStatistics_->rawBytesWritten();
+  writeIOTimeUs += ioStatistics_->writeIOTimeUs();
 
   stats.numWrittenBytes = numWrittenBytes;
   stats.writeIOTimeUs = writeIOTimeUs;
@@ -342,9 +342,8 @@ DataSink::Stats CudfHiveDataSink::stats() const {
 
   stats.numWrittenFiles = 1;
   VELOX_CHECK_NOT_NULL(writerInfo_);
-  const auto spillStats = writerInfo_->spillStats->rlock();
-  if (!spillStats->empty()) {
-    stats.spillStats += *spillStats;
+  if (!writerInfo_->spillStats->empty()) {
+    stats.spillStats += *writerInfo_->spillStats;
   }
 
   return stats;
@@ -403,10 +402,10 @@ std::vector<std::string> CudfHiveDataSink::close() {
           folly::dynamic::object
             ("writeFileName", writerInfo_->writerParameters.writeFileName())
             ("targetFileName", writerInfo_->writerParameters.targetFileName())
-            ("fileSize", ioStats_->rawBytesWritten())))
+            ("fileSize", ioStatistics_->rawBytesWritten())))
         ("rowCount", writerInfo_->numWrittenRows)
         ("inMemoryDataSizeInBytes", writerInfo_->inputSizeInBytes)
-        ("onDiskDataSizeInBytes", ioStats_->rawBytesWritten())
+        ("onDiskDataSizeInBytes", ioStatistics_->rawBytesWritten())
         ("containsNumberedFileNames", true));
   // clang-format on
   partitionUpdates.emplace_back(partitionUpdateJson);
@@ -456,7 +455,7 @@ void CudfHiveDataSink::makeWriterOptions(
       std::move(sinkPool),
       std::move(sortPool));
 
-  ioStats_ = std::make_shared<io::IoStatistics>();
+  ioStatistics_ = std::make_shared<io::IoStatistics>();
 
   // Take the writer options provided by the user as a starting point,
   // or allocate a new one.

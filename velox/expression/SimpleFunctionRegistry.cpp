@@ -145,7 +145,7 @@ namespace {
 
 // Same as Type::kindEquals, but matches UNKNOWN in 'physicalType' to any type.
 bool physicalTypeMatches(const TypePtr& type, const TypePtr& physicalType) {
-  if (physicalType->isUnKnown()) {
+  if (physicalType->isUnknown()) {
     return true;
   }
 

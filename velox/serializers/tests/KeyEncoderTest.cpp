@@ -305,29 +305,29 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
     auto keyEncoder = KeyEncoder::create(
         indexBounds.indexColumns, inputType, sortOrders, pool_.get());
 
-    const auto encodedBounds = keyEncoder->encodeIndexBounds(indexBounds);
-
     if (testCase.expectedFailure) {
-      // For lower bound bump failures, expect std::nullopt to be returned
-      EXPECT_FALSE(encodedBounds.has_value())
-          << "Expected encodeIndexBounds to return std::nullopt for bound bump failure";
+      // For lower bound bump failures, expect exception to be thrown.
+      VELOX_ASSERT_THROW(
+          keyEncoder->encodeIndexBounds(indexBounds),
+          "Failed to bump up lower bound");
       return;
     }
 
-    // Verify we got a valid result
-    ASSERT_TRUE(encodedBounds.has_value());
+    const auto encodedBounds = keyEncoder->encodeIndexBounds(indexBounds);
+
+    ASSERT_EQ(encodedBounds.size(), 1);
+
+    const auto& result = encodedBounds[0];
 
     // Verify presence of keys matches expectations
     EXPECT_EQ(
-        encodedBounds->lowerKey.has_value(),
-        testCase.expectedLowerBound.has_value());
+        result.lowerKey.has_value(), testCase.expectedLowerBound.has_value());
     EXPECT_EQ(
-        encodedBounds->upperKey.has_value(),
-        testCase.expectedUpperBound.has_value());
+        result.upperKey.has_value(), testCase.expectedUpperBound.has_value());
 
     // Encode expected bounds and verify they match
     if (testCase.expectedLowerBound.has_value()) {
-      ASSERT_TRUE(encodedBounds->lowerKey.has_value());
+      ASSERT_TRUE(result.lowerKey.has_value());
       std::vector<char> expectedBuffer;
       std::vector<std::string_view> expectedKeys;
       keyEncoder->encode(
@@ -338,11 +338,11 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
             return expectedBuffer.data();
           });
       EXPECT_EQ(expectedKeys.size(), 1);
-      EXPECT_EQ(encodedBounds->lowerKey.value(), std::string(expectedKeys[0]));
+      EXPECT_EQ(result.lowerKey.value(), std::string(expectedKeys[0]));
     }
 
     if (testCase.expectedUpperBound.has_value()) {
-      ASSERT_TRUE(encodedBounds->upperKey.has_value());
+      ASSERT_TRUE(result.upperKey.has_value());
       std::vector<char> expectedBuffer;
       std::vector<std::string_view> expectedKeys;
       keyEncoder->encode(
@@ -353,7 +353,7 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
             return expectedBuffer.data();
           });
       EXPECT_EQ(expectedKeys.size(), 1);
-      EXPECT_EQ(encodedBounds->upperKey.value(), std::string(expectedKeys[0]));
+      EXPECT_EQ(result.upperKey.value(), std::string(expectedKeys[0]));
     }
   }
 
@@ -416,26 +416,28 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
 
 TEST_F(KeyEncoderTest, indexBounds) {
   const auto boundRow = makeRowVector({makeNullableFlatVector<int32_t>({2})});
-  // Test valid bounds with lower bound
+  // Test valid bounds with lower bound.
   IndexBounds boundsWithLower;
   boundsWithLower.indexColumns = {"c0"};
   boundsWithLower.lowerBound = IndexBound{boundRow, true};
   EXPECT_TRUE(boundsWithLower.validate());
   EXPECT_EQ(
       boundsWithLower.toString(),
-      "IndexBounds{indexColumns=[c0], lowerBound=[0: {2}]}");
+      "IndexBounds{indexColumns=[c0], lowerBound=[0: {2}], upperBound=unbounded}");
   EXPECT_EQ(boundsWithLower.type()->toString(), boundRow->type()->toString());
+  EXPECT_EQ(boundsWithLower.numRows(), 1);
 
-  // Test valid bounds with upper bound
+  // Test valid bounds with upper bound.
   IndexBounds boundsWithUpper;
   boundsWithUpper.indexColumns = {"c0"};
   boundsWithUpper.upperBound = IndexBound{boundRow, false};
   EXPECT_TRUE(boundsWithUpper.validate());
   EXPECT_EQ(
       boundsWithUpper.toString(),
-      "IndexBounds{indexColumns=[c0], upperBound=(0: {2})}");
+      "IndexBounds{indexColumns=[c0], lowerBound=unbounded, upperBound=(0: {2})}");
+  EXPECT_EQ(boundsWithUpper.numRows(), 1);
 
-  // Test valid bounds with both
+  // Test valid bounds with both.
   IndexBounds boundsWithBoth;
   boundsWithBoth.indexColumns = {"c0"};
   boundsWithBoth.lowerBound = IndexBound{boundRow, true};
@@ -445,17 +447,19 @@ TEST_F(KeyEncoderTest, indexBounds) {
       boundsWithBoth.toString(),
       "IndexBounds{indexColumns=[c0], lowerBound=[0: {2}], upperBound=(0: {2})}");
 
-  // Test invalid bounds with no bounds
+  // Test invalid bounds with no bounds.
   IndexBounds noBounds;
   noBounds.indexColumns = {"c0"};
   EXPECT_FALSE(noBounds.validate());
 
-  auto badRowBound =
+  // Test multi-row bounds (valid with multi-row support).
+  auto twoRowBound =
       makeRowVector({makeNullableFlatVector<int32_t>({2, std::nullopt})});
-  IndexBounds badSizeBounds;
-  badSizeBounds.indexColumns = {"c0"};
-  badSizeBounds.lowerBound = IndexBound{badRowBound, true};
-  EXPECT_FALSE(badSizeBounds.validate());
+  IndexBounds twoRowBounds;
+  twoRowBounds.indexColumns = {"c0"};
+  twoRowBounds.lowerBound = IndexBound{twoRowBound, true};
+  EXPECT_TRUE(twoRowBounds.validate());
+  EXPECT_EQ(twoRowBounds.numRows(), 2);
 
   // Test invalid bounds with extra index columns.
   IndexBounds extraColBounds;
@@ -483,6 +487,48 @@ TEST_F(KeyEncoderTest, indexBounds) {
   missingColBounds.indexColumns = {"c0"};
   missingColBounds.upperBound = IndexBound{multiColumnBoundRow, false};
   EXPECT_FALSE(missingColBounds.validate());
+
+  // Test set() and clear() methods.
+  const auto lowerRow = makeRowVector({makeNullableFlatVector<int32_t>({10})});
+  const auto upperRow = makeRowVector({makeNullableFlatVector<int32_t>({20})});
+
+  IndexBounds bounds;
+  bounds.indexColumns = {"c0"};
+  EXPECT_FALSE(bounds.validate());
+
+  bounds.set(IndexBound{lowerRow, true}, IndexBound{upperRow, false});
+  EXPECT_TRUE(bounds.validate());
+  EXPECT_TRUE(bounds.lowerBound.has_value());
+  EXPECT_TRUE(bounds.upperBound.has_value());
+  EXPECT_TRUE(bounds.lowerBound->inclusive);
+  EXPECT_FALSE(bounds.upperBound->inclusive);
+  EXPECT_EQ(bounds.numRows(), 1);
+  EXPECT_EQ(
+      bounds.toString(),
+      "IndexBounds{indexColumns=[c0], lowerBound=[0: {10}], upperBound=(0: {20})}");
+
+  bounds.clear();
+  EXPECT_FALSE(bounds.lowerBound.has_value());
+  EXPECT_FALSE(bounds.upperBound.has_value());
+  EXPECT_FALSE(bounds.validate());
+
+  bounds.set(IndexBound{upperRow, false}, IndexBound{lowerRow, true});
+  EXPECT_TRUE(bounds.validate());
+  EXPECT_EQ(bounds.numRows(), 1);
+
+  // Test numRows() with multiple row bounds.
+  const auto multipleRows =
+      makeRowVector({makeNullableFlatVector<int32_t>({1, 2, 3})});
+  IndexBounds multiRowBounds;
+  multiRowBounds.indexColumns = {"c0"};
+  multiRowBounds.lowerBound = IndexBound{multipleRows, true};
+  EXPECT_EQ(multiRowBounds.numRows(), 3);
+
+  IndexBounds multiRowBothBounds;
+  multiRowBothBounds.indexColumns = {"c0"};
+  multiRowBothBounds.lowerBound = IndexBound{multipleRows, true};
+  multiRowBothBounds.upperBound = IndexBound{multipleRows, false};
+  EXPECT_EQ(multiRowBothBounds.numRows(), 3);
 }
 
 TEST_F(KeyEncoderTest, indexBoundsType) {
@@ -10911,6 +10957,113 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsNullIncrementThrows) {
          makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})});
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
+  }
+}
+
+// Tests for multiple rows in index bounds
+TEST_F(KeyEncoderTest, encodeIndexBoundsMultipleRows) {
+  // Test Case 1: Multiple rows - all succeed
+  {
+    IndexBounds indexBounds;
+    indexBounds.indexColumns = {"c0"};
+    indexBounds.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<int64_t>({1, 10, 100})}),
+        .inclusive = true};
+    indexBounds.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<int64_t>({5, 50, 500})}),
+        .inclusive = true};
+
+    ASSERT_TRUE(indexBounds.validate());
+
+    const auto inputType = asRowType(indexBounds.type());
+    const std::vector<velox::core::SortOrder> sortOrders(
+        indexBounds.indexColumns.size(), velox::core::kAscNullsFirst);
+    auto keyEncoder = KeyEncoder::create(
+        indexBounds.indexColumns, inputType, sortOrders, pool_.get());
+
+    const auto encodedBounds = keyEncoder->encodeIndexBounds(indexBounds);
+
+    // Should succeed with 3 results
+    ASSERT_EQ(encodedBounds.size(), 3);
+
+    // Verify each row has both lower and upper keys
+    for (size_t i = 0; i < 3; ++i) {
+      EXPECT_TRUE(encodedBounds[i].lowerKey.has_value())
+          << "Row " << i << " should have lowerKey";
+      EXPECT_TRUE(encodedBounds[i].upperKey.has_value())
+          << "Row " << i << " should have upperKey";
+    }
+
+    // Verify keys are different across rows
+    EXPECT_NE(encodedBounds[0].lowerKey, encodedBounds[1].lowerKey);
+    EXPECT_NE(encodedBounds[1].lowerKey, encodedBounds[2].lowerKey);
+  }
+
+  // Test Case 2: Multiple rows - one lower bound fails (throws)
+  {
+    IndexBounds indexBounds;
+    indexBounds.indexColumns = {"c0"};
+    // Second row has max value with exclusive bound - should fail to bump up
+    indexBounds.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<int64_t>(
+            {1, std::numeric_limits<int64_t>::max(), 100})}),
+        .inclusive = false};
+    indexBounds.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<int64_t>({5, 50, 500})}),
+        .inclusive = true};
+
+    ASSERT_TRUE(indexBounds.validate());
+
+    const auto inputType = asRowType(indexBounds.type());
+    const std::vector<velox::core::SortOrder> sortOrders(
+        indexBounds.indexColumns.size(), velox::core::kAscNullsFirst);
+    auto keyEncoder = KeyEncoder::create(
+        indexBounds.indexColumns, inputType, sortOrders, pool_.get());
+
+    // Should throw because one lower bound fails to bump up
+    VELOX_ASSERT_THROW(
+        keyEncoder->encodeIndexBounds(indexBounds),
+        "Failed to bump up lower bound");
+  }
+
+  // Test Case 3: Multiple rows - one upper bound fails (upper key becomes
+  // nullopt)
+  {
+    IndexBounds indexBounds;
+    indexBounds.indexColumns = {"c0"};
+    indexBounds.lowerBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<int64_t>({1, 10, 100})}),
+        .inclusive = true};
+    // Second row has max value with inclusive bound - should fail to bump up
+    indexBounds.upperBound = IndexBound{
+        .bound = makeRowVector({makeFlatVector<int64_t>(
+            {5, std::numeric_limits<int64_t>::max(), 500})}),
+        .inclusive = true};
+
+    ASSERT_TRUE(indexBounds.validate());
+
+    const auto inputType = asRowType(indexBounds.type());
+    const std::vector<velox::core::SortOrder> sortOrders(
+        indexBounds.indexColumns.size(), velox::core::kAscNullsFirst);
+    auto keyEncoder = KeyEncoder::create(
+        indexBounds.indexColumns, inputType, sortOrders, pool_.get());
+
+    const auto encodedBounds = keyEncoder->encodeIndexBounds(indexBounds);
+
+    // Should succeed but all upper keys become nullopt when any fails
+    ASSERT_EQ(encodedBounds.size(), 3);
+
+    // All rows should have lower keys
+    for (size_t i = 0; i < 3; ++i) {
+      EXPECT_TRUE(encodedBounds[i].lowerKey.has_value())
+          << "Row " << i << " should have lowerKey";
+    }
+
+    // All upper keys should be nullopt (unbounded) because bump up failed
+    for (size_t i = 0; i < 3; ++i) {
+      EXPECT_FALSE(encodedBounds[i].upperKey.has_value())
+          << "Row " << i << " should not have upperKey (unbounded)";
+    }
   }
 }
 } // namespace facebook::velox::serializer::test

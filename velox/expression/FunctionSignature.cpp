@@ -226,7 +226,7 @@ bool SignatureVariable::isEligibleType(const Type& type) const {
     return false;
   }
 
-  if (knownTypesOnly_ && type.isUnKnown()) {
+  if (knownTypesOnly_ && type.isUnknown()) {
     return false;
   }
 

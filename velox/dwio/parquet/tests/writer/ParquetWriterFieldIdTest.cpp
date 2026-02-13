@@ -79,27 +79,27 @@ TEST_P(ParquetWriterFieldIdTest, fieldIds) {
       std::make_shared<::arrow::Buffer>(
           reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
 
-  auto fileReader = parquet::arrow::ParquetFileReader::Open(arrowBufferReader);
+  auto fileReader = parquet::arrow::ParquetFileReader::open(arrowBufferReader);
   auto metadata = fileReader->metadata();
   auto* descr = metadata->schema();
-  auto* root = descr->group_node();
+  auto* root = descr->groupNode();
 
-  ASSERT_EQ(root->field_count(), 4);
+  ASSERT_EQ(root->fieldCount(), 4);
 
   auto exp = [&](int32_t expectedFieldId) {
     return GetParam() ? expectedFieldId : -1;
   };
 
   // Top-level field IDs.
-  EXPECT_EQ(root->field(0)->field_id(), exp(10));
-  EXPECT_EQ(root->field(1)->field_id(), exp(20));
-  EXPECT_EQ(root->field(2)->field_id(), exp(30));
-  EXPECT_EQ(root->field(3)->field_id(), exp(40));
+  EXPECT_EQ(root->field(0)->fieldId(), exp(10));
+  EXPECT_EQ(root->field(1)->fieldId(), exp(20));
+  EXPECT_EQ(root->field(2)->fieldId(), exp(30));
+  EXPECT_EQ(root->field(3)->fieldId(), exp(40));
 
   using GroupNode = parquet::arrow::schema::GroupNode;
   auto* s = static_cast<const GroupNode*>(root->field(1).get());
-  EXPECT_EQ(s->field(0)->field_id(), exp(21));
-  EXPECT_EQ(s->field(1)->field_id(), exp(22));
+  EXPECT_EQ(s->field(0)->fieldId(), exp(21));
+  EXPECT_EQ(s->field(1)->fieldId(), exp(22));
 
   auto* a = static_cast<const GroupNode*>(root->field(2).get());
   // LIST logical group has one repeated child (the array entries); dive once
@@ -107,13 +107,13 @@ TEST_P(ParquetWriterFieldIdTest, fieldIds) {
   auto* listEntries = a->field(0).get();
   auto* listGroup = static_cast<const GroupNode*>(listEntries);
   auto* element = listGroup->field(0).get();
-  EXPECT_EQ(element->field_id(), exp(31));
+  EXPECT_EQ(element->fieldId(), exp(31));
 
   auto* m = static_cast<const GroupNode*>(root->field(3).get());
   auto* keyValue = m->field(0).get();
   auto* keyValueGroup = static_cast<const GroupNode*>(keyValue);
-  EXPECT_EQ(keyValueGroup->field(0)->field_id(), exp(41));
-  EXPECT_EQ(keyValueGroup->field(1)->field_id(), exp(42));
+  EXPECT_EQ(keyValueGroup->field(0)->fieldId(), exp(41));
+  EXPECT_EQ(keyValueGroup->field(1)->fieldId(), exp(42));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

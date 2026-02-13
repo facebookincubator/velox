@@ -122,8 +122,10 @@ RowVectorPtr CudfLimit::getOutput() {
       {0, static_cast<int>(remainingLimit_)},
       cudfInput->stream());
 
-  auto materializedTable =
-      std::make_unique<cudf::table>(slicedTable[0], cudfInput->stream());
+  auto materializedTable = std::make_unique<cudf::table>(
+      slicedTable[0],
+      cudfInput->stream(),
+      cudf::get_current_device_resource_ref());
 
   auto output = std::make_shared<cudf_velox::CudfVector>(
       input_->pool(),

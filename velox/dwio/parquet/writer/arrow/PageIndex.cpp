@@ -36,55 +36,54 @@ namespace facebook::velox::parquet::arrow {
 namespace {
 
 template <typename DType>
-void Decode(
+void decode(
     std::unique_ptr<typename EncodingTraits<DType>::Decoder>& decoder,
     const std::string& input,
-    std::vector<typename DType::c_type>* output,
-    size_t output_index) {
-  if (ARROW_PREDICT_FALSE(output_index >= output->size())) {
+    std::vector<typename DType::CType>* output,
+    size_t outputIndex) {
+  if (ARROW_PREDICT_FALSE(outputIndex >= output->size())) {
     throw ParquetException("Index out of bound");
   }
 
-  decoder->SetData(
-      /*num_values=*/1,
+  decoder->setData(
+      1,
       reinterpret_cast<const uint8_t*>(input.c_str()),
       static_cast<int>(input.size()));
-  const auto num_values =
-      decoder->Decode(&output->at(output_index), /*max_values=*/1);
-  if (ARROW_PREDICT_FALSE(num_values != 1)) {
+  const auto numValues = decoder->decode(&output->at(outputIndex), 1);
+  if (ARROW_PREDICT_FALSE(numValues != 1)) {
     throw ParquetException("Could not decode statistics value");
   }
 }
 
 template <>
-void Decode<BooleanType>(
+void decode<BooleanType>(
     std::unique_ptr<BooleanDecoder>& decoder,
     const std::string& input,
     std::vector<bool>* output,
-    size_t output_index) {
-  if (ARROW_PREDICT_FALSE(output_index >= output->size())) {
+    size_t outputIndex) {
+  if (ARROW_PREDICT_FALSE(outputIndex >= output->size())) {
     throw ParquetException("Index out of bound");
   }
 
   bool value;
-  decoder->SetData(
-      /*num_values=*/1,
+  decoder->setData(
+      1,
       reinterpret_cast<const uint8_t*>(input.c_str()),
       static_cast<int>(input.size()));
-  const auto num_values = decoder->Decode(&value, /*max_values=*/1);
-  if (ARROW_PREDICT_FALSE(num_values != 1)) {
+  const auto numValues = decoder->decode(&value, 1);
+  if (ARROW_PREDICT_FALSE(numValues != 1)) {
     throw ParquetException("Could not decode statistics value");
   }
-  output->at(output_index) = value;
+  output->at(outputIndex) = value;
 }
 
 template <>
-void Decode<ByteArrayType>(
+void decode<ByteArrayType>(
     std::unique_ptr<ByteArrayDecoder>&,
     const std::string& input,
     std::vector<ByteArray>* output,
-    size_t output_index) {
-  if (ARROW_PREDICT_FALSE(output_index >= output->size())) {
+    size_t outputIndex) {
+  if (ARROW_PREDICT_FALSE(outputIndex >= output->size())) {
     throw ParquetException("Index out of bound");
   }
 
@@ -94,274 +93,265 @@ void Decode<ByteArrayType>(
     throw ParquetException("Invalid encoded byte array length");
   }
 
-  output->at(output_index) = {
-      /*len=*/static_cast<uint32_t>(input.size()),
-      /*ptr=*/reinterpret_cast<const uint8_t*>(input.data())};
+  output->at(outputIndex) = {
+      static_cast<uint32_t>(input.size()),
+      reinterpret_cast<const uint8_t*>(input.data())};
 }
 
 template <typename DType>
 class TypedColumnIndexImpl : public TypedColumnIndex<DType> {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   TypedColumnIndexImpl(
       const ColumnDescriptor& descr,
-      facebook::velox::parquet::thrift::ColumnIndex column_index)
-      : column_index_(std::move(column_index)) {
+      facebook::velox::parquet::thrift::ColumnIndex columnIndex)
+      : columnIndex_(std::move(columnIndex)) {
     // Make sure the number of pages is valid and it does not overflow to
     // int32_t.
-    const size_t num_pages = column_index_.null_pages.size();
-    if (num_pages >= static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-        column_index_.min_values.size() != num_pages ||
-        column_index_.max_values.size() != num_pages ||
-        (column_index_.__isset.null_counts &&
-         column_index_.null_counts.size() != num_pages)) {
+    const size_t numPages = columnIndex_.null_pages.size();
+    if (numPages >= static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+        columnIndex_.min_values.size() != numPages ||
+        columnIndex_.max_values.size() != numPages ||
+        (columnIndex_.__isset.null_counts &&
+         columnIndex_.null_counts.size() != numPages)) {
       throw ParquetException("Invalid column index");
     }
 
-    const size_t num_non_null_pages = static_cast<size_t>(std::accumulate(
-        column_index_.null_pages.cbegin(),
-        column_index_.null_pages.cend(),
+    const size_t numNonNullPages = static_cast<size_t>(std::accumulate(
+        columnIndex_.null_pages.cbegin(),
+        columnIndex_.null_pages.cend(),
         0,
-        [](int32_t num_non_null_pages, bool null_page) {
-          return num_non_null_pages + (null_page ? 0 : 1);
+        [](int32_t numNonNullPages, bool nullPage) {
+          return numNonNullPages + (nullPage ? 0 : 1);
         }));
-    VELOX_DCHECK_LE(num_non_null_pages, num_pages);
+    VELOX_DCHECK_LE(numNonNullPages, numPages);
 
     // Allocate slots for decoded values.
-    min_values_.resize(num_pages);
-    max_values_.resize(num_pages);
-    non_null_page_indices_.reserve(num_non_null_pages);
+    minValues_.resize(numPages);
+    maxValues_.resize(numPages);
+    nonNullPageIndices_.reserve(numNonNullPages);
 
     // Decode min and max values according to the physical type.
-    // Note that null page are skipped.
-    auto plain_decoder = MakeTypedDecoder<DType>(Encoding::PLAIN, &descr);
-    for (size_t i = 0; i < num_pages; ++i) {
-      if (!column_index_.null_pages[i]) {
-        // The check on `num_pages` has guaranteed the cast below is safe.
-        non_null_page_indices_.emplace_back(static_cast<int32_t>(i));
-        Decode<DType>(
-            plain_decoder, column_index_.min_values[i], &min_values_, i);
-        Decode<DType>(
-            plain_decoder, column_index_.max_values[i], &max_values_, i);
+    // Note that null pages are skipped.
+    auto plainDecoder = makeTypedDecoder<DType>(Encoding::kPlain, &descr);
+    for (size_t i = 0; i < numPages; ++i) {
+      if (!columnIndex_.null_pages[i]) {
+        // The check on `numPages` has guaranteed the cast below is safe.
+        nonNullPageIndices_.emplace_back(static_cast<int32_t>(i));
+        decode<DType>(plainDecoder, columnIndex_.min_values[i], &minValues_, i);
+        decode<DType>(plainDecoder, columnIndex_.max_values[i], &maxValues_, i);
       }
     }
-    VELOX_DCHECK_EQ(num_non_null_pages, non_null_page_indices_.size());
+    VELOX_DCHECK_EQ(numNonNullPages, nonNullPageIndices_.size());
   }
 
-  const std::vector<bool>& null_pages() const override {
-    return column_index_.null_pages;
+  const std::vector<bool>& nullPages() const override {
+    return columnIndex_.null_pages;
   }
 
-  const std::vector<std::string>& encoded_min_values() const override {
-    return column_index_.min_values;
+  const std::vector<std::string>& encodedMinValues() const override {
+    return columnIndex_.min_values;
   }
 
-  const std::vector<std::string>& encoded_max_values() const override {
-    return column_index_.max_values;
+  const std::vector<std::string>& encodedMaxValues() const override {
+    return columnIndex_.max_values;
   }
 
-  BoundaryOrder::type boundary_order() const override {
-    return LoadEnumSafe(&column_index_.boundary_order);
+  BoundaryOrder::type boundaryOrder() const override {
+    return loadenumSafe(&columnIndex_.boundary_order);
   }
 
-  bool has_null_counts() const override {
-    return column_index_.__isset.null_counts;
+  bool hasNullCounts() const override {
+    return columnIndex_.__isset.null_counts;
   }
 
-  const std::vector<int64_t>& null_counts() const override {
-    return column_index_.null_counts;
+  const std::vector<int64_t>& nullCounts() const override {
+    return columnIndex_.null_counts;
   }
 
-  const std::vector<int32_t>& non_null_page_indices() const override {
-    return non_null_page_indices_;
+  const std::vector<int32_t>& nonNullPageIndices() const override {
+    return nonNullPageIndices_;
   }
 
-  const std::vector<T>& min_values() const override {
-    return min_values_;
+  const std::vector<T>& minValues() const override {
+    return minValues_;
   }
 
-  const std::vector<T>& max_values() const override {
-    return max_values_;
+  const std::vector<T>& maxValues() const override {
+    return maxValues_;
   }
 
  private:
-  /// Wrapped thrift column index.
-  const facebook::velox::parquet::thrift::ColumnIndex column_index_;
+  /// Wrapped Thrift column index.
+  const facebook::velox::parquet::thrift::ColumnIndex columnIndex_;
   /// Decoded typed min/max values. Undefined for null pages.
-  std::vector<T> min_values_;
-  std::vector<T> max_values_;
+  std::vector<T> minValues_;
+  std::vector<T> maxValues_;
   /// A list of page indices for non-null pages.
-  std::vector<int32_t> non_null_page_indices_;
+  std::vector<int32_t> nonNullPageIndices_;
 };
 
 class OffsetIndexImpl : public OffsetIndex {
  public:
   explicit OffsetIndexImpl(
-      const facebook::velox::parquet::thrift::OffsetIndex& offset_index) {
-    page_locations_.reserve(offset_index.page_locations.size());
-    for (const auto& page_location : offset_index.page_locations) {
-      page_locations_.emplace_back(
+      const facebook::velox::parquet::thrift::OffsetIndex& offsetIndex) {
+    pageLocations_.reserve(offsetIndex.page_locations.size());
+    for (const auto& pageLocation : offsetIndex.page_locations) {
+      pageLocations_.emplace_back(
           PageLocation{
-              page_location.offset,
-              page_location.compressed_page_size,
-              page_location.first_row_index});
+              pageLocation.offset,
+              pageLocation.compressed_page_size,
+              pageLocation.first_row_index});
     }
   }
 
-  const std::vector<PageLocation>& page_locations() const override {
-    return page_locations_;
+  const std::vector<PageLocation>& pageLocations() const override {
+    return pageLocations_;
   }
 
  private:
-  std::vector<PageLocation> page_locations_;
+  std::vector<PageLocation> pageLocations_;
 };
 
 class RowGroupPageIndexReaderImpl : public RowGroupPageIndexReader {
  public:
   RowGroupPageIndexReaderImpl(
       ::arrow::io::RandomAccessFile* input,
-      std::shared_ptr<RowGroupMetaData> row_group_metadata,
+      std::shared_ptr<RowGroupMetaData> rowGroupMetadata,
       const ReaderProperties& properties,
-      int32_t row_group_ordinal,
-      const RowGroupIndexReadRange& index_read_range,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor)
+      int32_t rowGroupOrdinal,
+      const RowGroupIndexReadRange& indexReadRange,
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor)
       : input_(input),
-        row_group_metadata_(std::move(row_group_metadata)),
+        rowGroupMetadata_(std::move(rowGroupMetadata)),
         properties_(properties),
-        row_group_ordinal_(row_group_ordinal),
-        index_read_range_(index_read_range),
-        file_decryptor_(std::move(file_decryptor)) {}
+        rowGroupOrdinal_(rowGroupOrdinal),
+        indexReadRange_(indexReadRange),
+        fileDecryptor_(std::move(fileDecryptor)) {}
 
   /// Read column index of a column chunk.
-  std::shared_ptr<ColumnIndex> GetColumnIndex(int32_t i) override {
-    if (i < 0 || i >= row_group_metadata_->num_columns()) {
+  std::shared_ptr<ColumnIndex> getColumnIndex(int32_t i) override {
+    if (i < 0 || i >= rowGroupMetadata_->numColumns()) {
       throw ParquetException("Invalid column index at column ordinal ", i);
     }
 
-    auto col_chunk = row_group_metadata_->ColumnChunk(i);
-    std::unique_ptr<ColumnCryptoMetaData> crypto_metadata =
-        col_chunk->crypto_metadata();
-    if (crypto_metadata != nullptr) {
+    auto colChunk = rowGroupMetadata_->columnChunk(i);
+    std::unique_ptr<ColumnCryptoMetaData> cryptoMetadata =
+        colChunk->cryptoMetadata();
+    if (cryptoMetadata != nullptr) {
       ParquetException::NYI("Cannot read encrypted column index yet");
     }
 
-    auto column_index_location = col_chunk->GetColumnIndexLocation();
-    if (!column_index_location.has_value()) {
+    auto columnIndexLocation = colChunk->getColumnIndexLocation();
+    if (!columnIndexLocation.has_value()) {
       return nullptr;
     }
 
-    CheckReadRangeOrThrow(
-        *column_index_location,
-        index_read_range_.column_index,
-        row_group_ordinal_);
+    checkReadRangeOrThrow(
+        *columnIndexLocation, indexReadRange_.columnIndex, rowGroupOrdinal_);
 
-    if (column_index_buffer_ == nullptr) {
+    if (columnIndexBuffer_ == nullptr) {
       PARQUET_ASSIGN_OR_THROW(
-          column_index_buffer_,
+          columnIndexBuffer_,
           input_->ReadAt(
-              index_read_range_.column_index->offset,
-              index_read_range_.column_index->length));
+              indexReadRange_.columnIndex->offset,
+              indexReadRange_.columnIndex->length));
     }
 
-    int64_t buffer_offset =
-        column_index_location->offset - index_read_range_.column_index->offset;
-    // ColumnIndex::Make() requires the type of serialized thrift message to be
-    // uint32_t
-    uint32_t length = static_cast<uint32_t>(column_index_location->length);
-    auto descr = row_group_metadata_->schema()->Column(i);
-    return ColumnIndex::Make(
-        *descr,
-        column_index_buffer_->data() + buffer_offset,
-        length,
-        properties_);
+    int64_t bufferoffset =
+        columnIndexLocation->offset - indexReadRange_.columnIndex->offset;
+    // ColumnIndex::make() requires the type of serialized Thrift message to be
+    // uint32_t.
+    uint32_t length = static_cast<uint32_t>(columnIndexLocation->length);
+    auto descr = rowGroupMetadata_->schema()->column(i);
+    return ColumnIndex::make(
+        *descr, columnIndexBuffer_->data() + bufferoffset, length, properties_);
   }
 
   /// Read offset index of a column chunk.
-  std::shared_ptr<OffsetIndex> GetOffsetIndex(int32_t i) override {
-    if (i < 0 || i >= row_group_metadata_->num_columns()) {
+  std::shared_ptr<OffsetIndex> getOffsetIndex(int32_t i) override {
+    if (i < 0 || i >= rowGroupMetadata_->numColumns()) {
       throw ParquetException("Invalid offset index at column ordinal ", i);
     }
 
-    auto col_chunk = row_group_metadata_->ColumnChunk(i);
-    std::unique_ptr<ColumnCryptoMetaData> crypto_metadata =
-        col_chunk->crypto_metadata();
-    if (crypto_metadata != nullptr) {
+    auto colChunk = rowGroupMetadata_->columnChunk(i);
+    std::unique_ptr<ColumnCryptoMetaData> cryptoMetadata =
+        colChunk->cryptoMetadata();
+    if (cryptoMetadata != nullptr) {
       ParquetException::NYI("Cannot read encrypted offset index yet");
     }
 
-    auto offset_index_location = col_chunk->GetOffsetIndexLocation();
-    if (!offset_index_location.has_value()) {
+    auto offsetIndexLocation = colChunk->getOffsetIndexLocation();
+    if (!offsetIndexLocation.has_value()) {
       return nullptr;
     }
 
-    CheckReadRangeOrThrow(
-        *offset_index_location,
-        index_read_range_.offset_index,
-        row_group_ordinal_);
+    checkReadRangeOrThrow(
+        *offsetIndexLocation, indexReadRange_.offsetIndex, rowGroupOrdinal_);
 
-    if (offset_index_buffer_ == nullptr) {
+    if (offsetIndexBuffer_ == nullptr) {
       PARQUET_ASSIGN_OR_THROW(
-          offset_index_buffer_,
+          offsetIndexBuffer_,
           input_->ReadAt(
-              index_read_range_.offset_index->offset,
-              index_read_range_.offset_index->length));
+              indexReadRange_.offsetIndex->offset,
+              indexReadRange_.offsetIndex->length));
     }
 
-    int64_t buffer_offset =
-        offset_index_location->offset - index_read_range_.offset_index->offset;
-    // OffsetIndex::Make() requires the type of serialized thrift message to be
-    // uint32_t
-    uint32_t length = static_cast<uint32_t>(offset_index_location->length);
-    return OffsetIndex::Make(
-        offset_index_buffer_->data() + buffer_offset, length, properties_);
+    int64_t bufferoffset =
+        offsetIndexLocation->offset - indexReadRange_.offsetIndex->offset;
+    // OffsetIndex::make() requires the type of serialized Thrift message to be
+    // uint32_t.
+    uint32_t length = static_cast<uint32_t>(offsetIndexLocation->length);
+    return OffsetIndex::make(
+        offsetIndexBuffer_->data() + bufferoffset, length, properties_);
   }
 
  private:
-  static void CheckReadRangeOrThrow(
-      const IndexLocation& index_location,
-      const std::optional<::arrow::io::ReadRange>& index_read_range,
-      int32_t row_group_ordinal) {
-    if (!index_read_range.has_value()) {
+  static void checkReadRangeOrThrow(
+      const IndexLocation& indexLocation,
+      const std::optional<::arrow::io::ReadRange>& indexReadRange,
+      int32_t rowGroupOrdinal) {
+    if (!indexReadRange.has_value()) {
       throw ParquetException(
           "Missing page index read range of row group ",
-          row_group_ordinal,
+          rowGroupOrdinal,
           ", it may not exist or has not been requested");
     }
 
     /// The coalesced read range is invalid.
-    if (index_read_range->offset < 0 || index_read_range->length <= 0) {
+    if (indexReadRange->offset < 0 || indexReadRange->length <= 0) {
       throw ParquetException(
           "Invalid page index read range: offset ",
-          index_read_range->offset,
+          indexReadRange->offset,
           " length ",
-          index_read_range->length);
+          indexReadRange->length);
     }
 
     /// The location to page index itself is corrupted.
-    if (index_location.offset < 0 || index_location.length <= 0) {
+    if (indexLocation.offset < 0 || indexLocation.length <= 0) {
       throw ParquetException(
           "Invalid page index location: offset ",
-          index_location.offset,
+          indexLocation.offset,
           " length ",
-          index_location.length);
+          indexLocation.length);
     }
 
     /// Page index location must be within the range of the read range.
-    if (index_location.offset < index_read_range->offset ||
-        index_location.offset + index_location.length >
-            index_read_range->offset + index_read_range->length) {
+    if (indexLocation.offset < indexReadRange->offset ||
+        indexLocation.offset + indexLocation.length >
+            indexReadRange->offset + indexReadRange->length) {
       throw ParquetException(
           "Page index location [offset:",
-          index_location.offset,
+          indexLocation.offset,
           ",length:",
-          index_location.length,
+          indexLocation.length,
           "] is out of range from previous WillNeed request [offset:",
-          index_read_range->offset,
+          indexReadRange->offset,
           ",length:",
-          index_read_range->length,
+          indexReadRange->length,
           "], row group: ",
-          row_group_ordinal);
+          rowGroupOrdinal);
     }
   }
 
@@ -370,107 +360,107 @@ class RowGroupPageIndexReaderImpl : public RowGroupPageIndexReader {
   ::arrow::io::RandomAccessFile* input_;
 
   /// The row group metadata to get column chunk metadata.
-  std::shared_ptr<RowGroupMetaData> row_group_metadata_;
+  std::shared_ptr<RowGroupMetaData> rowGroupMetadata_;
 
   /// Reader properties used to deserialize thrift object.
   const ReaderProperties& properties_;
 
   /// The ordinal of the row group in the file.
-  int32_t row_group_ordinal_;
+  int32_t rowGroupOrdinal_;
 
   /// File offsets and sizes of the page Index of all column chunks in the row
   /// group.
-  RowGroupIndexReadRange index_read_range_;
+  RowGroupIndexReadRange indexReadRange_;
 
   /// File-level decryptor.
-  std::shared_ptr<InternalFileDecryptor> file_decryptor_;
+  std::shared_ptr<InternalFileDecryptor> fileDecryptor_;
 
   /// Buffer to hold the raw bytes of the page index.
   /// Will be set lazily when the corresponding page index is accessed for the
-  /// 1st time.
-  std::shared_ptr<::arrow::Buffer> column_index_buffer_;
-  std::shared_ptr<::arrow::Buffer> offset_index_buffer_;
+  /// first time.
+  std::shared_ptr<::arrow::Buffer> columnIndexBuffer_;
+  std::shared_ptr<::arrow::Buffer> offsetIndexBuffer_;
 };
 
 class PageIndexReaderImpl : public PageIndexReader {
  public:
   PageIndexReaderImpl(
       ::arrow::io::RandomAccessFile* input,
-      std::shared_ptr<FileMetaData> file_metadata,
+      std::shared_ptr<FileMetaData> fileMetadata,
       const ReaderProperties& properties,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor)
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor)
       : input_(input),
-        file_metadata_(std::move(file_metadata)),
+        fileMetadata_(std::move(fileMetadata)),
         properties_(properties),
-        file_decryptor_(std::move(file_decryptor)) {}
+        fileDecryptor_(std::move(fileDecryptor)) {}
 
-  std::shared_ptr<RowGroupPageIndexReader> RowGroup(int i) override {
-    if (i < 0 || i >= file_metadata_->num_row_groups()) {
+  std::shared_ptr<RowGroupPageIndexReader> rowGroup(int i) override {
+    if (i < 0 || i >= fileMetadata_->numRowGroups()) {
       throw ParquetException("Invalid row group ordinal: ", i);
     }
 
-    auto row_group_metadata = file_metadata_->RowGroup(i);
+    auto rowGroupMetadata = fileMetadata_->rowGroup(i);
 
     // Find the read range of the page index of the row group if provided by
-    // WillNeed()
-    RowGroupIndexReadRange index_read_range;
-    auto iter = index_read_ranges_.find(i);
-    if (iter != index_read_ranges_.cend()) {
+    // WillNeed().
+    RowGroupIndexReadRange indexReadRange;
+    auto iter = indexReadRanges_.find(i);
+    if (iter != indexReadRanges_.cend()) {
       /// This row group has been requested by WillNeed(). Only column index
       /// and/or offset index of requested columns can be read.
-      index_read_range = iter->second;
+      indexReadRange = iter->second;
     } else {
-      /// If the row group has not been requested by WillNeed(), by default both
-      /// column index and offset index of all column chunks for the row group
-      /// can be read.
-      index_read_range = PageIndexReader::DeterminePageIndexRangesInRowGroup(
-          *row_group_metadata, {});
+      /// If the row group has not been requested by WillNeed(), by default
+      /// both column index and offset index of all column chunks for the row
+      /// group can be read.
+      indexReadRange = PageIndexReader::determinePageIndexRangesInRowGroup(
+          *rowGroupMetadata, {});
     }
 
-    if (index_read_range.column_index.has_value() ||
-        index_read_range.offset_index.has_value()) {
+    if (indexReadRange.columnIndex.has_value() ||
+        indexReadRange.offsetIndex.has_value()) {
       return std::make_shared<RowGroupPageIndexReaderImpl>(
           input_,
-          std::move(row_group_metadata),
+          std::move(rowGroupMetadata),
           properties_,
           i,
-          index_read_range,
-          file_decryptor_);
+          indexReadRange,
+          fileDecryptor_);
     }
 
     /// The row group does not has page index or has not been requested by
-    /// WillNeed(). Simply returns nullptr.
+    /// willNeed(). Simply returns nullptr.
     return nullptr;
   }
 
-  void WillNeed(
-      const std::vector<int32_t>& row_group_indices,
-      const std::vector<int32_t>& column_indices,
+  void willNeed(
+      const std::vector<int32_t>& rowGroupIndices,
+      const std::vector<int32_t>& columnIndices,
       const PageIndexSelection& selection) override {
-    std::vector<::arrow::io::ReadRange> read_ranges;
-    for (int32_t row_group_ordinal : row_group_indices) {
-      auto read_range = PageIndexReader::DeterminePageIndexRangesInRowGroup(
-          *file_metadata_->RowGroup(row_group_ordinal), column_indices);
-      if (selection.column_index && read_range.column_index.has_value()) {
-        read_ranges.push_back(*read_range.column_index);
+    std::vector<::arrow::io::ReadRange> readRanges;
+    for (int32_t rowGroupOrdinal : rowGroupIndices) {
+      auto readRange = PageIndexReader::determinePageIndexRangesInRowGroup(
+          *fileMetadata_->rowGroup(rowGroupOrdinal), columnIndices);
+      if (selection.columnIndex && readRange.columnIndex.has_value()) {
+        readRanges.push_back(*readRange.columnIndex);
       } else {
         // Mark the column index as not requested.
-        read_range.column_index = std::nullopt;
+        readRange.columnIndex = std::nullopt;
       }
-      if (selection.offset_index && read_range.offset_index.has_value()) {
-        read_ranges.push_back(*read_range.offset_index);
+      if (selection.offsetIndex && readRange.offsetIndex.has_value()) {
+        readRanges.push_back(*readRange.offsetIndex);
       } else {
         // Mark the offset index as not requested.
-        read_range.offset_index = std::nullopt;
+        readRange.offsetIndex = std::nullopt;
       }
-      index_read_ranges_.emplace(row_group_ordinal, std::move(read_range));
+      indexReadRanges_.emplace(rowGroupOrdinal, std::move(readRange));
     }
-    PARQUET_THROW_NOT_OK(input_->WillNeed(read_ranges));
+    PARQUET_THROW_NOT_OK(input_->WillNeed(readRanges));
   }
 
-  void WillNotNeed(const std::vector<int32_t>& row_group_indices) override {
-    for (int32_t row_group_ordinal : row_group_indices) {
-      index_read_ranges_.erase(row_group_ordinal);
+  void willNotNeed(const std::vector<int32_t>& rowGroupIndices) override {
+    for (int32_t rowGroupOrdinal : rowGroupIndices) {
+      indexReadRanges_.erase(rowGroupOrdinal);
     }
   }
 
@@ -479,17 +469,17 @@ class PageIndexReaderImpl : public PageIndexReader {
   ::arrow::io::RandomAccessFile* input_;
 
   /// The file metadata to get row group metadata.
-  std::shared_ptr<FileMetaData> file_metadata_;
+  std::shared_ptr<FileMetaData> fileMetadata_;
 
   /// Reader properties used to deserialize thrift object.
   const ReaderProperties& properties_;
 
   /// File-level decrypter.
-  std::shared_ptr<InternalFileDecryptor> file_decryptor_;
+  std::shared_ptr<InternalFileDecryptor> fileDecryptor_;
 
-  /// Coalesced read ranges of page index of row groups that have been suggested
-  /// by WillNeed(). Key is the row group ordinal.
-  std::unordered_map<int32_t, RowGroupIndexReadRange> index_read_ranges_;
+  /// Coalesced read ranges of page index of row groups that have been
+  /// suggested by WillNeed(). Key is the row group ordinal.
+  std::unordered_map<int32_t, RowGroupIndexReadRange> indexReadRanges_;
 };
 
 /// \brief Internal state of page index builder.
@@ -507,38 +497,38 @@ enum class BuilderState {
 template <typename DType>
 class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
  public:
-  using T = typename DType::c_type;
+  using T = typename DType::CType;
 
   explicit ColumnIndexBuilderImpl(const ColumnDescriptor* descr)
       : descr_(descr) {
-    /// Initialize the null_counts vector as set. Invalid null_counts vector
-    /// from any page will invalidate the null_counts vector of the column
+    /// Initialize the nullCounts vector as set. Invalid nullCounts vector
+    /// from any page will invalidate the nullCounts vector of the column
     /// index.
-    column_index_.__isset.null_counts = true;
-    column_index_.boundary_order =
+    columnIndex_.__isset.null_counts = true;
+    columnIndex_.boundary_order =
         facebook::velox::parquet::thrift::BoundaryOrder::UNORDERED;
   }
 
-  void AddPage(const EncodedStatistics& stats) override {
+  void addPage(const EncodedStatistics& stats) override {
     if (state_ == BuilderState::kFinished) {
       throw ParquetException("Cannot add page to finished ColumnIndexBuilder.");
     } else if (state_ == BuilderState::kDiscarded) {
-      /// The offset index is discarded. Do nothing.
+      /// The column index is discarded. Do nothing.
       return;
     }
 
     state_ = BuilderState::kStarted;
 
-    if (stats.all_null_value) {
-      column_index_.null_pages.emplace_back(true);
-      column_index_.min_values.emplace_back("");
-      column_index_.max_values.emplace_back("");
-    } else if (stats.has_min && stats.has_max) {
-      const size_t page_ordinal = column_index_.null_pages.size();
-      non_null_page_indices_.emplace_back(page_ordinal);
-      column_index_.min_values.emplace_back(stats.min());
-      column_index_.max_values.emplace_back(stats.max());
-      column_index_.null_pages.emplace_back(false);
+    if (stats.allNullValue) {
+      columnIndex_.null_pages.emplace_back(true);
+      columnIndex_.min_values.emplace_back("");
+      columnIndex_.max_values.emplace_back("");
+    } else if (stats.hasMin && stats.hasMax) {
+      const size_t pageOrdinal = columnIndex_.null_pages.size();
+      nonNullPageIndices_.emplace_back(pageOrdinal);
+      columnIndex_.min_values.emplace_back(stats.min());
+      columnIndex_.max_values.emplace_back(stats.max());
+      columnIndex_.null_pages.emplace_back(false);
     } else {
       /// This is a non-null page but it lacks of meaningful min/max values.
       /// Discard the column index.
@@ -546,15 +536,15 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       return;
     }
 
-    if (column_index_.__isset.null_counts && stats.has_null_count) {
-      column_index_.null_counts.emplace_back(stats.null_count);
+    if (columnIndex_.__isset.null_counts && stats.hasNullCount) {
+      columnIndex_.null_counts.emplace_back(stats.nullCount);
     } else {
-      column_index_.__isset.null_counts = false;
-      column_index_.null_counts.clear();
+      columnIndex_.__isset.null_counts = false;
+      columnIndex_.null_counts.clear();
     }
   }
 
-  void Finish() override {
+  void finish() override {
     switch (state_) {
       case BuilderState::kCreated: {
         /// No page is added. Discard the column index.
@@ -573,93 +563,93 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
     state_ = BuilderState::kFinished;
 
     /// Clear null_counts vector because at least one page does not provide it.
-    if (!column_index_.__isset.null_counts) {
-      column_index_.null_counts.clear();
+    if (!columnIndex_.__isset.null_counts) {
+      columnIndex_.null_counts.clear();
     }
 
     /// Decode min/max values according to the data type.
-    const size_t non_null_page_count = non_null_page_indices_.size();
-    std::vector<T> min_values, max_values;
-    min_values.resize(non_null_page_count);
-    max_values.resize(non_null_page_count);
-    auto decoder = MakeTypedDecoder<DType>(Encoding::PLAIN, descr_);
-    for (size_t i = 0; i < non_null_page_count; ++i) {
-      auto page_ordinal = non_null_page_indices_.at(i);
-      Decode<DType>(
-          decoder, column_index_.min_values.at(page_ordinal), &min_values, i);
-      Decode<DType>(
-          decoder, column_index_.max_values.at(page_ordinal), &max_values, i);
+    const size_t nonNullPageCount = nonNullPageIndices_.size();
+    std::vector<T> minValues, maxValues;
+    minValues.resize(nonNullPageCount);
+    maxValues.resize(nonNullPageCount);
+    auto decoder = makeTypedDecoder<DType>(Encoding::kPlain, descr_);
+    for (size_t i = 0; i < nonNullPageCount; ++i) {
+      auto pageOrdinal = nonNullPageIndices_.at(i);
+      decode<DType>(
+          decoder, columnIndex_.min_values.at(pageOrdinal), &minValues, i);
+      decode<DType>(
+          decoder, columnIndex_.max_values.at(pageOrdinal), &maxValues, i);
     }
 
     /// Decide the boundary order from decoded min/max values.
-    auto boundary_order = DetermineBoundaryOrder(min_values, max_values);
-    column_index_.__set_boundary_order(ToThrift(boundary_order));
+    auto boundaryOrder = determineBoundaryOrder(minValues, maxValues);
+    columnIndex_.__set_boundary_order(toThrift(boundaryOrder));
   }
 
-  void WriteTo(::arrow::io::OutputStream* sink) const override {
+  void writeTo(::arrow::io::OutputStream* sink) const override {
     if (state_ == BuilderState::kFinished) {
-      ThriftSerializer{}.Serialize(&column_index_, sink);
+      ThriftSerializer{}.serialize(&columnIndex_, sink);
     }
   }
 
-  std::unique_ptr<ColumnIndex> Build() const override {
+  std::unique_ptr<ColumnIndex> build() const override {
     if (state_ == BuilderState::kFinished) {
       return std::make_unique<TypedColumnIndexImpl<DType>>(
-          *descr_, column_index_);
+          *descr_, columnIndex_);
     }
     return nullptr;
   }
 
  private:
-  BoundaryOrder::type DetermineBoundaryOrder(
-      const std::vector<T>& min_values,
-      const std::vector<T>& max_values) const {
-    VELOX_DCHECK_EQ(min_values.size(), max_values.size());
-    if (min_values.empty()) {
-      return BoundaryOrder::Unordered;
+  BoundaryOrder::type determineBoundaryOrder(
+      const std::vector<T>& minValues,
+      const std::vector<T>& maxValues) const {
+    VELOX_DCHECK_EQ(minValues.size(), maxValues.size());
+    if (minValues.empty()) {
+      return BoundaryOrder::kUnordered;
     }
 
     std::shared_ptr<TypedComparator<DType>> comparator;
     try {
-      comparator = MakeComparator<DType>(descr_);
+      comparator = makeComparator<DType>(descr_);
     } catch (const ParquetException&) {
       /// Simply return unordered for unsupported comparator.
-      return BoundaryOrder::Unordered;
+      return BoundaryOrder::kUnordered;
     }
 
-    /// Check if both min_values and max_values are in ascending order.
-    bool is_ascending = true;
-    for (size_t i = 1; i < min_values.size(); ++i) {
-      if (comparator->Compare(min_values[i], min_values[i - 1]) ||
-          comparator->Compare(max_values[i], max_values[i - 1])) {
-        is_ascending = false;
+    /// Check if both minValues and maxValues are in ascending order.
+    bool isAscending = true;
+    for (size_t i = 1; i < minValues.size(); ++i) {
+      if (comparator->compare(minValues[i], minValues[i - 1]) ||
+          comparator->compare(maxValues[i], maxValues[i - 1])) {
+        isAscending = false;
         break;
       }
     }
-    if (is_ascending) {
-      return BoundaryOrder::Ascending;
+    if (isAscending) {
+      return BoundaryOrder::kAscending;
     }
 
-    /// Check if both min_values and max_values are in descending order.
-    bool is_descending = true;
-    for (size_t i = 1; i < min_values.size(); ++i) {
-      if (comparator->Compare(min_values[i - 1], min_values[i]) ||
-          comparator->Compare(max_values[i - 1], max_values[i])) {
-        is_descending = false;
+    /// Check if both minValues and maxValues are in descending order.
+    bool isDescending = true;
+    for (size_t i = 1; i < minValues.size(); ++i) {
+      if (comparator->compare(minValues[i - 1], minValues[i]) ||
+          comparator->compare(maxValues[i - 1], maxValues[i])) {
+        isDescending = false;
         break;
       }
     }
-    if (is_descending) {
-      return BoundaryOrder::Descending;
+    if (isDescending) {
+      return BoundaryOrder::kDescending;
     }
 
     /// Neither ascending nor descending is detected.
-    return BoundaryOrder::Unordered;
+    return BoundaryOrder::kUnordered;
   }
 
   const ColumnDescriptor* descr_;
-  facebook::velox::parquet::thrift::ColumnIndex column_index_;
-  std::vector<size_t> non_null_page_indices_;
+  facebook::velox::parquet::thrift::ColumnIndex columnIndex_;
+  std::vector<size_t> nonNullPageIndices_;
   BuilderState state_ = BuilderState::kCreated;
 };
 
@@ -667,10 +657,10 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
  public:
   OffsetIndexBuilderImpl() = default;
 
-  void AddPage(
+  void addPage(
       int64_t offset,
-      int32_t compressed_page_size,
-      int64_t first_row_index) override {
+      int32_t compressedPageSize,
+      int64_t firstRowIndex) override {
     if (state_ == BuilderState::kFinished) {
       throw ParquetException("Cannot add page to finished OffsetIndexBuilder.");
     } else if (state_ == BuilderState::kDiscarded) {
@@ -680,14 +670,14 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
 
     state_ = BuilderState::kStarted;
 
-    facebook::velox::parquet::thrift::PageLocation page_location;
-    page_location.__set_offset(offset);
-    page_location.__set_compressed_page_size(compressed_page_size);
-    page_location.__set_first_row_index(first_row_index);
-    offset_index_.page_locations.emplace_back(std::move(page_location));
+    facebook::velox::parquet::thrift::PageLocation pageLocation;
+    pageLocation.__set_offset(offset);
+    pageLocation.__set_compressed_page_size(compressedPageSize);
+    pageLocation.__set_first_row_index(firstRowIndex);
+    offsetIndex_.page_locations.emplace_back(std::move(pageLocation));
   }
 
-  void Finish(int64_t final_position) override {
+  void finish(int64_t finalPosition) override {
     switch (state_) {
       case BuilderState::kCreated: {
         /// No pages are added. Simply discard the offset index.
@@ -695,10 +685,10 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
         break;
       }
       case BuilderState::kStarted: {
-        /// Adjust page offsets according the final position.
-        if (final_position > 0) {
-          for (auto& page_location : offset_index_.page_locations) {
-            page_location.__set_offset(page_location.offset + final_position);
+        /// Adjust page offsets according to the final position.
+        if (finalPosition > 0) {
+          for (auto& pageLocation : offsetIndex_.page_locations) {
+            pageLocation.__set_offset(pageLocation.offset + finalPosition);
           }
         }
         state_ = BuilderState::kFinished;
@@ -710,21 +700,21 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
     }
   }
 
-  void WriteTo(::arrow::io::OutputStream* sink) const override {
+  void writeTo(::arrow::io::OutputStream* sink) const override {
     if (state_ == BuilderState::kFinished) {
-      ThriftSerializer{}.Serialize(&offset_index_, sink);
+      ThriftSerializer{}.serialize(&offsetIndex_, sink);
     }
   }
 
-  std::unique_ptr<OffsetIndex> Build() const override {
+  std::unique_ptr<OffsetIndex> build() const override {
     if (state_ == BuilderState::kFinished) {
-      return std::make_unique<OffsetIndexImpl>(offset_index_);
+      return std::make_unique<OffsetIndexImpl>(offsetIndex_);
     }
     return nullptr;
   }
 
  private:
-  facebook::velox::parquet::thrift::OffsetIndex offset_index_;
+  facebook::velox::parquet::thrift::OffsetIndex offsetIndex_;
   BuilderState state_ = BuilderState::kCreated;
 };
 
@@ -733,118 +723,112 @@ class PageIndexBuilderImpl final : public PageIndexBuilder {
   explicit PageIndexBuilderImpl(const SchemaDescriptor* schema)
       : schema_(schema) {}
 
-  void AppendRowGroup() override {
+  void appendRowGroup() override {
     if (finished_) {
       throw ParquetException(
-          "Cannot call AppendRowGroup() to finished PageIndexBuilder.");
+          "Cannot call appendRowGroup() to finished PageIndexBuilder.");
     }
 
     // Append new builders of next row group.
-    const auto num_columns = static_cast<size_t>(schema_->num_columns());
-    column_index_builders_.emplace_back();
-    offset_index_builders_.emplace_back();
-    column_index_builders_.back().resize(num_columns);
-    offset_index_builders_.back().resize(num_columns);
+    const auto numColumns = static_cast<size_t>(schema_->numColumns());
+    columnIndexBuilders_.emplace_back();
+    offsetIndexBuilders_.emplace_back();
+    columnIndexBuilders_.back().resize(numColumns);
+    offsetIndexBuilders_.back().resize(numColumns);
 
-    VELOX_DCHECK_EQ(
-        column_index_builders_.size(), offset_index_builders_.size());
-    VELOX_DCHECK_EQ(column_index_builders_.back().size(), num_columns);
-    VELOX_DCHECK_EQ(offset_index_builders_.back().size(), num_columns);
+    VELOX_DCHECK_EQ(columnIndexBuilders_.size(), offsetIndexBuilders_.size());
+    VELOX_DCHECK_EQ(columnIndexBuilders_.back().size(), numColumns);
+    VELOX_DCHECK_EQ(offsetIndexBuilders_.back().size(), numColumns);
   }
 
-  ColumnIndexBuilder* GetColumnIndexBuilder(int32_t i) override {
-    CheckState(i);
+  ColumnIndexBuilder* getColumnIndexBuilder(int32_t i) override {
+    checkState(i);
     std::unique_ptr<ColumnIndexBuilder>& builder =
-        column_index_builders_.back()[i];
+        columnIndexBuilders_.back()[i];
     if (builder == nullptr) {
-      builder = ColumnIndexBuilder::Make(schema_->Column(i));
+      builder = ColumnIndexBuilder::make(schema_->column(i));
     }
     return builder.get();
   }
 
-  OffsetIndexBuilder* GetOffsetIndexBuilder(int32_t i) override {
-    CheckState(i);
+  OffsetIndexBuilder* getOffsetIndexBuilder(int32_t i) override {
+    checkState(i);
     std::unique_ptr<OffsetIndexBuilder>& builder =
-        offset_index_builders_.back()[i];
+        offsetIndexBuilders_.back()[i];
     if (builder == nullptr) {
-      builder = OffsetIndexBuilder::Make();
+      builder = OffsetIndexBuilder::make();
     }
     return builder.get();
   }
 
-  void Finish() override {
+  void finish() override {
     finished_ = true;
   }
 
-  void WriteTo(::arrow::io::OutputStream* sink, PageIndexLocation* location)
+  void writeTo(::arrow::io::OutputStream* sink, PageIndexLocation* location)
       const override {
     if (!finished_) {
       throw ParquetException(
-          "Cannot call WriteTo() to unfinished PageIndexBuilder.");
+          "Cannot call writeTo() to unfinished PageIndexBuilder.");
     }
 
-    location->column_index_location.clear();
-    location->offset_index_location.clear();
+    location->columnIndexLocation.clear();
+    location->offsetIndexLocation.clear();
 
     /// Serialize column index ordered by row group ordinal and then column
     /// ordinal.
-    SerializeIndex(
-        column_index_builders_, sink, &location->column_index_location);
+    serializeIndex(columnIndexBuilders_, sink, &location->columnIndexLocation);
 
     /// Serialize offset index ordered by row group ordinal and then column
     /// ordinal.
-    SerializeIndex(
-        offset_index_builders_, sink, &location->offset_index_location);
+    serializeIndex(offsetIndexBuilders_, sink, &location->offsetIndexLocation);
   }
 
  private:
-  /// Make sure column ordinal is not out of bound and the builder is in good
+  /// Make sure column ordinal is not out of bounds and the builder is in good
   /// state.
-  void CheckState(int32_t column_ordinal) const {
+  void checkState(int32_t columnOrdinal) const {
     if (finished_) {
       throw ParquetException("PageIndexBuilder is already finished.");
     }
-    if (column_ordinal < 0 || column_ordinal >= schema_->num_columns()) {
-      throw ParquetException("Invalid column ordinal: ", column_ordinal);
+    if (columnOrdinal < 0 || columnOrdinal >= schema_->numColumns()) {
+      throw ParquetException("Invalid column ordinal: ", columnOrdinal);
     }
-    if (offset_index_builders_.empty() || column_index_builders_.empty()) {
+    if (offsetIndexBuilders_.empty() || columnIndexBuilders_.empty()) {
       throw ParquetException("No row group appended to PageIndexBuilder.");
     }
   }
 
   template <typename Builder>
-  void SerializeIndex(
+  void serializeIndex(
       const std::vector<std::vector<std::unique_ptr<Builder>>>&
-          page_index_builders,
+          pageIndexBuilders,
       ::arrow::io::OutputStream* sink,
       std::map<size_t, std::vector<std::optional<IndexLocation>>>* location)
       const {
-    const auto num_columns = static_cast<size_t>(schema_->num_columns());
+    const auto numColumns = static_cast<size_t>(schema_->numColumns());
 
     /// Serialize the same kind of page index row group by row group.
-    for (size_t row_group = 0; row_group < page_index_builders.size();
-         ++row_group) {
-      const auto& row_group_page_index_builders =
-          page_index_builders[row_group];
-      VELOX_DCHECK_EQ(row_group_page_index_builders.size(), num_columns);
+    for (size_t rowGroup = 0; rowGroup < pageIndexBuilders.size(); ++rowGroup) {
+      const auto& rowGroupPageIndexBuilders = pageIndexBuilders[rowGroup];
+      VELOX_DCHECK_EQ(rowGroupPageIndexBuilders.size(), numColumns);
 
-      bool has_valid_index = false;
+      bool hasValidIndex = false;
       std::vector<std::optional<IndexLocation>> locations(
-          num_columns, std::nullopt);
+          numColumns, std::nullopt);
 
-      /// In the same row group, serialize the same kind of page index column by
-      /// column.
-      for (size_t column = 0; column < num_columns; ++column) {
-        const auto& column_page_index_builder =
-            row_group_page_index_builders[column];
-        if (column_page_index_builder != nullptr) {
+      /// In the same row group, serialize the same kind of page index column
+      /// by column.
+      for (size_t column = 0; column < numColumns; ++column) {
+        const auto& columnPageIndexBuilder = rowGroupPageIndexBuilders[column];
+        if (columnPageIndexBuilder != nullptr) {
           /// Try serializing the page index.
-          PARQUET_ASSIGN_OR_THROW(int64_t pos_before_write, sink->Tell());
-          column_page_index_builder->WriteTo(sink);
-          PARQUET_ASSIGN_OR_THROW(int64_t pos_after_write, sink->Tell());
-          int64_t len = pos_after_write - pos_before_write;
+          PARQUET_ASSIGN_OR_THROW(int64_t posBeforeWrite, sink->Tell());
+          columnPageIndexBuilder->writeTo(sink);
+          PARQUET_ASSIGN_OR_THROW(int64_t posAfterWrite, sink->Tell());
+          int64_t len = posAfterWrite - posBeforeWrite;
 
-          /// The page index is not serialized and skip reporting its location
+          /// The page index is not serialized and skip reporting its location.
           if (len == 0) {
             continue;
           }
@@ -852,180 +836,180 @@ class PageIndexBuilderImpl final : public PageIndexBuilder {
           if (len > std::numeric_limits<int32_t>::max()) {
             throw ParquetException("Page index size overflows to INT32_MAX");
           }
-          locations[column] = {pos_before_write, static_cast<int32_t>(len)};
-          has_valid_index = true;
+          locations[column] = {posBeforeWrite, static_cast<int32_t>(len)};
+          hasValidIndex = true;
         }
       }
 
-      if (has_valid_index) {
-        location->emplace(row_group, std::move(locations));
+      if (hasValidIndex) {
+        location->emplace(rowGroup, std::move(locations));
       }
     }
   }
 
   const SchemaDescriptor* schema_;
   std::vector<std::vector<std::unique_ptr<ColumnIndexBuilder>>>
-      column_index_builders_;
+      columnIndexBuilders_;
   std::vector<std::vector<std::unique_ptr<OffsetIndexBuilder>>>
-      offset_index_builders_;
+      offsetIndexBuilders_;
   bool finished_ = false;
 };
 
 } // namespace
 
-RowGroupIndexReadRange PageIndexReader::DeterminePageIndexRangesInRowGroup(
-    const RowGroupMetaData& row_group_metadata,
+RowGroupIndexReadRange PageIndexReader::determinePageIndexRangesInRowGroup(
+    const RowGroupMetaData& rowGroupMetadata,
     const std::vector<int32_t>& columns) {
-  int64_t ci_start = std::numeric_limits<int64_t>::max();
-  int64_t oi_start = std::numeric_limits<int64_t>::max();
-  int64_t ci_end = -1;
-  int64_t oi_end = -1;
+  int64_t ciStart = std::numeric_limits<int64_t>::max();
+  int64_t oiStart = std::numeric_limits<int64_t>::max();
+  int64_t ciEnd = -1;
+  int64_t oiEnd = -1;
 
-  auto merge_range = [](const std::optional<IndexLocation>& index_location,
-                        int64_t* start,
-                        int64_t* end) {
-    if (index_location.has_value()) {
-      int64_t index_end = 0;
-      if (index_location->offset < 0 || index_location->length <= 0 ||
-          ::arrow::internal::AddWithOverflow(
-              index_location->offset, index_location->length, &index_end)) {
+  auto mergeRange = [](const std::optional<IndexLocation>& indexLocation,
+                       int64_t* start,
+                       int64_t* end) {
+    if (indexLocation.has_value()) {
+      int64_t indexEnd = 0;
+      if (indexLocation->offset < 0 || indexLocation->length <= 0 ||
+          ::arrow::internal::addWithOverflow(
+              indexLocation->offset, indexLocation->length, &indexEnd)) {
         throw ParquetException(
             "Invalid page index location: offset ",
-            index_location->offset,
+            indexLocation->offset,
             " length ",
-            index_location->length);
+            indexLocation->length);
       }
-      *start = std::min(*start, index_location->offset);
-      *end = std::max(*end, index_end);
+      *start = std::min(*start, indexLocation->offset);
+      *end = std::max(*end, indexEnd);
     }
   };
 
   if (columns.empty()) {
-    for (int32_t i = 0; i < row_group_metadata.num_columns(); ++i) {
-      auto col_chunk = row_group_metadata.ColumnChunk(i);
-      merge_range(col_chunk->GetColumnIndexLocation(), &ci_start, &ci_end);
-      merge_range(col_chunk->GetOffsetIndexLocation(), &oi_start, &oi_end);
+    for (int32_t i = 0; i < rowGroupMetadata.numColumns(); ++i) {
+      auto colChunk = rowGroupMetadata.columnChunk(i);
+      mergeRange(colChunk->getColumnIndexLocation(), &ciStart, &ciEnd);
+      mergeRange(colChunk->getOffsetIndexLocation(), &oiStart, &oiEnd);
     }
   } else {
     for (int32_t i : columns) {
-      if (i < 0 || i >= row_group_metadata.num_columns()) {
+      if (i < 0 || i >= rowGroupMetadata.numColumns()) {
         throw ParquetException("Invalid column ordinal ", i);
       }
-      auto col_chunk = row_group_metadata.ColumnChunk(i);
-      merge_range(col_chunk->GetColumnIndexLocation(), &ci_start, &ci_end);
-      merge_range(col_chunk->GetOffsetIndexLocation(), &oi_start, &oi_end);
+      auto colChunk = rowGroupMetadata.columnChunk(i);
+      mergeRange(colChunk->getColumnIndexLocation(), &ciStart, &ciEnd);
+      mergeRange(colChunk->getOffsetIndexLocation(), &oiStart, &oiEnd);
     }
   }
 
-  RowGroupIndexReadRange read_range;
-  if (ci_end != -1) {
-    read_range.column_index = {ci_start, ci_end - ci_start};
+  RowGroupIndexReadRange readRange;
+  if (ciEnd != -1) {
+    readRange.columnIndex = {ciStart, ciEnd - ciStart};
   }
-  if (oi_end != -1) {
-    read_range.offset_index = {oi_start, oi_end - oi_start};
+  if (oiEnd != -1) {
+    readRange.offsetIndex = {oiStart, oiEnd - oiStart};
   }
-  return read_range;
+  return readRange;
 }
 
 // ----------------------------------------------------------------------
-// Public factory functions
+// Public factory functions.
 
-std::unique_ptr<ColumnIndex> ColumnIndex::Make(
+std::unique_ptr<ColumnIndex> ColumnIndex::make(
     const ColumnDescriptor& descr,
-    const void* serialized_index,
-    uint32_t index_len,
+    const void* serializedIndex,
+    uint32_t indexLen,
     const ReaderProperties& properties) {
-  facebook::velox::parquet::thrift::ColumnIndex column_index;
+  facebook::velox::parquet::thrift::ColumnIndex columnIndex;
   ThriftDeserializer deserializer(properties);
-  deserializer.DeserializeMessage(
-      reinterpret_cast<const uint8_t*>(serialized_index),
-      &index_len,
-      &column_index);
-  switch (descr.physical_type()) {
-    case Type::BOOLEAN:
+  deserializer.deserializeMessage(
+      reinterpret_cast<const uint8_t*>(serializedIndex),
+      &indexLen,
+      &columnIndex);
+  switch (descr.physicalType()) {
+    case Type::kBoolean:
       return std::make_unique<TypedColumnIndexImpl<BooleanType>>(
-          descr, std::move(column_index));
-    case Type::INT32:
+          descr, std::move(columnIndex));
+    case Type::kInt32:
       return std::make_unique<TypedColumnIndexImpl<Int32Type>>(
-          descr, std::move(column_index));
-    case Type::INT64:
+          descr, std::move(columnIndex));
+    case Type::kInt64:
       return std::make_unique<TypedColumnIndexImpl<Int64Type>>(
-          descr, std::move(column_index));
-    case Type::INT96:
+          descr, std::move(columnIndex));
+    case Type::kInt96:
       return std::make_unique<TypedColumnIndexImpl<Int96Type>>(
-          descr, std::move(column_index));
-    case Type::FLOAT:
+          descr, std::move(columnIndex));
+    case Type::kFloat:
       return std::make_unique<TypedColumnIndexImpl<FloatType>>(
-          descr, std::move(column_index));
-    case Type::DOUBLE:
+          descr, std::move(columnIndex));
+    case Type::kDouble:
       return std::make_unique<TypedColumnIndexImpl<DoubleType>>(
-          descr, std::move(column_index));
-    case Type::BYTE_ARRAY:
+          descr, std::move(columnIndex));
+    case Type::kByteArray:
       return std::make_unique<TypedColumnIndexImpl<ByteArrayType>>(
-          descr, std::move(column_index));
-    case Type::FIXED_LEN_BYTE_ARRAY:
+          descr, std::move(columnIndex));
+    case Type::kFixedLenByteArray:
       return std::make_unique<TypedColumnIndexImpl<FLBAType>>(
-          descr, std::move(column_index));
-    case Type::UNDEFINED:
+          descr, std::move(columnIndex));
+    case Type::kUndefined:
       return nullptr;
   }
   ::arrow::Unreachable("Cannot make ColumnIndex of an unknown type");
   return nullptr;
 }
 
-std::unique_ptr<OffsetIndex> OffsetIndex::Make(
-    const void* serialized_index,
-    uint32_t index_len,
+std::unique_ptr<OffsetIndex> OffsetIndex::make(
+    const void* serializedIndex,
+    uint32_t indexLen,
     const ReaderProperties& properties) {
-  facebook::velox::parquet::thrift::OffsetIndex offset_index;
+  facebook::velox::parquet::thrift::OffsetIndex offsetIndex;
   ThriftDeserializer deserializer(properties);
-  deserializer.DeserializeMessage(
-      reinterpret_cast<const uint8_t*>(serialized_index),
-      &index_len,
-      &offset_index);
-  return std::make_unique<OffsetIndexImpl>(offset_index);
+  deserializer.deserializeMessage(
+      reinterpret_cast<const uint8_t*>(serializedIndex),
+      &indexLen,
+      &offsetIndex);
+  return std::make_unique<OffsetIndexImpl>(offsetIndex);
 }
 
-std::shared_ptr<PageIndexReader> PageIndexReader::Make(
+std::shared_ptr<PageIndexReader> PageIndexReader::make(
     ::arrow::io::RandomAccessFile* input,
-    std::shared_ptr<FileMetaData> file_metadata,
+    std::shared_ptr<FileMetaData> fileMetadata,
     const ReaderProperties& properties,
-    std::shared_ptr<InternalFileDecryptor> file_decryptor) {
+    std::shared_ptr<InternalFileDecryptor> fileDecryptor) {
   return std::make_shared<PageIndexReaderImpl>(
-      input, std::move(file_metadata), properties, std::move(file_decryptor));
+      input, std::move(fileMetadata), properties, std::move(fileDecryptor));
 }
 
-std::unique_ptr<ColumnIndexBuilder> ColumnIndexBuilder::Make(
+std::unique_ptr<ColumnIndexBuilder> ColumnIndexBuilder::make(
     const ColumnDescriptor* descr) {
-  switch (descr->physical_type()) {
-    case Type::BOOLEAN:
+  switch (descr->physicalType()) {
+    case Type::kBoolean:
       return std::make_unique<ColumnIndexBuilderImpl<BooleanType>>(descr);
-    case Type::INT32:
+    case Type::kInt32:
       return std::make_unique<ColumnIndexBuilderImpl<Int32Type>>(descr);
-    case Type::INT64:
+    case Type::kInt64:
       return std::make_unique<ColumnIndexBuilderImpl<Int64Type>>(descr);
-    case Type::INT96:
+    case Type::kInt96:
       return std::make_unique<ColumnIndexBuilderImpl<Int96Type>>(descr);
-    case Type::FLOAT:
+    case Type::kFloat:
       return std::make_unique<ColumnIndexBuilderImpl<FloatType>>(descr);
-    case Type::DOUBLE:
+    case Type::kDouble:
       return std::make_unique<ColumnIndexBuilderImpl<DoubleType>>(descr);
-    case Type::BYTE_ARRAY:
+    case Type::kByteArray:
       return std::make_unique<ColumnIndexBuilderImpl<ByteArrayType>>(descr);
-    case Type::FIXED_LEN_BYTE_ARRAY:
+    case Type::kFixedLenByteArray:
       return std::make_unique<ColumnIndexBuilderImpl<FLBAType>>(descr);
-    case Type::UNDEFINED:
+    case Type::kUndefined:
       return nullptr;
   }
   ::arrow::Unreachable("Cannot make ColumnIndexBuilder of an unknown type");
   return nullptr;
 }
 
-std::unique_ptr<OffsetIndexBuilder> OffsetIndexBuilder::Make() {
+std::unique_ptr<OffsetIndexBuilder> OffsetIndexBuilder::make() {
   return std::make_unique<OffsetIndexBuilderImpl>();
 }
 
-std::unique_ptr<PageIndexBuilder> PageIndexBuilder::Make(
+std::unique_ptr<PageIndexBuilder> PageIndexBuilder::make(
     const SchemaDescriptor* schema) {
   return std::make_unique<PageIndexBuilderImpl>(schema);
 }
@@ -1033,8 +1017,8 @@ std::unique_ptr<PageIndexBuilder> PageIndexBuilder::Make(
 std::ostream& operator<<(
     std::ostream& out,
     const PageIndexSelection& selection) {
-  out << "PageIndexSelection{column_index = " << selection.column_index
-      << ", offset_index = " << selection.offset_index << "}";
+  out << "PageIndexSelection{column_index = " << selection.columnIndex
+      << ", offset_index = " << selection.offsetIndex << "}";
   return out;
 }
 

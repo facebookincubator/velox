@@ -18,6 +18,7 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/common/process/StackTrace.h"
 #include "velox/vector/TypeAliases.h"
 
 #include <cudf/column/column.hpp>
@@ -94,6 +95,17 @@ std::pair<uint64_t, std::unique_ptr<cudf::table>> getTableSize(
       totalBytes, std::make_unique<cudf::table>(std::move(columnsOut)));
 }
 
+void logDefaultStreamIfNeeded(
+    rmm::cuda_stream_view stream,
+    const char* constructorName) {
+  if (stream.value() != rmm::cuda_stream_default.value()) {
+    return;
+  }
+  LOG(WARNING) << constructorName
+               << " constructed with default CUDA stream. Backtrace:\n"
+               << process::StackTrace().toString();
+}
+
 } // namespace
 
 CudfVector::CudfVector(
@@ -111,6 +123,7 @@ CudfVector::CudfVector(
           std::nullopt),
       tableStorage_{std::move(table)},
       stream_{stream} {
+  logDefaultStreamIfNeeded(stream_, "CudfVector(table)");
   auto& tablePtr = std::get<std::unique_ptr<cudf::table>>(tableStorage_);
   auto [bytes, tableOut] = getTableSize(std::move(tablePtr));
   flatSize_ = bytes;
@@ -133,6 +146,7 @@ CudfVector::CudfVector(
           std::nullopt),
       tableStorage_{std::move(packedTable)},
       stream_{stream} {
+  logDefaultStreamIfNeeded(stream_, "CudfVector(packed_table)");
   auto& packedPtr =
       std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
   tabView_ = packedPtr->table;

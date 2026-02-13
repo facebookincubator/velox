@@ -76,6 +76,10 @@ class SkewedPartitionRebalancerTestHelper {
 
 class SkewedPartitionRebalancerTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    TestValue::enable();
+  }
+
   std::unique_ptr<SkewedPartitionRebalancer> createBalancer(
       uint32_t numPartitions = 128,
       uint32_t numTasks = 8,
@@ -330,10 +334,18 @@ DEBUG_ONLY_TEST_F(SkewedPartitionRebalancerTest, serializedRebalanceExecution) {
   SkewedPartitionRebalancerTestHelper helper(balancer.get());
   folly::EventCount rebalanceWait;
   std::atomic_bool rebalanceWaitFlag{true};
+
+  // Used to signal that the background thread has entered the test value
+  // callback.
+  folly::EventCount mainThreadRebalancerWait;
+  std::atomic_bool mainThreadRebalancerWaitFlag{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::common::SkewedPartitionRebalancer::rebalancePartitions",
       std::function<void(SkewedPartitionRebalancer*)>(
           [&](SkewedPartitionRebalancer*) {
+            // Signal that we've entered the callback.
+            mainThreadRebalancerWaitFlag = false;
+            mainThreadRebalancerWait.notifyAll();
             rebalanceWait.await([&] { return !rebalanceWaitFlag.load(); });
           }));
 
@@ -343,6 +355,12 @@ DEBUG_ONLY_TEST_F(SkewedPartitionRebalancerTest, serializedRebalanceExecution) {
   }
 
   std::thread rebalanceThread([&]() { balancer->rebalance(); });
+
+  // Wait for the background thread to enter the test value callback and block
+  // there. This ensures that when we call rebalance() from the main thread,
+  // rebalancing_ is already true and our rebalance() call will return early.
+  mainThreadRebalancerWait.await(
+      [&] { return !mainThreadRebalancerWaitFlag.load(); });
 
   balancer->rebalance();
 

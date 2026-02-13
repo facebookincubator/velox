@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include <pybind11/pybind11.h>
 #include <string>
-#include <vector>
 
 #include "velox/python/runner/PyLocalRunner.h"
 
@@ -34,16 +34,27 @@ class PyLocalDebuggerRunner : public PyLocalRunner {
       const std::shared_ptr<folly::CPUThreadPoolExecutor>& executor)
       : PyLocalRunner(pyPlanNode, pool, executor) {}
 
-  /// Sets a breakpoint at the specified plan node.
+  /// Sets a breakpoint at the specified plan node with no callback.
+  /// The breakpoint will always stop execution.
   ///
   /// @param planNodeId The ID of the plan node where execution should pause.
   void setBreakpoint(const std::string& planNodeId);
+
+  /// Sets a breakpoint at the specified plan node with a Python callback.
+  ///
+  /// The callback is invoked with a PyVector when the breakpoint is hit.
+  /// If the callback returns True, execution stops and the vector is produced.
+  /// If the callback returns False, execution continues without stopping.
+  ///
+  /// @param planNodeId The ID of the plan node where the hook is installed.
+  /// @param callback Python function that takes a PyVector and returns bool.
+  void setHook(const std::string& planNodeId, pybind11::function callback);
 
  protected:
   exec::CursorParameters createCursorParameters(int32_t maxDrivers) override;
 
  private:
-  std::vector<std::string> breakpoints_;
+  exec::CursorParameters::TBreakpointMap breakpoints_;
 };
 
 } // namespace facebook::velox::py

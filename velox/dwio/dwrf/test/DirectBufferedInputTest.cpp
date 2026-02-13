@@ -52,11 +52,11 @@ class DirectBufferedInputTest : public testing::Test {
 
   void SetUp() override {
     executor_ = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
-    ioStats_ = std::make_shared<IoStatistics>();
+    ioStatistics_ = std::make_shared<IoStatistics>();
     fileIoStats_ = std::make_shared<IoStatistics>();
-    fsStats_ = std::make_shared<facebook::velox::filesystems::File::IoStats>();
+    ioStats_ = std::make_shared<facebook::velox::IoStats>();
     tracker_ = std::make_shared<cache::ScanTracker>("", nullptr, kLoadQuantum);
-    file_ = std::make_shared<TestReadFile>(11, 100 << 20, fsStats_);
+    file_ = std::make_shared<TestReadFile>(11, 100 << 20, ioStats_);
     opts_ = std::make_unique<dwio::common::ReaderOptions>(pool_.get());
     opts_->setLoadQuantum(kLoadQuantum);
   }
@@ -66,16 +66,15 @@ class DirectBufferedInputTest : public testing::Test {
   }
 
   std::unique_ptr<DirectBufferedInput> makeInput(
-      const std::shared_ptr<facebook::velox::filesystems::File::IoStats>&
-          fsStats) {
+      const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     return std::make_unique<DirectBufferedInput>(
         file_,
         dwio::common::MetricsLog::voidLog(),
         StringIdLease{},
         tracker_,
         StringIdLease{},
-        ioStats_,
-        fsStats,
+        ioStatistics_,
+        ioStats,
         executor_.get(),
         *opts_);
   }
@@ -85,10 +84,9 @@ class DirectBufferedInputTest : public testing::Test {
   void testLoads(
       std::vector<TestRegion> regions,
       int32_t numIos,
-      const std::shared_ptr<facebook::velox::filesystems::File::IoStats>&
-          fsStats) {
+      const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     auto previous = file_->numIos();
-    auto input = makeInput(fsStats);
+    auto input = makeInput(ioStats);
     std::vector<std::unique_ptr<SeekableInputStream>> streams;
     for (auto i = 0; i < regions.size(); ++i) {
       if (regions[i].length > 0) {
@@ -135,9 +133,9 @@ class DirectBufferedInputTest : public testing::Test {
   std::unique_ptr<dwio::common::ReaderOptions> opts_;
   std::shared_ptr<TestReadFile> file_;
   std::shared_ptr<cache::ScanTracker> tracker_;
-  std::shared_ptr<IoStatistics> ioStats_;
+  std::shared_ptr<IoStatistics> ioStatistics_;
   std::shared_ptr<IoStatistics> fileIoStats_;
-  std::shared_ptr<facebook::velox::filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<facebook::velox::IoStats> ioStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
@@ -154,7 +152,7 @@ TEST_F(DirectBufferedInputTest, basic) {
        {7004000, 2000000},
        {20000000, 10000000}},
       4,
-      fsStats_);
+      ioStats_);
 
   // All but the last coalesce into one , the last is read in 2 parts. The
   // columns are now dense and coalesce goes up to 128MB if gaps are small
@@ -166,55 +164,54 @@ TEST_F(DirectBufferedInputTest, basic) {
        {7004000, 2000000},
        {20000000, 10000000}},
       3,
-      fsStats_);
+      ioStats_);
 
   // Mark the first 4 ranges as densely accessed.
   makeDense(4);
 
   // The first and first part of second coalesce.
-  testLoads({{100, 100}, {1000, 10000000}}, 2, fsStats_);
+  testLoads({{100, 100}, {1000, 10000000}}, 2, ioStats_);
 
   // The first is read in two parts, the tail of the first does not coalesce
   // with the second.
-  testLoads({{1000, 10000000}, {10001000, 1000}}, 3, fsStats_);
+  testLoads({{1000, 10000000}, {10001000, 1000}}, 3, ioStats_);
 
   // One large standalone read in 2 parts.
-  testLoads({{1000, 10000000}}, 2, fsStats_);
+  testLoads({{1000, 10000000}}, 2, ioStats_);
 
   // Small standalone read in 1 part.
-  testLoads({{100, 100}}, 1, fsStats_);
+  testLoads({{100, 100}}, 1, ioStats_);
 
   // Two small far apart
-  testLoads({{100, 100}, {1000000, 100}}, 2, fsStats_);
+  testLoads({{100, 100}, {1000000, 100}}, 2, ioStats_);
   // The two coalesce because the first fits within load quantum + max coalesce
   // distance.
-  testLoads({{1000, 8500000}, {8510000, 1000000}}, 1, fsStats_);
+  testLoads({{1000, 8500000}, {8510000, 1000000}}, 1, ioStats_);
 
   // The two coalesce because the first fits within load quantum + max coalesce
   // distance. The tail of the second does not coalesce.
-  testLoads({{1000, 8500000}, {8510000, 8400000}}, 2, fsStats_);
+  testLoads({{1000, 8500000}, {8510000, 8400000}}, 2, ioStats_);
 
   // The first reads in 2 parts and does not coalesce to the second, which reads
   // in one part.
-  testLoads({{1000, 9000000}, {9010000, 1000000}}, 3, fsStats_);
+  testLoads({{1000, 9000000}, {9010000, 1000000}}, 3, ioStats_);
 }
 
 TEST_F(DirectBufferedInputTest, noRedownloadCoalescedPrefetch) {
-  testLoads({{100, 100}, {201, 1, false}, {202, 100}}, 1, fsStats_);
-  testLoads({{100, 100}, {201, 1, true}, {202, 100}}, 1, fsStats_);
+  testLoads({{100, 100}, {201, 1, false}, {202, 100}}, 1, ioStats_);
+  testLoads({{100, 100}, {201, 1, true}, {202, 100}}, 1, ioStats_);
 }
 
 TEST_F(DirectBufferedInputTest, coalesedPrefetchOverlap) {
   testLoads(
-      {{100, 100}, {201, 1, false}, {201, 2, false}, {203, 100}}, 2, fsStats_);
+      {{100, 100}, {201, 1, false}, {201, 2, false}, {203, 100}}, 2, ioStats_);
   testLoads(
-      {{100, 100}, {201, 1, true}, {201, 2, true}, {203, 100}}, 2, fsStats_);
+      {{100, 100}, {201, 1, true}, {201, 2, true}, {203, 100}}, 2, ioStats_);
 }
 
 TEST_F(DirectBufferedInputTest, ioStatsLifeTimeTest) {
   for (size_t i = 0; i < 10; i++) {
-    auto stats =
-        std::make_shared<facebook::velox::filesystems::File::IoStats>();
+    auto stats = std::make_shared<facebook::velox::IoStats>();
     // Induce a tiny sleep so that we're more likely to destruct the thread as
     // we're trying to bump ioStats inside the test file
     std::thread t([s = stats]() mutable {

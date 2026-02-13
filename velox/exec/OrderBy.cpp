@@ -41,7 +41,7 @@ OrderBy::OrderBy(
           orderByNode->id(),
           "OrderBy",
           orderByNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "OrderBy")
               : std::nullopt) {
   maxOutputRows_ = outputBatchRows(std::nullopt);
   VELOX_CHECK(pool()->trackUsage());

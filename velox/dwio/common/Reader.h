@@ -27,6 +27,7 @@
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/serializers/KeyEncoder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -186,6 +187,92 @@ class RowReader {
       VectorPtr& result);
 };
 
+/// Represents a row range within a stripe [startRow, endRow).
+struct RowRange {
+  vector_size_t startRow{0}; // Inclusive
+  vector_size_t endRow{0}; // Exclusive
+
+  RowRange() = default;
+  RowRange(vector_size_t _startRow, vector_size_t _endRow)
+      : startRow(_startRow), endRow(_endRow) {}
+
+  /// Returns true if this row range is empty (no rows to read).
+  bool empty() const {
+    return startRow >= endRow;
+  }
+};
+
+/**
+ * Abstract index reader interface for index-based lookups.
+ *
+ * IndexReader provides methods for encoding index bounds, looking up stripes,
+ * and reading data within specific row ranges. This interface is used by
+ * HiveIndexReader to perform efficient key-based lookups on indexed files.
+ */
+class IndexReader {
+ public:
+  virtual ~IndexReader() = default;
+
+  using KeyBoundsVector = std::vector<velox::serializer::EncodedKeyBounds>;
+
+  /// Encodes index bounds into format-specific encoded key bounds.
+  /// Different file formats may use different key encoding schemes, so this
+  /// allows the format-specific reader to handle the encoding.
+  ///
+  /// @param indexBounds The index bounds to encode, containing column names
+  ///        and lower/upper bound values.
+  /// @return A vector of encoded key bounds, one for each row in the input
+  ///         bounds.
+  /// @throws if encoding is not supported by the implementation or if any
+  ///         index bound fails to encode.
+  virtual KeyBoundsVector encodeIndexBounds(
+      const velox::serializer::IndexBounds& indexBounds) = 0;
+
+  /// Looks up stripes that contain data matching the encoded key bounds.
+  /// For each request row, returns the list of stripe indices that may contain
+  /// matching data based on the encoded lower and upper key bounds.
+  ///
+  /// @param keyBounds The encoded key bounds for each request row.
+  /// @return Stripe indices for each request row. Each inner vector contains
+  ///         the indices of stripes that may contain matching data for that
+  ///         request.
+  /// @throws if lookup is not supported by the implementation.
+  virtual std::vector<std::vector<uint32_t>> lookupStripes(
+      const KeyBoundsVector& keyBounds) = 0;
+
+  /// Looks up row ranges within a specific stripe based on encoded key bounds.
+  /// Computes row ranges per request without setting up state for iteration.
+  ///
+  /// @param stripeIndex The index of the stripe to compute row ranges for.
+  /// @param keyBounds The encoded key bounds for each request.
+  /// @return Row ranges for each request, one per input encoded key bounds.
+  ///         Empty ranges (startRow >= endRow) are included for requests with
+  ///         no matching data.
+  /// @throws if lookup is not supported by the implementation.
+  virtual std::vector<RowRange> lookupRowRanges(
+      uint32_t stripeIndex,
+      const KeyBoundsVector& keyBounds) = 0;
+
+  /// Sets row ranges for reading from a specific stripe. Must be called before
+  /// next() to set up the iteration state.
+  ///
+  /// @param stripeIndex The index of the stripe to read from.
+  /// @param rowRanges The row ranges to read within the stripe.
+  /// @throws if setting row ranges is not supported by the implementation.
+  virtual void setRowRanges(
+      uint32_t stripeIndex,
+      const std::vector<RowRange>& rowRanges) = 0;
+
+  /**
+   * Fetch the next portion of rows.
+   * @param size Max number of rows to read
+   * @param result output vector
+   * @return number of rows scanned in the file (including any rows filtered
+   * out), 0 if there are no more rows to read.
+   */
+  virtual uint64_t next(uint64_t size, velox::VectorPtr& result) = 0;
+};
+
 /**
  * Abstract reader class.
  *
@@ -235,6 +322,17 @@ class Reader {
    */
   virtual std::unique_ptr<RowReader> createRowReader(
       const RowReaderOptions& options = {}) const = 0;
+
+  /**
+   * Create index reader object for index-based lookups.
+   * @param options Row reader options describing the data to fetch
+   * @return Index reader for efficient key-based lookups
+   * @throws if index reading is not supported by the implementation
+   */
+  virtual std::unique_ptr<IndexReader> createIndexReader(
+      const RowReaderOptions& options = {}) const {
+    VELOX_UNSUPPORTED("Reader::createIndexReader() is not supported");
+  }
 
   static TypePtr updateColumnNames(
       const TypePtr& fileType,
