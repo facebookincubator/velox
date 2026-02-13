@@ -98,6 +98,8 @@ class IcebergSplitReader : public SplitReader {
   uint64_t baseReadOffset_;
   // The file position for the first row in the split
   uint64_t splitOffset_;
+  // The number of rows in the split
+  uint64_t splitRows_;
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
