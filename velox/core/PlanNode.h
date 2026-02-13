@@ -1135,6 +1135,7 @@ class AggregationNode : public PlanNode {
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
       bool noGroupsSpanBatches,
+      bool preferStreamingAggregation,
       PlanNodePtr source);
 
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
@@ -1157,6 +1158,7 @@ class AggregationNode : public PlanNode {
       const std::optional<FieldAccessTypedExprPtr>& groupId,
       bool ignoreNullKeys,
       bool noGroupsSpanBatches,
+      bool preferStreamingAggregation,
       PlanNodePtr source);
 
   class Builder {
@@ -1229,6 +1231,11 @@ class AggregationNode : public PlanNode {
       return *this;
     }
 
+    Builder& preferStreamingAggregation(bool preferStreamingAggregation) {
+      preferStreamingAggregation_ = preferStreamingAggregation;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -1251,6 +1258,9 @@ class AggregationNode : public PlanNode {
           ignoreNullKeys_.has_value(),
           "AggregationNode ignoreNullKeys is not set");
       VELOX_USER_CHECK(
+          preferStreamingAggregation_.has_value(),
+          "AggregationNode preferStreamingAggregation is not set");
+      VELOX_USER_CHECK(
           source_.has_value(), "AggregationNode source is not set");
 
       return std::make_shared<AggregationNode>(
@@ -1264,6 +1274,7 @@ class AggregationNode : public PlanNode {
           groupId_,
           ignoreNullKeys_.value(),
           noGroupsSpanBatches_,
+          preferStreamingAggregation_.value(),
           source_.value());
     }
 
@@ -1278,11 +1289,12 @@ class AggregationNode : public PlanNode {
     std::optional<FieldAccessTypedExprPtr> groupId_ = kDefaultGroupId;
     std::optional<bool> ignoreNullKeys_;
     bool noGroupsSpanBatches_{false};
+    std::optional<bool> preferStreamingAggregation_{false};
     std::optional<PlanNodePtr> source_;
   };
 
   bool supportsBarrier() const override {
-    return isPreGrouped();
+    return shouldUseStreamingAggregation();
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -1306,6 +1318,13 @@ class AggregationNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys() const {
     return preGroupedKeys_;
+  }
+
+  bool shouldUseStreamingAggregation() const {
+    if (groupingKeys_.empty()) {
+      return preferStreamingAggregation_;
+    }
+    return isPreGrouped();
   }
 
   bool isPreGrouped() const {
@@ -1348,6 +1367,13 @@ class AggregationNode : public PlanNode {
   /// result for all the groups in each input batch.
   bool noGroupsSpanBatches() const {
     return noGroupsSpanBatches_;
+  }
+
+  /// When true, prefers streaming aggregation over
+  /// hash aggregation during query planning if applicable.
+  /// E.g., when the aggregation is global.
+  bool preferStreamingAggregation() const {
+    return preferStreamingAggregation_;
   }
 
   std::string_view name() const override {
@@ -1395,6 +1421,11 @@ class AggregationNode : public PlanNode {
   // the streaming aggregation operator to immediately produce the aggregation
   // result for all the groups in each input batch.
   const bool noGroupsSpanBatches_;
+
+  /// When true, prefers streaming aggregation over
+  /// hash aggregation during query planning if applicable.
+  /// E.g., when the aggregation is global.
+  const bool preferStreamingAggregation_;
 
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;

@@ -485,6 +485,7 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
               aggregates,
               /*ignoreNullKeys=*/false,
               /*noGroupsSpanBatches=*/false,
+              /*preferStreamingAggregation=*/false,
               std::move(source));
         })
         .planNode();
@@ -547,6 +548,7 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                         aggregates,
                         /*ignoreNullKeys=*/false,
                         /*noGroupsSpanBatches=*/false,
+                        /*preferStreamingAggregation=*/false,
                         std::move(source));
                   })
                   .planNode();

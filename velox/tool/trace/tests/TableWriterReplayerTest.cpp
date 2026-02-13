@@ -250,6 +250,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
         source);
   }
 

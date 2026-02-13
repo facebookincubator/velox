@@ -73,6 +73,7 @@ class AverageAggregationTest : public AggregationTestBase {
         std::vector{avgAggregate},
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
         std::move(child));
   }
 };

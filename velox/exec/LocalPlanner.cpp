@@ -634,7 +634,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
-      if (aggregationNode->isPreGrouped()) {
+      if (aggregationNode->shouldUseStreamingAggregation()) {
         operators.push_back(
             std::make_unique<StreamingAggregation>(
                 id, ctx.get(), aggregationNode));

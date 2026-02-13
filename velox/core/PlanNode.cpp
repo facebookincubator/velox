@@ -167,6 +167,7 @@ AggregationNode::AggregationNode(
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
     bool noGroupsSpanBatches,
+    bool preferStreamingAggregation,
     PlanNodePtr source)
     : PlanNode(id),
       step_(step),
@@ -178,6 +179,7 @@ AggregationNode::AggregationNode(
       groupId_(groupId),
       globalGroupingSets_(globalGroupingSets),
       noGroupsSpanBatches_(noGroupsSpanBatches),
+      preferStreamingAggregation_(preferStreamingAggregation),
       sources_{source},
       outputType_(getAggregationOutputType(
           groupingKeys_,
@@ -224,7 +226,7 @@ AggregationNode::AggregationNode(
   }
 
   VELOX_USER_CHECK(
-      !noGroupsSpanBatches_ || isPreGrouped(),
+      !noGroupsSpanBatches_ || shouldUseStreamingAggregation(),
       "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
 }
 
@@ -237,6 +239,7 @@ AggregationNode::AggregationNode(
     const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
     bool noGroupsSpanBatches,
+    bool preferStreamingAggregation,
     PlanNodePtr source)
     : AggregationNode(
           id,
@@ -249,6 +252,7 @@ AggregationNode::AggregationNode(
           kDefaultGroupId,
           ignoreNullKeys,
           noGroupsSpanBatches,
+          preferStreamingAggregation,
           source) {}
 
 namespace {
@@ -300,7 +304,7 @@ bool AggregationNode::canSpill(const QueryConfig& queryConfig) const {
 void AggregationNode::addDetails(std::stringstream& stream) const {
   stream << toName(step_) << " ";
 
-  if (isPreGrouped()) {
+  if (shouldUseStreamingAggregation()) {
     stream << "STREAMING ";
   }
 
@@ -379,6 +383,7 @@ folly::dynamic AggregationNode::serialize() const {
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
   obj["noGroupsSpanBatches"] = noGroupsSpanBatches_;
+  obj["preferStreamingAggregation"] = preferStreamingAggregation_;
   return obj;
 }
 
@@ -501,6 +506,9 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       obj["ignoreNullKeys"].asBool(),
       obj.count("noGroupsSpanBatches") ? obj["noGroupsSpanBatches"].asBool()
                                        : false,
+      obj.count("preferStreamingAggregation")
+          ? obj["preferStreamingAggregation"].asBool()
+          : false,
       deserializeSingleSource(obj, context));
 }
 
