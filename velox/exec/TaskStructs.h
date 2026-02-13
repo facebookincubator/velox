@@ -95,11 +95,11 @@ class SplitsStore {
   /// Return true when split is set or there is no more splits; false when
   /// caller should retry when the future is fulfilled.
   virtual bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
-      uint32_t driverId = -1) = 0;
+      Split& split,
+      ContinueFuture& future) = 0;
 
   /// Return whether all splits has been consumed and there will be no more
   /// splits.

@@ -1229,7 +1229,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
-  std::unordered_map<core::PlanNodeId, uint32_t> nodeIdNumDrivers_;
+  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {

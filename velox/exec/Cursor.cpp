@@ -62,13 +62,13 @@ class TaskQueue {
     return pool_.get();
   }
 
+  std::optional<int32_t> numProducers_;
   std::atomic_int32_t numDrainedProducers_{0};
 
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
-  std::optional<int32_t> numProducers_;
   int32_t numFinishedProducers_ = 0;
   uint64_t totalBytes_ = 0;
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
@@ -375,6 +375,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     checkTaskError();
     if (!current_) {
       if (queue_->numDrainedProducers_ > 0) {
+        VELOX_CHECK_EQ(queue_->numDrainedProducers_, queue_->numProducers_);
         queue_->numDrainedProducers_ = 0;
         return false;
       }

@@ -199,11 +199,11 @@ class QueueSplitsStore : public SplitsStore {
   }
 
   bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
-      uint32_t driverId) override {
+      Split& split,
+      ContinueFuture& future) override {
     if (!splits_.empty()) {
       split = getSplit(maxPreloadSplits, preload);
       return true;
@@ -514,7 +514,8 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
-    nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
+    VELOX_CHECK_EQ(factory->numDrivers, 1);
+    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
 
   // Create drivers.
@@ -1032,7 +1033,7 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       numDriversUngrouped_ += factory->numDrivers;
     }
     numTotalDrivers_ += factory->numTotalDrivers;
-    nodeIdNumDrivers_[factory->leafNodeId()] = factory->numDrivers;
+    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
   }
@@ -1811,8 +1812,8 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
 
   promises.reserve(leafPlanNodeIds.size());
   for (const auto& leafPlanNode : leafPlanNodeIds) {
-    auto barrierSplit =
-        Split::createBarrier(nodeIdNumDrivers_.at(leafPlanNode));
+    const auto barrierSplit =
+        Split::createBarrier(numDriversPerLeafNode_.at(leafPlanNode));
     auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
     addSplitLocked(splitState, barrierSplit, promises);
   }
@@ -1987,7 +1988,7 @@ BlockingReason Task::getSplitOrFuture(
         splitsStore,
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
-  return splitsStore->nextSplit(split, future, maxPreloadSplits, preload)
+  return splitsStore->nextSplit(-1, maxPreloadSplits, preload, split, future)
       ? BlockingReason::kNotBlocked
       : BlockingReason::kWaitForSplit;
 }
@@ -2009,7 +2010,7 @@ BlockingReason Task::getSplitOrFuture(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   return splitsStore->nextSplit(
-             split, future, maxPreloadSplits, preload, driverId)
+             driverId, maxPreloadSplits, preload, split, future)
       ? BlockingReason::kNotBlocked
       : BlockingReason::kWaitForSplit;
 }
@@ -2584,8 +2585,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           }
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
-            VELOX_CHECK(
-                store->nextSplit(splits.emplace_back(), future, 0, nullptr));
+            VELOX_CHECK(store->nextSplit(
+                -1, 0, nullptr, splits.emplace_back(), future));
           }
         }
         if (!splits.empty()) {
