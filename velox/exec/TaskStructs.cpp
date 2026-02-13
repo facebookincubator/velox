@@ -28,6 +28,8 @@ void SplitsStore::addSplit(
       barrierSplits_[i] = Split::createBarrier();
     }
     VELOX_CHECK_LE(promises_.size(), split.barrier->numDrivers);
+    // A barrier is assigned to every driver; wake up all currently blocked
+    // drivers to process it.
     while (!promises_.empty()) {
       promises.push_back(std::move(promises_.back()));
       promises_.pop_back();

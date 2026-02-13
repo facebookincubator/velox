@@ -1951,7 +1951,11 @@ TEST_F(MergeJoinTest, barrier) {
           "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
     }
   } testSettings[] = {
-      {false, false}, {false, true}, {true, false}, {true, true}};
+      {false, false},
+      {false, true},
+      {true, false},
+      {true, true},
+  };
 
   {
     // Inner join.

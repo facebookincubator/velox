@@ -1968,10 +1968,6 @@ bool Task::testingAllSplitsFinished() {
   return isAllSplitsFinishedLocked();
 }
 
-bool Task::testingBarrierProcessing() const {
-  return barrierRequested_;
-}
-
 bool Task::isAllSplitsFinishedLocked() {
   return (taskStats_.numFinishedSplits == taskStats_.numTotalSplits) &&
       allNodesReceivedNoMoreSplitsMessageLocked();
