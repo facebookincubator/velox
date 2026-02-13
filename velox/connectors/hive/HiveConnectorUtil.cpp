@@ -376,6 +376,30 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
         outputSubfields,
     const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns,
+    const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
+    memory::MemoryPool* pool) {
+  return makeScanSpec(
+      rowType,
+      outputSubfields,
+      subfieldFilters,
+      /*indexColumns=*/{},
+      dataColumns,
+      partitionKeys,
+      infoColumns,
+      specialColumns,
+      disableStatsBasedFilterReorder,
+      pool);
+}
+
+std::shared_ptr<common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
+        outputSubfields,
+    const common::SubfieldFilters& subfieldFilters,
     const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
