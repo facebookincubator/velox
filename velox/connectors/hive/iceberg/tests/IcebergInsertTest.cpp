@@ -17,7 +17,6 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
-#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -249,7 +248,7 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
   setConnectorSessionProperty(HiveConfig::kMaxTargetFileSizeSession, "4KB");
 
-  const auto outputPath = exec::test::TempDirectoryPath::create()->getPath();
+  const auto outputPath = TempDirectoryPath::create()->getPath();
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
   const auto vectors = createTestData(rowType, 10, 1'000);
   const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);

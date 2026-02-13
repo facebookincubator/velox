@@ -25,9 +25,6 @@
 #include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
-
-#include <common/Casts.h>
-
 #include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::parquet {
@@ -717,20 +714,13 @@ void WriterOptions::processConfigs(
       ? getParquetPageSize(session, kParquetSessionMaxTargetFileSize)
       : getParquetPageSize(connectorConfig, kParquetConnectorMaxTargetFileSize);
   if (maxTargetFileSize.has_value()) {
-    auto bytesInRowGroup = DefaultFlushPolicy::kDefaultBytesInRowGroup;
-    auto rowsInRowGroup = DefaultFlushPolicy::kDefaultRowsInGroup;
-    if (flushPolicyFactory) {
-      std::unique_ptr<DefaultFlushPolicy> policy;
-      castUniquePointer(flushPolicyFactory(), policy);
-      bytesInRowGroup = policy->bytesInRowGroup();
-      rowsInRowGroup = policy->rowsInRowGroup();
-    }
-    bytesInRowGroup =
-        std::min<int64_t>(bytesInRowGroup, maxTargetFileSize.value());
     if (!flushPolicyFactory) {
-      flushPolicyFactory = [rowsInRowGroup, bytesInRowGroup]() {
+      auto bytesInRowGroup = std::min<int64_t>(
+          DefaultFlushPolicy::kDefaultBytesInRowGroup,
+          maxTargetFileSize.value());
+      flushPolicyFactory = [bytesInRowGroup]() {
         return std::make_unique<DefaultFlushPolicy>(
-            rowsInRowGroup, bytesInRowGroup);
+            DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
       };
     }
   }
