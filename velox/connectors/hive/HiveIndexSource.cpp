@@ -227,12 +227,10 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
   HiveLookupIterator(
       std::shared_ptr<HiveIndexSource> indexSource,
       HiveIndexReader* indexReader,
-      IndexSource::Request request,
-      vector_size_t maxRowsPerRequest)
+      IndexSource::Request request)
       : indexSource_(std::move(indexSource)),
         indexReader_(indexReader),
-        request_(std::move(request)),
-        maxRowsPerRequest_(maxRowsPerRequest) {}
+        request_(std::move(request)) {}
 
   ~HiveLookupIterator() override = default;
 
@@ -249,8 +247,7 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
 
     // Set the request on first call.
     if (state_ == State::kInit) {
-      indexReader_->startLookup(
-          request_, {.maxRowsPerRequest = maxRowsPerRequest_});
+      indexReader_->startLookup(request_);
       setState(State::kRead);
     }
 
@@ -363,11 +360,11 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
         emptyResult_->inputHits, emptyResult_->output);
   }
 
+  // Holds the index source to ensure HiveIndexReader lifetime.
   const std::shared_ptr<HiveIndexSource> indexSource_;
   // Raw pointer to index reader for lookup operations.
   HiveIndexReader* const indexReader_;
   const IndexSource::Request request_;
-  const vector_size_t maxRowsPerRequest_;
 
   State state_{State::kInit};
   // Cached empty result for reuse when no rows pass the remaining filter.
@@ -389,8 +386,6 @@ HiveIndexSource::HiveIndexSource(
       hiveConfig_(hiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()),
-      maxRowsPerIndexRequest_(hiveConfig_->maxRowsPerIndexRequest(
-          connectorQueryCtx_->sessionProperties())),
       tableHandle_(std::move(tableHandle)),
       requestType_(requestType),
       outputType_(outputType),
@@ -658,7 +653,7 @@ std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
     const Request& request) {
   VELOX_CHECK_NOT_NULL(indexReader_, "No index reader available for lookup");
   return std::make_shared<HiveLookupIterator>(
-      shared_from_this(), indexReader_.get(), request, maxRowsPerIndexRequest_);
+      shared_from_this(), indexReader_.get(), request);
 }
 
 std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {

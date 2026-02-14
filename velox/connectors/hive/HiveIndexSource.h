@@ -68,10 +68,6 @@ class HiveIndexSource : public IndexSource,
     return pool_;
   }
 
-  uint32_t maxRowsPerIndexRequest() const {
-    return maxRowsPerIndexRequest_;
-  }
-
   const RowTypePtr& outputType() const {
     return outputType_;
   }
@@ -125,7 +121,6 @@ class HiveIndexSource : public IndexSource,
   const std::shared_ptr<HiveConfig> hiveConfig_;
   memory::MemoryPool* const pool_;
   core::ExpressionEvaluator* const expressionEvaluator_;
-  const uint32_t maxRowsPerIndexRequest_;
 
   const HiveTableHandlePtr tableHandle_;
   const RowTypePtr requestType_;

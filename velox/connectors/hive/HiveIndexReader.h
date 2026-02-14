@@ -63,16 +63,13 @@ class HiveIndexReader {
 
   using Request = IndexSource::Request;
   using Result = IndexSource::Result;
-  using Options = dwio::common::IndexReader::Options;
 
   /// Sets the input for index lookup. Each row in 'input' will be converted
   /// to index bounds and passed to the format-specific IndexReader.
   ///
   /// @param request The lookup request containing input row vector with lookup
   /// keys.
-  /// @param options Options controlling index reader behavior (e.g.,
-  ///        maxRowsPerRequest). Defaults to no limit.
-  void startLookup(const Request& request, const Options& options = {});
+  void startLookup(const Request& request);
 
   /// Returns true if there are more results to fetch from the current lookup.
   bool hasNext() const;

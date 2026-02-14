@@ -208,14 +208,6 @@ class HiveConfig {
   static constexpr const char* kPreserveFlatMapsInMemorySession =
       "hive.preserve_flat_maps_in_memory";
 
-  /// Maximum number of output rows to return per index lookup request.
-  /// The limit is applied to the actual output rows after filtering.
-  /// 0 means no limit (default).
-  static constexpr const char* kMaxRowsPerIndexRequest =
-      "hive.max-rows-per-index-request";
-  static constexpr const char* kMaxRowsPerIndexRequestSession =
-      "hive.max_rows_per_index_request";
-
   static constexpr const char* kUser = "user";
   static constexpr const char* kSource = "source";
   static constexpr const char* kSchema = "schema";
@@ -300,10 +292,6 @@ class HiveConfig {
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
-
-  /// Returns the maximum number of rows to read per index lookup request.
-  /// 0 means no limit (default).
-  uint32_t maxRowsPerIndexRequest(const config::ConfigBase* session) const;
 
   /// User of the query. Used for storage logging.
   std::string user(const config::ConfigBase* session) const;

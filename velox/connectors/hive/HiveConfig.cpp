@@ -259,13 +259,6 @@ bool HiveConfig::preserveFlatMapsInMemory(
       config_->get<bool>(kPreserveFlatMapsInMemory, false));
 }
 
-uint32_t HiveConfig::maxRowsPerIndexRequest(
-    const config::ConfigBase* session) const {
-  return session->get<uint32_t>(
-      kMaxRowsPerIndexRequestSession,
-      config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
-}
-
 std::string HiveConfig::user(const config::ConfigBase* session) const {
   return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
 }
