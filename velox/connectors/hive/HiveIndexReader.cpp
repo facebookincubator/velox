@@ -302,7 +302,9 @@ HiveIndexReader::createIndexReader() {
   return fileReader_->createIndexReader(rowReaderOpts);
 }
 
-void HiveIndexReader::startLookup(const Request& request) {
+void HiveIndexReader::startLookup(
+    const Request& request,
+    const Options& options) {
   VELOX_CHECK(
       !indexReader_->hasNext(),
       "Previous request not finished. Call next() first.");
@@ -311,7 +313,7 @@ void HiveIndexReader::startLookup(const Request& request) {
 
   // Build index bounds from request and pass to the index reader.
   auto indexBounds = buildRequestIndexBounds(request.input);
-  indexReader_->startLookup(indexBounds);
+  indexReader_->startLookup(indexBounds, options);
 }
 
 serializer::IndexBounds HiveIndexReader::buildRequestIndexBounds(
