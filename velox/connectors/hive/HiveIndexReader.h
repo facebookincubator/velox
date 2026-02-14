@@ -20,9 +20,8 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
-#include "velox/vector/DecodedVector.h"
+#include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::velox::connector {
 class ConnectorQueryCtx;
@@ -35,14 +34,15 @@ class HiveTableHandle;
 class HiveColumnHandle;
 class HiveConfig;
 
-/// HiveIndexReader is similar to SplitReader but supports index lookup API.
-/// It takes a request row vector, converts each row into filters inserted into
-/// the scan spec, and reads matching data from the underlying reader. The
-/// result includes matched rows and a buffer containing the count of matches
-/// for each input request row.
+/// HiveIndexReader handles index lookups for Hive tables with cluster indexes.
+/// It focuses on:
+/// - Creating index bounds from join conditions
+/// - Delegating actual index lookups to the format-specific IndexReader
 ///
-/// The HiveIndexReader is designed to be reusable across multiple lookup
-/// requests on the same split.
+/// The format-specific IndexReader (e.g., SelectiveNimbleIndexReader) handles:
+/// - Encoding keys into format-specific representations
+/// - Stripe iteration and row range computation
+/// - Data reading and output assembly
 class HiveIndexReader {
  public:
   HiveIndexReader(
@@ -54,8 +54,8 @@ class HiveIndexReader {
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& requestType,
       const RowTypePtr& outputType,
-      const std::shared_ptr<io::IoStatistics>& ioStatistics,
-      const std::shared_ptr<IoStats>& ioStats,
+      const std::shared_ptr<io::IoStatistics>& ioStats,
+      const std::shared_ptr<IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor);
 
@@ -65,17 +65,16 @@ class HiveIndexReader {
   using Result = IndexSource::Result;
 
   /// Sets the input for index lookup. Each row in 'input' will be converted
-  /// to filters on key columns and used to query matching rows from the
-  /// underlying data.
+  /// to index bounds and passed to the format-specific IndexReader.
   ///
   /// @param request The lookup request containing input row vector with lookup
   /// keys.
-  void setRequest(const Request& request);
+  void startLookup(const Request& request);
 
-  /// Returns true if there are more input rows to process.
+  /// Returns true if there are more results to fetch from the current lookup.
   bool hasNext() const;
 
-  /// Reads the next batch of matching rows for the current input rows.
+  /// Returns the next batch of matching rows for the current input rows.
   /// The result from a single request row is never split across multiple
   /// calls to next().
   ///
@@ -87,37 +86,17 @@ class HiveIndexReader {
   std::string toString() const;
 
  private:
-  // Resets filter caches for reuse.
-  void resetFilterCaches();
-
   // Creates the file reader for reading file metadata and schema.
-  // NOTE: Called from constructor initializer list, so only accesses members
-  // declared before fileReader_.
   std::unique_ptr<dwio::common::Reader> createFileReader();
 
-  // Creates the row reader.
-  // NOTE: Called from constructor initializer list, so only accesses members
-  // declared before rowReader_.
-  std::unique_ptr<dwio::common::RowReader> createRowReader();
+  // Creates the format-specific index reader.
+  std::unique_ptr<dwio::common::IndexReader> createIndexReader();
 
-  // Initializes joinIndexColumnSpecs_ and requestColumnIndices_ from join
-  // conditions.
-  void initJoinConditions();
+  // Parses join conditions to extract column indices and constant values.
+  void parseJoinConditions();
 
-  // Converts the input row at the given index to filters on key columns
-  // and applies them to the scan spec.
-  void applyFiltersFromRequest(vector_size_t row);
-
-  // Clears filters applied to key columns in the scan spec.
-  void clearKeyFilters();
-
-  // Reads the next batch of rows based on the current filters.
-  // Returns the number of rows read. The output vector is passed by reference
-  // and will be populated with the matching rows.
-  uint64_t readNext(VectorPtr& output);
-
-  // Resets request_ and requestRow_.
-  void reset();
+  // Builds IndexBounds from the request row vector.
+  serializer::IndexBounds buildRequestIndexBounds(const RowVectorPtr& request);
 
   std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
   const std::shared_ptr<const HiveTableHandle> tableHandle_;
@@ -134,27 +113,14 @@ class HiveIndexReader {
 
   const std::shared_ptr<common::ScanSpec> scanSpec_;
   const std::unique_ptr<dwio::common::Reader> fileReader_;
-  const std::unique_ptr<dwio::common::RowReader> rowReader_;
+  const std::unique_ptr<dwio::common::IndexReader> indexReader_;
   // Join conditions (including equal conditions converted from join keys).
   const std::vector<core::IndexLookupConditionPtr> joinConditions_;
 
-  // Cached ScanSpec children for index columns used in join conditions.
-  std::vector<common::ScanSpec*> joinIndexColumnSpecs_;
   // Request column indices for each join condition (for probe side columns).
   // For EqualIndexLookupCondition, stores {valueIndex}.
   // For BetweenIndexLookupCondition, stores {lowerIndex, upperIndex}.
   std::vector<std::vector<column_index_t>> requestColumnIndices_;
-
-  // Current request for lookup.
-  RowVectorPtr request_;
-  // Current row index in the request being processed.
-  vector_size_t requestRow_{0};
-
-  // Decoded vectors for input columns used in join conditions.
-  // Indexed by join condition index and then by column index within that
-  // condition (0 for equal condition value, 0/1 for between condition
-  // lower/upper).
-  std::vector<std::vector<DecodedVector>> decodedRequestVectors_;
 
   // For BetweenIndexLookupCondition with constant bounds, stores the constant
   // values directly. The outer vector is indexed by join condition index. The
@@ -162,6 +128,14 @@ class HiveIndexReader {
   // is a constant, the corresponding optional contains the value; otherwise
   // it's std::nullopt and the value should be decoded from request.
   std::vector<std::vector<std::optional<variant>>> constantBoundValues_;
+
+  // Cached row type for index bounds (column names and types from join
+  // conditions).
+  RowTypePtr indexBoundType_;
+
+  // Reusable column vectors for building index bounds.
+  std::vector<VectorPtr> lowerBoundColumns_;
+  std::vector<VectorPtr> upperBoundColumns_;
 };
 
 } // namespace facebook::velox::connector::hive

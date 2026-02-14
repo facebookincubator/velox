@@ -522,6 +522,12 @@ class Operator : public BaseRuntimeStatWriter {
     return input_ != nullptr;
   }
 
+  /// Returns the spill config for this operator. This method is only used for
+  /// test.
+  const common::SpillConfig* testingSpillConfig() const {
+    return spillConfig();
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
   friend class NonReclaimableSection;

@@ -30,7 +30,7 @@ RowNumber::RowNumber(
           rowNumberNode->id(),
           "RowNumber",
           rowNumberNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "RowNumber")
               : std::nullopt),
       limit_{rowNumberNode->limit()},
       generateRowNumber_{rowNumberNode->generateRowNumber()} {

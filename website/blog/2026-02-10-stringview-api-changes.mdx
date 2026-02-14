@@ -1,0 +1,143 @@
+---
+slug: stringview-api-changes
+title: "velox::StringView API Changes and Best Practices"
+authors: [pedroerp]
+tags: [tech-blog, strings, api]
+---
+
+## Context
+
+Strings are ubiquitously used in large-scale analytic query processing. From storing identifiers,
+names, labels, or structured data (like json/xml), to simply descriptive text, like a product
+description or the contents of this very blog post, there is hardly a SQL query that does not require
+the manipulation of string data.
+
+This post describes in more detail how Velox handles columns of strings, the low-level C++ APIs
+involved and some recent changes made to them, and presents best practices for string usage
+throughout Velox's codebase.
+
+## StringView
+
+To efficiently enable string operations, Velox provides a specialized physical C++ type, called
+`velox::StringView`. The main purpose of this layout, also called a *German String Layout*, is to
+optimize common string operations over small strings, or operations that can be performed by only
+accessing a string's prefix.
+
+StringViews are 16-byte objects that provide a non-owning string-like API that refers to data stored
+elsewhere in a columnar Velox Vector buffer. The lifetime of a `velox::StringView` is always tied to
+the lifetime of the underlying Velox Vector buffer, in the sense that it only provides a pointer
+(*view*) into the external buffer. It provides a similar abstraction to `std::string_view`, with
+the following additional optimizations:
+
+- **Small String Optimization (SSO):** strings up to 12 characters are always stored inline, within
+  the object itself. With the assumption that strings are in many cases small, it removes the need
+  for dereferencing the larger data buffer, hopefully reducing cache misses and memory bus traffic.
+
+- **Prefix optimization:** a 4 character prefix is always stored inline within the StringView object
+  to enable failed comparison to be short circuited, also skipping accesses to the external buffer.
+
+To enable better interoperability with other engines, a few years ago
+[we collaborated with the Arrow community](https://engineering.fb.com/2024/02/20/developer-tools/velox-apache-arrow-15-composable-data-management/)
+in what resulted to be the
+[BinaryView Arrow format](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout)
+for string data. Ever since, we have seen increased adoption of this format in a series of
+[other systems and libraries](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/).
+
+## The Old Unsafe API
+
+For convenience, in Velox we used to allow developers to implicitly convert `velox::StringView` into
+`std::string`, since many APIs are built based on `std::string`. For example, one could naively do:
+
+```cpp
+// Given this signature.
+void myFunction(const std::string& input) {
+  // ...
+}
+
+// All would silently result in a string copy
+// (valueAt() returns a velox::StringView):
+
+myFunction(stringVector->valueAt(0));
+
+std::string myStr = stringVector->valueAt(0);
+
+std::unordered_map<std::string, size_t> myMap;
+myMap[stringVector->valueAt(0)] = 1;
+```
+
+While these usages seem harmless, they would all result in a full string copy, and potentially a
+memory allocation, depending on the string size. We have found this anti-pattern to be commonly
+used; in most cases, the developer did not intend for a copy to be performed, and this behavior
+silently added unnecessary overhead.
+
+## What Changed
+
+To prevent such inadvertent string copies, in
+[#15946](https://github.com/facebookincubator/velox/pull/15946) we removed implicit conversion from
+`velox::StringView` to `std::string`. You can still do so if needed, but you now have to explicitly
+state it, for clarity:
+
+```cpp
+// Compilation failure from now on:
+myFunction(stringVector->valueAt(0));
+
+// Ok:
+myFunction(std::string(stringVector->valueAt(0)));
+```
+
+Instead, we are now making conversion from `velox::StringView` to `std::string_view` available
+implicitly. `std::string_view`'s are non-owning, so constructing them based on a pointer and size
+is essentially free.
+
+A series of PR were landed before this change to clean up any dependencies on the old behavior
+throughout Velox's codebase, making them explicitly defined when needed.
+
+## folly::StringPiece
+
+`folly::StringPiece`'s are now superseded by `std::string_view`. As part of this work, we have also
+cleaned up and removed every usage of `folly::StringPiece` in Velox; **do not** use
+`folly::StringPiece` in future code in Velox. Use `std::string_view` or `velox::StringView` instead.
+
+If you need to use a library that takes a `folly::StringPiece`, for example, `folly::parseJson()`,
+you can pass a `std::string_view` instead, since the `std::string_view` => `folly::StringPiece`
+conversion can be done implicitly.
+
+## The RValue Gotcha
+
+A slightly unintuitive gotcha of `velox::StringView` is the handling of rvalues and temporary
+values. Since `velox::StringView` may contain inlined strings, if you take a pointer to the string
+contents, the string happened to be small and inlined, and the `velox::StringView` object is
+destroyed, you would end up with a dangling pointer. For example:
+
+```cpp
+// Unsafe: would result in a std::string_view pointing to
+// the temporary object that gets destroyed right away.
+std::string_view sv = stringVector->valueAt(0);
+LOG(INFO) << "Happily would have crashed: " << sv;
+```
+
+To prevent these unsafe usages, the rvalue-based version of these conversions, both explicit and
+implicit, and for both `std::string` and `std::string_view`, are disabled. This means that the
+snippets above will give you a compilation error.
+
+The safe behavior would be to create a non-temporary object in the stack:
+
+```cpp
+velox::StringView sv1 = stringVector->valueAt(0);
+std::string_view sv2 = sv1; // all good, as long as sv2 is not used after
+                             // sv1 is destroyed.
+```
+
+## Best Practices
+
+To summarize, from now on, the conversions:
+
+- `velox::StringView` => `std::string`: won't be done implicitly anymore. This now needs to be
+  explicitly stated, for clarity.
+- `velox::StringView` => `std::string_view`: can be done implicitly.
+- `velox::StringView` => `folly::StringPiece`: do not use. If needed for legacy external libraries,
+  pass a `std::string_view` instead.
+- rvalue `velox::StringView&&` => any other type: compilation error to minimize risk of dangling
+  pointer.
+
+Please reach out on [Slack](https://velox-oss.slack.com) if you have any questions.

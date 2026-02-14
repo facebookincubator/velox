@@ -111,10 +111,13 @@ WriteFileSink::WriteFileSink(
     std::unique_ptr<WriteFile> writeFile,
     std::string name,
     MetricsLogPtr metricLogger,
-    IoStatistics* stats)
+    IoStatistics* stats,
+    velox::IoStats* fileSystemStats)
     : FileSink(
           std::move(name),
-          {.metricLogger = std::move(metricLogger), .stats = stats}),
+          {.metricLogger = std::move(metricLogger),
+           .stats = stats,
+           .fileSystemStats = fileSystemStats}),
       writeFile_{std::move(writeFile)} {
   VELOX_CHECK_NOT_NULL(writeFile_);
 }

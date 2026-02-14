@@ -726,7 +726,7 @@ LocalMerge::LocalMerge(
           localMergeNode->id(),
           "LocalMerge",
           localMergeNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "LocalMerge")
               : std::nullopt) {
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,

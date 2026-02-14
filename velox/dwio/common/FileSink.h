@@ -105,6 +105,10 @@ class FileSink : public Closeable {
     return stats_;
   }
 
+  velox::IoStats* getFileSystemStats() {
+    return fileSystemStats_;
+  }
+
  protected:
   // General write wrapper with logging. All concrete subclasses gets logging
   // for free if they call a public method that goes through this method.
@@ -131,7 +135,8 @@ class WriteFileSink final : public FileSink {
       std::unique_ptr<WriteFile> writeFile,
       std::string name,
       MetricsLogPtr metricLogger = MetricsLog::voidLog(),
-      IoStatistics* stats = nullptr);
+      IoStatistics* stats = nullptr,
+      velox::IoStats* fileSystemStats = nullptr);
 
   ~WriteFileSink() override {
     destroy();

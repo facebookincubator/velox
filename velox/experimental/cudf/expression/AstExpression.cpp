@@ -36,14 +36,8 @@ cudf::ast::expression const& createAstTree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precomputeInstructions) {
-  static constexpr bool kAllowPureAstOnly = false;
   AstContext context{
-      tree,
-      scalars,
-      {inputRowSchema},
-      {precomputeInstructions},
-      expr,
-      kAllowPureAstOnly};
+      tree, scalars, {inputRowSchema}, {precomputeInstructions}, expr};
   return context.pushExprToTree(expr);
 }
 
@@ -54,15 +48,13 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const bool allowPureAstOnly) {
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions) {
   AstContext context{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
       {leftPrecomputeInstructions, rightPrecomputeInstructions},
-      expr,
-      allowPureAstOnly};
+      expr};
   return context.pushExprToTree(expr);
 }
 
@@ -81,25 +73,20 @@ void ASTExpression::close() {
 }
 
 ColumnOrView ASTExpression::eval(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    std::vector<cudf::column_view> inputColumnViews,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   auto precomputedColumns = precomputeSubexpressions(
-      inputTableColumns,
+      inputColumnViews,
       precomputeInstructions_,
       scalars_,
       inputRowSchema_,
       stream);
 
   // Make table_view from input columns and precomputed columns
-  std::vector<cudf::column_view> allColumnViews;
-  allColumnViews.reserve(inputTableColumns.size() + precomputedColumns.size());
-
-  for (const auto& col : inputTableColumns) {
-    allColumnViews.push_back(col->view());
-  }
-
+  std::vector<cudf::column_view> allColumnViews(inputColumnViews);
+  allColumnViews.reserve(inputColumnViews.size() + precomputedColumns.size());
   for (auto& precomputedCol : precomputedColumns) {
     allColumnViews.push_back(asView(precomputedCol));
   }
@@ -110,12 +97,12 @@ ColumnOrView ASTExpression::eval(
     if (auto colRefPtr = dynamic_cast<cudf::ast::column_reference const*>(
             &cudfTree_.back())) {
       auto columnIndex = colRefPtr->get_column_index();
-      if (columnIndex < inputTableColumns.size()) {
-        return inputTableColumns[columnIndex]->view();
+      if (columnIndex < inputColumnViews.size()) {
+        return inputColumnViews[columnIndex];
       } else {
         // Referencing a precomputed column return as it is (view or owned)
         return std::move(
-            precomputedColumns[columnIndex - inputTableColumns.size()]);
+            precomputedColumns[columnIndex - inputColumnViews.size()]);
       }
     } else {
       if (CudfConfig::getInstance().debugEnabled) {

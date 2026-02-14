@@ -133,7 +133,7 @@ TopNRowNumber::TopNRowNumber(
           node->id(),
           "TopNRowNumber",
           node->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "TopNRowNumber")
               : std::nullopt),
       rankFunction_(node->rankFunction()),
       limit_{node->limit()},

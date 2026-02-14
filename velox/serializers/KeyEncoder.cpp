@@ -20,42 +20,55 @@
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::serializer {
+namespace {
+
+bool validateBound(
+    const IndexBound& indexBound,
+    const std::vector<std::string>& indexColumns) {
+  if (indexBound.bound == nullptr || indexBound.bound->size() == 0) {
+    return false;
+  }
+
+  const auto& rowType = asRowType(indexBound.bound->type());
+  if (rowType->size() != indexColumns.size()) {
+    return false;
+  }
+  for (const auto& columnName : indexColumns) {
+    if (!rowType->containsChild(columnName)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 bool IndexBounds::validate() const {
   if (!lowerBound.has_value() && !upperBound.has_value()) {
     return false;
   }
 
-  const auto validateBound = [this](const RowVectorPtr& bound) {
-    if (bound->size() != 1) {
+  if (lowerBound.has_value() &&
+      !validateBound(lowerBound.value(), indexColumns)) {
+    return false;
+  }
+
+  if (upperBound.has_value() &&
+      !validateBound(upperBound.value(), indexColumns)) {
+    return false;
+  }
+
+  if (lowerBound.has_value() && upperBound.has_value()) {
+    if (!lowerBound->bound->type()->equivalent(*upperBound->bound->type())) {
       return false;
     }
-
-    const auto& rowType = asRowType(bound->type());
-    if (rowType->size() != indexColumns.size()) {
+    if (lowerBound->bound->size() != upperBound->bound->size()) {
       return false;
     }
-    for (const auto& columnName : indexColumns) {
-      if (!rowType->containsChild(columnName)) {
-        return false;
-      }
+    if (lowerBound->bound->size() == 0) {
+      return false;
     }
-    return true;
-  };
-
-  if (lowerBound.has_value() && !validateBound(lowerBound->bound)) {
-    return false;
   }
-
-  if (upperBound.has_value() && !validateBound(upperBound->bound)) {
-    return false;
-  }
-
-  if (lowerBound.has_value() && upperBound.has_value() &&
-      !lowerBound->bound->type()->equivalent(*upperBound->bound->type())) {
-    return false;
-  }
-
   return true;
 }
 
@@ -76,22 +89,63 @@ std::string IndexBounds::toString() const {
   }
   ss << "]";
 
-  const auto formatBound = [&ss](const char* name, const IndexBound& bound) {
-    ss << ", " << name << "=" << (bound.inclusive ? "[" : "(");
-    ss << bound.bound->toString(0, bound.bound->size());
-    ss << (bound.inclusive ? "]" : ")");
-  };
+  const auto formatBound =
+      [&ss](const char* name, const std::optional<IndexBound>& bound) {
+        if (!bound.has_value()) {
+          ss << ", " << name << "=unbounded";
+        } else {
+          ss << ", " << name << "=" << (bound->inclusive ? "[" : "(");
+          ss << bound->bound->toString(0, bound->bound->size());
+          ss << (bound->inclusive ? "]" : ")");
+        }
+      };
 
-  if (lowerBound.has_value()) {
-    formatBound("lowerBound", lowerBound.value());
-  }
-
-  if (upperBound.has_value()) {
-    formatBound("upperBound", upperBound.value());
-  }
+  formatBound("lowerBound", lowerBound);
+  formatBound("upperBound", upperBound);
 
   ss << "}";
   return ss.str();
+}
+
+std::string EncodedKeyBounds::toString() const {
+  std::stringstream ss;
+  ss << "EncodedKeyBounds{lowerKey=";
+  if (lowerKey.has_value()) {
+    ss << folly::hexlify(lowerKey.value());
+  } else {
+    ss << "unbounded";
+  }
+  ss << ", upperKey=";
+  if (upperKey.has_value()) {
+    ss << folly::hexlify(upperKey.value());
+  } else {
+    ss << "unbounded";
+  }
+  ss << "}";
+  return ss.str();
+}
+
+vector_size_t IndexBounds::numRows() const {
+  if (lowerBound.has_value()) {
+    return lowerBound->bound->size();
+  }
+  VELOX_CHECK(upperBound.has_value());
+  return upperBound->bound->size();
+}
+
+void IndexBounds::set(IndexBound lower, IndexBound upper) {
+  lowerBound = std::move(lower);
+  upperBound = std::move(upper);
+  VELOX_CHECK(validate());
+}
+
+void IndexBounds::clear() {
+  lowerBound.reset();
+  upperBound.reset();
+}
+
+bool KeyEncoder::IncrementedBoundsResult::allSucceeded() const {
+  return bounds != nullptr && succeededIndices == nullptr;
 }
 
 namespace {
@@ -1138,38 +1192,81 @@ void KeyEncoder::encodeColumn(
   }
 }
 
-std::optional<RowVectorPtr> KeyEncoder::createIncrementedBound(
-    const RowVectorPtr& bound) const {
-  const auto& children = bound->children();
-  VELOX_CHECK_EQ(bound->size(), 1);
+KeyEncoder::IncrementedBoundsResult KeyEncoder::createIncrementedBounds(
+    const RowVectorPtr& bounds) const {
+  const auto& children = bounds->children();
+  const auto numRows = bounds->size();
   const auto numKeyColumns = keyChannels_.size();
-  VELOX_CHECK_EQ(children.size(), keyChannels_.size());
+  VELOX_CHECK_EQ(children.size(), numKeyColumns);
 
-  std::vector<VectorPtr> newChildren;
-  newChildren.reserve(numKeyColumns);
+  // Create vectors for incrementing values.
+  std::vector<VectorPtr> incrementedChildren;
+  incrementedChildren.reserve(numKeyColumns);
   for (const auto& child : children) {
-    newChildren.push_back(BaseVector::create(child->type(), 1, pool_));
+    incrementedChildren.push_back(
+        BaseVector::create(child->type(), numRows, pool_));
   }
 
-  // Copy all values from the source row
+  // Copy all values from the source rows.
   for (size_t i = 0; i < numKeyColumns; ++i) {
-    newChildren[i]->copy(children[i].get(), 0, 0, 1);
+    incrementedChildren[i]->copy(children[i].get(), 0, 0, numRows);
   }
 
-  // Increment from rightmost key column (least significant) to leftmost and
-  // quit once we find a column that can be incremented.
-  for (int i = numKeyColumns - 1; i >= 0; --i) {
-    const bool descending = !sortOrders_[i].isAscending();
-    const bool nullLast = !sortOrders_[i].isNullsFirst();
-    if (incrementColumnValue(
-            children[i], 0, descending, nullLast, newChildren[i])) {
-      return std::make_shared<RowVector>(
-          pool_, bound->type(), nullptr, 1, std::move(newChildren));
+  // Track succeeded rows directly in indices buffer.
+  auto indicesBuffer = allocateIndices(numRows, pool_);
+  auto* rawIndices = indicesBuffer->asMutable<vector_size_t>();
+  vector_size_t numSucceeded{0};
+
+  // Process each row independently.
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    // Increment from rightmost key column (least significant) to leftmost.
+    // Stop when we find a column that can be incremented.
+    for (int col = numKeyColumns - 1; col >= 0; --col) {
+      const bool descending = !sortOrders_[col].isAscending();
+      const bool nullLast = !sortOrders_[col].isNullsFirst();
+      if (FOLLY_LIKELY(incrementColumnValue(
+              incrementedChildren[col],
+              row,
+              descending,
+              nullLast,
+              incrementedChildren[col]))) {
+        rawIndices[numSucceeded++] = row;
+        break;
+      }
     }
   }
 
-  // All key columns overflowed - cannot increment
-  return std::nullopt;
+  if (numSucceeded == 0) {
+    return {nullptr, nullptr};
+  }
+
+  // If all rows succeeded, return incrementedChildren directly without
+  // wrapping.
+  if (numSucceeded == numRows) {
+    return {
+        std::make_shared<RowVector>(
+            pool_,
+            bounds->type(),
+            nullptr,
+            numRows,
+            std::move(incrementedChildren)),
+        nullptr};
+  }
+  VELOX_CHECK_LT(numSucceeded, numRows);
+
+  // Wrap children in place with dictionary using succeeded indices.
+  for (auto& child : incrementedChildren) {
+    child = BaseVector::wrapInDictionary(
+        nullptr, indicesBuffer, numSucceeded, child);
+  }
+  return {
+      std::make_shared<RowVector>(
+          pool_,
+          bounds->type(),
+          nullptr,
+          numSucceeded,
+          std::move(incrementedChildren)),
+      std::move(indicesBuffer)};
 }
 
 uint64_t KeyEncoder::estimateEncodedSize() {
@@ -1211,54 +1308,83 @@ std::vector<std::string> KeyEncoder::encode(const RowVectorPtr& input) {
   return result;
 }
 
-std::optional<EncodedKeyBounds> KeyEncoder::encodeIndexBounds(
+std::vector<EncodedKeyBounds> KeyEncoder::encodeIndexBounds(
     const IndexBounds& indexBounds) {
   VELOX_CHECK(indexBounds.validate());
 
-  EncodedKeyBounds result;
+  const auto numRows = indexBounds.numRows();
+  std::vector<EncodedKeyBounds> results(numRows);
 
-  // Encode lower bound if present
+  // Encode lower bounds if present.
   if (indexBounds.lowerBound.has_value()) {
     const auto& lowerBound = indexBounds.lowerBound.value();
     RowVectorPtr lowerBoundToEncode = lowerBound.bound;
-    // For exclusive lower bound, increment the row before encoding
+
+    // For exclusive lower bound, bump up all rows before encoding.
     if (!lowerBound.inclusive) {
-      const auto incrementedBoundOpt =
-          createIncrementedBound(lowerBoundToEncode);
-      if (!incrementedBoundOpt.has_value()) {
-        return std::nullopt;
-      }
-      lowerBoundToEncode = incrementedBoundOpt.value();
+      const auto incrementedResult =
+          createIncrementedBounds(lowerBoundToEncode);
+      // All rows must succeed for lower bound increment.
+      VELOX_CHECK_NOT_NULL(
+          incrementedResult.bounds,
+          "Failed to bump up lower bound for exclusive range");
+      VELOX_CHECK_NULL(
+          incrementedResult.succeededIndices,
+          "Failed to bump up lower bound for exclusive range");
+      lowerBoundToEncode = incrementedResult.bounds;
     }
+
     auto encodedKeys = encode(lowerBoundToEncode);
-    VELOX_CHECK_EQ(encodedKeys.size(), 1);
-    result.lowerKey = std::move(encodedKeys[0]);
+    VELOX_CHECK_EQ(encodedKeys.size(), numRows);
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      results[row].lowerKey = std::move(encodedKeys[row]);
+    }
   }
 
-  // Encode upper bound if present
+  // Encode upper bounds if present.
   if (indexBounds.upperBound.has_value()) {
     const auto& upperBound = indexBounds.upperBound.value();
-    RowVectorPtr upperBoundToEncode = upperBound.bound;
 
-    // For inclusive upper bound, increment the row before encoding
+    // For inclusive upper bound, bump up rows before encoding.
+    // Failed rows will have unbounded upper bound (std::nullopt).
     if (upperBound.inclusive) {
-      const auto incrementedBoundOpt = createIncrementedBound(upperBound.bound);
-      // If increment fails (bound is at maximum value), treat as unbounded by
-      // setting to nullptr. This prevents setting an upper bound when the
-      // inclusive upper bound is already at the maximum possible value.
-      if (!incrementedBoundOpt.has_value()) {
-        upperBoundToEncode = nullptr;
-      } else {
-        upperBoundToEncode = incrementedBoundOpt.value();
+      const auto incrementedResult = createIncrementedBounds(upperBound.bound);
+
+      // Only encode if there are any succeeded rows.
+      if (incrementedResult.bounds != nullptr) {
+        const auto numSucceeded = incrementedResult.bounds->size();
+        auto encodedKeys = encode(incrementedResult.bounds);
+        VELOX_CHECK_EQ(encodedKeys.size(), numSucceeded);
+
+        // Map encoded keys back to original row indices.
+        if (incrementedResult.allSucceeded()) {
+          VELOX_CHECK_EQ(numSucceeded, numRows);
+          // All rows succeeded - direct mapping.
+          for (vector_size_t i = 0; i < numSucceeded; ++i) {
+            results[i].upperKey = std::move(encodedKeys[i]);
+          }
+        } else {
+          VELOX_CHECK_LT(numSucceeded, numRows);
+          // Partial success - use indices to map back.
+          const auto* rawIndices =
+              incrementedResult.succeededIndices->as<vector_size_t>();
+          for (vector_size_t i = 0; i < numSucceeded; ++i) {
+            results[rawIndices[i]].upperKey = std::move(encodedKeys[i]);
+          }
+        }
       }
-    }
-    if (upperBoundToEncode != nullptr) {
-      auto encodedKeys = encode(upperBoundToEncode);
-      result.upperKey = std::move(encodedKeys[0]);
+      // Failed rows keep upperKey as std::nullopt (unbounded).
+    } else {
+      // Exclusive upper bound - encode directly.
+      auto encodedKeys = encode(upperBound.bound);
+      VELOX_CHECK_EQ(encodedKeys.size(), numRows);
+      for (vector_size_t row = 0; row < numRows; ++row) {
+        results[row].upperKey = std::move(encodedKeys[row]);
+      }
     }
   }
 
-  return result;
+  return results;
 }
 
 } // namespace facebook::velox::serializer

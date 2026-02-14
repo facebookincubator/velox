@@ -621,6 +621,7 @@ void HiveDataSink::write(size_t index, RowVectorPtr input) {
   writers_[index]->write(dataInput);
   writerInfo_[index]->inputSizeInBytes += dataInput->estimateFlatSize();
   writerInfo_[index]->numWrittenRows += dataInput->size();
+  writerInfo_[index]->currentFileWrittenRows += dataInput->size();
 
   // File rotation is not supported for bucketed tables (require one file per
   // bucket with predictable name) or sorted writes (SortingWriter not
@@ -642,12 +643,7 @@ uint64_t HiveDataSink::getCurrentFileBytes(size_t writerIndex) const {
   const auto baselineBytes = writerInfo_[writerIndex]->cumulativeWrittenBytes;
   // Sanity check: total should always be >= baseline since ioStats is
   // never reset and cumulative is a snapshot of rawBytesWritten at rotation.
-  VELOX_DCHECK_GE(
-      totalBytes,
-      baselineBytes,
-      "rawBytesWritten ({}) < cumulativeWrittenBytes ({})",
-      totalBytes,
-      baselineBytes);
+  VELOX_DCHECK_GE(totalBytes, baselineBytes);
   return totalBytes - baselineBytes;
 }
 
@@ -665,6 +661,9 @@ void HiveDataSink::finalizeWriterFile(size_t index) {
   fileInfo.writeFileName = info->currentWriteFileName;
   fileInfo.targetFileName = info->currentTargetFileName;
   fileInfo.fileSize = currentFileBytes;
+  fileInfo.numRows = info->currentFileWrittenRows;
+  // Reset for next file.
+  info->currentFileWrittenRows = 0;
   info->writtenFiles.push_back(std::move(fileInfo));
 
   // Update cumulative stats as a snapshot of total stats so far.

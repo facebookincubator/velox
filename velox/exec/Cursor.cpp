@@ -535,138 +535,19 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   std::exception_ptr error_;
 };
 
-/// A debugging cursor for interactive task execution.
+/// Common base class for debugging cursors that support breakpoints.
 ///
-/// The cursor uses a custom tracing context that pauses execution at traced
-/// operators, allowing inspection of input vectors before they are processed.
-///
-/// @note This class assumes serial (single-threaded) execution mode.
-class TaskDebuggerCursor : public TaskCursorBase {
- public:
-  explicit TaskDebuggerCursor(const CursorParameters& params)
-      : TaskCursorBase(params, nullptr) {
-    // Installs the required trace provider.
-    queryCtx_->setTraceCtxProvider(
-        [&](core::QueryCtx&, const core::PlanFragment&) {
-          return std::make_unique<TaskDebuggerTraceCtx>(
-              params.breakpoints, traceState_);
-        });
-
-    task_ = Task::create(
-        taskId_,
-        std::move(planFragment_),
-        params.destination,
-        std::move(queryCtx_),
-        Task::ExecutionMode::kSerial);
-  }
-
-  /// Ensures the task completes before cleanup.
-  ~TaskDebuggerCursor() {
-    if (task_) {
-      task_->requestCancel().wait();
-    }
-  }
-
-  TaskDebuggerCursor(TaskDebuggerCursor&&) noexcept = default;
-  TaskDebuggerCursor& operator=(TaskDebuggerCursor&&) noexcept = default;
-
-  // no-op
-  void start() override {}
-
-  bool moveNext() override {
-    return advance(false);
-  }
-
-  bool moveStep() override {
-    return advance(true);
-  }
-
-  RowVectorPtr& current() override {
-    return current_;
-  }
-
-  core::PlanNodeId at() const override {
-    return traceState_.planId;
-  }
-
-  void setNoMoreSplits() override {
-    VELOX_CHECK(!noMoreSplits_);
-    noMoreSplits_ = true;
-  }
-
-  bool noMoreSplits() const override {
-    return noMoreSplits_;
-  }
-
-  void setError(std::exception_ptr error) override {
-    error_ = error;
-    if (task_) {
-      task_->setError(error);
-    }
-  }
-
-  const std::shared_ptr<Task>& task() override {
-    return task_;
-  }
-
- private:
-  // Advance to the next vector to produce, storing it in `current_`. If
-  // `isStep` is true, move to the next trace point or task output. If false,
-  // moves to the next task output.
-  //
-  // Returns false when the task is done producing output.
-  bool advance(bool isStep) {
-    if (error_) {
-      std::rethrow_exception(error_);
-    }
-
-    if (traceState_.traceData) {
-      traceState_.traceData = nullptr;
-      traceState_.tracePromise.setValue();
-    }
-
-    while (true) {
-      ContinueFuture future = ContinueFuture::makeEmpty();
-
-      if (auto vector = task_->next(&future)) {
-        current_ = vector;
-        traceState_.planId.clear();
-        return true;
-      }
-
-      // When we hit a tracing point, the driver will return nullptr, set a
-      // future, and the trace implementation will capture state in traceState_.
-      if (traceState_.traceData) {
-        if (isStep) {
-          current_ = traceState_.traceData;
-          return true;
-        }
-
-        // Signal the task driver to unblock.
-        traceState_.traceData = nullptr;
-        traceState_.tracePromise.setValue();
-        traceState_.planId.clear();
-      }
-
-      // Wait until the task future is unblocked.
-      if (future.valid()) {
-        future.wait();
-      } else {
-        // When no vector was produced and the future is not valid, it's the
-        // task signal that it has finished producing output.
-        VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
-        break;
-      }
-    }
-    return false;
-  }
-
+/// Provides shared infrastructure for pausing execution at traced operators
+/// and inspecting intermediate results. Subclasses implement the execution
+/// model (serial vs parallel) via the `advance()` and `start()` methods.
+class TaskDebuggerCursorBase : public TaskCursorBase {
+ protected:
   // Internal state for coordinating between the tracer and cursor.
   //
   // This struct manages the synchronization between the trace writer
   // (which produces intermediate results) and the cursor (which consumes
   // them).
-  struct TraceState {
+  struct TraceDriverState {
     // Promise used to signal the tracer to continue after a partial result
     // has been consumed.
     ContinuePromise tracePromise{ContinuePromise::makeEmpty()};
@@ -678,7 +559,17 @@ class TaskDebuggerCursor : public TaskCursorBase {
     core::PlanNodeId planId;
   };
 
-  TraceState traceState_;
+  struct TraceState {
+    std::deque<TraceDriverState> queue;
+    std::mutex mutex;
+
+    // Consumer blocking fields used by the parallel cursor to coordinate
+    // between the consumer callback and the advance() loop. In serial mode,
+    // consumerBlocked is never set to true, so the wakeup code is a no-op.
+    bool consumerBlocked = false;
+    ContinuePromise consumerPromise{ContinuePromise::makeEmpty()};
+    ContinueFuture consumerFuture;
+  };
 
   // Custom trace context implementation for the debugger.
   //
@@ -750,12 +641,20 @@ class TaskDebuggerCursor : public TaskCursorBase {
           return false;
         }
 
-        VELOX_CHECK(traceState_.tracePromise.isFulfilled());
+        std::lock_guard<std::mutex> l(traceState_.mutex);
+        traceState_.queue.push_back(
+            TraceDriverState{
+                .tracePromise = ContinuePromise("TaskQueue::dequeue"),
+                .traceData = vector,
+                .planId = planId_,
+            });
+        *future = traceState_.queue.back().tracePromise.getFuture();
 
-        traceState_.tracePromise = ContinuePromise("TaskQueue::dequeue");
-        traceState_.traceData = vector;
-        traceState_.planId = planId_;
-        *future = traceState_.tracePromise.getFuture();
+        // If the consumer is blocked waiting for output, unblock it.
+        if (traceState_.consumerBlocked) {
+          traceState_.consumerBlocked = false;
+          traceState_.consumerPromise.setValue();
+        }
         return true;
       }
 
@@ -772,10 +671,288 @@ class TaskDebuggerCursor : public TaskCursorBase {
     TraceState& traceState_;
   };
 
+  using TaskCursorBase::TaskCursorBase;
+
+  /// Ensures the task completes before cleanup.
+  ~TaskDebuggerCursorBase() override {
+    if (task_) {
+      task_->requestCancel().wait();
+    }
+  }
+
+ public:
+  bool moveNext() override {
+    return advance(false);
+  }
+
+  bool moveStep() override {
+    return advance(true);
+  }
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  core::PlanNodeId at() const override {
+    if (pendingTraceDriverState_) {
+      return pendingTraceDriverState_->planId;
+    }
+    return "";
+  }
+
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
+  void setError(std::exception_ptr error) override {
+    error_ = error;
+    if (task_) {
+      task_->setError(error);
+    }
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
+ protected:
+  // Advance to the next vector to produce, storing it in `current_`. If
+  // `isStep` is true, move to the next trace point or task output. If false,
+  // moves to the next task output.
+  //
+  // Returns false when the task is done producing output.
+  virtual bool advance(bool isStep) = 0;
+
+  // Unblocks the trace writer (driver) from the previously consumed trace
+  // state.
+  void unblockPendingState() {
+    if (pendingTraceDriverState_) {
+      pendingTraceDriverState_->tracePromise.setValue();
+      pendingTraceDriverState_.reset();
+    }
+  }
+
   std::shared_ptr<exec::Task> task_;
   bool noMoreSplits_{false};
   RowVectorPtr current_;
   std::exception_ptr error_;
+
+  // Holds the trace state that was returned to the user via moveStep(),
+  // so its promise can be fulfilled on the next advance() call.
+  std::optional<TraceDriverState> pendingTraceDriverState_;
+};
+
+/// A debugging cursor for interactive serial task execution.
+///
+/// @note This class assumes serial (single-threaded) execution mode.
+class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
+ public:
+  explicit TaskDebuggerSerialCursor(const CursorParameters& params)
+      : TaskDebuggerCursorBase(params, nullptr) {
+    // Installs the required trace provider.
+    queryCtx_->setTraceCtxProvider(
+        [&](core::QueryCtx&, const core::PlanFragment&) {
+          return std::make_unique<TaskDebuggerTraceCtx>(
+              params.breakpoints, traceState_);
+        });
+
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kSerial);
+  }
+
+  // no-op
+  void start() override {}
+
+ private:
+  bool advance(bool isStep) override {
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+
+    unblockPendingState();
+
+    while (true) {
+      ContinueFuture future = ContinueFuture::makeEmpty();
+
+      if (auto vector = task_->next(&future)) {
+        current_ = vector;
+        return true;
+      }
+
+      // Check if any trace states have been queued by writers.
+      {
+        std::lock_guard<std::mutex> l(traceState_.mutex);
+        if (!traceState_.queue.empty()) {
+          auto state = std::move(traceState_.queue.front());
+          traceState_.queue.pop_front();
+
+          if (isStep) {
+            current_ = state.traceData;
+            pendingTraceDriverState_ = std::move(state);
+            return true;
+          }
+
+          // Signal the task driver to unblock.
+          state.tracePromise.setValue();
+        }
+      }
+
+      // Wait until the task future is unblocked.
+      if (future.valid()) {
+        future.wait();
+      } else {
+        // When no vector was produced and the future is not valid, it's the
+        // task signal that it has finished producing output.
+        VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
+        break;
+      }
+    }
+    return false;
+  }
+
+  TraceState traceState_;
+};
+
+/// A debugging cursor for interactive parallel task execution.
+///
+/// Uses a consumer callback to receive output from parallel drivers.
+class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
+ public:
+  explicit TaskDebuggerParallelCursor(const CursorParameters& params)
+      : TaskDebuggerCursorBase(
+            params,
+            std::make_shared<folly::CPUThreadPoolExecutor>(
+                folly::hardware_concurrency())),
+        maxDrivers_(params.maxDrivers),
+        numConcurrentSplitGroups_(params.numConcurrentSplitGroups) {
+    // Installs the required trace provider.
+    queryCtx_->setTraceCtxProvider(
+        [&](core::QueryCtx&, const core::PlanFragment&) {
+          return std::make_unique<TaskDebuggerTraceCtx>(
+              params.breakpoints, traceState_);
+        });
+
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kParallel,
+        // consumer
+        [&](const RowVectorPtr& vector,
+            bool drained,
+            velox::ContinueFuture* future) {
+          VELOX_CHECK(
+              !drained, "Unexpected drain in multithreaded task cursor");
+
+          if (!vector) {
+            // End-of-stream from a driver. Track completion and wake the
+            // consumer if it's blocked waiting for data.
+            std::lock_guard<std::mutex> l(traceState_.mutex);
+            ++traceState_.numFinishedProducers;
+            if (traceState_.consumerBlocked) {
+              traceState_.consumerBlocked = false;
+              traceState_.consumerPromise.setValue();
+            }
+            return exec::BlockingReason::kNotBlocked;
+          }
+
+          std::lock_guard<std::mutex> l(traceState_.mutex);
+          traceState_.queue.push_back(
+              TraceDriverState{
+                  .tracePromise = ContinuePromise("TaskQueue::dequeue"),
+                  .traceData = vector,
+                  .planId = "",
+              });
+          *future = traceState_.queue.back().tracePromise.getFuture();
+
+          if (traceState_.consumerBlocked) {
+            traceState_.consumerBlocked = false;
+            traceState_.consumerPromise.setValue();
+          }
+          return exec::BlockingReason::kWaitForConsumer;
+        });
+  }
+
+  void start() override {
+    if (!started_) {
+      started_ = true;
+      try {
+        task_->start(maxDrivers_, numConcurrentSplitGroups_);
+        numProducers_ = task_->numOutputDrivers();
+      } catch (const VeloxException& e) {
+        // Could not find output pipeline, due to Task terminated before
+        // start. Do not override the error.
+        if (e.message().find("Output pipeline not found for task") ==
+            std::string::npos) {
+          throw;
+        }
+      }
+    }
+  }
+
+ private:
+  bool advance(bool isStep) override {
+    start();
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+
+    unblockPendingState();
+
+    while (true) {
+      // Check if any trace states have been queued by writers.
+      {
+        std::lock_guard<std::mutex> l(traceState_.mutex);
+        if (!traceState_.queue.empty()) {
+          auto state = std::move(traceState_.queue.front());
+          traceState_.queue.pop_front();
+
+          if (isStep || state.planId.empty()) {
+            current_ = state.traceData;
+            pendingTraceDriverState_ = std::move(state);
+            return true;
+          }
+
+          // moveNext() skips breakpoint trace data; unblock the trace writer
+          // (driver).
+          state.tracePromise.setValue();
+        }
+
+        // Queue is empty. If all producers have finished, we're done.
+        if (traceState_.numFinishedProducers >= numProducers_) {
+          break;
+        }
+
+        traceState_.consumerBlocked = true;
+        traceState_.consumerPromise = ContinuePromise("TaskQueue::dequeue");
+        traceState_.consumerFuture = traceState_.consumerPromise.getFuture();
+      }
+      traceState_.consumerFuture.wait();
+    }
+    return false;
+  }
+
+  struct ParallelTraceState : TraceState {
+    // Number of output drivers that have finished (sent a null vector).
+    int numFinishedProducers{0};
+  };
+
+  ParallelTraceState traceState_;
+
+  bool started_{false};
+  int32_t maxDrivers_;
+  int32_t numConcurrentSplitGroups_;
+  int numProducers_{0};
 };
 
 } // namespace
@@ -809,10 +986,11 @@ bool RowCursor::next() {
 
 std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
   if (!params.breakpoints.empty()) {
-    VELOX_CHECK(
-        params.serialExecution,
-        "Breakpoints are only supported in serial execution for now.");
-    return std::make_unique<TaskDebuggerCursor>(params);
+    if (params.serialExecution) {
+      return std::make_unique<TaskDebuggerSerialCursor>(params);
+    } else {
+      return std::make_unique<TaskDebuggerParallelCursor>(params);
+    }
   }
 
   if (params.serialExecution) {

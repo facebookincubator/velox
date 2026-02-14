@@ -1069,7 +1069,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
 }
 
 ColumnOrView FunctionExpression::eval(
-    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    std::vector<cudf::column_view> inputColumnViews,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
@@ -1078,18 +1078,18 @@ ColumnOrView FunctionExpression::eval(
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr_)) {
     auto name = fieldExpr->name();
     auto columnIndex = inputRowSchema_->getChildIdx(name);
-    return inputTableColumns[columnIndex]->view();
+    return inputColumnViews[columnIndex];
   }
 
   if (function_) {
-    std::vector<ColumnOrView> inputColumns;
-    inputColumns.reserve(subexpressions_.size());
+    std::vector<ColumnOrView> subexprResults;
+    subexprResults.reserve(subexpressions_.size());
 
     for (const auto& subexpr : subexpressions_) {
-      inputColumns.push_back(subexpr->eval(inputTableColumns, stream, mr));
+      subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
     }
 
-    auto result = function_->eval(inputColumns, stream, mr);
+    auto result = function_->eval(subexprResults, stream, mr);
     if (finalize) {
       const auto requestedType =
           cudf::data_type(cudf_velox::veloxToCudfTypeId(expr_->type()));

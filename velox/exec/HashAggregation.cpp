@@ -35,7 +35,12 @@ HashAggregation::HashAggregation(
               ? "PartialAggregation"
               : "Aggregation",
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    aggregationNode->step() ==
+                            core::AggregationNode::Step::kPartial
+                        ? "PartialAggregation"
+                        : "Aggregation")
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),

@@ -76,6 +76,10 @@ class SkewedPartitionRebalancerTestHelper {
 
 class SkewedPartitionRebalancerTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    TestValue::enable();
+  }
+
   std::unique_ptr<SkewedPartitionRebalancer> createBalancer(
       uint32_t numPartitions = 128,
       uint32_t numTasks = 8,
@@ -356,7 +360,7 @@ DEBUG_ONLY_TEST_F(SkewedPartitionRebalancerTest, serializedRebalanceExecution) {
   // there. This ensures that when we call rebalance() from the main thread,
   // rebalancing_ is already true and our rebalance() call will return early.
   mainThreadRebalancerWait.await(
-      [&] { return mainThreadRebalancerWaitFlag.load(); });
+      [&] { return !mainThreadRebalancerWaitFlag.load(); });
 
   balancer->rebalance();
 

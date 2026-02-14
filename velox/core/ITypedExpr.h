@@ -123,8 +123,17 @@ class ITypedExpr : public ISerializable {
 
   virtual std::string toString() const = 0;
 
+  /// Returns a hash value for this expression node only, not including inputs.
+  /// Implementations must use a stable hash like folly::hasher to ensure
+  /// stable hashing across processes and builds.
   virtual size_t localHash() const = 0;
 
+  /// Returns a hash value for the entire expression tree rooted at this node.
+  /// The hash is computed by combining localHash() with the type's hash and
+  /// the hashes of all input expressions.
+  ///
+  /// STABILITY GUARANTEE: This hash is stable across different processes,
+  /// builds, and machines.
   size_t hash() const {
     size_t hash = bits::hashMix(type_->hashKind(), localHash());
     for (size_t i = 0; i < inputs_.size(); ++i) {

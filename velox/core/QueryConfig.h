@@ -420,7 +420,19 @@ class QueryConfig {
   static constexpr const char* kSpillFileCreateConfig =
       "spill_file_create_config";
 
-  /// Default offset spill start partition bit. It is used with
+  /// Config used to create aggregation spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kAggregationSpillFileCreateConfig =
+      "aggregation_spill_file_create_config";
+
+  /// Config used to create hash join spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kHashJoinSpillFileCreateConfig =
+      "hash_join_spill_file_create_config";
+
+  /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
   /// spill.
@@ -1191,6 +1203,14 @@ class QueryConfig {
 
   std::string spillFileCreateConfig() const {
     return get<std::string>(kSpillFileCreateConfig, "");
+  }
+
+  std::string aggregationSpillFileCreateConfig() const {
+    return get<std::string>(kAggregationSpillFileCreateConfig, "");
+  }
+
+  std::string hashJoinSpillFileCreateConfig() const {
+    return get<std::string>(kHashJoinSpillFileCreateConfig, "");
   }
 
   int32_t minSpillableReservationPct() const {

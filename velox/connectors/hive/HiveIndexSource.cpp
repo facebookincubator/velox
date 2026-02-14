@@ -25,6 +25,128 @@
 
 namespace facebook::velox::connector::hive {
 namespace {
+
+// Extracts a constant value from a point lookup filter (single value equality).
+// Returns nullopt if the filter is not a point lookup or cannot be converted.
+std::optional<variant> extractPointLookupValue(const common::Filter* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+
+  switch (filter->kind()) {
+    case common::FilterKind::kBigintRange: {
+      const auto* range = filter->as<common::BigintRange>();
+      if (range->isSingleValue()) {
+        return variant(range->lower());
+      }
+      return std::nullopt;
+    }
+    case common::FilterKind::kDoubleRange: {
+      const auto* range = filter->as<common::DoubleRange>();
+      if (!range->lowerUnbounded() && !range->upperUnbounded() &&
+          range->lower() == range->upper() && !range->lowerExclusive() &&
+          !range->upperExclusive()) {
+        return variant(range->lower());
+      }
+      return std::nullopt;
+    }
+    case common::FilterKind::kFloatRange: {
+      const auto* range = filter->as<common::FloatRange>();
+      if (!range->lowerUnbounded() && !range->upperUnbounded() &&
+          range->lower() == range->upper() && !range->lowerExclusive() &&
+          !range->upperExclusive()) {
+        return variant(range->lower());
+      }
+      return std::nullopt;
+    }
+    case common::FilterKind::kBytesRange: {
+      const auto* range = filter->as<common::BytesRange>();
+      if (range->isSingleValue()) {
+        return variant(range->lower());
+      }
+      return std::nullopt;
+    }
+    case common::FilterKind::kBytesValues: {
+      const auto* values = filter->as<common::BytesValues>();
+      if (values->values().size() == 1) {
+        return variant(*values->values().begin());
+      }
+      return std::nullopt;
+    }
+    case common::FilterKind::kBoolValue: {
+      const auto* boolFilter = filter->as<common::BoolValue>();
+      // BoolValue doesn't expose value() getter - use testBool to determine the
+      // value
+      return variant(boolFilter->testBool(true));
+    }
+    default:
+      return std::nullopt;
+  }
+}
+
+// Extracts range bounds from a range filter.
+// Returns a pair of (lower, upper) variants. If a bound is unbounded, the
+// corresponding variant will be null.
+// Returns nullopt if the filter is not a range filter or cannot be converted.
+std::optional<std::pair<variant, variant>> extractRangeBounds(
+    const common::Filter* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+
+  switch (filter->kind()) {
+    case common::FilterKind::kBigintRange: {
+      const auto* range = filter->as<common::BigintRange>();
+      return std::make_pair(variant(range->lower()), variant(range->upper()));
+    }
+    case common::FilterKind::kDoubleRange: {
+      const auto* range = filter->as<common::DoubleRange>();
+      if (range->lowerUnbounded() || range->upperUnbounded()) {
+        // Cannot convert unbounded ranges to BetweenCondition.
+        return std::nullopt;
+      }
+      return std::make_pair(variant(range->lower()), variant(range->upper()));
+    }
+    case common::FilterKind::kFloatRange: {
+      const auto* range = filter->as<common::FloatRange>();
+      if (range->lowerUnbounded() || range->upperUnbounded()) {
+        return std::nullopt;
+      }
+      return std::make_pair(variant(range->lower()), variant(range->upper()));
+    }
+    case common::FilterKind::kBytesRange: {
+      const auto* range = filter->as<common::BytesRange>();
+      if (!range->isSingleValue()) {
+        // Only convert bounded range filters.
+        return std::make_pair(variant(range->lower()), variant(range->upper()));
+      }
+      return std::nullopt;
+    }
+    default:
+      return std::nullopt;
+  }
+}
+
+// Creates an EqualIndexLookupCondition with a constant value.
+core::IndexLookupConditionPtr createEqualConditionWithConstant(
+    const std::string& columnName,
+    const TypePtr& type,
+    const variant& value) {
+  auto keyExpr = std::make_shared<core::FieldAccessTypedExpr>(type, columnName);
+  auto constantExpr = std::make_shared<core::ConstantTypedExpr>(type, value);
+  return std::make_shared<core::EqualIndexLookupCondition>(
+      std::move(keyExpr), std::move(constantExpr));
+}
+
+// Creates a BetweenIndexLookupCondition with constant bounds.
+core::IndexLookupConditionPtr createBetweenConditionWithConstants(
+    const std::string& columnName,
+    const TypePtr& type,
+    const variant& lowerValue,
+    const variant& upperValue) {
+  auto keyExpr = std::make_shared<core::FieldAccessTypedExpr>(type, columnName);
+  auto lowerExpr = std::make_shared<core::ConstantTypedExpr>(type, lowerValue);
+  auto upperExpr = std::make_shared<core::ConstantTypedExpr>(type, upperValue);
+  return std::make_shared<core::BetweenIndexLookupCondition>(
+      std::move(keyExpr), std::move(lowerExpr), std::move(upperExpr));
+}
+
 // Checks that a HiveColumnHandle is a regular column type.
 void checkColumnHandleIsRegular(const HiveColumnHandle& handle) {
   VELOX_CHECK_EQ(
@@ -48,6 +170,39 @@ std::string getTableColumnName(
   const auto* handle =
       checkedPointerCast<const HiveColumnHandle>(it->second.get());
   return handle->name();
+}
+
+// Creates a new FieldAccessTypedExpr with the given column name but same type.
+core::FieldAccessTypedExprPtr renameFieldAccess(
+    const core::FieldAccessTypedExprPtr& field,
+    const std::string& newName) {
+  return std::make_shared<core::FieldAccessTypedExpr>(field->type(), newName);
+}
+
+// Converts a join condition's key name from input column name to table column
+// name. Returns a new condition with the converted key name.
+core::IndexLookupConditionPtr convertConditionKeyName(
+    const core::IndexLookupConditionPtr& condition,
+    const connector::ColumnHandleMap& assignments) {
+  const auto tableColumnName =
+      getTableColumnName(condition->key->name(), assignments);
+  auto newKey = renameFieldAccess(condition->key, tableColumnName);
+
+  if (auto equalCondition =
+          std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
+              condition)) {
+    return std::make_shared<core::EqualIndexLookupCondition>(
+        std::move(newKey), equalCondition->value);
+  }
+  if (auto betweenCondition =
+          std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
+              condition)) {
+    return std::make_shared<core::BetweenIndexLookupCondition>(
+        std::move(newKey), betweenCondition->lower, betweenCondition->upper);
+  }
+
+  VELOX_UNREACHABLE(
+      "Unsupported IndexLookupCondition type: {}", condition->toString());
 }
 
 // Filters input indices based on selected indices from filter evaluation.
@@ -92,7 +247,7 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
 
     // Set the request on first call.
     if (state_ == State::kInit) {
-      indexReader_->setRequest(request_);
+      indexReader_->startLookup(request_);
       setState(State::kRead);
     }
 
@@ -240,46 +395,108 @@ HiveIndexSource::HiveIndexSource(
   init(columnHandles, joinConditions);
 }
 
-std::vector<std::string> HiveIndexSource::initJoinConditions(
+void HiveIndexSource::initJoinConditions(
     const std::vector<core::IndexLookupConditionPtr>& joinConditions,
     const ColumnHandleMap& assignments) {
   const auto& indexColumns = tableHandle_->indexColumns();
-  VELOX_USER_CHECK_LE(
-      joinConditions.size(),
-      indexColumns.size(),
-      "joinConditions ({}) exceeds the number of index columns ({})",
-      joinConditions.size(),
-      indexColumns.size());
+  const auto& dataColumns = tableHandle_->dataColumns();
 
-  std::vector<std::string> joinColumns;
-  joinColumns.reserve(joinConditions.size());
-  joinConditions_.reserve(joinConditions.size());
-
-  folly::F14FastSet<std::string> seenJoinKeys;
-  // Process original join conditions.
-  // Filter conditions (with constant values) are converted to filters for
-  // better pushdown.
+  // Build a map from join condition key name to condition for quick lookup.
+  // The key name in IndexLookupCondition references input column name, we need
+  // to convert it to the table column name using assignments.
+  folly::F14FastMap<std::string, core::IndexLookupConditionPtr>
+      joinConditionMap;
   for (const auto& condition : joinConditions) {
-    const auto columnName =
-        getTableColumnName(condition->key->name(), assignments);
+    auto convertedCondition = convertConditionKeyName(condition, assignments);
+    const auto& columnName = convertedCondition->key->name();
     VELOX_USER_CHECK(
-        seenJoinKeys.insert(columnName).second,
+        joinConditionMap.emplace(columnName, std::move(convertedCondition))
+            .second,
         "Duplicate join key found in joinConditions: {}",
         columnName);
-    const common::Subfield subfield(columnName);
-    VELOX_CHECK(
-        filters_.find(subfield) == filters_.end(),
-        "Unexpected filter found on index column {}",
-        columnName);
-    VELOX_CHECK(
-        !condition->isFilter(),
-        "Join condition on index column '{}' cannot be a filter condition",
-        columnName);
-
-    joinConditions_.push_back(condition);
-    joinColumns.push_back(columnName);
   }
-  return joinColumns;
+
+  joinConditions_.reserve(indexColumns.size());
+  size_t numValidJoinConditions{0};
+  // Process index columns in order, converting filters to join conditions
+  // where possible. A range filter/condition stops further processing.
+  for (const auto& indexColumn : indexColumns) {
+    const common::Subfield subfield(indexColumn);
+    const auto filterIt = filters_.find(subfield);
+    const bool hasFilter = filterIt != filters_.end();
+    const auto conditionIt = joinConditionMap.find(indexColumn);
+    const bool hasJoinCondition = conditionIt != joinConditionMap.end();
+
+    // Cannot have both a filter and a join condition on the same column.
+    VELOX_CHECK(
+        !(hasFilter && hasJoinCondition),
+        "Cannot have both filter and join condition on index column {}",
+        indexColumn);
+
+    if (!hasFilter && !hasJoinCondition) {
+      // No filter or join condition on this column - stop processing.
+      break;
+    }
+
+    // Get column type from data columns.
+    const auto typeIdx = dataColumns->getChildIdxIfExists(indexColumn);
+    VELOX_CHECK(
+        typeIdx.has_value(),
+        "Index column {} not found in data columns",
+        indexColumn);
+
+    if (hasJoinCondition) {
+      // Use the existing join condition as-is.
+      const auto& condition = conditionIt->second;
+      joinConditions_.push_back(condition);
+      VELOX_CHECK(!condition->isFilter());
+      ++numValidJoinConditions;
+
+      // Check if this is a range condition (Between) - stops further
+      // processing.
+      if (std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
+              condition)) {
+        break;
+      }
+      continue;
+    }
+
+    // Has filter - try to convert to join condition.
+    VELOX_CHECK(hasFilter);
+    const auto& columnType = dataColumns->childAt(*typeIdx);
+    const auto* filter = filterIt->second.get();
+    // Try point lookup conversion first.
+    auto pointValue = extractPointLookupValue(filter);
+    if (pointValue.has_value()) {
+      auto condition = createEqualConditionWithConstant(
+          indexColumn, columnType, pointValue.value());
+      joinConditions_.push_back(condition);
+      // Remove converted filter from filters_ map.
+      filters_.erase(filterIt);
+      continue;
+    }
+
+    // Try range conversion.
+    auto rangeBounds = extractRangeBounds(filter);
+    if (rangeBounds.has_value()) {
+      auto condition = createBetweenConditionWithConstants(
+          indexColumn, columnType, rangeBounds->first, rangeBounds->second);
+      joinConditions_.push_back(condition);
+      // Remove converted filter from filters_ map.
+      filters_.erase(filterIt);
+      // Range condition stops further processing.
+      break;
+    }
+
+    // Filter cannot be converted - leave it in filters_ map and stop
+    // processing.
+    break;
+  }
+
+  VELOX_CHECK_EQ(
+      numValidJoinConditions,
+      joinConditions.size(),
+      "Not all join conditions were processed");
 }
 
 void HiveIndexSource::initRemainingFilter(
@@ -397,7 +614,7 @@ void HiveIndexSource::init(
 
   initRemainingFilter(readColumnNames, readColumnTypes);
 
-  const auto joinIndexColumns = initJoinConditions(joinConditions, assignments);
+  initJoinConditions(joinConditions, assignments);
 
   readerOutputType_ =
       ROW(std::move(readColumnNames), std::move(readColumnTypes));
@@ -405,7 +622,7 @@ void HiveIndexSource::init(
       readerOutputType_,
       projectedSubfields_,
       filters_,
-      joinIndexColumns,
+      /*indexColumns=*/{},
       tableHandle_->dataColumns(),
       /*partitionKeys=*/{},
       /*infoColumns=*/{},

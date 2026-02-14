@@ -282,6 +282,60 @@ class FunctionRegistryTest : public testing::Test {
 
     return builder.build();
   }
+
+  void testVectorFunctionWithMetadataCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      const std::vector<TypePtr>& expectedCoercions,
+      bool expectedDeterministic) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions);
+    ASSERT_TRUE(result.has_value());
+    VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
+    EXPECT_EQ(result->second.deterministic, expectedDeterministic);
+
+    EXPECT_EQ(coercions.size(), expectedCoercions.size());
+    for (auto i = 0; i < coercions.size(); ++i) {
+      if (expectedCoercions[i] == nullptr) {
+        EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
+                                         << ": " << coercions[i]->toString();
+      } else {
+        ASSERT_NE(coercions[i], nullptr) << "at " << i;
+        EXPECT_EQ(*coercions[i], *expectedCoercions[i])
+            << "Expected: " << expectedCoercions[i]->toString()
+            << ", but got: " << coercions[i]->toString();
+      }
+    }
+  }
+
+  void testVectorFunctionWithMetadataNoCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      bool expectedDeterministic) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions);
+    ASSERT_TRUE(result.has_value());
+    VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
+    EXPECT_EQ(result->second.deterministic, expectedDeterministic);
+
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    for (const auto& coercion : coercions) {
+      EXPECT_EQ(coercion, nullptr);
+    }
+  }
+
+  void testVectorFunctionWithMetadataCannotResolve(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions);
+    EXPECT_FALSE(result.has_value());
+  }
 };
 
 TEST_F(FunctionRegistryTest, removeFunction) {
@@ -1048,6 +1102,64 @@ TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
   EXPECT_TRUE(result->second.defaultNullBehavior);
   EXPECT_TRUE(result->second.deterministic);
   EXPECT_FALSE(result->second.supportsFlattening);
+}
+
+TEST_F(FunctionRegistryTest, resolveVectorFunctionWithMetadataWithCoercions) {
+  removeFunction("bar");
+
+  SCOPE_EXIT {
+    removeFunction("bar");
+    removeFunction("bar_nondet");
+  };
+
+  exec::registerVectorFunction(
+      "bar",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+          makeSignature("real", {"real", "real"}),
+      },
+      std::make_unique<DummyVectorFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(true).build());
+
+  // Register a non-deterministic function to verify metadata is correctly
+  // returned (not just default metadata).
+  exec::registerVectorFunction(
+      "bar_nondet",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+      },
+      std::make_unique<DummyVectorFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(false).build());
+
+  // Test exact match - no coercions needed.
+  testVectorFunctionWithMetadataNoCoercions(
+      "bar", {INTEGER(), INTEGER()}, INTEGER(), true);
+
+  // Test coercions are applied.
+  testVectorFunctionWithMetadataCoercions(
+      "bar", {TINYINT(), TINYINT()}, INTEGER(), {INTEGER(), INTEGER()}, true);
+
+  // Test partial coercions - one arg needs coercion, the other doesn't.
+  testVectorFunctionWithMetadataCoercions(
+      "bar", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr}, true);
+
+  // Test that metadata is correctly returned for non-deterministic function.
+  // This verifies we're returning actual function metadata, not defaults.
+  testVectorFunctionWithMetadataCoercions(
+      "bar_nondet",
+      {TINYINT(), TINYINT()},
+      INTEGER(),
+      {INTEGER(), INTEGER()},
+      false);
+
+  // Test function not found.
+  testVectorFunctionWithMetadataCannotResolve(
+      "non_existent_function", {INTEGER(), INTEGER()});
+
+  // Test incompatible types - cannot resolve.
+  testVectorFunctionWithMetadataCannotResolve("bar", {TINYINT(), VARCHAR()});
 }
 
 } // namespace

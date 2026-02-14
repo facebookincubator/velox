@@ -238,7 +238,7 @@ IcebergDataSink::IcebergDataSink(
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const std::string& functionPrefix)
+    const IcebergConfigPtr& icebergConfig)
     : IcebergDataSink(
           std::move(inputType),
           insertTableHandle,
@@ -250,7 +250,7 @@ IcebergDataSink::IcebergDataSink(
               insertTableHandle->partitionSpec()),
           createDataChannels(insertTableHandle),
           createPartitionRowType(insertTableHandle->partitionSpec()),
-          functionPrefix) {}
+          icebergConfig) {}
 
 IcebergDataSink::IcebergDataSink(
     RowTypePtr inputType,
@@ -261,7 +261,7 @@ IcebergDataSink::IcebergDataSink(
     const std::vector<column_index_t>& partitionChannels,
     const std::vector<column_index_t>& dataChannels,
     RowTypePtr partitionRowType,
-    const std::string& functionPrefix)
+    const IcebergConfigPtr& icebergConfig)
     : HiveDataSink(
           inputType,
           insertTableHandle,
@@ -295,7 +295,7 @@ IcebergDataSink::IcebergDataSink(
                                                partitionSpec_,
                                                partitionChannels_,
                                                inputType_,
-                                               functionPrefix),
+                                               icebergConfig->functionPrefix()),
                                            connectorQueryCtx_)
                                      : nullptr),
       icebergPartitionName_(
@@ -315,30 +315,36 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
           insertTableHandle_);
 
   for (auto i = 0; i < writerInfo_.size(); ++i) {
-    const auto& info = writerInfo_.at(i);
-    VELOX_CHECK_NOT_NULL(info);
+    const auto& writerInfo = writerInfo_.at(i);
+    VELOX_CHECK_NOT_NULL(writerInfo);
+
     // Following metadata (json format) is consumed by Presto CommitTaskData.
     // It contains the minimal subset of metadata.
     // TODO: Complete metrics is missing now and this could lead to suboptimal
     // query plan, will collect full iceberg metrics in following PR.
-    // clang-format off
-    folly::dynamic commitData = folly::dynamic::object(
-    "path", (fs::path(info->writerParameters.writeDirectory()) /
-                    info->writerParameters.writeFileName()).string())
-      ("fileSizeInBytes", ioStats_.at(i)->rawBytesWritten())
-      ("metrics",
-        folly::dynamic::object("recordCount", info->numWrittenRows))
-      ("partitionSpecJson",
-        icebergInsertTableHandle->partitionSpec() ? icebergInsertTableHandle->partitionSpec()->specId : 0)
-      ("fileFormat", "PARQUET")
-      ("content", "DATA");
-    // clang-format on
-    if (!commitPartitionValue_.empty() && !commitPartitionValue_[i].isNull()) {
-      commitData["partitionDataJson"] = folly::toJson(
-          folly::dynamic::object("partitionValues", commitPartitionValue_[i]));
+    for (const auto& fileInfo : writerInfo->writtenFiles) {
+      // clang-format off
+      folly::dynamic commitData = folly::dynamic::object(
+        "path", (fs::path(writerInfo->writerParameters.targetDirectory()) /
+                      fileInfo.targetFileName).string())
+        ("fileSizeInBytes", fileInfo.fileSize)
+        ("metrics",
+          folly::dynamic::object("recordCount", fileInfo.numRows))
+        ("partitionSpecJson",
+          icebergInsertTableHandle->partitionSpec() ?
+            icebergInsertTableHandle->partitionSpec()->specId : 0)
+        ("fileFormat", "PARQUET")
+        ("content", "DATA");
+      // clang-format on
+      if (!commitPartitionValue_.empty() &&
+          !commitPartitionValue_[i].isNull()) {
+        commitData["partitionDataJson"] = folly::toJson(
+            folly::dynamic::object(
+                "partitionValues", commitPartitionValue_[i]));
+      }
+      auto commitDataJson = folly::toJson(commitData);
+      commitTasks.push_back(commitDataJson);
     }
-    auto commitDataJson = folly::toJson(commitData);
-    commitTasks.push_back(commitDataJson);
   }
   return commitTasks;
 }

@@ -383,3 +383,20 @@ These stats are reported only by connector data or index sources.
      - The number of times a stripe has been loaded during index lookup. This
        metric helps track the I/O efficiency of index-based reads, where lower
        values indicate better stripe reuse across lookups.
+   * - numIndexLookupRequests
+     -
+     - The number of index lookup requests submitted in startLookup(). Each
+       request corresponds to one set of index bounds and may match rows across
+       multiple stripes.
+   * - numIndexLookupStripes
+     -
+     - The total number of stripes that need to be read for all index lookup
+       requests. Multiple requests may share the same stripe, and each shared
+       stripe is counted once per request that needs it.
+   * - numIndexLookupReadSegments
+     -
+     - The total number of read segments across all stripes during index lookup.
+       A read segment is a contiguous row range within a stripe that needs to be
+       read. When filters are present, overlapping request ranges are split at
+       boundaries to enable per-request output tracking. Without filters,
+       overlapping ranges are merged to minimize I/O.

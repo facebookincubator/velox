@@ -45,7 +45,7 @@ Window::Window(
           windowNode->id(),
           "Window",
           windowNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "Window")
               : std::nullopt),
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),

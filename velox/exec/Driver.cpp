@@ -107,8 +107,19 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
       planNodeId, splitGroupId, pipelineId, driverId, operatorType);
 }
 
+namespace {
+bool isHashJoinSpillOperator(const std::string& operatorType) {
+  return operatorType == "HashBuild" || operatorType == "HashProbe";
+}
+
+bool isAggregationSpillOperator(const std::string& operatorType) {
+  return operatorType == "Aggregation" || operatorType == "PartialAggregation";
+}
+} // namespace
+
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
-    int32_t operatorId) const {
+    int32_t operatorId,
+    const std::string& operatorType) const {
   const auto& queryConfig = task->queryCtx()->queryConfig();
   if (!queryConfig.spillEnabled()) {
     return std::nullopt;
@@ -126,6 +137,21 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       [this](uint64_t bytes) {
         task->queryCtx()->updateSpilledBytesAndCheckLimit(bytes);
       };
+
+  std::string fileCreateConfig = queryConfig.spillFileCreateConfig();
+  if (isHashJoinSpillOperator(operatorType)) {
+    const auto& hashJoinConfig = queryConfig.hashJoinSpillFileCreateConfig();
+    if (!hashJoinConfig.empty()) {
+      fileCreateConfig = hashJoinConfig;
+    }
+  } else if (isAggregationSpillOperator(operatorType)) {
+    const auto& aggregationConfig =
+        queryConfig.aggregationSpillFileCreateConfig();
+    if (!aggregationConfig.empty()) {
+      fileCreateConfig = aggregationConfig;
+    }
+  }
+
   return common::SpillConfig(
       std::move(getSpillDirPathCb),
       std::move(updateAndCheckSpillLimitCb),
@@ -146,7 +172,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.spillPrefixSortEnabled()
           ? std::optional<common::PrefixSortConfig>(prefixSortConfig())
           : std::nullopt,
-      queryConfig.spillFileCreateConfig(),
+      fileCreateConfig,
       queryConfig.windowSpillMinReadBatchRows());
 }
 
