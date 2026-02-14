@@ -361,8 +361,9 @@ AssertQueryBuilder::readCursor() {
         if (task->underBarrier()) {
           // TODO: Refactor this lambda function to return future returned by
           // the 'Task::requestBarrier'.
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        ASSERT(!task->underBarrier());
         task->requestBarrier();
       } else {
         taskCursor->setNoMoreSplits();

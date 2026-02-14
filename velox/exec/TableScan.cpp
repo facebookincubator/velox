@@ -280,7 +280,6 @@ bool TableScan::getSplit() {
       driverCtx_->driverId,
       driverCtx_->splitGroupId,
       planNodeId(),
-
       maxPreloadedSplits_,
       splitPreloader_,
       split,

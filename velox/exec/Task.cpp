@@ -208,6 +208,7 @@ class QueueSplitsStore : public SplitsStore {
       split = getSplit(maxPreloadSplits, preload);
       return true;
     }
+    // Delivers a barrier exactly once for each driver from the same plan node.
     if (barrierSplits_.contains(driverId)) {
       split = barrierSplits_[driverId];
       barrierSplits_.erase(driverId);
@@ -2566,9 +2567,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
             VELOX_CHECK(store->nextSplit(
-                /*driverId*/ -1,
-                /*maxPreloadSplits*/ 0,
-                /*preload*/ nullptr,
+                /*driverId=*/-1,
+                /*maxPreloadSplits=*/0,
+                /*preload=*/nullptr,
                 splits.emplace_back(),
                 future));
           }

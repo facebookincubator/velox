@@ -2838,7 +2838,6 @@ TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    LOG(ERROR) << "Test setting: " << testData.debugString();
     auto task = runLookupQuery(
         plan,
         probeFiles,
