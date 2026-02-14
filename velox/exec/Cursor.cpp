@@ -370,7 +370,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     return current_ != nullptr;
   }
 
-  bool moveStep() override {
+  bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
     return moveNext();
   }
 
@@ -505,7 +505,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     return false;
   }
 
-  bool moveStep() override {
+  bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
     return moveNext();
   }
 
@@ -685,8 +685,8 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
     return advance(false);
   }
 
-  bool moveStep() override {
-    return advance(true);
+  bool moveStep(const core::PlanNodeId& planId = "") override {
+    return advance(true, planId);
   }
 
   RowVectorPtr& current() override {
@@ -725,8 +725,11 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
   // `isStep` is true, move to the next trace point or task output. If false,
   // moves to the next task output.
   //
+  // If `isStep` is true and `planId` is non-empty, only stops at trace points
+  // matching the given plan node ID; other trace points are skipped.
+  //
   // Returns false when the task is done producing output.
-  virtual bool advance(bool isStep) = 0;
+  virtual bool advance(bool isStep, const core::PlanNodeId& planId = "") = 0;
 
   // Unblocks the trace writer (driver) from the previously consumed trace
   // state.
@@ -773,7 +776,7 @@ class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
   void start() override {}
 
  private:
-  bool advance(bool isStep) override {
+  bool advance(bool isStep, const core::PlanNodeId& planId = "") override {
     if (error_) {
       std::rethrow_exception(error_);
     }
@@ -795,7 +798,7 @@ class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
           auto state = std::move(traceState_.queue.front());
           traceState_.queue.pop_front();
 
-          if (isStep) {
+          if (isStep && (planId.empty() || state.planId == planId)) {
             current_ = state.traceData;
             pendingTraceDriverState_ = std::move(state);
             return true;
@@ -901,7 +904,7 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
   }
 
  private:
-  bool advance(bool isStep) override {
+  bool advance(bool isStep, const core::PlanNodeId& planId = "") override {
     start();
     if (error_) {
       std::rethrow_exception(error_);
@@ -917,14 +920,15 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
           auto state = std::move(traceState_.queue.front());
           traceState_.queue.pop_front();
 
-          if (isStep || state.planId.empty()) {
+          const bool matchesPlanId = planId.empty() || state.planId == planId;
+          if ((isStep && matchesPlanId) || state.planId.empty()) {
             current_ = state.traceData;
             pendingTraceDriverState_ = std::move(state);
             return true;
           }
 
-          // moveNext() skips breakpoint trace data; unblock the trace writer
-          // (driver).
+          // moveNext() skips breakpoint trace data, or the planId filter
+          // didn't match; unblock the trace writer (driver).
           state.tracePromise.setValue();
         }
 
