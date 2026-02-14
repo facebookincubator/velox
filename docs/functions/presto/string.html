@@ -618,6 +618,13 @@ specifying <code class="docutils literal notranslate"><span class="pre">form</sp
 <dd><p>Encodes <code class="docutils literal notranslate"><span class="pre">string</span></code> into a UTF-8 varbinary representation.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="key_sampling_percent">
+<span class="sig-name descname"><span class="pre">key_sampling_percent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#key_sampling_percent" title="Link to this definition">¶</a></dt>
+<dd><p>Generates a double value between 0.0 and 1.0 based on the hash of the given <code class="docutils literal notranslate"><span class="pre">varchar</span></code>.
+This function is useful for deterministic sampling of data.</p>
+</dd></dl>
+
 </section>
 </section>
 
@@ -668,6 +675,7 @@ specifying <code class="docutils literal notranslate"><span class="pre">form</sp
 <li><a class="reference internal" href="#normalize"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
 <li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
 <li><a class="reference internal" href="#to_utf8"><code class="docutils literal notranslate"><span class="pre">to_utf8()</span></code></a></li>
+<li><a class="reference internal" href="#key_sampling_percent"><code class="docutils literal notranslate"><span class="pre">key_sampling_percent()</span></code></a></li>
 </ul>
 </li>
 </ul>
