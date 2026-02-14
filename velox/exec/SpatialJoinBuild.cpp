@@ -20,6 +20,7 @@
 #ifdef VELOX_ENABLE_GEO
 #include "velox/common/geospatial/GeometrySerde.h"
 #endif
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -58,7 +59,7 @@ SpatialJoinBuild::SpatialJoinBuild(
           nullptr,
           operatorId,
           joinNode->id(),
-          "SpatialJoinBuild") {
+          OperatorType::kSpatialJoinBuild) {
   const auto& buildType = joinNode->rightNode()->outputType();
   buildGeometryChannel_ =
       buildType->getChildIdx(joinNode->buildGeometry()->name());

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/FlatVector.h"
@@ -39,9 +40,9 @@ OrderBy::OrderBy(
           orderByNode->outputType(),
           operatorId,
           orderByNode->id(),
-          "OrderBy",
+          OperatorType::kOrderBy,
           orderByNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "OrderBy")
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kOrderBy)
               : std::nullopt) {
   maxOutputRows_ = outputBatchRows(std::nullopt);
   VELOX_CHECK(pool()->trackUsage());

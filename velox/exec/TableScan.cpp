@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -76,7 +77,7 @@ TableScan::TableScan(
           tableScanNode->outputType(),
           operatorId,
           tableScanNode->id(),
-          "TableScan"),
+          OperatorType::kTableScan),
       tableHandle_(tableScanNode->tableHandle()),
       columnHandles_(tableScanNode->assignments()),
       driverCtx_(driverCtx),

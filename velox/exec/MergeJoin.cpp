@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -48,7 +49,7 @@ MergeJoin::MergeJoin(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "MergeJoin"),
+          OperatorType::kMergeJoin),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
       preferredOutputBatchRows_{

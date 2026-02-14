@@ -63,7 +63,7 @@ Exchange::Exchange(
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
     std::shared_ptr<ExchangeClient> exchangeClient,
-    const std::string& operatorType)
+    std::string_view operatorType)
     : SourceOperator(
           driverCtx,
           exchangeNode->outputType(),
