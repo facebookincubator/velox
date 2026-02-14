@@ -358,13 +358,11 @@ AssertQueryBuilder::readCursor() {
             numSplits,
             splits_.size(),
             "Barrier task execution mode requires all the sources have the same number of splits");
-        if (task->underBarrier()) {
-          // TODO: Refactor this lambda function to return future returned by
-          // the 'Task::requestBarrier'.
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto future = task->requestBarrier();
+        if (!params_.serialExecution) {
+          // TODO: Hold the future and wait it in the next round.
+          future.wait();
         }
-        ASSERT(!task->underBarrier());
-        task->requestBarrier();
       } else {
         taskCursor->setNoMoreSplits();
       }

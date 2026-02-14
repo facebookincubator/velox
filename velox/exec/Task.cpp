@@ -2566,12 +2566,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           }
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
-            VELOX_CHECK(store->nextSplit(
+            const auto hasNextSplit = store->nextSplit(
                 /*driverId=*/-1,
                 /*maxPreloadSplits=*/0,
                 /*preload=*/nullptr,
                 splits.emplace_back(),
-                future));
+                future);
+            VELOX_CHECK(hasNextSplit);
           }
         }
         if (!splits.empty()) {
