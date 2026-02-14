@@ -98,7 +98,7 @@ CMD ["/bin/bash"]
 ########################
 FROM base-image AS pyvelox
 
-ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}"
 
 ########################
 # Stage: Adapters Build#
@@ -164,7 +164,7 @@ ENV HADOOP_HOME=/usr/local/hadoop \
     PATH=/usr/lib/jvm/java-1.8.0-openjdk/bin:${PATH}
 
 # thrift1 requires shared libraries copied from /deps to /usr/local.
-ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}"
 
 COPY --from=adapters-build /deps /usr/local
 
