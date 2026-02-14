@@ -766,8 +766,8 @@ struct DSDGenContext {
   struct DBGEN_VERSION_TBL g_dbgen_version;
 
   struct W_STORE_SALES_TBL g_w_store_sales;
-  int *pStoreSalesItemPermutation, *pCatalogSalesItemPermutation,
-      *pWebSalesItemPermutation;
+  std::vector<int32_t> pStoreSalesItemPermutation, pCatalogSalesItemPermutation,
+      pWebSalesItemPermutation;
   int nStoreSalesItemCount, nCatalogSalesItemCount, nWebSalesItemCount;
   int nStoreSalesItemIndex, nCatalogSalesItemIndex, nWebSalesItemIndex;
   ds_key_t jDate, kNewDateIndex;
