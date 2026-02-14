@@ -101,8 +101,12 @@ But Spark allows for changing the defaults while Velox does not.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="collect_list">
 <span class="sig-name descname"><span class="pre">collect_list</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;[same</span> <span class="pre">as</span> <span class="pre">x]&gt;</span></span></span><a class="headerlink" href="#collect_list" title="Link to this definition">¶</a></dt>
-<dd><p>Returns an array created from the input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements. Ignores null
-inputs, and returns an empty array when all inputs are null.</p>
+<dd><p>Returns an array created from the input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements. By default,
+ignores null inputs and returns an empty array when all inputs are null.</p>
+<p>When the configuration property <code class="docutils literal notranslate"><span class="pre">spark.collect_list.ignore_nulls</span></code> is set
+to <code class="docutils literal notranslate"><span class="pre">false</span></code>, null values are included in the output array (RESPECT NULLS
+behavior). In this mode, an all-null input produces an array of nulls
+instead of an empty array.</p>
 </dd></dl>
 
 <dl class="spark function">
