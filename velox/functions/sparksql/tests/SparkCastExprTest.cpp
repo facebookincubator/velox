@@ -193,76 +193,6 @@ TEST_F(SparkCastExprTest, decimalToIntegral) {
   testDecimalToIntegralCasts<int8_t>();
 }
 
-TEST_F(SparkCastExprTest, decimalToVarchar) {
-  auto testShortDecimal =
-      [&](const std::vector<std::optional<int64_t>>& values,
-          const TypePtr& type,
-          const std::vector<std::optional<StringView>>& expected) {
-        testCast(
-            makeNullableFlatVector<int64_t>(values, type),
-            makeNullableFlatVector<StringView>(expected));
-      };
-
-  auto testLongDecimal =
-      [&](const std::vector<std::optional<int128_t>>& values,
-          const TypePtr& type,
-          const std::vector<std::optional<StringView>>& expected) {
-        testCast(
-            makeNullableFlatVector<int128_t>(values, type),
-            makeNullableFlatVector<StringView>(expected));
-      };
-
-  // Short decimal with scale > 0 (inlined).
-  testShortDecimal(
-      {123456789, -333333333, 0, 5, -9, std::nullopt},
-      DECIMAL(9, 2),
-      {"1234567.89", "-3333333.33", "0.00", "0.05", "-0.09", std::nullopt});
-
-  // Short decimal zero scale.
-  testShortDecimal({0}, DECIMAL(6, 0), {"0"});
-
-  // Short decimal extreme values (scientific notation for small magnitudes).
-  testShortDecimal(
-      {DecimalUtil::kShortDecimalMin,
-       -3,
-       0,
-       55,
-       DecimalUtil::kShortDecimalMax,
-       std::nullopt},
-      DECIMAL(18, 18),
-      {"-0.999999999999999999",
-       "-3E-18",
-       "0E-18",
-       "5.5E-17",
-       "0.999999999999999999",
-       std::nullopt});
-
-  // Long decimal.
-  testLongDecimal(
-      {DecimalUtil::kLongDecimalMin,
-       0,
-       DecimalUtil::kLongDecimalMax,
-       HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
-       HugeInt::build(0xffff, 0xffffffffffffffff),
-       std::nullopt},
-      DECIMAL(38, 5),
-      {"-999999999999999999999999999999999.99999",
-       "0.00000",
-       "999999999999999999999999999999999.99999",
-       "-0.00001",
-       "12089258196146291747.06175",
-       std::nullopt});
-
-  // Long decimal with small magnitudes should use scientific notation.
-  testLongDecimal(
-      {-3, 0, 55, HugeInt::build(0, 1), std::nullopt},
-      DECIMAL(38, 20),
-      {"-3E-20", "0E-20", "5.5E-19", "1E-20", std::nullopt});
-
-  // Long decimal zero scale.
-  testLongDecimal({0}, DECIMAL(25, 0), {"0"});
-}
-
 TEST_F(SparkCastExprTest, invalidDate) {
   testInvalidCast<int8_t>(
       "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
@@ -1234,6 +1164,9 @@ TEST_F(SparkCastExprTest, decimalToString) {
              HugeInt::build(0, 12300000000),
              HugeInt::build(0, 12345000000),
              HugeInt::build(0, 0),
+             HugeInt::build(0, 55),
+             HugeInt::build(0, 1),
+             -HugeInt::build(0, 3),
              -HugeInt::build(0, 10000000000),
              -HugeInt::build(0, 12300000000),
              -HugeInt::build(0, 12345000000)},
@@ -1242,7 +1175,10 @@ TEST_F(SparkCastExprTest, decimalToString) {
             {"1.0000000000",
              "1.2300000000",
              "1.2345000000",
-             "0.0000000000",
+             "0E-10",
+             "5.5E-9",
+             "1E-10",
+             "-3E-10",
              "-1.0000000000",
              "-1.2300000000",
              "-1.2345000000"}));
@@ -1252,12 +1188,16 @@ TEST_F(SparkCastExprTest, decimalToString) {
         makeFlatVector<std::string>({"100", "200", "300"}));
 
     testCast(
-        makeFlatVector<int64_t>({12, 120, 1200, -12, -120}, DECIMAL(10, 8)),
+        makeFlatVector<int64_t>(
+            {0, 12, 55, 120, 1200, -3, -12, -120}, DECIMAL(10, 8)),
         makeFlatVector<std::string>(
-            {"0.00000012",
+            {"0E-8",
+             "1.2E-7",
+             "5.5E-7",
              "0.00000120",
              "0.00001200",
-             "-0.00000012",
+             "-3E-8",
+             "-1.2E-7",
              "-0.00000120"}));
 
     testCast(
@@ -1265,6 +1205,24 @@ TEST_F(SparkCastExprTest, decimalToString) {
             {100, std::nullopt, 1230, std::nullopt}, DECIMAL(10, 2)),
         makeNullableFlatVector<std::string>(
             {"1.00", std::nullopt, "12.30", std::nullopt}));
+
+    // Keep one non-scientific long-decimal baseline for larger magnitudes.
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {DecimalUtil::kLongDecimalMin,
+             0,
+             DecimalUtil::kLongDecimalMax,
+             HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
+             HugeInt::build(0xffff, 0xffffffffffffffff),
+             std::nullopt},
+            DECIMAL(38, 5)),
+        makeNullableFlatVector<std::string>(
+            {"-999999999999999999999999999999999.99999",
+             "0.00000",
+             "999999999999999999999999999999999.99999",
+             "-0.00001",
+             "12089258196146291747.06175",
+             std::nullopt}));
   }
 }
 
