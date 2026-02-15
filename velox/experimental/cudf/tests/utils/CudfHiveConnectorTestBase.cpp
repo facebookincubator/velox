@@ -81,9 +81,6 @@ void CudfHiveConnectorTestBase::SetUp() {
   facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
       factory;
   auto config = std::unordered_map<std::string, std::string>{};
-  // TODO(mh):Enable experimental cudf reader
-  // config.insert({facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::kUseExperimentalCudfReader,
-  // "true"});
   auto hiveConnector = factory.newConnector(
       kCudfHiveConnectorId,
       std::make_shared<facebook::velox::config::ConfigBase>(std::move(config)),
@@ -295,6 +292,8 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
     uint64_t start,
     uint64_t length) {
   return facebook::velox::connector::hive::HiveConnectorSplitBuilder(filePath)
+      .connectorId(kCudfHiveConnectorId)
+      .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
       .infoColumn("$file_size", fmt::format("{}", fileSize))
       .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
       .start(start)
