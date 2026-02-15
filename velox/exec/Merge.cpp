@@ -18,6 +18,7 @@
 #include <folly/Traits.h>
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
@@ -33,7 +34,7 @@ Merge::Merge(
         sortingKeys,
     const std::vector<core::SortOrder>& sortingOrders,
     const std::string& planNodeId,
-    const std::string& operatorType,
+    std::string_view operatorType,
     const std::optional<common::SpillConfig>& spillConfig)
     : SourceOperator(
           driverCtx,
@@ -724,9 +725,11 @@ LocalMerge::LocalMerge(
           localMergeNode->sortingKeys(),
           localMergeNode->sortingOrders(),
           localMergeNode->id(),
-          "LocalMerge",
+          OperatorType::kLocalMerge,
           localMergeNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "LocalMerge")
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    OperatorType::kLocalMerge)
               : std::nullopt) {
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,
@@ -761,7 +764,7 @@ MergeExchange::MergeExchange(
           mergeExchangeNode->sortingKeys(),
           mergeExchangeNode->sortingOrders(),
           mergeExchangeNode->id(),
-          "MergeExchange"),
+          OperatorType::kMergeExchange),
       serde_(getNamedVectorSerde(mergeExchangeNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(

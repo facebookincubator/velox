@@ -17,6 +17,7 @@
 #include "velox/exec/Driver.h"
 
 #include "velox/common/process/TraceContext.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/LazyVector.h"
 
@@ -108,18 +109,20 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
 }
 
 namespace {
-bool isHashJoinSpillOperator(const std::string& operatorType) {
-  return operatorType == "HashBuild" || operatorType == "HashProbe";
+bool isHashJoinSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kHashBuild ||
+      operatorType == OperatorType::kHashProbe;
 }
 
-bool isAggregationSpillOperator(const std::string& operatorType) {
-  return operatorType == "Aggregation" || operatorType == "PartialAggregation";
+bool isAggregationSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kAggregation ||
+      operatorType == OperatorType::kPartialAggregation;
 }
 } // namespace
 
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
     int32_t operatorId,
-    const std::string& operatorType) const {
+    std::string_view operatorType) const {
   const auto& queryConfig = task->queryCtx()->queryConfig();
   if (!queryConfig.spillEnabled()) {
     return std::nullopt;

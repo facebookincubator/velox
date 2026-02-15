@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/MixedUnion.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
@@ -29,7 +30,7 @@ MixedUnion::MixedUnion(
           unionNode->outputType(),
           operatorId,
           unionNode->id(),
-          "MixedUnion"),
+          OperatorType::kMixedUnion),
       unionNode_(unionNode),
       maxOutputBatchRows_(outputBatchRows()),
       maxOutputBatchBytes_(

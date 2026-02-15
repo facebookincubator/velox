@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include <string_view>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -44,7 +45,7 @@ class OperatorCtx {
       DriverCtx* driverCtx,
       const core::PlanNodeId& planNodeId,
       int32_t operatorId,
-      const std::string& operatorType = "");
+      std::string_view operatorType = "");
 
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
@@ -209,7 +210,7 @@ class Operator : public BaseRuntimeStatWriter {
       RowTypePtr outputType,
       int32_t operatorId,
       std::string planNodeId,
-      std::string operatorType,
+      std::string_view operatorType,
       std::optional<common::SpillConfig> spillConfig = std::nullopt);
 
   virtual ~Operator() = default;
@@ -704,7 +705,7 @@ class SourceOperator : public Operator {
       RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
-      const std::string& operatorType,
+      std::string_view operatorType,
       const std::optional<common::SpillConfig>& spillConfig = std::nullopt)
       : Operator(
             driverCtx,

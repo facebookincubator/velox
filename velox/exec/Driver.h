@@ -17,6 +17,7 @@
 #pragma once
 
 #include <memory>
+#include <string_view>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
@@ -261,7 +262,7 @@ struct DriverCtx {
   /// 'operatorType'.
   std::optional<common::SpillConfig> makeSpillConfig(
       int32_t operatorId,
-      const std::string& operatorType) const;
+      std::string_view operatorType) const;
 
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{

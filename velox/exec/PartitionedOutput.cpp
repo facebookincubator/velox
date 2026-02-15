@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
@@ -165,7 +166,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "PartitionedOutput"),
+          OperatorType::kPartitionedOutput),
       keyChannels_(toChannels(planNode->inputType(), planNode->keys())),
       numDestinations_(planNode->numPartitions()),
       replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),

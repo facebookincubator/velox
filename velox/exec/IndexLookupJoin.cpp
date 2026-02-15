@@ -18,6 +18,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -184,7 +185,7 @@ IndexLookupJoin::IndexLookupJoin(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "IndexLookupJoin"),
+          OperatorType::kIndexLookupJoin),
       splitOutput_{driverCtx->queryConfig().indexLookupJoinSplitOutput()},
       // TODO: support to update output batch size with output size stats during
       // the lookup processing.

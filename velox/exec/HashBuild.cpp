@@ -19,6 +19,7 @@
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/HashTableCache.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
@@ -56,9 +57,9 @@ HashBuild::HashBuild(
           nullptr,
           operatorId,
           joinNode->id(),
-          "HashBuild",
+          OperatorType::kHashBuild,
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "HashBuild")
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashBuild)
               : std::nullopt),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
