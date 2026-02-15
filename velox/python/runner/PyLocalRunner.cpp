@@ -77,8 +77,8 @@ PyVector PyTaskIterator::next() {
   return PyVector{vector_, outputPool_};
 }
 
-PyVector PyTaskIterator::step() {
-  if (!cursor_->moveStep()) {
+PyVector PyTaskIterator::step(const std::string& planId) {
+  if (!cursor_->moveStep(planId)) {
     vector_ = nullptr;
     throw py::stop_iteration(); // Raise StopIteration when done.
   }
