@@ -2761,20 +2761,42 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
                         .project({"c0 + 5"})
                         .planFragment();
   ASSERT_TRUE(plan.firstNodeNotSupportingBarrier());
-
-  const auto task = Task::create(
-      "invalidPlanNodeForBarrier",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(
-      task->requestBarrier(),
-      "Name of the first node that doesn't support barriered execution:");
-  while (auto next = task->next()) {
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Name of the first node that doesn't support barriered execution:");
+    while (auto next = task->next()) {
+    }
+    ASSERT_TRUE(task->isFinished());
   }
-  ASSERT_TRUE(task->isFinished());
+
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    ASSERT_TRUE(!task->underBarrier());
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Name of the first node that doesn't support barriered execution:");
+    task->taskCompletionFuture().wait();
+    ASSERT_TRUE(task->isFinished());
+  }
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2792,53 +2814,52 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
+  {
+    const auto task = Task::create(
+        "barrierAfterNoMoreSplits",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
 
-  const auto task = Task::create(
-      "barrierAfterNoMoreSplits",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    task->noMoreSplits(scanId);
+    ASSERT_TRUE(!task->underBarrier());
 
-  task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  task->noMoreSplits(scanId);
-  ASSERT_TRUE(!task->underBarrier());
-
-  VELOX_ASSERT_THROW(
-      task->requestBarrier(),
-      "Can't start barrier on task which has already received no more splits");
-  while (auto next = task->next()) {
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Can't start barrier on task which has already received no more splits");
+    while (auto next = task->next()) {
+    }
+    ASSERT_TRUE(task->isFinished());
   }
-  ASSERT_TRUE(task->isFinished());
-}
 
-TEST_F(TaskTest, invalidTaskModeForBarrier) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
 
-  // Filter + Project.
-  core::PlanNodeId scanId;
-  const auto plan = PlanBuilder()
-                        .tableScan(asRowType(data->type()))
-                        .capturePlanNodeId(scanId)
-                        .filter("c0 < 100")
-                        .project({"c0 + 5"})
-                        .planFragment();
-  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
+    ASSERT_TRUE(!task->underBarrier());
+    task->start(2);
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    task->noMoreSplits(scanId);
+    ASSERT_TRUE(!task->underBarrier());
 
-  const auto task = Task::create(
-      "invalidTaskModeForBarrier",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kParallel);
-  ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(
-      task->requestBarrier(),
-      "(Parallel vs. Serial) Task doesn't support barriered execution.");
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Can't start barrier on task which has already received no more splits");
+  }
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
@@ -2857,30 +2878,56 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
                         .project({"c0 + 5"})
                         .planFragment();
   ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
+  {
+    const auto task = Task::create(
+        "barrierAfterNoMoreSplits",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
 
-  const auto task = Task::create(
-      "barrierAfterNoMoreSplits",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto future = task->requestBarrier();
+    ASSERT_TRUE(task->underBarrier());
+    VELOX_ASSERT_THROW(
+        task->addSplit(
+            scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath()))),
+        "Can't add new split under barrier processing");
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
+    ASSERT_TRUE(task->isRunning());
+    ASSERT_FALSE(future.isReady());
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
+    ASSERT_TRUE(future.isReady());
+    future.wait();
+  }
 
-  task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  auto future = task->requestBarrier();
-  ASSERT_TRUE(task->underBarrier());
-  VELOX_ASSERT_THROW(
-      task->addSplit(
-          scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath()))),
-      "Can't add new split under barrier processing");
-  std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
-  ASSERT_TRUE(task->isRunning());
-  ASSERT_FALSE(future.isReady());
-  task->requestAbort().wait();
-  ASSERT_TRUE(!task->isRunning());
-  ASSERT_TRUE(future.isReady());
-  future.wait();
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto future = task->requestBarrier();
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
+    ASSERT_FALSE(task->underBarrier());
+    ASSERT_TRUE(future.isReady());
+    ASSERT_TRUE(task->isRunning());
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
+  }
 }
 
 TEST_F(TaskTest, testTerminateDuringBarrier) {
@@ -2897,36 +2944,60 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
                   .capturePlanNodeId(scanId)
                   .project({"c0"})
                   .planFragment();
-
-  auto queryCtx = core::QueryCtx::create();
-  queryCtx->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kMaxOutputBatchRows, "1"}});
-  const auto task = Task::create(
-      "testTerminateDuringBarrier",
-      plan,
-      0,
-      std::move(queryCtx),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
-  task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  auto barrierFuture = task->requestBarrier();
-  ASSERT_TRUE(task->underBarrier());
-  for (int i = 0; i < numRows / 2; ++i) {
-    ContinueFuture future{ContinueFuture::makeEmpty()};
-    auto result = task->next(&future);
-    ASSERT_TRUE(result != nullptr);
-    ASSERT_FALSE(future.valid());
+  {
+    auto queryCtx = core::QueryCtx::create();
+    queryCtx->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kMaxOutputBatchRows, "1"}});
+    const auto task = Task::create(
+        "testTerminateDuringBarrier",
+        plan,
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+    ASSERT_TRUE(task->underBarrier());
+    for (int i = 0; i < numRows / 2; ++i) {
+      ContinueFuture future{ContinueFuture::makeEmpty()};
+      auto result = task->next(&future);
+      ASSERT_TRUE(result != nullptr);
+      ASSERT_FALSE(future.valid());
+    }
+    task->requestAbort();
+    ASSERT_FALSE(task->isRunning());
+    VELOX_ASSERT_THROW(
+        task->next(nullptr), "Task has already finished processing");
+    ASSERT_TRUE(barrierFuture.isReady());
+    barrierFuture.wait();
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numFinishedSplits, 0);
+    ASSERT_EQ(taskStats.numBarriers, 1);
   }
-  task->requestAbort();
-  ASSERT_FALSE(task->isRunning());
-  VELOX_ASSERT_THROW(
-      task->next(nullptr), "Task has already finished processing");
-  ASSERT_TRUE(barrierFuture.isReady());
-  barrierFuture.wait();
-  const auto taskStats = task->taskStats();
-  ASSERT_EQ(taskStats.numFinishedSplits, 0);
-  ASSERT_EQ(taskStats.numBarriers, 1);
+
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+    task->requestAbort().wait();
+    ASSERT_FALSE(task->isRunning());
+    ASSERT_TRUE(barrierFuture.isReady());
+    ASSERT_EQ(task->taskStats().numBarriers, 1);
+  }
 }
 
 namespace {

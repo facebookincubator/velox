@@ -88,15 +88,18 @@ class SplitsStore {
   ///
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
-  virtual void requestBarrier(std::vector<ContinuePromise>& promises) = 0;
+  virtual void requestBarrier(
+      uint32_t numDrivers,
+      std::vector<ContinuePromise>& promises) = 0;
 
   /// Return true when split is set or there is no more splits; false when
   /// caller should retry when the future is fulfilled.
   virtual bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
+      uint32_t driverId,
       int maxPreloadSplits,
-      const ConnectorSplitPreloadFunc& preload) = 0;
+      const ConnectorSplitPreloadFunc& preload,
+      Split& split,
+      ContinueFuture& future) = 0;
 
   /// Return whether all splits has been consumed and there will be no more
   /// splits.
@@ -146,6 +149,8 @@ class SplitsStore {
 
   // Arrived (added), but not distributed yet, splits.
   std::deque<Split> splits_;
+  // The map from driver id to barrier splits.
+  std::unordered_map<uint32_t, Split> barrierSplits_;
 
   // Signal, that no more splits will arrive.
   bool noMoreSplits_{false};
