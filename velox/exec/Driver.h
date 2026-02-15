@@ -257,8 +257,11 @@ struct DriverCtx {
       const core::PlanNodeId& planNodeId,
       const std::string& operatorType);
 
-  /// Builds the spill config for the operator with specified 'operatorId'.
-  std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
+  /// Builds the spill config for the operator with specified 'operatorId' and
+  /// 'operatorType'.
+  std::optional<common::SpillConfig> makeSpillConfig(
+      int32_t operatorId,
+      const std::string& operatorType) const;
 
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{

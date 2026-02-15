@@ -132,7 +132,12 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "queuedWallNanos",
       "flushTimes",
       "driverCpuTimeNanos",
-      "ioWaitWallNanos"};
+      "ioWaitWallNanos",
+      "storageReadWallNanos",
+      "ssdCacheReadWallNanos",
+      "cacheWaitWallNanos",
+      "coalescedSsdLoadWallNanos",
+      "coalescedStorageLoadWallNanos"};
   if (metricNames.contains(name)) {
     return true;
   }

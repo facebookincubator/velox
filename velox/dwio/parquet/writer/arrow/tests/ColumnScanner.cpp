@@ -27,78 +27,78 @@ using arrow::MemoryPool;
 
 namespace facebook::velox::parquet::arrow {
 
-std::shared_ptr<Scanner> Scanner::Make(
-    std::shared_ptr<ColumnReader> col_reader,
-    int64_t batch_size,
+std::shared_ptr<Scanner> Scanner::make(
+    std::shared_ptr<ColumnReader> colReader,
+    int64_t batchSize,
     MemoryPool* pool) {
-  switch (col_reader->type()) {
-    case Type::BOOLEAN:
+  switch (colReader->type()) {
+    case Type::kBoolean:
       return std::make_shared<BoolScanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::INT32:
+          std::move(colReader), batchSize, pool);
+    case Type::kInt32:
       return std::make_shared<Int32Scanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::INT64:
+          std::move(colReader), batchSize, pool);
+    case Type::kInt64:
       return std::make_shared<Int64Scanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::INT96:
+          std::move(colReader), batchSize, pool);
+    case Type::kInt96:
       return std::make_shared<Int96Scanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::FLOAT:
+          std::move(colReader), batchSize, pool);
+    case Type::kFloat:
       return std::make_shared<FloatScanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::DOUBLE:
+          std::move(colReader), batchSize, pool);
+    case Type::kDouble:
       return std::make_shared<DoubleScanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::BYTE_ARRAY:
+          std::move(colReader), batchSize, pool);
+    case Type::kByteArray:
       return std::make_shared<ByteArrayScanner>(
-          std::move(col_reader), batch_size, pool);
-    case Type::FIXED_LEN_BYTE_ARRAY:
+          std::move(colReader), batchSize, pool);
+    case Type::kFixedLenByteArray:
       return std::make_shared<FixedLenByteArrayScanner>(
-          std::move(col_reader), batch_size, pool);
+          std::move(colReader), batchSize, pool);
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning
+  // Unreachable code, but suppress compiler warning.
   return std::shared_ptr<Scanner>(nullptr);
 }
 
-int64_t ScanAllValues(
-    int32_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+int64_t scanAllValues(
+    int32_t batchSize,
+    int16_t* defLevels,
+    int16_t* repLevels,
     uint8_t* values,
-    int64_t* values_buffered,
+    int64_t* valuesBuffered,
     ColumnReader* reader) {
   switch (reader->type()) {
-    case parquet::Type::BOOLEAN:
-      return ScanAll<BoolReader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::INT32:
-      return ScanAll<Int32Reader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::INT64:
-      return ScanAll<Int64Reader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::INT96:
-      return ScanAll<Int96Reader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::FLOAT:
-      return ScanAll<FloatReader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::DOUBLE:
-      return ScanAll<DoubleReader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::BYTE_ARRAY:
-      return ScanAll<ByteArrayReader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
-    case parquet::Type::FIXED_LEN_BYTE_ARRAY:
-      return ScanAll<FixedLenByteArrayReader>(
-          batch_size, def_levels, rep_levels, values, values_buffered, reader);
+    case parquet::Type::kBoolean:
+      return scanAll<BoolReader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kInt32:
+      return scanAll<Int32Reader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kInt64:
+      return scanAll<Int64Reader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kInt96:
+      return scanAll<Int96Reader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kFloat:
+      return scanAll<FloatReader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kDouble:
+      return scanAll<DoubleReader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kByteArray:
+      return scanAll<ByteArrayReader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
+    case parquet::Type::kFixedLenByteArray:
+      return scanAll<FixedLenByteArrayReader>(
+          batchSize, defLevels, repLevels, values, valuesBuffered, reader);
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning
+  // Unreachable code, but suppress compiler warning.
   return 0;
 }
 

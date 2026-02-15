@@ -53,7 +53,7 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
       folly::Executor* executor,
       const ConsumerCallBack& consumerCb = [](auto partition, auto page) {});
 
-  RowVectorPtr run(bool /*unused*/) override;
+  RowVectorPtr run(bool /*copyResults*/, bool /*cursorCopyResult*/) override;
 
  private:
   core::PlanNodePtr createPlanNode(

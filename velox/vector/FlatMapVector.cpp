@@ -546,7 +546,8 @@ void FlatMapVector::copyRanges(
       // Then we allocate a new key values vector and in map buffer.
       inMapsAt(channel, true) =
           AlignedBuffer::allocate<bool>(size(), pool(), false);
-      mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+      mapValues_.back() = BaseVector::createEmptyLike(
+          sourceFlatMap->mapValues_[i].get(), size(), pool());
     }
 
     // Finally, copy the map values and update the in map buffers.

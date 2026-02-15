@@ -47,7 +47,7 @@ SortWindowBuild::SortWindowBuild(
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
     folly::Synchronized<OperatorStats>* opStats,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numPartitionKeys_{node->partitionKeys().size()},
       compareFlags_{makeCompareFlags(numPartitionKeys_, node->sortingOrders())},
@@ -205,7 +205,7 @@ void SortWindowBuild::spill() {
   data_->pool()->release();
 }
 
-std::optional<common::SpillStats> SortWindowBuild::spilledStats() const {
+std::optional<exec::SpillStats> SortWindowBuild::spilledStats() const {
   if (spiller_ == nullptr) {
     return std::nullopt;
   }

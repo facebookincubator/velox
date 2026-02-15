@@ -1422,7 +1422,7 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
 TEST_F(ParquetTableScanTest, booleanRle) {
   WriterOptions options;
   options.enableDictionary = false;
-  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
 
   auto allTrue = [](vector_size_t row) -> bool { return true; };
@@ -1470,7 +1470,7 @@ TEST_F(ParquetTableScanTest, booleanRle) {
 TEST_F(ParquetTableScanTest, singleBooleanRle) {
   WriterOptions options;
   options.enableDictionary = false;
-  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
 
   auto vector = makeRowVector(
@@ -1608,6 +1608,36 @@ TEST_F(ParquetTableScanTest, inFilter) {
       .split(makeSplit(filePath->getPath()))
       .assertResults(
           "SELECT name FROM tmp where name not in ('alex', 'leo', 'mary', null, 'victor')");
+}
+
+TEST_F(ParquetTableScanTest, reusedLazyVectors) {
+  const std::vector<std::string> columnNames = {"a", "b"};
+  std::vector<RowVectorPtr> data;
+  for (auto row = 0; row < 10; ++row) {
+    data.emplace_back(makeRowVector(
+        columnNames,
+        {
+            makeFlatVector<int64_t>({static_cast<int64_t>(row % 5)}),
+            makeFlatVector<int64_t>({static_cast<int64_t>(row)}),
+        }));
+  }
+  const auto expectedRowVector = makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13})});
+
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), data, options);
+
+  const auto plan = PlanBuilder()
+                        .tableScan(ROW(columnNames, {BIGINT(), BIGINT()}))
+                        .project({"a as c1", "b as c2", "b as c3"})
+                        .singleAggregation({"c1"}, {"sum(c2)", "sum(c3)"})
+                        .planNode();
+  AssertQueryBuilder(plan)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(expectedRowVector);
 }
 
 int main(int argc, char** argv) {

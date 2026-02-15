@@ -16,17 +16,13 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
-/// TODO Add IcebergConfig class and Move these configuration properties to
-/// IcebergConfig.h
-extern const std::string_view kIcebergFunctionPrefixConfig;
-extern const std::string_view kDefaultIcebergFunctionPrefix;
-
 /// Provides Iceberg table format support.
-/// - Creates HiveDataSource instances that use IcebergSplitReader for reading
-///   Iceberg tables with support for delete files and schema evolution.
+/// - Creates IcebergDataSource instances for reading Iceberg tables with
+///   support for delete files and schema evolution.
 /// - Creates IcebergDataSink instances for writing data with Iceberg-specific
 ///   partition transforms and commit metadata.
 class IcebergConnector final : public HiveConnector {
@@ -35,6 +31,19 @@ class IcebergConnector final : public HiveConnector {
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor);
+
+  /// Creates IcebergDataSource for reading from Iceberg tables.
+  ///
+  /// @param outputType The schema of the output data to read.
+  /// @param tableHandle The table handle containing table metadata.
+  /// @param columnHandles Map of column names to column handles.
+  /// @param connectorQueryCtx Query context for the read operation.
+  /// @return IcebergDataSource instance configured for the read operation.
+  std::unique_ptr<DataSource> createDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
 
   /// Creates IcebergDataSink for writing to Iceberg tables.
   ///
@@ -54,7 +63,7 @@ class IcebergConnector final : public HiveConnector {
       CommitStrategy commitStrategy) override;
 
  private:
-  const std::string functionPrefix_;
+  const std::shared_ptr<IcebergConfig> icebergConfig_;
 };
 
 class IcebergConnectorFactory final : public ConnectorFactory {

@@ -59,8 +59,8 @@ class CachedBufferedInput : public BufferedInput {
       cache::AsyncDataCache* cache,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
       folly::F14FastMap<std::string, std::string> fileReadOps = {})
@@ -68,8 +68,8 @@ class CachedBufferedInput : public BufferedInput {
             std::move(readFile),
             readerOptions.memoryPool(),
             metricsLog,
+            ioStatistics.get(),
             ioStats.get(),
-            fsStats.get(),
             kMaxMergeDistance,
             std::nullopt,
             std::move(fileReadOps)),
@@ -77,8 +77,8 @@ class CachedBufferedInput : public BufferedInput {
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {
@@ -91,8 +91,8 @@ class CachedBufferedInput : public BufferedInput {
       cache::AsyncDataCache* cache,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.memoryPool()),
@@ -100,8 +100,8 @@ class CachedBufferedInput : public BufferedInput {
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {
@@ -153,8 +153,8 @@ class CachedBufferedInput : public BufferedInput {
         cache_,
         tracker_,
         groupId_,
+        ioStatistics_,
         ioStats_,
-        fsStats_,
         executor_,
         options_);
   }
@@ -227,8 +227,8 @@ class CachedBufferedInput : public BufferedInput {
   const StringIdLease fileNum_;
   const std::shared_ptr<cache::ScanTracker> tracker_;
   const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
   const io::ReaderOptions options_;

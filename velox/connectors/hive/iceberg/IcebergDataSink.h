@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
@@ -87,30 +88,6 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  IcebergInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
-      LocationHandlePtr locationHandle,
-      dwio::common::FileFormat tableStorageFormat,
-      IcebergPartitionSpecPtr partitionSpec,
-      std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {})
-      : IcebergInsertTableHandle(
-            [&inputColumns]() {
-              std::vector<IcebergColumnHandlePtr> icebergColumns;
-              icebergColumns.reserve(inputColumns.size());
-              for (const auto& col : inputColumns) {
-                icebergColumns.push_back(convertToIcebergColumnHandle(col));
-              }
-              return icebergColumns;
-            }(),
-            locationHandle,
-            tableStorageFormat,
-            partitionSpec,
-            compressionKind,
-            serdeParameters) {}
-#endif
-
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
   const IcebergPartitionSpecPtr& partitionSpec() const {
@@ -132,7 +109,7 @@ class IcebergDataSink : public HiveDataSink {
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -166,7 +143,7 @@ class IcebergDataSink : public HiveDataSink {
       const std::vector<column_index_t>& partitionChannels,
       const std::vector<column_index_t>& dataChannels,
       RowTypePtr partitionRowType,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   // Computes partition IDs for each row in the input batch by applying Iceberg
   // partition transforms and generating unique partition identifiers.

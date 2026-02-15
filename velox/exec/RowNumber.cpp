@@ -30,7 +30,7 @@ RowNumber::RowNumber(
           rowNumberNode->id(),
           "RowNumber",
           rowNumberNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "RowNumber")
               : std::nullopt),
       limit_{rowNumberNode->limit()},
       generateRowNumber_{rowNumberNode->generateRowNumber()} {
@@ -388,7 +388,8 @@ void RowNumber::reclaim(
                  << spillConfig_->maxSpillLevel
                  << ", and abandon spilling for memory pool: "
                  << pool()->name();
-    ++spillStats_->wlock()->spillMaxLevelExceededCount;
+    spillStats_->spillMaxLevelExceededCount.fetch_add(
+        1, std::memory_order_relaxed);
     return;
   }
 
@@ -544,7 +545,7 @@ RowNumberHashTableSpiller::RowNumberHashTableSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),

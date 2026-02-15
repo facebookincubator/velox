@@ -935,11 +935,15 @@ void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
 
   ssdSaveable_ += bytes;
   if (memory::AllocationTraits::numPages(ssdSaveable_) >
-      std::max<int32_t>(
-          static_cast<int32_t>(
-              memory::AllocationTraits::numPages(opts_.minSsdSavableBytes)),
-          static_cast<int32_t>(
-              static_cast<double>(cachedPages_) * opts_.ssdSavableRatio))) {
+          std::max<int32_t>(
+              static_cast<int32_t>(
+                  memory::AllocationTraits::numPages(opts_.minSsdSavableBytes)),
+              static_cast<int32_t>(
+                  static_cast<double>(cachedPages_) * opts_.ssdSavableRatio)) ||
+      (opts_.ssdFlushThresholdBytes > 0 &&
+       memory::AllocationTraits::numPages(ssdSaveable_) >
+           static_cast<int32_t>(memory::AllocationTraits::numPages(
+               opts_.ssdFlushThresholdBytes)))) {
     // Do not start a new save if another one is in progress.
     if (!ssdCache_->startWrite()) {
       return;

@@ -413,7 +413,7 @@ class HashBuildSpiller : public SpillerBase {
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   /// Invoked to spill all the rows stored in the row container of the hash
   /// build.
