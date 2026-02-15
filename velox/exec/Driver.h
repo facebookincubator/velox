@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -487,7 +488,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Returns true if the driver is under barrier processing.
   bool hasBarrier() const {
-    return barrier_.has_value();
+    return hasBarrier_.load(std::memory_order_acquire);
   }
 
   /// Invoked to start draining the output of this driver pipeline from the
@@ -590,10 +591,19 @@ class Driver : public std::enable_shared_from_this<Driver> {
     // If set, the driver has started output draining. It points to the operator
     // that is currently draining output.
     std::optional<int32_t> drainingOpId{std::nullopt};
-    // If set, the specified operator doesn't need any more input to finish the
-    // draining operation. All the upstream operators within the same driver
-    // should drop their output or output processing.
-    std::optional<int32_t> dropInputOpId{std::nullopt};
+    // The operator id that doesn't need any more input to finish the draining
+    // operation. All the upstream operators within the same driver should drop
+    // their output or output processing. -1 means not set. This is accessed
+    // from different driver threads so it needs to be atomic.
+    static constexpr int32_t kNoDropInput = -1;
+    std::atomic_int32_t dropInputOpId{kNoDropInput};
+
+    BarrierState() = default;
+
+    void reset() {
+      drainingOpId = std::nullopt;
+      dropInputOpId.store(kNoDropInput, std::memory_order_relaxed);
+    }
   };
 
   // Invoked to start draining on the next operator. If there is no "next"
@@ -655,8 +665,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::atomic_bool closed_{false};
 
-  // If set, the driver is under a barrier processing.
-  std::optional<BarrierState> barrier_;
+  // Set to true if the driver is under a barrier processing. This is set by
+  // startBarrier() and read by hasBarrier() from different threads.
+  std::atomic_bool hasBarrier_{false};
+
+  // The driver barrier processing state.
+  BarrierState barrier_;
 
   OpCallStatus opCallStatus_;
 

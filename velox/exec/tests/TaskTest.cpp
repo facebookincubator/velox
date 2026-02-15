@@ -2862,6 +2862,7 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
         task->requestBarrier(),
         "Can't start barrier on task which has already received no more splits");
   }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
@@ -2930,6 +2931,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
     task->requestAbort().wait();
     ASSERT_TRUE(!task->isRunning());
   }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(TaskTest, testTerminateDuringBarrier) {
