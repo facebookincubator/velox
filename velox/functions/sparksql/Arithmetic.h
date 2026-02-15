@@ -666,4 +666,40 @@ struct CheckedIntegralDivideFunction {
   }
 };
 
+template <typename TExec>
+struct CheckedRemainderFunction {
+  template <
+      typename TInput,
+      typename std::enable_if_t<!std::is_floating_point_v<TInput>, int> = 0>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput a, const TInput b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+    // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+    // int64_t.
+    if (UNLIKELY(b == 1 || b == -1)) {
+      result = 0;
+    } else {
+      result = a % b;
+    }
+    return Status::OK();
+  }
+
+  template <
+      typename TInput,
+      typename std::enable_if_t<std::is_floating_point_v<TInput>, int> = 0>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput a, const TInput b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    if (UNLIKELY(std::isnan(a) || std::isnan(b) || std::isinf(a))) {
+      result = std::numeric_limits<TInput>::quiet_NaN();
+    } else if (UNLIKELY(std::isinf(b))) {
+      result = a;
+    } else {
+      result = std::fmod(a, b);
+    }
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
