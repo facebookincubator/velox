@@ -565,76 +565,120 @@ TEST_F(DecimalArithmeticTest, roundN) {
           DECIMAL(19, 5))});
 }
 
-TEST_F(DecimalArithmeticTest, floor) {
+TEST_F(DecimalArithmeticTest, floorAndCeil) {
   // short DECIMAL -> short DECIMAL.
+  // inputs
+  auto const inShortShort1 = makeFlatVector<int64_t>(
+      {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(3, 2));
+  auto const inShortShort2 = makeFlatVector<int64_t>(
+      {12300,
+       -12300,
+       12301,
+       -12301,
+       12345,
+       -12345,
+       12349,
+       -12349,
+       12350,
+       -12350,
+       12399,
+       -12399},
+      DECIMAL(5, 2));
+  auto const inShortShort3 = makeFlatVector<int64_t>(
+      {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+      DECIMAL(18, 0));
+  // expected outputs (floor)
+  auto const outShortShortFloor1 =
+      makeFlatVector<int64_t>({0, 0, -1, 0, -1, 0, -1, 0, -1}, DECIMAL(2, 0));
+  auto const outShortShortFloor2 = makeFlatVector<int64_t>(
+      {123, -123, 123, -124, 123, -124, 123, -124, 123, -124, 123, -124},
+      DECIMAL(4, 0));
+  auto const outShortShortFloor3 = makeFlatVector<int64_t>(
+      {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+      DECIMAL(18, 0));
+  // expected outputs (ceil)
+  auto const outShortShortCeil1 =
+      makeFlatVector<int64_t>({0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(2, 0));
+  auto const outShortShortCeil2 = makeFlatVector<int64_t>(
+      {123, -123, 124, -123, 124, -123, 124, -123, 124, -123, 124, -123},
+      DECIMAL(4, 0));
+  auto const outShortShortCeil3 = makeFlatVector<int64_t>(
+      {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+      DECIMAL(18, 0));
+  // test
   testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, -1, 0, -1, 0, -1, 0, -1}, DECIMAL(2, 0))},
-      "floor(c0)",
-      {makeFlatVector<int64_t>(
-          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(3, 2))});
+      {outShortShortFloor1}, "floor(c0)", {inShortShort1});
   testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {123, -123, 123, -124, 123, -124, 123, -124, 123, -124, 123, -124},
-          DECIMAL(4, 0))},
-      "floor(c0)",
-      {makeFlatVector<int64_t>(
-          {12300,
-           -12300,
-           12301,
-           -12301,
-           12345,
-           -12345,
-           12349,
-           -12349,
-           12350,
-           -12350,
-           12399,
-           -12399},
-          DECIMAL(5, 2))});
+      {outShortShortFloor2}, "floor(c0)", {inShortShort2});
   testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(18, 0))},
-      "floor(c0)",
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(18, 0))});
+      {outShortShortFloor3}, "floor(c0)", {inShortShort3});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {outShortShortCeil1}, "ceil(c0)", {inShortShort1});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {outShortShortCeil2}, "ceil(c0)", {inShortShort2});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {outShortShortCeil3}, "ceil(c0)", {inShortShort3});
 
   // long DECIMAL -> long DECIMAL.
+  // inputs
+  auto const inLongLong1 = makeFlatVector<int128_t>(
+      {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(20, 2));
+  auto const inLongLong2 = makeFlatVector<int128_t>(
+      {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+      DECIMAL(38, 5));
+  auto const inLongLong3 = makeFlatVector<int128_t>(
+      {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+      DECIMAL(38, 0));
+  // expected outputs (floor)
+  auto const outLongLongFloor1 =
+      makeFlatVector<int128_t>({0, 0, -1, 0, -1, 0, -1, 0, -1}, DECIMAL(19, 0));
+  auto const outLongLongFloor2 = makeFlatVector<int128_t>(
+      {DecimalUtil::kPowersOfTen[33] - 1, -DecimalUtil::kPowersOfTen[33]},
+      DECIMAL(34, 0));
+  auto const outLongLongFloor3 = inLongLong3;
+  // expected outputs (ceil)
+  auto const outLongLongCeil1 =
+      makeFlatVector<int128_t>({0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(19, 0));
+  auto const outLongLongCeil2 = makeFlatVector<int128_t>(
+      {DecimalUtil::kPowersOfTen[33], -DecimalUtil::kPowersOfTen[33] + 1},
+      DECIMAL(34, 0));
+  auto const outLongLongCeil3 = makeFlatVector<int128_t>(
+      {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+      DECIMAL(38, 0));
+  // test
   testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {0, 0, -1, 0, -1, 0, -1, 0, -1}, DECIMAL(19, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(20, 2))});
+      {outLongLongFloor1}, "floor(c0)", {inLongLong1});
   testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kPowersOfTen[33] - 1, -DecimalUtil::kPowersOfTen[33]},
-          DECIMAL(34, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 5))});
+      {outLongLongFloor2}, "floor(c0)", {inLongLong2});
   testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))});
+      {outLongLongFloor3}, "floor(c0)", {inLongLong3});
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {outLongLongCeil1}, "ceil(c0)", {inLongLong1});
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {outLongLongCeil2}, "ceil(c0)", {inLongLong2});
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {outLongLongCeil3}, "ceil(c0)", {inLongLong3});
 
   // long DECIMAL -> short DECIMAL.
+  // input
+  auto const inLongShort = makeFlatVector<int128_t>(
+      {1234567890123456789,
+       5000000000000000000,
+       -9000000000000000000,
+       -1000000000000000000,
+       0},
+      DECIMAL(19, 19));
+  // expected output (floor)
+  auto const outLongShortFloor =
+      makeFlatVector<int64_t>({0, 0, -1, -1, 0}, DECIMAL(1, 0));
+  // expected output (ceil)
+  auto const outLongShortCeil =
+      makeFlatVector<int64_t>({1, 1, 0, 0, 0}, DECIMAL(1, 0));
+  // test
   testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, -1, -1, 0}, DECIMAL(1, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789,
-           5000000000000000000,
-           -9000000000000000000,
-           -1000000000000000000,
-           0},
-          DECIMAL(19, 19))});
+      {outLongShortFloor}, "floor(c0)", {inLongShort});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {outLongShortCeil}, "ceil(c0)", {inLongShort});
 }
 
 TEST_F(DecimalArithmeticTest, truncate) {
