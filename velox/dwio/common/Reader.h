@@ -229,16 +229,28 @@ class IndexReader {
 
   virtual ~IndexReader() = default;
 
+  /// Options for controlling index reader behavior.
+  struct Options {
+    /// Maximum number of rows to read per index lookup request.
+    /// When set to non-zero, the index reader will stop fetching or truncate
+    /// stripes once the total row range (before filtering) reaches this limit.
+    /// 0 means no limit (default).
+    vector_size_t maxRowsPerRequest{0};
+  };
+
   /// Starts a new batch lookup with the given index bounds.
   /// Each index bound in the vector represents a separate lookup request.
   /// After calling startLookup(), call next() repeatedly to get results.
   ///
   /// @param indexBounds Index bounds for the lookup request. Contains
   ///        column names and lower/upper bound values.
+  /// @param options Options controlling index reader behavior (e.g.,
+  ///        maxRowsPerRequest). Defaults to no limit.
   /// @throws if lookup is not supported by the implementation or if any
   ///         index bound is invalid.
   virtual void startLookup(
-      const velox::serializer::IndexBounds& indexBounds) = 0;
+      const velox::serializer::IndexBounds& indexBounds,
+      const Options& options) = 0;
 
   /// Returns true if there are more results to fetch from the current lookup.
   virtual bool hasNext() const = 0;
