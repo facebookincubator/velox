@@ -226,6 +226,13 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
+  std::optional<T> checkedRemainder(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_remainder(c0, c1)", a, b);
+  }
+
+  template <typename T>
   std::optional<int64_t> checkedDiv(
       std::optional<T> numerator,
       std::optional<T> denominator) {
@@ -268,6 +275,14 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       const std::optional<T> b,
       const std::string& errorMessage) {
     assertErrorForCheckedArithmetic("checked_divide", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedRemainder(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_remainder", a, b, errorMessage);
   }
 
   template <typename T>
@@ -772,6 +787,44 @@ TEST_F(ArithmeticTest, checkedDivide) {
       INT64_MIN, -1, "Arithmetic overflow: -9223372036854775808 / -1");
   EXPECT_EQ(checkedDivide<float>(kInf, 1), kInf);
   EXPECT_EQ(checkedDivide<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedRemainder) {
+  // Division by zero throws for all integer types.
+  assertErrorForCheckedRemainder<int8_t>(1, 0, "Division by zero");
+  assertErrorForCheckedRemainder<int16_t>(1, 0, "Division by zero");
+  assertErrorForCheckedRemainder<int32_t>(1, 0, "Division by zero");
+  assertErrorForCheckedRemainder<int64_t>(10, 0, "Division by zero");
+  // INT_MIN % -1 = 0 (no overflow, unlike divide).
+  EXPECT_EQ(checkedRemainder<int8_t>(INT8_MIN, -1), 0);
+  EXPECT_EQ(checkedRemainder<int16_t>(INT16_MIN, -1), 0);
+  EXPECT_EQ(checkedRemainder<int32_t>(INT32_MIN, -1), 0);
+  EXPECT_EQ(checkedRemainder<int64_t>(INT64_MIN, -1), 0);
+  // x % 1 = 0.
+  EXPECT_EQ(checkedRemainder<int32_t>(10, 1), 0);
+  EXPECT_EQ(checkedRemainder<int64_t>(INT64_MIN, 1), 0);
+  // Normal cases.
+  EXPECT_EQ(checkedRemainder<int32_t>(10, 3), 1);
+  EXPECT_EQ(checkedRemainder<int32_t>(-10, 3), -1);
+  EXPECT_EQ(checkedRemainder<int64_t>(23, 7), 2);
+  EXPECT_EQ(checkedRemainder<int64_t>(-23, 7), -2);
+  // Float: division by zero throws.
+  assertErrorForCheckedRemainder<float>(1.0f, 0.0f, "Division by zero");
+  assertErrorForCheckedRemainder<double>(1.0, 0.0, "Division by zero");
+  // Float: normal cases.
+  EXPECT_FLOAT_EQ(checkedRemainder<float>(10.5f, 3.0f).value(), 1.5f);
+  EXPECT_DOUBLE_EQ(checkedRemainder<double>(10.5, 3.0).value(), 1.5);
+  // Float: infinity dividend produces NaN.
+  EXPECT_TRUE(std::isnan(checkedRemainder<float>(kInf, 1).value()));
+  EXPECT_TRUE(std::isnan(checkedRemainder<double>(kInfDouble, 1).value()));
+  // Float: NaN dividend or divisor produces NaN.
+  EXPECT_TRUE(std::isnan(checkedRemainder<float>(kNan, 1.0f).value()));
+  EXPECT_TRUE(std::isnan(checkedRemainder<double>(kNanDouble, 1.0).value()));
+  EXPECT_TRUE(std::isnan(checkedRemainder<float>(1.0f, kNan).value()));
+  EXPECT_TRUE(std::isnan(checkedRemainder<double>(1.0, kNanDouble).value()));
+  // Float: infinity divisor returns dividend.
+  EXPECT_FLOAT_EQ(checkedRemainder<float>(1.5f, kInf).value(), 1.5f);
+  EXPECT_DOUBLE_EQ(checkedRemainder<double>(1.5, kInfDouble).value(), 1.5);
 }
 
 TEST_F(ArithmeticTest, checkedDiv) {
