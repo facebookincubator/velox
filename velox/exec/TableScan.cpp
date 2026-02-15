@@ -277,12 +277,13 @@ bool TableScan::getSplit() {
 
   exec::Split split;
   blockingReason_ = driverCtx_->task->getSplitOrFuture(
+      driverCtx_->driverId,
       driverCtx_->splitGroupId,
       planNodeId(),
-      split,
-      blockingFuture_,
       maxPreloadedSplits_,
-      splitPreloader_);
+      splitPreloader_,
+      split,
+      blockingFuture_);
   if (blockingReason_ != BlockingReason::kNotBlocked) {
     return false;
   }

@@ -48,9 +48,8 @@ class TaskQueue {
   // producer may continue. Returns kWaitForConsumer if the queue is
   // full after the addition and sets '*future' to a future that is
   // realized when the producer may continue.
-  exec::BlockingReason enqueue(
-      RowVectorPtr vector,
-      velox::ContinueFuture* future);
+  exec::BlockingReason
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
 
   // Returns nullptr when all producers are at end. Otherwise blocks.
   RowVectorPtr dequeue();
@@ -63,11 +62,13 @@ class TaskQueue {
     return pool_.get();
   }
 
+  std::optional<int32_t> numProducers_;
+  std::atomic_int32_t numDrainedProducers_{0};
+
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
-  std::optional<int32_t> numProducers_;
   int32_t producersFinished_ = 0;
   uint64_t totalBytes_ = 0;
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
@@ -83,10 +84,15 @@ class TaskQueue {
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
+    bool drained,
     velox::ContinueFuture* future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
-    ++producersFinished_;
+    if (drained) {
+      ++numDrainedProducers_;
+    } else {
+      ++producersFinished_;
+    }
     if (consumerBlocked_) {
       consumerBlocked_ = false;
       consumerPromise_.setValue();
@@ -139,7 +145,10 @@ RowVectorPtr TaskQueue::dequeue() {
       } else if (
           numProducers_.has_value() && producersFinished_ == numProducers_) {
         return nullptr;
+      } else if (numDrainedProducers_ == numProducers_) {
+        return nullptr;
       }
+
       if (!vector) {
         consumerBlocked_ = true;
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
@@ -300,16 +309,16 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
             return exec::BlockingReason::kNotBlocked;
           }
-          VELOX_CHECK(
-              !drained, "Unexpected drain in multithreaded task cursor");
-          if (!vector || !copyResult) {
-            return queue->enqueue(vector, future);
-          }
 
+          if (!vector || !copyResult) {
+            return queue->enqueue(vector, drained, future);
+          }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
           return queue->enqueue(
-              std::static_pointer_cast<RowVector>(std::move(copy)), future);
+              std::static_pointer_cast<RowVector>(std::move(copy)),
+              drained,
+              future);
         },
         0,
         std::move(spillDiskOpts),
@@ -365,6 +374,13 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     checkTaskError();
     if (!current_) {
+      if (queue_->numDrainedProducers_ > 0) {
+        VELOX_CHECK(queue_->numProducers_.has_value());
+        VELOX_CHECK_EQ(
+            queue_->numDrainedProducers_.load(), queue_->numProducers_.value());
+        queue_->numDrainedProducers_ = 0;
+        return false;
+      }
       atEnd_ = true;
     }
     return current_ != nullptr;
