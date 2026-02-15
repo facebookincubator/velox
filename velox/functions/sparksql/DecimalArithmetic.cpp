@@ -474,6 +474,145 @@ struct DecimalDivideFunction {
   uint8_t rPrecision_;
 };
 
+// Decimal remainder function.
+// Computes a % b by rescaling both operands to the same scale and performing
+// integer modulo. Uses int256_t intermediate to avoid overflow during rescaling.
+template <typename TExec, bool allowPrecisionLoss>
+struct DecimalRemainderFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/,
+      B* /*b*/) {
+    auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
+    auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
+    auto rScale = std::max(aScale, bScale);
+    uint8_t rPrecision =
+        std::min(aPrecision - aScale, bPrecision - bScale) + rScale;
+    if constexpr (allowPrecisionLoss) {
+      rPrecision_ = DecimalUtil::adjustPrecisionScale(rPrecision, rScale).first;
+    } else {
+      rPrecision_ =
+          std::min(rPrecision, LongDecimalType::kMaxPrecision);
+    }
+    aRescale_ = std::max<int8_t>(0, bScale - aScale);
+    bRescale_ = std::max<int8_t>(0, aScale - bScale);
+  }
+
+  template <typename R, typename A, typename B>
+  bool call(R& out, const A& a, const B& b) {
+    if (UNLIKELY(b == 0)) {
+      return false;
+    }
+    // Fast path: if both operands fit in result type after rescaling,
+    // stay in int128 and avoid int256.
+    R aScaled;
+    R bScaled;
+    bool aOverflow = __builtin_mul_overflow(
+        R(a), R(velox::DecimalUtil::kPowersOfTen[aRescale_]), &aScaled);
+    bool bOverflow = __builtin_mul_overflow(
+        R(b), R(velox::DecimalUtil::kPowersOfTen[bRescale_]), &bScaled);
+    if (LIKELY(!aOverflow && !bOverflow)) {
+      out = aScaled % bScaled;
+      return velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+    }
+    // Slow path: use int256_t to avoid overflow during rescaling.
+    int256_t aLarge = a;
+    aLarge *= DecimalUtil::getPowersOfTen(aRescale_);
+    int256_t bLarge = b;
+    bLarge *= DecimalUtil::getPowersOfTen(bRescale_);
+    int256_t resultLarge = aLarge % bLarge;
+    bool overflow = false;
+    out = DecimalUtil::convert<R>(resultLarge, overflow);
+    return !overflow &&
+        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+  }
+
+ private:
+  uint8_t rPrecision_;
+  uint8_t aRescale_;
+  uint8_t bRescale_;
+};
+
+// Decimal remainder function that returns error on overflow or division by zero.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalRemainderFunction
+    : DecimalRemainderFunction<TExec, allowPrecisionLoss> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    bool valid = DecimalRemainderFunction<TExec, allowPrecisionLoss>::
+        template call<R, A, B>(out, a, b);
+    VELOX_USER_RETURN(!valid, "Decimal overflow in remainder");
+    return Status::OK();
+  }
+};
+
+// Computes pmod(a, b) = ((a % b) + b) % b for decimals.
+// Returns a non-negative remainder with the sign of the divisor.
+template <typename TExec, bool allowPrecisionLoss>
+struct DecimalPModFunction
+    : DecimalRemainderFunction<TExec, allowPrecisionLoss> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename R, typename A, typename B>
+  bool call(R& out, const A& a, const B& b) {
+    R remainder;
+    bool valid = DecimalRemainderFunction<TExec, allowPrecisionLoss>::
+        template call<R, A, B>(remainder, a, b);
+    if (!valid) {
+      return false;
+    }
+    if (remainder > 0) {
+      out = remainder;
+    } else {
+      // (remainder + b) % b — reuse the parent's call for the second modulo.
+      // Since remainder <= 0 and we add b, the result fits in the same
+      // precision. We pass b as both arguments' scale context is already set
+      // from initialize().
+      R adjusted = remainder + R(b);
+      // Need second modulo for cases like pmod(-1, -3) = -1 where
+      // remainder + b could still be negative or >= b.
+      valid = DecimalRemainderFunction<TExec, allowPrecisionLoss>::
+          template call<R, R, B>(out, adjusted, b);
+      if (!valid) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
+// Decimal pmod function that returns error on division by zero or overflow.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalPModFunction
+    : DecimalRemainderFunction<TExec, allowPrecisionLoss> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    R remainder;
+    bool valid = DecimalRemainderFunction<TExec, allowPrecisionLoss>::
+        template call<R, A, B>(remainder, a, b);
+    VELOX_USER_RETURN(!valid, "Decimal overflow in pmod");
+    if (remainder > 0) {
+      out = remainder;
+    } else {
+      R adjusted = remainder + R(b);
+      valid = DecimalRemainderFunction<TExec, allowPrecisionLoss>::
+          template call<R, R, B>(out, adjusted, b);
+      VELOX_USER_RETURN(!valid, "Decimal overflow in pmod");
+    }
+    return Status::OK();
+  }
+};
+
 // Decimal integral divide function implementation.
 struct DecimalIntegralDivideBase {
   void initializeBase(const std::vector<TypePtr>& inputTypes) {
@@ -686,6 +825,36 @@ using DivideFunctionAllowPrecisionLoss = DecimalDivideFunction<TExec, true>;
 template <typename TExec>
 using DivideFunctionDenyPrecisionLoss = DecimalDivideFunction<TExec, false>;
 
+template <typename TExec>
+using RemainderFunctionAllowPrecisionLoss =
+    DecimalRemainderFunction<TExec, true>;
+
+template <typename TExec>
+using RemainderFunctionDenyPrecisionLoss =
+    DecimalRemainderFunction<TExec, false>;
+
+template <typename TExec>
+using CheckedRemainderFunctionAllowPrecisionLoss =
+    CheckedDecimalRemainderFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedRemainderFunctionDenyPrecisionLoss =
+    CheckedDecimalRemainderFunction<TExec, false>;
+
+template <typename TExec>
+using PModFunctionAllowPrecisionLoss = DecimalPModFunction<TExec, true>;
+
+template <typename TExec>
+using PModFunctionDenyPrecisionLoss = DecimalPModFunction<TExec, false>;
+
+template <typename TExec>
+using CheckedPModFunctionAllowPrecisionLoss =
+    CheckedDecimalPModFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedPModFunctionDenyPrecisionLoss =
+    CheckedDecimalPModFunction<TExec, false>;
+
 std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
   std::string wholeDigits = fmt::format(
       "min(38, {a_precision} - {a_scale} + {b_scale})",
@@ -820,5 +989,52 @@ void registerDecimalIntegralDivide(const std::string& prefix) {
   registerIntegralDecimalDivide<DecimalIntegralDivideFunction>(prefix + "div");
   registerIntegralDecimalDivide<CheckedDecimalIntegralDivideFunction>(
       prefix + "checked_div");
+}
+
+void registerDecimalRemainder(const std::string& prefix) {
+  std::string rScale = fmt::format(
+      "max({a_scale}, {b_scale})",
+      fmt::arg("a_scale", S1::name()),
+      fmt::arg("b_scale", S2::name()));
+  std::string rPrecision = fmt::format(
+      "min({a_precision} - {a_scale}, {b_precision} - {b_scale}) + max({a_scale}, {b_scale})",
+      fmt::arg("a_precision", P1::name()),
+      fmt::arg("b_precision", P2::name()),
+      fmt::arg("a_scale", S1::name()),
+      fmt::arg("b_scale", S2::name()));
+  registerDecimalBinary<RemainderFunctionAllowPrecisionLoss>(
+      prefix + "remainder", makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<RemainderFunctionDenyPrecisionLoss>(
+      prefix + "remainder" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+  registerDecimalBinary<CheckedRemainderFunctionAllowPrecisionLoss>(
+      prefix + "checked_remainder",
+      makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<CheckedRemainderFunctionDenyPrecisionLoss>(
+      prefix + "checked_remainder" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+}
+void registerDecimalPmod(const std::string& prefix) {
+  std::string rScale = fmt::format(
+      "max({a_scale}, {b_scale})",
+      fmt::arg("a_scale", S1::name()),
+      fmt::arg("b_scale", S2::name()));
+  std::string rPrecision = fmt::format(
+      "min({a_precision} - {a_scale}, {b_precision} - {b_scale}) + max({a_scale}, {b_scale})",
+      fmt::arg("a_precision", P1::name()),
+      fmt::arg("b_precision", P2::name()),
+      fmt::arg("a_scale", S1::name()),
+      fmt::arg("b_scale", S2::name()));
+  registerDecimalBinary<PModFunctionAllowPrecisionLoss>(
+      prefix + "pmod", makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<PModFunctionDenyPrecisionLoss>(
+      prefix + "pmod" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+  registerDecimalBinary<CheckedPModFunctionAllowPrecisionLoss>(
+      prefix + "checked_pmod",
+      makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<CheckedPModFunctionDenyPrecisionLoss>(
+      prefix + "checked_pmod" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
 }
 } // namespace facebook::velox::functions::sparksql
