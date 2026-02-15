@@ -15,9 +15,11 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfQueryConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
+#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -140,6 +142,37 @@ bool CompileState::compile(bool allowCpuFallback) {
       opProps.begin(),
       getOperatorProperties);
 
+  // Operators which break batch continuity and need concat before next operator
+  // LocalPartition is not included since it is meant to break batches.
+  auto breaksBatchContinuity = [](const exec::Operator* op) {
+    return isAnyOf<
+        exec::HashProbe,
+        exec::HashBuild,
+        exec::HashAggregation,
+        exec::StreamingAggregation,
+        exec::Limit,
+        exec::OrderBy,
+        exec::TopN>(op);
+  };
+
+  // Operators which are stateless and thus concat can safely be inserted before
+  auto NoOperatorBuffering = [](const exec::Operator* op) {
+    return isAnyOf<
+        exec::FilterProject,
+        exec::HashProbe,
+        exec::HashAggregation,
+        exec::StreamingAggregation>(op);
+  };
+
+  // Determines if concat is needed before an operator
+  auto needsConcat = [breaksBatchContinuity, NoOperatorBuffering](
+                         const exec::Operator* currentOp,
+                         const exec::Operator* nextOp) {
+    // Add concat if current breaks batch and next is stateless
+    return currentOp != nullptr && nextOp != nullptr &&
+        breaksBatchContinuity(currentOp) && NoOperatorBuffering(nextOp);
+  };
+
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
@@ -218,6 +251,21 @@ bool CompileState::compile(bool allowCpuFallback) {
         isPureCpuOperator = true;
       }
     }
+    
+    // Check if batch concat needs to be added before the next operator
+    exec::Operator* nextOper = nullptr;
+    if (operatorIndex < operators.size() - 1) {
+      nextOper = operators[operatorIndex + 1];
+    }
+    if (needsConcat(oper, nextOper) && !nextOperatorIsNotGpu &&
+        ctx->queryConfig().get<bool>(
+            CudfQueryConfig::kCudfConcatOptimizationEnabled,
+            CudfQueryConfig::isConcatOptimizationEnabledDefault)) {
+      auto planNode = getPlanNode(oper->planNodeId());
+      replaceOp.push_back(
+          std::make_unique<CudfBatchConcat>(oper->operatorId(), ctx, planNode));
+    }
+    
     if (thisOpProps.producesGpuOutput and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
@@ -385,6 +433,14 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfMemoryPercent) != config.end()) {
     memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
+    batchSizeMinThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+  }
+  if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
+    batchSizeMaxThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMaxThreshold]);
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
