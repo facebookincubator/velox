@@ -78,6 +78,19 @@ Expected<int32_t> PrestoCastHooks::castStringToDate(
   return util::fromDateString(dateString, util::ParseMode::kPrestoCast);
 }
 
+Expected<int64_t> PrestoCastHooks::castStringToTime(
+    const StringView& timeString,
+    const tz::TimeZone* timeZone,
+    int64_t sessionStartTimeMs) const {
+  try {
+    return TIME()->valueToTime(timeString, timeZone, sessionStartTimeMs);
+  } catch (const VeloxException& e) {
+    return folly::makeUnexpected(Status::UserError(e.message()));
+  } catch (const std::exception& e) {
+    return folly::makeUnexpected(Status::UserError(e.what()));
+  }
+}
+
 Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
     bool /*seconds*/) const {
   return folly::makeUnexpected(

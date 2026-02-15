@@ -123,21 +123,12 @@ VectorPtr CastExpr::castToDate(
           const auto result =
               hooks_->castStringToDate(inputVector->valueAt(row));
           if (result.hasError()) {
-            wrapException = false;
-            if (setNullInResultAtError()) {
-              resultFlatVector->setNull(row, true);
-            } else {
-              if (context.captureErrorDetails()) {
-                context.setStatus(
-                    row,
-                    Status::UserError(
-                        "{} {}",
-                        makeErrorMessage(input, row, DATE()),
-                        result.error().message()));
-              } else {
-                context.setStatus(row, Status::UserError());
-              }
-            }
+            const auto errorDetails = fmt::format(
+                "{} {}",
+                makeErrorMessage(input, row, DATE()),
+                result.error().message());
+            setCastError(
+                row, context, resultFlatVector, wrapException, errorDetails);
           } else {
             resultFlatVector->set(row, result.value());
           }
@@ -357,13 +348,24 @@ VectorPtr CastExpr::castToTime(
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        bool wrapException = true;
         try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
+          const auto inputString =
+              hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+          const auto timeResult = hooks_->castStringToTime(
+              inputString, timeZone, sessionStartTimeMs);
+          if (timeResult.hasError()) {
+            const auto errorDetails = fmt::format(
+                "{} {}",
+                makeErrorMessage(input, row, TIME()),
+                timeResult.error().message());
+            setCastError(
+                row, context, resultFlatVector, wrapException, errorDetails);
+          } else {
+            resultFlatVector->set(row, timeResult.value());
+          }
+        } catch (const VeloxUserError& ue) {
+          if (!wrapException) {
             throw;
           }
           VELOX_USER_FAIL(

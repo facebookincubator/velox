@@ -41,9 +41,13 @@ bool parseNumber(const char* data, size_t size, size_t& pos, int32_t& result) {
   return true;
 }
 
-// Helper: Parse fractional seconds (milliseconds)
-Expected<int32_t>
-parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
+Expected<int32_t> parseFractionalSecondsWithScale(
+    const char* data,
+    size_t size,
+    size_t& pos,
+    int32_t maxDigits,
+    int32_t scaleToDigits,
+    const char* precisionErrorMessage) {
   if (pos >= size || data[pos] != '.') {
     return 0; // No fractional part
   }
@@ -72,21 +76,48 @@ parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
   size_t digitCount = parseResult.ptr - start;
   pos += digitCount;
 
-  // Check that we don't have more than 3 digits (millisecond precision)
-  if (digitCount > 3) {
-    return folly::makeUnexpected(
-        Status::UserError(
-            "Invalid time format: Microsecond precision not supported"));
+  if (digitCount > static_cast<size_t>(maxDigits)) {
+    return folly::makeUnexpected(Status::UserError(precisionErrorMessage));
   }
 
-  // Convert to milliseconds by padding with zeros if needed
-  // e.g., .1 -> 100ms, .12 -> 120ms, .123 -> 123ms
-  for (size_t i = digitCount; i < 3; i++) {
+  // Convert to target precision by padding with zeros if needed.
+  for (size_t i = digitCount; i < static_cast<size_t>(scaleToDigits); i++) {
     fractionalPart *= 10;
   }
 
   return fractionalPart;
 }
+
+// Helper: Parse fractional seconds (milliseconds)
+Expected<int32_t>
+parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
+  return parseFractionalSecondsWithScale(
+      data,
+      size,
+      pos,
+      3,
+      3,
+      "Invalid time format: Microsecond precision not supported");
+}
+
+// Helper: Parse fractional seconds (microseconds)
+Expected<int32_t>
+parseFractionalSecondsMicros(const char* data, size_t size, size_t& pos) {
+  return parseFractionalSecondsWithScale(
+      data,
+      size,
+      pos,
+      6,
+      6,
+      "Invalid time format: precision beyond microseconds not supported");
+}
+
+struct TimeComponentsMicros {
+  int32_t hour = 0;
+  int32_t minute = 0;
+  int32_t second = 0;
+  int32_t micros = 0;
+};
 
 // Helper: Validate time components
 Status validateTimeComponents(const TimeComponents& components) {
@@ -106,6 +137,24 @@ Status validateTimeComponents(const TimeComponents& components) {
   return Status::OK();
 }
 
+// Helper: Validate time components (microseconds)
+Status validateTimeComponentsMicros(const TimeComponentsMicros& components) {
+  if (components.hour < 0 || components.hour >= kHoursPerDay) {
+    return Status::UserError("Invalid hour value: {}", components.hour);
+  }
+  if (components.minute < 0 || components.minute >= kMinsPerHour) {
+    return Status::UserError("Invalid minute value: {}", components.minute);
+  }
+  if (components.second < 0 || components.second >= kSecsPerMinute) {
+    return Status::UserError("Invalid second value: {}", components.second);
+  }
+  if (components.micros < 0 || components.micros >= 1'000'000) {
+    return Status::UserError(
+        "Invalid microsecond value: {}", components.micros);
+  }
+  return Status::OK();
+}
+
 // Helper: Convert time components to milliseconds since midnight
 Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
   int64_t result = static_cast<int64_t>(components.hour) * kMillisInHour +
@@ -118,6 +167,29 @@ Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
     return folly::makeUnexpected(
         Status::UserError(
             "Time value {} is out of range [0, {})", result, kMillisInDay));
+  }
+
+  return result;
+}
+
+// Helper: Convert time components to microseconds since midnight
+Expected<int64_t> timeComponentsToMicros(
+    const TimeComponentsMicros& components) {
+  constexpr int64_t kMicrosInSecond = 1'000'000;
+  constexpr int64_t kMicrosInMinute = 60 * kMicrosInSecond;
+  constexpr int64_t kMicrosInHour = 60 * kMicrosInMinute;
+  constexpr int64_t kMicrosInDay = 24 * kMicrosInHour;
+
+  int64_t result = static_cast<int64_t>(components.hour) * kMicrosInHour +
+      static_cast<int64_t>(components.minute) * kMicrosInMinute +
+      static_cast<int64_t>(components.second) * kMicrosInSecond +
+      static_cast<int64_t>(components.micros);
+
+  // Validate time range (0 to 86399999999 us in a day)
+  if (result < 0 || result >= kMicrosInDay) {
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Time value {} is out of range [0, {})", result, kMicrosInDay));
   }
 
   return result;
@@ -177,6 +249,62 @@ Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
   return components;
 }
 
+// Helper: Parse time components from string (H:m[:s[.SSSSSS]])
+Expected<TimeComponentsMicros> parseTimeComponentsMicros(
+    const char* buf,
+    size_t len) {
+  TimeComponentsMicros components;
+  size_t pos = 0;
+
+  // Parse hour (required, 1-2 digits)
+  if (!parseNumber(buf, len, pos, components.hour)) {
+    return folly::makeUnexpected(
+        Status::UserError("Invalid time format: failed to parse hour"));
+  }
+
+  // Skip first ':'
+  if (pos >= len || buf[pos] != ':') {
+    return folly::makeUnexpected(
+        Status::UserError("Invalid time format: expected ':' after hour"));
+  }
+  pos++;
+
+  // Parse minute (required, 1-2 digits)
+  if (!parseNumber(buf, len, pos, components.minute)) {
+    return folly::makeUnexpected(
+        Status::UserError("Invalid time format: failed to parse minute"));
+  }
+
+  // Check if there's a second ':' for seconds (OPTIONAL)
+  if (pos < len && buf[pos] == ':') {
+    pos++; // Skip the ':'
+
+    // Parse second (optional, 1-2 digits)
+    if (!parseNumber(buf, len, pos, components.second)) {
+      return folly::makeUnexpected(
+          Status::UserError("Invalid time format: failed to parse second"));
+    }
+
+    // Parse optional fractional seconds
+    auto microsResult = parseFractionalSecondsMicros(buf, len, pos);
+    if (microsResult.hasError()) {
+      return folly::makeUnexpected(microsResult.error());
+    }
+    components.micros = microsResult.value();
+  }
+  // If no second ':', seconds and micros remain at 0 (default)
+
+  // Check for trailing characters
+  if (pos < len) {
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Invalid time format: unexpected trailing characters at position {}",
+            pos));
+  }
+
+  return components;
+}
+
 } // namespace
 
 Expected<int64_t> fromTimeString(const char* buf, size_t len) {
@@ -195,6 +323,24 @@ Expected<int64_t> fromTimeString(const char* buf, size_t len) {
 
   // Convert to milliseconds since midnight
   return timeComponentsToMillis(components);
+}
+
+Expected<int64_t> fromTimeStringMicros(const char* buf, size_t len) {
+  auto componentsResult = parseTimeComponentsMicros(buf, len);
+  if (componentsResult.hasError()) {
+    return folly::makeUnexpected(componentsResult.error());
+  }
+
+  auto components = componentsResult.value();
+
+  // Validate all components
+  auto validationStatus = validateTimeComponentsMicros(components);
+  if (!validationStatus.ok()) {
+    return folly::makeUnexpected(validationStatus);
+  }
+
+  // Convert to microseconds since midnight
+  return timeComponentsToMicros(components);
 }
 
 Expected<int16_t>

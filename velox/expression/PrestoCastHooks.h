@@ -43,6 +43,12 @@ class PrestoCastHooks : public CastHooks {
   Expected<int32_t> castStringToDate(
       const StringView& dateString) const override;
 
+  // Casts string to TIME using TIME()->valueToTime().
+  Expected<int64_t> castStringToTime(
+      const StringView& timeString,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const override;
+
   // Allows casting 'NaN', 'Infinity', and '-Infinity' to real, but not 'Inf' or
   // these strings with different letter cases.
   Expected<float> castStringToReal(const StringView& data) const override;

@@ -50,6 +50,20 @@ inline Expected<int64_t> fromTimeString(const StringView& str) {
   return fromTimeString(str.data(), str.size());
 }
 
+/// Parse a TIME string (H:m[:s[.SSSSSS]] format)
+/// Supports formats:
+/// - "H:m" -> "1:30"
+/// - "H:m:s" -> "1:30:45"
+/// - "H:m:s.SSSSSS" -> "1:30:45.123456"
+///
+/// Returns microseconds since midnight (0 to 86399999999)
+/// Returns Unexpected with UserError status if parsing fails
+Expected<int64_t> fromTimeStringMicros(const char* buf, size_t len);
+
+inline Expected<int64_t> fromTimeStringMicros(const StringView& str) {
+  return fromTimeStringMicros(str.data(), str.size());
+}
+
 // Constants for TIME WITH TIME ZONE encoding
 constexpr int32_t kMillisShift = 12;
 constexpr int32_t kTimezoneMask = (1 << kMillisShift) - 1;
