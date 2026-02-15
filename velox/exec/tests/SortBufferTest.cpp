@@ -120,7 +120,7 @@ class SortBufferTest : public OperatorTestBase,
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
   const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
       memory::memoryManager()->addLeafPool("SortBufferTest");
 
