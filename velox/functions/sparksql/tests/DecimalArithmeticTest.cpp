@@ -108,6 +108,25 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     return evaluateOnce<R>(
         "checked_remainder(c0, c1)", {tType, uType}, t, u);
   }
+
+  template <typename R, typename T, typename U>
+  std::optional<R> decimal_pmod(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<R>("pmod(c0, c1)", {tType, uType}, t, u);
+  }
+
+  template <typename R, typename T, typename U>
+  std::optional<R> checked_pmod(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<R>(
+        "checked_pmod(c0, c1)", {tType, uType}, t, u);
+  }
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -953,6 +972,83 @@ TEST_F(DecimalArithmeticTest, checkedRemainder) {
       "Division by zero");
   VELOX_ASSERT_USER_THROW(
       (checked_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), 10500, 0)),
+      "Division by zero");
+}
+TEST_F(DecimalArithmeticTest, pmod) {
+  // Positive dividend: pmod = remainder.
+  // 10.500 pmod 3.000 = 1.500.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 3000)),
+      1500);
+
+  // Negative dividend: pmod adjusts to positive.
+  // -10.500 pmod 3.000 = 1.500 (remainder is -1.500, then -1.500 + 3.000 = 1.500).
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, 3000)),
+      1500);
+
+  // Positive dividend, negative divisor.
+  // 10.500 pmod -3.000: remainder = 1.500, positive so result = 1.500.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, -3000)),
+      1500);
+
+  // Both negative: -10.500 pmod -3.000.
+  // remainder = -1.500, negative so: (-1.500 + -3.000) % -3.000 = -4.500 % -3.000 = -1.500.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, -3000)),
+      -1500);
+
+  // Zero dividend.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 0, 3000)),
+      0);
+
+  // Division by zero returns null.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 0)),
+      std::nullopt);
+
+  // Long decimal.
+  EXPECT_EQ(
+      (decimal_pmod<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), -10500, 3000)),
+      1500);
+}
+
+TEST_F(DecimalArithmeticTest, checkedPmod) {
+  // Normal case.
+  EXPECT_EQ(
+      (checked_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 3000)),
+      1500);
+
+  // Negative dividend adjusts to positive.
+  EXPECT_EQ(
+      (checked_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, 3000)),
+      1500);
+
+  // Long decimal.
+  EXPECT_EQ(
+      (checked_pmod<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), -10500, 3000)),
+      1500);
+
+  // Division by zero throws.
+  VELOX_ASSERT_USER_THROW(
+      (checked_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 0)),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      (checked_pmod<int128_t, int128_t, int128_t>(
           DECIMAL(20, 3), DECIMAL(20, 3), 10500, 0)),
       "Division by zero");
 }

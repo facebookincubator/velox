@@ -160,6 +160,26 @@ Arithmetic Functions
     Throws an error when the result overflows or ``y`` is zero.
     Corresponds to Spark's operator ``%`` with ``spark.sql.ansi.enabled`` set to true.
 
+.. spark:function:: pmod(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the positive remainder of ``x`` divided by ``y``. The result is always
+    non-negative. The result type is determined by the precision and scale computation
+    rules described above (same as remainder).
+    Returns NULL when the result overflows or ``y`` is zero.
+    Corresponds to Spark's function ``pmod`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT pmod(CAST(-1.0 as DECIMAL(3, 1)), CAST(3.0 as DECIMAL(3, 1))); -- 2.0
+        SELECT pmod(CAST(1.0 as DECIMAL(3, 1)), CAST(3.0 as DECIMAL(3, 1))); -- 1.0
+        SELECT pmod(CAST(1.0 as DECIMAL(3, 1)), CAST(0.0 as DECIMAL(3, 1))); -- NULL
+
+.. spark:function:: checked_pmod(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the positive remainder of ``x`` divided by ``y``. The result is always
+    non-negative. The result type is determined by the precision and scale computation
+    rules described above (same as remainder).
+    Throws an error when the result overflows or ``y`` is zero.
+    Corresponds to Spark's function ``pmod`` with ``spark.sql.ansi.enabled`` set to true.
+
 Decimal Functions
 -----------------
 .. spark:function:: ceil(x: decimal(p, s)) -> r: decimal(pr, 0)
