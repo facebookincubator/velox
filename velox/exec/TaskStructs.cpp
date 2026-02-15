@@ -23,12 +23,23 @@ void SplitsStore::addSplit(
     std::vector<ContinuePromise>& promises) {
   VELOX_CHECK(!noMoreSplits_);
   VELOX_CHECK(!(remoteSplit_ && split.isBarrier()));
-  splits_.push_back(std::move(split));
-  if (promises_.empty()) {
-    return;
+  VELOX_CHECK(barrierSplits_.empty());
+  if (split.isBarrier()) {
+    for (auto i = 0; i < split.barrier->numDrivers; ++i) {
+      barrierSplits_[i] = Split::createBarrier();
+    }
+    VELOX_CHECK_LE(promises_.size(), split.barrier->numDrivers);
+    // A barrier is assigned to every driver; wake up all currently blocked
+    // drivers to process it.
+    std::move(promises_.begin(), promises_.end(), std::back_inserter(promises));
+    promises_.clear();
+  } else {
+    splits_.push_back(std::move(split));
+    if (!promises_.empty()) {
+      promises.push_back(std::move(promises_.back()));
+      promises_.pop_back();
+    }
   }
-  promises.push_back(std::move(promises_.back()));
-  promises_.pop_back();
 }
 
 ContinueFuture SplitsStore::makeFuture() {

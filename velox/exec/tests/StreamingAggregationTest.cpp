@@ -184,20 +184,34 @@ class StreamingAggregationTest
                     .capturePlanNodeId(aggregationNodeId)
                     .planNode();
 
-    for (const auto barrierExecution : {false, true}) {
-      SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+    struct {
+      bool hasBarrier;
+      bool serialExecution;
+
+      std::string toString() const {
+        return fmt::format(
+            "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+      }
+    } testSettings[] = {
+        {false, false},
+        {false, true},
+        {true, false},
+        {true, true},
+    };
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       auto task =
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .splits(makeHiveConnectorSplits(tempFiles))
-              .serialExecution(true)
-              .barrierExecution(barrierExecution)
+              .serialExecution(testData.serialExecution)
+              .barrierExecution(testData.hasBarrier)
               .config(
                   core::QueryConfig::kPreferredOutputBatchRows,
                   std::to_string(outputBatchSize))
               .assertResults(
                   "SELECT c0, max(c1 order by c2), max(c1 order by c2 desc), array_agg(c1 order by c2) FROM tmp GROUP BY c0");
       const auto taskStats = task->taskStats();
-      ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+      ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
       ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
       ASSERT_EQ(
           velox::exec::toPlanStats(taskStats)
@@ -280,13 +294,30 @@ class StreamingAggregationTest
                           false)
                       .capturePlanNodeId(aggregationNodeId)
                       .planNode();
-      for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      struct {
+        bool hasBarrier;
+        bool serialExecution;
+
+        std::string toString() const {
+          return fmt::format(
+              "hasBarrier: {}, serialExecution: {}",
+              hasBarrier,
+              serialExecution);
+        }
+      } testSettings[] = {
+          {false, true},
+          {false, false},
+          {true, true},
+          {true, false},
+      };
+      for (const auto& testData : testSettings) {
+        SCOPED_TRACE(testData.toString());
         auto task =
             AssertQueryBuilder(plan, duckDbQueryRunner_)
                 .splits(makeHiveConnectorSplits(tempFiles))
-                .serialExecution(true)
-                .barrierExecution(barrierExecution)
+                .serialExecution(testData.serialExecution)
+                .barrierExecution(testData.hasBarrier)
+                .maxDrivers(testData.serialExecution ? 1 : 3)
                 .config(
                     core::QueryConfig::kPreferredOutputBatchRows,
                     std::to_string(outputBatchSize))
@@ -294,7 +325,7 @@ class StreamingAggregationTest
                     "SELECT c0, array_agg(distinct c1), array_agg(c1 order by c2), "
                     "count(distinct c1), array_agg(c2) FROM tmp GROUP BY c0");
         const auto taskStats = task->taskStats();
-        ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+        ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         ASSERT_EQ(
             velox::exec::toPlanStats(taskStats)
@@ -541,18 +572,34 @@ class StreamingAggregationTest
           keySql.str(),
           keySql.str());
 
-      for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      struct {
+        bool hasBarrier;
+        bool serialExecution;
+
+        std::string toString() const {
+          return fmt::format(
+              "hasBarrier: {}, serialExecution: {}",
+              hasBarrier,
+              serialExecution);
+        }
+      } testSettings[] = {
+          {false, false},
+          {false, true},
+          {true, false},
+          {true, true},
+      };
+      for (const auto& testData : testSettings) {
+        SCOPED_TRACE(testData.toString());
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
-                        .serialExecution(true)
-                        .barrierExecution(barrierExecution)
+                        .serialExecution(testData.serialExecution)
+                        .barrierExecution(testData.hasBarrier)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
                             std::to_string(outputBatchSize))
                         .assertResults(sql);
         const auto taskStats = task->taskStats();
-        ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+        ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
       }
@@ -584,18 +631,34 @@ class StreamingAggregationTest
 
       const auto sql = fmt::format("SELECT distinct {} FROM tmp", keySql.str());
 
-      for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      struct {
+        bool hasBarrier;
+        bool serialExecution;
+
+        std::string toString() const {
+          return fmt::format(
+              "hasBarrier: {}, serialExecution: {}",
+              hasBarrier,
+              serialExecution);
+        }
+      } testSettings[] = {
+          {false, false},
+          {false, true},
+          {true, false},
+          {true, true},
+      };
+      for (const auto& testData : testSettings) {
+        SCOPED_TRACE(testData.toString());
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
-                        .serialExecution(true)
-                        .barrierExecution(barrierExecution)
+                        .serialExecution(testData.serialExecution)
+                        .barrierExecution(testData.hasBarrier)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
                             std::to_string(outputBatchSize))
                         .assertResults(sql);
         const auto taskStats = task->taskStats();
-        ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+        ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
       }
