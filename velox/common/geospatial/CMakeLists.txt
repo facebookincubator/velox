@@ -14,7 +14,11 @@
 
 if(VELOX_ENABLE_GEO)
   velox_add_library(velox_common_geospatial_serde GeometrySerde.cpp)
-  velox_link_libraries(velox_common_geospatial_serde velox_expression GEOS::geos)
+  velox_link_libraries(
+    velox_common_geospatial_serde
+    velox_expression
+    GEOS::geos
+  )
 endif()
 
 velox_install_library_headers()

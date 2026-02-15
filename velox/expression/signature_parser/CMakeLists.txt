@@ -36,7 +36,9 @@ add_flex_bison_dependency(SignatureParserScanner SignatureParser)
 if(VELOX_MONO_LIBRARY)
   add_custom_target(
     velox_signature_gen_src
-    DEPENDS ${BISON_SignatureParser_OUTPUTS} ${FLEX_SignatureParserScanner_OUTPUTS}
+    DEPENDS
+      ${BISON_SignatureParser_OUTPUTS}
+      ${FLEX_SignatureParserScanner_OUTPUTS}
   )
   add_dependencies(velox velox_signature_gen_src)
 endif()

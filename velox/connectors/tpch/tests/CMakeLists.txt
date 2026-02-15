@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_tpch_connector_test TpchConnectorTest.cpp TpchConnectorSerDeTest.cpp)
+add_executable(
+  velox_tpch_connector_test
+  TpchConnectorTest.cpp
+  TpchConnectorSerDeTest.cpp
+)
 
 add_test(velox_tpch_connector_test velox_tpch_connector_test)
 

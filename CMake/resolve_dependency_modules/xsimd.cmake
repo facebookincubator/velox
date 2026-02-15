@@ -18,9 +18,11 @@ set(
   VELOX_XSIMD_BUILD_SHA256_CHECKSUM
   73f818368b3a4dad92fab1b2933d93694241bd2365a6181747b2df1768f6afdd
 )
-set(
+string(
+  CONCAT
   VELOX_XSIMD_SOURCE_URL
-  "https://github.com/xtensor-stack/xsimd/archive/refs/tags/${VELOX_XSIMD_VERSION}.tar.gz"
+  "https://github.com/xtensor-stack/xsimd/archive/refs/tags/"
+  "${VELOX_XSIMD_VERSION}.tar.gz"
 )
 
 velox_resolve_dependency_url(XSIMD)

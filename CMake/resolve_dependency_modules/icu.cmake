@@ -58,7 +58,8 @@ ExternalProject_Add(
   SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-src
   BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-bld
   CONFIGURE_COMMAND
-    <SOURCE_DIR>/source/configure --prefix=${ICU_DIR} --libdir=${ICU_LIBRARIES} ${ICU_CFG}
+    <SOURCE_DIR>/source/configure --prefix=${ICU_DIR} --libdir=${ICU_LIBRARIES}
+    ${ICU_CFG}
   BUILD_COMMAND ${MAKE_PROGRAM} -j ${NUM_JOBS}
   INSTALL_COMMAND ${HOST_ENV_CMAKE} ${MAKE_PROGRAM} install
 )
@@ -83,7 +84,14 @@ set(
 
 foreach(component ${icu_components})
   add_library(ICU::${component} SHARED IMPORTED)
-  string(CONCAT ICU_${component}_LIBRARY ${ICU_LIBRARIES} "/libicu" ${component} ".so")
+  string(
+    CONCAT
+    ICU_${component}_LIBRARY
+    ${ICU_LIBRARIES}
+    "/libicu"
+    ${component}
+    ".so"
+  )
   file(TOUCH ${ICU_${component}_LIBRARY})
   set_target_properties(
     ICU::${component}

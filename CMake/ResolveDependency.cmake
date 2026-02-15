@@ -32,7 +32,11 @@ include(FetchContent)
 include(ExternalProject)
 include(ProcessorCount)
 include(CheckCXXCompilerFlag)
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/resolve_dependency_modules)
+list(
+  APPEND
+  CMAKE_MODULE_PATH
+  ${CMAKE_CURRENT_LIST_DIR}/resolve_dependency_modules
+)
 
 # Enable SSL certificate verification for file downloads
 set(CMAKE_TLS_VERIFY true)
@@ -82,7 +86,10 @@ macro(velox_resolve_dependency dependency_name)
   elseif(${dependency_name}_SOURCE STREQUAL "BUNDLED")
     velox_build_dependency(${dependency_name})
   else()
-    message(FATAL_ERROR "Invalid source for ${dependency_name}: ${${dependency_name}_SOURCE}")
+    message(
+      FATAL_ERROR
+      "Invalid source for ${dependency_name}: ${${dependency_name}_SOURCE}"
+    )
   endif()
 
   list(POP_BACK CMAKE_MESSAGE_INDENT)
@@ -95,7 +102,10 @@ macro(velox_set_source dependency_name)
     ${dependency_name}_SOURCE
     ${VELOX_DEPENDENCY_SOURCE}
   )
-  message(STATUS "Setting ${dependency_name} source to ${${dependency_name}_SOURCE}")
+  message(
+    STATUS
+    "Setting ${dependency_name} source to ${${dependency_name}_SOURCE}"
+  )
 endmacro()
 
 # Set var_name to the value of $ENV{envvar_name} if ENV is defined. If neither

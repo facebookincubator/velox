@@ -28,7 +28,10 @@ function(pyvelox_add_module TARGET)
   pybind11_add_module(${TARGET} ${ARGN})
 
   if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
-    target_compile_definitions(${TARGET} PRIVATE PYVELOX_VERSION=${SKBUILD_PROJECT_VERSION_FULL})
+    target_compile_definitions(
+      ${TARGET}
+      PRIVATE PYVELOX_VERSION=${SKBUILD_PROJECT_VERSION_FULL}
+    )
   else()
     target_compile_definitions(${TARGET} PRIVATE PYVELOX_VERSION=dev)
   endif()
@@ -37,9 +40,14 @@ function(pyvelox_add_module TARGET)
   velox_get_rpath_origin(_origin)
   set_target_properties(
     ${TARGET}
-    PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib" INSTALL_RPATH_USE_LINK_PATH TRUE
+    PROPERTIES
+      INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
+      INSTALL_RPATH_USE_LINK_PATH TRUE
   )
-  install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+  install(
+    TARGETS ${TARGET}
+    LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries
+  )
 endfunction()
 
 # TODO use file sets
@@ -69,7 +77,13 @@ function(velox_add_library TARGET)
   set(options OBJECT STATIC SHARED INTERFACE)
   set(oneValueArgs)
   set(multiValueArgs)
-  cmake_parse_arguments(VELOX "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  cmake_parse_arguments(
+    VELOX
+    "${options}"
+    "${oneValueArgs}"
+    "${multiValueArgs}"
+    ${ARGN}
+  )
 
   # Remove library type specifiers from ARGN
   set(library_type)
@@ -93,7 +107,10 @@ function(velox_add_library TARGET)
       # Target already exists, append sources to it.
       target_sources(velox PRIVATE ${ARGN})
       if(VELOX_BUILD_PYTHON_PACKAGE)
-        install(TARGETS velox LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+        install(
+          TARGETS velox
+          LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries
+        )
       endif()
     else()
       set(_type STATIC)
@@ -102,8 +119,14 @@ function(velox_add_library TARGET)
       endif()
       # Create the target if this is the first invocation.
       add_library(velox ${_type} ${ARGN})
-      set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
-      set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+      set_target_properties(
+        velox
+        PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
+      )
+      set_target_properties(
+        velox
+        PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
+      )
       install(TARGETS velox DESTINATION lib/velox EXPORT velox_targets)
       if(VELOX_BUILD_CMAKE_PACKAGE)
         set(package_cmake_dir "lib/cmake/Velox")
@@ -135,13 +158,20 @@ function(velox_add_library TARGET)
           list(APPEND system_dependencies Snappy zstd)
         endif()
         foreach(system_dependency ${system_dependencies})
-          set(velox_find_module "${PROJECT_SOURCE_DIR}/CMake/Find${system_dependency}.cmake")
+          set(
+            velox_find_module
+            "${PROJECT_SOURCE_DIR}/CMake/Find${system_dependency}.cmake"
+          )
           if(EXISTS "${velox_find_module}")
-            install(FILES "${velox_find_module}" DESTINATION "${package_cmake_dir}")
+            install(
+              FILES "${velox_find_module}"
+              DESTINATION "${package_cmake_dir}"
+            )
           endif()
         endforeach()
         # TODO: We can enable this once we add version to Velox.
-        # set(version_cmake "${PROJECT_BINARY_DIR}/CMake/VeloxConfigVersion.cmake")
+        # set(version_cmake
+        #     \"${PROJECT_BINARY_DIR}/CMake/VeloxConfigVersion.cmake\")
         # write_basic_package_version_file("${version_cmake}"
         #                                  COMPATIBILITY SameMajorVersion)
         # install(FILES "${version_cmake}" DESTINATION "${package_cmake_dir}")

@@ -48,7 +48,12 @@ set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "Provider of zlib library")
 set(gRPC_CARES_PROVIDER "package" CACHE STRING "Provider of c-ares library")
 set(gRPC_RE2_PROVIDER "package" CACHE STRING "Provider of re2 library")
 set(gRPC_SSL_PROVIDER "package" CACHE STRING "Provider of ssl library")
-set(gRPC_PROTOBUF_PROVIDER "package" CACHE STRING "Provider of protobuf library")
+set(
+  gRPC_PROTOBUF_PROVIDER
+  "package"
+  CACHE STRING
+  "Provider of protobuf library"
+)
 set(gRPC_INSTALL ON CACHE BOOL "Generate installation target")
 FetchContent_MakeAvailable(gRPC)
 add_library(gRPC::grpc ALIAS grpc)

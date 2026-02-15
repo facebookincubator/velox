@@ -22,9 +22,11 @@ set(
   VELOX_FOLLY_BUILD_SHA256_CHECKSUM
   8b41494b664fcde3d02f652d6a27381ec5e938ef58cf986d8ce4958d424af101
 )
-set(
+string(
+  CONCAT
   VELOX_FOLLY_SOURCE_URL
-  "https://github.com/facebook/folly/releases/download/${VELOX_FOLLY_BUILD_VERSION}/folly-${VELOX_FOLLY_BUILD_VERSION}.tar.gz"
+  "https://github.com/facebook/folly/releases/download/"
+  "${VELOX_FOLLY_BUILD_VERSION}/folly-${VELOX_FOLLY_BUILD_VERSION}.tar.gz"
 )
 
 velox_resolve_dependency_url(FOLLY)
@@ -44,7 +46,8 @@ FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
+  PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL

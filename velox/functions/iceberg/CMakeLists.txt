@@ -14,7 +14,11 @@
 
 velox_add_library(velox_functions_iceberg_hash Murmur3Hash32.cpp)
 
-velox_link_libraries(velox_functions_iceberg_hash velox_common_base velox_functions_util)
+velox_link_libraries(
+  velox_functions_iceberg_hash
+  velox_common_base
+  velox_functions_util
+)
 
 velox_add_library(
   velox_functions_iceberg
@@ -32,7 +36,10 @@ velox_link_libraries(
 )
 
 if(NOT VELOX_MONO_LIBRARY)
-  set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE high_memory_pool)
+  set_property(
+    TARGET velox_functions_iceberg
+    PROPERTY JOB_POOL_COMPILE high_memory_pool
+  )
 endif()
 
 if(${VELOX_BUILD_TESTING})

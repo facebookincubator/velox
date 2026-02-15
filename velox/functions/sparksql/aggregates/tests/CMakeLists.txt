@@ -32,7 +32,10 @@ add_executable(
   VarianceAggregationTest.cpp
 )
 
-add_test(velox_functions_spark_aggregates_test velox_functions_spark_aggregates_test)
+add_test(
+  velox_functions_spark_aggregates_test
+  velox_functions_spark_aggregates_test
+)
 
 target_link_libraries(
   velox_functions_spark_aggregates_test

@@ -23,7 +23,8 @@ if(${VELOX_PROTOBUF_BUILD_VERSION} LESS 22.0)
     CONCAT
     VELOX_PROTOBUF_SOURCE_URL
     "https://github.com/protocolbuffers/protobuf/releases/download/"
-    "v${VELOX_PROTOBUF_BUILD_VERSION}/protobuf-all-${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
+    "v${VELOX_PROTOBUF_BUILD_VERSION}/"
+    "protobuf-all-${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
   )
 else()
   velox_set_source(absl)

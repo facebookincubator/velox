@@ -14,7 +14,11 @@
 
 add_subdirectory(utils)
 add_library(velox_dwio_faulty_file_sink FaultyFileSink.cpp)
-target_link_libraries(velox_dwio_faulty_file_sink velox_file_test_utils velox_dwio_common)
+target_link_libraries(
+  velox_dwio_faulty_file_sink
+  velox_file_test_utils
+  velox_dwio_common
+)
 
 # There is an issue with the VTT symbol for the InlineExecutor from folly when
 # building on Linux with Clang15. It is not created and results in a SEGV when
@@ -78,7 +82,10 @@ target_link_libraries(
 )
 
 if(VELOX_ENABLE_BENCHMARKS)
-  add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
+  add_executable(
+    velox_dwio_common_data_buffer_benchmark
+    DataBufferBenchmark.cpp
+  )
 
   target_link_libraries(
     velox_dwio_common_data_buffer_benchmark
@@ -89,7 +96,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
   )
 
-  add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
+  add_executable(
+    velox_dwio_common_int_decoder_benchmark
+    IntDecoderBenchmark.cpp
+  )
   target_link_libraries(
     velox_dwio_common_int_decoder_benchmark
     velox_dwio_common_exception
@@ -101,7 +111,10 @@ if(VELOX_ENABLE_BENCHMARKS)
 
   if(VELOX_ENABLE_ARROW)
     add_subdirectory(Lemire/FastPFor)
-    add_executable(velox_dwio_common_bitpack_decoder_benchmark BitPackDecoderBenchmark.cpp)
+    add_executable(
+      velox_dwio_common_bitpack_decoder_benchmark
+      BitPackDecoderBenchmark.cpp
+    )
 
     target_compile_options(
       velox_dwio_common_bitpack_decoder_benchmark

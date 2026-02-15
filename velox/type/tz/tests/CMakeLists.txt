@@ -24,7 +24,10 @@ target_link_libraries(
   pthread
 )
 
-add_executable(velox_type_tz_ext_invalid_test TimeZoneMapExternalInvalidTest.cpp)
+add_executable(
+  velox_type_tz_ext_invalid_test
+  TimeZoneMapExternalInvalidTest.cpp
+)
 add_test(velox_type_tz_ext_invalid_test velox_type_tz_ext_invalid_test)
 
 target_link_libraries(

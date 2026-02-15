@@ -27,7 +27,9 @@ add_library(breeze_cuda INTERFACE)
 target_include_directories(breeze_cuda INTERFACE ../breeze)
 target_compile_definitions(
   breeze_cuda
-  INTERFACE PLATFORM_CUDA CUDA_PLATFORM_SPECIALIZATION_HEADER=${CUDA_PLATFORM_SPECIALIZATION_HEADER}
+  INTERFACE
+    PLATFORM_CUDA
+    CUDA_PLATFORM_SPECIALIZATION_HEADER=${CUDA_PLATFORM_SPECIALIZATION_HEADER}
 )
 
 add_subdirectory(common)

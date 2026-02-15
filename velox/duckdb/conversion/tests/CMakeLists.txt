@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_duckdb_conversion_test DuckConversionTest.cpp DuckParserTest.cpp)
+add_executable(
+  velox_duckdb_conversion_test
+  DuckConversionTest.cpp
+  DuckParserTest.cpp
+)
 
 add_test(velox_duckdb_conversion_test velox_duckdb_conversion_test)
 

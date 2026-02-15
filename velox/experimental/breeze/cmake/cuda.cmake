@@ -32,7 +32,10 @@ find_program(NVCC_EXECUTABLE nvcc REQUIRED PATHS /usr/local/cuda/bin)
 
 if(DEFINED CUDA_EXPECTED_RESOURCE_USAGE_DIR)
   if(NOT EXISTS "${CUDA_EXPECTED_RESOURCE_USAGE_DIR}")
-    message(FATAL_ERROR "Invalid resource usage dir: ${CUDA_EXPECTED_RESOURCE_USAGE_DIR}")
+    message(
+      FATAL_ERROR
+      "Invalid resource usage dir: ${CUDA_EXPECTED_RESOURCE_USAGE_DIR}"
+    )
   endif()
   if(NOT DEFINED CUDA_RESOURCE_USAGE_CMDLINE)
     message(FATAL_ERROR "CUDA_RESOURCE_USAGE_CMDLINE is undefined")
@@ -58,10 +61,12 @@ function(breeze_add_cuda_object target source)
   add_custom_command(
     OUTPUT ${target}.o
     COMMAND
-      ${NVCC_EXECUTABLE} -x cu ${CMAKE_NVCC_FLAGS} ${NDEBUG_DEFINE} -DPLATFORM_CUDA
+      ${NVCC_EXECUTABLE} -x cu ${CMAKE_NVCC_FLAGS} ${NDEBUG_DEFINE}
+      -DPLATFORM_CUDA
       -DCUDA_PLATFORM_SPECIALIZATION_HEADER=${CUDA_PLATFORM_SPECIALIZATION_HEADER}
-      -I${CMAKE_SOURCE_DIR} ${CMAKE_CXX_FLAGS} ${COMPILER_WARN_FLAGS} ${OPT_FLAGS} ${CUDA_OPT_FLAGS}
-      ${arg_FLAGS} -std=c++17 -c ${source} -MD -MF ${target}.o.d -o ${target}.o
+      -I${CMAKE_SOURCE_DIR} ${CMAKE_CXX_FLAGS} ${COMPILER_WARN_FLAGS}
+      ${OPT_FLAGS} ${CUDA_OPT_FLAGS} ${arg_FLAGS} -std=c++17 -c ${source} -MD
+      -MF ${target}.o.d -o ${target}.o
     DEPFILE ${target}.o.d
     DEPENDS ${arg_DEPENDS}
     COMMENT "Building CUDA object ${target}.o"
@@ -73,13 +78,20 @@ function(breeze_add_cuda_test target source)
   list(APPEND arg_FLAGS -I${googletest_SOURCE_DIR}/googletest/include)
   list(APPEND arg_FLAGS -I${CMAKE_SOURCE_DIR})
   list(APPEND arg_FLAGS -I${CMAKE_BINARY_DIR})
-  breeze_add_cuda_object(${target} ${source} FLAGS ${arg_FLAGS} DEPENDS ${arg_DEPENDS})
+  breeze_add_cuda_object(
+    ${target}
+    ${source}
+    FLAGS ${arg_FLAGS}
+    DEPENDS ${arg_DEPENDS}
+  )
   add_custom_command(
     OUTPUT ${target}
     COMMAND
       ${NVCC_EXECUTABLE} -o ${target} ${target}.o ${arg_LIBS}
-      $<TARGET_FILE_DIR:GTest::gtest>/libgtest.a $<TARGET_FILE_DIR:test_main>/libtest_main.a
-      $<$<BOOL:${BUILD_TRACING}>:$<TARGET_FILE_DIR:perfetto>/libperfetto.a> ${ARCH_LINK_FLAGS}
+      $<TARGET_FILE_DIR:GTest::gtest>/libgtest.a
+      $<TARGET_FILE_DIR:test_main>/libtest_main.a
+      $<$<BOOL:${BUILD_TRACING}>:$<TARGET_FILE_DIR:perfetto>/libperfetto.a>
+      ${ARCH_LINK_FLAGS}
     DEPENDS ${target}.o test_main
     COMMENT "Linking CUDA executable ${target}"
   )
@@ -88,7 +100,11 @@ function(breeze_add_cuda_test target source)
     TARGET ${target}_TESTS
     PROPERTY IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/${target}
   )
-  gtest_discover_tests(${target}_TESTS TEST_PREFIX cuda: DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(
+    ${target}_TESTS
+    TEST_PREFIX cuda:
+    DISCOVERY_MODE PRE_TEST
+  )
   if(DEFINED CUDA_EXPECTED_RESOURCE_USAGE_DIR)
     if(EXISTS "${CUDA_EXPECTED_RESOURCE_USAGE_DIR}/${target}-expected.txt")
       set(
@@ -102,7 +118,11 @@ function(breeze_add_cuda_test target source)
         DEPENDS ${target}
         VERBATIM
       )
-      add_custom_target(${target}-resource-usage ALL DEPENDS ${ACTUAL_USAGE_PATH})
+      add_custom_target(
+        ${target}-resource-usage
+        ALL
+        DEPENDS ${ACTUAL_USAGE_PATH}
+      )
       string(ASCII 27 Esc)
       set(RedColor "${Esc}[31m")
       set(YellowColor "${Esc}[33m")

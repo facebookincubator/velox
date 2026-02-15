@@ -128,7 +128,10 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_executable(velox_expression_verifier_unit_test ExpressionVerifierUnitTest.cpp)
+add_executable(
+  velox_expression_verifier_unit_test
+  ExpressionVerifierUnitTest.cpp
+)
 target_link_libraries(
   velox_expression_verifier_unit_test
   velox_expression_verifier

@@ -22,7 +22,10 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
     SERVICES
     LocalRunnerService
   )
-  target_compile_options(local_runner_service_thrift PRIVATE -Wno-error=deprecated-declarations)
+  target_compile_options(
+    local_runner_service_thrift
+    PRIVATE -Wno-error=deprecated-declarations
+  )
 endif()
 
 add_library(
@@ -46,7 +49,10 @@ add_library(
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
   target_link_libraries(velox_fuzzer_util local_runner_service_thrift)
-  target_include_directories(velox_fuzzer_util PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+  target_include_directories(
+    velox_fuzzer_util
+    PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
+  )
 endif()
 
 target_link_libraries(
@@ -146,10 +152,18 @@ target_link_libraries(
 # TopNRowNumber Fuzzer.
 add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
 
-target_link_libraries(velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
+target_link_libraries(
+  velox_topn_row_number_fuzzer
+  velox_topn_row_number_fuzzer_lib
+)
 
 # Join Fuzzer.
-add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp JoinMaker.cpp)
+add_executable(
+  velox_join_fuzzer
+  JoinFuzzerRunner.cpp
+  JoinFuzzer.cpp
+  JoinMaker.cpp
+)
 
 target_link_libraries(
   velox_join_fuzzer
@@ -161,7 +175,11 @@ target_link_libraries(
 )
 
 # Spatial Join Fuzzer.
-add_executable(velox_spatial_join_fuzzer SpatialJoinFuzzerRunner.cpp SpatialJoinFuzzer.cpp)
+add_executable(
+  velox_spatial_join_fuzzer
+  SpatialJoinFuzzerRunner.cpp
+  SpatialJoinFuzzer.cpp
+)
 
 target_link_libraries(
   velox_spatial_join_fuzzer
@@ -212,7 +230,11 @@ add_library(velox_cache_fuzzer_lib CacheFuzzer.cpp)
 # Cache Fuzzer
 add_executable(velox_cache_fuzzer CacheFuzzerRunner.cpp)
 
-target_link_libraries(velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_util)
+target_link_libraries(
+  velox_cache_fuzzer
+  velox_cache_fuzzer_lib
+  velox_fuzzer_util
+)
 
 target_link_libraries(
   velox_cache_fuzzer_lib
@@ -252,7 +274,10 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
     glog::glog
   )
 
-  target_include_directories(velox_local_runner_service_lib PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+  target_include_directories(
+    velox_local_runner_service_lib
+    PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
+  )
 
   # LocalRunnerService Executable
   add_executable(velox_local_runner_service_runner LocalRunnerServiceRunner.cpp)

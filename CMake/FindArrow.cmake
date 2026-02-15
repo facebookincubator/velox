@@ -43,5 +43,8 @@ if(Arrow_FOUND AND NOT TARGET arrow)
     arrow
     PROPERTIES IMPORTED_LOCATION ${ARROW_LIB} INTERFACE_LINK_LIBRARIES thrift
   )
-  set_target_properties(arrow_testing PROPERTIES IMPORTED_LOCATION ${ARROW_TESTING_LIB})
+  set_target_properties(
+    arrow_testing
+    PROPERTIES IMPORTED_LOCATION ${ARROW_TESTING_LIB}
+  )
 endif()

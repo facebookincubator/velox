@@ -42,7 +42,11 @@ foreach(PROTO ${PROTO_FILES})
     GRPC_HDRS
     "${PROJECT_BINARY_DIR}/velox/functions/sparksql/fuzzer/spark/connect/${PROTO_NAME}.grpc.pb.h"
   )
-  list(APPEND PROTO_FILES_FULL "${PROJECT_SOURCE_DIR}/${PROTO_DIR}/${PROTO_NAME}.proto")
+  list(
+    APPEND
+    PROTO_FILES_FULL
+    "${PROJECT_SOURCE_DIR}/${PROTO_DIR}/${PROTO_NAME}.proto"
+  )
 endforeach()
 
 set(PROTO_OUTPUT_FILES ${PROTO_HDRS} ${PROTO_SRCS})
@@ -59,7 +63,9 @@ endforeach()
 # Generate Spark connect headers and sources.
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
-  COMMAND protobuf::protoc ${PROTO_PATH_ARGS} --cpp_out ${PROJECT_BINARY_DIR} ${PROTO_FILES_FULL}
+  COMMAND
+    protobuf::protoc ${PROTO_PATH_ARGS} --cpp_out ${PROJECT_BINARY_DIR}
+    ${PROTO_FILES_FULL}
   DEPENDS protobuf::protoc
   COMMENT "Running PROTO compiler"
   VERBATIM
@@ -70,7 +76,8 @@ add_custom_command(
   OUTPUT ${GRPC_OUTPUT_FILES}
   COMMAND
     protobuf::protoc ${PROTO_PATH_ARGS} --grpc_out=${PROJECT_BINARY_DIR}
-    --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin> ${PROTO_FILES_FULL}
+    --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+    ${PROTO_FILES_FULL}
   DEPENDS protobuf::protoc
   COMMENT "Running gRPC C++ protocol buffer compiler"
   VERBATIM
@@ -84,7 +91,10 @@ add_library(
   SparkQueryRunnerToSqlPlanNodeVisitor.cpp
 )
 
-target_include_directories(velox_spark_query_runner PUBLIC ${PROJECT_BINARY_DIR}/spark/connect/)
+target_include_directories(
+  velox_spark_query_runner
+  PUBLIC ${PROJECT_BINARY_DIR}/spark/connect/
+)
 
 target_link_libraries(
   velox_spark_query_runner

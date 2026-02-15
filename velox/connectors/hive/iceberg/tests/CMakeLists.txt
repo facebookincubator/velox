@@ -11,7 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.cpp)
+add_library(
+  velox_dwio_iceberg_reader_benchmark_lib
+  IcebergSplitReaderBenchmark.cpp
+)
 target_link_libraries(
   velox_dwio_iceberg_reader_benchmark_lib
   velox_exec_test_lib
@@ -23,7 +26,10 @@ target_link_libraries(
 )
 
 if(VELOX_ENABLE_BENCHMARKS)
-  add_executable(velox_dwio_iceberg_reader_benchmark IcebergSplitReaderBenchmarkMain.cpp)
+  add_executable(
+    velox_dwio_iceberg_reader_benchmark
+    IcebergSplitReaderBenchmarkMain.cpp
+  )
   target_link_libraries(
     velox_dwio_iceberg_reader_benchmark
     velox_dwio_iceberg_reader_benchmark_lib
@@ -37,7 +43,11 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_executable(velox_hive_iceberg_test IcebergReadTest.cpp IcebergSplitReaderBenchmarkTest.cpp)
+  add_executable(
+    velox_hive_iceberg_test
+    IcebergReadTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+  )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
@@ -85,7 +95,10 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 
-    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    file(
+      COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+      DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
+    )
 
     target_link_libraries(
       velox_hive_iceberg_insert_test

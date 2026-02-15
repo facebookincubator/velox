@@ -26,8 +26,14 @@ set(
   glog::glog
 )
 
-add_executable(velox_dwio_dwrf_buffered_output_stream_test TestBufferedOutputStream.cpp)
-add_test(velox_dwio_dwrf_buffered_output_stream_test velox_dwio_dwrf_buffered_output_stream_test)
+add_executable(
+  velox_dwio_dwrf_buffered_output_stream_test
+  TestBufferedOutputStream.cpp
+)
+add_test(
+  velox_dwio_dwrf_buffered_output_stream_test
+  velox_dwio_dwrf_buffered_output_stream_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_buffered_output_stream_test
@@ -36,8 +42,14 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_column_statistics_test TestDwrfColumnStatistics.cpp)
-add_test(velox_dwio_dwrf_column_statistics_test velox_dwio_dwrf_column_statistics_test)
+add_executable(
+  velox_dwio_dwrf_column_statistics_test
+  TestDwrfColumnStatistics.cpp
+)
+add_test(
+  velox_dwio_dwrf_column_statistics_test
+  velox_dwio_dwrf_column_statistics_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_column_statistics_test
@@ -46,8 +58,14 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_orc_column_statistics_test TestOrcColumnStatistics.cpp)
-add_test(velox_dwio_orc_column_statistics_test velox_dwio_orc_column_statistics_test)
+add_executable(
+  velox_dwio_orc_column_statistics_test
+  TestOrcColumnStatistics.cpp
+)
+add_test(
+  velox_dwio_orc_column_statistics_test
+  velox_dwio_orc_column_statistics_test
+)
 
 target_link_libraries(
   velox_dwio_orc_column_statistics_test
@@ -115,8 +133,14 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_stripe_dictionary_cache_test TestStripeDictionaryCache.cpp)
-add_test(velox_dwio_dwrf_stripe_dictionary_cache_test velox_dwio_dwrf_stripe_dictionary_cache_test)
+add_executable(
+  velox_dwio_dwrf_stripe_dictionary_cache_test
+  TestStripeDictionaryCache.cpp
+)
+add_test(
+  velox_dwio_dwrf_stripe_dictionary_cache_test
+  velox_dwio_dwrf_stripe_dictionary_cache_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_stripe_dictionary_cache_test
@@ -134,7 +158,10 @@ add_executable(
   TestIntegerDictionaryEncoder.cpp
   TestStringDictionaryEncoder.cpp
 )
-add_test(velox_dwio_dwrf_dictionary_encoder_test velox_dwio_dwrf_dictionary_encoder_test)
+add_test(
+  velox_dwio_dwrf_dictionary_encoder_test
+  velox_dwio_dwrf_dictionary_encoder_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_dictionary_encoder_test
@@ -145,7 +172,10 @@ target_link_libraries(
 )
 
 add_executable(velox_dwio_dwrf_encoding_selector_test TestEncodingSelector.cpp)
-add_test(velox_dwio_dwrf_encoding_selector_test velox_dwio_dwrf_encoding_selector_test)
+add_test(
+  velox_dwio_dwrf_encoding_selector_test
+  velox_dwio_dwrf_encoding_selector_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_encoding_selector_test
@@ -164,7 +194,10 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_dictionary_encoding_utils_test TestDictionaryEncodingUtils.cpp)
+add_executable(
+  velox_dwio_dwrf_dictionary_encoding_utils_test
+  TestDictionaryEncodingUtils.cpp
+)
 add_test(
   velox_dwio_dwrf_dictionary_encoding_utils_test
   velox_dwio_dwrf_dictionary_encoding_utils_test
@@ -202,7 +235,10 @@ target_link_libraries(
 )
 
 add_executable(velox_dwio_dwrf_writer_context_test WriterContextTest.cpp)
-add_test(velox_dwio_dwrf_writer_context_test velox_dwio_dwrf_writer_context_test)
+add_test(
+  velox_dwio_dwrf_writer_context_test
+  velox_dwio_dwrf_writer_context_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_writer_context_test
@@ -214,8 +250,14 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_writer_encoding_manager_test EncodingManagerTests.cpp)
-add_test(velox_dwio_dwrf_writer_encoding_manager_test velox_dwio_dwrf_writer_encoding_manager_test)
+add_executable(
+  velox_dwio_dwrf_writer_encoding_manager_test
+  EncodingManagerTests.cpp
+)
+add_test(
+  velox_dwio_dwrf_writer_encoding_manager_test
+  velox_dwio_dwrf_writer_encoding_manager_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_writer_encoding_manager_test
@@ -237,8 +279,14 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_data_buffer_holder_test DataBufferHolderTests.cpp)
-add_test(velox_dwio_dwrf_data_buffer_holder_test velox_dwio_dwrf_data_buffer_holder_test)
+add_executable(
+  velox_dwio_dwrf_data_buffer_holder_test
+  DataBufferHolderTests.cpp
+)
+add_test(
+  velox_dwio_dwrf_data_buffer_holder_test
+  velox_dwio_dwrf_data_buffer_holder_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_data_buffer_holder_test
@@ -248,7 +296,10 @@ target_link_libraries(
 )
 
 add_executable(velox_dwio_dwrf_layout_planner_test LayoutPlannerTests.cpp)
-add_test(velox_dwio_dwrf_layout_planner_test velox_dwio_dwrf_layout_planner_test)
+add_test(
+  velox_dwio_dwrf_layout_planner_test
+  velox_dwio_dwrf_layout_planner_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_layout_planner_test
@@ -290,8 +341,14 @@ add_test(velox_common_test velox_common_test)
 
 target_link_libraries(velox_common_test velox_link_libs ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_dwrf_stripe_reader_base_test StripeReaderBaseTests.cpp)
-add_test(velox_dwio_dwrf_stripe_reader_base_test velox_dwio_dwrf_stripe_reader_base_test)
+add_executable(
+  velox_dwio_dwrf_stripe_reader_base_test
+  StripeReaderBaseTests.cpp
+)
+add_test(
+  velox_dwio_dwrf_stripe_reader_base_test
+  velox_dwio_dwrf_stripe_reader_base_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_stripe_reader_base_test
@@ -360,7 +417,10 @@ target_link_libraries(
 )
 
 add_executable(velox_dwio_dwrf_byte_rle_encoder_test TestByteRLEEncoder.cpp)
-add_test(velox_dwio_dwrf_byte_rle_encoder_test velox_dwio_dwrf_byte_rle_encoder_test)
+add_test(
+  velox_dwio_dwrf_byte_rle_encoder_test
+  velox_dwio_dwrf_byte_rle_encoder_test
+)
 
 target_link_libraries(
   velox_dwio_dwrf_byte_rle_encoder_test
@@ -383,7 +443,12 @@ target_link_libraries(
 add_executable(velox_dwio_dwrf_rle_test TestRle.cpp)
 add_test(velox_dwio_dwrf_rle_test velox_dwio_dwrf_rle_test)
 
-target_link_libraries(velox_dwio_dwrf_rle_test velox_link_libs Folly::folly ${TEST_LINK_LIBS})
+target_link_libraries(
+  velox_dwio_dwrf_rle_test
+  velox_link_libs
+  Folly::folly
+  ${TEST_LINK_LIBS}
+)
 
 add_executable(velox_dwio_dwrf_int_direct_test TestIntDirect.cpp)
 add_test(velox_dwio_dwrf_int_direct_test velox_dwio_dwrf_int_direct_test)
@@ -453,8 +518,14 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwrf_statistics_builder_utils_test TestStatisticsBuilderUtils.cpp)
-add_test(velox_dwrf_statistics_builder_utils_test velox_dwrf_statistics_builder_utils_test)
+add_executable(
+  velox_dwrf_statistics_builder_utils_test
+  TestStatisticsBuilderUtils.cpp
+)
+add_test(
+  velox_dwrf_statistics_builder_utils_test
+  velox_dwrf_statistics_builder_utils_test
+)
 
 target_link_libraries(
   velox_dwrf_statistics_builder_utils_test
@@ -480,7 +551,10 @@ target_link_libraries(
 )
 
 add_executable(velox_dwrf_column_writer_index_test ColumnWriterIndexTest.cpp)
-add_test(velox_dwrf_column_writer_index_test velox_dwrf_column_writer_index_test)
+add_test(
+  velox_dwrf_column_writer_index_test
+  velox_dwrf_column_writer_index_test
+)
 
 target_link_libraries(
   velox_dwrf_column_writer_index_test
@@ -558,7 +632,10 @@ target_link_libraries(
 )
 
 add_executable(velox_dwrf_column_writer_stats_test ColumnWriterStatsTests.cpp)
-add_test(velox_dwrf_column_writer_stats_test velox_dwrf_column_writer_stats_test)
+add_test(
+  velox_dwrf_column_writer_stats_test
+  velox_dwrf_column_writer_stats_test
+)
 
 target_link_libraries(
   velox_dwrf_column_writer_stats_test
@@ -598,7 +675,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
   )
 
-  add_executable(velox_dwrf_float_column_writer_benchmark FloatColumnWriterBenchmark.cpp)
+  add_executable(
+    velox_dwrf_float_column_writer_benchmark
+    FloatColumnWriterBenchmark.cpp
+  )
   target_link_libraries(
     velox_dwrf_float_column_writer_benchmark
     velox_vector
@@ -610,7 +690,11 @@ if(VELOX_ENABLE_BENCHMARKS)
   )
 endif()
 
-add_executable(velox_dwio_cache_test CacheInputTest.cpp DirectBufferedInputTest.cpp)
+add_executable(
+  velox_dwio_cache_test
+  CacheInputTest.cpp
+  DirectBufferedInputTest.cpp
+)
 
 add_test(velox_dwio_cache_test velox_dwio_cache_test)
 

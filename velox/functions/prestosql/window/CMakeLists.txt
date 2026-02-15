@@ -23,4 +23,10 @@ velox_add_library(
   WindowFunctionsRegistration.cpp
 )
 
-velox_link_libraries(velox_window velox_buffer velox_exec velox_functions_window Folly::folly)
+velox_link_libraries(
+  velox_window
+  velox_buffer
+  velox_exec
+  velox_functions_window
+  Folly::folly
+)

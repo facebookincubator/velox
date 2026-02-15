@@ -29,7 +29,12 @@ find_path(GLOG_INCLUDE_DIR glog/logging.h PATHS ${GLOG_INCLUDEDIR})
 
 select_library_configurations(GLOG)
 
-find_package_handle_standard_args(glog DEFAULT_MSG GLOG_LIBRARY GLOG_INCLUDE_DIR)
+find_package_handle_standard_args(
+  glog
+  DEFAULT_MSG
+  GLOG_LIBRARY
+  GLOG_INCLUDE_DIR
+)
 
 mark_as_advanced(GLOG_LIBRARY GLOG_INCLUDE_DIR)
 
@@ -38,9 +43,14 @@ set(GLOG_INCLUDE_DIRS ${GLOG_INCLUDE_DIR})
 
 if(NOT TARGET glog::glog)
   add_library(glog::glog UNKNOWN IMPORTED)
-  set_target_properties(glog::glog PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${GLOG_INCLUDE_DIRS}")
   set_target_properties(
     glog::glog
-    PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C" IMPORTED_LOCATION "${GLOG_LIBRARIES}"
+    PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${GLOG_INCLUDE_DIRS}"
+  )
+  set_target_properties(
+    glog::glog
+    PROPERTIES
+      IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+      IMPORTED_LOCATION "${GLOG_LIBRARIES}"
   )
 endif()

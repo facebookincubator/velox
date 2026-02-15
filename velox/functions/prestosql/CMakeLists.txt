@@ -81,7 +81,10 @@ velox_link_libraries(
 
 if(VELOX_ENABLE_FAISS)
   velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
-  velox_compile_definitions(velox_functions_prestosql_impl PRIVATE VELOX_ENABLE_FAISS)
+  velox_compile_definitions(
+    velox_functions_prestosql_impl
+    PRIVATE VELOX_ENABLE_FAISS
+  )
 endif()
 
 if(VELOX_ENABLE_GEO)
@@ -90,7 +93,10 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 if(NOT VELOX_MONO_LIBRARY)
-  set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE high_memory_pool)
+  set_property(
+    TARGET velox_functions_prestosql_impl
+    PROPERTY JOB_POOL_COMPILE high_memory_pool
+  )
 endif()
 
 if(${VELOX_ENABLE_AGGREGATES})

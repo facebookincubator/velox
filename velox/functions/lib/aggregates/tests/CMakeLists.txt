@@ -16,7 +16,10 @@ add_subdirectory(utils)
 
 add_executable(velox_functions_aggregates_test ValueListTest.cpp)
 
-add_test(NAME velox_functions_aggregates_test COMMAND velox_functions_aggregates_test)
+add_test(
+  NAME velox_functions_aggregates_test
+  COMMAND velox_functions_aggregates_test
+)
 
 target_link_libraries(
   velox_functions_aggregates_test

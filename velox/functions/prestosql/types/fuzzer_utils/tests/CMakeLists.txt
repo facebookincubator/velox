@@ -22,7 +22,10 @@ add_executable(
   SfmSketchInputGeneratorTest.cpp
 )
 
-add_test(velox_presto_types_fuzzer_utils_test velox_presto_types_fuzzer_utils_test)
+add_test(
+  velox_presto_types_fuzzer_utils_test
+  velox_presto_types_fuzzer_utils_test
+)
 
 target_link_libraries(
   velox_presto_types_fuzzer_utils_test

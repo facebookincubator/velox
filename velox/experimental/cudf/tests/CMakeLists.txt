@@ -15,7 +15,11 @@
 add_executable(velox_cudf_aggregation_test Main.cpp AggregationTest.cpp)
 add_executable(velox_cudf_assign_unique_id_test Main.cpp AssignUniqueIdTest.cpp)
 add_executable(velox_cudf_config_test Main.cpp ConfigTest.cpp)
-add_executable(velox_cudf_expression_selection_test Main.cpp ExpressionEvaluatorSelectionTest.cpp)
+add_executable(
+  velox_cudf_expression_selection_test
+  Main.cpp
+  ExpressionEvaluatorSelectionTest.cpp
+)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 add_executable(velox_cudf_hash_join_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_limit_test Main.cpp LimitTest.cpp)
@@ -24,10 +28,22 @@ add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
 if(VELOX_ENABLE_S3)
   add_executable(velox_cudf_s3_read_test Main.cpp S3ReadTest.cpp)
 endif()
-add_executable(velox_cudf_subfield_filter_ast_test Main.cpp SubfieldFilterAstTest.cpp)
+add_executable(
+  velox_cudf_subfield_filter_ast_test
+  Main.cpp
+  SubfieldFilterAstTest.cpp
+)
 add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
-add_executable(velox_cudf_aggregation_selection_test Main.cpp AggregationSelectionTest.cpp)
-add_executable(velox_cudf_tocudf_selection_test Main.cpp ToCudfSelectionTest.cpp)
+add_executable(
+  velox_cudf_aggregation_selection_test
+  Main.cpp
+  AggregationSelectionTest.cpp
+)
+add_executable(
+  velox_cudf_tocudf_selection_test
+  Main.cpp
+  ToCudfSelectionTest.cpp
+)
 add_executable(
   velox_cudf_step_aware_aggregation_registry_test
   Main.cpp
@@ -142,32 +158,77 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_assign_unique_id_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_config_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+set_tests_properties(
+  velox_cudf_hash_join_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_order_by_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_aggregation_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_assign_unique_id_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_config_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 300
+)
 set_tests_properties(
   velox_cudf_expression_selection_test
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
-set_tests_properties(velox_cudf_filter_project_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_limit_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_local_partition_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_filter_project_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_hash_join_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_limit_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_local_partition_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_order_by_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
 if(VELOX_ENABLE_S3)
-  set_tests_properties(velox_cudf_s3_read_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+  set_tests_properties(
+    velox_cudf_s3_read_test
+    PROPERTIES LABELS cuda_driver TIMEOUT 3000
+  )
 endif()
-set_tests_properties(velox_cudf_subfield_filter_ast_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_subfield_filter_ast_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
+set_tests_properties(
+  velox_cudf_table_scan_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
 # set_tests_properties(velox_cudf_table_write_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
-set_tests_properties(velox_cudf_topn_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_topn_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
 set_tests_properties(
   velox_cudf_aggregation_selection_test
   PROPERTIES LABELS cuda_driver TIMEOUT 3000
 )
-set_tests_properties(velox_cudf_tocudf_selection_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  velox_cudf_tocudf_selection_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 3000
+)
 set_tests_properties(
   velox_cudf_step_aware_aggregation_registry_test
   PROPERTIES LABELS cuda_driver TIMEOUT 3000

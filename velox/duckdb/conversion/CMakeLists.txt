@@ -13,7 +13,12 @@
 # limitations under the License.
 velox_add_library(velox_duckdb_conversion DuckConversion.cpp)
 
-velox_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb_static)
+velox_link_libraries(
+  velox_duckdb_conversion
+  velox_core
+  velox_vector
+  duckdb_static
+)
 
 velox_add_library(velox_duckdb_parser DuckParser.cpp)
 

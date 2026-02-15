@@ -23,7 +23,12 @@ find_path(C_ARES_INCLUDE_DIR NAMES ares.h PATH_SUFFIXES c-ares)
 find_library(C_ARES_LIBRARY NAMES c-ares)
 
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(c-ares DEFAULT_MSG C_ARES_LIBRARY C_ARES_INCLUDE_DIR)
+find_package_handle_standard_args(
+  c-ares
+  DEFAULT_MSG
+  C_ARES_LIBRARY
+  C_ARES_INCLUDE_DIR
+)
 
 if(c-ares_FOUND AND NOT TARGET c-ares::cares)
   add_library(c-ares::cares UNKNOWN IMPORTED)

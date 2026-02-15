@@ -18,9 +18,11 @@ set(
   VELOX_FAISS_BUILD_SHA256_CHECKSUM
   c5d517da6deb6a6d74290d7145331fc7474426025e2d826fa4a6d40670f4493c
 )
-set(
+string(
+  CONCAT
   VELOX_FAISS_SOURCE_URL
-  "https://github.com/facebookresearch/faiss/archive/refs/tags/v${VELOX_FAISS_BUILD_VERSION}.tar.gz"
+  "https://github.com/facebookresearch/faiss/archive/refs/tags/"
+  "v${VELOX_FAISS_BUILD_VERSION}.tar.gz"
 )
 
 velox_resolve_dependency_url(FAISS)

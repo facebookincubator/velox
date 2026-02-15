@@ -1,6 +1,6 @@
 # vim: set filetype=yaml :
 
-line_length: 100
+line_length: 80
 indent: 2
 definitions:
   - CMake/third-party/FBCMakeParseArgs.cmake

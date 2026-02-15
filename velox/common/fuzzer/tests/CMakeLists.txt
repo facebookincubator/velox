@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_constrained_input_generators_test ConstrainedGeneratorsTest.cpp)
+add_executable(
+  velox_constrained_input_generators_test
+  ConstrainedGeneratorsTest.cpp
+)
 
 add_test(
   NAME velox_constrained_input_generators_test

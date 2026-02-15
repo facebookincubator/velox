@@ -17,4 +17,8 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 velox_add_library(velox_common_config Config.cpp)
-velox_link_libraries(velox_common_config PUBLIC velox_common_base velox_exception PRIVATE re2::re2)
+velox_link_libraries(
+  velox_common_config
+  PUBLIC velox_common_base velox_exception
+  PRIVATE re2::re2
+)

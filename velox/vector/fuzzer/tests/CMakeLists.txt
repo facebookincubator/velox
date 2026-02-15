@@ -26,7 +26,10 @@ target_link_libraries(
   GTest::gmock
 )
 
-add_executable(velox_constrained_vector_generator_test ConstrainedVectorGeneratorTest.cpp)
+add_executable(
+  velox_constrained_vector_generator_test
+  ConstrainedVectorGeneratorTest.cpp
+)
 
 add_test(
   NAME velox_constrained_vector_generator_test

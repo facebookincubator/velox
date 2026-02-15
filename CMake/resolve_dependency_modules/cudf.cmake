@@ -24,9 +24,11 @@ set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
   02abaa8580c30a0b01eb142d5cd58b5acc85005bf58f5360f4a62efbd6e4635a
 )
-set(
+string(
+  CONCAT
   VELOX_rapids_cmake_SOURCE_URL
-  "https://github.com/rapidsai/rapids-cmake/archive/${VELOX_rapids_cmake_COMMIT}.tar.gz"
+  "https://github.com/rapidsai/rapids-cmake/archive/"
+  "${VELOX_rapids_cmake_COMMIT}.tar.gz"
 )
 velox_resolve_dependency_url(rapids_cmake)
 
@@ -37,7 +39,12 @@ set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
   c6a5b4855802d7c17c0a0a978f2643792b9e17a6b773dd6bbb2f99b16496b38a
 )
-set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
+string(
+  CONCAT
+  VELOX_rmm_SOURCE_URL
+  "https://github.com/rapidsai/rmm/archive/"
+  "${VELOX_rmm_COMMIT}.tar.gz"
+)
 velox_resolve_dependency_url(rmm)
 
 # kvikio commit 62b3d6f from 2026-02-10
@@ -60,7 +67,12 @@ set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
   19137d306db0ddbf4eebb4333e0257de4815563039b1e805829ce2dcc525c3f5
 )
-set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
+string(
+  CONCAT
+  VELOX_cudf_SOURCE_URL
+  "https://github.com/rapidsai/cudf/archive/"
+  "${VELOX_cudf_COMMIT}.tar.gz"
+)
 velox_resolve_dependency_url(cudf)
 
 # Use block so we don't leak variables
@@ -107,11 +119,15 @@ block(SCOPE_FOR VARIABLES)
   FetchContent_MakeAvailable(cudf)
 
   # cudf sets all warnings as errors, and therefore fails to compile with velox
-  # expanded set of warnings. We selectively disable problematic warnings just for
-  # cudf
+  # expanded set of warnings. We selectively disable problematic warnings just
+  # for cudf
   target_compile_options(
     cudf
-    PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy -Wno-restrict
+    PRIVATE
+      -Wno-non-virtual-dtor
+      -Wno-missing-field-initializers
+      -Wno-deprecated-copy
+      -Wno-restrict
   )
 
   unset(BUILD_SHARED_LIBS)

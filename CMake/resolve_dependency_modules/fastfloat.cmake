@@ -18,9 +18,11 @@ set(
   VELOX_FASTFLOAT_BUILD_SHA256_CHECKSUM
   e14a33089712b681d74d94e2a11362643bd7d769ae8f7e7caefe955f57f7eacd
 )
-set(
+string(
+  CONCAT
   VELOX_FASTFLOAT_SOURCE_URL
-  "https://github.com/fastfloat/fast_float/archive/refs/tags/${VELOX_FASTFLOAT_VERSION}.tar.gz"
+  "https://github.com/fastfloat/fast_float/archive/refs/tags/"
+  "${VELOX_FASTFLOAT_VERSION}.tar.gz"
 )
 
 velox_resolve_dependency_url(FASTFLOAT)

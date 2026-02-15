@@ -68,18 +68,21 @@ if(ARROW_THRIFT_USE_SHARED)
     list(
       APPEND
       THRIFT_LIB_NAMES
-      "${CMAKE_IMPORT_LIBRARY_PREFIX}${THRIFT_LIB_NAME_BASE}${CMAKE_IMPORT_LIBRARY_SUFFIX}"
+      "${CMAKE_IMPORT_LIBRARY_PREFIX}${THRIFT_LIB_NAME_BASE}\
+${CMAKE_IMPORT_LIBRARY_SUFFIX}"
     )
   endif()
   list(
     APPEND
     THRIFT_LIB_NAMES
-    "${CMAKE_SHARED_LIBRARY_PREFIX}${THRIFT_LIB_NAME_BASE}${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    "${CMAKE_SHARED_LIBRARY_PREFIX}${THRIFT_LIB_NAME_BASE}\
+${CMAKE_SHARED_LIBRARY_SUFFIX}"
   )
 else()
   set(
     THRIFT_LIB_NAMES
-    "${CMAKE_STATIC_LIBRARY_PREFIX}${THRIFT_LIB_NAME_BASE}${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    "${CMAKE_STATIC_LIBRARY_PREFIX}${THRIFT_LIB_NAME_BASE}\
+${CMAKE_STATIC_LIBRARY_SUFFIX}"
   )
 endif()
 
@@ -90,7 +93,12 @@ if(Thrift_ROOT)
     PATHS ${Thrift_ROOT}
     PATH_SUFFIXES "lib/${CMAKE_LIBRARY_ARCHITECTURE}" "lib"
   )
-  find_path(THRIFT_INCLUDE_DIR thrift/Thrift.h PATHS ${Thrift_ROOT} PATH_SUFFIXES "include")
+  find_path(
+    THRIFT_INCLUDE_DIR
+    thrift/Thrift.h
+    PATHS ${Thrift_ROOT}
+    PATH_SUFFIXES "include"
+  )
   find_program(THRIFT_COMPILER thrift PATHS ${Thrift_ROOT} PATH_SUFFIXES "bin")
   EXTRACT_THRIFT_VERSION()
 else()
@@ -158,11 +166,17 @@ if(Thrift_FOUND)
   if(WIN32 AND NOT MSVC_TOOLCHAIN)
     # We don't need this for Visual C++ because Thrift uses "#pragma
     # comment(lib, "Ws2_32.lib")" in thrift/windows/config.h for Visual C++.
-    set_target_properties(thrift::thrift PROPERTIES INTERFACE_LINK_LIBRARIES "ws2_32")
+    set_target_properties(
+      thrift::thrift
+      PROPERTIES INTERFACE_LINK_LIBRARIES "ws2_32"
+    )
   endif()
 
   if(Thrift_COMPILER_FOUND)
     add_executable(thrift::compiler IMPORTED)
-    set_target_properties(thrift::compiler PROPERTIES IMPORTED_LOCATION "${THRIFT_COMPILER}")
+    set_target_properties(
+      thrift::compiler
+      PROPERTIES IMPORTED_LOCATION "${THRIFT_COMPILER}"
+    )
   endif()
 endif()

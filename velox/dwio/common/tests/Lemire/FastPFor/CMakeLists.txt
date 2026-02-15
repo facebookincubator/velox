@@ -13,4 +13,7 @@
 # limitations under the License.
 add_library(velox_fastpforlib STATIC bitpacking.cpp)
 
-target_include_directories(velox_fastpforlib PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+target_include_directories(
+  velox_fastpforlib
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)

@@ -102,7 +102,9 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   endif()
   set(
     thrift_include_options
+    # cmake-format: off
     "-I;$<JOIN:$<TARGET_PROPERTY:${LIB_NAME}.thrift_includes,INTERFACE_INCLUDE_DIRECTORIES>,;-I;>"
+    # cmake-format: on
   )
 
   # Emit the rule to run the thrift compiler
