@@ -105,6 +105,11 @@ Mathematical Functions
     Returns the result of subtracting y from x. The types of x and y must be the same.
     For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
 
+.. function:: checked_unaryminus(x) -> [same as x]
+
+    Returns the negative of ``x``. For integral types, throws an error when ``x`` is the minimum value
+    of the type (e.g., ``-128`` for tinyint). Corresponds to Spark's unary ``-`` operator with ``failOnError`` as true.
+
 .. spark:function:: cos(x) -> double
 
     Returns the cosine of ``x``.

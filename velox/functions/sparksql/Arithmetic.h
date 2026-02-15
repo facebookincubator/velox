@@ -666,4 +666,21 @@ struct CheckedIntegralDivideFunction {
   }
 };
 
+template <typename TExec>
+struct CheckedUnaryMinusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
+    if constexpr (std::is_integral_v<TInput>) {
+      VELOX_USER_RETURN(
+          a == std::numeric_limits<TInput>::min(),
+          "Arithmetic overflow: -{}",
+          a);
+      result = -a;
+    } else {
+      result = -a;
+    }
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
