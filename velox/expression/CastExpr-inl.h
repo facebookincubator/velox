@@ -19,6 +19,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
+#include "velox/type/Conversions.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 
@@ -152,7 +153,13 @@ void CastExpr::applyCastKernel(
         (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
-      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
+      const auto secondsResult = hooks_->castTimestampToInt(inputRowValue);
+      if (secondsResult.hasError()) {
+        setError(secondsResult.error().message());
+        return;
+      }
+      const auto castResult = util::Converter<ToKind, void, TPolicy>::tryCast(
+          secondsResult.value());
       setResultOrError(castResult, row);
       return;
     }
