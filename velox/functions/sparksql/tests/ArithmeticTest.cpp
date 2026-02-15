@@ -86,6 +86,62 @@ TEST_F(PmodTest, double) {
   EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
 }
 
+class CheckedPmodTest : public SparkFunctionBaseTest {
+ protected:
+  template <typename T>
+  std::optional<T> checkedPmod(std::optional<T> a, std::optional<T> n) {
+    return evaluateOnce<T>("checked_pmod(c0, c1)", a, n);
+  };
+
+  template <typename T>
+  void assertError(
+      std::optional<T> a,
+      std::optional<T> n,
+      const std::string& errorMessage) {
+    auto res = evaluateOnce<T>("try(checked_pmod(c0, c1))", a, n);
+    ASSERT_TRUE(!res.has_value());
+    try {
+      evaluateOnce<T>("checked_pmod(c0, c1)", a, n);
+      FAIL() << "Expected an error";
+    } catch (const std::exception& e) {
+      ASSERT_TRUE(
+          std::string(e.what()).find(errorMessage) != std::string::npos);
+    }
+  }
+};
+
+TEST_F(CheckedPmodTest, divisionByZero) {
+  assertError<int8_t>(1, 0, "Division by zero");
+  assertError<int16_t>(1, 0, "Division by zero");
+  assertError<int32_t>(1, 0, "Division by zero");
+  assertError<int64_t>(10, 0, "Division by zero");
+  assertError<float>(1.0f, 0.0f, "Division by zero");
+  assertError<double>(1.0, 0.0, "Division by zero");
+}
+
+TEST_F(CheckedPmodTest, intTypes) {
+  // Same results as non-checked pmod.
+  EXPECT_EQ(1, checkedPmod<int8_t>(1, 3));
+  EXPECT_EQ(2, checkedPmod<int8_t>(-1, 3));
+  EXPECT_EQ(1, checkedPmod<int8_t>(3, -2));
+  EXPECT_EQ(-1, checkedPmod<int8_t>(-1, -3));
+  // INT_MIN % -1 = 0 (no overflow).
+  EXPECT_EQ(0, checkedPmod<int8_t>(INT8_MIN, -1));
+  EXPECT_EQ(0, checkedPmod<int16_t>(INT16_MIN, -1));
+  EXPECT_EQ(0, checkedPmod<int32_t>(INT32_MIN, -1));
+  EXPECT_EQ(0, checkedPmod<int64_t>(INT64_MIN, -1));
+  // Larger types.
+  EXPECT_EQ(2095, checkedPmod<int32_t>(391819, 8292));
+  EXPECT_EQ(INT64_MAX, checkedPmod<int64_t>(INT64_MAX, INT64_MIN));
+}
+
+TEST_F(CheckedPmodTest, floatTypes) {
+  EXPECT_FLOAT_EQ(0.2, checkedPmod<float>(0.5, 0.3).value());
+  EXPECT_FLOAT_EQ(0.9, checkedPmod<float>(-1.1, 2).value());
+  EXPECT_DOUBLE_EQ(0.2, checkedPmod<double>(0.5, 0.3).value());
+  EXPECT_DOUBLE_EQ(0.1, checkedPmod<double>(0.7, -0.3).value());
+}
+
 class RemainderTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
