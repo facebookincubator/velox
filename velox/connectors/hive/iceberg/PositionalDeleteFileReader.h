@@ -22,9 +22,9 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/Reader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -139,7 +139,7 @@ class PositionalDeleteFileReader {
 
   // Internal split and row reader for the delete file. Reset to nullptr when
   // the delete file is fully consumed or skipped by testFilters().
-  std::shared_ptr<HiveConnectorSplit> deleteSplit_;
+  std::shared_ptr<IcebergConnectorSplit> deleteSplit_;
   std::unique_ptr<dwio::common::RowReader> deleteRowReader_;
 
   // Holds the raw output from reading the delete file. Contains a RowVector

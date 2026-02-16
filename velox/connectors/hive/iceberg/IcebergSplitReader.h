@@ -18,6 +18,8 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/SplitReader.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -27,7 +29,7 @@ struct IcebergDeleteFile;
 class IcebergSplitReader : public SplitReader {
  public:
   IcebergSplitReader(
-      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+      const std::shared_ptr<const IcebergConnectorSplit>& icebergSplit,
       const HiveTableHandlePtr& hiveTableHandle,
       const HiveColumnHandleMap* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -71,7 +73,7 @@ class IcebergSplitReader : public SplitReader {
   ///
   /// 1. Info columns (e.g., $path, $data_sequence_number, $deleted)
   ///    These are virtual columns that provide metadata about the file itself.
-  ///    Values are read from hiveSplit_->infoColumns map and set as constant
+  ///    Values are read from icebergSplit_->infoColumns map and set as constant
   ///    values in the scanSpec so they're materialized for all rows.
   ///
   /// 2. Regular columns present in File:
@@ -81,7 +83,7 @@ class IcebergSplitReader : public SplitReader {
   ///
   /// 3. Columns missing from File:
   ///    a) Partition columns (hive-migrated tables):
-  ///       Column is marked as partition key in hiveSplit_->partitionKeys.
+  ///       Column is marked as partition key in icebergSplit_->partitionKeys.
   ///       In Hive-written Iceberg tables, partition column values are stored
   ///       in partition metadata, not in the data file itself. Value is read
   ///       from partition metadata and set as a constant.
@@ -92,6 +94,8 @@ class IcebergSplitReader : public SplitReader {
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
+
+  const std::shared_ptr<const IcebergConnectorSplit> icebergSplit_;
 
   // The read offset to the beginning of the split in number of rows for the
   // current batch for the base data file

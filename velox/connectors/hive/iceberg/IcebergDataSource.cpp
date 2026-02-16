@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
+#include "velox/common/Casts.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -38,8 +40,9 @@ IcebergDataSource::IcebergDataSource(
           hiveConfig) {}
 
 std::unique_ptr<SplitReader> IcebergDataSource::createSplitReader() {
+  auto icebergSplit = checkedPointerCast<const IcebergConnectorSplit>(split_);
   return std::make_unique<IcebergSplitReader>(
-      split_,
+      icebergSplit,
       hiveTableHandle_,
       &partitionKeys_,
       connectorQueryCtx_,
