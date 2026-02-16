@@ -107,6 +107,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<Aggregator>>& aggregators,
+      TypePtr const& outputType,
       rmm::cuda_stream_view stream);
   CudfVectorPtr doGlobalAggregation(
       cudf::table_view tableView,
@@ -120,6 +121,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
+  std::vector<column_index_t> aggregationInputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<Aggregator>> aggregators_;
@@ -134,6 +136,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // Distinct means it's a count distinct on the groupby keys, without any
   // aggregations
   const bool isDistinct_;
+  // Streaming aggregation is disabled if companion aggregates are present.
+  bool streamingEnabled_{true};
 
   // Maximum memory usage for partial aggregation.
   const int64_t maxPartialAggregationMemoryUsage_;
@@ -151,11 +155,14 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // This is for partial aggregation to keep reducing the amount of memory it
   // has to hold on to.
-  void computeIntermediateGroupbyPartial(CudfVectorPtr tbl);
+  void computePartialGroupbyStreaming(CudfVectorPtr tbl);
 
-  void computeIntermediateDistinctPartial(CudfVectorPtr tbl);
+  void computePartialDistinctStreaming(CudfVectorPtr tbl);
 
-  CudfVectorPtr partialOutput_;
+  void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
+
+  CudfVectorPtr bufferedResult_;
+  RowTypePtr bufferedResultType_;
 };
 
 // Step-aware aggregation function registry
