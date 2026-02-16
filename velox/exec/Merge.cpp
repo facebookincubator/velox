@@ -523,7 +523,7 @@ SpillMerger::SpillMerger(
     uint64_t maxOutputBatchBytes,
     int mergeSourceQueueSize,
     const common::SpillConfig* spillConfig,
-    const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
+    const std::shared_ptr<exec::SpillStats>& spillStats,
     velox::memory::MemoryPool* pool)
     : executor_(spillConfig->executor),
       spillStats_(spillStats),
@@ -726,7 +726,7 @@ LocalMerge::LocalMerge(
           localMergeNode->id(),
           "LocalMerge",
           localMergeNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "LocalMerge")
               : std::nullopt) {
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,

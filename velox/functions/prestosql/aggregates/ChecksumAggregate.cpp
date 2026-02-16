@@ -77,12 +77,12 @@ class ChecksumAggregate : public exec::Aggregate {
   }
 
   bool isNullOrNullArray(const TypePtr& type) {
-    if (type->isUnKnown()) {
+    if (type->isUnknown()) {
       return true;
     }
     // Only supports null array type for now.
     if (type->kind() == TypeKind::ARRAY) {
-      return type->asArray().elementType()->isUnKnown();
+      return type->asArray().elementType()->isUnknown();
     }
     return false;
   }

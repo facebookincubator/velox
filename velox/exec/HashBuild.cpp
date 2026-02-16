@@ -58,7 +58,7 @@ HashBuild::HashBuild(
           joinNode->id(),
           "HashBuild",
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "HashBuild")
               : std::nullopt),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
@@ -318,7 +318,8 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       LOG(WARNING) << "Exceeded spill level limit: " << config->maxSpillLevel
                    << ", and disable spilling for memory pool: "
                    << pool()->name();
-      ++spillStats_->wlock()->spillMaxLevelExceededCount;
+      spillStats_->spillMaxLevelExceededCount.fetch_add(
+          1, std::memory_order_relaxed);
       exceededMaxSpillLevelLimit_ = true;
       return;
     }
@@ -1379,7 +1380,7 @@ HashBuildSpiller::HashBuildSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),

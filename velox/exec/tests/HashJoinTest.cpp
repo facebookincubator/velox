@@ -6378,7 +6378,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   const int exceededMaxSpillLevelCount =
-      common::globalSpillStats().spillMaxLevelExceededCount;
+      globalSpillStats().spillMaxLevelExceededCount;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::HashBuild::reclaim",
       std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
@@ -6432,7 +6432,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
       })
       .run();
   ASSERT_EQ(
-      common::globalSpillStats().spillMaxLevelExceededCount,
+      globalSpillStats().spillMaxLevelExceededCount,
       exceededMaxSpillLevelCount + 16);
 }
 
@@ -8723,6 +8723,75 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<TestParam>& info) {
       return TestParamToName(info.param);
     });
+
+// Test that hash join spill uses the hash_join_spill_file_create_config when
+// set, and other spillable operators use the default spill_file_create_config.
+DEBUG_ONLY_TEST_P(HashJoinTest, hashJoinSpillFileCreateConfig) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto probeVectors = createVectors(rowType, 128, 10);
+  const auto buildVectors = createVectors(rowType, 128, 10);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Build a plan with hash join and orderBy. Hash join operators should use
+  // hash_join_spill_file_create_config and orderBy should use the default
+  // spill_file_create_config.
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, true)
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, true)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+  std::atomic_bool hashJoinConfigVerified{false};
+  std::atomic_bool defaultConfigVerified{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::isBlocked",
+      std::function<void(exec::Operator*)>([&](exec::Operator* op) {
+        const auto* spillConfig = op->testingSpillConfig();
+        if (spillConfig == nullptr) {
+          return;
+        }
+        const auto& opType = op->operatorType();
+        if (opType == "HashBuild" || opType == "HashProbe") {
+          // Hash join operators should use hash_join_spill_file_create_config.
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_hashjoin_config")
+              << "Operator: " << opType;
+          hashJoinConfigVerified = true;
+        } else {
+          // Other spillable operators (e.g., OrderBy) should use the default
+          // spill_file_create_config.
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_default_config")
+              << "Operator: " << opType;
+          defaultConfigVerified = true;
+        }
+      }));
+
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(plan)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kJoinSpillEnabled, true)
+      .config(core::QueryConfig::kOrderBySpillEnabled, true)
+      .config(core::QueryConfig::kSpillFileCreateConfig, "test_default_config")
+      .config(
+          core::QueryConfig::kHashJoinSpillFileCreateConfig,
+          "test_hashjoin_config")
+      .copyResults(pool_.get());
+
+  ASSERT_TRUE(hashJoinConfigVerified.load());
+  ASSERT_TRUE(defaultConfigVerified.load());
+}
 
 } // namespace
 } // namespace facebook::velox::exec

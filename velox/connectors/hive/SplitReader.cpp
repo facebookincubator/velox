@@ -22,7 +22,6 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
@@ -95,42 +94,25 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const common::SubfieldFilters* subfieldFiltersForValidation) {
-  //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
-  if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
-      hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
-    return std::make_unique<iceberg::IcebergSplitReader>(
-        hiveSplit,
-        hiveTableHandle,
-        partitionKeys,
-        connectorQueryCtx,
-        hiveConfig,
-        readerOutputType,
-        ioStats,
-        fsStats,
-        fileHandleFactory,
-        ioExecutor,
-        scanSpec);
-  } else {
-    return std::unique_ptr<SplitReader>(new SplitReader(
-        hiveSplit,
-        hiveTableHandle,
-        partitionKeys,
-        connectorQueryCtx,
-        hiveConfig,
-        readerOutputType,
-        ioStats,
-        fsStats,
-        fileHandleFactory,
-        ioExecutor,
-        scanSpec,
-        subfieldFiltersForValidation));
-  }
+  return std::unique_ptr<SplitReader>(new SplitReader(
+      hiveSplit,
+      hiveTableHandle,
+      partitionKeys,
+      connectorQueryCtx,
+      hiveConfig,
+      readerOutputType,
+      ioStatistics,
+      ioStats,
+      fileHandleFactory,
+      ioExecutor,
+      scanSpec,
+      subfieldFiltersForValidation));
 }
 
 SplitReader::SplitReader(
@@ -140,8 +122,8 @@ SplitReader::SplitReader(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
@@ -153,8 +135,8 @@ SplitReader::SplitReader(
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       readerOutputType_(readerOutputType),
+      ioStatistics_(ioStatistics),
       ioStats_(ioStats),
-      fsStats_(fsStats),
       fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
@@ -365,7 +347,7 @@ void SplitReader::createReader(
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey, &fileProperties, fsStats_ ? fsStats_.get() : nullptr);
+        fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
@@ -388,8 +370,8 @@ void SplitReader::createReader(
       *fileHandleCachePtr,
       baseReaderOpts_,
       connectorQueryCtx_,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       ioExecutor_,
       fileReadOps);
 

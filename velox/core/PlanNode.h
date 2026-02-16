@@ -5260,6 +5260,77 @@ class MarkDistinctNode : public PlanNode {
 
 using MarkDistinctNodePtr = std::shared_ptr<const MarkDistinctNode>;
 
+/// Checks that input rows have unique values in the specified key columns.
+/// Passes through all input rows unchanged. Raises an exception if duplicate
+/// key values are detected.
+///
+/// Used to validate uniqueness constraints, such as ensuring a scalar subquery
+/// returns at most one row per group.
+///
+class EnforceDistinctNode : public PlanNode {
+ public:
+  /// @param distinctKeys Columns that must have unique values.
+  /// @param preGroupedKeys Subset of distinctKeys that input is already
+  /// clustered on. When preGroupedKeys equals distinctKeys, a streaming
+  /// implementation is used that compares consecutive rows instead of using a
+  /// hash table.
+  /// @param errorMessage Custom error message to show when duplicates are
+  /// found.
+  EnforceDistinctNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      std::vector<FieldAccessTypedExprPtr> preGroupedKeys,
+      std::string errorMessage,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  std::string_view name() const override {
+    return "EnforceDistinct";
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys() const {
+    return preGroupedKeys_;
+  }
+
+  /// Returns true if all distinct keys are pre-grouped, meaning input is
+  /// clustered on distinct keys and streaming enforcement can be used.
+  bool isPreGrouped() const {
+    return preGroupedKeys_.size() == distinctKeys_.size();
+  }
+
+  const std::string& errorMessage() const {
+    return errorMessage_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys_;
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
+  const std::string errorMessage_;
+  const std::vector<PlanNodePtr> sources_;
+};
+
+using EnforceDistinctNodePtr = std::shared_ptr<const EnforceDistinctNode>;
+
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
@@ -5468,6 +5539,141 @@ class TopNRowNumberNode : public PlanNode {
 
 using TopNRowNumberNodePtr = std::shared_ptr<const TopNRowNumberNode>;
 
+/// Union operator that combines data from multiple inputs.
+/// Supports both serial mode (process inputs one at a time) and
+/// mixed mode (process inputs simultaneously and combine results).
+class MixedUnionNode : public PlanNode {
+ public:
+  MixedUnionNode(const PlanNodeId& id, std::vector<PlanNodePtr> sources)
+      : MixedUnionNode(id, std::move(sources), {}) {}
+
+  MixedUnionNode(
+      const PlanNodeId& id,
+      std::vector<PlanNodePtr> sources,
+      std::vector<int64_t> batchSizesPerSource)
+      : PlanNode(id),
+        sources_(std::move(sources)),
+        batchSizesPerSource_(std::move(batchSizesPerSource)) {
+    VELOX_USER_CHECK(
+        !sources_.empty(), "Union node must have at least one source");
+
+    // All sources must have the same output type
+    outputType_ = sources_[0]->outputType();
+    for (size_t i = 1; i < sources_.size(); ++i) {
+      VELOX_USER_CHECK(
+          outputType_->equivalent(*sources_[i]->outputType()),
+          "All Union sources must have the same output type. "
+          "Source 0 type: {}, Source {} type: {}",
+          outputType_->toString(),
+          i,
+          sources_[i]->outputType()->toString());
+    }
+  }
+
+  class Builder {
+   public:
+    Builder() = default;
+
+    explicit Builder(const MixedUnionNode& other) {
+      id_ = other.id();
+      sources_ = other.sources();
+      batchSizesPerSource_ = other.batchSizesPerSource();
+    }
+
+    Builder& id(PlanNodeId id) {
+      id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& sources(std::vector<PlanNodePtr> sources) {
+      sources_ = std::move(sources);
+      return *this;
+    }
+
+    Builder& source(PlanNodePtr source) {
+      if (!sources_.has_value()) {
+        sources_ = std::vector<PlanNodePtr>{};
+      }
+      sources_->push_back(std::move(source));
+      return *this;
+    }
+
+    Builder& batchSizesPerSource(std::vector<int64_t> batchSizes) {
+      batchSizesPerSource_ = std::move(batchSizes);
+      return *this;
+    }
+
+    Builder& batchSizeForSource(int32_t sourceIndex, int64_t batchSize) {
+      if (!batchSizesPerSource_.has_value()) {
+        batchSizesPerSource_ = std::vector<int64_t>{};
+      }
+      if (sourceIndex >= batchSizesPerSource_->size()) {
+        batchSizesPerSource_->resize(sourceIndex + 1, 0);
+      }
+      (*batchSizesPerSource_)[sourceIndex] = batchSize;
+      return *this;
+    }
+
+    std::shared_ptr<MixedUnionNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "MixedUnionNode id is not set");
+      VELOX_USER_CHECK(
+          sources_.has_value() && !sources_->empty(),
+          "MixedUnionNode sources is not set or empty");
+
+      return std::make_shared<MixedUnionNode>(
+          id_.value(),
+          sources_.value(),
+          batchSizesPerSource_.value_or(std::vector<int64_t>{}));
+    }
+
+   private:
+    std::optional<PlanNodeId> id_;
+    std::optional<std::vector<PlanNodePtr>> sources_;
+    std::optional<std::vector<int64_t>> batchSizesPerSource_;
+  };
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  /// Returns the batch sizes per source index.
+  /// This controls how many rows are taken from each source when mixing.
+  const std::vector<int64_t>& batchSizesPerSource() const {
+    return batchSizesPerSource_;
+  }
+
+  /// Get batch size for a specific source index (returns 0 if not set).
+  int64_t getBatchSizeForSource(int32_t sourceIndex) const {
+    if (sourceIndex < 0 || sourceIndex >= batchSizesPerSource_.size()) {
+      return 0;
+    }
+    return batchSizesPerSource_[sourceIndex];
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  std::string_view name() const override {
+    return "MixedUnion";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+  const std::vector<PlanNodePtr> sources_;
+  RowTypePtr outputType_;
+  std::vector<int64_t> batchSizesPerSource_;
+};
+
+using MixedUnionNodePtr = std::shared_ptr<const MixedUnionNode>;
+
 class PlanNodeVisitorContext {
  public:
   virtual ~PlanNodeVisitorContext() = default;
@@ -5522,6 +5728,10 @@ class PlanNodeVisitor {
 
   virtual void visit(const MarkDistinctNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
+
+  virtual void visit(
+      const EnforceDistinctNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
 
   virtual void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
@@ -5579,6 +5789,9 @@ class PlanNodeVisitor {
       const = 0;
 
   virtual void visit(const WindowNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.

@@ -28,9 +28,10 @@ namespace {
 static const char* kNullKeyErrorMessage = "map key cannot be null";
 static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
-// See documentation at https://prestodb.io/docs/current/functions/map.html
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
+  explicit MapFromEntriesFunction(bool throwOnNull)
+      : throwOnNull_(throwOnNull) {}
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -93,12 +94,15 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     auto& inputValueVector = inputArray->elements();
     exec::LocalDecodedVector decodedRowVector(context);
     decodedRowVector.get()->decode(*inputValueVector);
-    // If the input array(unknown) then all rows should have errors.
     if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
-      try {
-        VELOX_USER_FAIL(kErrorMessageEntryNotNull);
-      } catch (...) {
-        context.setErrors(rows, std::current_exception());
+      // For Presto, if the input is array(unknown), all rows should have
+      // errors.
+      if (throwOnNull_) {
+        try {
+          VELOX_USER_FAIL(kErrorMessageEntryNotNull);
+        } catch (...) {
+          context.setErrors(rows, std::current_exception());
+        }
       }
 
       auto sizes = allocateSizes(rows.end(), context.pool());
@@ -117,7 +121,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           BaseVector::create(UNKNOWN(), 0, context.pool()));
     }
 
-    exec::LocalSelectivityVector remianingRows(context, rows);
+    exec::LocalSelectivityVector remainingRows(context, rows);
     auto rowVector = decodedRowVector->base()->as<RowVector>();
     auto keyVector = rowVector->childAt(0);
 
@@ -128,8 +132,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     });
 
     auto resetSize = [&](vector_size_t row) { mutableSizes[row] = 0; };
+    auto nulls = allocateNulls(rows.end(), context.pool());
+    auto* mutableNulls = nulls->asMutable<uint64_t>();
 
-    // Validate all map entries and map keys are not null.
     if (decodedRowVector->mayHaveNulls() || keyVector->mayHaveNulls() ||
         keyVector->mayHaveNullsRecursive()) {
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
@@ -140,12 +145,16 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           // Check nulls in the top level row vector.
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
           if (isMapEntryNull) {
-            // Set the sizes to 0 so that the final map vector generated is
-            // valid in case we are inside a try. The map vector needs to be
-            // valid because its consumed by checkDuplicateKeys before try
-            // sets invalid rows to null.
-            resetSize(row);
-            VELOX_USER_FAIL(kErrorMessageEntryNotNull);
+            if (throwOnNull_) {
+              // Set the sizes to 0 so that the final map vector generated is
+              // valid in case we are inside a try. The map vector needs to be
+              // valid because its consumed by checkDuplicateKeys before try
+              // sets invalid rows to null.
+              resetSize(row);
+              VELOX_USER_FAIL(kErrorMessageEntryNotNull);
+            }
+            bits::setNull(mutableNulls, row);
+            break;
           }
 
           // Check null keys.
@@ -158,7 +167,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       });
     }
 
-    context.deselectErrors(*remianingRows.get());
+    context.deselectErrors(*remainingRows.get());
 
     VectorPtr wrappedKeys;
     VectorPtr wrappedValues;
@@ -190,8 +199,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     } else {
       // Dictionary.
       auto indices = allocateIndices(decodedRowVector->size(), context.pool());
-      auto nulls = allocateNulls(decodedRowVector->size(), context.pool());
-      auto* mutableNulls = nulls->asMutable<uint64_t>();
+      auto rowVectorNulls =
+          allocateNulls(decodedRowVector->size(), context.pool());
+      auto* rowVectorMutableNulls = rowVectorNulls->asMutable<uint64_t>();
       memcpy(
           indices->asMutable<vector_size_t>(),
           decodedRowVector->indices(),
@@ -200,35 +210,51 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       // not guranteed to be addressable at X or Y.
       for (auto i = 0; i < decodedRowVector->size(); i++) {
         if (decodedRowVector->isNullAt(i)) {
-          bits::setNull(mutableNulls, i);
+          bits::setNull(rowVectorMutableNulls, i);
         }
       }
       wrappedKeys = BaseVector::wrapInDictionary(
-          nulls, indices, decodedRowVector->size(), rowVector->childAt(0));
+          rowVectorNulls,
+          indices,
+          decodedRowVector->size(),
+          rowVector->childAt(0));
       wrappedValues = BaseVector::wrapInDictionary(
-          nulls, indices, decodedRowVector->size(), rowVector->childAt(1));
+          rowVectorNulls,
+          indices,
+          decodedRowVector->size(),
+          rowVector->childAt(1));
     }
 
-    // To avoid creating new buffers, we try to reuse the input's buffers
-    // as many as possible.
+    // For Presto, need construct map vector based on input nulls for possible
+    // outer expression like try(). For Spark, use the updated nulls unless it's
+    // empty.
+    if (throwOnNull_ || decodedRowVector->size() == 0) {
+      nulls = inputArray->nulls();
+    }
     auto mapVector = std::make_shared<MapVector>(
         context.pool(),
         outputType,
-        inputArray->nulls(),
+        nulls,
         rows.end(),
         inputArray->offsets(),
         sizes,
         wrappedKeys,
         wrappedValues);
 
-    checkDuplicateKeys(mapVector, *remianingRows, context);
+    checkDuplicateKeys(mapVector, *remainingRows, context);
     return mapVector;
   }
+
+  // If true, throws exception when input is NULL or contains NULL entry
+  // (Presto's behavior). Otherwise, returns NULL (Spark's behavior).
+  const bool throwOnNull_;
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_map_from_entries,
-    MapFromEntriesFunction::signatures(),
-    std::make_unique<MapFromEntriesFunction>());
+void registerMapFromEntriesFunction(const std::string& name, bool throwOnNull) {
+  exec::registerVectorFunction(
+      name,
+      MapFromEntriesFunction::signatures(),
+      std::make_unique<MapFromEntriesFunction>(throwOnNull));
+}
 } // namespace facebook::velox::functions

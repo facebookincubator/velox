@@ -1051,7 +1051,7 @@ ArrayVectorPtr deserializeArrays(
 
   VectorPtr elements;
   const auto& elementType = type->childAt(0);
-  if (elementType->isUnKnown()) {
+  if (elementType->isUnknown()) {
     elements =
         deserializeUnknownArrays(elementType, data, arraySizes, offsets, pool);
   } else if (elementType->isFixedWidth()) {

@@ -21,6 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorStats.h"
+#include "velox/exec/SpillStats.h"
 #include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
@@ -521,6 +522,12 @@ class Operator : public BaseRuntimeStatWriter {
     return input_ != nullptr;
   }
 
+  /// Returns the spill config for this operator. This method is only used for
+  /// test.
+  const common::SpillConfig* testingSpillConfig() const {
+    return spillConfig();
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
   friend class NonReclaimableSection;
@@ -633,8 +640,8 @@ class Operator : public BaseRuntimeStatWriter {
   bool initialized_{false};
 
   folly::Synchronized<OperatorStats> stats_;
-  std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
-      std::make_shared<folly::Synchronized<common::SpillStats>>();
+  std::shared_ptr<exec::SpillStats> spillStats_ =
+      std::make_shared<exec::SpillStats>();
 
   /// NOTE: only one of the two could be set for an operator for tracing .
   /// 'splitTracer_' is only set for table scan to record the processed split

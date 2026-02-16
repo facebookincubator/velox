@@ -23,7 +23,7 @@
 
 namespace facebook::velox::parquet::arrow::internal {
 
-/// \brief Compute the CRC32 checksum of the given data
+/// \brief Compute the CRC32 checksum of the given data.
 ///
 /// This function computes CRC32 with the polynomial 0x04C11DB7,
 /// as used in zlib and others (note this is different from CRC32C).

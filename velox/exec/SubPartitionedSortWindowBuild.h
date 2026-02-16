@@ -38,7 +38,7 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
       folly::Synchronized<OperatorStats>* opStats,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   ~SubPartitionedSortWindowBuild() override {
     pool_->release();
@@ -53,7 +53,7 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
 
   void spill() override;
 
-  std::optional<common::SpillStats> spilledStats() const override;
+  std::optional<exec::SpillStats> spilledStats() const override;
 
   void noMoreInput() override;
 
@@ -77,7 +77,7 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
 
   memory::MemoryPool* const pool_;
 
-  folly::Synchronized<common::SpillStats>* const spillStats_;
+  exec::SpillStats* const spillStats_;
 
   // Divide input rows to the corresponding sub partitions.
   std::unique_ptr<HashPartitionFunction> subPartitioningFunction_;

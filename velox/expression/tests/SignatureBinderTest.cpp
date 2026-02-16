@@ -1510,5 +1510,132 @@ TEST(SignatureBinderTest, homogeneousRow) {
   }
 }
 
+TEST(SignatureBinderTest, unknownCoercions) {
+  // UNKNOWN can be coerced to any type with zero cost.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("bigint")
+                         .build();
+
+    testCoercions(signature, {UNKNOWN()}, {BIGINT()}, BOOLEAN());
+  }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("varchar")
+                         .build();
+
+    testCoercions(signature, {UNKNOWN()}, {VARCHAR()}, BOOLEAN());
+  }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("double")
+                         .build();
+
+    testCoercions(signature, {UNKNOWN()}, {DOUBLE()}, BOOLEAN());
+  }
+
+  // Multiple UNKNOWN arguments coerced to different types.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("bigint")
+                         .argumentType("varchar")
+                         .argumentType("double")
+                         .build();
+
+    testCoercions(
+        signature,
+        {UNKNOWN(), UNKNOWN(), UNKNOWN()},
+        {BIGINT(), VARCHAR(), DOUBLE()},
+        BOOLEAN());
+  }
+
+  // UNKNOWN mixed with regular types requiring coercion.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("bigint")
+                         .argumentType("double")
+                         .build();
+
+    testCoercions(
+        signature, {UNKNOWN(), REAL()}, {BIGINT(), DOUBLE()}, BOOLEAN());
+
+    testCoercions(
+        signature, {INTEGER(), UNKNOWN()}, {BIGINT(), DOUBLE()}, BOOLEAN());
+  }
+}
+
+TEST(SignatureBinderTest, unknownInComplexTypes) {
+  // UNKNOWN in array.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("array(bigint)")
+                         .build();
+
+    testCoercions(signature, {ARRAY(UNKNOWN())}, {ARRAY(BIGINT())}, BOOLEAN());
+  }
+
+  // UNKNOWN in map.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("map(bigint, varchar)")
+                         .build();
+
+    testCoercions(
+        signature,
+        {MAP(UNKNOWN(), UNKNOWN())},
+        {MAP(BIGINT(), VARCHAR())},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {MAP(INTEGER(), UNKNOWN())},
+        {MAP(BIGINT(), VARCHAR())},
+        BOOLEAN());
+  }
+
+  // UNKNOWN in row.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("row(bigint, varchar, double)")
+                         .build();
+
+    testCoercions(
+        signature,
+        {ROW({UNKNOWN(), UNKNOWN(), UNKNOWN()})},
+        {ROW({BIGINT(), VARCHAR(), DOUBLE()})},
+        BOOLEAN());
+
+    testCoercions(
+        signature,
+        {ROW({INTEGER(), UNKNOWN(), REAL()})},
+        {ROW({BIGINT(), VARCHAR(), DOUBLE()})},
+        BOOLEAN());
+  }
+
+  // Nested complex types with UNKNOWN.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("boolean")
+                         .argumentType("array(map(bigint, varchar))")
+                         .build();
+
+    testCoercions(
+        signature,
+        {ARRAY(MAP(UNKNOWN(), UNKNOWN()))},
+        {ARRAY(MAP(BIGINT(), VARCHAR()))},
+        BOOLEAN());
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test

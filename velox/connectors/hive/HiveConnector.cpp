@@ -19,6 +19,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/HiveIndexSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 
 #include <boost/lexical_cast.hpp>
@@ -56,7 +57,7 @@ HiveConnector::HiveConnector(
 std::unique_ptr<DataSource> HiveConnector::createDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
-    const std::unordered_map<std::string, ColumnHandlePtr>& columnHandles,
+    const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
   return std::make_unique<HiveDataSource>(
       outputType,
@@ -84,6 +85,30 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
       connectorQueryCtx,
       commitStrategy,
       hiveConfig_);
+}
+
+std::shared_ptr<IndexSource> HiveConnector::createIndexSource(
+    const RowTypePtr& inputType,
+    const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+        joinConditions,
+    const RowTypePtr& outputType,
+    const ConnectorTableHandlePtr& tableHandle,
+    const ColumnHandleMap& columnHandles,
+    ConnectorQueryCtx* connectorQueryCtx) {
+  auto hiveTableHandle =
+      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
+  VELOX_CHECK_NOT_NULL(
+      hiveTableHandle, "Hive connector expecting hive table handle!");
+  return std::make_shared<HiveIndexSource>(
+      inputType,
+      joinConditions,
+      outputType,
+      hiveTableHandle,
+      columnHandles,
+      &fileHandleFactory_,
+      connectorQueryCtx,
+      hiveConfig_,
+      ioExecutor_);
 }
 
 // static

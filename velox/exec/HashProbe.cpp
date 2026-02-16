@@ -120,7 +120,7 @@ HashProbe::HashProbe(
           joinNode->id(),
           "HashProbe",
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "HashProbe")
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
@@ -1743,13 +1743,14 @@ void HashProbe::noMoreInputInternal() {
         spillInputPartitionIds_.size(),
         inputSpiller_->state().spilledPartitionIdSet().size());
     inputSpiller_->finishSpill(inputSpillPartitionSet_);
-    VELOX_CHECK_EQ(spillStats_->rlock()->spillSortTimeNanos, 0);
+    VELOX_CHECK_EQ(
+        spillStats_->spillSortTimeNanos.load(std::memory_order_relaxed), 0);
   }
 
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
 
-  // Reset flags about outputing build-side rows in parallel.
+  // Reset flags about outputting build-side rows in parallel.
   buildSideOutputRowContainerId_ = -1;
 
   // NOTE: if 'canSpill()' is false and 'outputBuildRowsInParallel' is
@@ -1758,7 +1759,7 @@ void HashProbe::noMoreInputInternal() {
   // needs to wait and might expect spill gets triggered by the other probe
   // operators, or there is previously spilled table partition(s) that needs to
   // restore. If 'outputBuildRowsInParallel', it needs to wait to all drivers
-  // start outputing build-side rows in parallel only after all drivers finish
+  // start outputting build-side rows in parallel only after all drivers finish
   // probe processing.
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
@@ -1783,7 +1784,7 @@ void HashProbe::noMoreInputInternal() {
   lastProber_ = true;
   joinBridge_->resetUnclaimedRowContainerId();
   // If 'outputBuildRowsInParallel' is true, wake up all peers to start
-  // outputing build-side rows in parallel. Otherwise, only let the last prober
+  // outputting build-side rows in parallel. Otherwise, only let the last prober
   // proceed.
   if (outputBuildRowsInParallel) {
     wakeupPeerOperators();
@@ -2105,7 +2106,8 @@ void HashProbe::checkMaxSpillLevel(
           << "Exceeded spill level limit: " << config->maxSpillLevel
           << ", and disable spilling for memory pool: " << pool()->name();
       exceededMaxSpillLevelLimit_ = true;
-      ++spillStats_->wlock()->spillMaxLevelExceededCount;
+      spillStats_->spillMaxLevelExceededCount.fetch_add(
+          1, std::memory_order_relaxed);
       return;
     }
   }

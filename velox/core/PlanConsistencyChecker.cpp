@@ -139,7 +139,17 @@ class Checker : public PlanNodeVisitor {
     visitSources(&node, ctx);
   }
 
+  void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
   void visit(const MarkDistinctNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
+  void visit(const EnforceDistinctNode& node, PlanNodeVisitorContext& ctx)
       const override {
     visitSources(&node, ctx);
   }
