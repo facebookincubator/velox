@@ -299,8 +299,9 @@ jobs:
           grep "Source directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Build directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           tar -xvf _build/release/cudf-libs.tar -C _build/release/
-          echo "$PWD/_build/release/cudf-libs" | sudo tee -a /etc/ld.so.conf.d/cudftests.conf > /dev/null
-          sudo ldconfig
+          echo "$PWD/_build/release/cudf-libs" | sudo tee /etc/ld.so.conf.d/cudftests.conf > /dev/null
+          sudo cat /etc/ld.so.conf.d/cudftests.conf
+          sudo ldconfig -v
           echo $( \
             for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
               do ldd "$exe" 2>/dev/null; done | \
@@ -314,6 +315,7 @@ jobs:
 
       - name: Run cuDF Tests
         run: |
+          export LD_LIBRARY_PATH="$PWD/_build/release/cudf-libs:$LD_LIBRARY_PATH"
           cd _build/release/velox/experimental/cudf/tests/
           ctest --output-on-failure
 
