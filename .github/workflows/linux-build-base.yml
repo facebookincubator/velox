@@ -295,12 +295,15 @@ jobs:
         run: |
           ls -R .
           # Change hardcoded workspace path in CTestTestfile.cmake to the runner workspace
+          echo $PWD
+          echo ${{ github.workspace }}
           sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Source directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Build directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-          tar -xvf _build/release/cudf-libs.tar -C _build/release/
+          tar -xf _build/release/cudf-libs.tar -C _build/release/
           echo "$PWD/_build/release/cudf-libs" | sudo tee /etc/ld.so.conf.d/cudftests.conf > /dev/null
           sudo cat /etc/ld.so.conf.d/cudftests.conf
+          ls /home/runner/work/velox/velox/_build/release/cudf-libs
           sudo ldconfig -v
           echo $( \
             for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
