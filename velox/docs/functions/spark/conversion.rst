@@ -285,6 +285,9 @@ Invalid examples
 Cast to Time
 ------------
 
+.. note::
+   The TIME type was introduced in Apache Spark 4.1.0 as part of ANSI SQL compliance improvements.
+
 From strings
 ^^^^^^^^^^^^
 

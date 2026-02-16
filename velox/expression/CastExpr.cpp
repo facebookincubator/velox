@@ -349,31 +349,17 @@ VectorPtr CastExpr::castToTime(
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         bool wrapException = true;
-        try {
-          const auto inputString =
-              hooks_->removeWhiteSpaces(inputVector->valueAt(row));
-          const auto timeResult = hooks_->castStringToTime(
-              inputString, timeZone, sessionStartTimeMs);
-          if (timeResult.hasError()) {
-            const auto errorDetails = fmt::format(
-                "{} {}",
-                makeErrorMessage(input, row, TIME()),
-                timeResult.error().message());
-            setCastError(
-                row, context, resultFlatVector, wrapException, errorDetails);
-          } else {
-            resultFlatVector->set(row, timeResult.value());
-          }
-        } catch (const VeloxUserError& ue) {
-          if (!wrapException) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
-        }
+        const auto inputString =
+            hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+        const auto timeResult =
+            hooks_->castStringToTime(inputString, timeZone, sessionStartTimeMs);
+        setResultOrError(
+            row,
+            timeResult,
+            makeErrorMessage(input, row, TIME()),
+            context,
+            resultFlatVector,
+            wrapException);
       });
 
       return castResult;

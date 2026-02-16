@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include <gtest/gtest.h>
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/Time.h"
 
 using namespace facebook::velox;
 namespace facebook::velox::test {
@@ -1156,15 +1158,15 @@ TEST_F(SparkCastExprTest, stringToTime) {
   // Test invalid time strings with ANSI mode disabled - should return NULL.
   {
     auto input = makeFlatVector<std::string>(
-        {"24:00:00", "12:60:00", "12:30:60", "abc", ""});
+        {"24:00:00", "12:60:00", "12:30:60", "12:30", "abc", ""});
 
     auto result =
         evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
 
     // All should be null.
-    ASSERT_EQ(result->size(), 5);
+    ASSERT_EQ(result->size(), 6);
     ASSERT_TRUE(result->type()->isTime());
-    for (size_t i = 0; i < 5; i++) {
+    for (size_t i = 0; i < 6; i++) {
       ASSERT_TRUE(result->isNullAt(i))
           << "Row " << i << " should be null for invalid input";
     }
@@ -1184,6 +1186,7 @@ TEST_F(SparkCastExprTest, stringToTime) {
     testInvalidString("24:00:00");
     testInvalidString("12:60:00");
     testInvalidString("12:30:60");
+    testInvalidString("12:30");
     testInvalidString("abc");
     testInvalidString("");
   }

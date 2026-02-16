@@ -19,6 +19,10 @@
 #include "velox/expression/StringWriter.h"
 #include "velox/type/Timestamp.h"
 
+namespace facebook::velox::tz {
+class TimeZone;
+}
+
 namespace facebook::velox::exec {
 
 enum PolicyType {

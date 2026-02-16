@@ -15,12 +15,15 @@
  */
 
 #include <cmath>
+#include <exception>
 
 #include <double-conversion/double-conversion.h>
 #include <folly/Expected.h>
 
+#include "velox/common/base/VeloxException.h"
 #include "velox/expression/PrestoCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 

@@ -16,10 +16,14 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
+#include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
 
@@ -351,6 +355,33 @@ class CastExpr : public SpecialForm {
       } else {
         context.setStatus(row, Status::UserError());
       }
+    }
+  }
+
+  /// Helper to set result or error from Expected<T> cast result.
+  /// If castResult has an error, sets the error in context. Otherwise, sets
+  /// the value in castResult directly to result.
+  /// @param row The row index being processed
+  /// @param castResult The Expected<T> result from cast operation
+  /// @param errorPrefix Error message prefix (e.g., from makeErrorMessage)
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  template <typename T, typename TResult>
+  void setResultOrError(
+      vector_size_t row,
+      const Expected<T>& castResult,
+      const std::string& errorPrefix,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException) const {
+    if (castResult.hasError()) {
+      const auto errorDetails =
+          fmt::format("{} {}", errorPrefix, castResult.error().message());
+      setCastError(row, context, result, wrapException, errorDetails);
+    } else {
+      result->set(row, castResult.value());
     }
   }
 
