@@ -300,6 +300,7 @@ RowVectorPtr LocalExchange::getOutput() {
     VELOX_CHECK(!drained);
     auto lockedStats = stats_.wlock();
     lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+    data->setType(outputType_);
     return data;
   }
 
