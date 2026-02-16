@@ -22,7 +22,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/Reader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -75,7 +75,7 @@ class PositionalDeleteFileReader {
   std::shared_ptr<IcebergMetadataColumn> posColumn_;
   uint64_t splitOffset_;
 
-  std::shared_ptr<HiveConnectorSplit> deleteSplit_;
+  std::shared_ptr<IcebergConnectorSplit> deleteSplit_;
   std::unique_ptr<dwio::common::RowReader> deleteRowReader_;
   // The vector to hold the delete positions read from the positional delete
   // file. These positions are relative to the start of the whole base data
