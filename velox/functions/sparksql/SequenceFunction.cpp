@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/sparksql/SequenceFunction.h"
+#include "velox/functions/prestosql/Sequence.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -75,13 +76,17 @@ std::shared_ptr<exec::VectorFunction> makeSparkSequence(
     const core::QueryConfig& /* config */) {
   switch (inputArgs[0].type->kind()) {
     case TypeKind::BIGINT:
-      return std::make_shared<SparkSequenceFunction<int64_t>>();
+      return std::make_shared<SequenceFunction<int64_t, int64_t>>();
+    // Use K=int64_t for INTEGER to avoid conflicting with the
+    // add<int32_t, int32_t> specialization used for date year-to-month
+    // intervals. getStep handles reading the step vector as int32_t when
+    // isDate is false.
     case TypeKind::INTEGER:
-      return std::make_shared<SparkSequenceFunction<int32_t>>();
+      return std::make_shared<SequenceFunction<int32_t, int64_t>>();
     case TypeKind::SMALLINT:
-      return std::make_shared<SparkSequenceFunction<int16_t>>();
+      return std::make_shared<SequenceFunction<int16_t, int16_t>>();
     case TypeKind::TINYINT:
-      return std::make_shared<SparkSequenceFunction<int8_t>>();
+      return std::make_shared<SequenceFunction<int8_t, int8_t>>();
     default:
       VELOX_UNREACHABLE(
           "Unexpected type for Spark sequence: {}",
