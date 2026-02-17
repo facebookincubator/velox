@@ -30,6 +30,7 @@
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
+#include "velox/functions/prestosql/MapUpdate.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
 #include "velox/functions/prestosql/RemapKeys.h"
 
@@ -195,6 +196,42 @@ void registerMapAppend(const std::string& prefix) {
       Array<Generic<T2>>>({prefix + "map_append"});
 }
 
+template <typename Key>
+void registerMapUpdatePrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapUpdatePrimitiveFunction, Key>,
+      Map<Key, Generic<T1>>,
+      Map<Key, Generic<T1>>,
+      Array<Key>,
+      Array<Generic<T1>>>({prefix + "map_update"});
+}
+
+void registerMapUpdate(const std::string& prefix) {
+  registerMapUpdatePrimitive<bool>(prefix);
+  registerMapUpdatePrimitive<int8_t>(prefix);
+  registerMapUpdatePrimitive<int16_t>(prefix);
+  registerMapUpdatePrimitive<int32_t>(prefix);
+  registerMapUpdatePrimitive<int64_t>(prefix);
+  registerMapUpdatePrimitive<float>(prefix);
+  registerMapUpdatePrimitive<double>(prefix);
+  registerMapUpdatePrimitive<Timestamp>(prefix);
+  registerMapUpdatePrimitive<Date>(prefix);
+
+  registerFunction<
+      MapUpdateVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>,
+      Array<Generic<T1>>>({prefix + "map_update"});
+
+  registerFunction<
+      MapUpdateFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>,
+      Array<Generic<T2>>>({prefix + "map_update"});
+}
+
 void registerMapRemoveNullValues(const std::string& prefix) {
   registerFunction<
       MapRemoveNullValues,
@@ -277,6 +314,8 @@ void registerMapFunctions(const std::string& prefix) {
   registerMapKeysOverlap(prefix);
 
   registerMapAppend(prefix);
+
+  registerMapUpdate(prefix);
 
   registerMapRemoveNullValues(prefix);
 

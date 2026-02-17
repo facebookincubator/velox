@@ -1942,6 +1942,20 @@ TEST_F(MergeJoinTest, barrier) {
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
+  struct {
+    bool hasBarrier;
+    bool serialExecution;
+
+    std::string toString() const {
+      return fmt::format(
+          "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+    }
+  } testSettings[] = {
+      {false, false},
+      {false, true},
+      {true, false},
+      {true, true},
+  };
 
   {
     // Inner join.
@@ -1968,10 +1982,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kInner)
             .planNode();
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -1980,8 +1996,10 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t INNER JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
-      ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
+      ASSERT_EQ(
+          task->taskStats().numFinishedSplits,
+          (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
 
@@ -2010,10 +2028,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kFull)
             .planNode();
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2022,7 +2042,7 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
       ASSERT_EQ(task->taskStats().numFinishedSplits, 2);
     }
   }
@@ -2052,10 +2072,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kRight)
             .planNode();
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2064,7 +2086,7 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t RIGHT JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
       ASSERT_EQ(task->taskStats().numFinishedSplits, 2);
     }
   }
@@ -2094,10 +2116,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kLeft)
             .planNode();
-    for (const auto hasBarrier : {true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2106,8 +2130,10 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t LEFT JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
-      ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
+      ASSERT_EQ(
+          task->taskStats().numFinishedSplits,
+          (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
 
@@ -2136,10 +2162,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1"},
                 core::JoinType::kAnti)
             .planNode();
-    for (const auto hasBarrier : {true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2148,10 +2176,13 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1 FROM t WHERE NOT exists (select u0, u1 from u where t0 = u0)");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
-      ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
+      ASSERT_EQ(
+          task->taskStats().numFinishedSplits,
+          (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {

@@ -746,6 +746,17 @@ class BaseVector {
     return vector ? vector : create(type, 0, pool);
   }
 
+  /// Creates a vector matching the structure of a source vector, preserving
+  /// FLAT_MAP encoding where the source uses it. For nested types (ROW, ARRAY,
+  /// MAP), it recursively handles children to preserve encoding at each level.
+  /// BaseVector::create builds from type, without reference to encodings. This
+  /// will still flatten other encodings (e.g. dictionary, constant and lazy),
+  /// only preserving flat map as FlatMapVector.
+  static VectorPtr createEmptyLike(
+      const BaseVector* source,
+      vector_size_t size,
+      memory::MemoryPool* pool);
+
   /// Set 'nulls' to be the nulls buffer of this vector. This API should not be
   /// used on ConstantVector.
   void setNulls(const BufferPtr& nulls);

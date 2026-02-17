@@ -250,6 +250,15 @@ resolveVectorFunctionWithMetadata(
   return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
 }
 
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadataWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  return exec::resolveVectorFunctionWithMetadataWithCoercions(
+      functionName, argTypes, coercions);
+}
+
 void removeFunction(const std::string& functionName) {
   exec::mutableSimpleFunctions().removeFunction(functionName);
   exec::vectorFunctionFactories().withWLock(
