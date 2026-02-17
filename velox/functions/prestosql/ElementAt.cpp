@@ -37,6 +37,19 @@ class ElementAtFunction : public SubscriptImpl<
  public:
   explicit ElementAtFunction(bool allowcaching) : SubscriptImpl(allowcaching) {}
 };
+/// checked_element_at for Spark ANSI mode:
+/// - throws on out-of-bounds array access (instead of returning NULL).
+/// - throws on missing map key (instead of returning NULL).
+class CheckedElementAtFunction : public SubscriptImpl<
+                                     /* allowNegativeIndices */ true,
+                                     /* nullOnNegativeIndices */ false,
+                                     /* allowOutOfBound */ false,
+                                     /* indexStartsAtOne */ true,
+                                     /* throwOnMissingMapKey */ true> {
+ public:
+  explicit CheckedElementAtFunction(bool allowcaching)
+      : SubscriptImpl(allowcaching) {}
+};
 } // namespace
 
 void registerElementAtFunction(
@@ -55,6 +68,27 @@ void registerElementAtFunction(
           return kSubscriptStateLess;
         } else {
           return std::make_shared<ElementAtFunction>(
+              enableCaching && config.isExpressionEvaluationCacheEnabled());
+        }
+      });
+}
+
+void registerCheckedElementAtFunction(
+    const std::string& name,
+    bool enableCaching = true) {
+  exec::registerStatefulVectorFunction(
+      name,
+      CheckedElementAtFunction::signatures(),
+      [enableCaching](
+          const std::string&,
+          const std::vector<exec::VectorFunctionArg>& inputArgs,
+          const velox::core::QueryConfig& config) {
+        static const auto kSubscriptStateLess =
+            std::make_shared<CheckedElementAtFunction>(false);
+        if (inputArgs[0].type->isArray()) {
+          return kSubscriptStateLess;
+        } else {
+          return std::make_shared<CheckedElementAtFunction>(
               enableCaching && config.isExpressionEvaluationCacheEnabled());
         }
       });
