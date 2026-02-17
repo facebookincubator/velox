@@ -16,6 +16,7 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/TopN.h"
 #include "velox/vector/FlatVector.h"
 
@@ -29,7 +30,7 @@ TopN::TopN(
           topNNode->outputType(),
           operatorId,
           topNNode->id(),
-          "TopN"),
+          OperatorType::kTopN),
       count_(topNNode->count()),
       data_(std::make_unique<RowContainer>(outputType_->children(), pool())),
       comparator_(

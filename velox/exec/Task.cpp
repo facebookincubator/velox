@@ -31,6 +31,7 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorTraceCtx.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -185,7 +186,8 @@ std::string makeUuid() {
 
 // Returns true if an operator is a hash join operator given 'operatorType'.
 bool isHashJoinOperator(const std::string& operatorType) {
-  return (operatorType == "HashBuild") || (operatorType == "HashProbe");
+  return (operatorType == OperatorType::kHashBuild) ||
+      (operatorType == OperatorType::kHashProbe);
 }
 
 class QueueSplitsStore : public SplitsStore {
