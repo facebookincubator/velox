@@ -52,18 +52,21 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   explicit TestIndexTableHandle(
       std::string connectorId,
       std::shared_ptr<TestIndexTable> indexTable,
-      bool asyncLookup)
+      bool asyncLookup,
+      bool needsIndexSplit = false)
       : ConnectorTableHandle(std::move(connectorId)),
         indexTable_(std::move(indexTable)),
-        asyncLookup_(asyncLookup) {}
+        asyncLookup_(asyncLookup),
+        needsIndexSplit_(needsIndexSplit) {}
 
   ~TestIndexTableHandle() override = default;
 
   std::string toString() const override {
     return fmt::format(
-        "IndexTableHandle: num of rows: {}, asyncLookup: {}",
+        "IndexTableHandle: num of rows: {}, asyncLookup: {}, needsIndexSplit: {}",
         indexTable_ ? indexTable_->table->rows()->numRows() : 0,
-        asyncLookup_);
+        asyncLookup_,
+        needsIndexSplit_);
   }
 
   const std::string& name() const override {
@@ -80,6 +83,7 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
     obj["name"] = name();
     obj["connectorId"] = connectorId();
     obj["asyncLookup"] = asyncLookup_;
+    obj["needsIndexSplit"] = needsIndexSplit_;
     // For testing purpose only, we serialize the index table pointer as an
     // long integer.
     obj["indexTable"] = reinterpret_cast<int64_t>(indexTable_.get());
@@ -96,7 +100,8 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
     return std::make_shared<TestIndexTableHandle>(
         obj["connectorId"].getString(),
         std::shared_ptr<TestIndexTable>(indexTablePtr, [](TestIndexTable*) {}),
-        obj["asyncLookup"].asBool());
+        obj["asyncLookup"].asBool(),
+        obj["needsIndexSplit"].asBool());
   }
 
   static void registerSerDe() {
@@ -113,12 +118,32 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
     return asyncLookup_;
   }
 
+  /// If true, the index source requires a split to perform lookup. This is for
+  /// testing the split collection logic in the IndexLookupJoin operator.
+  bool needsIndexSplit() const override {
+    return needsIndexSplit_;
+  }
+
  private:
   const std::shared_ptr<TestIndexTable> indexTable_;
   const bool asyncLookup_;
+  const bool needsIndexSplit_;
 };
 
 using TestIndexTableHandlePtr = std::shared_ptr<const TestIndexTableHandle>;
+
+/// A fake split class for testing the split collection logic in the
+/// IndexLookupJoin operator. The test index source doesn't actually use splits,
+/// but this is used to verify the split passing mechanism works correctly.
+class TestIndexConnectorSplit : public connector::ConnectorSplit {
+ public:
+  explicit TestIndexConnectorSplit(std::string connectorId)
+      : ConnectorSplit(std::move(connectorId)) {}
+
+  std::string toString() const override {
+    return "TestIndexConnectorSplit";
+  }
+};
 
 class TestIndexColumnHandle : public connector::ColumnHandle {
  public:
@@ -165,8 +190,15 @@ class TestIndexSource : public connector::IndexSource,
       connector::ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor);
 
-  std::shared_ptr<LookupResultIterator> lookup(
-      const LookupRequest& request) override;
+  void addSplits(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits) override {
+    VELOX_CHECK(tableHandle_->needsIndexSplit());
+    VELOX_CHECK(!splits.empty());
+    VELOX_CHECK(splits_.empty());
+    splits_ = std::move(splits);
+  }
+
+  std::shared_ptr<ResultIterator> lookup(const Request& request) override;
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
@@ -186,15 +218,17 @@ class TestIndexSource : public connector::IndexSource,
     return lookupOutputProjections_;
   }
 
-  class ResultIterator : public LookupResultIterator {
+  class ResultIterator : public connector::IndexSource::ResultIterator {
    public:
     ResultIterator(
         std::shared_ptr<TestIndexSource> source,
-        const LookupRequest& request,
+        const Request& request,
         std::unique_ptr<HashLookup> lookupResult,
         folly::Executor* executor);
 
-    std::optional<std::unique_ptr<LookupResult>> next(
+    bool hasNext() override;
+
+    std::optional<std::unique_ptr<connector::IndexSource::Result>> next(
         vector_size_t size,
         ContinueFuture& future) override;
 
@@ -236,16 +270,17 @@ class TestIndexSource : public connector::IndexSource,
 
     // Synchronously lookup the index table and return up to 'size' number of
     // output rows in result.
-    std::unique_ptr<LookupResult> syncLookup(vector_size_t size);
+    std::unique_ptr<connector::IndexSource::Result> syncLookup(
+        vector_size_t size);
 
     const std::shared_ptr<TestIndexSource> source_;
-    const LookupRequest request_;
+    const Request request_;
     const std::unique_ptr<HashLookup> lookupResult_;
     folly::Executor* const executor_{nullptr};
 
     std::atomic_bool hasPendingRequest_{false};
     std::unique_ptr<BaseHashTable::JoinResultIterator> lookupResultIter_;
-    std::optional<std::unique_ptr<LookupResult>> asyncResult_;
+    std::optional<std::unique_ptr<connector::IndexSource::Result>> asyncResult_;
 
     // The reusable buffers for lookup result processing.
     // The input row number in lookup request for each matched result which is
@@ -311,6 +346,11 @@ class TestIndexSource : public connector::IndexSource,
   std::vector<IdentityProjection> conditionTableProjections_;
   std::vector<IdentityProjection> lookupOutputProjections_;
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
+
+  // Collected splits for the index source (if tableHandle_->needsIndexSplit()
+  // returns true). This is only used for testing the split interface but not
+  // actually used in the lookup.
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits_;
 };
 
 class TestIndexConnector : public connector::Connector {
@@ -334,7 +374,6 @@ class TestIndexConnector : public connector::Connector {
 
   std::shared_ptr<connector::IndexSource> createIndexSource(
       const RowTypePtr& inputType,
-      size_t numJoinKeys,
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,

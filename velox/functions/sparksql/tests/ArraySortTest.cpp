@@ -127,7 +127,7 @@ TEST_F(ArraySortTest, array) {
 TEST_F(ArraySortTest, failOnMapTypeSort) {
   auto input = makeArrayOfMapVector(mapInput());
   const std::string kErrorMessage =
-      "Scalar function signature is not supported"_sv;
+      "Scalar function signature is not supported";
 
   VELOX_ASSERT_THROW(
       evaluate("array_sort(c0)", makeRowVector({input})), kErrorMessage);
@@ -207,13 +207,6 @@ TEST_F(ArraySortTest, lambda) {
       true,
       data,
       sortedDesc);
-
-  // Lambda function return NULL.
-  VELOX_ASSERT_THROW(
-      evaluate(
-          "array_sort(c0, (x, y) -> IF(lessthan(x, y), 1, IF(equalto(x, y), 0, null)))",
-          makeRowVector({data})),
-      "Else clause of a SWITCH statement must have the same type as 'then' clauses. Expected BIGINT, but got UNKNOWN.");
 }
 
 TEST_F(ArraySortTest, unsupporteLambda) {

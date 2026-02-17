@@ -27,6 +27,12 @@ Generic Configuration
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+   * - merge_join_output_batch_start_size
+     - integer
+     - 0
+     - Initial output batch size in rows for MergeJoin operator. When non-zero, the batch size starts at this value
+       and is dynamically adjusted based on the average row size of previous output batches. When zero (default),
+       dynamic adjustment is disabled and the batch size is fixed at preferred_output_batch_rows.
    * - max_elements_size_in_repeat_and_sequence
      - integer
      - 10000
@@ -43,6 +49,16 @@ Generic Configuration
      - integer
      - 80
      - Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.
+   * - abandon_dedup_hashmap_min_rows
+     - integer
+     - 100,000
+     - Number of input rows to receive before starting to check whether to abandon building a HashTable without
+       duplicates in HashBuild for left semi/anti join.
+   * - abandon_dedup_hashmap_min_pct
+     - integer
+     - 0
+     - Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of
+       distinct keys in the HashTable exceeds this threshold. Zero means 'disable this optimization'.
    * - session_timezone
      - string
      -
@@ -73,6 +89,11 @@ Generic Configuration
      - bool
      - true
      - If true, the conjunction expression can reorder inputs based on the time taken to calculate them.
+   * - parallel_join_build_rows_enabled
+     - bool
+     - false
+     - If true, the hash probe drivers can output build\-side rows in parallel for full and right joins (only when spilling is not
+       enabled by hash probe). If false, only the last prober is allowed to output build\-side rows.
    * - max_local_exchange_buffer_size
      - integer
      - 32MB
@@ -122,6 +143,10 @@ Generic Configuration
      - The maximum size in bytes for the task's buffered output when output is partitioned using hash of partitioning keys. See PartitionedOutputNode::Kind::kPartitioned.
        The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below OutputBufferManager::kContinuePct (90)% of this.
+   * - partitioned_output_eager_flush
+     - bool
+     - false
+     - If true, the PartitionedOutput operator will flush rows eagerly, without waiting until buffers reach certain size. Default is false.
    * - max_output_buffer_size
      - integer
      - 32MB
@@ -132,6 +157,17 @@ Generic Configuration
      - integer
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
+   * - hash_probe_dynamic_filter_pushdown_enabled
+     - bool
+     - true
+     - Whether hash probe can generate any dynamic filter (including Bloom filter) and push down to upstream operators.
+   * - hash_probe_bloom_filter_pushdown_max_size
+     - integer
+     - 0
+     - The maximum byte size of Bloom filter that can be generated from hash
+       probe.  When set to 0, no Bloom filter will be generated.  To achieve
+       optimal performance, this should not be too larger than the CPU cache
+       size on the host.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -232,6 +268,13 @@ Expression Evaluation Configuration
      - false
      - Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
        when processing small batches, e.g. < 10K rows.
+   * - expression.track_cpu_usage_for_functions
+     - string
+     - ""
+     - Comma-separated list of function names to selectively track CPU usage for. Only applicable when
+       ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
+       to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
+       be monitored.
    * - legacy_cast
      - bool
      - false
@@ -445,6 +488,12 @@ Spilling
      - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
        efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
        none means no compression.
+   * - spill_num_max_merge_files
+     - integer
+     - 0
+     - The max number of files to merge at a time when merging sorted files into a single ordered stream. 0 means unlimited.
+       This is used to reduce memory pressure by capping the number of open files when merging spilled sorted files to
+       avoid using too much memory and causing OOM. Note that this is only applicable for ordered spill.
    * - spill_prefixsort_enabled
      - bool
      - false
@@ -482,6 +531,21 @@ Aggregation
      - integer
      - 80
      - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
+   * - aggregation_compaction_bytes_threshold
+     - integer
+     - 0
+     - Memory threshold in bytes for triggering string compaction during global
+       aggregation. When total string storage exceeds this limit with high unused
+       memory ratio, compaction is triggered to reclaim dead strings. Disabled by
+       default (0). Currently only applies to approx_most_frequent aggregate with
+       StringView type during global aggregation.
+   * - aggregation_compaction_unused_memory_ratio
+     - double
+     - 0.25
+     - Ratio of unused (evicted) bytes to total bytes that triggers compaction.
+       The value is in the range of [0, 1). Currently only applies to approx_most_frequent
+       aggregate with StringView type during global aggregation. May be extended
+       to other aggregation types on-demand.
    * - streaming_aggregation_min_output_batch_rows
      - integer
      - 0
@@ -727,6 +791,12 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
+   * - hive.max-rows-per-index-request
+     - hive.max_rows_per_index_request
+     - integer
+     - 0
+     - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
+       after filtering. 0 means no limit (default).
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

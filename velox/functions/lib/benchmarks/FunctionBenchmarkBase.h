@@ -17,7 +17,6 @@
 
 #include "velox/expression/Expr.h"
 #include "velox/expression/RegisterSpecialForm.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -42,13 +41,23 @@ class FunctionBenchmarkBase {
         {{core::QueryConfig::kAdjustTimestampToTimezone, value}});
   }
 
+  exec::ExprSet compileExpressions(
+      const std::vector<std::string>& texts,
+      const TypePtr& rowType) {
+    std::vector<core::TypedExprPtr> typedExprs;
+    for (const auto& text : texts) {
+      auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
+      auto typed =
+          core::Expressions::inferTypes(untyped, rowType, execCtx_.pool());
+      typedExprs.push_back(typed);
+    }
+    return exec::ExprSet(typedExprs, &execCtx_);
+  }
+
   exec::ExprSet compileExpression(
       const std::string& text,
       const TypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
-    auto typed =
-        core::Expressions::inferTypes(untyped, rowType, execCtx_.pool());
-    return exec::ExprSet({typed}, &execCtx_);
+    return compileExpressions({text}, rowType);
   }
 
   void evaluate(

@@ -39,7 +39,7 @@ allowedCoercions() {
     for (const auto& toType : to) {
       coercions.emplace(
           std::make_pair<std::string, std::string>(
-              from->kindName(), toType->kindName()),
+              from->name(), toType->name()),
           Coercion{.type = toType, .cost = ++cost});
     }
   };
@@ -49,6 +49,17 @@ allowedCoercions() {
   add(INTEGER(), {BIGINT(), REAL(), DOUBLE()});
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
+  add(DATE(), {TIMESTAMP()});
+  add(UNKNOWN(),
+      {TINYINT(),
+       BOOLEAN(),
+       SMALLINT(),
+       INTEGER(),
+       BIGINT(),
+       REAL(),
+       DOUBLE(),
+       VARCHAR(),
+       VARBINARY()});
 
   return coercions;
 }
@@ -72,31 +83,118 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
 }
 
 // static
-bool TypeCoercer::coercible(const TypePtr& fromType, const TypePtr& toType) {
-  if (fromType->isUnKnown()) {
-    return true;
+std::optional<int32_t> TypeCoercer::coercible(
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  if (fromType->isUnknown()) {
+    if (toType->isUnknown()) {
+      return 0;
+    }
+    return 1;
   }
 
   if (fromType->size() == 0) {
     if (auto coercion = TypeCoercer::coerceTypeBase(fromType, toType->name())) {
-      return true;
+      return coercion->cost;
     }
 
-    return false;
+    return std::nullopt;
   }
 
   if (fromType->name() != toType->name() ||
       fromType->size() != toType->size()) {
-    return false;
+    return std::nullopt;
   }
 
+  int32_t totalCost = 0;
   for (auto i = 0; i < fromType->size(); i++) {
-    if (!coercible(fromType->childAt(i), toType->childAt(i))) {
-      return false;
+    if (auto cost = coercible(fromType->childAt(i), toType->childAt(i))) {
+      totalCost += cost.value();
+    } else {
+      return std::nullopt;
     }
   }
 
-  return true;
+  return totalCost;
+}
+
+namespace {
+
+TypePtr leastCommonSuperRowType(const RowType& a, const RowType& b) {
+  std::vector<std::string> childNames;
+  childNames.reserve(a.size());
+
+  const auto& aNames = a.names();
+  const auto& bNames = b.names();
+
+  for (auto i = 0; i < a.size(); i++) {
+    if (aNames[i] == bNames[i]) {
+      childNames.push_back(aNames[i]);
+    } else {
+      childNames.push_back("");
+    }
+  }
+
+  std::vector<TypePtr> childTypes;
+  childTypes.reserve(a.size());
+  for (auto i = 0; i < a.size(); i++) {
+    if (auto childType =
+            TypeCoercer::leastCommonSuperType(a.childAt(i), b.childAt(i))) {
+      childTypes.push_back(childType);
+    } else {
+      return nullptr;
+    }
+  }
+
+  return ROW(std::move(childNames), std::move(childTypes));
+}
+} // namespace
+
+// static
+TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
+  if (a->isUnknown()) {
+    return b;
+  }
+
+  if (b->isUnknown()) {
+    return a;
+  }
+
+  if (a->size() != b->size()) {
+    return nullptr;
+  }
+
+  if (a->size() == 0) {
+    if (TypeCoercer::coerceTypeBase(a, b->name())) {
+      return b;
+    }
+
+    if (TypeCoercer::coerceTypeBase(b, a->name())) {
+      return a;
+    }
+
+    return nullptr;
+  }
+
+  if (a->name() != b->name()) {
+    return nullptr;
+  }
+
+  if (a->name() == TypeKindName::toName(TypeKind::ROW)) {
+    return leastCommonSuperRowType(a->asRow(), b->asRow());
+  }
+
+  std::vector<TypeParameter> childTypes;
+  childTypes.reserve(a->size());
+  for (auto i = 0; i < a->size(); i++) {
+    if (auto childType = leastCommonSuperType(a->childAt(i), b->childAt(i))) {
+      childTypes.push_back(TypeParameter(childType));
+    } else {
+      return nullptr;
+    }
+  }
+
+  return getType(a->name(), childTypes);
 }
 
 } // namespace facebook::velox

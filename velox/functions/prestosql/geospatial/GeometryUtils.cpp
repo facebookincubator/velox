@@ -13,22 +13,153 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 #include <geos/operation/valid/IsSimpleOp.h>
 #include <geos/operation/valid/IsValidOp.h>
 #include <queue>
 #include "velox/common/base/Exceptions.h"
-
-#include "velox/functions/prestosql/geospatial/GeometryUtils.h"
+#include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 
 using geos::operation::valid::IsSimpleOp;
 using geos::operation::valid::IsValidOp;
 
+namespace {
+
+class SphericalExcessCalculator {
+  static constexpr double TWO_PI = 2 * M_PI;
+  static constexpr double THREE_PI = 3 * M_PI;
+
+  double sphericalExcess = 0.0;
+  double courseDelta = 0.0;
+
+  bool firstPoint = true;
+  double firstInitialBearing = 0.0;
+  double previousFinalBearing = 0.0;
+
+  double previousPhi = 0.0;
+  double previousCos = 0.0;
+  double previousSin = 0.0;
+  double previousTan = 0.0;
+  double previousLongitude = 0.0;
+
+  bool done = false;
+
+  static double toRadians(double deg) {
+    return deg * M_PI / 180.0;
+  }
+
+ public:
+  explicit SphericalExcessCalculator(const geos::geom::Coordinate& endPoint) {
+    previousPhi = toRadians(endPoint.y);
+    previousSin = std::sin(previousPhi);
+    previousCos = std::cos(previousPhi);
+    previousTan = std::tan(previousPhi / 2);
+    previousLongitude = toRadians(endPoint.x);
+  }
+
+  void add(const geos::geom::Coordinate& point) {
+    VELOX_CHECK(!done, "Computation of spherical excess is complete");
+
+    double phi = toRadians(point.y);
+    double tan = std::tan(phi / 2);
+    double longitude = toRadians(point.x);
+
+    VELOX_USER_CHECK(
+        (longitude != previousLongitude || phi != previousPhi),
+        "Polygon is not valid: it has two identical consecutive vertices");
+
+    double deltaLongitude = longitude - previousLongitude;
+    sphericalExcess += 2 *
+        std::atan2(std::tan(deltaLongitude / 2) * (previousTan + tan),
+                   1 + previousTan * tan);
+
+    double cos = std::cos(phi);
+    double sin = std::sin(phi);
+    double sinOfDeltaLongitude = std::sin(deltaLongitude);
+    double cosOfDeltaLongitude = std::cos(deltaLongitude);
+
+    // Initial bearing from previous to current
+    double y = sinOfDeltaLongitude * cos;
+    double x = previousCos * sin - previousSin * cos * cosOfDeltaLongitude;
+    double initialBearing = std::fmod(std::atan2(y, x) + TWO_PI, TWO_PI);
+
+    // Final bearing from previous to current = opposite of bearing from current
+    // to previous
+    double finalY = -sinOfDeltaLongitude * previousCos;
+    double finalX = previousSin * cos - previousCos * sin * cosOfDeltaLongitude;
+    double finalBearing = std::fmod(std::atan2(finalY, finalX) + M_PI, TWO_PI);
+
+    if (firstPoint) {
+      // Keep our initial bearing around, and we'll use it at the end
+      // with the last final bearing
+      firstInitialBearing = initialBearing;
+      firstPoint = false;
+    } else {
+      courseDelta +=
+          std::fmod(initialBearing - previousFinalBearing + THREE_PI, TWO_PI) -
+          M_PI;
+    }
+
+    courseDelta +=
+        std::fmod(finalBearing - initialBearing + THREE_PI, TWO_PI) - M_PI;
+
+    previousFinalBearing = finalBearing;
+    previousCos = cos;
+    previousSin = sin;
+    previousPhi = phi;
+    previousTan = tan;
+    previousLongitude = longitude;
+  }
+
+  double computeSphericalExcess() {
+    if (!done) {
+      courseDelta +=
+          std::fmod(
+              firstInitialBearing - previousFinalBearing + THREE_PI, TWO_PI) -
+          M_PI;
+
+      // The courseDelta should be 2Pi or - 2Pi, unless a pole is enclosed (and
+      // then it should be ~ 0) In which case we need to correct the spherical
+      // excess by 2Pi
+      if (std::abs(courseDelta) < M_PI / 4) {
+        sphericalExcess = std::abs(sphericalExcess) - TWO_PI;
+      }
+      done = true;
+    }
+    return sphericalExcess;
+  }
+
+  static double excessFromCoordinates(
+      const geos::geom::CoordinateSequence& coords) {
+    int start = 0;
+    size_t end = coords.size();
+    // Our calculations rely on not processing the same point twice
+    if (coords.getAt(end - 1).equals(coords.getAt(start))) {
+      end = end - 1;
+    }
+
+    // A path with less than 3 distinct points is not valid for calculating an
+    // area
+    VELOX_USER_CHECK(
+        end - start > 2,
+        "Polygon is not valid: a loop contains less then 3 vertices.");
+
+    // Initialize the calculator with the last point
+    SphericalExcessCalculator calculator(coords.getAt(end - 1));
+
+    for (int i = start; i < end; i++) {
+      calculator.add(coords.getAt(i));
+    }
+
+    return calculator.computeSphericalExcess();
+  }
+};
+} // namespace
+
 namespace facebook::velox::functions::geospatial {
 
-static constexpr double kRealMinLatitude = -90;
-static constexpr double kRealMaxLatitude = 90;
 static constexpr int32_t kMaxCoveringCount = 1'000'000;
 
 GeometryCollectionIterator::GeometryCollectionIterator(
@@ -84,12 +215,6 @@ std::vector<const geos::geom::Geometry*> flattenCollection(
     result.push_back(it.next());
   }
   return result;
-}
-
-geos::geom::GeometryFactory* getGeometryFactory() {
-  thread_local static geos::geom::GeometryFactory::Ptr geometryFactory =
-      geos::geom::GeometryFactory::create();
-  return geometryFactory.get();
 }
 
 std::optional<std::string> geometryInvalidReason(
@@ -151,17 +276,18 @@ std::optional<std::string> geometryInvalidReason(
 
 Status validateLatitudeLongitude(double latitude, double longitude) {
   if (FOLLY_UNLIKELY(
-          latitude < kRealMinLatitude || latitude > kRealMaxLatitude ||
-          longitude < BingTileType::kMinLongitude ||
-          longitude > BingTileType::kMaxLongitude || std::isnan(latitude) ||
-          std::isnan(longitude))) {
+          latitude < common::geospatial::kMinLatitude ||
+          latitude > common::geospatial::kMaxLatitude ||
+          longitude < common::geospatial::kMinLongitude ||
+          longitude > common::geospatial::kMaxLongitude ||
+          std::isnan(latitude) || std::isnan(longitude))) {
     return Status::UserError(
         fmt::format(
             "Latitude must be in range [{}, {}] and longitude must be in range [{}, {}]. Got latitude: {} and longitude: {}",
-            kRealMinLatitude,
-            kRealMaxLatitude,
-            BingTileType::kMinLongitude,
-            BingTileType::kMaxLongitude,
+            common::geospatial::kMinLatitude,
+            common::geospatial::kMaxLatitude,
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude,
             latitude,
             longitude));
   }
@@ -174,22 +300,22 @@ FOLLY_ALWAYS_INLINE void checkLatitudeLongitudeBounds(
     double latitude,
     double longitude) {
   if (FOLLY_UNLIKELY(
-          latitude > BingTileType::kMaxLatitude ||
-          latitude < BingTileType::kMinLatitude)) {
+          latitude > common::geospatial::kMaxBingTileLatitude ||
+          latitude < common::geospatial::kMinBingTileLatitude)) {
     VELOX_USER_FAIL(
         fmt::format(
             "Latitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-            BingTileType::kMinLatitude,
-            BingTileType::kMaxLatitude));
+            common::geospatial::kMinBingTileLatitude,
+            common::geospatial::kMaxBingTileLatitude));
   }
   if (FOLLY_UNLIKELY(
-          longitude > BingTileType::kMaxLongitude ||
-          longitude < BingTileType::kMinLongitude)) {
+          longitude > common::geospatial::kMaxLongitude ||
+          longitude < common::geospatial::kMinLongitude)) {
     VELOX_USER_FAIL(
         fmt::format(
             "Longitude span for the geometry must be in [{:.2f}, {:.2f}] range",
-            BingTileType::kMinLongitude,
-            BingTileType::kMaxLongitude));
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude));
   }
 }
 
@@ -591,6 +717,19 @@ double getSphericalLength(const geos::geom::LineString& lineString) {
   }
 
   return sum;
+}
+
+double computeSphericalExcess(const geos::geom::Polygon& polygon) {
+  double sphericalExcess = std::abs(
+      SphericalExcessCalculator::excessFromCoordinates(
+          *polygon.getExteriorRing()->getCoordinates()));
+  auto interiorRingCount = polygon.getNumInteriorRing();
+  for (int i = 0; i < interiorRingCount; i++) {
+    sphericalExcess -= std::abs(
+        SphericalExcessCalculator::excessFromCoordinates(
+            *polygon.getInteriorRingN(i)->getCoordinates()));
+  }
+  return sphericalExcess;
 }
 
 } // namespace facebook::velox::functions::geospatial

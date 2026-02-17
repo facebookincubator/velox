@@ -28,7 +28,7 @@ SortBuffer::SortBuffer(
     tsan_atomic<bool>* nonReclaimableSection,
     common::PrefixSortConfig prefixSortConfig,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<velox::common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
       pool_(pool),
@@ -74,7 +74,7 @@ SortBuffer::SortBuffer(
   }
 
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes, nonSortedColumnTypes, pool_);
+      sortedColumnTypes, nonSortedColumnTypes, /*useListRowIndex=*/true, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
@@ -128,6 +128,7 @@ void SortBuffer::noMoreInput() {
     updateEstimatedOutputRowSize();
     // Sort the pointers to the rows in RowContainer (data_) instead of sorting
     // the rows.
+    // TODO: Reuse 'RowContainer::rowPointers_'.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numInputRows_, sortedRows_.data());
@@ -484,7 +485,7 @@ void SortBuffer::prepareOutputWithSpill() {
 
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
   spillMerger_ = spillPartitionSet_.begin()->second->createOrderedReader(
-      spillConfig_->readBufferSize, pool(), spillStats_);
+      *spillConfig_, pool(), spillStats_);
   spillPartitionSet_.clear();
 }
 } // namespace facebook::velox::exec

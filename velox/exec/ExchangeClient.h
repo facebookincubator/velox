@@ -36,11 +36,12 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       memory::MemoryPool* pool,
       folly::Executor* executor,
       int32_t requestDataSizesMaxWaitSec = 10,
-      bool skipRequestDataSizeWithSingleSource = false)
+      bool skipRequestDataSizeWithSingleSource = false,
+      bool lazyFetching = false)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
-        kRequestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
+        requestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
         pool_(pool),
         executor_(executor),
         queue_(
@@ -55,7 +56,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         minOutputBatchBytes_(
             std::max(static_cast<uint64_t>(1), minOutputBatchBytes)),
         skipRequestDataSizeWithSingleSource_(
-            skipRequestDataSizeWithSingleSource) {
+            skipRequestDataSizeWithSingleSource),
+        lazyFetching_(lazyFetching) {
     VELOX_CHECK_NOT_NULL(pool_);
     VELOX_CHECK_NOT_NULL(executor_);
     // NOTE: the executor is used to run async response callback from the
@@ -91,7 +93,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   // Returns runtime statistics aggregated across all of the exchange sources.
   // ExchangeClient is expected to report background CPU time by including a
   // runtime metric named Operator::kBackgroundCpuTimeNanos.
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+  folly::F14FastMap<std::string, RuntimeMetric> stats();
 
   const std::shared_ptr<ExchangeQueue>& queue() const {
     return queue_;
@@ -113,7 +115,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   folly::dynamic toJson() const;
 
   std::chrono::seconds requestDataSizesMaxWaitSec() const {
-    return kRequestDataSizesMaxWaitSec_;
+    return requestDataSizesMaxWaitSec_;
   }
 
   const std::unordered_set<std::string>& getRemoteTaskIdList() const {
@@ -163,11 +165,13 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         sources_.size() == 1;
   }
 
+  folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
+
   // Handy for ad-hoc logging.
   const std::string taskId_;
   const int destination_;
   const int64_t maxQueuedBytes_;
-  const std::chrono::seconds kRequestDataSizesMaxWaitSec_;
+  const std::chrono::seconds requestDataSizesMaxWaitSec_;
 
   memory::MemoryPool* const pool_;
   folly::Executor* const executor_;
@@ -177,6 +181,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
 
+  folly::F14FastMap<std::string, RuntimeMetric> stats_;
+
   // The minimum byte size the consumer is expected to consume from
   // the exchange queue.
   const uint64_t minOutputBatchBytes_;
@@ -184,6 +190,11 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   // Enable single source exchange optimization query config flag
   // when there is only one exchange source.
   const bool skipRequestDataSizeWithSingleSource_;
+
+  // If true, defer fetching until next() is called.
+  // If false (default), start fetching data immediately when remote tasks are
+  // added.
+  const bool lazyFetching_;
 
   // Total number of bytes in flight.
   int64_t totalPendingBytes_{0};

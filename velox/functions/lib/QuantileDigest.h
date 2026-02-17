@@ -1348,10 +1348,6 @@ QuantileDigest<T, Allocator>::getDistributionFunction(T rangeStart, T rangeEnd)
   std::vector<CdfEntry, RebindAlloc<CdfEntry>> cdf(
       RebindAlloc<CdfEntry>(counts_.get_allocator()));
 
-  if (weightedCount_ == 0 || root_ == -1) {
-    return cdf;
-  }
-
   VELOX_USER_CHECK_LE(
       rangeStart,
       rangeEnd,

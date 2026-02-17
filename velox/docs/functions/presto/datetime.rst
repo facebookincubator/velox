@@ -188,6 +188,19 @@ Date and Time Functions
 
         SELECT current_timezone;   -- Asia/Kolkata
 
+.. function:: current_timestamp() -> timestamp with time zone
+.. function:: now() -> timestamp with time zone
+
+    Returns the current timestamp with session time zone applied.
+    The timestamp is captured once at the start of query execution and remains
+    constant throughout the query. This matches the standard SQL behavior for
+    ``CURRENT_TIMESTAMP`` and ``NOW()``.
+
+    Example::
+
+        SELECT current_timestamp;  -- 2025-07-17 14:53:12.123 Asia/Kolkata
+        SELECT now();              -- 2025-07-17 14:53:12.123 Asia/Kolkata
+
 Truncation Function
 -------------------
 
@@ -324,6 +337,10 @@ Specifier Description
 .. function:: date_format(x, format) -> varchar
 
     Formats ``x`` as a string using ``format``. ``x`` is a timestamp or a timestamp with time zone.
+
+.. function:: date_parse(string, format) -> timestamp
+
+    Parses ``string`` into a timestamp using ``format``.
 
 Java Date Functions
 -------------------

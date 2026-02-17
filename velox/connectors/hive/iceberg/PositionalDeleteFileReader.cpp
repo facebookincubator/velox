@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -31,8 +32,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStatistics& runtimeStats,
     uint64_t splitOffset,
     const std::string& connectorId)
@@ -42,8 +43,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
+      ioStatistics_(ioStatistics),
       ioStats_(ioStats),
-      fsStats_(fsStats),
       pool_(connectorQueryCtx->memoryPool()),
       filePathColumn_(IcebergMetadataColumn::icebergDeleteFilePathColumn()),
       posColumn_(IcebergMetadataColumn::icebergDeletePosColumn()),
@@ -97,12 +98,12 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
-  auto deleteFileInput = createBufferedInput(
+  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       executor_);
 
   auto deleteReader =

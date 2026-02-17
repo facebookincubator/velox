@@ -62,4 +62,14 @@ inline bool isKHyperLogLogType(const TypePtr& type) {
 inline std::shared_ptr<const KHyperLogLogType> KHYPERLOGLOG() {
   return KHyperLogLogType::get();
 }
+
+// Type to use for inputs and outputs of simple functions, e.g.
+// arg_type<KHyperLogLog> and out_type<KHyperLogLog>.
+struct KHyperLogLogT {
+  using type = Varbinary;
+  static constexpr const char* typeName = "khyperloglog";
+};
+
+using KHyperLogLog = CustomType<KHyperLogLogT>;
+
 } // namespace facebook::velox

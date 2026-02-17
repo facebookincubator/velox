@@ -213,6 +213,20 @@ class StringImplTest : public testing::Test {
         {"CAPS_LOCK@DOMAIN.COM", "Caps_lock@domain.com"},
         {"__init__.py@example.dev", "__init__.py@example.dev"}};
   }
+
+  static void testTruncate(
+      const std::string& input,
+      int32_t numCodePoints,
+      const std::string& expected) {
+    EXPECT_EQ(truncateUtf8(input, numCodePoints), expected);
+  }
+
+  static void testRoundUp(
+      const std::string& input,
+      int32_t numCodePoints,
+      const std::optional<std::string>& expected) {
+    EXPECT_EQ(roundUpUtf8(input, numCodePoints), expected);
+  }
 };
 
 TEST_F(StringImplTest, upperAscii) {
@@ -466,15 +480,11 @@ TEST_F(StringImplTest, badUnicodeLength) {
 TEST_F(StringImplTest, codePointToString) {
   auto testValidInput = [](const int64_t codePoint,
                            const std::string& expectedString) {
-    core::StringWriter output;
-    codePointToString(output, codePoint);
-    ASSERT_EQ(
-        StringView(expectedString), StringView(output.data(), output.size()));
+    ASSERT_EQ(StringView(expectedString), codePointToString(codePoint));
   };
 
   auto testInvalidCodePoint = [](const int64_t codePoint) {
-    core::StringWriter output;
-    EXPECT_THROW(codePointToString(output, codePoint), VeloxUserError)
+    EXPECT_THROW(codePointToString(codePoint), VeloxUserError)
         << "codePoint " << codePoint;
   };
 
@@ -494,9 +504,8 @@ TEST_F(StringImplTest, charToCodePoint) {
   };
 
   auto testValidInputRoundTrip = [](const int64_t codePoint) {
-    core::StringWriter string;
-    codePointToString(string, codePoint);
-    ASSERT_EQ(charToCodePoint(string), codePoint) << "codePoint " << codePoint;
+    ASSERT_EQ(charToCodePoint(codePointToString(codePoint)), codePoint)
+        << "codePoint " << codePoint;
   };
 
   auto testExpectDeath = [](const std::string& charString) {
@@ -1038,4 +1047,98 @@ TEST_F(StringImplTest, initcapAsciiSpark) {
         /*greekFinalSigma=*/true>(output, input);
     ASSERT_EQ(output, expected);
   }
+}
+
+TEST_F(StringImplTest, truncate) {
+  // ASCII string.
+  std::string ascii = "Hello, world!";
+  testTruncate(ascii, 0, "");
+  testTruncate(ascii, 1, "H");
+  testTruncate(ascii, 5, "Hello");
+  testTruncate(ascii, 13, ascii);
+  testTruncate(ascii, 20, ascii);
+
+  // String with multi-bytes characters.
+  std::string unicode = "Hello, 世界!";
+  testTruncate(unicode, 7, "Hello, ");
+  testTruncate(unicode, 8, "Hello, 世");
+  testTruncate(unicode, 9, "Hello, 世界");
+  testTruncate(unicode, 10, unicode);
+  testTruncate(unicode, 20, unicode);
+
+  // String with emoji (surrogate pairs).
+  std::string emoji = "Hello 🌍!";
+  testTruncate(emoji, 6, "Hello ");
+  testTruncate(emoji, 7, "Hello 🌍");
+  testTruncate(emoji, 8, emoji);
+  testTruncate(emoji, 10, emoji);
+
+  std::string empty = "";
+  testTruncate(empty, 0, "");
+  testTruncate(empty, 5, "");
+
+  std::string mixed = "café世界🌍";
+  testTruncate(mixed, 3, "caf");
+  testTruncate(mixed, 4, "café");
+  testTruncate(mixed, 5, "café世");
+  testTruncate(mixed, 6, "café世界");
+  testTruncate(mixed, 7, mixed);
+}
+
+TEST_F(StringImplTest, roundUp) {
+  std::string ascii = "Hello, world!";
+  // Empty truncation returns nullopt.
+  testRoundUp(ascii, 0, std::nullopt);
+  // 'o' -> 'p'.
+  testRoundUp(ascii, 5, "Hellp");
+  testRoundUp(ascii, ascii.length(), ascii);
+
+  ascii = "Customer#000001500";
+  // '5' -> '6'.
+  testRoundUp(ascii, 16, "Customer#0000016");
+
+  std::string unicode = "Hello, 世界!";
+  testRoundUp(unicode, 8, "Hello, 丗");
+
+  // No truncation needed.
+  std::string shortString = "Hi";
+  testRoundUp(shortString, 2, shortString);
+  testRoundUp(shortString, 20, shortString);
+
+  // Last character is already at maximum value, returns nullopt.
+  std::string maxChar = "Hello\U0010FFFF";
+  testRoundUp(maxChar, 6, maxChar);
+
+  std::string empty = "";
+  testRoundUp(empty, 0, "");
+  testRoundUp(empty, 5, "");
+
+  std::string single = "a";
+  // No truncation needed.
+  testRoundUp(single, 1, "a");
+
+  std::string zChar = "zz";
+  // 'z' -> '{'.
+  testRoundUp(zChar, 1, "{");
+
+  std::string emojiTest = "🌍!!";
+  // U1F30D (🌍) -> U1F30E.
+  testRoundUp(emojiTest, 1, "\U0001F30E");
+
+  std::string multiByteTest = "café+";
+  // 'f' -> 'g'.
+  testRoundUp(multiByteTest, 3, "cag");
+  // 'é' -> 'ê'.
+  testRoundUp(multiByteTest, 4, "cafê");
+
+  // Test surrogate boundary: U+D7FF should increment to U+E000 (skipping
+  // surrogate range U+D800-U+DFFF).
+  // U+D7FF followed by "!!"
+  std::string surrogateTest = "\xED\x9F\xBF!!";
+  // U+E000
+  testRoundUp(surrogateTest, 1, "\xEE\x80\x80");
+
+  // Test all max code points - should return nullopt.
+  std::string allMax = "\U0010FFFF\U0010FFFF";
+  testRoundUp(allMax, 1, std::nullopt);
 }

@@ -21,6 +21,7 @@ add_executable(
   FilterSerDeTest.cpp
   FloatingPointUtilTest.cpp
   HugeIntTest.cpp
+  OpaqueCustomTypesTest.cpp
   StringViewTest.cpp
   SubfieldTest.cpp
   TimestampConversionTest.cpp

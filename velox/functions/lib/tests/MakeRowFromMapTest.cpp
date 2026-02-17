@@ -173,7 +173,8 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
     // eg: cast(row_constructor(c0[1], c0[2]) as row(key1 bigint, key2 bigint))
     // Extract keys and wrap it in a struct
     auto typedExpr = core::Expressions::inferTypes(
-        parse::parseExpr("row_constructor(c0[1], c0[2])", {}),
+        parse::DuckSqlExpressionsParser().parseExpr(
+            "row_constructor(c0[1], c0[2])"),
         inputRow->type(),
         execCtx_->pool());
     // Wrap the struct in a cast to get the correct field names

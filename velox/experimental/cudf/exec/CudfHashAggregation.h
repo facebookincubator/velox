@@ -19,10 +19,16 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
+#include "velox/expression/FunctionSignature.h"
 
 #include <cudf/groupby.hpp>
 
+#include <unordered_map>
+
 namespace facebook::velox::cudf_velox {
+
+// Forward declaration
+struct CudfFunctionSpec;
 
 class CudfHashAggregation : public exec::Operator, public NvtxHelper {
  public:
@@ -98,15 +104,15 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t>& groupingKeyOutputChannels) const;
 
   CudfVectorPtr doGroupByAggregation(
-      std::unique_ptr<cudf::table> tbl,
+      cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<Aggregator>>& aggregators,
       rmm::cuda_stream_view stream);
   CudfVectorPtr doGlobalAggregation(
-      std::unique_ptr<cudf::table> tbl,
+      cudf::table_view tableView,
       rmm::cuda_stream_view stream);
   CudfVectorPtr getDistinctKeys(
-      std::unique_ptr<cudf::table> tbl,
+      cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       rmm::cuda_stream_view stream);
 
@@ -151,5 +157,51 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   CudfVectorPtr partialOutput_;
 };
+
+// Step-aware aggregation function registry
+// Map of function name -> Map of step -> signatures
+using StepAwareAggregationRegistry = std::unordered_map<
+    std::string,
+    std::unordered_map<
+        core::AggregationNode::Step,
+        std::vector<exec::FunctionSignaturePtr>>>;
+
+// Get the step-aware aggregation registry
+StepAwareAggregationRegistry& getStepAwareAggregationRegistry();
+
+// Register aggregation function signatures for a specific step
+bool registerAggregationFunctionForStep(
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
+    bool overwrite = true);
+
+// Register step-aware builtin aggregation functions
+bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix);
+
+// Step-aware aggregation validation function
+bool canAggregationBeEvaluatedByCudf(
+    const core::CallTypedExpr& call,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputTypes,
+    core::QueryCtx* queryCtx);
+
+bool canBeEvaluatedByCudf(
+    const core::AggregationNode& aggregationNode,
+    core::QueryCtx* queryCtx);
+
+// Utility functions
+core::TypedExprPtr expandFieldReference(
+    const core::TypedExprPtr& expr,
+    const core::PlanNode* sourceNode);
+
+bool canGroupingKeysBeEvaluatedByCudf(
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const core::PlanNode* sourceNode,
+    core::QueryCtx* queryCtx);
+
+bool matchTypedCallAgainstSignatures(
+    const core::CallTypedExpr& call,
+    const std::vector<exec::FunctionSignaturePtr>& sigs);
 
 } // namespace facebook::velox::cudf_velox

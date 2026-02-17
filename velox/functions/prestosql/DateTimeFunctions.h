@@ -24,7 +24,9 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -560,6 +562,29 @@ struct TimeMinusInterval {
       const arg_type<Time>& time,
       const arg_type<IntervalDayTime>& interval) {
     result = addToTime(time, -interval);
+  }
+};
+
+template <typename T>
+struct TimeMinusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<Time>& a,
+      const arg_type<Time>& b) {
+    // Validate inputs are in valid TIME range [0, 86400000)
+    VELOX_USER_CHECK(
+        a >= 0 && a < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        a);
+    VELOX_USER_CHECK(
+        b >= 0 && b < kMillisInDay,
+        "TIME value {} is out of range [0, 86400000)",
+        b);
+
+    // Simple subtraction returns interval in milliseconds
+    result = a - b;
   }
 };
 
@@ -1797,6 +1822,29 @@ struct CurrentTimezoneFunction {
 };
 
 template <typename T>
+struct CurrentTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int64_t result_{0};
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+    result_ = pack(ts, timeZone_->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
+    result = result_;
+  }
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1914,6 +1962,40 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     // two, as timestamp is stored as a UTC offset. The timestamp is then
     // resolved to the respective timezone at the time of display.
     result = pack(inputMs, targetTimezoneID);
+  }
+};
+
+template <typename T>
+struct AtTimezoneTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& timeWithTz,
+      const arg_type<Varchar>& targetTimezone) {
+    // Extract milliseconds UTC from the input
+    auto millisUtc = util::unpackMillisUtc(*timeWithTz);
+
+    // Parse the target timezone offset from the VARCHAR string
+    auto offsetResult = util::parseTimezoneOffset(
+        targetTimezone.data(),
+        targetTimezone.size(),
+        /*allowCompactFormat*/ false);
+    if (offsetResult.hasError()) {
+      if (offsetResult.error().isUserError()) {
+        VELOX_USER_FAIL(offsetResult.error().message());
+      } else {
+        VELOX_FAIL(offsetResult.error().message());
+      }
+    }
+
+    auto targetOffsetMinutes = offsetResult.value();
+
+    // Encode the timezone offset using bias encoding
+    auto encodedOffset = util::biasEncode(targetOffsetMinutes);
+
+    // Pack and return the result with the same UTC time but new timezone
+    result = util::pack(millisUtc, encodedOffset);
   }
 };
 

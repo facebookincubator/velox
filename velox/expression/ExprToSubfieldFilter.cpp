@@ -69,15 +69,39 @@ std::unique_ptr<common::BigintRange> asBigintRange(
 }
 
 template <typename T>
-std::vector<int64_t>
-toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
+std::unique_ptr<common::Filter> toInt64In(
+    const VectorPtr& vector,
+    vector_size_t start,
+    vector_size_t size,
+    bool negated) {
   auto ints = vector->as<SimpleVector<T>>();
   std::vector<int64_t> values;
   values.reserve(size);
-  for (auto i = 0; i < size; i++) {
-    values.push_back(ints->valueAt(start + i));
+  bool hasNull = false;
+  if (!ints->mayHaveNulls()) {
+    for (auto i = 0; i < size; i++) {
+      values.push_back(ints->valueAt(start + i));
+    }
+  } else {
+    for (auto i = 0; i < size; i++) {
+      if (!ints->isNullAt(start + i)) {
+        values.push_back(ints->valueAt(start + i));
+      } else if (!hasNull) {
+        hasNull = true;
+      }
+    }
   }
-  return values;
+
+  if (negated) {
+    if (hasNull) {
+      // If values contain NULL, the input cannot pass the filter, e.g. '1
+      // not in (2, NULL)' evaluates to NULL.
+      return std::make_unique<common::AlwaysFalse>();
+    }
+    return notIn(values);
+  }
+
+  return in(values);
 }
 
 } // namespace
@@ -136,6 +160,9 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
   if (!value) {
     return nullptr;
   }
+  if (value->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
 
   auto lessThanFilter = makeLessThanFilter(valueExpr, evaluator);
   if (!lessThanFilter) {
@@ -180,6 +207,9 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeEqualFilter(
   if (!value) {
     return nullptr;
   }
+  if (value->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
   switch (value->typeKind()) {
     case TypeKind::BOOLEAN:
       return boolEqual(singleValue<bool>(value));
@@ -210,6 +240,9 @@ ExprToSubfieldFilterParser::makeGreaterThanFilter(
   auto lower = toConstant(lowerExpr, evaluator);
   if (!lower) {
     return nullptr;
+  }
+  if (lower->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
   }
   switch (lower->typeKind()) {
     case TypeKind::TINYINT:
@@ -242,6 +275,9 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeLessThanFilter(
   auto upper = toConstant(upperExpr, evaluator);
   if (!upper) {
     return nullptr;
+  }
+  if (upper->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
   }
   switch (upper->typeKind()) {
     case TypeKind::TINYINT:
@@ -276,6 +312,9 @@ ExprToSubfieldFilterParser::makeLessThanOrEqualFilter(
   if (!upper) {
     return nullptr;
   }
+  if (upper->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
   switch (upper->typeKind()) {
     case TypeKind::TINYINT:
       return lessThanOrEqual(singleValue<int8_t>(upper));
@@ -308,6 +347,9 @@ ExprToSubfieldFilterParser::makeGreaterThanOrEqualFilter(
   auto lower = toConstant(lowerExpr, evaluator);
   if (!lower) {
     return nullptr;
+  }
+  if (lower->isNullAt(0)) {
+    return std::make_unique<common::AlwaysFalse>();
   }
   switch (lower->typeKind()) {
     case TypeKind::TINYINT:
@@ -351,30 +393,39 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
 
   auto elementType = arrayVector->type()->asArray().elementType();
   switch (elementType->kind()) {
-    case TypeKind::TINYINT: {
-      auto values = toInt64List<int8_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::SMALLINT: {
-      auto values = toInt64List<int16_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::INTEGER: {
-      auto values = toInt64List<int32_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::BIGINT: {
-      auto values = toInt64List<int64_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
+    case TypeKind::TINYINT:
+      return toInt64In<int8_t>(elements, offset, size, negated);
+    case TypeKind::SMALLINT:
+      return toInt64In<int16_t>(elements, offset, size, negated);
+    case TypeKind::INTEGER:
+      return toInt64In<int32_t>(elements, offset, size, negated);
+    case TypeKind::BIGINT:
+      return toInt64In<int64_t>(elements, offset, size, negated);
     case TypeKind::VARCHAR: {
       auto stringElements = elements->as<SimpleVector<StringView>>();
       std::vector<std::string> values;
       values.reserve(size);
-      for (auto i = 0; i < size; i++) {
-        values.push_back(std::string(stringElements->valueAt(offset + i)));
+      bool hasNull = false;
+      if (!stringElements->mayHaveNulls()) {
+        for (auto i = 0; i < size; i++) {
+          values.push_back(std::string(stringElements->valueAt(offset + i)));
+        }
+      } else {
+        for (auto i = 0; i < size; i++) {
+          if (!stringElements->isNullAt(offset + i)) {
+            values.push_back(std::string(stringElements->valueAt(offset + i)));
+          } else if (!hasNull) {
+            hasNull = true;
+          }
+        }
       }
+
       if (negated) {
+        if (hasNull) {
+          // If values contain NULL, the input cannot pass the filter, e.g. 'a'
+          // not in ('b', NULL) evaluates to NULL.
+          return std::make_unique<common::AlwaysFalse>();
+        }
         return notIn(values);
       }
       return in(values);
@@ -678,10 +729,7 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
     return merged;
   }
 
-  const bool nullAllowed = isNullAllowed(disjuncts);
-
-  return std::make_unique<common::MultiRange>(
-      std::move(disjuncts), nullAllowed);
+  return nullptr;
 }
 
 namespace {

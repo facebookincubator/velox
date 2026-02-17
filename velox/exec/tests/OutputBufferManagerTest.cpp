@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBufferManager.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -437,7 +438,7 @@ class OutputBufferManagerTest : public testing::Test {
   const VectorSerde::Kind serdeKind_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
   std::shared_ptr<OutputBufferManager> bufferManager_;
   RowTypePtr rowType_;

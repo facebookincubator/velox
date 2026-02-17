@@ -80,6 +80,12 @@ class SignatureBinderBase {
       const std::string& parameterName,
       const VarcharEnumParameter& params);
 
+  std::optional<bool> checkSetTypeVariable(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      bool allowCoercion,
+      Coercion& coercion);
+
   /// Try to bind the integer parameter from the actualType.
   bool tryBindIntegerParameters(
       const std::vector<exec::TypeSignature>& parameters,
@@ -185,6 +191,10 @@ class SignatureBinder : private SignatureBinderBase {
 
  private:
   bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
+
+  bool tryBindVariablesWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType);
 
   const std::vector<TypePtr>& actualTypes_;
 };

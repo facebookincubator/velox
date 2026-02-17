@@ -16,13 +16,50 @@
 
 #pragma once
 
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/connectors/hive/iceberg/TransformEvaluator.h"
 #include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+namespace {
+
+IcebergColumnHandlePtr convertToIcebergColumnHandle(
+    const HiveColumnHandlePtr& hiveColumn) {
+  static int32_t fieldIdCounter = 1;
+
+  std::function<parquet::ParquetFieldId(const TypePtr&, int32_t&)> makeField =
+      [&makeField](
+          const TypePtr& type, int32_t& fieldId) -> parquet::ParquetFieldId {
+    const int32_t currentId = fieldId++;
+    std::vector<parquet::ParquetFieldId> children;
+    children.reserve(type->size());
+    for (auto i = 0; i < type->size(); ++i) {
+      children.push_back(makeField(type->childAt(i), fieldId));
+    }
+    return parquet::ParquetFieldId{currentId, children};
+  };
+
+  auto field = makeField(hiveColumn->dataType(), fieldIdCounter);
+
+  return std::make_shared<const IcebergColumnHandle>(
+      hiveColumn->name(),
+      hiveColumn->columnType(),
+      hiveColumn->dataType(),
+      field);
+}
+
+} // namespace
 
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -44,28 +81,12 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
   IcebergInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
+      std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
       IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  IcebergInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
-      LocationHandlePtr locationHandle,
-      dwio::common::FileFormat tableStorageFormat,
-      std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {})
-      : IcebergInsertTableHandle(
-            inputColumns,
-            locationHandle,
-            tableStorageFormat,
-            nullptr,
-            compressionKind,
-            serdeParameters) {}
-#endif
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -88,7 +109,7 @@ class IcebergDataSink : public HiveDataSink {
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -120,9 +141,29 @@ class IcebergDataSink : public HiveDataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels,
       RowTypePtr partitionRowType,
-      const std::string& functionPrefix);
+      const IcebergConfigPtr& icebergConfig);
 
+  // Computes partition IDs for each row in the input batch by applying Iceberg
+  // partition transforms and generating unique partition identifiers.
+  //
+  // Performs a two-step process:
+  // 1. Applies Iceberg partition transforms (e.g., year, month, day, hour,
+  //    bucket, truncate) to the input partition columns using
+  //    transformEvaluator_ to produce transformed partition values.
+  // 2. Wraps the transformed columns in a RowVector with partitionRowType_
+  //    schema and passes it to partitionIdGenerator_ to compute partition IDs.
+  //
+  // The resulting partition IDs are stored in partitionIds_ buffer, where each
+  // element corresponds to a row in the input. These IDs are used to:
+  // - Route rows to the appropriate writer (one writer per unique partition).
+  // - Generate partition directory names via getPartitionName().
+  //
+  // Note: Iceberg does not support bucketing, so this method only computes
+  // partition IDs, not bucket IDs.
+  //
+  // @param input The input RowVector containing rows to be partitioned.
   void computePartitionAndBucketIds(const RowVectorPtr& input) override;
 
   // Returns the Iceberg partition directory name for the given partition ID.
@@ -130,6 +171,28 @@ class IcebergDataSink : public HiveDataSink {
   // into an Iceberg compliant directory path
   // (e.g., "date_year=2023/id_bucket=5").
   std::string getPartitionName(uint32_t partitionId) const override;
+
+  // Ensures a writer exists for the given writer ID and returns its index.
+  // If the writer doesn't exist, creates it by calling appendWriter().
+  // Additionally, extracts and stores the transformed partition values for
+  // the writer in commitPartitionValue_ if not already set, which will be
+  // included in the commit message as "partitionDataJson".
+  uint32_t ensureWriter(const HiveWriterId& id) override;
+
+  // Creates writer options configured for Iceberg table writes. Extends the
+  // base HiveDataSink writer options with Iceberg-specific settings:
+  // - Sets timestamp timezone to nullopt (UTC) for Iceberg compliance.
+  // - Sets timestamp precision to microseconds.
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
+      const override;
+
+  // Extracts partition values for a specific writer to be included in the
+  // commit message. Converts the transformed partition values from columnar
+  // storage (partitionIdGenerator_->partitionValues() where each partition
+  // field is a separate column) to row storage (a folly::dynamic array of
+  // values for the given writer index) for JSON serialization.
+  // Returns nullptr for null partition values.
+  folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
 
   // Iceberg partition specification defining how the table is partitioned.
   // Contains partition fields with source column names, transform types
@@ -165,6 +228,18 @@ class IcebergDataSink : public HiveDataSink {
   // generation and to IcebergPartitionNameGenerator for partition path name
   // generation.
   RowTypePtr partitionRowType_;
+
+  // Stores the transformed partition values for each writer to be included in
+  // the commit message sent to Presto. Indexed by writer index. Each entry
+  // contains the transformed partition values (as a folly::dynamic array) for
+  // that writer's partition, which are serialized to JSON as
+  // "partitionDataJson" in the commit protocol. These values represent the same
+  // transformed partition data as partitionIdGenerator_->partitionValues(), but
+  // converted from columnar storage (where each partition field is a separate
+  // column in the RowVector) to row storage (where each writer has a
+  // folly::dynamic array of values across all partition fields), ready for JSON
+  // serialization.
+  std::vector<folly::dynamic> commitPartitionValue_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

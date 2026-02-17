@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
@@ -63,12 +64,13 @@ class WindowTest : public OperatorTestBase {
         0,
         0,
         "none",
+        0,
         prefixSortConfig);
   }
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
 
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
@@ -878,7 +880,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig =
         getSpillConfig(spillDirectory->getPath(), enableSpillPrefixSort);
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     const auto plan = usePrefixSort ? prefixSortPlan : nonPrefixSortPlan;
     velox::common::PrefixSortConfig prefixSortConfig =
         velox::common::PrefixSortConfig{

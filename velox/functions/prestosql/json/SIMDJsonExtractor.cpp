@@ -19,7 +19,7 @@
 namespace facebook::velox::functions {
 
 /* static */ SIMDJsonExtractor& SIMDJsonExtractor::getInstance(
-    folly::StringPiece path) {
+    std::string_view path) {
   // Cache tokenize operations in JsonExtractor across invocations in the same
   // thread for the same JsonPath.
   thread_local static std::

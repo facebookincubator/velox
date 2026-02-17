@@ -27,11 +27,11 @@
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
 #include "velox/tool/trace/TraceReplayRunner.h"
@@ -248,7 +248,8 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
         std::vector<core::FieldAccessTypedExprPtr>{},
         aggregateNames,
         aggregates,
-        false, // ignoreNullKeys
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         source);
   }
 
@@ -287,8 +288,8 @@ TEST_F(TableWriterReplayerTest, runner) {
           .split(makeHiveConnectorSplit(sourceFilePath->getPath()))
           .copyResults(pool(), task);
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto opTraceDir = exec::trace::getOpTraceDirectory(
       taskTraceDir,
       traceNodeId,
@@ -314,6 +315,7 @@ TEST_F(TableWriterReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  resetHiveConnector();
 
   const auto traceOutputDir = TempDirectoryPath::create();
   FLAGS_task_id = task->taskId();
@@ -325,6 +327,7 @@ TEST_F(TableWriterReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  resetHiveConnector();
 }
 
 TEST_F(TableWriterReplayerTest, basic) {
@@ -373,7 +376,8 @@ TEST_F(TableWriterReplayerTest, basic) {
   // Second column contains details about written files.
   const auto details = results->childAt(TableWriteTraits::kFragmentChannel)
                            ->as<FlatVector<StringView>>();
-  const folly::dynamic obj = folly::parseJson(details->valueAt(1));
+  const folly::dynamic obj =
+      folly::parseJson(std::string_view(details->valueAt(1)));
   const auto fileWriteInfos = obj["fileWriteInfos"];
   ASSERT_EQ(1, fileWriteInfos.size());
 

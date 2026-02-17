@@ -867,15 +867,22 @@ TEST_P(UnnestTest, barrier) {
 
   struct {
     bool barrierExecution;
+    bool serialExecution;
     int numOutputRows;
 
     std::string toString() const {
       return fmt::format(
-          "barrierExecution {}, numOutputRows {}",
+          "barrierExecution {}, serialExecution {}, numOutputRows {}",
           barrierExecution,
+          serialExecution,
           numOutputRows);
     }
-  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
+  } testSettings[] = {
+      {true, true, 23},
+      {true, false, 23},
+      {false, true, 200},
+      {false, false, 200},
+  };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
     const int numExpectedOutputVectors =
@@ -887,7 +894,8 @@ TEST_P(UnnestTest, barrier) {
                         core::QueryConfig::kMaxSplitPreloadPerDriver,
                         std::to_string(tempFiles.size()))
                     .splits(makeHiveConnectorSplits(tempFiles))
-                    .serialExecution(true)
+                    .serialExecution(testData.serialExecution)
+                    .maxDrivers(testData.serialExecution ? 1 : 3)
                     .barrierExecution(testData.barrierExecution)
                     .config(
                         core::QueryConfig::kPreferredOutputBatchRows,

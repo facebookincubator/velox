@@ -16,12 +16,157 @@
 
 #pragma once
 
+#include <folly/Likely.h>
+#include <cstring>
+
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 #include "velox/type/Conversions.h"
 
 namespace facebook::velox::functions::sparksql {
+
+namespace detail {
+// Normalizes the JSON path to be Spark-compatible.
+//
+// Rules applied:
+// 1. Removes single quotes in bracket notation (e.g., "$['a']" -> "$[a]").
+// 2. Removes spaces after dots (e.g., "$. a" -> "$.a").
+// 3. Removes trailing spaces after root symbol (e.g., "$ " -> "$").
+// 4. Invalid cases return "-1":
+//    - Empty path or path not starting with '$'.
+//    - Space between ($ or ]) and dot (e.g., "$ .a").
+//    - Space between [ and field name (e.g., "$[' a']").
+//    - Consecutive dots (e.g., "$..a").
+//    - Dot at the end (e.g., "$.a. ").
+class JsonPathNormalizer {
+ public:
+  // The state transitions: kAfterDollar --> kAfterDot <--> kToken
+  //                            |               /|\            |
+  //                            |                |             |
+  //                            |----> kInSquareBrackets <-----|
+  enum class State { kAfterDollar, kAfterDot, kToken, kInSquareBrackets };
+
+  std::string normalize(StringView jsonPath) {
+    // First, remove single quotes for bracket notation
+    std::string path = removeSingleQuotes(jsonPath);
+    if (path.empty() || path[0] != '$') {
+      return "-1";
+    }
+    std::string normalized;
+    normalized.reserve(path.size() - 1);
+
+    // Initialize state.
+    state_ = State::kAfterDollar;
+    for (size_t i = 1; i < path.size(); ++i) {
+      const char c = path[i];
+      if (c == ' ') {
+        if (state_ == State::kToken || state_ == State::kInSquareBrackets) {
+          // Spaces within tokens and quare brackets are preserved.
+          normalized.push_back(c);
+        }
+        continue;
+      }
+      switch (state_) {
+        case State::kAfterDollar: {
+          if (!tryConvertToAfterDot(c, path[i - 1])) {
+            return "-1";
+          }
+          // i + 1 is safe because removeSingleQuotes ensures at least one
+          // char (']') after.
+          if (!tryConvertToInSquareBrackets(c, path[i + 1])) {
+            return "-1";
+          }
+          break;
+        }
+        case State::kAfterDot: {
+          if (c == '.') {
+            // Consecutive dots are invalid.
+            return "-1";
+          }
+          state_ = State::kToken;
+          break;
+        }
+        case State::kToken: {
+          if (c == '.') {
+            state_ = State::kAfterDot;
+          } else if (!tryConvertToInSquareBrackets(c, path[i + 1])) {
+            return "-1";
+          }
+          break;
+        }
+        case State::kInSquareBrackets: {
+          if (!tryConvertToAfterDot(c, path[i - 1])) {
+            return "-1";
+          }
+          break;
+        }
+      }
+      normalized.push_back(c);
+    }
+
+    if (state_ == State::kAfterDot) {
+      // Trailing dot is invalid.
+      return "-1";
+    }
+
+    return normalized;
+  }
+
+ private:
+  // Spark's json path requires field name surrounded by single quotes if it is
+  // specified in "[]". But simdjson lib requires not. This method just removes
+  // such single quotes to adapt to simdjson lib, e.g., converts "['a']['b']" to
+  // "[a][b]".
+  std::string removeSingleQuotes(StringView jsonPath) {
+    std::string result(jsonPath.data(), jsonPath.size());
+    size_t pairEnd = 0;
+    while (true) {
+      auto pairBegin = result.find("['", pairEnd);
+      if (pairBegin == std::string::npos) {
+        break;
+      }
+      pairEnd = result.find(']', pairBegin);
+      // If expected pattern, like ['a'], is not found.
+      if (pairEnd == std::string::npos || result[pairEnd - 1] != '\'') {
+        return "-1";
+      }
+      result.erase(pairEnd - 1, 1);
+      result.erase(pairBegin + 1, 1);
+      pairEnd -= 2;
+    }
+    return result;
+  }
+
+  // Try to convert state to kAfterDot if currentChar is '.'.
+  bool tryConvertToAfterDot(char currentChar, char previousChar) {
+    if (currentChar == '.') {
+      if (previousChar == ' ' && state_ != State::kToken) {
+        // Spaces before '.' are invalid.
+        return false;
+      }
+      state_ = State::kAfterDot;
+    }
+    return true;
+  }
+
+  // Try to convert state to kInSquareBrackets if currentChar is '['.
+  bool tryConvertToInSquareBrackets(char currentChar, char nextChar) {
+    if (currentChar == '[') {
+      if (nextChar == ' ') {
+        // Spaces between '[' and field are invalid.
+        return false;
+      }
+      state_ = State::kInSquareBrackets;
+    }
+    return true;
+  }
+
+  State state_{State::kAfterDollar};
+};
+
+} // namespace detail
 
 /// Parses a JSON string and returns the value at the specified path.
 /// Simdjson On-Demand API is used to parse JSON string.
@@ -39,7 +184,7 @@ struct GetJsonObjectFunction {
       const arg_type<Varchar>* /*json*/,
       const arg_type<Varchar>* jsonPath) {
     if (jsonPath != nullptr && checkJsonPath(*jsonPath)) {
-      jsonPath_ = normalizeJsonPath(*jsonPath);
+      jsonPath_ = pathNormalizer_.normalize(*jsonPath);
     }
   }
 
@@ -51,8 +196,13 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
-    const auto formattedJsonPath =
-        jsonPath_.has_value() ? jsonPath_.value() : normalizeJsonPath(jsonPath);
+    // Check if json has invalid escape sequence.
+    if (hasInvalidEscapedChar(json.data(), json.size())) {
+      return false;
+    }
+    const auto formattedJsonPath = jsonPath_.has_value()
+        ? jsonPath_.value()
+        : pathNormalizer_.normalize(jsonPath);
     // jsonPath is "$".
     if (formattedJsonPath.empty()) {
       result.append(json);
@@ -89,107 +239,6 @@ struct GetJsonObjectFunction {
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
     return std::string_view{jsonPath}.starts_with('$');
-  }
-
-  // Spark's json path requires field name surrounded by single quotes if it is
-  // specified in "[]". But simdjson lib requires not. This method just removes
-  // such single quotes to adapt to simdjson lib, e.g., converts "['a']['b']" to
-  // "[a][b]".
-  std::string removeSingleQuotes(StringView jsonPath) {
-    std::string result(jsonPath.data(), jsonPath.size());
-    size_t pairEnd = 0;
-    while (true) {
-      auto pairBegin = result.find("['", pairEnd);
-      if (pairBegin == std::string::npos) {
-        break;
-      }
-      pairEnd = result.find(']', pairBegin);
-      // If expected pattern, like ['a'], is not found.
-      if (pairEnd == std::string::npos || result[pairEnd - 1] != '\'') {
-        return "-1";
-      }
-      result.erase(pairEnd - 1, 1);
-      result.erase(pairBegin + 1, 1);
-      pairEnd -= 2;
-    }
-    return result;
-  }
-
-  // Normalizes the JSON path to be Spark-compatible.
-  //
-  // Rules applied:
-  // 1. Removes single quotes in bracket notation (e.g., "$['a']" -> "$[a]").
-  // 2. Removes spaces after dots (e.g., "$. a" -> "$.a").
-  // 3. Removes trailing spaces after root symbol (e.g., "$ " -> "$").
-  // 4. Invalid cases return "-1":
-  //    - Empty path or path not starting with '$'.
-  //    - Space between $ and dot (e.g., "$ .a").
-  //    - Consecutive dots (e.g., "$..a").
-  //    - Dot at the end (e.g., "$.a. ").
-  std::string normalizeJsonPath(StringView jsonPath) {
-    // First, remove single quotes for bracket notation
-    std::string path = removeSingleQuotes(jsonPath);
-    if (path.empty() || path[0] != '$') {
-      return "-1";
-    }
-
-    enum class State {
-      kAfterDollar,
-      kAfterDot,
-      kToken
-    } state = State::kAfterDollar;
-
-    std::string normalized;
-    normalized.reserve(path.size() - 1);
-
-    for (size_t i = 1; i < path.size(); ++i) {
-      const char c = path[i];
-      if (c == ' ') {
-        if (state == State::kToken) {
-          // Spaces within tokens are preserved.
-          normalized.push_back(c);
-        }
-        continue;
-      }
-      switch (state) {
-        case State::kAfterDollar: {
-          if (c == '.') {
-            state = State::kAfterDot;
-            if (path[i - 1] == ' ') {
-              // Spaces between '$' and '.' are invalid.
-              return "-1";
-            }
-          }
-          normalized.push_back(c);
-          break;
-        }
-        case State::kAfterDot: {
-          if (c == '.') {
-            // Consecutive dots are invalid.
-            return "-1";
-          }
-          normalized.push_back(c);
-          state = State::kToken;
-          break;
-        }
-        case State::kToken: {
-          if (c == '.') {
-            normalized.push_back(c);
-            state = State::kAfterDot;
-          } else {
-            normalized.push_back(c);
-          }
-          break;
-        }
-      }
-    }
-
-    if (state == State::kAfterDot) {
-      // Trailing dot is invalid.
-      return "-1";
-    }
-
-    return normalized;
   }
 
   // Extracts a string representation from a simdjson result. Handles various
@@ -277,8 +326,68 @@ struct GetJsonObjectFunction {
     return false;
   }
 
+  // Checks for invalid escape sequences in JSON string.
+  // Note: We only search for '\' which is ASCII (0x5C) and cannot appear
+  // as a continuation byte in valid UTF-8 (continuation bytes are 0x80-0xBF).
+  // So we can safely scan byte-by-byte regardless of encoding.
+  // See the valid escape sequences in Jackson's JSON parser:
+  // https://github.com/FasterXML/jackson-core/blob/jackson-core-2.19.2/src/main/java/com/fasterxml/jackson/core/json/ReaderBasedJsonParser.java#L2648
+  FOLLY_ALWAYS_INLINE bool hasInvalidEscapedChar(
+      const char* json,
+      size_t size) {
+    const char* end = json + size;
+    const char* pos = json;
+
+    while ((pos = static_cast<const char*>(std::memchr(
+                pos, '\\', static_cast<size_t>(end - pos)))) != nullptr) {
+      const auto remaining = static_cast<size_t>(end - pos);
+      if (FOLLY_UNLIKELY(remaining < 2)) {
+        return false; // Incomplete escape at end, let parser handle it.
+      }
+
+      switch (pos[1]) {
+        case '"':
+          [[fallthrough]];
+        case '\\':
+          [[fallthrough]];
+        case '/':
+          [[fallthrough]];
+        case 'b':
+          [[fallthrough]];
+        case 'f':
+          [[fallthrough]];
+        case 'n':
+          [[fallthrough]];
+        case 'r':
+          [[fallthrough]];
+        case 't':
+          pos += 2;
+          break;
+        case 'u':
+          // Validate \uXXXX.
+          if (FOLLY_UNLIKELY(remaining < 6) || !isHexDigit(pos[2]) ||
+              !isHexDigit(pos[3]) || !isHexDigit(pos[4]) ||
+              !isHexDigit(pos[5])) {
+            return true;
+          }
+          pos += 6;
+          break;
+        default:
+          return true; // Invalid escape character.
+      }
+    }
+    return false;
+  }
+
+  static FOLLY_ALWAYS_INLINE bool isHexDigit(char c) {
+    auto uc = static_cast<unsigned char>(c);
+    return (uc - '0' < 10U) || ((uc | 0x20) - 'a' < 6U);
+  }
+
   // Used for constant json path.
   std::optional<std::string> jsonPath_;
+
+  detail::JsonPathNormalizer pathNormalizer_;
 };
 
 } // namespace facebook::velox::functions::sparksql

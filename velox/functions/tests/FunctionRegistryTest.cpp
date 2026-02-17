@@ -162,10 +162,6 @@ class FunctionRegistryTest : public testing::Test {
       const TypePtr& expectedReturnType,
       const std::vector<TypePtr>& expectedCoercions) {
     auto type = resolveFuncs.resolveFunc(name, argTypes);
-    if (type) {
-      LOG(ERROR) << type->toString();
-    }
-
     ASSERT_TRUE(type == nullptr);
 
     std::vector<TypePtr> coercions;
@@ -181,7 +177,7 @@ class FunctionRegistryTest : public testing::Test {
         EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
                                          << ": " << coercions[i]->toString();
       } else {
-        ASSERT_NE(coercions[i], nullptr);
+        ASSERT_NE(coercions[i], nullptr) << "at " << i;
         EXPECT_EQ(*coercions[i], *expectedCoercions[i])
             << "Expected: " << expectedCoercions[i]->toString()
             << ", but got: " << coercions[i]->toString();
@@ -285,6 +281,60 @@ class FunctionRegistryTest : public testing::Test {
     }
 
     return builder.build();
+  }
+
+  void testVectorFunctionWithMetadataCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      const std::vector<TypePtr>& expectedCoercions,
+      bool expectedDeterministic) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions);
+    ASSERT_TRUE(result.has_value());
+    VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
+    EXPECT_EQ(result->second.deterministic, expectedDeterministic);
+
+    EXPECT_EQ(coercions.size(), expectedCoercions.size());
+    for (auto i = 0; i < coercions.size(); ++i) {
+      if (expectedCoercions[i] == nullptr) {
+        EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
+                                         << ": " << coercions[i]->toString();
+      } else {
+        ASSERT_NE(coercions[i], nullptr) << "at " << i;
+        EXPECT_EQ(*coercions[i], *expectedCoercions[i])
+            << "Expected: " << expectedCoercions[i]->toString()
+            << ", but got: " << coercions[i]->toString();
+      }
+    }
+  }
+
+  void testVectorFunctionWithMetadataNoCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      bool expectedDeterministic) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions);
+    ASSERT_TRUE(result.has_value());
+    VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
+    EXPECT_EQ(result->second.deterministic, expectedDeterministic);
+
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    for (const auto& coercion : coercions) {
+      EXPECT_EQ(coercion, nullptr);
+    }
+  }
+
+  void testVectorFunctionWithMetadataCannotResolve(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions);
+    EXPECT_FALSE(result.has_value());
   }
 };
 
@@ -605,6 +655,23 @@ TEST_F(FunctionRegistryTest, isDeterministic) {
   ASSERT_FALSE(isDeterministic("not_found_function").has_value());
 }
 
+TEST_F(FunctionRegistryTest, isDefaultNullBehavior) {
+  functions::prestosql::registerAllScalarFunctions();
+
+  // Functions with default null behavior.
+  ASSERT_TRUE(isDefaultNullBehavior("eq").value());
+  ASSERT_TRUE(isDefaultNullBehavior("plus").value());
+  ASSERT_TRUE(isDefaultNullBehavior("substr").value());
+
+  // Functions with non-default null behavior.
+  ASSERT_FALSE(isDefaultNullBehavior("distinct_from").value());
+  ASSERT_FALSE(isDefaultNullBehavior("in").value());
+
+  // Not found functions.
+  ASSERT_FALSE(isDefaultNullBehavior("cast").has_value());
+  ASSERT_FALSE(isDefaultNullBehavior("not_found_function").has_value());
+}
+
 TEST_F(FunctionRegistryTest, companionFunction) {
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
@@ -711,6 +778,8 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     registerFunction<DummySimpleFunction, int64_t, int64_t, int64_t>({"foo"});
     registerFunction<DummySimpleFunction, float, float, float>({"foo"});
     registerFunction<DummySimpleFunction, double, double, double>({"foo"});
+    registerFunction<DummySimpleFunction, Timestamp, Timestamp, Timestamp>(
+        {"foo"});
 
     testCoercions(
         "foo", {TINYINT(), TINYINT()}, INTEGER(), {INTEGER(), INTEGER()});
@@ -722,6 +791,11 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
 
     testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
     testCoercions("foo", {REAL(), TINYINT()}, REAL(), {nullptr, REAL()});
+
+    testCoercions(
+        "foo", {TIMESTAMP(), DATE()}, {TIMESTAMP()}, {nullptr, TIMESTAMP()});
+    testCoercions(
+        "foo", {DATE(), DATE()}, {TIMESTAMP()}, {TIMESTAMP(), TIMESTAMP()});
 
     testNoCoercions("foo", {INTEGER(), INTEGER()}, INTEGER());
     testNoCoercions("foo", {REAL(), REAL()}, REAL());
@@ -761,7 +835,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 
-  // Coercions with complex types are not supported yet.
+  // Coercions with complex types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -776,10 +850,18 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         },
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {ARRAY(TINYINT()), SMALLINT()});
+    testCoercions(
+        "foo",
+        {ARRAY(TINYINT()), SMALLINT()},
+        INTEGER(),
+        {ARRAY(INTEGER()), INTEGER()});
+
+    testNoCoercions("foo", {ARRAY(INTEGER()), INTEGER()}, INTEGER());
+
+    testCannotResolve("foo", {ARRAY(VARCHAR()), SMALLINT()});
   }
 
-  // Coercions with variable number of arguments are not supported yet.
+  // Coercions with variable number of arguments.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -790,21 +872,27 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         {velox::exec::FunctionSignatureBuilder()
              .returnType("bigint")
              .argumentType("bigint")
-             .argumentType("bigint")
-             .variableArity()
+             .variableArity("bigint")
              .build(),
          velox::exec::FunctionSignatureBuilder()
              .returnType("double")
              .argumentType("double")
-             .argumentType("double")
-             .variableArity()
+             .variableArity("double")
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), SMALLINT(), INTEGER()});
+    testCoercions(
+        "foo",
+        {TINYINT(), SMALLINT(), INTEGER()},
+        BIGINT(),
+        {BIGINT(), BIGINT(), BIGINT()});
+
+    testNoCoercions("foo", {BIGINT(), BIGINT(), BIGINT()}, BIGINT());
+
+    testCannotResolve("foo", {TINYINT(), SMALLINT(), VARCHAR()});
   }
 
-  // Coercions with generic types are not supported yet.
+  // Coercions with generic types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -820,7 +908,11 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), REAL()});
+    testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
+
+    testNoCoercions("foo", {INTEGER(), INTEGER()}, INTEGER());
+
+    testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 }
 
@@ -918,11 +1010,24 @@ TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
       {nullptr, BIGINT(), nullptr, BIGINT(), nullptr, BIGINT(), nullptr});
 }
 
+TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
+  testSpecialFormCoercions(
+      "coalesce", {UNKNOWN(), BIGINT()}, BIGINT(), {BIGINT(), nullptr});
+
+  testSpecialFormCoercions(
+      "coalesce", {BIGINT(), UNKNOWN()}, BIGINT(), {nullptr, BIGINT()});
+
+  testSpecialFormCoercions(
+      "coalesce",
+      {SMALLINT(), INTEGER(), BIGINT(), TINYINT()},
+      BIGINT(),
+      {BIGINT(), BIGINT(), nullptr, BIGINT()});
+}
+
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
   auto result = resolveFunctionOrCallableSpecialForm(
       "row_constructor", {INTEGER(), BOOLEAN(), DOUBLE()});
-  ASSERT_EQ(
-      *result, *ROW({"c1", "c2", "c3"}, {INTEGER(), BOOLEAN(), DOUBLE()}));
+  ASSERT_EQ(*result, *ROW({"", "", ""}, {INTEGER(), BOOLEAN(), DOUBLE()}));
 }
 
 TEST_F(FunctionRegistryTest, resolveFunctionNotSpecialForm) {
@@ -997,6 +1102,64 @@ TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
   EXPECT_TRUE(result->second.defaultNullBehavior);
   EXPECT_TRUE(result->second.deterministic);
   EXPECT_FALSE(result->second.supportsFlattening);
+}
+
+TEST_F(FunctionRegistryTest, resolveVectorFunctionWithMetadataWithCoercions) {
+  removeFunction("bar");
+
+  SCOPE_EXIT {
+    removeFunction("bar");
+    removeFunction("bar_nondet");
+  };
+
+  exec::registerVectorFunction(
+      "bar",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+          makeSignature("real", {"real", "real"}),
+      },
+      std::make_unique<DummyVectorFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(true).build());
+
+  // Register a non-deterministic function to verify metadata is correctly
+  // returned (not just default metadata).
+  exec::registerVectorFunction(
+      "bar_nondet",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+      },
+      std::make_unique<DummyVectorFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(false).build());
+
+  // Test exact match - no coercions needed.
+  testVectorFunctionWithMetadataNoCoercions(
+      "bar", {INTEGER(), INTEGER()}, INTEGER(), true);
+
+  // Test coercions are applied.
+  testVectorFunctionWithMetadataCoercions(
+      "bar", {TINYINT(), TINYINT()}, INTEGER(), {INTEGER(), INTEGER()}, true);
+
+  // Test partial coercions - one arg needs coercion, the other doesn't.
+  testVectorFunctionWithMetadataCoercions(
+      "bar", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr}, true);
+
+  // Test that metadata is correctly returned for non-deterministic function.
+  // This verifies we're returning actual function metadata, not defaults.
+  testVectorFunctionWithMetadataCoercions(
+      "bar_nondet",
+      {TINYINT(), TINYINT()},
+      INTEGER(),
+      {INTEGER(), INTEGER()},
+      false);
+
+  // Test function not found.
+  testVectorFunctionWithMetadataCannotResolve(
+      "non_existent_function", {INTEGER(), INTEGER()});
+
+  // Test incompatible types - cannot resolve.
+  testVectorFunctionWithMetadataCannotResolve("bar", {TINYINT(), VARCHAR()});
 }
 
 } // namespace

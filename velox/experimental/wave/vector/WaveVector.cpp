@@ -29,7 +29,7 @@ static int32_t kindSize() {
 
 int32_t waveTypeKindSize(WaveTypeKind waveKind) {
   TypeKind kind = static_cast<TypeKind>(waveKind);
-  if (kind == TypeKind::VARCHAR || kind == TypeKind::VARBINARY) {
+  if (is_string_kind(kind)) {
     // Wave StringView is 8, not 16 bytes.
     return sizeof(StringView);
   }

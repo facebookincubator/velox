@@ -69,7 +69,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const std::string& text,
       const RowTypePtr& rowType,
       const VectorPtr& complexConstants = nullptr) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(
         untyped, rowType, execCtx_->pool(), complexConstants);
   }
@@ -78,7 +78,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const std::string& text,
       const RowTypePtr& rowType,
       const std::vector<TypePtr>& lambdaInputTypes) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(
         untyped, rowType, lambdaInputTypes, execCtx_->pool(), nullptr);
   }
@@ -86,13 +86,15 @@ class ExprTest : public testing::Test, public VectorTestBase {
   std::vector<core::TypedExprPtr> parseMultipleExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseMultipleExpressions(text, options_);
-    std::vector<core::TypedExprPtr> parsed;
-    for (auto& iExpr : untyped) {
-      parsed.push_back(
-          core::Expressions::inferTypes(iExpr, rowType, execCtx_->pool()));
+    auto untypedExprs =
+        parse::DuckSqlExpressionsParser(options_).parseExprs(text);
+    std::vector<core::TypedExprPtr> typedExprs;
+    typedExprs.reserve(untypedExprs.size());
+    for (const auto& expr : untypedExprs) {
+      typedExprs.push_back(
+          core::Expressions::inferTypes(expr, rowType, execCtx_->pool()));
     }
-    return parsed;
+    return typedExprs;
   }
 
   // T can be ExprSet or ExprSetSimplified.
@@ -237,8 +239,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const RowVectorPtr& input,
       VectorPtr& result,
       const VectorPtr& expected) {
-    parse::ParseOptions options;
-    auto untyped = parse::parseExpr(expr, options);
+    auto untyped = parse::DuckSqlExpressionsParser().parseExpr(expr);
     auto typedExpr = core::Expressions::inferTypes(
         untyped, asRowType(input->type()), pool());
 
@@ -2403,6 +2404,40 @@ struct ThrowRuntimeError {
     VELOX_FAIL();
   }
 };
+
+// Simple function with custom owner that always throws.
+template <typename T>
+struct AlwaysThrowsWithCustomOwner {
+  static constexpr std::string_view owner = "custom-owner-team";
+
+  template <typename TResult, typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
+    VELOX_USER_FAIL("Expected error from custom owner function");
+  }
+};
+
+// Vector function with custom owner that always throws.
+class AlwaysThrowsVectorFunctionWithCustomOwner : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& /* args */,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& /* result */) const override {
+    auto error = std::make_exception_ptr(
+        std::invalid_argument(
+            "Expected error from custom owner vector function"));
+    context.setErrors(rows, error);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("integer")
+                .argumentType("integer")
+                .build()};
+  }
+};
 } // namespace
 
 TEST_P(ParameterizedExprTest, exceptionContext) {
@@ -2533,6 +2568,50 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
         trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
+}
+
+// Test that custom owner is included in exception context.
+TEST_P(ParameterizedExprTest, exceptionContextWithCustomOwner) {
+  auto data = makeFlatVector<int32_t>({1, 2, 3});
+
+  // Register test simple function.
+  registerFunction<AlwaysThrowsWithCustomOwner, int32_t, int32_t>(
+      {"always_throws_custom_owner"});
+
+  assertError(
+      "always_throws_custom_owner(c0)",
+      data,
+      "Owner: custom-owner-team. Top-level Expression: always_throws_custom_owner(c0)",
+      "",
+      "Expected error from custom owner function");
+
+  assertError(
+      "always_throws_custom_owner(c0) + 1",
+      data,
+      "Owner: custom-owner-team. Expression: always_throws_custom_owner(c0)",
+      "Top-level Expression: plus(cast((always_throws_custom_owner(c0)) as BIGINT), 1:BIGINT)",
+      "Expected error from custom owner function");
+
+  // Register and test vector function.
+  exec::registerVectorFunction(
+      "always_throws_vector_custom_owner",
+      AlwaysThrowsVectorFunctionWithCustomOwner::signatures(),
+      std::make_unique<AlwaysThrowsVectorFunctionWithCustomOwner>(),
+      exec::VectorFunctionMetadataBuilder().owner("vector-owner-team").build());
+
+  assertError(
+      "always_throws_vector_custom_owner(c0)",
+      data,
+      "Owner: vector-owner-team. Top-level Expression: always_throws_vector_custom_owner(c0)",
+      "",
+      "Expected error from custom owner vector function");
+
+  assertError(
+      "always_throws_vector_custom_owner(c0) + 1",
+      data,
+      "Owner: vector-owner-team. Expression: always_throws_vector_custom_owner(c0)",
+      "Top-level Expression: plus(cast((always_throws_vector_custom_owner(c0)) as BIGINT), 1:BIGINT)",
+      "Expected error from custom owner vector function");
 }
 
 namespace {
@@ -5183,17 +5262,11 @@ TEST_F(ExprTest, peelingOnDeterministicFunctionInNonDeterministicExpr) {
 }
 
 TEST_F(ExprTest, lambdaConstantFolded) {
-  const auto makeTypedExpr =
-      [this](const std::string& text, const RowTypePtr& rowType) {
-        auto untyped = parse::parseExpr(text, {});
-        return core::Expressions::inferTypes(untyped, rowType, pool());
-      };
-
   // Test the resource clear of lambda constant folding which relies on an
   // uninitialized ExprSet for eval.
   std::string expression =
       "reduce(regexp_split('a,b,c,d,e,f,g,h',','), array[array['']], (acc, x) -> array[array[x]], (id) -> id)";
-  auto typedExpr = makeTypedExpr(expression, ROW({"c0"}, {INTEGER()}));
+  auto typedExpr = parseExpression(expression, ROW({"c0"}, {INTEGER()}));
   exec::ExprSet exprSet({typedExpr}, execCtx_.get());
   exprSet.clear();
 }

@@ -30,10 +30,9 @@ velox_add_library(
   SimdUtil.cpp
   SkewedPartitionBalancer.cpp
   SpillConfig.cpp
-  SpillStats.cpp
+  SplitBlockBloomFilter.cpp
   StatsReporter.cpp
   SuccinctPrinter.cpp
-  TraceConfig.cpp
 )
 
 velox_link_libraries(

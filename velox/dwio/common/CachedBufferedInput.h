@@ -59,8 +59,8 @@ class CachedBufferedInput : public BufferedInput {
       cache::AsyncDataCache* cache,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
       folly::F14FastMap<std::string, std::string> fileReadOps = {})
@@ -68,8 +68,8 @@ class CachedBufferedInput : public BufferedInput {
             std::move(readFile),
             readerOptions.memoryPool(),
             metricsLog,
+            ioStatistics.get(),
             ioStats.get(),
-            fsStats.get(),
             kMaxMergeDistance,
             std::nullopt,
             std::move(fileReadOps)),
@@ -77,8 +77,8 @@ class CachedBufferedInput : public BufferedInput {
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {
@@ -91,8 +91,8 @@ class CachedBufferedInput : public BufferedInput {
       cache::AsyncDataCache* cache,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.memoryPool()),
@@ -100,8 +100,8 @@ class CachedBufferedInput : public BufferedInput {
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {
@@ -109,7 +109,7 @@ class CachedBufferedInput : public BufferedInput {
   }
 
   ~CachedBufferedInput() override {
-    for (auto& load : allCoalescedLoads_) {
+    for (auto& load : coalescedLoads_) {
       load->cancel();
     }
   }
@@ -153,8 +153,8 @@ class CachedBufferedInput : public BufferedInput {
         cache_,
         tracker_,
         groupId_,
+        ioStatistics_,
         ioStats_,
-        fsStats_,
         executor_,
         options_);
   }
@@ -175,6 +175,18 @@ class CachedBufferedInput : public BufferedInput {
 
   uint64_t nextFetchSize() const override {
     VELOX_NYI();
+  }
+
+  /// Resets the buffered input for reuse across different operations.
+  void reset() override;
+
+  const std::vector<std::shared_ptr<cache::CoalescedLoad>>&
+  testingCoalescedLoads() const {
+    return coalescedLoads_;
+  }
+
+  size_t testingStreamToCoalescedLoadSize() const {
+    return streamToCoalescedLoad_.rlock()->size();
   }
 
  private:
@@ -215,8 +227,8 @@ class CachedBufferedInput : public BufferedInput {
   const StringIdLease fileNum_;
   const std::shared_ptr<cache::ScanTracker> tracker_;
   const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
   const io::ReaderOptions options_;
@@ -224,14 +236,14 @@ class CachedBufferedInput : public BufferedInput {
   // Regions that are candidates for loading.
   std::vector<CacheRequest> requests_;
 
-  // Coalesced loads spanning multiple cache entries in one IO.
+  // Map from stream to its coalesced load.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<cache::CoalescedLoad>>>
-      coalescedLoads_;
+      streamToCoalescedLoad_;
 
-  // Distinct coalesced loads in 'coalescedLoads_'.
-  std::vector<std::shared_ptr<cache::CoalescedLoad>> allCoalescedLoads_;
+  // All distinct coalesced loads.
+  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
 };
 
 } // namespace facebook::velox::dwio::common

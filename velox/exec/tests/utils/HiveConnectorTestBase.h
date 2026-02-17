@@ -35,7 +35,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
   void TearDown() override;
 
   void resetHiveConnector(
-      const std::shared_ptr<const config::ConfigBase>& config);
+      const std::shared_ptr<const config::ConfigBase>& config =
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
 
   void writeToFiles(
       const std::vector<std::string>& filePaths,
@@ -130,6 +132,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
+      const std::vector<std::string>& indexColumns = {},
       bool filterPushdownEnabled = true,
       const std::unordered_map<std::string, std::string>& tableParameters =
           {}) {
@@ -140,6 +143,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
         std::move(subfieldFilters),
         remainingFilter,
         dataColumns,
+        indexColumns,
         tableParameters);
   }
 

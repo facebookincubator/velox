@@ -100,7 +100,8 @@ class GcsMultipleEndpointsTest : public testing::Test,
     // Second column contains details about written files.
     auto details = results->childAt(exec::TableWriteTraits::kFragmentChannel)
                        ->as<FlatVector<StringView>>();
-    folly::dynamic obj = folly::parseJson(details->valueAt(1));
+    folly::dynamic obj =
+        folly::parseJson(std::string_view(details->valueAt(1)));
     return obj["fileWriteInfos"];
   }
 

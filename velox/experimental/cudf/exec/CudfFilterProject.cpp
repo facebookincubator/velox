@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -28,6 +29,7 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <iostream>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -36,10 +38,14 @@ namespace {
 
 void debugPrintTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
-    int indent = 0) {
-  std::cout << std::string(indent, ' ') << expr->name() << std::endl;
+    int indent = 0,
+    std::ostream& os = std::cout) {
+  if (indent == 0)
+    os << "=== Expression Tree ===" << std::endl;
+  os << std::string(indent, ' ') << expr->name() << "("
+     << expr->type()->toString() << ")" << std::endl;
   for (auto& input : expr->inputs()) {
-    debugPrintTree(input, indent + 2);
+    debugPrintTree(input, indent + 2, os);
   }
 }
 
@@ -96,6 +102,30 @@ std::vector<exec::OperatorStats> splitStats(
 }
 
 } // namespace
+
+bool canBeEvaluatedByCudf(
+    const std::vector<core::TypedExprPtr>& exprs,
+    core::QueryCtx* queryCtx) {
+  if (exprs.empty()) {
+    return true;
+  }
+
+  auto precompilePool =
+      memory::memoryManager()->addLeafPool("", /*threadSafe*/ false);
+  core::ExecCtx precompileCtx(precompilePool.get(), queryCtx);
+
+  bool lazyDereference = false;
+  std::vector<core::TypedExprPtr> exprsCopy = exprs;
+  std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
+      std::move(exprsCopy), &precompileCtx, lazyDereference);
+
+  for (const auto& e : exprSet->exprs()) {
+    if (!canBeEvaluatedByCudf(e)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,
@@ -168,9 +198,8 @@ void CudfFilterProject::initialize() {
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
     for (const auto& expr : expr->exprs()) {
-      LOG(INFO) << "expr[" << i++ << "] " << expr->toString() << std::endl;
-      debugPrintTree(expr);
-      ++i;
+      LOG(INFO) << "expr[" << i++ << "] " << expr->toString();
+      debugPrintTree(expr, 0, LOG(INFO));
     }
   }
   if (hasFilter_) {
@@ -227,8 +256,8 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto const numColumns = outputTable->num_columns();
   auto const size = outputTable->num_rows();
   if (CudfConfig::getInstance().debugEnabled) {
-    LOG(INFO) << "cudfProject Output: " << size << " rows, " << numColumns
-              << " columns " << std::endl;
+    VLOG(1) << "cudfProject Output: " << size << " rows, " << numColumns
+            << " columns";
   }
 
   auto cudfOutput = std::make_shared<CudfVector>(
@@ -244,8 +273,13 @@ void CudfFilterProject::filter(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
   // Evaluate the Filter
+  std::vector<cudf::column_view> inputViews;
+  inputViews.reserve(inputTableColumns.size());
+  for (auto& col : inputTableColumns) {
+    inputViews.push_back(col->view());
+  }
   auto filterColumn = filterEvaluator_->eval(
-      inputTableColumns, stream, cudf::get_current_device_resource_ref(), true);
+      inputViews, stream, cudf::get_current_device_resource_ref(), true);
   auto filterColumnView = asView(filterColumn);
   bool shouldApplyFilter = [&]() {
     if (filterColumnView.has_nulls()) {
@@ -275,13 +309,15 @@ void CudfFilterProject::filter(
 std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream) {
+  std::vector<cudf::column_view> inputViews;
+  inputViews.reserve(inputTableColumns.size());
+  for (auto& col : inputTableColumns) {
+    inputViews.push_back(col->view());
+  }
   std::vector<ColumnOrView> columns;
   for (auto& projectEvaluator : projectEvaluators_) {
     columns.push_back(projectEvaluator->eval(
-        inputTableColumns,
-        stream,
-        cudf::get_current_device_resource_ref(),
-        true));
+        inputViews, stream, cudf::get_current_device_resource_ref(), true));
   }
 
   // Rearrange columns to match outputType_

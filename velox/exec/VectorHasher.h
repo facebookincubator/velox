@@ -252,6 +252,29 @@ class VectorHasher {
   // Returns null if distinctOverflow_ is true.
   std::unique_ptr<common::Filter> getFilter(bool nullAllowed) const;
 
+  bool supportsBloomFilter() const {
+    if (typeProvidesCustomComparison_) {
+      return false;
+    }
+    switch (typeKind_) {
+      // Smaller integers would never overflow 100'000 distinct values.
+      case TypeKind::INTEGER:
+      case TypeKind::BIGINT:
+        return distinctOverflow_;
+      default:
+        return false;
+    }
+  }
+
+  void setBloomFilter(common::FilterPtr filter) {
+    VELOX_DCHECK(supportsBloomFilter());
+    bloomFilter_ = std::move(filter);
+  }
+
+  const common::FilterPtr& getBloomFilter() const {
+    return bloomFilter_;
+  }
+
   void resetStats() {
     uniqueValues_.clear();
     uniqueValuesStorage_.clear();
@@ -314,7 +337,7 @@ class VectorHasher {
 
   // Merges the value ids information of 'other' into 'this'. Ranges
   // and distinct values are unioned.
-  void merge(const VectorHasher& other);
+  void merge(const VectorHasher& other, size_t maxNumDistinct);
 
   // true if no values have been added.
   bool empty() const {
@@ -607,6 +630,8 @@ class VectorHasher {
   // Memory for unique string values.
   std::vector<std::string> uniqueValuesStorage_;
   uint64_t distinctStringsBytes_ = 0;
+
+  common::FilterPtr bloomFilter_;
 };
 
 template <>
@@ -620,14 +645,6 @@ bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
 
 template <>
 void VectorHasher::analyzeValue(StringView value);
-
-template <>
-inline bool VectorHasher::tryMapToRange(
-    const StringView* /*values*/,
-    const SelectivityVector& /*rows*/,
-    uint64_t* /*result*/) {
-  return false;
-}
 
 template <>
 inline uint64_t VectorHasher::valueId(StringView value) {
@@ -723,10 +740,12 @@ inline bool VectorHasher::tryMapToRange(
 }
 
 template <>
-bool VectorHasher::tryMapToRange(
+inline bool VectorHasher::tryMapToRange(
     const StringView* /*values*/,
     const SelectivityVector& /*rows*/,
-    uint64_t* /*result*/);
+    uint64_t* /*result*/) {
+  return false;
+}
 
 template <>
 bool VectorHasher::makeValueIdsFlatNoNulls<bool>(

@@ -17,7 +17,11 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <memory>
+#include <string>
+#include <vector>
 
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -56,7 +60,6 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<PartitionField>& partitionFields = {});
 
   std::shared_ptr<IcebergDataSink> createDataSinkAndAppendData(
-      const RowTypePtr& rowType,
       const std::vector<RowVectorPtr>& vectors,
       const std::string& dataPath,
       const std::vector<PartitionField>& partitionFields = {});
@@ -70,7 +73,15 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::vector<PartitionField>& partitionFields);
 
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  /// Extracts partition key-value pairs from a file path.
+  /// Returns a map where keys are partition column names and values are
+  /// partition values (std::nullopt for null values).
+  /// Example: "/path/to/c1=10/c2=null/file.parquet" returns
+  /// {{"c1", "10"}, {"c2", std::nullopt}}.
+  static std::unordered_map<std::string, std::optional<std::string>>
+  extractPartitionKeys(const std::string& filePath);
+
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::PARQUET};
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
 
@@ -88,7 +99,8 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<memory::MemoryPool> root_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
-  std::shared_ptr<HiveConfig> connectorConfig_;
+  std::shared_ptr<HiveConfig> hiveConfig_;
+  std::shared_ptr<IcebergConfig> icebergConfig_;
   VectorFuzzer::Options fuzzerOptions_;
   std::unique_ptr<VectorFuzzer> fuzzer_;
   std::shared_ptr<core::QueryCtx> queryCtx_;

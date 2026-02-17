@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/hash/Hash.h>
 #include <ostream>
 
 #include "velox/common/Enums.h"
@@ -133,7 +134,7 @@ class Subfield {
     }
 
     size_t hash() const override {
-      return std::hash<std::string>()(name_);
+      return folly::hasher<std::string_view>()(name_);
     }
 
     std::string toString() const override {
@@ -199,7 +200,7 @@ class Subfield {
     }
 
     size_t hash() const override {
-      return std::hash<std::string>()(index_);
+      return folly::hasher<std::string_view>()(index_);
     }
 
     std::string toString() const override;

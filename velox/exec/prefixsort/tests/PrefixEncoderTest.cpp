@@ -270,8 +270,7 @@ class PrefixEncoderTest : public testing::Test,
         const auto rightValue = rightVector->isNullAt(i)
             ? std::nullopt
             : std::optional<ValueDataType>(rightVector->valueAt(i));
-        if constexpr (
-            Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+        if constexpr (is_string_kind(Kind)) {
           encoder.encode(leftValue, leftEncoded, 17, true);
           encoder.encode(rightValue, rightEncoded, 17, true);
         } else {

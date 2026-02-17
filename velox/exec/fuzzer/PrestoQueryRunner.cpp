@@ -210,7 +210,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown() ||
+  if (type->isDate() || type->isIntervalDayTime() || type->isUnknown() ||
       isGeometryType(type)) {
     return false;
   }
@@ -404,9 +404,10 @@ std::string PrestoQueryRunner::createTable(
 
   // Query Presto to find out table's location on disk.
   auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
-
   auto filePath = extractSingleValue<StringView>(results);
-  auto tableDirectoryPath = fs::path(filePath).parent_path();
+
+  // TODO: Remove explicit std::string_view cast.
+  auto tableDirectoryPath = fs::path(std::string_view(filePath)).parent_path();
 
   // Delete the all-null row.
   execute(fmt::format("DELETE FROM {}", name));

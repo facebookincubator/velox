@@ -79,9 +79,21 @@ class VectorFuzzer {
   struct Options {
     size_t vectorSize{100};
 
-    /// Chance of generating a null value in the output vector (`nullRatio` is a
-    /// double between 0 and 1).
+    /// Controls NULL generation in vectors. This is a probability (0.0-1.0)
+    /// or fraction used by NULL patterns:
+    /// - When useRandomNullPattern=false (default): Uses kRandom pattern only
+    ///   - nullRatio is the probability that each element is NULL
+    /// - When useRandomNullPattern=true: Randomly selects pattern, then:
+    ///   - Random (70%): Probability that each element is NULL
+    ///   - HeadOnly (10%): Fraction of vector that's NULL at beginning
+    ///   - TailOnly (10%): Fraction of vector that's NULL at end
+    ///   - HeadAndTail (10%): Half the fraction at head, half at tail
     double nullRatio{0};
+
+    /// If true, randomly selects NULL patterns (kRandom 70%, kHeadOnly 10%,
+    /// kTailOnly 10%, kHeadAndTail 10%). If false, uses only kRandom pattern.
+    /// Default is false to preserve backward compatibility.
+    bool useRandomNullPattern{false};
 
     /// If false, fuzzer will not generate nulls for elements within containers
     /// (arrays/maps/rows). It might still generate null for the container

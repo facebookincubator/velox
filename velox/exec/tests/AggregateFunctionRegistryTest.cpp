@@ -40,10 +40,43 @@ class AggregateFunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& expectedFinalType,
       const TypePtr& expectedIntermediateType) {
-    auto finalType = resolveResultType(name, argTypes);
-    auto intermediateType = resolveIntermediateType(name, argTypes);
-    EXPECT_EQ(*finalType, *expectedFinalType);
-    EXPECT_EQ(*intermediateType, *expectedIntermediateType);
+    {
+      auto finalType = resolveResultType(name, argTypes);
+      auto intermediateType = resolveIntermediateType(name, argTypes);
+      VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
+      VELOX_EXPECT_EQ_TYPES(intermediateType, expectedIntermediateType);
+    }
+
+    {
+      std::vector<TypePtr> coercions;
+      auto finalType =
+          resolveResultTypeWithCoercions(name, argTypes, coercions);
+      VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
+
+      EXPECT_EQ(coercions.size(), argTypes.size());
+      for (const auto& coercion : coercions) {
+        EXPECT_EQ(coercion, nullptr);
+      }
+    }
+  }
+
+  void testCoersions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedFinalType,
+      const std::vector<TypePtr>& expectedCoercions) {
+    VELOX_ASSERT_THROW(
+        resolveResultType(name, argTypes),
+        "Aggregate function signature is not supported");
+
+    std::vector<TypePtr> coercions;
+    auto finalType = resolveResultTypeWithCoercions(name, argTypes, coercions);
+    VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
+
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    for (int i = 0; i < coercions.size(); ++i) {
+      VELOX_EXPECT_EQ_TYPES(coercions[i], expectedCoercions[i]);
+    }
   }
 
   void clearRegistry() {
@@ -84,6 +117,19 @@ TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
   VELOX_ASSERT_THROW(
       resolveResultType("aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
       "Aggregate function signature is not supported");
+}
+
+TEST_F(AggregateFunctionRegistryTest, coercions) {
+  // (bigint, double) -> bigint
+  // (T, T) -> T
+  testCoersions(
+      "aggregate_func", {DOUBLE(), BIGINT()}, DOUBLE(), {nullptr, DOUBLE()});
+
+  testCoersions(
+      "aggregate_func", {TINYINT(), BIGINT()}, BIGINT(), {BIGINT(), nullptr});
+
+  testCoersions(
+      "aggregate_func", {INTEGER(), DOUBLE()}, BIGINT(), {BIGINT(), nullptr});
 }
 
 TEST_F(AggregateFunctionRegistryTest, functionNameInMixedCase) {

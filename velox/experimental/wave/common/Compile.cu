@@ -38,6 +38,8 @@ DEFINE_int32(
     ,
     "-O level for NVRTC");
 
+DEFINE_bool(cuda_ptx, false, "Compile to ptx instead of cubin");
+
 #ifndef VELOX_OSS_BUILD
 #include "velox/facebook/NvrtcUtil.h"
 #endif
@@ -254,9 +256,10 @@ void ensureInit() {
     }
   }
   if (!hasArch) {
+    std::string arch = FLAGS_cuda_ptx ? "compute" : "sm";
     waveNvrtcFlags.push_back(
         fmt::format(
-            "--gpu-architecture=compute_{}{}", device->major, device->minor));
+            "--gpu-architecture={}_{}{}", arch, device->major, device->minor));
   }
   ::jitify::detail::detect_and_add_cuda_arch(waveNvrtcFlags);
   std::map<std::string, std::string> headers;
@@ -336,11 +339,17 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
     waveError(std::string("Cuda compilation error: ") + log);
   }
   // Obtain PTX from the program.
-  size_t ptxSize;
-  nvrtcCheck(nvrtcGetPTXSize(prog, &ptxSize));
-  std::string ptx;
-  ptx.resize(ptxSize);
-  nvrtcCheck(nvrtcGetPTX(prog, ptx.data()));
+  size_t codeSize;
+  std::string code;
+  if (FLAGS_cuda_ptx) {
+    nvrtcCheck(nvrtcGetPTXSize(prog, &codeSize));
+    code.resize(codeSize);
+    nvrtcCheck(nvrtcGetPTX(prog, code.data()));
+  } else {
+    nvrtcCheck(nvrtcGetCUBINSize(prog, &codeSize));
+    code.resize(codeSize);
+    nvrtcCheck(nvrtcGetCUBIN(prog, code.data()));
+  }
   std::vector<std::string> loweredNames;
   for (auto& entry : spec.entryPoints) {
     const char* temp;
@@ -362,7 +371,7 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
 
   CUmodule module;
   auto loadResult = cuModuleLoadDataEx(
-      &module, ptx.data(), sizeof(values) / sizeof(void*), options, values);
+      &module, code.data(), sizeof(values) / sizeof(void*), options, values);
   if (loadResult != CUDA_SUCCESS) {
     LOG(ERROR) << "Load error " << errorSize << " " << infoSize;
     waveError(fmt::format("Error in load module: {} {}", info, error));

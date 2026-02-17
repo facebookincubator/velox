@@ -18,7 +18,6 @@
 #include <folly/container/IntrusiveList.h>
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
-#include "velox/common/base/TraceConfig.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -28,6 +27,7 @@
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -153,8 +153,8 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   /// Returns query trace config if specified.
-  const std::optional<TraceConfig>& traceConfig() const {
-    return traceConfig_;
+  const trace::TraceCtx* traceCtx() const {
+    return traceCtx_.get();
   }
 
   /// Returns ConsumerSupplier passed in the constructor.
@@ -439,12 +439,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// so many of splits at the head of the queue are preloading. If
   /// they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
+      uint32_t driverId,
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload,
       exec::Split& split,
-      ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      const ConnectorSplitPreloadFunc& preload = nullptr);
+      ContinueFuture& future);
 
   /// Returns the scaled scan controller for a given table scan node if the
   /// query has configured.
@@ -513,7 +514,7 @@ class Task : public std::enable_shared_from_this<Task> {
   void setError(const std::string& message);
 
   /// Returns all the peer operators of the 'caller' operator from a given
-  /// 'pipelindId' in this task.
+  /// 'pipelineId' in this task.
   std::vector<Operator*> findPeerOperators(int pipelineId, Operator* caller);
 
   /// Synchronizes completion of an Operator across Drivers of 'this'.
@@ -619,7 +620,7 @@ class Task : public std::enable_shared_from_this<Task> {
   StopReason enterForTerminateLocked(ThreadState& state);
 
   /// Marks that the Driver is not on thread. If no more Drivers in the
-  /// CancelPool are on thread, this realizes threadFinishFutures_. These allow
+  /// Task are on thread, this realizes threadFinishFutures_.
   /// syncing with pause or termination. The Driver may go off thread because of
   /// hasBlockingFuture or pause requested or terminate requested. The
   /// return value indicates the reason. If kTerminate is returned, the
@@ -859,7 +860,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // message.
   bool allNodesReceivedNoMoreSplitsMessageLocked() const;
 
-  // Recursive helper for 'allSpilitsConsumed()' method.
+  // Recursive helper for 'allSplitsConsumed()' method.
   bool allSplitsConsumedHelper(const core::PlanNode* planNode) const;
 
   // Remove the spill directory, if the Task was creating it for potential
@@ -944,7 +945,7 @@ class Task : public std::enable_shared_from_this<Task> {
       VELOX_CHECK_NOT_NULL(task);
     }
 
-    // Gets the shared pointer to the driver to ensure its liveness during the
+    // Gets the shared pointer to the task to ensure its liveness during the
     // memory reclaim operation.
     //
     // NOTE: a task's memory pool might outlive the task itself.
@@ -1118,7 +1119,7 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t pipelineId) const;
 
   // Builds the query trace config.
-  std::optional<TraceConfig> maybeMakeTraceConfig() const;
+  std::unique_ptr<trace::TraceCtx> maybeMakeTraceCtx() const;
 
   // Create a 'QueryMetadtaWriter' to trace the query metadata if the query
   // trace enabled.
@@ -1165,7 +1166,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // and all its plan nodes support barrier processing.
   const core::PlanNode* firstNodeNotSupportingBarrier_{};
 
-  const std::optional<TraceConfig> traceConfig_;
+  const std::unique_ptr<trace::TraceCtx> traceCtx_;
 
   inline static std::atomic_uint64_t numCreatedTasks_;
 
@@ -1176,7 +1177,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // to pool_ must be defined after pool_, childPools_.
   std::shared_ptr<memory::MemoryPool> pool_;
 
-  // Keep driver and operator memory pools alive for the duration of the task
+  // Keep plan node and operator memory pools alive for the duration of the task
   // to allow for sharing vectors across drivers without copy.
   std::vector<std::shared_ptr<memory::MemoryPool>> childPools_;
 
@@ -1215,11 +1216,12 @@ class Task : public std::enable_shared_from_this<Task> {
   ConsumerSupplier consumerSupplier_;
 
   // The function that is executed when the task encounters its first error,
-  // that is, serError() is called for the first time.
+  // that is, setError() is called for the first time.
   std::function<void(std::exception_ptr)> onError_;
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {

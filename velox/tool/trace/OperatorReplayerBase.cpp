@@ -21,10 +21,10 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TaskTraceReader.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 #include "velox/tool/trace/TraceReplayTaskRunner.h"
@@ -83,7 +83,9 @@ OperatorReplayerBase::OperatorReplayerBase(
   queryConfigs_[core::QueryConfig::kQueryTraceEnabled] = "false";
 }
 
-RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
+RowVectorPtr OperatorReplayerBase::run(
+    bool copyResults,
+    bool cursorCopyResult) {
   auto queryCtx = createQueryCtx();
   std::shared_ptr<exec::test::TempDirectoryPath> localSpillDirectory;
   if (queryCtx->queryConfig().spillEnabled() && spillBaseDir_.empty()) {
@@ -96,6 +98,7 @@ RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
           .spillDirectory(
               localSpillDirectory != nullptr ? localSpillDirectory->getPath()
                                              : spillBaseDir_)
+          .cursorCopyResult(cursorCopyResult)
           .run(copyResults);
   printStats(task);
   return result;

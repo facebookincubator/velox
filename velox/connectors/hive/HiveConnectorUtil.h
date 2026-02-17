@@ -23,6 +23,11 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 
+namespace facebook::velox::exec {
+class Expr;
+class FieldReference;
+} // namespace facebook::velox::exec
+
 namespace facebook::velox::connector::hive {
 
 class HiveColumnHandle;
@@ -47,11 +52,66 @@ struct SpecialColumnNames {
   std::optional<std::string> rowId;
 };
 
+/// Checks that two HiveColumnHandle instances are consistent in terms of
+/// column type, data type, and hive type. Throws if inconsistent.
+void checkColumnHandleConsistent(
+    const HiveColumnHandle& x,
+    const HiveColumnHandle& y);
+
+/// Creates a ScanSpec for reading data from a Hive table.
+///
+/// The ScanSpec describes which columns to read and what filters to apply.
+/// It handles several types of columns:
+/// - Regular data columns from the file
+/// - Partition key columns (values from file path)
+/// - Synthesized columns (e.g., $path, $bucket)
+/// - Special columns (e.g., row index, row ID)
+/// - Index columns for index lookup joins
+///
+/// @param rowType Schema of columns to be projected in the output.
+/// @param outputSubfields Map of column names to subfields that need to be
+///     read. Used for pruning nested structures.
+/// @param subfieldFilters Map of subfields to filters to apply during scan.
+/// @param indexColumns Column names used for index lookup joins. These columns
+///     are added to the scan spec even if they are not in the output
+///     projection, ensuring they are read from the file for join key matching.
+/// @param dataColumns Full schema of all columns in the data file. Used to
+///     look up column types when a column is referenced in filters or index
+///     columns but not in the output projection.
+/// @param partitionKeys Map of partition column names to their handles.
+///     Partition columns are not read from the file.
+/// @param infoColumns Map of synthesized column names (e.g., $path) to their
+///     handles.
+/// @param specialColumns Names of special columns like row index and row ID.
+/// @param disableStatsBasedFilterReorder If true, disables reordering of
+///     filters based on statistics.
+/// @param pool Memory pool for allocations during scan spec construction.
+/// @return A ScanSpec that can be used to configure a reader.
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
         outputSubfields,
-    const common::SubfieldFilters& filters,
+    const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<const HiveColumnHandle>>& partitionKeys,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<const HiveColumnHandle>>& infoColumns,
+    const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
+    memory::MemoryPool* pool);
+
+/// @deprecated Use the overload without indexColumns parameter instead.
+/// This overload is kept for backward compatibility and will be removed in a
+/// future release.
+std::shared_ptr<common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
+        outputSubfields,
+    const common::SubfieldFilters& subfieldFilters,
+    const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
     const std::unordered_map<
         std::string,
@@ -104,8 +164,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
-    std::shared_ptr<io::IoStatistics> ioStats,
-    std::shared_ptr<filesystems::File::IoStats> fsStats,
+    std::shared_ptr<io::IoStatistics> ioStatistics,
+    std::shared_ptr<IoStats> ioStats,
     folly::Executor* executor,
     const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
@@ -151,5 +211,49 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     core::ExpressionEvaluator* evaluator,
     common::SubfieldFilters& filters,
     double& sampleRate);
+
+/// Determines whether a field referenced in the remaining filter should be
+/// eagerly materialized (loaded upfront) or can be lazily loaded.
+///
+/// Returns true (eager materialization needed) when:
+/// 1. The remaining filter is NOT an AND expression (e.g., OR), because row
+///    access patterns are unpredictable.
+/// 2. The field is used within a conditional sub-expression (IF, CASE, nested
+///    AND/OR) of an AND expression, because the conditional may access rows
+///    unpredictably.
+///
+/// Returns false (lazy loading OK) when the remaining filter is an AND
+/// expression and the field is only used in simple, non-conditional conjuncts.
+///
+/// @param remainingFilter The compiled remaining filter expression.
+/// @param field The field reference to check.
+/// @return true if the field should be eagerly materialized.
+bool shouldEagerlyMaterialize(
+    const exec::Expr& remainingFilter,
+    const exec::FieldReference& field);
+
+/// Creates a point lookup filter from a variant value.
+/// Null values are not allowed.
+/// Supports TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, BOOLEAN,
+/// VARCHAR, and VARBINARY types.
+/// @param type The type of the value.
+/// @param value The filter value (must not be null).
+/// @return A filter for point lookup, or nullptr if type is not supported.
+std::unique_ptr<common::Filter> createPointFilter(
+    const TypePtr& type,
+    const variant& value);
+
+/// Creates a range filter from two variant values.
+/// Both lower and upper bounds are inclusive. Null values are not allowed.
+/// Supports TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
+/// and VARBINARY types.
+/// @param type The type of the values.
+/// @param lower The lower bound value.
+/// @param upper The upper bound value.
+/// @return A filter for range lookup, or nullptr if type is not supported.
+std::unique_ptr<common::Filter> createRangeFilter(
+    const TypePtr& type,
+    const variant& lower,
+    const variant& upper);
 
 } // namespace facebook::velox::connector::hive

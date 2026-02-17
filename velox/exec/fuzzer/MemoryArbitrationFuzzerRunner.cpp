@@ -28,6 +28,7 @@
 #include "velox/exec/fuzzer/MemoryArbitrationFuzzer.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 DEFINE_int64(allocator_capacity, 32L << 30, "Allocator capacity in bytes.");
 

@@ -17,7 +17,8 @@
 #pragma once
 
 #include <limits>
-#include <unordered_set>
+#include <string>
+#include <unordered_map>
 
 #include <folly/Executor.h>
 #include "velox/common/base/RandomUtil.h"
@@ -51,6 +52,7 @@ enum class FileFormat {
   NIMBLE = 8,
   ORC = 9,
   SST = 10, // rocksdb sst format
+  FLUX = 11,
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -448,8 +450,29 @@ class RowReaderOptions {
     return trackRowSize_;
   }
 
-  void setTrackRowSize(bool value) {
-    trackRowSize_ = value;
+  void setTrackRowSize(bool trackRowSize) {
+    trackRowSize_ = trackRowSize;
+  }
+
+  bool indexEnabled() const {
+    return indexEnabled_;
+  }
+
+  /// Sets whether to use the cluster index for filter-based row pruning.
+  /// When enabled, filters from ScanSpec are converted to index bounds for
+  /// efficient row skipping based on the file's cluster index.
+  ///
+  /// NOTE: currently only supported by Nimble format.
+  void setIndexEnabled(bool enabled) {
+    indexEnabled_ = enabled;
+  }
+
+  bool passStringBuffersFromDecoder() const {
+    return passStringBuffersFromDecoder_;
+  }
+
+  void setPassStringBuffersFromDecoder(bool passStringBuffersFromDecoder) {
+    passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
  private:
@@ -512,6 +535,10 @@ class RowReaderOptions {
 
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   bool trackRowSize_{false};
+  bool indexEnabled_{false};
+  // NOTE: we will control this option with a session property
+  // for prod. Tests are parameterized on both branches.
+  bool passStringBuffersFromDecoder_{false};
 };
 
 /// Options for creating a Reader.
@@ -531,6 +558,13 @@ class ReaderOptions : public io::ReaderOptions {
   /// "dwrf".
   ReaderOptions& setFileFormat(FileFormat format) {
     fileFormat_ = format;
+    return *this;
+  }
+
+  /// Sets the property bag.
+  ReaderOptions& setProperties(
+      std::unordered_map<std::string, std::string> properties) {
+    properties_ = std::move(properties);
     return *this;
   }
 
@@ -605,6 +639,11 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the file format.
   FileFormat fileFormat() const {
     return fileFormat_;
+  }
+
+  /// Gets the property bag.
+  const std::unordered_map<std::string, std::string>& properties() const {
+    return properties_;
   }
 
   /// Gets the file schema.
@@ -697,6 +736,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_;
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
+  std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t footerEstimatedSize_{kDefaultFooterEstimatedSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};

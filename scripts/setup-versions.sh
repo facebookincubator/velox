@@ -19,7 +19,13 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-FB_OS_VERSION="v2025.04.28.00"
+# Note: When updating FB_OS_VERSION, ensure that
+# CMake/third-party/FBThriftCppLibrary.cmake is updated
+# with the matching version from fbthrift:
+# <fbthrift_github>/build/fbcode_builder/CMake/FBThriftCppLibrary.cmake
+# The new FB_OS version of fbthrift might require changes such that thrift
+# files are generated properly on all platforms.
+FB_OS_VERSION="v2026.01.05.00"
 FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="15.0.0"
@@ -53,4 +59,4 @@ HADOOP_VERSION="3.3.6"
 AZURE_SDK_VERSION="12.8.0"
 MINIO_VERSION="2022-05-26T05-48-41Z"
 MINIO_BINARY_NAME="minio-2022-05-26"
-AWS_SDK_VERSION="1.11.321"
+AWS_SDK_VERSION="1.11.654"

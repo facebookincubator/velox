@@ -27,7 +27,7 @@ void ExchangeQueue::noMoreSources() {
   {
     std::lock_guard<std::mutex> l(mutex_);
     noMoreSources_ = true;
-    promises = checkCompleteLocked();
+    promises = checkNoMoreInput();
   }
   clearPromises(promises);
 }
@@ -42,11 +42,12 @@ void ExchangeQueue::close() {
 }
 
 int64_t ExchangeQueue::minOutputBatchBytesLocked() const {
-  // always allow to unblock when at end
-  if (atEnd_) {
+  // Allow to unblock if no more input.
+  if (noMoreInput_) {
     return 0;
   }
-  // At most 1% of received bytes so far to minimize latency for small exchanges
+  // At most 1% of received bytes so far to minimize latency for small
+  // exchanges.
   return std::min<int64_t>(minOutputBatchBytes_, receivedBytes_ / 100);
 }
 
@@ -55,7 +56,7 @@ void ExchangeQueue::enqueueLocked(
     std::vector<ContinuePromise>& promises) {
   if (page == nullptr) {
     ++numCompleted_;
-    auto completedPromises = checkCompleteLocked();
+    auto completedPromises = checkNoMoreInput();
     promises.reserve(promises.size() + completedPromises.size());
     for (auto& promise : completedPromises) {
       promises.push_back(std::move(promise));
@@ -132,7 +133,7 @@ std::vector<std::unique_ptr<SerializedPageBase>> ExchangeQueue::dequeueLocked(
   uint32_t pageBytes = 0;
   for (;;) {
     if (queue_.empty()) {
-      if (atEnd_) {
+      if (noMoreInput_) {
         *atEnd = true;
       } else if (pages.empty()) {
         addPromiseLocked(consumerId, future, stalePromise);
@@ -161,9 +162,9 @@ void ExchangeQueue::setError(const std::string& error) {
       return;
     }
     error_ = error;
-    atEnd_ = true;
-    // NOTE: clear the serialized page queue as we won't consume from an
-    // errored queue.
+    noMoreInput_ = true;
+    // NOTE: clear the serialized page queue as we won't consume from an errored
+    // queue.
     queue_.clear();
     promises = clearAllPromisesLocked();
   }

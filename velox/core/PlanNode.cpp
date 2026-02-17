@@ -21,7 +21,6 @@
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::core {
-
 namespace {
 
 void appendComma(int32_t i, std::stringstream& sql) {
@@ -167,6 +166,7 @@ AggregationNode::AggregationNode(
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
+    bool noGroupsSpanBatches,
     PlanNodePtr source)
     : PlanNode(id),
       step_(step),
@@ -177,6 +177,7 @@ AggregationNode::AggregationNode(
       ignoreNullKeys_(ignoreNullKeys),
       groupId_(groupId),
       globalGroupingSets_(globalGroupingSets),
+      noGroupsSpanBatches_(noGroupsSpanBatches),
       sources_{source},
       outputType_(getAggregationOutputType(
           groupingKeys_,
@@ -221,6 +222,10 @@ AggregationNode::AggregationNode(
     VELOX_USER_CHECK(
         groupId_.has_value(), "Global grouping sets require GroupId key");
   }
+
+  VELOX_USER_CHECK(
+      !noGroupsSpanBatches_ || isPreGrouped(),
+      "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
 }
 
 AggregationNode::AggregationNode(
@@ -231,6 +236,7 @@ AggregationNode::AggregationNode(
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
+    bool noGroupsSpanBatches,
     PlanNodePtr source)
     : AggregationNode(
           id,
@@ -242,6 +248,7 @@ AggregationNode::AggregationNode(
           kDefaultGlobalGroupingSets,
           kDefaultGroupId,
           ignoreNullKeys,
+          noGroupsSpanBatches,
           source) {}
 
 namespace {
@@ -284,13 +291,6 @@ void addVectorSerdeKind(VectorSerde::Kind kind, std::stringstream& stream) {
 } // namespace
 
 bool AggregationNode::canSpill(const QueryConfig& queryConfig) const {
-  // TODO: Add spilling for aggregations over distinct inputs.
-  // https://github.com/facebookincubator/velox/issues/7454
-  for (const auto& aggregate : aggregates_) {
-    if (aggregate.distinct) {
-      return false;
-    }
-  }
   // TODO: add spilling for pre-grouped aggregation later:
   // https://github.com/facebookincubator/velox/issues/3264
   return (isFinal() || isSingle()) && !groupingKeys().empty() &&
@@ -336,6 +336,10 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   if (groupId_.has_value()) {
     stream << " Group Id key: " << groupId_.value()->name();
   }
+
+  if (noGroupsSpanBatches_) {
+    stream << " noGroupsSpanBatches";
+  }
 }
 
 namespace {
@@ -374,6 +378,7 @@ folly::dynamic AggregationNode::serialize() const {
     obj["groupId"] = ISerializable::serialize(groupId_.value());
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
+  obj["noGroupsSpanBatches"] = noGroupsSpanBatches_;
   return obj;
 }
 
@@ -494,6 +499,8 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       globalGroupingSets,
       groupId,
       obj["ignoreNullKeys"].asBool(),
+      obj.count("noGroupsSpanBatches") ? obj["noGroupsSpanBatches"].asBool()
+                                       : false,
       deserializeSingleSource(obj, context));
 }
 
@@ -1585,23 +1592,44 @@ const auto& joinTypeNames() {
 }
 
 // Check that each output of the join is in exactly one of the inputs.
-void checkJoinColumnNames(
+void checkJoinOutput(
     const RowTypePtr& leftType,
     const RowTypePtr& rightType,
     const RowTypePtr& outputType,
     uint32_t numColumnsToCheck) {
   for (auto i = 0; i < numColumnsToCheck; ++i) {
-    const auto name = outputType->nameOf(i);
-    const bool leftContains = leftType->containsChild(name);
-    const bool rightContains = rightType->containsChild(name);
+    const auto& name = outputType->nameOf(i);
+    const auto& type = outputType->childAt(i);
+
+    const auto leftIndex = leftType->getChildIdxIfExists(name);
+    const auto rightIndex = rightType->getChildIdxIfExists(name);
+
     VELOX_USER_CHECK(
-        !(leftContains && rightContains),
+        !(leftIndex.has_value() && rightIndex.has_value()),
         "Duplicate column name found on join's left and right sides: {}",
         name);
     VELOX_USER_CHECK(
-        leftContains || rightContains,
+        leftIndex.has_value() || rightIndex.has_value(),
         "Join's output column not found in either left or right sides: {}",
         name);
+
+    if (leftIndex.has_value()) {
+      const auto& expectedType = leftType->childAt(leftIndex.value());
+      VELOX_USER_CHECK(
+          expectedType->equivalent(*type),
+          "Join output column type must match the input type: {} vs. {}",
+          type->toString(),
+          expectedType->toString());
+    }
+
+    if (rightIndex.has_value()) {
+      const auto& expectedType = rightType->childAt(rightIndex.value());
+      VELOX_USER_CHECK(
+          expectedType->equivalent(*type),
+          "Join output column type must match the input type: {} vs. {}",
+          type->toString(),
+          expectedType->toString());
+    }
   }
 }
 
@@ -1619,6 +1647,7 @@ void HashJoinNode::addDetails(std::stringstream& stream) const {
 folly::dynamic HashJoinNode::serialize() const {
   auto obj = serializeBase();
   obj["nullAware"] = nullAware_;
+  obj["useHashTableCache"] = useHashTableCache_;
   return obj;
 }
 
@@ -1634,6 +1663,7 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
   VELOX_CHECK_EQ(2, sources.size());
 
   auto nullAware = obj["nullAware"].asBool();
+  auto useHashTableCache = obj.getDefault("useHashTableCache", false).asBool();
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
 
@@ -1653,7 +1683,8 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
       filter,
       sources[0],
       sources[1],
-      outputType);
+      outputType,
+      useHashTableCache);
 }
 
 MergeJoinNode::MergeJoinNode(
@@ -1820,7 +1851,7 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     VELOX_USER_CHECK(!rightType->containsChild(name));
   }
 
-  checkJoinColumnNames(leftType, rightType, outputType_, numOutputColumns);
+  checkJoinOutput(leftType, rightType, outputType_, numOutputColumns);
 }
 
 PlanNodePtr IndexLookupJoinNode::create(
@@ -1872,6 +1903,10 @@ folly::dynamic IndexLookupJoinNode::serialize() const {
   }
   obj["hasMarker"] = hasMarker_;
   return obj;
+}
+
+bool IndexLookupJoinNode::needsIndexSplit() const {
+  return lookupSourceNode_->tableHandle()->needsIndexSplit();
 }
 
 void IndexLookupJoinNode::addDetails(std::stringstream& stream) const {
@@ -1952,7 +1987,7 @@ NestedLoopJoinNode::NestedLoopJoinNode(
         name);
   }
 
-  checkJoinColumnNames(leftType, rightType, outputType_, numOutputColumns);
+  checkJoinOutput(leftType, rightType, outputType_, numOutputColumns);
 }
 
 NestedLoopJoinNode::NestedLoopJoinNode(
@@ -2390,6 +2425,86 @@ PlanNodePtr MarkDistinctNode::create(const folly::dynamic& obj, void* context) {
       deserializePlanNodeId(obj), markerName, distinctKeys, source);
 }
 
+EnforceDistinctNode::EnforceDistinctNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> distinctKeys,
+    std::vector<FieldAccessTypedExprPtr> preGroupedKeys,
+    std::string errorMessage,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      distinctKeys_(std::move(distinctKeys)),
+      preGroupedKeys_(std::move(preGroupedKeys)),
+      errorMessage_(std::move(errorMessage)),
+      sources_{std::move(source)} {
+  VELOX_USER_CHECK(!distinctKeys_.empty(), "distinctKeys must not be empty.");
+  VELOX_USER_CHECK(!errorMessage_.empty(), "errorMessage must not be empty");
+
+  using TypedExprSet = folly::
+      F14FastSet<const ITypedExpr*, ITypedExprHasher, ITypedExprComparer>;
+
+  TypedExprSet distinctKeySet;
+  const auto& inputType = sources_.front()->outputType();
+  for (const auto& key : distinctKeys_) {
+    VELOX_USER_CHECK(
+        key->isInputColumn(),
+        "Distinct key must be a column reference: {}.",
+        key->toString());
+
+    VELOX_USER_CHECK(
+        distinctKeySet.insert(key.get()).second,
+        "Duplicate distinct key: {}.",
+        key->toString());
+
+    VELOX_USER_CHECK(
+        inputType->containsChild(key->name()),
+        "Distinct key must be present in the input: {}.",
+        key->toString());
+  }
+
+  TypedExprSet preGroupedKeySet;
+  for (const auto& key : preGroupedKeys_) {
+    VELOX_USER_CHECK(
+        preGroupedKeySet.insert(key.get()).second,
+        "Duplicate pre-grouped key: {}.",
+        key->name());
+    VELOX_USER_CHECK(
+        distinctKeySet.contains(key.get()),
+        "Pre-grouped key must be one of the distinct keys: {}.",
+        key->name());
+  }
+}
+
+folly::dynamic EnforceDistinctNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["distinctKeys"] = ISerializable::serialize(this->distinctKeys_);
+  obj["preGroupedKeys"] = ISerializable::serialize(this->preGroupedKeys_);
+  obj["errorMessage"] = this->errorMessage_;
+  return obj;
+}
+
+void EnforceDistinctNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr EnforceDistinctNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto distinctKeys = deserializeFields(obj["distinctKeys"], context);
+  auto preGroupedKeys = deserializeFields(obj["preGroupedKeys"], context);
+  auto errorMessage = obj["errorMessage"].asString();
+
+  return std::make_shared<EnforceDistinctNode>(
+      deserializePlanNodeId(obj),
+      distinctKeys,
+      preGroupedKeys,
+      errorMessage,
+      source);
+}
+
 namespace {
 RowTypePtr getRowNumberOutputType(
     const RowTypePtr& inputType,
@@ -2658,6 +2773,29 @@ PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
 
 void TableWriteNode::addDetails(std::stringstream& stream) const {
   stream << insertTableHandle_->connectorInsertTableHandle()->toString();
+}
+
+RowTypePtr ColumnStatsSpec::outputType() const {
+  // Create output type based on the column stats collection specs.
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+
+  const auto numAggregates = aggregates.size();
+  const auto outputTypeSize = groupingKeys.size() + numAggregates;
+
+  names.reserve(outputTypeSize);
+  types.reserve(outputTypeSize);
+
+  for (const auto& key : groupingKeys) {
+    names.push_back(key->name());
+    types.push_back(key->type());
+  }
+
+  for (auto i = 0; i < numAggregates; ++i) {
+    names.push_back(aggregateNames[i]);
+    types.push_back(aggregates[i].call->type());
+  }
+  return ROW(std::move(names), std::move(types));
 }
 
 folly::dynamic ColumnStatsSpec::serialize() const {
@@ -3112,7 +3250,7 @@ SpatialJoinNode::SpatialJoinNode(
       sources_[1] != nullptr,
       "Right source must not be null for spatial joins");
 
-  checkJoinColumnNames(
+  checkJoinOutput(
       sources_[0]->outputType(),
       sources_[1]->outputType(),
       outputType_,
@@ -3337,6 +3475,14 @@ void MarkDistinctNode::addDetails(std::stringstream& stream) const {
   addFields(stream, distinctKeys_);
 }
 
+void EnforceDistinctNode::addDetails(std::stringstream& stream) const {
+  if (isPreGrouped()) {
+    stream << "STREAMING ";
+  }
+  addFields(stream, distinctKeys_);
+  stream << " " << errorMessage_;
+}
+
 void PlanNode::toString(
     std::stringstream& stream,
     bool detailed,
@@ -3513,6 +3659,7 @@ void PlanNode::registerSerDe() {
   registry.Register("AggregationNode", AggregationNode::create);
   registry.Register("AssignUniqueIdNode", AssignUniqueIdNode::create);
   registry.Register("EnforceSingleRowNode", EnforceSingleRowNode::create);
+  registry.Register("EnforceDistinctNode", EnforceDistinctNode::create);
   registry.Register("ExchangeNode", ExchangeNode::create);
   registry.Register("ExpandNode", ExpandNode::create);
   registry.Register("FilterNode", FilterNode::create);
@@ -3540,6 +3687,7 @@ void PlanNode::registerSerDe() {
   registry.Register("ValuesNode", ValuesNode::create);
   registry.Register("WindowNode", WindowNode::create);
   registry.Register("MarkDistinctNode", MarkDistinctNode::create);
+  registry.Register("MixedUnionNode", MixedUnionNode::create);
   registry.Register(
       "GatherPartitionFunctionSpec", GatherPartitionFunctionSpec::deserialize);
 }
@@ -3769,9 +3917,15 @@ IndexLookupConditionPtr EqualIndexLookupCondition::create(
 void EqualIndexLookupCondition::validate() const {
   VELOX_CHECK_NOT_NULL(key);
   VELOX_CHECK_NOT_NULL(value);
-  VELOX_CHECK_NOT_NULL(
-      checkedPointerCast<const ConstantTypedExpr>(value),
-      "Equal condition value must be a constant expression: {}",
+  // Value can be either a constant expression or a field access expression
+  // (probe side column).
+  const bool isConstant =
+      std::dynamic_pointer_cast<const ConstantTypedExpr>(value) != nullptr;
+  const bool isFieldAccess =
+      std::dynamic_pointer_cast<const FieldAccessTypedExpr>(value) != nullptr;
+  VELOX_CHECK(
+      isConstant || isFieldAccess,
+      "Equal condition value must be a constant or field access expression: {}",
       value->toString());
 
   VELOX_CHECK_EQ(
@@ -3781,4 +3935,24 @@ void EqualIndexLookupCondition::validate() const {
       key->type()->toString(),
       value->type()->toString());
 }
+
+void MixedUnionNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+folly::dynamic MixedUnionNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr MixedUnionNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+
+  return std::make_shared<MixedUnionNode>(
+      deserializePlanNodeId(obj), std::move(sources));
+}
+
 } // namespace facebook::velox::core

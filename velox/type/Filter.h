@@ -20,6 +20,8 @@
 #include <xsimd/xsimd.hpp>
 #include "velox/common/Enums.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/SimdUtil.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
@@ -50,6 +52,7 @@ enum class FilterKind {
   kHugeintRange,
   kTimestampRange,
   kHugeintValuesUsingHashTable,
+  kBigintValuesUsingBloomFilter,
 };
 
 VELOX_DECLARE_ENUM_NAME(FilterKind);
@@ -118,7 +121,7 @@ class Filter : public velox::ISerializable {
   /// e.g. a[1] > 10 is non-deterministic because > 10 filter applies only to
   /// some positions, e.g. first entry in a set of entries that correspond to a
   /// single top-level position.
-  virtual bool isDeterministic() const {
+  bool isDeterministic() const {
     return deterministic_;
   }
 
@@ -128,7 +131,7 @@ class Filter : public velox::ISerializable {
   /// where the current top-level position started and how far it continues.
   /// @return number of positions from the start of the current top-level
   /// position up to the current position (excluding current position)
-  virtual int getPrecedingPositionsToFail() const {
+  int getPrecedingPositionsToFail() const {
     return 0;
   }
 
@@ -138,11 +141,11 @@ class Filter : public velox::ISerializable {
 
   /// @return number of positions remaining until the end of the current
   /// top-level position
-  virtual int getSucceedingPositionsToFail() const {
+  int getSucceedingPositionsToFail() const {
     return 0;
   }
 
-  virtual bool testNull() const {
+  bool testNull() const {
     return nullAllowed_;
   }
 
@@ -301,15 +304,10 @@ class Filter : public velox::ISerializable {
   folly::dynamic serializeBase() const;
 
  protected:
-  const bool nullAllowed_;
-
- private:
-  const bool deterministic_;
-  const FilterKind kind_;
-
   template <typename T, typename F>
-  xsimd::batch_bool<T> genericTestValues(xsimd::batch<T> batch, F&& testValue)
-      const {
+  static xsimd::batch_bool<T> genericTestValues(
+      xsimd::batch<T> batch,
+      F&& testValue) {
     constexpr int N = decltype(batch)::size;
     constexpr int kAlign = decltype(batch)::arch_type::alignment();
     alignas(kAlign) T data[N];
@@ -320,6 +318,12 @@ class Filter : public velox::ISerializable {
     }
     return xsimd::broadcast<T>(0) != xsimd::load_aligned(res);
   }
+
+  const bool nullAllowed_;
+
+ private:
+  const bool deterministic_;
+  const FilterKind kind_;
 };
 
 /// TODO Check if this filter is needed. This should not be passed down.
@@ -341,10 +345,6 @@ class AlwaysFalse final : public Filter {
   }
 
   bool testNonNull() const final {
-    return false;
-  }
-
-  bool testNull() const final {
     return false;
   }
 
@@ -429,10 +429,6 @@ class AlwaysTrue final : public Filter {
 
   bool testingEquals(const Filter& other) const final {
     return Filter::testingBaseEquals<AlwaysTrue>(other);
-  }
-
-  bool testNull() const final {
-    return true;
   }
 
   bool testNonNull() const final {
@@ -1030,12 +1026,101 @@ class BigintValuesUsingHashTable final : public Filter {
     }
   }
 
-  bool testInt64(int64_t value) const final;
-  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t>) const final;
-  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t>) const final;
-  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
-    return Filter::testValues(x);
+  bool testInt64(int64_t value) const final {
+    if (containsEmptyMarker_ && value == kEmptyMarker) {
+      return true;
+    }
+    if (value < min_ || value > max_) {
+      return false;
+    }
+    uint32_t pos = (value * M) & sizeMask_;
+    for (auto i = pos; i <= pos + sizeMask_; i++) {
+      int32_t idx = i & sizeMask_;
+      int64_t l = hashTable_[idx];
+      if (l == kEmptyMarker) {
+        return false;
+      }
+      if (l == value) {
+        return true;
+      }
+    }
+    return false;
   }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    auto outOfRange = (x < xsimd::broadcast<int64_t>(min_)) |
+        (x > xsimd::broadcast<int64_t>(max_));
+    if (simd::toBitMask(outOfRange) == simd::allSetBitMask<int64_t>()) {
+      return xsimd::batch_bool<int64_t>(false);
+    }
+    if (containsEmptyMarker_) {
+      return Filter::testValues(x);
+    }
+    auto allEmpty = xsimd::broadcast<int64_t>(kEmptyMarker);
+    // Temporarily casted to unsigned to suppress overflow error.
+    auto indices = simd::reinterpretBatch<int64_t>(
+        simd::reinterpretBatch<uint64_t>(x) * M & sizeMask_);
+    auto data =
+        simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
+    // The lanes with kEmptyMarker missed, the lanes matching x hit and the
+    // other lanes must check next positions.
+
+    auto result = x == data;
+    auto resultBits = simd::toBitMask(result);
+    auto missed = simd::toBitMask(data == allEmpty);
+    static_assert(decltype(result)::size <= 16);
+    uint16_t unresolved =
+        simd::allSetBitMask<int64_t>() ^ (resultBits | missed);
+    if (!unresolved) {
+      return result;
+    }
+    constexpr int kAlign = xsimd::default_arch::alignment();
+    constexpr int kArraySize = xsimd::batch<int64_t>::size;
+    alignas(kAlign) int64_t indicesArray[kArraySize];
+    alignas(kAlign) int64_t valuesArray[kArraySize];
+    (indices + 1).store_aligned(indicesArray);
+    x.store_aligned(valuesArray);
+    while (unresolved) {
+      auto lane = bits::getAndClearLastSetBit(unresolved);
+      // Loop for each unresolved (not hit and
+      // not empty) until finding hit or empty.
+      int64_t index = indicesArray[lane];
+      int64_t value = valuesArray[lane];
+      auto allValue = xsimd::broadcast<int64_t>(value);
+      for (;;) {
+        auto line = xsimd::load_unaligned(hashTable_.data() + index);
+
+        if (simd::toBitMask(line == allValue)) {
+          resultBits |= 1 << lane;
+          break;
+        }
+        if (simd::toBitMask(line == allEmpty)) {
+          resultBits &= ~(1 << lane);
+          break;
+        }
+        index += line.size;
+        if (index > sizeMask_) {
+          index = 0;
+        }
+      }
+    }
+    return simd::fromBitMask<int64_t>(resultBits);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    // Calls 4x64 twice since the hash table is 64 bits wide in any
+    // case. A 32-bit hash table would be possible but all the use
+    // cases seen are in the 64 bit range.
+    auto first = simd::toBitMask(testValues(simd::getHalf<int64_t, 0>(x)));
+    auto second = simd::toBitMask(testValues(simd::getHalf<int64_t, 1>(x)));
+    return simd::fromBitMask<int32_t>(
+        first | (second << xsimd::batch<int64_t>::size));
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
   bool testInt64Range(int64_t min, int64_t max, bool hashNull) const final;
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
@@ -1175,7 +1260,12 @@ class BigintValuesUsingBitmask final : public Filter {
 
   std::vector<int64_t> values() const;
 
-  bool testInt64(int64_t value) const final;
+  bool testInt64(int64_t value) const final {
+    if (value < min_ || value > max_) {
+      return false;
+    }
+    return bitmask_[value - min_];
+  }
 
   bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
 
@@ -1198,6 +1288,85 @@ class BigintValuesUsingBitmask final : public Filter {
   std::vector<bool> bitmask_;
   const int64_t min_;
   const int64_t max_;
+};
+
+class BigintValuesUsingBloomFilter final : public Filter {
+ public:
+  static int64_t numBlocks(int64_t capacity) {
+    return SplitBlockBloomFilter::numBlocks(capacity, 0.01);
+  }
+
+  BigintValuesUsingBloomFilter(int64_t capacity, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+        blocks_(numBlocks(capacity)),
+        filter_(blocks_) {}
+
+  bool testInt64(int64_t value) const final {
+    return filter_.mayContain(hash(value));
+  }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    return genericTestValues(x, [this](int64_t x) { return testInt64(x); });
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    return genericTestValues(x, [this](int32_t x) { return testInt64(x); });
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed) const override {
+    return std::unique_ptr<BigintValuesUsingBloomFilter>(
+        new BigintValuesUsingBloomFilter(
+            nullAllowed.value_or(nullAllowed_), blocks_));
+  }
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  bool testingEquals(const Filter& other) const override;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const override;
+
+  void insert(int64_t value) {
+    filter_.insert(hash(value));
+  }
+
+  uint64_t blockIndex(int64_t value) const {
+    return filter_.blockIndex(hash(value));
+  }
+
+  int64_t blocksByteSize() const {
+    return blocks_.size() * sizeof(SplitBlockBloomFilter::Block);
+  }
+
+ private:
+  static uint64_t hash(int64_t value) {
+    // Simple multiplication hash like the one in BigintValuesUsingHashTable
+    // does not distribute values evenly.  Maybe we need to reconsider the hash
+    // choice in BigintValuesUsingHashTable as well in the future.
+    return folly::hasher<int64_t>()(value);
+  }
+
+  // Private constructor used by clone() and create().
+  BigintValuesUsingBloomFilter(
+      bool nullAllowed,
+      std::vector<SplitBlockBloomFilter::Block> blocks)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+        blocks_(std::move(blocks)),
+        filter_(blocks_) {}
+
+  std::vector<SplitBlockBloomFilter::Block> blocks_;
+  SplitBlockBloomFilter filter_;
 };
 
 // NOT IN-list filter for integral data types. Implemented as a hash table. Good
@@ -1685,8 +1854,12 @@ inline xsimd::batch_bool<double> FloatingPointRange<double>::testValues(
 
 template <>
 inline xsimd::batch_bool<float> FloatingPointRange<double>::testValues(
-    xsimd::batch<float>) const {
-  VELOX_FAIL("Not defined for double filter");
+    xsimd::batch<float> x) const {
+  // Slow path for schema evolution:  handles the case where double filter is
+  // applied to float data (e.g., reading float column with double type
+  // request). Falls back to element-by-element testing as batch processing
+  // requires type matching.
+  return Filter::testValues(x);
 }
 
 template <>
@@ -2342,3 +2515,13 @@ std::unique_ptr<Filter> createNegatedBigintValues(
     bool nullAllowed);
 
 } // namespace facebook::velox::common
+
+template <>
+struct fmt::formatter<facebook::velox::common::FilterKind>
+    : formatter<std::string> {
+  auto format(facebook::velox::common::FilterKind s, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        std::string(facebook::velox::common::FilterKindName::toName(s)), ctx);
+  }
+};

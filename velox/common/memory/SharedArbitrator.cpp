@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/SharedArbitrator.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <folly/system/ThreadName.h>
 #include <pthread.h>
 #include <mutex>
@@ -296,8 +297,7 @@ SharedArbitrator::SharedArbitrator(const Config& config)
       "memoryReclaimThreadsHwMultiplier_ needs to be positive");
 
   const uint64_t numReclaimThreads = std::max<size_t>(
-      1,
-      std::thread::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
+      1, folly::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
   memoryReclaimExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
       numReclaimThreads,
       std::make_shared<folly::NamedThreadFactory>("MemoryReclaim"));

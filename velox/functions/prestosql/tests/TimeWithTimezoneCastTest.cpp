@@ -72,6 +72,13 @@ TEST_F(TimeWithTimezoneCastTest, toVarchar) {
   // UTC time to local time by adding the timezone offset.
   auto input = makeNullableFlatVector<int64_t>(
       {
+          // Constant values to test any regressions
+          // in pack and biasEncode functions.
+          58755883008,
+          // 11:31:37.123 UTC with timezone +05:30 -> displays as 17:01:37.123
+          169972216978,
+          // 11:31:37.123 UTC with timezone -05:00 -> displays as 06:31:37.123
+          169972216349,
           // UTC time 06:11:37.123 with UTC timezone -> displays as
           // 06:11:37.123+00:00
           pack(getUTCMillis(6, 11, 37, 123), biasEncode(0)),
@@ -107,6 +114,9 @@ TEST_F(TimeWithTimezoneCastTest, toVarchar) {
       TIME_WITH_TIME_ZONE());
 
   auto expected = makeNullableFlatVector<std::string>({
+      "03:59:04.698+00:00",
+      "17:01:37.123+05:30",
+      "06:31:37.123-05:00",
       "06:11:37.123+00:00",
       "01:11:37.123-05:00",
       "11:41:37.123+05:30",
@@ -169,6 +179,9 @@ TEST_F(TimeWithTimezoneCastTest, fromVarchar) {
       // Double-digit hours and minutes: HH:mm:ss.SSS+HH:mm
       "06:11:37.123+00:00",
       "12:34:56.789-04:30", // Local 12:34:56.789 in UTC-4:30 = 17:04:56.789 UTC
+      "03:59:04.698+00:00",
+      "17:01:37.123+05:30",
+      "06:31:37.123-05:00",
   });
 
   auto expected = makeNullableFlatVector<int64_t>(
@@ -223,6 +236,13 @@ TEST_F(TimeWithTimezoneCastTest, fromVarchar) {
           pack(getUTCMillis(6, 11, 37, 123), biasEncode(0)),
           // "12:34:56.789-04:30" -> UTC 17:04:56.789
           pack(getUTCMillis(17, 4, 56, 789), biasEncode(-4 * 60 - 30)),
+          // Constant values to test any regressions
+          // in pack and biasEncode functions.
+          58755883008,
+          // 11:31:37.123 UTC with timezone +05:30 -> displays as 17:01:37.123
+          169972216978,
+          // 11:31:37.123 UTC with timezone -05:00 -> displays as 06:31:37.123
+          169972216349,
       },
       TIME_WITH_TIME_ZONE());
 

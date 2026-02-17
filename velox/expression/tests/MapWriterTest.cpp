@@ -564,7 +564,7 @@ TEST_F(MapWriterTest, copyFromNullableMapView) {
       Map<int64_t, int64_t>>({"copy_from_nullable_map_view"});
 
   auto result = evaluate(
-      "copy_from_nullable_map_view(map(array_constructor(1,2,3),array_constructor(4,null,6)))",
+      "copy_from_nullable_map_view(map(array_constructor(1,2,3),array_constructor(4,null::bigint,6)))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   // Test results.

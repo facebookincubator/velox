@@ -35,22 +35,22 @@ class AbfsReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      const FileStorageContext& fileStorageContext = {}) const final;
+      const FileIoContext& context = {}) const final;
 
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      const FileStorageContext& fileStorageContext = {}) const final;
+      const FileIoContext& context = {}) const final;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      const FileStorageContext& fileStorageContext = {}) const final;
+      const FileIoContext& context = {}) const final;
 
   uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
-      const FileStorageContext& fileStorageContext = {}) const final;
+      const FileIoContext& context = {}) const final;
 
   uint64_t size() const final;
 

@@ -27,18 +27,24 @@
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskTraceReader.h"
 #include "velox/exec/TaskTraceWriter.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 
-using namespace facebook::velox::exec::test;
-
 namespace facebook::velox::exec::trace::test {
-class OperatorTraceTest : public HiveConnectorTestBase {
+namespace {
+
+using exec::test::assertEqualResults;
+using exec::test::AssertQueryBuilder;
+using exec::test::PlanBuilder;
+using exec::test::TempDirectoryPath;
+using exec::test::TempFilePath;
+
+class OperatorTraceTest : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -104,6 +110,13 @@ class OperatorTraceTest : public HiveConnectorTestBase {
 
   std::unique_ptr<DriverCtx> driverCtx() {
     return std::make_unique<DriverCtx>(nullptr, 0, 0, 0, 0);
+  }
+
+  std::string getTaskTraceDirectory(
+      const std::string& traceDir,
+      const Task& task) {
+    return trace::getTaskTraceDirectory(
+        traceDir, task.queryCtx()->queryId(), task.taskId());
   }
 
   RowTypePtr dataType_;
@@ -299,16 +312,17 @@ TEST_F(OperatorTraceTest, traceMetadata) {
       executor_.get(),
       core::QueryConfig(expectedQueryConfigs),
       expectedConnectorProperties);
-  auto writer = trace::TaskTraceMetadataWriter(outputDir->getPath(), pool());
-  auto traceNode = getTraceNode(planNode, traceNodeId);
-  writer.write(queryCtx, traceNode);
+  auto writer =
+      trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool());
+  writer.write(*queryCtx, *planNode);
   const auto reader =
       trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
   const auto actualQueryConfigs = reader.queryConfigs();
   const auto actualConnectorProperties = reader.connectorProperties();
   const auto actualQueryPlan = reader.queryPlan();
 
-  ASSERT_TRUE(isSamePlan(actualQueryPlan, traceNode));
+  auto expectedTraceNode = getTraceNode(*planNode, traceNodeId);
+  ASSERT_TRUE(isSamePlan(actualQueryPlan, expectedTraceNode));
   ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
   for (const auto& [key, value] : actualQueryConfigs) {
     ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
@@ -424,7 +438,7 @@ TEST_F(OperatorTraceTest, task) {
     const auto actualQueryPlan = reader.queryPlan();
 
     ASSERT_TRUE(
-        isSamePlan(actualQueryPlan, getTraceNode(planNode, hashJoinNodeId)));
+        isSamePlan(actualQueryPlan, getTraceNode(*planNode, hashJoinNodeId)));
     ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
     for (const auto& [key, value] : actualQueryConfigs) {
       ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
@@ -505,8 +519,7 @@ TEST_F(OperatorTraceTest, error) {
             .queryCtx(queryCtx)
             .maxDrivers(1)
             .copyResults(pool()),
-
-        "Trace plan node ID = nonexist not found from task");
+        "Trace plan node ID = 'nonexist' not found from task");
   }
 }
 
@@ -1130,7 +1143,9 @@ TEST_F(OperatorTraceTest, canTrace) {
       {"Aggregation", true},
       {"TableWrite", true},
       {"TableScan", true},
-      {"FilterProject", true}};
+      {"FilterProject", true},
+      {"Exchange", true},
+      {"MergeExchange", true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     ASSERT_EQ(testData.canTrace, trace::canTrace(testData.operatorType));
@@ -1163,10 +1178,12 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
       .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
       .config(core::QueryConfig::kQueryTraceNodeId, "0")
       .splits(splits)
-      .runWithoutResults(task);
+      .countResults(task);
   const auto taskTraceDir =
       getTaskTraceDirectory(traceDirPath->getPath(), *task);
   const auto reader = trace::TaskTraceMetadataReader(taskTraceDir, pool());
   ASSERT_EQ("test-hive", reader.connectorId("0"));
 }
+
+} // namespace
 } // namespace facebook::velox::exec::trace::test

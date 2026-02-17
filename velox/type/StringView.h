@@ -32,17 +32,40 @@
 
 namespace facebook::velox {
 
-/// Variable length string or binary type for use in vectors. This has
-/// semantics similar to std::string_view or folly::StringPiece and
-/// exposes a subset of the interface. If the string is 12 characters
-/// or less, it is inlined and no reference is held. If it is longer, a
-/// reference to the string is held and the 4 first characters are
-/// cached in the StringView. This allows failing comparisons early and
-/// reduces the CPU cache working set when dealing with short strings.
+/// C++ container to store a variable length string (or binary type) optimized
+/// for use in Vectors.
 ///
-/// Adapted from TU Munich Umbra and CWI DuckDB.
+/// StringView provides a lightweight, non-owning view of string data with
+/// semantics similar to std::string or std::string_view. It implements the
+/// following space optimization:
 ///
-/// TODO: Extend the interface to parity with folly::StringPiece as needed.
+/// - Strings <= 12 bytes: Fully inlined, no heap allocation or pointer
+///     indirection.
+/// - Strings > 12 bytes: Stores pointer + caches first 4 bytes as prefix.
+///
+/// The prefix caching enables early comparison failures and reduces CPU cache
+/// pressure when working with large sets of strings.
+///
+/// Memory Layout (16 bytes total):
+/// - 4 bytes: size.
+/// - 4 bytes: prefix (first 4 chars, or part of inline data).
+/// - 8 bytes: either inline data continuation OR pointer to external data.
+///
+/// Key Characteristics:
+/// - Non-owning: Does not manage lifetime of referenced data.
+/// - Immutable: Provides const access to underlying data.
+/// - Efficient comparisons: Uses prefix and size for fast inequality checks.
+/// - Zero-overhead for small strings: Fully inlined with no allocations.
+///
+/// Conversions:
+/// - Implicit: from char*, std::string_view (const& only).
+/// - Explicit: from std::string, folly::StringPiece.
+///
+/// Safety Notes:
+/// - StringView does NOT own the data it references.
+/// - Callers must ensure referenced data outlives the StringView.
+/// - Conversion to views from temporaries is explicitly deleted to prevent
+///   dangling references to inlined data.
 struct StringView {
  public:
   using value_type = char;
@@ -69,7 +92,17 @@ struct StringView {
       // small string: inlined. Zero the last 8 bytes first to allow for whole
       // word comparison.
       value_.data = nullptr;
+#ifdef __GNUC__
+      // Use asm volatile to prevent GCC's interprocedural analysis from
+      // incorrectly concluding that size could exceed kInlineSize. This is a
+      // workaround for a false positive -Wstringop-overflow warning when GCC
+      // cannot prove the size constraint through deep template inlining.
+      auto sz = static_cast<size_t>(size_);
+      asm volatile("" : "+r"(sz));
+      memcpy(prefix_, data, sz);
+#else
       memcpy(prefix_, data, size_);
+#endif
     } else {
       // large string: store pointer
       memcpy(prefix_, data, kPrefixSize);
@@ -77,15 +110,16 @@ struct StringView {
     }
   }
 
-  // Making StringView implicitly constructible/convertible from char* and
-  // string literals, in order to allow for a more flexible API and optional
-  // interoperability. E.g:
-  //
-  //   StringView sv = "literal";
-  //   std::optional<StringView> osv = "literal";
-  //
-  /* implicit */ StringView(const char* data)
+  /// Enabling StringView to be implicitly constructed from char* and
+  /// string literals, in order to allow for a more flexible API and optional
+  /// interoperability. E.g:
+  ///
+  /// >  StringView sv = "literal";
+  /// >  std::optional<StringView> osv = "literal";
+  ///
+  /* implicit */ StringView(const char* FOLLY_NONNULL data)
       : StringView(data, strlen(data)) {}
+  /* implicit */ StringView(std::nullptr_t) = delete;
 
   explicit StringView(const folly::fbstring& value)
       : StringView(value.data(), value.size()) {}
@@ -118,7 +152,7 @@ struct StringView {
     return StringView{input};
   }
 
-  const char* data() && = delete;
+  const char* data() const&& = delete;
   const char* data() const& {
     return isInline() ? prefix_ : value_.data;
   }
@@ -156,9 +190,9 @@ struct StringView {
                size_ - kPrefixSize) == 0;
   }
 
-  // Returns 0, if this == other
-  //       < 0, if this < other
-  //       > 0, if this > other
+  /// Returns 0, if this == other
+  ///       < 0, if this < other
+  ///       > 0, if this > other
   int32_t compare(const StringView& other) const {
     if (prefixAsInt() != other.prefixAsInt()) {
       // The result is decided on prefix. The shorter will be less because the
@@ -186,43 +220,65 @@ struct StringView {
                    : std::strong_ordering::equal;
   }
 
-  operator folly::StringPiece() && = delete;
-  operator folly::StringPiece() const& {
+  /// Conversion to folly::StringPiece can only be done explicitly. For example,
+  /// this is ok:
+  ///
+  /// > StringView sv();
+  /// > folly::StringPiece sp(sv);
+  ///
+  /// but no:
+  ///
+  /// > StringView sv();
+  /// > folly::StringPiece sp = sv;
+  ///
+  /// Note that we also explicitly disable conversion from a temporary (rvalue)
+  /// because this could have resulted in a folly::StringPiece wrapping around a
+  /// temporary buffer, if the StringView was inlined:
+  ///
+  /// > folly::StringPiece sp(StringView()); // unsafe, won't compile.
+  ///
+  explicit operator folly::StringPiece() const&& = delete;
+  explicit operator folly::StringPiece() const& {
     return folly::StringPiece(data(), size());
   }
 
-  operator std::string() const {
+  /// Similarly, conversion to std::string can only be done explicitly, since
+  /// this may result in an allocation and string copy.
+  ///
+  /// Note that in this case it is ok to enable conversion from a temporary
+  /// (rvalue) StringView since its contents will be copied into the
+  /// std::string.
+  ///
+  /// > std::string str(StringView()); // ok
+  explicit operator std::string() const {
     return std::string(data(), size());
   }
 
-  std::string str() const {
-    return *this;
-  }
-
-  std::string getString() const {
-    return *this;
-  }
-
-  std::string materialize() const {
-    return *this;
-  }
-
-  operator folly::dynamic() && = delete;
-  operator folly::dynamic() const& {
-    return folly::dynamic(folly::StringPiece(data(), size()));
-  }
-
-  operator std::string_view() && = delete;
-  explicit operator std::string_view() const& {
+  /// Conversion to std::string_view are allowed to be implicit, as long as they
+  /// are not from a temporary (rvalue) StringView, for the same reasons
+  /// described above.
+  /* implicit */ operator std::string_view() const&& = delete;
+  /* implicit */ operator std::string_view() const& {
     return std::string_view(data(), size());
   }
 
-  const char* begin() && = delete;
+  /// TODO: Should make this explicit-only.
+  ///
+  /// Note that in this case it is ok to enable conversion from a temporary
+  /// (rvalue) StringView since its contents will be copied into the
+  /// folly::dynamic.
+  ///
+  /// > folly::dynamic str(StringView()); // ok
+  /* implicit */ operator folly::dynamic() const {
+    return folly::dynamic(folly::StringPiece(data(), size()));
+  }
+
+  const char* begin() const&& = delete;
   const char* begin() const& {
     return data();
   }
 
-  const char* end() && = delete;
+  const char* end() const&& = delete;
   const char* end() const& {
     return data() + size();
   }
@@ -231,13 +287,28 @@ struct StringView {
     return size() == 0;
   }
 
-  /// Searches for 'key == strings[i]'for i >= 0 < numStrings. If
-  /// 'indices' is given. searches for 'key ==
-  /// strings[indices[i]]. Returns the first i for which the strings
-  /// match or -1 if no match is found. Uses SIMD to accelerate the
-  /// search. Accesses StringView bodies in 32 byte vectors, thus
-  /// expects up to 31 bytes of addressable padding after out of
-  /// line strings. This is the case for velox Buffers.
+  /// Convenience common std::string conversion aliases.
+  std::string str() const {
+    return std::string(*this);
+  }
+
+  std::string getString() const {
+    return std::string(*this);
+  }
+
+  std::string materialize() const {
+    return std::string(*this);
+  }
+
+  /// Searches for 'key == strings[i]' for i >= 0 < numStrings.
+  ///
+  /// If 'indices' is given, searches for 'key == strings[indices[i]]'. Returns
+  /// the first i for which the strings match or -1 if no match is found. Uses
+  /// SIMD to accelerate the search.
+  ///
+  /// Accesses StringView bodies in 32 byte vectors, thus expects up to 31 bytes
+  /// of addressable padding after out of line strings. This is the case for
+  /// velox Buffers.
   static int32_t linearSearch(
       StringView key,
       const StringView* strings,
@@ -245,11 +316,11 @@ struct StringView {
       int32_t numStrings);
 
  private:
-  inline int64_t sizeAndPrefixAsInt64() const {
+  int64_t sizeAndPrefixAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[0];
   }
 
-  inline int64_t inlinedAsInt64() const {
+  int64_t inlinedAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[1];
   }
 

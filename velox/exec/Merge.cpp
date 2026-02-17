@@ -523,7 +523,7 @@ SpillMerger::SpillMerger(
     uint64_t maxOutputBatchBytes,
     int mergeSourceQueueSize,
     const common::SpillConfig* spillConfig,
-    const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
+    const std::shared_ptr<exec::SpillStats>& spillStats,
     velox::memory::MemoryPool* pool)
     : executor_(spillConfig->executor),
       spillStats_(spillStats),
@@ -726,7 +726,7 @@ LocalMerge::LocalMerge(
           localMergeNode->id(),
           "LocalMerge",
           localMergeNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "LocalMerge")
               : std::nullopt) {
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,
@@ -781,7 +781,14 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   for (;;) {
     exec::Split split;
     auto reason = operatorCtx_->task()->getSplitOrFuture(
-        operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
+
+        operatorCtx_->driverCtx()->driverId,
+        operatorCtx_->driverCtx()->splitGroupId,
+        planNodeId(),
+        /*maxPreloadSplits=*/0,
+        /*preload=*/nullptr,
+        split,
+        *future);
     if (reason != BlockingReason::kNotBlocked) {
       return reason;
     }

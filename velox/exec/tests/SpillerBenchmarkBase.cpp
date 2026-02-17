@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/system/HardwareConcurrency.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <filesystem>
@@ -56,7 +57,7 @@ DEFINE_uint32(
     "The number of key columns");
 DEFINE_uint32(
     spiller_benchmark_spill_executor_size,
-    std::thread::hardware_concurrency(),
+    folly::hardware_concurrency(),
     "The spiller executor size in number of threads");
 DEFINE_uint32(
     spiller_benchmark_spill_vector_size,

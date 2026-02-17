@@ -33,7 +33,7 @@ struct ChrFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const int64_t& codePoint) {
-    stringImpl::codePointToString(result, codePoint);
+    result = stringImpl::codePointToString(codePoint);
   }
 };
 
@@ -602,13 +602,14 @@ template <typename T>
 struct NormalizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // Map for holding normalization form options
-  const static inline std::unordered_map<std::string, utf8proc_int16_t>
+  // Map for holding normalization form options.
+  const static inline std::unordered_map<std::string_view, utf8proc_int16_t>
       normalizationOptions{
           {"NFC", (UTF8PROC_STABLE | UTF8PROC_COMPOSE)},
           {"NFD", (UTF8PROC_STABLE | UTF8PROC_DECOMPOSE)},
           {"NFKC", (UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_COMPAT)},
-          {"NFKD", (UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT)}};
+          {"NFKD", (UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT)},
+      };
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
@@ -616,8 +617,10 @@ struct NormalizeFunction {
       const arg_type<Varchar>* /*string*/,
       const arg_type<Varchar>* form) {
     VELOX_USER_CHECK_NOT_NULL(form);
+
+    // TODO: Remove explicit std::string_view cast.
     VELOX_USER_CHECK_NE(
-        normalizationOptions.count(*form),
+        normalizationOptions.count(std::string_view(*form)),
         0,
         "Normalization form must be one of [NFD, NFC, NFKD, NFKC]");
   }
@@ -646,7 +649,8 @@ struct NormalizeFunction {
         (utf8proc_uint8_t*)string.data(),
         string.size(),
         &output,
-        normalizationOptions.at(form));
+        // TODO: Remove explicit std::string_view cast.
+        normalizationOptions.at(std::string_view(form)));
     if (outputLength < 0) {
       result = string;
     } else {
@@ -666,7 +670,9 @@ template <typename T>
 struct BitLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const StringView& input) {
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Varchar>& input) {
     result = static_cast<int64_t>(input.size()) * 8;
   }
 };
@@ -918,4 +924,23 @@ struct JaroWinklerSimilarityFunction {
   }
 };
 
+/// key_sampling_percent(varchar) -> double
+/// Returns a value between 0.0 and 1.0 using the hash of the given input
+/// string.
+template <typename T>
+struct KeySamplingPercentFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Varchar>& string) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    int64_t hash = XXH64(string.data(), string.size(), 0);
+    // Bitwise reinterpretation to match Java's
+    // Double.longBitsToDouble(xxhash64(...)) semantics.
+    // This may produce NaN, which is expected and allowed.
+    memcpy(&result, &hash, kTypeLength);
+    result = fmod(fabs(result), 100) / 100;
+  }
+};
 } // namespace facebook::velox::functions
