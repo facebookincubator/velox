@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<folly::Executor> executor(
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency()));
+          folly::available_concurrency()));
 
   // Task is the top-level execution concept. A task needs a taskId (as a
   // string), the plan fragment to execute, a destination (only used for
