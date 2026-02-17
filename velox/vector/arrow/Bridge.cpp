@@ -963,8 +963,9 @@ void exportFlat(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-VeloxToArrowBridgeHolder& holder,
-    const uint64_t* parentNulls = nullptr) {  out.n_children = 0;
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* parentNulls = nullptr) {
+  out.n_children = 0;
   out.children = nullptr;
   switch (vec.typeKind()) {
     case TypeKind::BOOLEAN:
@@ -1021,7 +1022,8 @@ void exportRows(
     ArrowArray& out,
     memory::MemoryPool* pool,
     VeloxToArrowBridgeHolder& holder,
-    const uint64_t* incomingParentNulls = nullptr) {  out.n_buffers = 1;
+    const uint64_t* incomingParentNulls = nullptr) {
+  out.n_buffers = 1;
   holder.resizeChildren(vec.childrenSize());
   out.n_children = vec.childrenSize();
   out.children = holder.getChildrenArrays();
