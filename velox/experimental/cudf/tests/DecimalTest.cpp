@@ -1865,6 +1865,51 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
   }
 }
 
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
+  auto stream = cudf::get_default_stream();
+  constexpr cudf::size_type numRows = 4;
+
+  auto offsetsCol = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT32},
+      numRows + 1,
+      cudf::mask_state::UNALLOCATED,
+      stream);
+  auto* offsetsPtr = offsetsCol->mutable_view().data<int32_t>();
+  auto status = cudaMemsetAsync(
+      offsetsPtr,
+      0,
+      static_cast<size_t>(numRows + 1) * sizeof(int32_t),
+      stream.value());
+  VELOX_CHECK_EQ(0, static_cast<int>(status));
+  stream.synchronize();
+
+  std::vector<bool> valid(numRows, false);
+  auto [nullMask, nullCount] = makeNullMask(valid, stream);
+  rmm::device_buffer charsBuf(0, stream);
+  auto stateCol = cudf::make_strings_column(
+      numRows,
+      std::move(offsetsCol),
+      std::move(charsBuf),
+      nullCount,
+      std::move(nullMask));
+
+  auto decoded = deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream);
+  auto outSumView = decoded.sum->view();
+  auto outCountView = decoded.count->view();
+
+  EXPECT_EQ(outSumView.size(), numRows);
+  EXPECT_EQ(outCountView.size(), numRows);
+  EXPECT_EQ(outSumView.null_count(), numRows);
+  EXPECT_EQ(outCountView.null_count(), numRows);
+
+  auto outSumMask = copyNullMask(outSumView, stream);
+  auto outCountMask = copyNullMask(outCountView, stream);
+  for (size_t i = 0; i < static_cast<size_t>(numRows); ++i) {
+    EXPECT_FALSE(isValidAt(outSumMask, i));
+    EXPECT_FALSE(isValidAt(outCountMask, i));
+  }
+}
+
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
   auto stream = cudf::get_default_stream();
   std::vector<int64_t> sums = {100, 105, 250, -125};

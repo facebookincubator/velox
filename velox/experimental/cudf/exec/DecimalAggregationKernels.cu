@@ -176,6 +176,23 @@ DecimalSumStateColumns deserializeDecimalSumStateWithCount(
     return empty;
   }
 
+  // For fully-null state columns there is nothing to deserialize. Avoid
+  // launching unpack kernels over string payload buffers that may be empty.
+  if (stateCol.nullable() && stateCol.null_count() == numRows) {
+    DecimalSumStateColumns allNull;
+    allNull.sum = cudf::make_fixed_width_column(
+        cudf::data_type{cudf::type_id::DECIMAL128, -scale},
+        numRows,
+        cudf::mask_state::ALL_NULL,
+        stream);
+    allNull.count = cudf::make_fixed_width_column(
+        cudf::data_type{cudf::type_id::INT64},
+        numRows,
+        cudf::mask_state::ALL_NULL,
+        stream);
+    return allNull;
+  }
+
   cudf::strings_column_view strings(stateCol);
   numRows = strings.size();
 
