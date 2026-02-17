@@ -27,8 +27,9 @@ These workloads share three critical requirements:
 The Solution: Task Barrier
 --------------------------
 
-To solve this, Velox uses Sequential Task Execution combined with a Task
-Barrier. This allows a single Velox Task to be reused indefinitely.
+To solve this, Velox uses a **Task Barrier** mechanism. This allows a single
+Velox Task to be reused indefinitely in both **Sequential (Single-threaded)**
+and **Parallel (Multi-threaded)** execution modes.
 
 The "Barrier" is a synchronization mechanism that forces the task to "pause"
 and drain all in-flight data—including buffered data in stateful operators.
@@ -60,12 +61,18 @@ Workflow
    has been produced, and the task has completely drained and signaled its
    completion (reached the barrier).
 
-3. **Process & Barrier Detection**: The application continuously calls
-   ``task->next()`` to fetch results. From a user perspective, the Barrier
-   Reached state is detected precisely when:
+3. **Process & Barrier Detection**
 
-   * ``task->next()`` returns no data (nullptr), AND
-   * The returned ContinueFuture is not set (invalid)
+   * **Sequential execution mode**: The application continuously calls ``task->next()``
+     to fetch results. From a user perspective, the Barrier
+     Reached state is detected precisely when:
+    - ``task->next()`` returns no data (nullptr), AND
+    - The returned ContinueFuture is not set (invalid)
+
+   * **Parallel execution mode**: The application can leverage ``MultiThreadedTaskCursor``,
+     and continuously calls ``MultiThreadedTaskCursor::current()``
+     to fetch results. From a user perspective, the Barrier Reached state is
+     detected precisely when ``MultiThreadedTaskCursor::moveNext()`` returns false.
 
    This specific combination confirms that the task is not merely blocked
    waiting for I/O, but has fully drained all vectors from the current Split
@@ -91,7 +98,7 @@ Code Example (C++)
 ^^^^^^^^^^^^^^^^^^
 
 The following pseudo-code illustrates how an AI data loader interacts with the
-Velox Task Barrier:
+Velox Task Barrier (Sequential execution mode):
 
 .. code-block:: c++
 
@@ -173,6 +180,12 @@ When ``requestBarrier()`` is called:
 
 * Velox injects a special "Barrier Split" into the split queue of every source
   operator in the leaf drivers (the drivers that read raw input splits).
+
+  * If a source node has ``N`` active drivers, ``requestBarrier`` generates ``N``
+    Barrier Splits.
+  * These splits are mapped to specific Driver IDs. This ensures that each
+    driver receives exactly one barrier signal to initiate its drain
+    sequence.
 * This split acts as a Sentinel that flows through the pipeline.
 * It is excluded from standard task split processing statistics.
 
@@ -276,7 +289,7 @@ Delivery (Entering the Barrier)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 * **Injection**: The ``requestBarrier`` API directly injects a BarrierSplit into
-  the Task's split queue. This split is distinct from regular data splits (e.g.,
+  the Task's SplitsStore. This split is distinct from regular data splits (e.g.,
   FileSplit).
 * **Detection**: The Driver loop responsible for the TableScan fetches the next
   split from the queue. When it pops the BarrierSplit, it does not attempt to
@@ -316,7 +329,7 @@ operators must actively manage their buffers to ensure data determinism.
 Index Lookup Join
 ^^^^^^^^^^^^^^^^^
 
-* **Function**: Connects a stream of input rows (probe side) with a remote or
+**Function**: Connects a stream of input rows (probe side) with a remote or
   local index (build side), often fetching matches asynchronously.
 
 **Draining Complexity**: The operator typically buffers input rows to perform
@@ -334,7 +347,7 @@ pending lookups inside the execution engine must complete and be emitted.
 Unnest
 ^^^^^^
 
-* **Function**: Expands complex types (arrays, maps) into multiple rows.
+**Function**: Expands complex types (arrays, maps) into multiple rows.
 
 **Draining Complexity**: An Unnest operator might require multiple calls to
 ``getOutput()`` to fully process a single large input vector due to output batch
@@ -353,7 +366,7 @@ finish expanding the current vector.
 Sort Merge Join
 ^^^^^^^^^^^^^^^
 
-* **Function**: Assumes both inputs are sorted and finds matches by traversing
+**Function**: Assumes both inputs are sorted and finds matches by traversing
   them simultaneously. It is highly stateful and relies on the relative order of
   keys.
 
@@ -390,7 +403,7 @@ guaranteeing the same correct result as a full drain.
 Streaming Aggregation
 ^^^^^^^^^^^^^^^^^^^^^
 
-* **Function**: Computes aggregates (SUM, COUNT, etc.) on data already sorted by
+**Function**: Computes aggregates (SUM, COUNT, etc.) on data already sorted by
   grouping keys.
 
 **Draining Complexity**: The operator buffers the current group's accumulation
@@ -410,10 +423,6 @@ hasn't seen a "new" key to trigger the flush.
 
 Limitations
 -----------
-
-* **Sequential Execution Mode Only**: The barrier logic currently requires the
-  task to be running in sequential execution mode (single-threaded logic per
-  driver).
 
 * **Restricted Data Sources**: The barrier execution strictly supports only
   TableScan source nodes. Other source nodes, such as Values (value source node)
