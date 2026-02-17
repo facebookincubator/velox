@@ -131,6 +131,9 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerBinaryIntegral<CheckedPModIntFunction>({prefix + "checked_pmod"});
+  registerBinaryFloatingPoint<CheckedPModFloatFunction>(
+      {prefix + "checked_pmod"});
   registerBinaryIntegralWithTReturn<CheckedIntegralDivideFunction, int64_t>(
       {prefix + "checked_div"});
   registerFunction<sparksql::FactorialFunction, int64_t, int32_t>(
