@@ -2948,6 +2948,14 @@ inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
 }
 
+/// Returns true if the join type is "probe-only", meaning the output includes
+/// only columns from the probe side (plus possibly a mark column).
+/// These join types are: kLeftSemiFilter, kLeftSemiProject, and kAnti.
+inline bool isProbeOnlyJoin(JoinType joinType) {
+  return joinType == JoinType::kLeftSemiFilter ||
+      joinType == JoinType::kLeftSemiProject || joinType == JoinType::kAnti;
+}
+
 inline bool isNullAwareSupported(JoinType joinType) {
   return joinType == JoinType::kAnti ||
       joinType == JoinType::kLeftSemiProject ||
