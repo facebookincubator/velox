@@ -31,10 +31,12 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
 #include <cuda_runtime_api.h>
 
+#include <cstdlib>
 #include <optional>
 #include <type_traits>
 
@@ -86,6 +88,33 @@ std::pair<rmm::device_buffer, cudf::size_type> makeNullMask(
   }
   return {std::move(mask), nullCount};
 }
+
+class ScopedEnvVar {
+ public:
+  ScopedEnvVar(const char* key, const char* value) : key_(key) {
+    const char* existing = std::getenv(key);
+    if (existing) {
+      oldValue_ = std::string(existing);
+    }
+    if (value) {
+      setenv(key, value, 1);
+    } else {
+      unsetenv(key);
+    }
+  }
+
+  ~ScopedEnvVar() {
+    if (oldValue_) {
+      setenv(key_.c_str(), oldValue_->c_str(), 1);
+    } else {
+      unsetenv(key_.c_str());
+    }
+  }
+
+ private:
+  std::string key_;
+  std::optional<std::string> oldValue_;
+};
 
 template <typename T>
 std::unique_ptr<cudf::column> makeFixedWidthColumn(
@@ -1893,7 +1922,8 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
       nullCount,
       std::move(nullMask));
 
-  auto decoded = deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream);
+  auto decoded =
+      deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream);
   auto outSumView = decoded.sum->view();
   auto outCountView = decoded.count->view();
 
@@ -1907,6 +1937,65 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
   for (size_t i = 0; i < static_cast<size_t>(numRows); ++i) {
     EXPECT_FALSE(isValidAt(outSumMask, i));
     EXPECT_FALSE(isValidAt(outCountMask, i));
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
+  auto stream = cudf::get_default_stream();
+  ScopedEnvVar enableLargeStrings("LIBCUDF_LARGE_STRINGS_ENABLED", "1");
+  ScopedEnvVar threshold("LIBCUDF_LARGE_STRINGS_THRESHOLD", "1");
+
+  std::vector<int64_t> sums = {100, -200};
+  std::vector<int64_t> counts = {1, 1};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, nullptr, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+
+  cudf::strings_column_view strings(stateCol->view());
+  EXPECT_EQ(strings.offsets().type().id(), cudf::type_id::INT64);
+}
+
+TEST_F(CudfDecimalTest, decimalSumStateRoundTripUsesInt64Offsets) {
+  auto stream = cudf::get_default_stream();
+  ScopedEnvVar enableLargeStrings("LIBCUDF_LARGE_STRINGS_ENABLED", "1");
+  ScopedEnvVar threshold("LIBCUDF_LARGE_STRINGS_THRESHOLD", "1");
+
+  std::vector<int64_t> sums = {100, -200, 300, 400};
+  std::vector<int64_t> counts = {1, 0, 2, 3};
+  std::vector<bool> sumValid = {true, true, false, true};
+  std::vector<bool> countValid = {true, true, true, false};
+
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+
+  cudf::strings_column_view strings(stateCol->view());
+  EXPECT_EQ(strings.offsets().type().id(), cudf::type_id::INT64);
+
+  auto decoded =
+      deserializeDecimalSumStateWithCount(stateCol->view(), 2, stream);
+  auto outSumView = decoded.sum->view();
+  auto outCountView = decoded.count->view();
+  auto outSum = copyColumnData<__int128_t>(outSumView, stream);
+  auto outCount = copyColumnData<int64_t>(outCountView, stream);
+  auto outSumMask = copyNullMask(outSumView, stream);
+  auto outCountMask = copyNullMask(outCountView, stream);
+
+  EXPECT_EQ(outSumView.size(), sums.size());
+  EXPECT_EQ(outCountView.size(), counts.size());
+  EXPECT_EQ(outSumMask, outCountMask);
+
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(outSumMask, i), expectedValid);
+    EXPECT_EQ(isValidAt(outCountMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outSum[i], static_cast<__int128_t>(sums[i]));
+      EXPECT_EQ(outCount[i], counts[i]);
+    }
   }
 }
 

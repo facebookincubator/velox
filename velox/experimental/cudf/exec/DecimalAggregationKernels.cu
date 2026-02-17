@@ -20,6 +20,7 @@
 #include <cudf/detail/null_mask.hpp>
 #include <cudf/detail/valid_if.cuh>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/strings/utilities.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
@@ -28,6 +29,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -55,25 +57,27 @@ splitToWords(__int128_t value, int64_t& upper, uint64_t& lower) {
   upper = static_cast<int64_t>(value >> 64);
 }
 
-__global__ void fillOffsetsKernel(int32_t* offsets, int32_t numRows) {
+template <typename OffsetT>
+__global__ void fillOffsetsKernel(OffsetT* offsets, int32_t numRows) {
   int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx <= numRows) {
-    offsets[idx] = idx * kStateSize;
+    int64_t offset = static_cast<int64_t>(idx) * kStateSize;
+    offsets[idx] = static_cast<OffsetT>(offset);
   }
 }
 
-template <typename SumT>
+template <typename SumT, typename OffsetT>
 __global__ void packStateKernel(
     const SumT* sums,
     const int64_t* counts,
-    const int32_t* offsets,
+    const OffsetT* offsets,
     uint8_t* chars,
     int32_t numRows) {
   int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= numRows) {
     return;
   }
-  int32_t offset = offsets[idx];
+  int64_t offset = static_cast<int64_t>(offsets[idx]);
   auto* state = reinterpret_cast<DecimalSumStateDevice*>(chars + offset);
   int64_t upper;
   uint64_t lower;
@@ -84,8 +88,9 @@ __global__ void packStateKernel(
   state->upper = upper;
 }
 
+template <typename OffsetT>
 __global__ void unpackStateKernel(
-    const int32_t* offsets,
+    const OffsetT* offsets,
     const uint8_t* chars,
     __int128_t* sums,
     int64_t* counts,
@@ -94,7 +99,7 @@ __global__ void unpackStateKernel(
   if (idx >= numRows) {
     return;
   }
-  int32_t offset = offsets[idx];
+  int64_t offset = static_cast<int64_t>(offsets[idx]);
   auto* state = reinterpret_cast<const DecimalSumStateDevice*>(chars + offset);
   counts[idx] = state->count;
   sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
@@ -197,7 +202,7 @@ DecimalSumStateColumns deserializeDecimalSumStateWithCount(
   numRows = strings.size();
 
   auto offsetsView = strings.offsets();
-  auto offsetsCol = offsetsView.data<int32_t>();
+  auto offsetsType = offsetsView.type().id();
   auto charsPtr = reinterpret_cast<const uint8_t*>(strings.chars_begin(stream));
 
   auto sumCol = cudf::make_fixed_width_column(
@@ -217,12 +222,26 @@ DecimalSumStateColumns deserializeDecimalSumStateWithCount(
   if (numRows > 0) {
     int32_t blockSize = 256;
     int32_t gridSize = (numRows + blockSize - 1) / blockSize;
-    unpackStateKernel<<<gridSize, blockSize, 0, stream.value()>>>(
-        offsetsCol,
-        charsPtr,
-        sumView.data<__int128_t>(),
-        countView.data<int64_t>(),
-        numRows);
+    if (offsetsType == cudf::type_id::INT64) {
+      auto offsetsCol = offsetsView.data<int64_t>();
+      unpackStateKernel<int64_t><<<gridSize, blockSize, 0, stream.value()>>>(
+          offsetsCol,
+          charsPtr,
+          sumView.data<__int128_t>(),
+          countView.data<int64_t>(),
+          numRows);
+    } else {
+      CUDF_EXPECTS(
+          offsetsType == cudf::type_id::INT32,
+          "Decimal sum state requires INT32 or INT64 offsets");
+      auto offsetsCol = offsetsView.data<int32_t>();
+      unpackStateKernel<int32_t><<<gridSize, blockSize, 0, stream.value()>>>(
+          offsetsCol,
+          charsPtr,
+          sumView.data<__int128_t>(),
+          countView.data<int64_t>(),
+          numRows);
+    }
     CUDF_CUDA_TRY(cudaGetLastError());
   }
 
@@ -265,8 +284,18 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       numRows <= std::numeric_limits<int32_t>::max(),
       "Too many rows to serialize decimal sum state");
 
+  auto const charsBytes = static_cast<int64_t>(numRows) * kStateSize;
+  auto const threshold = cudf::strings::get_offset64_threshold();
+  auto const useLargeOffsets = charsBytes >= threshold;
+  CUDF_EXPECTS(
+      !useLargeOffsets || cudf::strings::is_large_strings_enabled(),
+      "Size of output exceeds the column size limit",
+      std::overflow_error);
+
+  auto const offsetsType =
+      useLargeOffsets ? cudf::type_id::INT64 : cudf::type_id::INT32;
   auto offsetsCol = cudf::make_fixed_width_column(
-      cudf::data_type{cudf::type_id::INT32},
+      cudf::data_type{offsetsType},
       numRows + 1,
       cudf::mask_state::UNALLOCATED,
       stream);
@@ -277,31 +306,64 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
 
   int32_t blockSize = 256;
   int32_t offsetGridSize = (numRows + 1 + blockSize - 1) / blockSize;
-  fillOffsetsKernel<<<offsetGridSize, blockSize, 0, stream.value()>>>(
-      offsetsView.data<int32_t>(), numRows);
+  if (useLargeOffsets) {
+    fillOffsetsKernel<int64_t>
+        <<<offsetGridSize, blockSize, 0, stream.value()>>>(
+            offsetsView.data<int64_t>(), numRows);
+  } else {
+    fillOffsetsKernel<int32_t>
+        <<<offsetGridSize, blockSize, 0, stream.value()>>>(
+            offsetsView.data<int32_t>(), numRows);
+  }
   CUDF_CUDA_TRY(cudaGetLastError());
 
   if (numRows > 0) {
     int32_t gridSize = (numRows + blockSize - 1) / blockSize;
-    auto offsetsPtr = offsetsView.data<int32_t>();
     auto charsPtr = reinterpret_cast<uint8_t*>(charsBuf.data());
-    if (sumCol.type().id() == cudf::type_id::DECIMAL64) {
-      packStateKernel<int64_t><<<gridSize, blockSize, 0, stream.value()>>>(
-          sumCol.data<int64_t>(),
-          countCol.data<int64_t>(),
-          offsetsPtr,
-          charsPtr,
-          numRows);
+    if (useLargeOffsets) {
+      auto offsetsPtr = offsetsView.data<int64_t>();
+      if (sumCol.type().id() == cudf::type_id::DECIMAL64) {
+        packStateKernel<int64_t, int64_t>
+            <<<gridSize, blockSize, 0, stream.value()>>>(
+                sumCol.data<int64_t>(),
+                countCol.data<int64_t>(),
+                offsetsPtr,
+                charsPtr,
+                numRows);
+      } else {
+        CUDF_EXPECTS(
+            sumCol.type().id() == cudf::type_id::DECIMAL128,
+            "Unsupported decimal sum column type");
+        packStateKernel<__int128_t, int64_t>
+            <<<gridSize, blockSize, 0, stream.value()>>>(
+                sumCol.data<__int128_t>(),
+                countCol.data<int64_t>(),
+                offsetsPtr,
+                charsPtr,
+                numRows);
+      }
     } else {
-      CUDF_EXPECTS(
-          sumCol.type().id() == cudf::type_id::DECIMAL128,
-          "Unsupported decimal sum column type");
-      packStateKernel<__int128_t><<<gridSize, blockSize, 0, stream.value()>>>(
-          sumCol.data<__int128_t>(),
-          countCol.data<int64_t>(),
-          offsetsPtr,
-          charsPtr,
-          numRows);
+      auto offsetsPtr = offsetsView.data<int32_t>();
+      if (sumCol.type().id() == cudf::type_id::DECIMAL64) {
+        packStateKernel<int64_t, int32_t>
+            <<<gridSize, blockSize, 0, stream.value()>>>(
+                sumCol.data<int64_t>(),
+                countCol.data<int64_t>(),
+                offsetsPtr,
+                charsPtr,
+                numRows);
+      } else {
+        CUDF_EXPECTS(
+            sumCol.type().id() == cudf::type_id::DECIMAL128,
+            "Unsupported decimal sum column type");
+        packStateKernel<__int128_t, int32_t>
+            <<<gridSize, blockSize, 0, stream.value()>>>(
+                sumCol.data<__int128_t>(),
+                countCol.data<int64_t>(),
+                offsetsPtr,
+                charsPtr,
+                numRows);
+      }
     }
     CUDF_CUDA_TRY(cudaGetLastError());
   }
