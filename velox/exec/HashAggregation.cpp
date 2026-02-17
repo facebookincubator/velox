@@ -16,6 +16,7 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -32,15 +33,15 @@ HashAggregation::HashAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation",
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation,
           aggregationNode->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(
                     operatorId,
                     aggregationNode->step() ==
                             core::AggregationNode::Step::kPartial
-                        ? "PartialAggregation"
-                        : "Aggregation")
+                        ? OperatorType::kPartialAggregation
+                        : OperatorType::kAggregation)
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),

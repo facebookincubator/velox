@@ -16,6 +16,8 @@
 
 #include "velox/exec/StreamingAggregation.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 StreamingAggregation::StreamingAggregation(
@@ -28,8 +30,8 @@ StreamingAggregation::StreamingAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation"),
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation),
       maxOutputBatchSize_{outputBatchRows()},
       minOutputBatchSize_{
           operatorCtx_->driverCtx()
