@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <sstream>
 
 #include "velox/common/time/HardwareTimer.h"
 
@@ -25,30 +25,25 @@ namespace facebook::velox::test {
 
 namespace {
 
-// Intercepts glog messages so tests can inspect logged output.
-class CapturingLogSink : public google::LogSink {
+// Captures std::cerr output by temporarily redirecting its stream buffer.
+class CerrCapture {
  public:
-  void send(
-      google::LogSeverity /*severity*/,
-      const char* /*full_filename*/,
-      const char* /*base_filename*/,
-      int /*line*/,
-      const struct ::tm* /*tm_time*/,
-      const char* message,
-      size_t message_len) override {
-    captured_ += std::string(message, message_len);
+  CerrCapture() : oldBuf_(std::cerr.rdbuf(capture_.rdbuf())) {}
+
+  ~CerrCapture() {
+    std::cerr.rdbuf(oldBuf_);
   }
 
-  const std::string& captured() const {
-    return captured_;
-  }
+  CerrCapture(const CerrCapture&) = delete;
+  CerrCapture& operator=(const CerrCapture&) = delete;
 
-  void clear() {
-    captured_.clear();
+  std::string str() const {
+    return capture_.str();
   }
 
  private:
-  std::string captured_;
+  std::ostringstream capture_;
+  std::streambuf* oldBuf_;
 };
 
 // Strips ANSI escape sequences (e.g. \033[1;34m) from a string.
@@ -99,21 +94,18 @@ TEST(HardwareTimerTest, multipleIterations) {
 }
 
 TEST(HardwareTimerTest, zeroIterationsNoOutput) {
-  CapturingLogSink sink;
-  google::AddLogSink(&sink);
+  CerrCapture capture;
   {
     HardwareTimer timer("zeroIterations");
   }
   HardwareTimer::cleanup();
-  google::RemoveLogSink(&sink);
 
   // A timer with zero iterations should produce no table output.
-  EXPECT_EQ(sink.captured().find("zeroIterations"), std::string::npos);
+  EXPECT_EQ(capture.str().find("zeroIterations"), std::string::npos);
 }
 
 TEST(HardwareTimerTest, outputTableContextAndRuns) {
-  CapturingLogSink sink;
-  google::AddLogSink(&sink);
+  CerrCapture capture;
 
   {
     HardwareTimer timer("myTimer");
@@ -127,9 +119,8 @@ TEST(HardwareTimerTest, outputTableContextAndRuns) {
     }
   }
   HardwareTimer::cleanup();
-  google::RemoveLogSink(&sink);
 
-  std::string output = stripAnsi(sink.captured());
+  std::string output = stripAnsi(capture.str());
 
   // Context name appears (with thread id suffix).
   EXPECT_NE(output.find("myTimer"), std::string::npos) << output;
@@ -140,8 +131,7 @@ TEST(HardwareTimerTest, outputTableContextAndRuns) {
 }
 
 TEST(HardwareTimerTest, outputTableTimeUnits) {
-  CapturingLogSink sink;
-  google::AddLogSink(&sink);
+  CerrCapture capture;
 
   {
     HardwareTimer timer("unitTest");
@@ -153,9 +143,8 @@ TEST(HardwareTimerTest, outputTableTimeUnits) {
     timer.end();
   }
   HardwareTimer::cleanup();
-  google::RemoveLogSink(&sink);
 
-  std::string output = stripAnsi(sink.captured());
+  std::string output = stripAnsi(capture.str());
 
   // At least one time unit label must appear (Total and Average columns).
   bool hasUnit = output.find(" ns") != std::string::npos ||
@@ -166,8 +155,7 @@ TEST(HardwareTimerTest, outputTableTimeUnits) {
 }
 
 TEST(HardwareTimerTest, outputTableMultipleTimers) {
-  CapturingLogSink sink;
-  google::AddLogSink(&sink);
+  CerrCapture capture;
 
   {
     HardwareTimer t1("alphaTimer");
@@ -190,9 +178,8 @@ TEST(HardwareTimerTest, outputTableMultipleTimers) {
     }
   }
   HardwareTimer::cleanup();
-  google::RemoveLogSink(&sink);
 
-  std::string output = stripAnsi(sink.captured());
+  std::string output = stripAnsi(capture.str());
 
   // Both timer context names appear in the same table.
   EXPECT_NE(output.find("alphaTimer"), std::string::npos) << output;

@@ -29,6 +29,7 @@
 #include <iomanip>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -76,13 +77,24 @@ class HardwareTimer {
     entries()[keyStream.str()] = {iter_count_, total_ns, avg_ns};
   }
 
+  static void init(const std::string& name = "") {
+    auto& map = entries();
+    if (!map.empty()) {
+      throw std::runtime_error(
+          "HardwareTimer::init() called but entries map is not empty. "
+          "Call cleanup() before re-initializing.");
+    }
+    globalContextName() = name;
+  }
+
   static void cleanup() {
     auto& map = entries();
     if (map.empty()) {
       return;
     }
-    printTable(map);
+    printTable(map, globalContextName());
     map.clear();
+    globalContextName().clear();
   }
 
  private:
@@ -99,7 +111,12 @@ class HardwareTimer {
     return map;
   }
 
-  static double estimate_tsc_freq_ghz(
+  static std::string& globalContextName() {
+    static std::string name;
+    return name;
+  }
+
+  double estimate_tsc_freq_ghz(
       std::chrono::milliseconds window = std::chrono::milliseconds(100)) {
     static const double cached = [&]() {
       using clock = std::chrono::steady_clock;
@@ -123,7 +140,7 @@ class HardwareTimer {
     return cached;
   }
 
-  static void printTable(const EntriesMap& map) {
+  static void printTable(const EntriesMap& map, const std::string& title) {
     int nameWidth = static_cast<int>(std::string("Context").size());
     int runsWidth = static_cast<int>(std::string("Runs").size());
     int totalWidth = static_cast<int>(std::string("Total").size());
@@ -162,6 +179,14 @@ class HardwareTimer {
 
     std::ostringstream oss;
     oss << "\n\033[1;34m" << sep << "\033[0m\n";
+    if (!title.empty()) {
+      oss << "\033[1;34m| \033[0m"
+          << "\033[1;37m" << std::left
+          << std::setw(nameWidth + runsWidth + totalWidth + avgWidth + 4)
+          << title << "\033[0m"
+          << "\033[1;34m|\033[0m\n";
+      oss << "\033[1;34m" << sep << "\033[0m\n";
+    }
     oss << "\033[1;34m| \033[0m"
         << "\033[1;33m" << std::left << std::setw(nameWidth) << "Context"
         << "\033[0m"
@@ -190,8 +215,8 @@ class HardwareTimer {
           << "\033[1;34m|\033[0m\n";
     }
 
-    oss << "\033[1;34m" << sep << "\033[0m";
-    LOG(INFO) << oss.str();
+    oss << "\033[1;34m" << sep << "\033[0m\n";
+    std::cerr << "\nBreakdown:\n" << oss.str();
   }
 
   static std::string formatAutoUnit(double valueInNanoseconds) {
