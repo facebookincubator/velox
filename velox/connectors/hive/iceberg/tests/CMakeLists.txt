@@ -34,6 +34,21 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     ${TEST_LINK_LIBS}
   )
+
+  if(VELOX_ENABLE_PARQUET)
+    add_executable(velox_hive_iceberg_write_benchmark IcebergTestBase.cpp IcebergWriteBenchmark.cpp)
+    target_link_libraries(
+      velox_hive_iceberg_write_benchmark
+      velox_dwio_parquet_writer
+      velox_exec_test_lib
+      velox_functions_iceberg
+      velox_hive_connector
+      velox_hive_iceberg_splitreader
+      Folly::folly
+      Folly::follybenchmark
+      ${TEST_LINK_LIBS}
+    )
+  endif()
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
