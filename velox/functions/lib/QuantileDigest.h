@@ -299,7 +299,7 @@ T read(const char*& input) {
 
 template <typename T>
 void write(T value, char*& out) {
-  folly::storeUnaligned(out, value);
+  folly::storeUnaligned<T>(out, value);
   out += sizeof(T);
 }
 } // namespace detail
