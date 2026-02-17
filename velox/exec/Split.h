@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 #include "velox/connectors/Connector.h"
 #include "velox/exec/BarrierSplit.h"
 
