@@ -50,6 +50,14 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   void TearDown() override;
 
+  virtual int64_t rootPoolCapacityBytes() const {
+    return 1L << 30;
+  }
+
+  void setConnectorSessionProperty(
+      const std::string& key,
+      const std::string& value);
+
   std::vector<RowVectorPtr> createTestData(
       RowTypePtr rowType,
       int32_t numBatches,
@@ -74,10 +82,6 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
       const RowTypePtr& rowType,
       const std::vector<PartitionField>& partitionFields);
-
-  void setConnectorSessionProperty(
-      const std::string& key,
-      const std::string& value);
 
   /// Extracts partition key-value pairs from a file path.
   /// Returns a map where keys are partition column names and values are
