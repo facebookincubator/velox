@@ -242,7 +242,10 @@ jobs:
               do ldd "$exe" 2>/dev/null; done | \
             sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | \
             # don't copy cuda libraries
-            sed '/libcuda/ d' | sort -u \
+            sed '/libcuda/ d' |  \
+            sed '/librt.so/ d' |  \
+            sed '/ld-linux-x86-64.so/ d' |  \
+            sed '/libc.so/ d' | sort -u \
           ) && \
           # copy all "real" files and symlink targets to _build/release/cudf-libs
           ( \
@@ -256,9 +259,9 @@ jobs:
           ( \
             cd _build/release/cudf-libs && \
             echo "$lndeps" | \
-            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {} \
-          )
-          tar -cvf _build/release/cudf-libs.tar _build/release/cudf-libs
+            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}
+          ) && \
+          tar -cvf _build/release/cudf-libs.tar -C _build/release cudf-libs
 
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -300,11 +303,9 @@ jobs:
           sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Source directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
           grep "Build directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-          tar -xf _build/release/cudf-libs.tar -C _build/release/
-          ls _build/release/
-          realpath _build/release/cudf-libs
+          (cd _build/release && tar -xf cudf-libs.tar)
           echo "$PWD/_build/release/cudf-libs" | sudo tee /etc/ld.so.conf.d/cudftests.conf > /dev/null
-          sudo cat /etc/ld.so.conf.d/cudftests.conf
+          ls _build/release/cudf-libs/
           sudo ldconfig -v
           echo $( \
             for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
