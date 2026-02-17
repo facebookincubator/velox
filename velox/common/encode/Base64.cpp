@@ -87,19 +87,10 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-// Validate the character in charset with ReverseIndex table
-constexpr bool checkForwardIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[static_cast<uint8_t>(charset[index])] == index) &&
-      (index > 0 ? checkForwardIndex(index - 1, charset, reverseIndex) : true);
-}
-
 // Verify that for every entry in kBase64Charset, the corresponding entry
 // in kBase64ReverseIndexTable is correct.
 static_assert(
-    checkForwardIndex(
+    BaseEncoderUtils::checkForwardIndex(
         sizeof(kBase64Charset) - 1,
         kBase64Charset,
         kBase64ReverseIndexTable),
@@ -108,38 +99,16 @@ static_assert(
 // Verify that for every entry in kBase64UrlCharset, the corresponding entry
 // in kBase64UrlReverseIndexTable is correct.
 static_assert(
-    checkForwardIndex(
+    BaseEncoderUtils::checkForwardIndex(
         sizeof(kBase64UrlCharset) - 1,
         kBase64UrlCharset,
         kBase64UrlReverseIndexTable),
     "kBase64UrlCharset has incorrect entries");
 
-// Searches for a character within a charset up to a certain index.
-constexpr bool findCharacterInCharset(
-    const Base64::Charset& charset,
-    uint8_t index,
-    const char targetChar) {
-  return index < charset.size() &&
-      ((charset[index] == targetChar) ||
-       findCharacterInCharset(charset, index + 1, targetChar));
-}
-
-// Checks the consistency of a reverse index mapping for a given character
-// set.
-constexpr bool checkReverseIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[index] == 255
-              ? !findCharacterInCharset(charset, 0, static_cast<char>(index))
-              : (charset[reverseIndex[index]] == index)) &&
-      (index > 0 ? checkReverseIndex(index - 1, charset, reverseIndex) : true);
-}
-
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.
 static_assert(
-    checkReverseIndex(
+    BaseEncoderUtils::checkReverseIndex(
         sizeof(kBase64ReverseIndexTable) - 1,
         kBase64Charset,
         kBase64ReverseIndexTable),
@@ -148,9 +117,9 @@ static_assert(
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.
 // We can't run this check as the URL version has two duplicate entries so
-// that the url decoder can handle url encodings and default encodings
+// that the url decoder can handle url encodings and default encodings.
 // static_assert(
-//     checkReverseIndex(
+//     BaseEncoderUtils::checkReverseIndex(
 //         sizeof(kBase64UrlReverseIndexTable) - 1,
 //         kBase64UrlCharset,
 //         kBase64UrlReverseIndexTable),
@@ -172,17 +141,8 @@ std::string Base64::encodeImpl(
 
 // static
 size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
-  if (inputSize == 0) {
-    return 0;
-  }
-
-  // Calculate the output size assuming that we are including padding.
-  size_t encodedSize = ((inputSize + 2) / 3) * 4;
-  if (!withPadding) {
-    // If the padding was not requested, subtract the padding bytes.
-    encodedSize -= (3 - (inputSize % 3)) % 3;
-  }
-  return encodedSize;
+  return BaseEncoderUtils::calculateEncodedSize(
+      inputSize, withPadding, kBase64BlockSizes);
 }
 
 // static
@@ -235,13 +195,13 @@ void Base64::encodeImpl(
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       *outputPointer++ = charset[(inputBlock >> 6) & 0x3f];
       if (includePadding) {
-        *outputPointer = kPadding;
+        *outputPointer = BaseEncoderUtils::kPadding;
       }
     } else {
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       if (includePadding) {
-        *outputPointer++ = kPadding;
-        *outputPointer = kPadding;
+        *outputPointer++ = BaseEncoderUtils::kPadding;
+        *outputPointer = BaseEncoderUtils::kPadding;
       }
     }
   }
@@ -343,14 +303,8 @@ void Base64::decode(const char* input, size_t inputSize, char* outputBuffer) {
 Expected<uint8_t> Base64::base64ReverseLookup(
     char encodedChar,
     const ReverseIndex& reverseIndex) {
-  auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
-  if (reverseLookupValue >= 0x40) {
-    return folly::makeUnexpected(
-        Status::UserError(
-            "decode() - invalid input string: invalid character '{}'",
-            encodedChar));
-  }
-  return reverseLookupValue;
+  return BaseEncoderUtils::reverseLookup(
+      encodedChar, reverseIndex, kCharsetSize);
 }
 
 // static
@@ -371,48 +325,8 @@ Status Base64::decode(
 Expected<size_t> Base64::calculateDecodedSize(
     const char* input,
     size_t& inputSize) {
-  if (inputSize == 0) {
-    return 0;
-  }
-
-  // Check if the input string is padded
-  if (isPadded(input, inputSize)) {
-    // If padded, ensure that the string length is a multiple of the encoded
-    // block size
-    if (inputSize % kEncodedBlockByteSize != 0) {
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Base64::decode() - invalid input string: "
-              "string length is not a multiple of 4."));
-    }
-
-    auto decodedSize =
-        (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = numPadding(input, inputSize);
-    inputSize -= paddingCount;
-
-    // Adjust the needed size by deducting the bytes corresponding to the
-    // padding from the calculated size.
-    return decodedSize -
-        ((paddingCount * kBinaryBlockByteSize) + (kEncodedBlockByteSize - 1)) /
-        kEncodedBlockByteSize;
-  }
-  // If not padded, Calculate extra bytes, if any
-  auto extraBytes = inputSize % kEncodedBlockByteSize;
-  auto decodedSize = (inputSize / kEncodedBlockByteSize) * kBinaryBlockByteSize;
-
-  // Adjust the needed size for extra bytes, if present
-  if (extraBytes) {
-    if (extraBytes == 1) {
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Base64::decode() - invalid input string: "
-              "string length cannot be 1 more than a multiple of 4."));
-    }
-    decodedSize += (extraBytes * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-  }
-
-  return decodedSize;
+  return BaseEncoderUtils::calculateDecodedSize(
+      std::string_view(input, inputSize), inputSize, kBase64BlockSizes);
 }
 
 // static
@@ -567,10 +481,11 @@ Status Base64::decodeMime(const char* input, size_t inputSize, char* output) {
     int val = kBase64ReverseIndexTable[c];
 
     // Padding character.
-    if (c == kPadding) {
+    if (c == BaseEncoderUtils::kPadding) {
       // If we see '=' too early or only one '=' when two are needed → error.
       if (bitsNeeded == 18 ||
-          (bitsNeeded == 6 && (idx == inputSize || input[idx++] != kPadding))) {
+          (bitsNeeded == 6 &&
+           (idx == inputSize || input[idx++] != BaseEncoderUtils::kPadding))) {
         return Status::UserError(
             "Input byte array has wrong 4-byte ending unit.");
       }
@@ -639,7 +554,7 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
   // Compute how many true Base64 chars.
   for (size_t i = 0; i < inputSize; ++i) {
     auto c = input[i];
-    if (c == kPadding) {
+    if (c == BaseEncoderUtils::kPadding) {
       decodedSize -= inputSize - i;
       break;
     }
@@ -710,14 +625,14 @@ void Base64::encodeMime(const char* input, size_t inputSize, char* output) {
     if (remaining == 1) {
       // Only one byte remains: produce two chars + two '=' paddings.
       *writePtr++ = kBase64Charset[(b0 & 0x03) << 4];
-      *writePtr++ = kPadding;
-      *writePtr = kPadding;
+      *writePtr++ = BaseEncoderUtils::kPadding;
+      *writePtr = BaseEncoderUtils::kPadding;
     } else {
       // Two bytes remain: produce three chars + one '=' padding.
       uint8_t b1 = static_cast<uint8_t>(*readPtr);
       *writePtr++ = kBase64Charset[((b0 & 0x03) << 4) | (b1 >> 4)];
       *writePtr++ = kBase64Charset[(b1 & 0x0F) << 2];
-      *writePtr = kPadding;
+      *writePtr = BaseEncoderUtils::kPadding;
     }
   }
 }
