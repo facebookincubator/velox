@@ -1603,6 +1603,33 @@ int64_t TimeType::valueToTime(
   return adjustedTime;
 }
 
+// static
+std::string TimeType::toCompactIso8601(int64_t microseconds) {
+  // Ensure the value is within valid TIME range.
+  VELOX_USER_CHECK(
+      !(microseconds < 0 || microseconds >= (util::kMicrosPerHour * 24)));
+
+  int64_t hours = microseconds / util::kMicrosPerHour;
+  microseconds %= util::kMicrosPerHour;
+  int64_t minutes = microseconds / util::kMicrosPerMinute;
+  microseconds %= util::kMicrosPerMinute;
+  int64_t seconds = microseconds / util::kMicrosPerSec;
+  int64_t remainingMicros = microseconds % util::kMicrosPerSec;
+
+  std::string result = fmt::format("{:02d}:{:02d}", hours, minutes);
+  if (seconds > 0 || remainingMicros > 0) {
+    result += fmt::format(":{:02d}", seconds);
+    if (remainingMicros > 0) {
+      if (remainingMicros % 1000 == 0) {
+        result += fmt::format(".{:03d}", remainingMicros / 1000);
+      } else {
+        result += fmt::format(".{:06d}", remainingMicros);
+      }
+    }
+  }
+  return result;
+}
+
 std::string stringifyTruncatedElementList(
     size_t size,
     const std::function<void(std::stringstream&, size_t)>& stringifyElement,

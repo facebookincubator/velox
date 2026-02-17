@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/SimpleFunctionApi.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/TypeEncodingUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 
@@ -1237,4 +1238,26 @@ TEST(TypeTest, time) {
   ASSERT_TRUE(timeType->isComparable());
 
   testTypeSerde(timeType);
+}
+
+TEST(TypeTest, timeToIso8601) {
+  const auto toIso8601 =
+      [](int64_t hours, int64_t minutes, int64_t seconds, int64_t micros) {
+        return TimeType::toCompactIso8601(
+            hours * util::kMicrosPerHour + minutes * util::kMicrosPerMinute +
+            seconds * util::kMicrosPerSec + micros);
+      };
+
+  EXPECT_EQ("00:00", toIso8601(0, 0, 0, 0));
+  EXPECT_EQ("00:00:00.000001", toIso8601(0, 0, 0, 1));
+  EXPECT_EQ("00:00:00.100", toIso8601(0, 0, 0, 100'000));
+  EXPECT_EQ("00:00:01", toIso8601(0, 0, 1, 0));
+  EXPECT_EQ("00:00:00.001", toIso8601(0, 0, 0, 1'000));
+  EXPECT_EQ("00:00:00.038", toIso8601(0, 0, 0, 38'000));
+  EXPECT_EQ("00:00:00.038001", toIso8601(0, 0, 0, 38'001));
+  EXPECT_EQ("00:00:00.038100", toIso8601(0, 0, 0, 38'100));
+  EXPECT_EQ("08:08:08", toIso8601(8, 8, 8, 0));
+  EXPECT_EQ("10:12:55.038", toIso8601(10, 12, 55, 38'000));
+  EXPECT_EQ("23:59:59.999999", toIso8601(23, 59, 59, 999'999));
+  VELOX_ASSERT_THROW(toIso8601(24, 00, 00, 0), "");
 }
