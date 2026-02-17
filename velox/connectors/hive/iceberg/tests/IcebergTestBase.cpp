@@ -87,7 +87,7 @@ void IcebergTestBase::setupMemoryPools() {
   queryCtx_.reset();
 
   root_ = memory::memoryManager()->addRootPool(
-      "IcebergTest", 1L << 30, exec::MemoryReclaimer::create());
+      "IcebergTest", rootPoolCapacityBytes(), exec::MemoryReclaimer::create());
   opPool_ = root_->addLeafChild("operator");
   connectorPool_ =
       root_->addAggregateChild("connector", exec::MemoryReclaimer::create());
@@ -109,6 +109,12 @@ void IcebergTestBase::setupMemoryPools() {
       "planNodeId.IcebergTest",
       0,
       "");
+}
+
+void IcebergTestBase::setConnectorSessionProperty(
+    const std::string& key,
+    const std::string& value) {
+  connectorSessionProperties_->set(key, value);
 }
 
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(
