@@ -16,13 +16,19 @@
 
 #include "velox/exec/Driver.h"
 
+#include <atomic>
+
 #include "velox/common/process/TraceContext.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/LazyVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+
+Driver::~Driver() = default;
+
 namespace {
 
 // Checks if output channel is produced using identity projection and returns
@@ -888,9 +894,9 @@ void Driver::updateStats() {
 void Driver::startBarrier() {
   VELOX_CHECK(ctx_->task->underBarrier());
   VELOX_CHECK(
-      !barrier_.has_value(),
-      "The driver has already started barrier processing");
-  barrier_ = BarrierState{};
+      !hasBarrier(), "The driver has already started barrier processing");
+  barrier_.reset();
+  hasBarrier_.store(true, std::memory_order_release);
 }
 
 void Driver::drainOutput() {
@@ -898,38 +904,38 @@ void Driver::drainOutput() {
       hasBarrier(), "Can't drain a driver not under barrier processing");
   VELOX_CHECK(!isDraining(), "The driver is already draining");
   // Starts to drain from the source operator.
-  barrier_->drainingOpId = 0;
+  barrier_.drainingOpId = 0;
   drainNextOperator();
 }
 
 bool Driver::isDraining() const {
-  return hasBarrier() && barrier_->drainingOpId.has_value();
+  return hasBarrier() && barrier_.drainingOpId.has_value();
 }
 
 bool Driver::isDraining(int32_t operatorId) const {
-  return isDraining() && operatorId == barrier_->drainingOpId;
+  return isDraining() && operatorId == barrier_.drainingOpId;
 }
 
 bool Driver::hasDrained(int32_t operatorId) const {
-  return isDraining() && operatorId < barrier_->drainingOpId;
+  return isDraining() && operatorId < barrier_.drainingOpId;
 }
 
 void Driver::finishDrain(int32_t operatorId) {
   VELOX_CHECK(isDraining());
-  VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operatorId);
-  barrier_->drainingOpId = barrier_->drainingOpId.value() + 1;
+  VELOX_CHECK_EQ(barrier_.drainingOpId.value(), operatorId);
+  barrier_.drainingOpId = barrier_.drainingOpId.value() + 1;
   drainNextOperator();
 }
 
 void Driver::drainNextOperator() {
   VELOX_CHECK(isDraining());
-  for (; barrier_->drainingOpId < operators_.size();
-       barrier_->drainingOpId = barrier_->drainingOpId.value() + 1) {
-    if (operators_[barrier_->drainingOpId.value()]->startDrain()) {
+  for (; barrier_.drainingOpId < operators_.size();
+       barrier_.drainingOpId = barrier_.drainingOpId.value() + 1) {
+    if (operators_[barrier_.drainingOpId.value()]->startDrain()) {
       break;
     }
   }
-  if (barrier_->drainingOpId == operators_.size()) {
+  if (barrier_.drainingOpId == operators_.size()) {
     finishBarrier();
   }
 }
@@ -940,21 +946,31 @@ void Driver::dropInput(int32_t operatorId) {
     return;
   }
   VELOX_CHECK_LT(operatorId, operators_.size());
-  if (!barrier_->dropInputOpId.has_value()) {
-    barrier_->dropInputOpId = operatorId;
-  } else {
-    barrier_->dropInputOpId = std::max(*barrier_->dropInputOpId, operatorId);
-  }
+  // dropInput() is only called from operators within this driver's pipeline
+  // during barrier processing. Since a driver runs on a single thread at a
+  // time, we don't need compare-and-swap here. We simply keep the maximum
+  // operator id - all operators upstream (with smaller ids) will drop their
+  // output.
+  barrier_.dropInputOpId = std::max(
+      barrier_.dropInputOpId.load(std::memory_order_relaxed), operatorId);
 }
 
 bool Driver::shouldDropOutput(int32_t operatorId) const {
-  return hasBarrier() && barrier_->dropInputOpId.has_value() &&
-      operatorId < *barrier_->dropInputOpId;
+  const int32_t dropOpId =
+      barrier_.dropInputOpId.load(std::memory_order_acquire);
+  return hasBarrier() && dropOpId != BarrierState::kNoDropInput &&
+      operatorId < dropOpId;
+}
+
+void Driver::BarrierState::reset() {
+  drainingOpId = std::nullopt;
+  dropInputOpId.store(kNoDropInput, std::memory_order_relaxed);
 }
 
 void Driver::finishBarrier() {
   VELOX_CHECK(isDraining());
-  VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operators_.size());
+  VELOX_CHECK_EQ(barrier_.drainingOpId.value(), operators_.size());
+  hasBarrier_.store(false, std::memory_order_release);
   barrier_.reset();
   ctx_->task->finishDriverBarrier();
 }
