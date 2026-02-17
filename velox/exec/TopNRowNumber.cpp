@@ -15,6 +15,8 @@
  */
 #include "velox/exec/TopNRowNumber.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 namespace {
@@ -131,9 +133,11 @@ TopNRowNumber::TopNRowNumber(
           node->outputType(),
           operatorId,
           node->id(),
-          "TopNRowNumber",
+          OperatorType::kTopNRowNumber,
           node->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "TopNRowNumber")
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    OperatorType::kTopNRowNumber)
               : std::nullopt),
       rankFunction_(node->rankFunction()),
       limit_{node->limit()},

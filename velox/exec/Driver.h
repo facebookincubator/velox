@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <string_view>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
@@ -261,7 +263,7 @@ struct DriverCtx {
   /// 'operatorType'.
   std::optional<common::SpillConfig> makeSpillConfig(
       int32_t operatorId,
-      const std::string& operatorType) const;
+      std::string_view operatorType) const;
 
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{
@@ -344,6 +346,14 @@ using PipelinePushdownFilters =
 
 class Driver : public std::enable_shared_from_this<Driver> {
  public:
+  ~Driver();
+
+  // Disable copy and move
+  Driver(const Driver&) = delete;
+  Driver& operator=(const Driver&) = delete;
+  Driver(Driver&&) = delete;
+  Driver& operator=(Driver&&) = delete;
+
   static void enqueue(std::shared_ptr<Driver> instance);
 
   /// Run the pipeline until it produces a batch of data or gets blocked.
@@ -487,7 +497,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Returns true if the driver is under barrier processing.
   bool hasBarrier() const {
-    return barrier_.has_value();
+    return hasBarrier_.load(std::memory_order_acquire);
   }
 
   /// Invoked to start draining the output of this driver pipeline from the
@@ -590,10 +600,16 @@ class Driver : public std::enable_shared_from_this<Driver> {
     // If set, the driver has started output draining. It points to the operator
     // that is currently draining output.
     std::optional<int32_t> drainingOpId{std::nullopt};
-    // If set, the specified operator doesn't need any more input to finish the
-    // draining operation. All the upstream operators within the same driver
-    // should drop their output or output processing.
-    std::optional<int32_t> dropInputOpId{std::nullopt};
+    // The operator id that doesn't need any more input to finish the draining
+    // operation. All the upstream operators within the same driver should drop
+    // their output or output processing. -1 means not set. This is accessed
+    // from different driver threads so it needs to be atomic.
+    static constexpr int32_t kNoDropInput = -1;
+    std::atomic_int32_t dropInputOpId{kNoDropInput};
+
+    BarrierState() = default;
+
+    void reset();
   };
 
   // Invoked to start draining on the next operator. If there is no "next"
@@ -655,8 +671,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::atomic_bool closed_{false};
 
-  // If set, the driver is under a barrier processing.
-  std::optional<BarrierState> barrier_;
+  // Set to true if the driver is under a barrier processing. This is set by
+  // startBarrier() and read by hasBarrier() from different threads.
+  std::atomic_bool hasBarrier_{false};
+
+  // The driver barrier processing state.
+  BarrierState barrier_;
 
   OpCallStatus opCallStatus_;
 
@@ -671,7 +691,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // should update.
   size_t curOperatorId_{0};
 
-  std::vector<std::unique_ptr<Operator>> operators_;
+  std::vector<std::unique_ptr<Operator>> operators_; // NOLINT
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 

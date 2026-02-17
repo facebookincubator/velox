@@ -40,7 +40,7 @@ class Merge : public SourceOperator {
           sortingKeys,
       const std::vector<core::SortOrder>& sortingOrders,
       const std::string& planNodeId,
-      const std::string& operatorType,
+      std::string_view operatorType,
       const std::optional<common::SpillConfig>& spillConfig = std::nullopt);
 
   void initialize() override;

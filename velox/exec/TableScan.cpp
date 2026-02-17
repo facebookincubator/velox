@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -76,7 +77,7 @@ TableScan::TableScan(
           tableScanNode->outputType(),
           operatorId,
           tableScanNode->id(),
-          "TableScan"),
+          OperatorType::kTableScan),
       tableHandle_(tableScanNode->tableHandle()),
       columnHandles_(tableScanNode->assignments()),
       driverCtx_(driverCtx),
@@ -277,12 +278,13 @@ bool TableScan::getSplit() {
 
   exec::Split split;
   blockingReason_ = driverCtx_->task->getSplitOrFuture(
+      driverCtx_->driverId,
       driverCtx_->splitGroupId,
       planNodeId(),
-      split,
-      blockingFuture_,
       maxPreloadedSplits_,
-      splitPreloader_);
+      splitPreloader_,
+      split,
+      blockingFuture_);
   if (blockingReason_ != BlockingReason::kNotBlocked) {
     return false;
   }
@@ -470,7 +472,6 @@ void TableScan::checkPreload() {
         [ioExecutor,
          this](const std::shared_ptr<connector::ConnectorSplit>& split) {
           preload(split);
-
           ioExecutor->add([connectorSplit = split]() mutable {
             connectorSplit->dataSource->prepare();
             connectorSplit.reset();
