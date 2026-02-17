@@ -18,8 +18,11 @@
 
 #include <folly/system/HardwareConcurrency.h>
 #include <filesystem>
+#include <optional>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/future/VeloxPromise.h"
+#include "velox/exec/BlockingReason.h"
 #include "velox/vector/EncodedVectorCopy.h"
 
 namespace facebook::velox::exec {

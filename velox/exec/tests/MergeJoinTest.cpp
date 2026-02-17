@@ -2182,6 +2182,7 @@ TEST_F(MergeJoinTest, barrier) {
           (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {
