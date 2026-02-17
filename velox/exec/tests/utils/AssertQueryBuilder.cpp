@@ -336,7 +336,6 @@ AssertQueryBuilder::readCursor() {
       return;
     }
     auto& task = taskCursor->task();
-    VELOX_CHECK(!params_.barrierExecution || params_.serialExecution);
     if (params_.barrierExecution) {
       int numSplits{0};
       for (auto& [nodeId, nodeSplits] : splits_) {
@@ -359,7 +358,11 @@ AssertQueryBuilder::readCursor() {
             numSplits,
             splits_.size(),
             "Barrier task execution mode requires all the sources have the same number of splits");
-        task->requestBarrier();
+        auto future = task->requestBarrier();
+        if (!params_.serialExecution) {
+          // TODO: Hold the future and wait it in the next round.
+          future.wait();
+        }
       } else {
         taskCursor->setNoMoreSplits();
       }
