@@ -925,6 +925,7 @@ void Driver::drainNextOperator() {
   VELOX_CHECK(isDraining());
   for (; barrier_->drainingOpId < operators_.size();
        barrier_->drainingOpId = barrier_->drainingOpId.value() + 1) {
+    auto& t = operators_[barrier_->drainingOpId.value()];
     if (operators_[barrier_->drainingOpId.value()]->startDrain()) {
       break;
     }
