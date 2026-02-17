@@ -97,6 +97,10 @@ VELOX_DECLARE_ENUM_NAME(TypeKind);
 
 template <TypeKind KIND>
 class ScalarType;
+template <TypeKind KIND>
+class VaryingLengthScalarType;
+using VarcharNType = VaryingLengthScalarType<TypeKind::VARCHAR>;
+using VarbinaryNType = VaryingLengthScalarType<TypeKind::VARBINARY>;
 class ShortDecimalType;
 class LongDecimalType;
 class ArrayType;
@@ -644,8 +648,12 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   const ShortDecimalType& asShortDecimal() const;
   const LongDecimalType& asLongDecimal() const;
+  const VarcharNType& asVarcharN() const;
+  const VarbinaryNType& asVarbinaryN() const;
   bool isShortDecimal() const;
   bool isLongDecimal() const;
+  bool isVarcharN() const;
+  bool isVarbinaryN() const;
   bool isDecimal() const;
   bool isIntervalYearMonth() const;
 
@@ -974,6 +982,108 @@ class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
     return obj;
   }
 };
+
+static const uint32_t kVaryingLengthScalarTypeUnboundedLength =
+    std::numeric_limits<int32_t>::max();
+static const std::string kVaryingLengthScalarTypeUnboundedLengthStr =
+    std::to_string(kVaryingLengthScalarTypeUnboundedLength);
+
+template <TypeKind KIND>
+class VaryingLengthScalarType : public ScalarType<KIND> {
+ public:
+  explicit VaryingLengthScalarType(
+      const std::optional<uint32_t> length = std::nullopt) {
+    if (length.has_value()) {
+      VELOX_CHECK_LE(
+          length.value(),
+          kVaryingLengthScalarTypeUnboundedLength,
+          "Maximum length of varying string or binary type cannot exceed {}",
+          kVaryingLengthScalarTypeUnboundedLengthStr);
+      parameters_.emplace_back(TypeParameter(length.value()));
+    } else {
+      parameters_.emplace_back(
+          TypeParameter(kVaryingLengthScalarTypeUnboundedLength));
+    }
+  }
+
+  FOLLY_NOINLINE static TypePtr create();
+
+  FOLLY_NOINLINE static TypePtr create(uint32_t length);
+
+  inline uint32_t length() const {
+    return parameters_[0].longLiteral.value();
+  }
+
+  inline bool equivalent(const Type& other) const override {
+    if (!Type::hasSameTypeId(other)) {
+      return false;
+    }
+    const auto& otherType =
+        static_cast<const VaryingLengthScalarType<KIND>&>(other);
+    return (otherType.length() == length());
+  }
+
+  const char* name() const override {
+    return TypeTraits<KIND>::name;
+  }
+
+  std::string toString() const override {
+    if (length() == kVaryingLengthScalarTypeUnboundedLength) {
+      return std::string(name());
+    }
+    return fmt::format("{}({})", name(), length());
+  }
+
+  folly::dynamic serialize() const override {
+    auto obj = ScalarType<KIND>::serialize();
+    obj["type"] = name();
+    obj["length"] = length();
+    return obj;
+  }
+
+  const std::vector<TypeParameter>& parameters() const override {
+    return parameters_;
+  }
+
+ private:
+  std::vector<TypeParameter> parameters_;
+};
+
+// Functions for Varchar.
+FOLLY_ALWAYS_INLINE const VarcharNType& Type::asVarcharN() const {
+  return dynamic_cast<const VarcharNType&>(*this);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isVarcharN() const {
+  return dynamic_cast<const VarcharNType*>(this) != nullptr;
+}
+
+FOLLY_ALWAYS_INLINE bool isVarcharName(std::string_view name) {
+  return (name == "VARCHAR");
+}
+
+uint32_t getVarcharLength(const Type& type);
+
+// Functions for Varbinary.
+FOLLY_ALWAYS_INLINE const VarbinaryNType& Type::asVarbinaryN() const {
+  return dynamic_cast<const VarbinaryNType&>(*this);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isVarbinaryN() const {
+  return dynamic_cast<const VarbinaryNType*>(this) != nullptr;
+}
+
+FOLLY_ALWAYS_INLINE bool isVarbinaryName(const std::string& name) {
+  return (name == "VARBINARY");
+}
+
+uint32_t getVarbinaryLength(const Type& type);
+
+uint32_t getVaryingLengthScalarTypeLength(const Type& type);
+
+FOLLY_ALWAYS_INLINE bool isVaryingLengthScalarType(const TypePtr& type) {
+  return (type->isVarcharN() || type->isVarbinaryN());
+}
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
  public:
@@ -2134,6 +2244,9 @@ VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
+
+TypePtr VARCHAR(uint32_t length);
+TypePtr VARBINARY(uint32_t length);
 
 TypePtr UNKNOWN();
 
