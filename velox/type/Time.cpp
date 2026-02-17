@@ -41,13 +41,9 @@ bool parseNumber(const char* data, size_t size, size_t& pos, int32_t& result) {
   return true;
 }
 
-Expected<int32_t> parseFractionalSecondsWithScale(
-    const char* data,
-    size_t size,
-    size_t& pos,
-    int32_t maxDigits,
-    int32_t scaleToDigits,
-    const char* precisionErrorMessage) {
+// Helper: Parse fractional seconds (milliseconds)
+Expected<int32_t>
+parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
   if (pos >= size || data[pos] != '.') {
     return 0; // No fractional part
   }
@@ -76,28 +72,20 @@ Expected<int32_t> parseFractionalSecondsWithScale(
   size_t digitCount = parseResult.ptr - start;
   pos += digitCount;
 
-  if (digitCount > static_cast<size_t>(maxDigits)) {
-    return folly::makeUnexpected(Status::UserError(precisionErrorMessage));
+  // Check that we don't have more than 3 digits (millisecond precision)
+  if (digitCount > 3) {
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Invalid time format: Microsecond precision not supported"));
   }
 
-  // Convert to target precision by padding with zeros if needed.
-  for (size_t i = digitCount; i < static_cast<size_t>(scaleToDigits); i++) {
+  // Convert to milliseconds by padding with zeros if needed
+  // e.g., .1 -> 100ms, .12 -> 120ms, .123 -> 123ms
+  for (size_t i = digitCount; i < 3; i++) {
     fractionalPart *= 10;
   }
 
   return fractionalPart;
-}
-
-// Helper: Parse fractional seconds (milliseconds)
-Expected<int32_t>
-parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
-  return parseFractionalSecondsWithScale(
-      data,
-      size,
-      pos,
-      3,
-      3,
-      "Invalid time format: Microsecond precision not supported");
 }
 
 // Helper: Validate time components
