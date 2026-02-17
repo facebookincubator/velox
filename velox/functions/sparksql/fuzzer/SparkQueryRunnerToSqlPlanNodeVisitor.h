@@ -14,15 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/exec/fuzzer/PrestoSql.h"
+#include "velox/functions/sparksql/fuzzer/SparkSql.h"
 
 namespace facebook::velox::functions::sparksql::fuzzer {
 
-class SparkQueryRunnerToSqlPlanNodeVisitor
-    : public exec::test::PrestoSqlPlanNodeVisitor {
+class SparkQueryRunnerToSqlPlanNodeVisitor : public core::PlanNodeVisitor {
  public:
-  explicit SparkQueryRunnerToSqlPlanNodeVisitor()
-      : exec::test::PrestoSqlPlanNodeVisitor() {}
+  explicit SparkQueryRunnerToSqlPlanNodeVisitor() {}
 
   void visit(
       const core::AggregationNode& node,
@@ -65,7 +63,7 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
 
   void visit(const core::HashJoinNode& node, core::PlanNodeVisitorContext& ctx)
       const override {
-    PrestoSqlPlanNodeVisitor::visit(node, ctx);
+    VELOX_NYI();
   }
 
   void visit(const core::IndexLookupJoinNode&, core::PlanNodeVisitorContext&)
@@ -111,7 +109,7 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
   void visit(
       const core::NestedLoopJoinNode& node,
       core::PlanNodeVisitorContext& ctx) const override {
-    PrestoSqlPlanNodeVisitor::visit(node, ctx);
+    VELOX_NYI();
   }
 
   void visit(const core::OrderByNode&, core::PlanNodeVisitorContext&)
@@ -145,7 +143,8 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
 
   void visit(const core::TableScanNode& node, core::PlanNodeVisitorContext& ctx)
       const override {
-    PrestoSqlPlanNodeVisitor::visit(node, ctx);
+    static_cast<SparkSqlPlanNodeVisitorContext&>(ctx).sql =
+        node.tableHandle()->name();
   }
 
   void visit(const core::TableWriteNode&, core::PlanNodeVisitorContext&)
@@ -196,6 +195,9 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
       const override {
     VELOX_NYI();
   }
+
+ private:
+  std::optional<std::string> toSql(const core::PlanNodePtr& node) const;
 };
 
 } // namespace facebook::velox::functions::sparksql::fuzzer

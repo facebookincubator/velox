@@ -17,6 +17,7 @@
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/expression/signature_parser/ParseUtil.h"
 
 DEFINE_int32(steps, 10, "Number of expressions to generate and execute.");
 
@@ -162,6 +163,12 @@ DEFINE_string(
     "of functions at every instance. Number of tickets must be a positive "
     "integer. Example: eq=3,floor=5");
 
+DEFINE_string(
+    string_encodings,
+    "0",
+    "Comma-separated list of string encodings to use in generated vector. "
+    "Supported encodings: ASCII(0), UNICODE_CASE_SENSITIVE(1), EXTENDED_UNICODE(2), MATHEMATICAL_SYMBOLS(3), ALPHABETIC(4), NUMERIC(5).");
+
 namespace facebook::velox::fuzzer {
 
 namespace {
@@ -174,6 +181,13 @@ VectorFuzzer::Options getVectorFuzzerOptions() {
   opts.useRandomNullPattern = true;
   opts.timestampPrecision =
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  const auto& encodings = exec::splitNames(FLAGS_string_encodings);
+  opts.charEncodings.clear();
+  opts.charEncodings.reserve(encodings.size());
+  for (const auto& encoding : encodings) {
+    opts.charEncodings.emplace_back(
+        static_cast<fuzzer::UTF8CharList>(std::stoi(encoding)));
+  }
   return opts;
 }
 
