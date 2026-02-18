@@ -30,6 +30,7 @@
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
+#include "velox/functions/prestosql/MapTrimValues.h"
 #include "velox/functions/prestosql/MapUpdate.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
 #include "velox/functions/prestosql/RemapKeys.h"
@@ -325,6 +326,12 @@ void registerMapFunctions(const std::string& prefix) {
       MapNormalizeFunction,
       Map<Varchar, double>,
       Map<Varchar, double>>({prefix + "map_normalize"});
+
+  registerFunction<
+      MapTrimValuesFunction,
+      Map<Generic<T1>, Array<Generic<T2>>>,
+      Map<Generic<T1>, Array<Generic<T2>>>,
+      int64_t>({prefix + "map_trim_values"});
 }
 
 void registerMapAllowingDuplicates(
