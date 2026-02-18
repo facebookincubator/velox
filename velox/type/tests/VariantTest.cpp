@@ -839,9 +839,9 @@ TEST(VariantTest, arrayComparisonWithNullElements) {
     return Variant::array(arrayElements);
   };
 
-  auto a = makeArray({std::nullopt, 1});
-  auto b = makeArray({std::nullopt, 1});
-  auto c = makeArray({std::nullopt, 2});
+  auto a = makeArray({5, std::nullopt, 1});
+  auto b = makeArray({5, std::nullopt, 1});
+  auto c = makeArray({5, std::nullopt, 2});
 
   // Both are non-null arrays with null elements inside.
   // With kNullAsValue, they should be equal if all elements match.
@@ -865,47 +865,43 @@ TEST(VariantTest, arrayComparisonWithNullElements) {
 }
 
 TEST(VariantTest, rowComparisonWithNullElements) {
-  auto makeRow = [](const std::optional<int32_t>& intValue,
-                    const std::optional<std::string>& varcharValue) {
+  auto makeRow = [](int32_t before,
+                    const std::optional<std::string>& middle,
+                    double after) {
     std::vector<Variant> rowElements;
-    if (intValue.has_value()) {
-      rowElements.emplace_back(intValue.value());
-    } else {
-      rowElements.push_back(Variant::null(TypeKind::INTEGER));
-    }
-    if (varcharValue.has_value()) {
-      rowElements.emplace_back(varcharValue.value());
+    rowElements.emplace_back(before);
+    if (middle.has_value()) {
+      rowElements.emplace_back(middle.value());
     } else {
       rowElements.push_back(Variant::null(TypeKind::VARCHAR));
     }
+    rowElements.emplace_back(after);
     return Variant::row(rowElements);
   };
 
-  auto a = makeRow(1, "hello");
-  auto b = makeRow(1, "hello");
-  auto c = makeRow(2, "world");
-  auto d = makeRow(1, std::nullopt);
-  auto e = makeRow(1, std::nullopt);
+  auto a = makeRow(5, std::nullopt, 1.0);
+  auto b = makeRow(5, std::nullopt, 1.0);
+  auto c = makeRow(5, std::nullopt, 2.0);
 
-  // Both are non-null rows with matching elements.
+  // Rows with null elements inside and kNullAsValue should match if nulls
+  // match.
   auto result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result.value());
 
-  // Rows with different elements.
-  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsValue);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_FALSE(result.value());
+  // With kNullAsIndeterminate, null elements make the comparison indeterminate.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_FALSE(result.has_value());
 
-  // Rows with null elements inside and kNullAsValue should match if nulls
-  // match.
-  result = d.equals(e, CompareFlags::NullHandlingMode::kNullAsValue);
+  // Comparison of rows with different elements and null inside fails both
+  // with kNullAsValue and kNullAsIndeterminate modes.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result.value());
 
-  // With kNullAsIndeterminate, null elements make the comparison indeterminate.
-  result = d.equals(e, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
-  ASSERT_FALSE(result.has_value());
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
 }
 
 TEST(VariantTest, mapComparisonWithNullElements) {
@@ -923,9 +919,9 @@ TEST(VariantTest, mapComparisonWithNullElements) {
         return Variant::map(m);
       };
 
-  auto a = makeMap({{1, std::nullopt}, {2, 3}});
-  auto b = makeMap({{1, std::nullopt}, {2, 3}});
-  auto c = makeMap({{1, std::nullopt}, {2, 4}});
+  auto a = makeMap({{0, 9}, {1, std::nullopt}, {2, 3}});
+  auto b = makeMap({{0, 9}, {1, std::nullopt}, {2, 3}});
+  auto c = makeMap({{0, 9}, {1, std::nullopt}, {2, 4}});
 
   // Both are non-null maps with null values inside.
   // With kNullAsValue, they should be equal if all keys and values match.
