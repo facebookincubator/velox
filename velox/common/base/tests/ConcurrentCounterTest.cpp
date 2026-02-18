@@ -49,7 +49,7 @@ class ConcurrentCounterTest : public testing::TestWithParam<bool> {
 
   void setupCounter() {
     counter_ = std::make_unique<ConcurrentCounter<int64_t>>(
-        folly::hardware_concurrency());
+        folly::available_concurrency());
   }
 
   const bool useUpdateFn_{GetParam()};
@@ -73,8 +73,8 @@ TEST_P(ConcurrentCounterTest, multithread) {
   const int32_t numUpdatesPerThread = 5'000;
   std::vector<int> numThreads;
   numThreads.push_back(1);
-  numThreads.push_back(folly::hardware_concurrency());
-  numThreads.push_back(folly::hardware_concurrency() * 2);
+  numThreads.push_back(folly::available_concurrency());
+  numThreads.push_back(folly::available_concurrency() * 2);
   for (int numThreads : numThreads) {
     SCOPED_TRACE(fmt::format("numThreads: {}", numThreads));
     counter_->testingClear();
