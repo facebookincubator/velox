@@ -2101,6 +2101,23 @@ VectorPtr createShortDecimalVector(
     memory::MemoryPool* pool,
     const TypePtr& type,
     BufferPtr nulls,
+    const int64_t* input,
+    vector_size_t length,
+    int64_t nullCount,
+    WrapInBufferViewFunc wrapInBufferView) {
+  return createFlatVector<TypeKind::BIGINT>(
+      pool,
+      type,
+      std::move(nulls),
+      length,
+      wrapInBufferView(input, length * type->cppSizeInBytes()),
+      nullCount);
+}
+
+VectorPtr createShortDecimalVectorFromLongDecimals(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
     const int128_t* input,
     vector_size_t length,
     int64_t nullCount) {
@@ -2258,21 +2275,14 @@ VectorPtr importFromArrowImpl(
     // Validate the format bitWidth
     const int32_t bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
     if (bitWidth == 64) {
-      // Arrow decimal64 uses 8-byte values. Keep Velox short decimals (int64)
-      // unchanged by wrapping the values buffer directly.
-      VELOX_USER_CHECK_EQ(
-          arrowArray.n_buffers,
-          2,
-          "Decimal types expect two buffers as input.");
-      auto values = wrapInBufferView(
-          arrowArray.buffers[1], arrowArray.length * sizeof(int64_t));
-      return createFlatVector<TypeKind::BIGINT>(
+      return createShortDecimalVector(
           pool,
           type,
-          std::move(nulls),
+          nulls,
+          static_cast<const int64_t*>(arrowArray.buffers[1]),
           arrowArray.length,
-          values,
-          arrowArray.null_count);
+          arrowArray.null_count,
+          wrapInBufferView);
     }
     // otherwise convert to 128
     VELOX_USER_CHECK_EQ(
@@ -2281,7 +2291,7 @@ VectorPtr importFromArrowImpl(
         "Unsupported decimal bitWidth {} for '{}'",
         bitWidth,
         arrowSchema.format);
-    return createShortDecimalVector(
+    return createShortDecimalVectorFromLongDecimals(
         pool,
         type,
         nulls,
