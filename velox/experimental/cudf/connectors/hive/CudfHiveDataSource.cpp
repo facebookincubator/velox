@@ -533,6 +533,7 @@ void CudfHiveDataSource::setupCudfDataSourceAndOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
           .timestamp_type(cudfHiveConfig_->timestampType())
+          .use_jit_filter(hasDecimalFilter)
           .build();
 
   // Set skip_bytes and num_bytes if available
