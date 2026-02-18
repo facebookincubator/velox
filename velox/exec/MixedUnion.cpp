@@ -46,6 +46,7 @@ BlockingReason MixedUnion::addMergeSources(ContinueFuture* /* future */) {
     const auto numSources = sources_.size();
     pendingData_.resize(numSources);
     sourcesFinished_.resize(numSources, false);
+    sourcesDrained_.resize(numSources, false);
   }
   return BlockingReason::kNotBlocked;
 }
@@ -63,49 +64,45 @@ void MixedUnion::startSources() {
 }
 
 BlockingReason MixedUnion::isBlocked(ContinueFuture* future) {
-  // Get sources from the task if not already acquired
   const auto reason = addMergeSources(future);
   if (reason != BlockingReason::kNotBlocked) {
     return reason;
   }
 
-  // If task terminated early with no sources, mark as finished
   if (sources_.empty()) {
     finished_ = true;
     return BlockingReason::kNotBlocked;
   }
 
-  // Start sources if not already started
   startSources();
 
-  // Try to fetch data from each source that doesn't have pending data
-  sourceBlockingFutures_.clear();
+  // Pre-fetch data from each source into pendingData_. This is done in both
+  // normal and drain modes so that getOutputMixed() can uniformly drain
+  // pendingData_ without polling sources directly.
+  std::vector<ContinueFuture> blockingFutures;
   for (size_t i = 0; i < sources_.size(); ++i) {
-    if (sourcesFinished_[i] || pendingData_[i]) {
-      // Source is finished or already has data
+    if (sourcesFinished_[i] || sourcesDrained_[i] || pendingData_[i]) {
       continue;
     }
 
     ContinueFuture sourceFuture;
     RowVectorPtr data;
-    const auto blockingReason = sources_[i]->next(data, &sourceFuture);
+    bool drained{false};
+    const auto blockingReason = sources_[i]->next(data, &sourceFuture, drained);
 
     if (blockingReason != BlockingReason::kNotBlocked) {
-      // Source is blocked, add future to the list
-      sourceBlockingFutures_.push_back(std::move(sourceFuture));
+      blockingFutures.push_back(std::move(sourceFuture));
     } else if (data) {
-      // Got data from this source
       pendingData_[i] = std::move(data);
+    } else if (drained) {
+      sourcesDrained_[i] = true;
     } else {
-      // Source is finished
       sourcesFinished_[i] = true;
     }
   }
 
-  // If any source is blocked, return a blocking future
-  if (!sourceBlockingFutures_.empty()) {
-    *future = std::move(sourceBlockingFutures_.back());
-    sourceBlockingFutures_.pop_back();
+  if (!blockingFutures.empty()) {
+    *future = folly::collectAny(std::move(blockingFutures)).unit();
     return BlockingReason::kWaitForProducer;
   }
 
@@ -124,8 +121,75 @@ RowVectorPtr MixedUnion::getOutput() {
   return getOutputMixed();
 }
 
+bool MixedUnion::startDrain() {
+  VELOX_CHECK(isDraining());
+
+  // Note: We don't call source->drain() here because the producer's
+  // CallbackSink has already called it when it entered drain mode.
+  // We just need to check if there's pending data to drain and drain any
+  // remaining data from sources.
+
+  // Check if there's any pending data to drain.
+  for (size_t i = 0; i < pendingData_.size(); ++i) {
+    if (pendingData_[i]) {
+      return true;
+    }
+  }
+
+  // Check if any source still has data to drain (hasn't signaled drained yet).
+  for (size_t i = 0; i < sources_.size(); ++i) {
+    if (sourcesFinished_[i]) {
+      sourcesDrained_[i] = true;
+      continue;
+    }
+    if (!sourcesDrained_[i]) {
+      return true;
+    }
+  }
+
+  // No data to drain. Reset state for next barrier cycle.
+  std::fill(sourcesDrained_.begin(), sourcesDrained_.end(), false);
+
+  return false;
+}
+
+void MixedUnion::maybeFinishDrain() {
+  if (!isDraining()) {
+    return;
+  }
+
+  // Check if we have drained all pending data.
+  for (const auto& data : pendingData_) {
+    if (data != nullptr) {
+      return;
+    }
+  }
+
+  // Check if all sources have been drained.
+  for (size_t i = 0; i < sourcesDrained_.size(); ++i) {
+    if (sourcesFinished_[i]) {
+      sourcesDrained_[i] = true;
+      continue;
+    }
+    if (!sourcesDrained_[i]) {
+      return;
+    }
+  }
+
+  finishDrain();
+}
+
+void MixedUnion::finishDrain() {
+  VELOX_CHECK(isDraining());
+
+  // Reset drain state for next barrier.
+  std::fill(sourcesDrained_.begin(), sourcesDrained_.end(), false);
+
+  Operator::finishDrain();
+}
+
 RowVectorPtr MixedUnion::getOutputMixed() {
-  // Collect all available data from sources
+  // Drain pendingData_ populated by isBlocked() in both normal and drain modes.
   std::vector<RowVectorPtr> validInputs;
   for (size_t i = 0; i < pendingData_.size(); ++i) {
     if (pendingData_[i]) {
@@ -134,23 +198,41 @@ RowVectorPtr MixedUnion::getOutputMixed() {
     }
   }
 
-  // If we have no data, check if all sources are finished
-  if (validInputs.empty()) {
-    bool allFinished = true;
-    for (bool isFinished : sourcesFinished_) {
-      if (!isFinished) {
-        allFinished = false;
-        break;
-      }
+  if (!validInputs.empty()) {
+    auto result = combineResults(validInputs);
+    if (isDraining()) {
+      maybeFinishDrain();
     }
-    if (allFinished) {
-      finished_ = true;
-    }
+    return result;
+  }
+
+  // No pending data. Check termination conditions.
+  if (isDraining()) {
+    maybeFinishDrain();
     return nullptr;
   }
 
-  // Combine results from all sources
-  return combineResults(validInputs);
+  bool allFinished = true;
+  bool allDrained = true;
+  for (size_t i = 0; i < sources_.size(); ++i) {
+    if (!sourcesFinished_[i]) {
+      allFinished = false;
+    }
+    if (!sourcesFinished_[i] && !sourcesDrained_[i]) {
+      allDrained = false;
+    }
+  }
+
+  if (allFinished) {
+    finished_ = true;
+    return nullptr;
+  }
+
+  if (allDrained && operatorCtx_->driver()->hasBarrier()) {
+    operatorCtx_->driver()->drainOutput();
+  }
+
+  return nullptr;
 }
 
 RowVectorPtr MixedUnion::combineResults(std::vector<RowVectorPtr>& results) {
