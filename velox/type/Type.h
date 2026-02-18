@@ -828,13 +828,23 @@ class DecimalType : public ScalarType<KIND> {
   static constexpr uint8_t kMaxPrecision = KIND == TypeKind::BIGINT ? 18 : 38;
   static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 1 : 19;
 
-  inline bool equivalent(const Type& other) const override {
+  inline bool equals(const Type& other) const override {
     if (!Type::hasSameTypeId(other)) {
       return false;
     }
     const auto& otherDecimal = static_cast<const DecimalType<KIND>&>(other);
     return (
         otherDecimal.precision() == precision() &&
+        otherDecimal.scale() == scale());
+  }
+
+  inline bool equivalent(const Type& other) const override {
+    if (!Type::hasSameTypeId(other)) {
+      return false;
+    }
+    const auto& otherDecimal = static_cast<const DecimalType<KIND>&>(other);
+    return (
+        otherDecimal.precision() >= precision() &&
         otherDecimal.scale() == scale());
   }
 

@@ -845,6 +845,10 @@ TEST(TypeTest, equivalent) {
   EXPECT_TRUE(DECIMAL(30, 5)->equivalent(*DECIMAL(30, 5)));
   EXPECT_FALSE(DECIMAL(30, 6)->equivalent(*DECIMAL(30, 5)));
   EXPECT_FALSE(DECIMAL(31, 5)->equivalent(*DECIMAL(30, 5)));
+  EXPECT_TRUE(DECIMAL(4, 2)->equivalent(*DECIMAL(10, 2)));
+  EXPECT_FALSE(DECIMAL(10, 2)->equivalent(*DECIMAL(4, 2)));
+  EXPECT_FALSE(DECIMAL(18, 2)->equivalent(*DECIMAL(30, 2)));
+  EXPECT_FALSE(DECIMAL(30, 2)->equivalent(*DECIMAL(18, 2)));
   auto complexTypeA = ROW(
       {{"a0", ARRAY(ROW({{"a1", DECIMAL(20, 8)}}))},
        {"a2", MAP(VARCHAR(), ROW({{"a3", DECIMAL(10, 5)}}))}});
@@ -862,6 +866,20 @@ TEST(TypeTest, equivalent) {
       {{"b0", ARRAY(ROW({{"b1", DECIMAL(20, 8)}}))},
        {"b2", MAP(VARCHAR(), ROW({{"b3", DECIMAL(20, 5)}}))}});
   EXPECT_FALSE(complexTypeA->equivalent(*complexTypeB));
+}
+
+TEST(TypeTest, decimalEquals) {
+  EXPECT_TRUE(*DECIMAL(10, 5) == *DECIMAL(10, 5));
+  EXPECT_FALSE(*DECIMAL(10, 6) == *DECIMAL(10, 5));
+  EXPECT_FALSE(*DECIMAL(11, 5) == *DECIMAL(10, 5));
+  EXPECT_TRUE(*DECIMAL(30, 5) == *DECIMAL(30, 5));
+  EXPECT_FALSE(*DECIMAL(30, 6) == *DECIMAL(30, 5));
+  EXPECT_FALSE(*DECIMAL(31, 5) == *DECIMAL(30, 5));
+  // Both precision and scale need to match unlike equivalent()
+  EXPECT_FALSE(*DECIMAL(4, 2) == *DECIMAL(10, 2));
+  EXPECT_FALSE(*DECIMAL(10, 2) == *DECIMAL(4, 2));
+  EXPECT_FALSE(*DECIMAL(30, 2) == *DECIMAL(18, 2));
+  EXPECT_FALSE(*DECIMAL(18, 2) == *DECIMAL(30, 2));
 }
 
 TEST(TypeTest, kindEquals) {

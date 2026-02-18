@@ -146,7 +146,7 @@ VectorPtr VectorTestBase::asArray(VectorPtr elements) {
 
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {
   ASSERT_EQ(expected->size(), actual->size());
-  ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
+  ASSERT_TRUE(actual->type()->equivalent(*expected->type()))
       << "Expected " << expected->type()->toString() << ", but got "
       << actual->type()->toString();
   for (auto i = 0; i < expected->size(); i++) {
