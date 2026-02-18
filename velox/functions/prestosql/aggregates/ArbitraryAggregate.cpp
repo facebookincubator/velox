@@ -290,7 +290,9 @@ class NonNumericArbitrary : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       const folly::Range<const vector_size_t*>& groupBoundaries) override {
     VELOX_CHECK(clusteredInput_);
-    decoded_.decode(*args[0]);
+    // Since we're going through the process of decoding anyway, store the base
+    // so that downstream operators don't need to.
+    const auto base = decoded_.decodeAndGetBase(args[0]);
     vector_size_t groupStart = 0;
     auto forEachEmptyAccumulator = [&](auto func) {
       for (auto groupEnd : groupBoundaries) {
@@ -306,15 +308,15 @@ class NonNumericArbitrary : public exec::Aggregate {
     };
     if (rows.isAllSelected() && !decoded_.mayHaveNulls()) {
       forEachEmptyAccumulator([&](auto /*groupEnd*/, auto* accumulator) {
-        accumulator->vector = args[0];
-        accumulator->index = groupStart;
+        accumulator->vector = base;
+        accumulator->index = decoded_.index(groupStart);
       });
     } else {
       forEachEmptyAccumulator([&](auto groupEnd, auto* accumulator) {
         for (auto i = groupStart; i < groupEnd; ++i) {
           if (rows.isValid(i) && !decoded_.isNullAt(i)) {
-            accumulator->vector = args[0];
-            accumulator->index = i;
+            accumulator->vector = base;
+            accumulator->index = decoded_.index(i);
             break;
           }
         }
