@@ -382,6 +382,23 @@ TEST_F(StringImplTest, cappedUnicodeBytes) {
   ASSERT_EQ("♫¡Singing is fun!", stringInput.substr(0, exPos));
   ASSERT_EQ("Singing is fun!", stringInput.substr(sPos, exPos - sPos));
 
+  // Ensure the remainder loop handles a continuation byte at the block
+  // boundary. Place a UTF-8 lead byte (0xC2) as the last byte of a SIMD block
+  // and its continuation byte (0xA2) in the remainder. The string layout is:
+  // (batchSize - 1) ASCII 'a' bytes, then a 2-byte UTF-8 character, then 'b'.
+  // With maxChars set to include the trailing 'b', the expected byte length
+  // must account for both bytes of the UTF-8 character.
+  const int32_t batchSize = xsimd::batch<uint8_t>::size;
+  stringInput = std::string(batchSize - 1, 'a');
+  stringInput.push_back(static_cast<char>(0xC2));
+  stringInput.push_back(static_cast<char>(0xA2));
+  stringInput.push_back('b');
+  const int64_t boundaryMaxChars = static_cast<int64_t>(batchSize) + 1;
+  const int64_t boundaryExpectedBytes = static_cast<int64_t>(batchSize) + 2;
+  ASSERT_EQ(
+      cappedByteLength<false>(stringInput, boundaryMaxChars),
+      boundaryExpectedBytes);
+
   stringInput = std::string("abcd");
   auto stringViewInput = std::string_view(stringInput);
   ASSERT_EQ(cappedByteLength<true>(stringInput, 1), 1);
