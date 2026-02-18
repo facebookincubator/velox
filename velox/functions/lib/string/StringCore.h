@@ -335,6 +335,31 @@ FOLLY_ALWAYS_INLINE int64_t
 cappedByteLengthUnicode(const char* input, int64_t size, int64_t maxChars) {
   int64_t utf8Position = 0;
   int64_t numCharacters = 0;
+
+  // SIMD fast path for leading ASCII segments.
+  // Instead of calling utf8proc_char_length per byte, use SIMD to check a
+  // register-width block at a time. If all bytes have their high bit clear (<
+  // 0x80), they are guaranteed ASCII characters, so we skip the entire block.
+  // On encountering any non-ASCII byte, break out to the standard utf8proc loop
+  // which handles multi-byte and invalid sequences.
+  const auto kMask = xsimd::broadcast<uint8_t>(0x80);
+  while (utf8Position + static_cast<int64_t>(kMask.size) <= size &&
+         numCharacters + static_cast<int64_t>(kMask.size) <= maxChars) {
+    auto batch = xsimd::load_unaligned(
+        reinterpret_cast<const uint8_t*>(input + utf8Position));
+    if (xsimd::any(batch >= kMask)) {
+      break;
+    }
+    utf8Position += kMask.size;
+    numCharacters += kMask.size;
+  }
+
+  // Standard UTF-8 path for the remainder.
+  // Use utf8proc to determine the byte length of each character.
+  // For valid multi-byte sequences (2-4 bytes), charSize will be the
+  // sequence length. For invalid bytes, utf8proc_char_length returns
+  // a negative value, in which case we skip 1 byte and still count
+  // it as one character to maintain consistent behavior.
   while (utf8Position < size && numCharacters < maxChars) {
     auto charSize = utf8proc_char_length(input + utf8Position);
     utf8Position += UNLIKELY(charSize < 0) ? 1 : charSize;
