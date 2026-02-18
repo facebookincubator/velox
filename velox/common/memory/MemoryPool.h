@@ -783,8 +783,7 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
   FOLLY_ALWAYS_INLINE int64_t sizeAlign(int64_t size) const {
-    const auto remainder = size & (alignment_ - 1);
-    return (remainder == 0) ? size : (size + alignment_ - remainder);
+    return (size + alignment_ - 1) & ~(alignment_ - 1);
   }
 
   // Returns a rounded up delta based on adding 'delta' to 'size'. Adding the
