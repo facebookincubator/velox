@@ -17,14 +17,12 @@
 #include "velox/expression/CastExpr.h"
 
 #include <fmt/format.h>
-#include <stdexcept>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/PrestoCastHooks.h"
+#include "velox/expression/PrestoCastKernel.h"
 #include "velox/expression/ScopedVarSetter.h"
-#include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -48,171 +46,6 @@ const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
 }
 
 } // namespace
-
-VectorPtr CastExpr::castFromDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int32_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output = DATE()->toString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      static const int64_t kMillisPerDay{86'400'000};
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timestamp = Timestamp::fromMillis(
-            inputFlatVector->valueAt(row) * kMillisPerDay);
-        if (timeZone) {
-          timestamp.toGMT(*timeZone);
-        }
-        resultFlatVector->set(row, timestamp);
-      });
-
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from DATE to {} is not supported", toType->toString());
-  }
-}
-
-VectorPtr CastExpr::castToDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& fromType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, DATE(), castResult);
-  (*castResult).clearNulls(rows);
-  auto* resultFlatVector = castResult->as<FlatVector<int32_t>>();
-  switch (fromType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* inputVector = input.as<SimpleVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        bool wrapException = true;
-        try {
-          const auto result =
-              hooks_->castStringToDate(inputVector->valueAt(row));
-          if (result.hasError()) {
-            wrapException = false;
-            if (setNullInResultAtError()) {
-              resultFlatVector->setNull(row, true);
-            } else {
-              if (context.captureErrorDetails()) {
-                context.setStatus(
-                    row,
-                    Status::UserError(
-                        "{} {}",
-                        makeErrorMessage(input, row, DATE()),
-                        result.error().message()));
-              } else {
-                context.setStatus(row, Status::UserError());
-              }
-            }
-          } else {
-            resultFlatVector->set(row, result.value());
-          }
-        } catch (const VeloxUserError& ue) {
-          if (!wrapException) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, DATE()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, DATE()) + " " + e.what());
-        }
-      });
-
-      return castResult;
-    }
-    case TypeKind::TIMESTAMP: {
-      auto* inputVector = input.as<SimpleVector<Timestamp>>();
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        const auto days = util::toDate(inputVector->valueAt(row), timeZone);
-        resultFlatVector->set(row, days);
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to DATE is not supported", fromType->toString());
-  }
-}
-
-VectorPtr CastExpr::castFromIntervalDayTime(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const TypePtr& toType) {
-  VectorPtr castResult;
-  context.ensureWritable(rows, toType, castResult);
-  (*castResult).clearNulls(rows);
-
-  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
-  switch (toType->kind()) {
-    case TypeKind::VARCHAR: {
-      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          // TODO Optimize to avoid creating an intermediate string.
-          auto output =
-              INTERVAL_DAY_TIME()->valueToString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter(resultFlatVector, row);
-          writer.resize(output.size());
-          ::memcpy(writer.data(), output.data(), output.size());
-          writer.finalize();
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
-      });
-      return castResult;
-    }
-    default:
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          INTERVAL_DAY_TIME()->toString(),
-          toType->toString());
-  }
-}
 
 VectorPtr CastExpr::castFromTime(
     const SelectivityVector& rows,
@@ -833,16 +666,17 @@ void CastExpr::applyPeeled(
       applyCustomCast();
     }
   } else if (fromType->isDate()) {
-    result = castFromDate(rows, input, context, toType);
+    result = kernel_->castFromDate(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isDate()) {
-    result = castToDate(rows, input, context, fromType);
+    result =
+        kernel_->castToDate(rows, input, context, setNullInResultAtError());
   } else if (fromType->isIntervalDayTime()) {
-    result = castFromIntervalDayTime(rows, input, context, toType);
+    result = kernel_->castFromIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (toType->isIntervalDayTime()) {
-    VELOX_UNSUPPORTED(
-        "Cast from {} to {} is not supported",
-        fromType->toString(),
-        toType->toString());
+    result = kernel_->castToIntervalDayTime(
+        rows, input, context, toType, setNullInResultAtError());
   } else if (fromType->isTime()) {
     result = castFromTime(rows, input, context, toType);
   } else if (toType->isTime()) {
@@ -1166,7 +1000,8 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       false,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastHooks>(config),
+      std::make_shared<PrestoCastKernel>(config));
 }
 
 TypePtr TryCastCallToSpecialForm::resolveType(
@@ -1189,6 +1024,7 @@ ExprPtr TryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<PrestoCastHooks>(config));
+      std::make_shared<PrestoCastHooks>(config),
+      std::make_shared<PrestoCastKernel>(config));
 }
 } // namespace facebook::velox::exec
