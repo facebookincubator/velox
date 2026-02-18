@@ -210,16 +210,8 @@ class QueueSplitsStore : public SplitsStore {
       split = getSplit(maxPreloadSplits, preload);
       return true;
     }
-    if (driverId.has_value()) {
-      // Delivers a barrier exactly once for each driver from the same plan
-      // node.
-      if (barrierSplits_.contains(driverId.value())) {
-        split = barrierSplits_[driverId.value()];
-        barrierSplits_.erase(driverId.value());
-        return true;
-      }
-    } else {
-      barrierSplits_.clear();
+    if (tryGetBarrier(driverId, split)) {
+      return true;
     }
     if (noMoreSplits_) {
       return true;
@@ -2574,7 +2566,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
             const auto hasNextSplit = store->nextSplit(
-                /*driverId=*/0,
+                /*driverId=*/std::nullopt,
                 /*maxPreloadSplits=*/0,
                 /*preload=*/nullptr,
                 splits.emplace_back(),

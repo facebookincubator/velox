@@ -153,6 +153,8 @@ class SplitsStore {
 
   ContinueFuture makeFuture();
 
+  bool tryGetBarrier(std::optional<uint32_t> driverId, Split& split);
+
   const bool remoteSplit_;
   TaskStats* taskStats_{};
   folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>*
