@@ -945,13 +945,13 @@ TEST_P(UnnestTest, spiltOutput) {
 
   struct {
     bool produceSingleOutput;
-    int expectedNumOutputExectors;
+    int expectedNumOutputVectors;
 
     std::string toString() const {
       return fmt::format(
-          "produceSingleOutput {}, expectedNumOutputExectors {}",
+          "produceSingleOutput {}, expectedNumOutputVectors {}",
           produceSingleOutput,
-          expectedNumOutputExectors);
+          expectedNumOutputVectors);
     }
   } testSettings[] = {
       {true, numBatches},
@@ -969,7 +969,7 @@ TEST_P(UnnestTest, spiltOutput) {
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
-        testData.expectedNumOutputExectors);
+        testData.expectedNumOutputVectors);
   }
 }
 
