@@ -356,7 +356,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Reset the CudfHiveConnector config to use the experimental reader
+  // Reset the CudfHiveConnector config to use the experimental cudf reader
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseExperimentalCudfReader,
