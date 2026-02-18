@@ -839,9 +839,9 @@ TEST(VariantTest, arrayComparisonWithNullElements) {
     return Variant::array(arrayElements);
   };
 
-  auto a = makeArray({1, std::nullopt});
-  auto b = makeArray({1, std::nullopt});
-  auto c = makeArray({2, std::nullopt});
+  auto a = makeArray({std::nullopt, 1});
+  auto b = makeArray({std::nullopt, 1});
+  auto c = makeArray({std::nullopt, 2});
 
   // Both are non-null arrays with null elements inside.
   // With kNullAsValue, they should be equal if all elements match.
@@ -906,6 +906,47 @@ TEST(VariantTest, rowComparisonWithNullElements) {
   // With kNullAsIndeterminate, null elements make the comparison indeterminate.
   result = d.equals(e, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   ASSERT_FALSE(result.has_value());
+}
+
+TEST(VariantTest, mapComparisonWithNullElements) {
+  auto makeMap =
+      [](const std::vector<std::pair<int32_t, std::optional<int32_t>>>&
+             entries) {
+        std::map<Variant, Variant> m;
+        for (const auto& e : entries) {
+          if (e.second.has_value()) {
+            m.emplace(Variant(e.first), Variant(e.second.value()));
+          } else {
+            m.emplace(Variant(e.first), Variant::null(TypeKind::INTEGER));
+          }
+        }
+        return Variant::map(m);
+      };
+
+  auto a = makeMap({{1, std::nullopt}, {2, 3}});
+  auto b = makeMap({{1, std::nullopt}, {2, 3}});
+  auto c = makeMap({{1, std::nullopt}, {2, 4}});
+
+  // Both are non-null maps with null values inside.
+  // With kNullAsValue, they should be equal if all keys and values match.
+  auto result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
+
+  // With kNullAsIndeterminate, null elements make the comparison
+  // indeterminate when keys/values are otherwise identical.
+  result = a.equals(b, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_FALSE(result.has_value());
+
+  // Maps with different values for a given key (after a null) should be a
+  // definitive mismatch under both null handling modes.
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsValue);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
+
+  result = a.equals(c, CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result.value());
 }
 
 TEST(VariantTest, mapWithNaNKey) {

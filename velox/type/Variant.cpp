@@ -81,13 +81,21 @@ struct VariantEquality<TypeKind::ARRAY> {
     if (aArray.size() != bArray.size()) {
       return false;
     }
+    bool isComparisonIndeterminate = false;
     for (size_t i = 0; i != aArray.size(); ++i) {
       // todo(youknowjack): switch outside the loop
       auto compareResult = dispatchDynamicVariantEquality(
           aArray[i], bArray[i], nullHandlingMode);
-      if (!compareResult.value_or(false)) {
-        return compareResult;
+      if (compareResult.has_value()) {
+        if (!compareResult.value()) {
+          return false;
+        }
+      } else {
+        isComparisonIndeterminate = true;
       }
+    }
+    if (isComparisonIndeterminate) {
+      return std::nullopt;
     }
     return true;
   }
@@ -108,12 +116,20 @@ struct VariantEquality<TypeKind::ROW> {
       return false;
     }
     // compare array values
+    bool isComparisonIndeterminate = false;
     for (size_t i = 0; i != aRow.size(); ++i) {
       auto compareResult =
           dispatchDynamicVariantEquality(aRow[i], bRow[i], nullHandlingMode);
-      if (!compareResult.value_or(false)) {
-        return compareResult;
+      if (compareResult.has_value()) {
+        if (!compareResult.value()) {
+          return false;
+        }
+      } else {
+        isComparisonIndeterminate = true;
       }
+    }
+    if (isComparisonIndeterminate) {
+      return std::nullopt;
     }
     return true;
   }
@@ -134,20 +150,32 @@ struct VariantEquality<TypeKind::MAP> {
       return false;
     }
     // compare map values
+    bool isComparisonIndeterminate = false;
     for (auto it_a = aMap.begin(), it_b = bMap.begin();
          it_a != aMap.end() && it_b != bMap.end();
          ++it_a, ++it_b) {
       auto keysCompareResult = dispatchDynamicVariantEquality(
           it_a->first, it_b->first, nullHandlingMode);
-      if (!keysCompareResult.value_or(false)) {
-        return keysCompareResult;
+      if (keysCompareResult.has_value()) {
+        if (!keysCompareResult.value()) {
+          return false;
+        }
+      } else {
+        isComparisonIndeterminate = true;
       }
 
       auto valuesCompareResult = dispatchDynamicVariantEquality(
           it_a->second, it_b->second, nullHandlingMode);
-      if (!valuesCompareResult.value_or(false)) {
-        return valuesCompareResult;
+      if (valuesCompareResult.has_value()) {
+        if (!valuesCompareResult.value()) {
+          return false;
+        }
+      } else {
+        isComparisonIndeterminate = true;
       }
+    }
+    if (isComparisonIndeterminate) {
+      return std::nullopt;
     }
     return true;
   }

@@ -618,8 +618,10 @@ class Variant {
 
   struct NullEqualsNullsComparator {
     bool operator()(const Variant& a, const Variant& b) const {
-      return a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue)
-          .value_or(false);
+      auto compareResult =
+          a.equals(b, CompareFlags::NullHandlingMode::kNullAsValue);
+      VELOX_CHECK(compareResult.has_value());
+      return compareResult.value();
     }
   };
 
