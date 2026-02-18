@@ -415,15 +415,17 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   if (hooks_->truncate()) {
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-      resultBuffer[row] =
-          static_cast<To>(simpleInput->valueAt(row) / scaleFactor);
+      auto value = simpleInput->valueAt(row);
+      auto integralPart =
+          DecimalUtil::getDecimalParts(value, precisionScale.second).first;
+      resultBuffer[row] = static_cast<To>(integralPart);
     });
   } else {
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       auto value = simpleInput->valueAt(row);
-      auto integralPart = value / scaleFactor;
+      auto [integralPart, fractionPart] =
+          DecimalUtil::getDecimalParts(value, precisionScale.second);
       if (hooks_->getPolicy() != SparkTryCastPolicy) {
-        auto fractionPart = value % scaleFactor;
         auto sign = value >= 0 ? 1 : -1;
         bool needsRoundUp =
             (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
