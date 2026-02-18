@@ -898,8 +898,7 @@ void Driver::startBarrier() {
   VELOX_CHECK(ctx_->task->underBarrier());
   VELOX_CHECK(
       !hasBarrier(), "The driver has already started barrier processing");
-  barrier_.reset();
-  hasBarrier_.store(true, std::memory_order_release);
+  barrier_.start();
 }
 
 void Driver::drainOutput() {
@@ -965,7 +964,14 @@ bool Driver::shouldDropOutput(int32_t operatorId) const {
       operatorId < dropOpId;
 }
 
+void Driver::BarrierState::start() {
+  VELOX_CHECK(!active.load(std::memory_order_acquire));
+  active.store(true, std::memory_order_release);
+}
+
 void Driver::BarrierState::reset() {
+  VELOX_CHECK(active.load(std::memory_order_acquire));
+  active.store(false, std::memory_order_release);
   drainingOpId = std::nullopt;
   dropInputOpId.store(kNoDropInput, std::memory_order_relaxed);
 }
@@ -973,7 +979,6 @@ void Driver::BarrierState::reset() {
 void Driver::finishBarrier() {
   VELOX_CHECK(isDraining());
   VELOX_CHECK_EQ(barrier_.drainingOpId.value(), operators_.size());
-  hasBarrier_.store(false, std::memory_order_release);
   barrier_.reset();
   ctx_->task->finishDriverBarrier();
 }

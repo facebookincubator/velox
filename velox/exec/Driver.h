@@ -497,7 +497,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Returns true if the driver is under barrier processing.
   bool hasBarrier() const {
-    return hasBarrier_.load(std::memory_order_acquire);
+    return barrier_.active.load(std::memory_order_acquire);
   }
 
   /// Invoked to start draining the output of this driver pipeline from the
@@ -597,6 +597,9 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Defines the driver barrier processing state.
   struct BarrierState {
+    // True if the driver is under barrier processing. This is set by
+    // startBarrier() and read by hasBarrier() from different threads.
+    std::atomic_bool active{false};
     // If set, the driver has started output draining. It points to the operator
     // that is currently draining output.
     std::optional<int32_t> drainingOpId{std::nullopt};
@@ -609,6 +612,11 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
     BarrierState() = default;
 
+    /// Starts the barrier processing. Must be called when the barrier is not
+    /// active.
+    void start();
+
+    /// Resets the barrier state. Must be called when the barrier is active.
     void reset();
   };
 
@@ -670,10 +678,6 @@ class Driver : public std::enable_shared_from_this<Driver> {
   bool operatorsInitialized_{false};
 
   std::atomic_bool closed_{false};
-
-  // Set to true if the driver is under a barrier processing. This is set by
-  // startBarrier() and read by hasBarrier() from different threads.
-  std::atomic_bool hasBarrier_{false};
 
   // The driver barrier processing state.
   BarrierState barrier_;
