@@ -17,6 +17,7 @@
 #pragma once
 
 #include <google/protobuf/arena.h>
+#include <google/protobuf/stubs/common.h>
 
 namespace facebook::velox::dwio::common {
 
@@ -24,7 +25,7 @@ namespace facebook::velox::dwio::common {
 /// CreateMessage() to Create() in newer protobuf versions.
 template <class T, class... Args>
 T* ArenaCreate(google::protobuf::Arena* arena, Args&&... args) {
-#if PROTOBUF_VERSION >= 5030000
+#if GOOGLE_PROTOBUF_VERSION >= 5030000
   return google::protobuf::Arena::Create<T>(arena, std::forward<Args>(args)...);
 #else
   return google::protobuf::Arena::CreateMessage<T>(

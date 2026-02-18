@@ -44,6 +44,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "hamming_distance"});
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
+  registerFunction<JaroWinklerSimilarityFunction, double, Varchar, Varchar>(
+      {prefix + "jarowinkler_similarity"});
   registerFunction<LongestCommonPrefixFunction, Varchar, Varchar, Varchar>(
       {prefix + "longest_common_prefix"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
@@ -245,5 +247,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<WordStemFunction, Varchar, Varchar>({prefix + "word_stem"});
   registerFunction<WordStemFunction, Varchar, Varchar, Varchar>(
       {prefix + "word_stem"});
+
+  registerFunction<KeySamplingPercentFunction, double, Varchar>(
+      {prefix + "key_sampling_percent"});
 }
 } // namespace facebook::velox::functions

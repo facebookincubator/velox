@@ -39,7 +39,9 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
@@ -208,7 +210,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown() ||
+  if (type->isDate() || type->isIntervalDayTime() || type->isUnknown() ||
       isGeometryType(type)) {
     return false;
   }
@@ -322,8 +324,10 @@ bool PrestoQueryRunner::isConstantExprSupported(
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
         !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
-        !isTDigestType(type) && !isQDigestType(type) && !isBingTileType(type) &&
-        !isSfmSketchType(type) && !isTimeWithTimeZone(type);
+        !isKHyperLogLogType(type) && !isTDigestType(type) &&
+        !isQDigestType(type) && !isSetDigestType(type) &&
+        !isBingTileType(type) && !isSfmSketchType(type) &&
+        !isTimeWithTimeZone(type);
   }
   return true;
 }
@@ -400,9 +404,10 @@ std::string PrestoQueryRunner::createTable(
 
   // Query Presto to find out table's location on disk.
   auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
-
   auto filePath = extractSingleValue<StringView>(results);
-  auto tableDirectoryPath = fs::path(filePath).parent_path();
+
+  // TODO: Remove explicit std::string_view cast.
+  auto tableDirectoryPath = fs::path(std::string_view(filePath)).parent_path();
 
   // Delete the all-null row.
   execute(fmt::format("DELETE FROM {}", name));

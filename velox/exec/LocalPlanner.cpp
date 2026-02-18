@@ -18,6 +18,7 @@
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
+#include "velox/exec/EnforceDistinct.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/Expand.h"
@@ -31,6 +32,7 @@
 #include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/MixedUnion.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OperatorTraceScan.h"
@@ -43,6 +45,7 @@
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/SpatialJoinProbe.h"
 #include "velox/exec/StreamingAggregation.h"
+#include "velox/exec/StreamingEnforceDistinct.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TableWriteMerge.h"
 #include "velox/exec/TableWriter.h"
@@ -81,6 +84,11 @@ bool mustStartNewPipeline(
   if (auto localMerge =
           std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
     // LocalMerge's source runs on its own pipeline.
+    return true;
+  }
+
+  if (std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+    // MixedUnion's sources run on their own pipelines.
     return true;
   }
 
@@ -128,6 +136,28 @@ OperatorSupplier makeOperatorSupplier(
           localMerge->id(),
           localMerge->outputType(),
           ctx->queryConfig().localMergeSourceQueueSize());
+      auto consumerCb =
+          [mergeSource](
+              RowVectorPtr input, bool drained, ContinueFuture* future) {
+            VELOX_CHECK(!drained);
+            return mergeSource->enqueue(std::move(input), future);
+          };
+      auto startCb = [mergeSource](ContinueFuture* future) {
+        return mergeSource->started(future);
+      };
+      return std::make_unique<CallbackSink>(
+          operatorId, ctx, std::move(consumerCb), std::move(startCb));
+    };
+  }
+
+  if (auto mixedUnion =
+          std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+    return [mixedUnion](int32_t operatorId, DriverCtx* ctx) {
+      auto mergeSource = ctx->task->addLocalMergeSource(
+          ctx->splitGroupId,
+          mixedUnion->id(),
+          mixedUnion->outputType(),
+          static_cast<int>(ctx->queryConfig().localMergeSourceQueueSize()));
       auto consumerCb =
           [mergeSource](
               RowVectorPtr input, bool drained, ContinueFuture* future) {
@@ -203,7 +233,15 @@ OperatorSupplier makeOperatorSupplier(
               return source->enqueue(std::move(input), future);
             }
           };
-      return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
+      // NOTE: Pass planNodeId to associate CallbackSink with the MergeJoin
+      // node for proper operator identification and input collection.
+      // Operator::maybeSetTracer() uses this to enable tracing.
+      return std::make_unique<CallbackSink>(
+          operatorId,
+          ctx,
+          consumer,
+          nullptr,
+          ctx->queryConfig().queryTraceEnabled() ? planNodeId : "N/A");
     };
   }
 
@@ -303,6 +341,9 @@ uint32_t maxDrivers(
       }
     } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
       // Local merge must run single-threaded.
+      return 1;
+    } else if (std::dynamic_pointer_cast<const core::MixedUnionNode>(node)) {
+      // Mixed union must run single-threaded.
       return 1;
     } else if (std::dynamic_pointer_cast<const core::MergeExchangeNode>(node)) {
       // Merge exchange must run single-threaded.
@@ -644,11 +685,30 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(
           std::make_unique<MarkDistinct>(id, ctx.get(), markDistinctNode));
     } else if (
+        auto enforceDistinctNode =
+            std::dynamic_pointer_cast<const core::EnforceDistinctNode>(
+                planNode)) {
+      if (enforceDistinctNode->isPreGrouped()) {
+        operators.push_back(
+            std::make_unique<StreamingEnforceDistinct>(
+                id, ctx.get(), enforceDistinctNode));
+      } else {
+        operators.push_back(
+            std::make_unique<EnforceDistinct>(
+                id, ctx.get(), enforceDistinctNode));
+      }
+    } else if (
         auto localMerge =
             std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
       auto localMergeOp =
           std::make_unique<LocalMerge>(id, ctx.get(), localMerge);
       operators.push_back(std::move(localMergeOp));
+    } else if (
+        auto mixedUnion =
+            std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+      auto mixedUnionOp =
+          std::make_unique<MixedUnion>(id, ctx.get(), mixedUnion);
+      operators.push_back(std::move(mixedUnionOp));
     } else if (
         auto mergeJoin =
             std::dynamic_pointer_cast<const core::MergeJoinNode>(planNode)) {
@@ -740,7 +800,7 @@ std::vector<std::unique_ptr<Operator>> DriverFactory::replaceOperators(
   }
 
   driver.operators_.erase(
-      driver.operators_.begin() + begin, driver.operators_.begin() + end);
+      driver.operators_.cbegin() + begin, driver.operators_.cbegin() + end);
 
   // Insert the replacement at the place of the erase. Do manually because
   // insert() is not good with unique pointers.

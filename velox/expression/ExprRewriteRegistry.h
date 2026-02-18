@@ -38,6 +38,8 @@ class ExprRewriteRegistry {
   /// Clears the registry to remove all registered rewrites.
   void clear();
 
+  /// Rewrites input expression to an equivalent expression. Throws if the
+  /// expression only has constant inputs.
   core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
 
   static ExprRewriteRegistry& instance() {

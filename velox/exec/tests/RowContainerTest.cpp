@@ -108,7 +108,8 @@ class RowContainerTestHelper {
   RowContainer* const rowContainer_;
 };
 
-class RowContainerTest : public exec::test::RowContainerTestBase {
+class RowContainerTest : public exec::test::RowContainerTestBase,
+                         public testing::WithParamInterface<bool> {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -344,7 +345,9 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       sum += data.rowSize(row) - data.fixedRowSize();
     }
     auto usage = data.stringAllocator().currentBytes();
-    EXPECT_EQ(usage, sum);
+    if (data.testingRowPointers().empty()) {
+      EXPECT_EQ(usage, sum);
+    }
   }
 
   std::vector<char*> store(
@@ -832,8 +835,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
         kNumRows, rawValues, rawExpected);
     // Remove nulls in data because keys cannot be null.
     auto numNulls = countLeadingNulls(rawValues);
-    rawValues.erase(rawValues.begin(), rawValues.begin() + numNulls);
-    rawExpected.erase(rawExpected.begin(), rawExpected.begin() + numNulls);
+    rawValues.erase(rawValues.cbegin(), rawValues.cbegin() + numNulls);
+    rawExpected.erase(rawExpected.cbegin(), rawExpected.cbegin() + numNulls);
     std::optional<int32_t> second = 0;
     for (auto value : rawValues) {
       std::vector<std::pair<T, std::optional<int32_t>>> temp{
@@ -936,7 +939,7 @@ static int32_t sign(int32_t n) {
 }
 } // namespace
 
-TEST_F(RowContainerTest, extractWithNullsAndTargetOffset) {
+TEST_P(RowContainerTest, extractWithNullsAndTargetOffset) {
   constexpr int32_t kNumRows = 100;
   // The second column must have no nulls in the first batch.
   auto rowVector1 = makeRowVector({
@@ -962,8 +965,8 @@ TEST_F(RowContainerTest, extractWithNullsAndTargetOffset) {
   // Create and fill up two row containers from two row vectors.
   std::vector<TypePtr> vecTypes = {BOOLEAN(), VARCHAR(), TINYINT()};
   RowTypePtr rowType = VectorMaker::rowType({BOOLEAN(), VARCHAR(), TINYINT()});
-  auto data1 = makeRowContainer({}, vecTypes);
-  auto data2 = makeRowContainer({}, vecTypes);
+  auto data1 = makeRowContainer({}, vecTypes, true, GetParam());
+  auto data2 = makeRowContainer({}, vecTypes, true, GetParam());
   for (auto i = 0; i < kNumRows; i++) {
     data1->newRow();
     data2->newRow();
@@ -1046,7 +1049,7 @@ TEST_F(RowContainerTest, storeExtractArrayOfVarchar) {
   roundTrip(input);
 }
 
-TEST_F(RowContainerTest, types) {
+TEST_P(RowContainerTest, types) {
   constexpr int32_t kNumRows = 100;
   auto batch = makeDataset(
       ROW(
@@ -1106,7 +1109,7 @@ TEST_F(RowContainerTest, types) {
   std::vector<TypePtr> dependents;
   dependents.insert(
       dependents.begin(), types.begin() + types.size() / 2, types.end());
-  auto data = makeRowContainer(keys, dependents);
+  auto data = makeRowContainer(keys, dependents, true, GetParam());
 
   EXPECT_GT(data->nextOffset(), 0);
   EXPECT_GT(data->probedFlagOffset(), 0);
@@ -1218,7 +1221,7 @@ TEST_F(RowContainerTest, types) {
   EXPECT_LT(0, free.second);
 }
 
-TEST_F(RowContainerTest, extractNulls) {
+TEST_P(RowContainerTest, extractNulls) {
   constexpr int32_t kNumRows = 100;
   auto batch = makeRowVector({
       makeFlatVector<bool>(
@@ -1269,7 +1272,7 @@ TEST_F(RowContainerTest, extractNulls) {
       ARRAY(INTEGER()),
       MAP(INTEGER(), INTEGER()),
       ROW({INTEGER(), INTEGER()})};
-  auto data = makeRowContainer({}, rowType);
+  auto data = makeRowContainer({}, rowType, true, GetParam());
   for (int i = 0; i < kNumRows; i++) {
     data->newRow();
   }
@@ -1350,11 +1353,11 @@ TEST_F(RowContainerTest, erase) {
   RowContainerTestHelper(data.get()).checkConsistency();
 }
 
-TEST_F(RowContainerTest, initialNulls) {
+TEST_P(RowContainerTest, initialNulls) {
   std::vector<TypePtr> keys{INTEGER()};
   std::vector<TypePtr> dependent{INTEGER()};
   // Join build.
-  auto data = makeRowContainer(keys, dependent, true);
+  auto data = makeRowContainer(keys, dependent, true, GetParam());
   auto row = data->newRow();
   auto isNullAt = [](const RowContainer& data, const char* row, int32_t i) {
     auto column = data.columnAt(i);
@@ -1364,7 +1367,7 @@ TEST_F(RowContainerTest, initialNulls) {
   EXPECT_FALSE(isNullAt(*data, row, 0));
   EXPECT_FALSE(isNullAt(*data, row, 1));
   // Non-join build.
-  data = makeRowContainer(keys, dependent, false);
+  data = makeRowContainer(keys, dependent, false, GetParam());
   row = data->newRow();
   EXPECT_FALSE(isNullAt(*data, row, 0));
   EXPECT_FALSE(isNullAt(*data, row, 1));
@@ -1372,7 +1375,7 @@ TEST_F(RowContainerTest, initialNulls) {
 
 TEST_F(RowContainerTest, rowSize) {
   constexpr int32_t kNumRows = 100;
-  auto data = makeRowContainer({SMALLINT()}, {VARCHAR()});
+  auto data = makeRowContainer({SMALLINT()}, {VARCHAR()}, true);
 
   // The layout is expected to be smallint - 6 bytes of padding - 1 byte of bits
   // - StringView - rowSize - next pointer. The bits are a null flag for the
@@ -1408,10 +1411,10 @@ TEST_F(RowContainerTest, rowSize) {
   EXPECT_EQ(rows, rowsFromContainer);
 }
 
-TEST_F(RowContainerTest, columnSize) {
+TEST_P(RowContainerTest, columnSize) {
   const uint64_t kNumRows = 1000;
-  auto rowContainer =
-      makeRowContainer({BIGINT(), VARCHAR()}, {BIGINT(), VARCHAR()});
+  auto rowContainer = makeRowContainer(
+      {BIGINT(), VARCHAR()}, {BIGINT(), VARCHAR()}, true, GetParam());
 
   VectorFuzzer fuzzer(
       {
@@ -1455,8 +1458,8 @@ TEST_F(RowContainerTest, columnSize) {
   }
 }
 
-TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
-  auto data = makeRowContainer({SMALLINT()}, {VARCHAR()});
+TEST_P(RowContainerTest, rowSizeWithNormalizedKey) {
+  auto data = makeRowContainer({SMALLINT()}, {VARCHAR()}, true, GetParam());
   data->newRow();
   data->disableNormalizedKeys();
   data->newRow();
@@ -1472,7 +1475,7 @@ TEST_F(RowContainerTest, estimateRowSize) {
 
   // Make a RowContainer with a fixed-length key column and a variable-length
   // dependent column.
-  auto rowContainer = makeRowContainer({BIGINT()}, {VARCHAR()});
+  auto rowContainer = makeRowContainer({BIGINT()}, {VARCHAR()}, true);
   EXPECT_FALSE(rowContainer->estimateRowSize().has_value());
 
   // Store rows to the container.
@@ -1515,6 +1518,7 @@ TEST_F(RowContainerTest, alignment) {
       false,
       true,
       true,
+      false,
       pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
@@ -1682,6 +1686,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
+      false, // useListRowIndex
       pool_.get());
 
   auto input = makeRowVector({
@@ -2145,7 +2150,7 @@ DEBUG_ONLY_TEST_F(RowContainerTest, eraseAfterOomStoringString) {
   rowContainer->eraseRows(folly::Range<char**>(rows.data(), numRows));
 }
 
-TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
+TEST_P(RowContainerTest, hugeIntStoreWithNulls) {
   constexpr int32_t kNumRows = 100;
   constexpr int32_t kColumnIndex = 0;
 
@@ -2178,7 +2183,7 @@ TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
       dictNulls, dictIndices, kNumRows, hugeIntVector);
 
   std::vector<TypePtr> keys;
-  auto data = makeRowContainer({HUGEINT()}, {}, false);
+  auto data = makeRowContainer({HUGEINT()}, {}, false, GetParam());
   std::vector<char*> rows(kNumRows);
   for (auto i = 0; i < kNumRows; ++i) {
     rows[i] = data->newRow();
@@ -2193,9 +2198,9 @@ TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
   assertEqualVectors(source, extracted);
 }
 
-TEST_F(RowContainerTest, columnHasNulls) {
-  auto rowContainer =
-      makeRowContainer({BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false);
+TEST_P(RowContainerTest, columnHasNulls) {
+  auto rowContainer = makeRowContainer(
+      {BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false, GetParam());
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     ASSERT_FALSE(rowContainer->columnHasNulls(i));
   }
@@ -2246,7 +2251,7 @@ TEST_F(RowContainerTest, columnHasNulls) {
   }
 }
 
-TEST_F(RowContainerTest, store) {
+TEST_P(RowContainerTest, store) {
   const uint64_t kNumRows = 1000;
   auto rowVectorWithNulls = makeRowVector({
       makeFlatVector<int64_t>(
@@ -2276,7 +2281,7 @@ TEST_F(RowContainerTest, store) {
   });
   for (auto& rowVector : {rowVectorWithNulls, rowVectorNoNulls}) {
     auto rowContainer = makeRowContainer(
-        {BIGINT(), VARCHAR()}, {BIGINT(), ARRAY(BIGINT())}, false);
+        {BIGINT(), VARCHAR()}, {BIGINT(), ARRAY(BIGINT())}, false, GetParam());
     std::vector<char*> rows;
     rows.reserve(kNumRows);
 
@@ -2420,7 +2425,7 @@ TEST_F(RowContainerTest, customComparisonRow) {
       });
 }
 
-TEST_F(RowContainerTest, isNanAt) {
+TEST_P(RowContainerTest, isNanAt) {
   const auto kNan = std::numeric_limits<double>::quiet_NaN();
   const auto kNanF = std::numeric_limits<float>::quiet_NaN();
   auto rowVector = makeRowVector({
@@ -2431,8 +2436,8 @@ TEST_F(RowContainerTest, isNanAt) {
   });
   const auto kNumRows = rowVector->size();
 
-  auto rowContainer =
-      makeRowContainer({REAL(), DOUBLE()}, {REAL(), DOUBLE()}, false);
+  auto rowContainer = makeRowContainer(
+      {REAL(), DOUBLE()}, {REAL(), DOUBLE()}, false, GetParam());
   std::vector<char*> rows;
   rows.reserve(kNumRows);
 
@@ -2665,7 +2670,7 @@ TEST_F(RowContainerTest, rowColumnStats) {
   EXPECT_EQ(stats.nullCount(), 3);
 }
 
-TEST_F(RowContainerTest, storeAndCollectColumnStats) {
+TEST_P(RowContainerTest, storeAndCollectColumnStats) {
   const uint64_t kNumRows = 1000;
   auto rowVector = makeRowVector({
       makeFlatVector<int64_t>(
@@ -2676,7 +2681,8 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
           nullEvery(7)),
   });
 
-  auto rowContainer = makeRowContainer({BIGINT(), VARCHAR()}, {}, false);
+  auto rowContainer =
+      makeRowContainer({BIGINT(), VARCHAR()}, {}, false, GetParam());
   std::vector<char*> rows;
   rows.reserve(kNumRows);
 
@@ -2735,6 +2741,7 @@ TEST_F(RowContainerTest, setAllNull) {
       true,
       false,
       false,
+      false,
       pool_.get());
 
   auto row = rowContainer->newRow();
@@ -2757,5 +2764,10 @@ TEST_F(RowContainerTest, setAllNull) {
   ASSERT_EQ(
       (row[accColumn.initializedByte()] & accColumn.initializedMask()), 0);
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    RowContainerTest,
+    RowContainerTest,
+    testing::ValuesIn({false, true}));
 
 } // namespace facebook::velox::exec::test

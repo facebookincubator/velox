@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/ExpressionBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -256,51 +258,75 @@ TEST_F(PlanBuilderTest, missingOutputType) {
 }
 
 TEST_F(PlanBuilderTest, projectExpressions) {
+  using namespace velox::expr_builder;
+
   // Non-typed Expressions.
   // Simple field access.
   auto data = ROW({"c0"}, {BIGINT()});
   VELOX_CHECK_EQ(
       PlanBuilder()
           .tableScan("tmp", data)
-          .projectExpressions(
-              {std::make_shared<core::FieldAccessExpr>("c0", std::nullopt)})
+          .projectExpressions({col("c0")})
           .planNode()
           ->toString(true, false),
       "-- Project[1][expressions: (c0:BIGINT, ROW[\"c0\"])] -> c0:BIGINT\n");
+
   // Dereference test using field access query.
   data = ROW({"c0"}, {ROW({"field0"}, {BIGINT()})});
   VELOX_CHECK_EQ(
       PlanBuilder()
           .tableScan("tmp", data)
-          .projectExpressions({std::make_shared<core::FieldAccessExpr>(
-              "field0",
-              std::nullopt,
-              std::vector<core::ExprPtr>{
-                  std::make_shared<core::FieldAccessExpr>(
-                      "c0", std::nullopt)})})
+          .projectExpressions({col("c0").subfield("field0")})
           .planNode()
           ->toString(true, false),
       "-- Project[1][expressions: (field0:BIGINT, ROW[\"c0\"][field0])] -> field0:BIGINT\n");
 
   // Test Typed Expressions
+  auto rowType = ROW({"c0"}, {VARCHAR()});
   VELOX_CHECK_EQ(
       PlanBuilder()
-          .tableScan("tmp", ROW({"c0"}, {ROW({VARCHAR()})}))
+          .tableScan("tmp", rowType)
           .projectExpressions(
-              {std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")})
+              {core::Expressions::inferTypes(col("c0"), rowType, pool_.get())})
           .planNode()
           ->toString(true, false),
-      "-- Project[1][expressions: (p0:VARCHAR, \"c0\")] -> p0:VARCHAR\n");
+      "-- Project[1][expressions: (p0:VARCHAR, ROW[\"c0\"])] -> p0:VARCHAR\n");
+
+  rowType = ROW({"c0"}, {ROW({"field0"}, {VARCHAR()})});
   VELOX_CHECK_EQ(
       PlanBuilder()
-          .tableScan("tmp", ROW({"c0"}, {ROW({VARCHAR()})}))
-          .projectExpressions({std::make_shared<core::FieldAccessTypedExpr>(
-              VARCHAR(),
-              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
-              "field0")})
+          .tableScan("tmp", rowType)
+          .projectExpressions({core::Expressions::inferTypes(
+              col("c0").subfield("field0"), rowType, pool_.get())})
           .planNode()
           ->toString(true, false),
-      "-- Project[1][expressions: (p0:VARCHAR, \"c0\"[\"field0\"])] -> p0:VARCHAR\n");
+      "-- Project[1][expressions: (p0:VARCHAR, ROW[\"c0\"][field0])] -> p0:VARCHAR\n");
+}
+
+TEST_F(PlanBuilderTest, filter) {
+  auto data = ROW({"c0"}, {BIGINT()});
+  constexpr std::string_view expectation =
+      "-- Filter[1][expression: gt(plus(ROW[\"c0\"],10),100)] -> c0:BIGINT\n";
+
+  // Filter with SQL snippet.
+  VELOX_CHECK_EQ(
+      PlanBuilder()
+          .tableScan("tmp", data)
+          .filter("c0 + 10 > 100")
+          .planNode()
+          ->toString(true, false),
+      expectation);
+
+  using namespace velox::expr_builder;
+
+  // Filter with untyped expression (same expression as above).
+  VELOX_CHECK_EQ(
+      PlanBuilder()
+          .tableScan("tmp", data)
+          .filter(col("c0") + 10L > 100L)
+          .planNode()
+          ->toString(true, false),
+      expectation);
 }
 
 TEST_F(PlanBuilderTest, commitStrategyParameter) {

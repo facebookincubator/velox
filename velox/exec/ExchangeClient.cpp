@@ -53,7 +53,16 @@ void ExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
       sources_.push_back(source);
       queue_->addSourceLocked();
       emptySources_.push(source);
-      requestSpecs = pickSourcesToRequestLocked();
+      // When lazyFetching_ is true, I/O will be triggered lazily when next() is
+      // called from Exchange::isBlocked(). This allows waiter tasks using
+      // cached hash tables to skip I/O entirely when the table is already
+      // cached - the HashBuild operator will finish before
+      // Exchange::isBlocked() is ever called, so no unnecessary data fetching
+      // occurs.
+      if (!lazyFetching_) {
+        // Start fetching data immediately.
+        requestSpecs = pickSourcesToRequestLocked();
+      }
     }
   }
 
@@ -78,6 +87,11 @@ void ExchangeClient::close() {
     if (closed_) {
       return;
     }
+
+    // Capture stats BEFORE clearing sources_.
+    // This allows stats() to return meaningful data even after close().
+    stats_ = collectStatsLocked();
+
     closed_ = true;
     sources = std::move(sources_);
     producingSources = std::move(producingSources_);
@@ -91,41 +105,52 @@ void ExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
-  folly::F14FastMap<std::string, RuntimeMetric> stats;
+folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() {
   std::lock_guard<std::mutex> l(queue_->mutex());
+  if (stats_.empty()) {
+    stats_ = collectStatsLocked();
+  }
+  return stats_;
+}
+
+folly::F14FastMap<std::string, RuntimeMetric>
+ExchangeClient::collectStatsLocked() const {
+  folly::F14FastMap<std::string, RuntimeMetric> stats;
 
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {
       for (const auto& [name, value] : source->metrics()) {
-        if (UNLIKELY(stats.count(name) == 0)) {
-          stats.insert(std::pair(name, RuntimeMetric(value.unit)));
-        }
-        stats[name].merge(value);
+        auto [iter, inserted] = stats.try_emplace(name, value.unit);
+        iter->second.merge(value);
       }
     } else {
       for (const auto& [name, value] : source->stats()) {
-        stats[name].addValue(value);
+        auto [iter, inserted] = stats.try_emplace(name);
+        iter->second.addValue(value);
       }
     }
   }
 
-  stats["peakBytes"] =
-      RuntimeMetric(queue_->peakBytes(), RuntimeCounter::Unit::kBytes);
-  stats["numReceivedPages"] = RuntimeMetric(queue_->receivedPages());
-  stats["averageReceivedPageBytes"] = RuntimeMetric(
-      queue_->averageReceivedPageBytes(), RuntimeCounter::Unit::kBytes);
+  stats.insert_or_assign(
+      "peakBytes",
+      RuntimeMetric(queue_->peakBytes(), RuntimeCounter::Unit::kBytes));
+  stats.insert_or_assign(
+      "numReceivedPages", RuntimeMetric(queue_->receivedPages()));
+  stats.insert_or_assign(
+      "averageReceivedPageBytes",
+      RuntimeMetric(
+          queue_->averageReceivedPageBytes(), RuntimeCounter::Unit::kBytes));
 
   return stats;
 }
 
-std::vector<std::unique_ptr<SerializedPage>> ExchangeClient::next(
+std::vector<std::unique_ptr<SerializedPageBase>> ExchangeClient::next(
     int consumerId,
     uint32_t maxBytes,
     bool* atEnd,
     ContinueFuture* future) {
   std::vector<RequestSpec> requestSpecs;
-  std::vector<std::unique_ptr<SerializedPage>> pages;
+  std::vector<std::unique_ptr<SerializedPageBase>> pages;
   ContinuePromise stalePromise = ContinuePromise::makeEmpty();
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
@@ -161,7 +186,7 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
   for (auto& spec : requestSpecs) {
     auto future = folly::SemiFuture<ExchangeSource::Response>::makeEmpty();
     if (spec.maxBytes == 0) {
-      future = spec.source->requestDataSizes(kRequestDataSizesMaxWaitSec_);
+      future = spec.source->requestDataSizes(requestDataSizesMaxWaitSec_);
     } else {
       future = spec.source->request(spec.maxBytes, kRequestDataMaxWait);
     }
@@ -185,7 +210,7 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
                 RECORD_METRIC_VALUE(kMetricExchangeDataCount);
               }
 
-              bool pauseCurrentSource = false;
+              bool pauseCurrentSource{false};
               std::vector<RequestSpec> requestSpecs;
               std::shared_ptr<ExchangeSource> currentSource = spec.source;
               {
@@ -232,6 +257,9 @@ ExchangeClient::pickSourcesToRequestLocked() {
   if (closed_) {
     return {};
   }
+  if (skipRequestDataSizeWithSingleSource()) {
+    return pickupSingleSourceToRequestLocked();
+  }
   std::vector<RequestSpec> requestSpecs;
   while (!emptySources_.empty()) {
     auto& source = emptySources_.front();
@@ -267,10 +295,10 @@ ExchangeClient::pickSourcesToRequestLocked() {
     // 1. We have full capacity but still cannot initiate one single data
     //    transfer. Let the transfer happen in this case to avoid getting stuck.
     //
-    // 2. We have some data in the queue that is not big enough for
-    //    consumers and it is big enough to not allow ExchangeClient to
-    //    initiate request for more data. Let transfer happen in this case
-    //    to avoid this deadlock situation.
+    // 2. We have some data in the queue that is not big enough for consumers,
+    //    and it is big enough to not allow ExchangeClient to initiate request
+    //    for more data. Let transfer happen in this case to avoid this deadlock
+    //    situation.
     auto& source = producingSources_.front().source;
     auto requestBytes = producingSources_.front().remainingBytes.at(0);
     LOG(INFO) << "Requesting large single page " << requestBytes
@@ -280,6 +308,43 @@ ExchangeClient::pickSourcesToRequestLocked() {
     producingSources_.pop();
     totalPendingBytes_ += requestBytes;
   }
+  return requestSpecs;
+}
+
+std::vector<ExchangeClient::RequestSpec>
+ExchangeClient::pickupSingleSourceToRequestLocked() {
+  VELOX_CHECK_EQ(sources_.size(), 1);
+  VELOX_CHECK(!closed_);
+  if (emptySources_.empty() && producingSources_.empty()) {
+    return {};
+  }
+
+  VELOX_CHECK_EQ(totalPendingBytes_, 0);
+  VELOX_CHECK_LE(!!emptySources_.empty() + !!producingSources_.empty(), 1);
+  const auto requestBytes = maxQueuedBytes_ - queue_->totalBytes();
+
+  if (requestBytes <= 0) {
+    return {};
+  }
+  std::vector<RequestSpec> requestSpecs;
+  SCOPE_EXIT {
+    totalPendingBytes_ += requestBytes;
+  };
+  if (!emptySources_.empty()) {
+    VELOX_CHECK_EQ(emptySources_.size(), 1);
+    auto& source = emptySources_.front();
+    VELOX_CHECK(source->shouldRequestLocked());
+    requestSpecs.push_back({std::move(source), requestBytes});
+    emptySources_.pop();
+    return requestSpecs;
+  }
+
+  VELOX_CHECK_EQ(producingSources_.size(), 1);
+  auto& source = producingSources_.front().source;
+  VELOX_CHECK(source->shouldRequestLocked());
+  VELOX_CHECK(!producingSources_.front().remainingBytes.empty());
+  requestSpecs.push_back({std::move(source), requestBytes});
+  producingSources_.pop();
   return requestSpecs;
 }
 

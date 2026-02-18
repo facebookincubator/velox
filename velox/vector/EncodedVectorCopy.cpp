@@ -18,6 +18,7 @@
 
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -515,6 +516,56 @@ VectorPtr newArray(
       std::move(elements));
 }
 
+VectorPtr newFlatMap(
+    const EncodedVectorCopyOptions& options,
+    const FlatMapVector& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  auto size = newTargetSize(ranges);
+  auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
+
+  VectorPtr distinctKeys = BaseVector::create(
+      source.keyType(), source.numDistinctKeys(), options.pool);
+  BaseVector::CopyRange keyRange{0, 0, source.numDistinctKeys()};
+  distinctKeys->copyRanges(source.distinctKeys().get(), {&keyRange, 1});
+
+  std::vector<VectorPtr> mapValues;
+  mapValues.reserve(distinctKeys->size());
+  for (column_index_t i = 0; i < distinctKeys->size(); ++i) {
+    VectorPtr value;
+    // Vector is not empty or non-null
+    if (source.mapValuesAt(i)) {
+      copyImpl(options, source.mapValuesAt(i), ranges, value, false);
+    } else {
+      value = BaseVector::create(source.valueType(), size, options.pool);
+    }
+    mapValues.push_back(std::move(value));
+  }
+
+  std::vector<BufferPtr> inMaps;
+  inMaps.reserve(distinctKeys->size());
+  for (const auto& inMap : source.inMaps()) {
+    if (inMap) {
+      auto newInMap = allocateNulls(size, options.pool);
+      BaseVector::copyNulls(
+          newInMap->asMutable<uint64_t>(), inMap->as<uint64_t>(), ranges);
+      inMaps.push_back(std::move(newInMap));
+    } else {
+      inMaps.push_back(nullptr);
+    }
+  }
+
+  return std::make_shared<FlatMapVector>(
+      options.pool,
+      source.type(),
+      std::move(nulls),
+      size,
+      std::move(distinctKeys),
+      std::move(mapValues),
+      std::move(inMaps),
+      std::nullopt,
+      source.hasSortedKeys());
+}
+
 void copyIntoFlat(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
@@ -980,12 +1031,20 @@ void copyIntoExisting(
     case VectorEncoding::Simple::FLAT:
       copyIntoFlat(options, source, ranges, target, targetMutable);
       break;
-    case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::MAP:
+      VELOX_CHECK_NE(
+          sourceBase->encoding(),
+          VectorEncoding::Simple::FLAT_MAP,
+          "Cannot copy FlatMapVector into MapVector.");
+      [[fallthrough]];
+    case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
       copyIntoComplex(
           options, decodedSource, sourceBase, ranges, target, targetMutable);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_UNSUPPORTED(
+          "EncodedVectorCopy copyInto does not support FlatMapVector.");
     case VectorEncoding::Simple::LAZY:
       copyIntoLazy(options, source, ranges, target, targetMutable);
       break;
@@ -1045,6 +1104,10 @@ void copyImpl(
       break;
     case VectorEncoding::Simple::ARRAY:
       target = newArray(options, *source->asUnchecked<ArrayVector>(), ranges);
+      break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      target =
+          newFlatMap(options, *source->asUnchecked<FlatMapVector>(), ranges);
       break;
     case VectorEncoding::Simple::LAZY:
       VELOX_CHECK(!sourceBase->isLazy());

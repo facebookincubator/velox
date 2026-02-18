@@ -25,6 +25,7 @@ velox_add_library(
   QueryConfig.cpp
   QueryCtx.cpp
   SimpleFunctionMetadata.cpp
+  TableWriteTraits.cpp
 )
 
 velox_link_libraries(

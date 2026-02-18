@@ -10,11 +10,12 @@ General Aggregate Functions
 .. spark:function:: avg(x) -> double|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.
-    When x is of type DECIMAL, the result type is DECIMAL,
-    and the intermediate results are varbinarys or (sum, count) pairs represented as row(decimal, bigint).
+    When ``x`` is of type DECIMAL(p, s), the result type is DECIMAL(p + 4, s + 4),
+    and the intermediate results are (sum, count) pairs represented as ROW(DECIMAL(p + 10, s), BIGINT).
+    The current implementation for DECIMAL matches Spark avg's default behavior with spark.sql.decimalOperations.allowPrecisionLoss=true.
     For all other input types, the result type is DOUBLE,
-    and the intermediate results are (sum, count) pairs represented as row(double, bigint).
-    When all inputs are nulls, the intermediate result is row(0, 0),
+    and the intermediate results are (sum, count) pairs represented as ROW(DOUBLE, BIGINT).
+    When all inputs are nulls, the intermediate result is ROW(0, 0),
     and the final result is null.
 
 .. spark:function:: bit_xor(x) -> bigint
@@ -55,8 +56,13 @@ General Aggregate Functions
 
 .. spark:function:: collect_list(x) -> array<[same as x]>
 
-    Returns an array created from the input ``x`` elements. Ignores null
-    inputs, and returns an empty array when all inputs are null.
+    Returns an array created from the input ``x`` elements. By default,
+    ignores null inputs and returns an empty array when all inputs are null.
+
+    When the configuration property ``spark.collect_list.ignore_nulls`` is set
+    to ``false``, null values are included in the output array (RESPECT NULLS
+    behavior). In this mode, an all-null input produces an array of nulls
+    instead of an empty array.
 
 .. spark:function:: collect_set(x) -> array<[same as x]>
 

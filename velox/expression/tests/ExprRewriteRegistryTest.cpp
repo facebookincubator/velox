@@ -27,17 +27,20 @@ TEST_F(ExprRewriteRegistryTest, basic) {
   expression::ExpressionRewrite testRewrite =
       [&](const core::TypedExprPtr& input) {
         return std::make_shared<core::CallTypedExpr>(
-            input->type(), "test_expr", input, input);
+            input->type(), "rewritten_expr", input, input);
       };
   registry.registerRewrite(testRewrite);
 
-  auto input = std::make_shared<core::ConstantTypedExpr>(BIGINT(), 123LL);
+  auto input = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      "original_expr",
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"));
   const auto rewritten = registry.rewrite(input);
   ASSERT_TRUE(rewritten->isCallKind());
   ASSERT_TRUE(rewritten->type()->isBigint());
   const auto rewrittenCall = rewritten->asUnchecked<core::CallTypedExpr>();
   ASSERT_EQ(rewrittenCall->inputs().size(), 2);
-  ASSERT_EQ(rewrittenCall->name(), "test_expr");
+  ASSERT_EQ(rewrittenCall->name(), "rewritten_expr");
 
   registry.clear();
   const auto rewriteAfterClear = registry.rewrite(input);

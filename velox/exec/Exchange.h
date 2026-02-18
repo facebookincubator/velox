@@ -19,6 +19,7 @@
 
 #include "velox/exec/ExchangeClient.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/RowSerializer.h"
@@ -50,7 +51,7 @@ class Exchange : public SourceOperator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
       std::shared_ptr<ExchangeClient> exchangeClient,
-      const std::string& operatorType = "Exchange");
+      std::string_view operatorType = OperatorType::kExchange);
 
   ~Exchange() override {
     close();
@@ -117,13 +118,13 @@ class Exchange : public SourceOperator {
   // Reusable result vector.
   RowVectorPtr result_;
 
-  std::vector<std::unique_ptr<SerializedPage>> currentPages_;
+  std::vector<std::unique_ptr<SerializedPageBase>> currentPages_;
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
 
   // Memory holders for deserialization across 'getOutput' calls.
   // The merged pages for row serialization.
-  std::unique_ptr<SerializedPage> mergedRowPage_;
+  std::unique_ptr<SerializedPageBase> mergedRowPage_;
   std::unique_ptr<RowIterator> rowIterator_;
 
   // State for columnar page deserialization.

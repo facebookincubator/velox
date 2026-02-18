@@ -67,8 +67,6 @@ class GeometryCollectionIterator {
   std::deque<const geos::geom::Geometry*> geometriesDeque;
 };
 
-geos::geom::GeometryFactory* getGeometryFactory();
-
 FOLLY_ALWAYS_INLINE const
     std::unordered_map<geos::geom::GeometryTypeId, std::string>&
     getGeosTypeToStringIdentifier() {
@@ -149,63 +147,6 @@ FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {
 std::optional<std::string> geometryInvalidReason(
     const geos::geom::Geometry* geometry);
 
-/// Determines if a ring of coordinates (from `start` to `end`) is oriented
-/// clockwise.
-FOLLY_ALWAYS_INLINE bool isClockwise(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    size_t start,
-    size_t end) {
-  double sum = 0.0;
-  for (size_t i = start; i < end - 1; i++) {
-    const auto& p1 = coordinates->getAt(i);
-    const auto& p2 = coordinates->getAt(i + 1);
-    sum += (p2.x - p1.x) * (p2.y + p1.y);
-  }
-  return sum > 0.0;
-}
-
-/// Reverses the order of coordinates in the sequence between `start` and `end`
-FOLLY_ALWAYS_INLINE void reverse(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    size_t start,
-    size_t end) {
-  for (size_t i = 0; i < (end - start) / 2; ++i) {
-    auto temp = coordinates->getAt(start + i);
-    coordinates->setAt(coordinates->getAt(end - 1 - i), start + i);
-    coordinates->setAt(temp, end - 1 - i);
-  }
-}
-
-/// Ensures that a polygon ring has the canonical orientation:
-/// - Exterior rings (shells) must be clockwise.
-/// - Interior rings (holes) must be counter-clockwise.
-FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    size_t start,
-    size_t end,
-    bool isShell) {
-  bool isClockwiseFlag = isClockwise(coordinates, start, end);
-
-  if ((isShell && !isClockwiseFlag) || (!isShell && isClockwiseFlag)) {
-    reverse(coordinates, start, end);
-  }
-}
-
-/// Applies `canonicalizePolygonCoordinates` to all rings in a polygon.
-FOLLY_ALWAYS_INLINE void canonicalizePolygonCoordinates(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    const std::vector<size_t>& partIndexes,
-    const std::vector<bool>& shellPart) {
-  for (size_t part = 0; part < partIndexes.size() - 1; part++) {
-    canonicalizePolygonCoordinates(
-        coordinates, partIndexes[part], partIndexes[part + 1], shellPart[part]);
-  }
-  if (!partIndexes.empty()) {
-    canonicalizePolygonCoordinates(
-        coordinates, partIndexes.back(), coordinates->size(), shellPart.back());
-  }
-}
-
 Status validateLatitudeLongitude(double latitude, double longitude);
 
 std::vector<const geos::geom::Geometry*> flattenCollection(
@@ -225,5 +166,54 @@ std::vector<int64_t> getDissolvedTilesCoveringGeometry(
     int32_t zoom);
 
 bool isPointOrRectangle(const geos::geom::Geometry& geometry);
+
+/// Computes the centroid of a non-empty MultiPoint geometry on a sphere.
+/// Uses 3D Cartesian coordinates to properly average points on a spherical
+/// surface.
+/// @param geometry A MultiPoint geometry (must not be empty)
+/// @return A pair of (longitude, latitude) in degrees representing the centroid
+std::pair<double, double> computeSphericalCentroid(
+    const geos::geom::MultiPoint& multiPoint);
+
+/// Represents a point in 3D Cartesian coordinates, useful for spherical
+/// geometry calculations. Provides conversions to/from spherical coordinates
+/// (longitude, latitude).
+class CartesianPoint {
+ public:
+  /// Constructs a CartesianPoint from a spherical point (longitude, latitude)
+  /// in degrees. Assumes the point is on Earth's surface.
+  /// @param longitude Longitude in degrees (x-coordinate in spherical system)
+  /// @param latitude Latitude in degrees (y-coordinate in spherical system)
+  CartesianPoint(double longitude, double latitude);
+
+  /// Constructs a CartesianPoint from Cartesian coordinates.
+  /// @param x X-coordinate in Cartesian system
+  /// @param y Y-coordinate in Cartesian system
+  /// @param z Z-coordinate in Cartesian system
+  CartesianPoint(double x, double y, double z);
+
+  double getX() const {
+    return x_;
+  }
+  double getY() const {
+    return y_;
+  }
+  double getZ() const {
+    return z_;
+  }
+
+  /// Converts this Cartesian point back to spherical coordinates.
+  /// @return A pair of (longitude, latitude) in degrees
+  std::pair<double, double> toSphericalPoint() const;
+
+ private:
+  double x_;
+  double y_;
+  double z_;
+};
+
+double getSphericalLength(const geos::geom::LineString& lineString);
+
+double computeSphericalExcess(const geos::geom::Polygon& polygon);
 
 } // namespace facebook::velox::functions::geospatial

@@ -178,6 +178,13 @@ class HiveConfig {
   static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
       "sort_writer_finish_time_slice_limit_ms";
 
+  /// Maximum target file size. When a file exceeds this size during writing,
+  /// the writer will close the current file and start writing to a new file.
+  /// Accepts human-readable values like "1GB". Zero means no limit (default).
+  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
+  static constexpr const char* kMaxTargetFileSizeSession =
+      "max_target_file_size";
+
   // The unit for reading timestamps from files.
   static constexpr const char* kReadTimestampUnit =
       "hive.reader.timestamp-unit";
@@ -194,15 +201,20 @@ class HiveConfig {
   static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
       "stats_based_filter_reorder_disabled";
 
-  static constexpr const char* kLocalDataPath = "hive_local_data_path";
-  static constexpr const char* kLocalFileFormat = "hive_local_file_format";
-
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   static constexpr const char* kPreserveFlatMapsInMemory =
       "hive.preserve-flat-maps-in-memory";
   static constexpr const char* kPreserveFlatMapsInMemorySession =
       "hive.preserve_flat_maps_in_memory";
+
+  /// Maximum number of output rows to return per index lookup request.
+  /// The limit is applied to the actual output rows after filtering.
+  /// 0 means no limit (default).
+  static constexpr const char* kMaxRowsPerIndexRequest =
+      "hive.max-rows-per-index-request";
+  static constexpr const char* kMaxRowsPerIndexRequestSession =
+      "hive.max_rows_per_index_request";
 
   static constexpr const char* kUser = "user";
   static constexpr const char* kSource = "source";
@@ -267,6 +279,8 @@ class HiveConfig {
   uint64_t sortWriterFinishTimeSliceLimitMs(
       const config::ConfigBase* session) const;
 
+  uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
+
   uint64_t footerEstimatedSize() const;
 
   uint64_t filePreloadThreshold() const;
@@ -283,18 +297,13 @@ class HiveConfig {
   bool readStatsBasedFilterReorderDisabled(
       const config::ConfigBase* session) const;
 
-  /// Returns the file system path containing local data. If non-empty,
-  /// initializes LocalHiveConnectorMetadata to provide metadata for the tables
-  /// in the directory.
-  std::string hiveLocalDataPath() const;
-
-  /// Returns the name of the file format to use in interpreting the contents of
-  /// hiveLocalDataPath().
-  std::string hiveLocalFileFormat() const;
-
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+
+  /// Returns the maximum number of rows to read per index lookup request.
+  /// 0 means no limit (default).
+  uint32_t maxRowsPerIndexRequest(const config::ConfigBase* session) const;
 
   /// User of the query. Used for storage logging.
   std::string user(const config::ConfigBase* session) const;

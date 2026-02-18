@@ -88,7 +88,7 @@ TEST_F(RLEv2Test, basicDelta0) {
   }
 
   const unsigned char bytes[] = {0xc0, 0x13, 0x00, 0x02};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -106,7 +106,7 @@ TEST_F(RLEv2Test, basicDelta1) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe7, 0x07, 0xc8, 0x01, 0x32, 0x19, 0x0f};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -127,7 +127,7 @@ TEST_F(RLEv2Test, basicDelta2) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe7, 0x07, 0xc7, 0x01, 0x32, 0x19, 0x23};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -148,7 +148,7 @@ TEST_F(RLEv2Test, basicDelta3) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe8, 0x07, 0xc7, 0x01, 0x32, 0x19, 0x0f};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -169,7 +169,7 @@ TEST_F(RLEv2Test, basicDelta4) {
 
   const unsigned char bytes[] = {
       0xce, 0x04, 0xe8, 0x07, 0xc8, 0x01, 0x32, 0x19, 0x23};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -188,7 +188,7 @@ TEST_F(RLEv2Test, delta0Width) {
       createRleDecoder<false>(
           std::unique_ptr<dwio::common::SeekableInputStream>(
               new dwio::common::SeekableArrayInputStream(
-                  buffer, VELOX_ARRAY_SIZE(buffer))),
+                  buffer, std::size(buffer))),
           RleVersion_2,
           *pool,
           true /* doesn't matter */,
@@ -219,7 +219,7 @@ TEST_F(RLEv2Test, basicDelta0WithNulls) {
   }
 
   const unsigned char bytes[] = {0xc0, 0x13, 0x00, 0x02};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   const size_t count = values.size();
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count, nulls), 1, nulls);
@@ -243,7 +243,7 @@ TEST_F(RLEv2Test, shortRepeats) {
   const unsigned char bytes[] = {0x04, 0x00, 0x04, 0x02, 0x04, 0x04, 0x04,
                                  0x06, 0x04, 0x08, 0x04, 0x0a, 0x04, 0x0c,
                                  0x04, 0x0e, 0x04, 0x10, 0x04, 0x12};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -266,7 +266,7 @@ TEST_F(RLEv2Test, multiByteShortRepeats) {
                                  0x00, 0x00, 0x3c, 0x80, 0x00, 0x00, 0x00,
                                  0x00, 0x00, 0x00, 0x02, 0x3c, 0x80, 0x00,
                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -280,7 +280,7 @@ TEST_F(RLEv2Test, 0to2Repeat1Direct) {
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer))),
+              buffer, std::size(buffer))),
       RleVersion_2,
       *pool,
       true /* doesn't matter */,
@@ -302,7 +302,7 @@ TEST_F(RLEv2Test, bitSize2Direct) {
   }
 
   const unsigned char bytes[] = {0x42, 0x13, 0x22, 0x22, 0x22, 0x22, 0x22};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, count), 3);
@@ -320,7 +320,7 @@ TEST_F(RLEv2Test, bitSize4Direct) {
 
   const unsigned char bytes[] = {
       0x46, 0x13, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
 
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, count), 1);
@@ -360,7 +360,7 @@ TEST_F(RLEv2Test, multipleRunsDirect) {
       0x04,
       0x04,
       0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
 
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
@@ -382,7 +382,7 @@ TEST_F(RLEv2Test, largeNegativesDirect) {
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer))),
+              buffer, std::size(buffer))),
       RleVersion_2,
       *pool,
       true /* doesn't matter */,
@@ -408,7 +408,7 @@ TEST_F(RLEv2Test, overflowDirect) {
       0x7e, 0x03, 0x7d, 0x45, 0x3c, 0x12, 0x41, 0x48, 0xf4, 0xbe, 0x7d, 0x45,
       0x3c, 0x12, 0x41, 0x48, 0xf4, 0xae, 0x50, 0xce, 0xad, 0x2a, 0x30, 0x0e,
       0xd2, 0x96, 0xfe, 0xd8, 0xd2, 0x38, 0x54, 0x6e, 0x3d, 0x81};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -445,7 +445,7 @@ TEST_F(RLEv2Test, basicPatched0) {
       0x5a,
       0xfc,
       0xe8};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -484,7 +484,7 @@ TEST_F(RLEv2Test, basicPatched1) {
       0xe0, 0x78, 0x00, 0x1c, 0x0f, 0x08, 0x06, 0x81, 0xc6, 0x90, 0x80, 0x68,
       0x24, 0x1b, 0x0b, 0x26, 0x83, 0x21, 0x30, 0xe0, 0x98, 0x3c, 0x6f, 0x06,
       0xb7, 0x03, 0x70};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -544,7 +544,7 @@ TEST_F(RLEv2Test, mixedPatchedAndShortRepeats) {
       0x00, 0x0c, 0x02, 0x08, 0x18, 0x00, 0x40, 0x00, 0x01, 0x00, 0x00, 0x08,
       0x30, 0x33, 0x80, 0x00, 0x02, 0x0c, 0x10, 0x20, 0x20, 0x47, 0x80, 0x13,
       0x4c};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
   // Read 1 at a time, then 3 at a time, etc.
   checkResults(values, decodeRLEv2(bytes, l, 1, values.size()), 1);
   checkResults(values, decodeRLEv2(bytes, l, 3, values.size()), 3);
@@ -579,7 +579,7 @@ TEST_F(RLEv2Test, basicDirectSeek) {
       0x04,
       0x04,
       0x04};
-  unsigned long l = sizeof(bytes) / sizeof(char);
+  unsigned long l = sizeof(bytes);
 
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
@@ -688,7 +688,7 @@ TEST_F(RLEv1Test, simpleTest) {
       createRleDecoder<false>(
           std::unique_ptr<dwio::common::SeekableInputStream>(
               new dwio::common::SeekableArrayInputStream(
-                  buffer, VELOX_ARRAY_SIZE(buffer))),
+                  buffer, std::size(buffer))),
           RleVersion_1,
           *pool,
           true,
@@ -712,7 +712,7 @@ TEST_F(RLEv1Test, signedNullLiteralTest) {
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer))),
+              buffer, std::size(buffer))),
       RleVersion_1,
       *pool,
       true,
@@ -733,7 +733,7 @@ TEST_F(RLEv1Test, splitHeader) {
       createRleDecoder<false>(
           std::unique_ptr<dwio::common::SeekableInputStream>(
               new dwio::common::SeekableArrayInputStream(
-                  buffer, VELOX_ARRAY_SIZE(buffer), 4)),
+                  buffer, std::size(buffer), 4)),
           RleVersion_1,
           *pool,
           true,
@@ -751,8 +751,7 @@ TEST_F(RLEv1Test, splitRuns) {
   const unsigned char buffer[] = {
       0x7d, 0x01, 0xff, 0x01, 0xfb, 0x01, 0x02, 0x03, 0x04, 0x05};
   dwio::common::SeekableInputStream* const stream =
-      new dwio::common::SeekableArrayInputStream(
-          buffer, VELOX_ARRAY_SIZE(buffer));
+      new dwio::common::SeekableArrayInputStream(buffer, std::size(buffer));
   std::unique_ptr<dwio::common::IntDecoder<false>> rle =
       createRleDecoder<false>(
           std::unique_ptr<dwio::common::SeekableInputStream>(stream),
@@ -784,8 +783,7 @@ TEST_F(RLEv1Test, testSigned) {
   auto pool = memory::memoryManager()->addLeafPool();
   const unsigned char buffer[] = {0x7f, 0xff, 0x20};
   dwio::common::SeekableInputStream* const stream =
-      new dwio::common::SeekableArrayInputStream(
-          buffer, VELOX_ARRAY_SIZE(buffer));
+      new dwio::common::SeekableArrayInputStream(buffer, std::size(buffer));
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
       RleVersion_1,
@@ -808,8 +806,7 @@ TEST_F(RLEv1Test, testNull) {
   auto pool = memory::memoryManager()->addLeafPool();
   const unsigned char buffer[] = {0x75, 0x02, 0x00};
   dwio::common::SeekableInputStream* const stream =
-      new dwio::common::SeekableArrayInputStream(
-          buffer, VELOX_ARRAY_SIZE(buffer));
+      new dwio::common::SeekableArrayInputStream(buffer, std::size(buffer));
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
       RleVersion_1,
@@ -842,8 +839,7 @@ TEST_F(RLEv1Test, testAllNulls) {
                                   0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
                                   0x0d, 0x0e, 0x0f, 0x3d, 0x00, 0x12};
   dwio::common::SeekableInputStream* const stream =
-      new dwio::common::SeekableArrayInputStream(
-          buffer, VELOX_ARRAY_SIZE(buffer));
+      new dwio::common::SeekableArrayInputStream(buffer, std::size(buffer));
   std::unique_ptr<dwio::common::IntDecoder<false>> rle =
       createRleDecoder<false>(
           std::unique_ptr<dwio::common::SeekableInputStream>(stream),
@@ -1095,8 +1091,7 @@ TEST_F(RLEv1Test, skipTest) {
       128, 228, 63,  128, 232, 63,  128, 236, 63,  128, 240, 63,  128, 244, 63,
       128, 248, 63,  128, 252, 63};
   dwio::common::SeekableInputStream* const stream =
-      new dwio::common::SeekableArrayInputStream(
-          buffer, VELOX_ARRAY_SIZE(buffer));
+      new dwio::common::SeekableArrayInputStream(buffer, std::size(buffer));
   std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
       RleVersion_1,
@@ -1872,8 +1867,8 @@ TEST_F(RLEv1Test, seekTest) {
       151, 12,  193, 190, 224, 143, 9,   129, 245, 133, 204, 8,   182, 209, 250,
       178, 8,   148, 139, 144, 193, 11,  230, 182, 245, 164, 7,   149, 204, 161,
       226, 14,  175, 229, 148, 166, 13,  148, 140, 189, 216, 3};
-  auto* stream = new dwio::common::SeekableArrayInputStream(
-      buffer, VELOX_ARRAY_SIZE(buffer));
+  auto* stream =
+      new dwio::common::SeekableArrayInputStream(buffer, std::size(buffer));
   const long junk[] = {
       -1192035722, 1672896916,  1491444859,  -1244121273, -791680696,
       1681943525,  -571055948,  -1744759283, -998345856,  240559198,
@@ -2991,7 +2986,7 @@ TEST_F(RLEv1Test, seekTest) {
   };
   std::vector<int64_t> data(2048);
   rle->next(data.data(), data.size(), nullptr);
-  ASSERT_EQ(getNumReadBytes(), VELOX_ARRAY_SIZE(buffer));
+  ASSERT_EQ(getNumReadBytes(), std::size(buffer));
   for (size_t i = 0; i < data.size(); ++i) {
     if (i < 1024) {
       EXPECT_EQ(i / 4, data[i]) << "Wrong output at " << i;
@@ -3023,7 +3018,7 @@ TEST_F(RLEv1Test, seekTest) {
 
   // Seek to end
   std::vector<uint64_t> position;
-  position.push_back(VELOX_ARRAY_SIZE(buffer));
+  position.push_back(std::size(buffer));
   position.push_back(0);
   dwio::common::PositionProvider pp{position};
   rle->seekToRowGroup(pp);
@@ -3033,7 +3028,7 @@ TEST_F(RLEv1Test, seekTest) {
 
   // Seek to end + 1
   position.clear();
-  position.push_back(VELOX_ARRAY_SIZE(buffer));
+  position.push_back(std::size(buffer));
   position.push_back(1);
   dwio::common::PositionProvider pp2{position};
   // Seek is fine (because it's lazy), but read should fail
@@ -3049,7 +3044,7 @@ TEST_F(RLEv1Test, testLeadingNulls) {
       createRleDecoder<false>(
           std::unique_ptr<dwio::common::SeekableInputStream>(
               new dwio::common::SeekableArrayInputStream(
-                  buffer, VELOX_ARRAY_SIZE(buffer))),
+                  buffer, std::size(buffer))),
           RleVersion_1,
           *pool,
           true,

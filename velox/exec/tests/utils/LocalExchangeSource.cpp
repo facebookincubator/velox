@@ -17,7 +17,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/ExchangeClient.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec::test {
@@ -84,13 +84,13 @@ class LocalExchangeSource : public exec::ExchangeSource {
                 << requestedSequence;
         int64_t nExtra = requestedSequence - sequence;
         VELOX_CHECK(nExtra < data.size());
-        data.erase(data.begin(), data.begin() + nExtra);
+        data.erase(data.cbegin(), data.cbegin() + nExtra);
         sequence = requestedSequence;
       }
       if (data.empty()) {
         sequence = requestedSequence;
       }
-      std::vector<std::unique_ptr<SerializedPage>> pages;
+      std::vector<std::unique_ptr<SerializedPageBase>> pages;
       bool atEnd = false;
       int64_t totalBytes = 0;
       for (auto& inputPage : data) {
@@ -101,7 +101,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
         }
         totalBytes += inputPage->length();
         inputPage->unshare();
-        pages.push_back(std::make_unique<SerializedPage>(std::move(inputPage)));
+        pages.push_back(
+            std::make_unique<PrestoSerializedPage>(std::move(inputPage)));
         inputPage = nullptr;
       }
       numPages_ += pages.size();
@@ -190,7 +191,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
         {"localExchangeSource.numPages", RuntimeMetric(numPages_)},
         {"localExchangeSource.totalBytes",
          RuntimeMetric(totalBytes_, RuntimeCounter::Unit::kBytes)},
-        {ExchangeClient::kBackgroundCpuTimeMs,
+        {Operator::kBackgroundCpuTimeNanos,
          RuntimeMetric(123 * 1000000, RuntimeCounter::Unit::kNanos)},
     };
   }

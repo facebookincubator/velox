@@ -17,11 +17,13 @@
 #include "velox/exec/TableWriteMerge.h"
 
 #include "HashAggregation.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
 namespace {
+
 bool isSameCommitContext(
     const folly::dynamic& first,
     const folly::dynamic& second) {
@@ -44,6 +46,7 @@ bool containsNonNullRows(const VectorPtr& vector) {
   }
   return false;
 }
+
 } // namespace
 
 TableWriteMerge::TableWriteMerge(
@@ -55,7 +58,7 @@ TableWriteMerge::TableWriteMerge(
           tableWriteMergeNode->outputType(),
           operatorId,
           tableWriteMergeNode->id(),
-          "TableWriteMerge") {
+          OperatorType::kTableWriteMerge) {
   if (tableWriteMergeNode->outputType()->size() == 1) {
     VELOX_USER_CHECK(!tableWriteMergeNode->hasColumnStatsSpec());
   } else {

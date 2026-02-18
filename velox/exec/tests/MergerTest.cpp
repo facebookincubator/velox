@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Merge.h"
@@ -294,7 +295,7 @@ class MergerTest : public OperatorTestBase {
   const RowTypePtr inputType_ = ROW({{"c0", BIGINT()}, {"c1", SMALLINT()}});
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   const std::vector<column_index_t> sortColumnIndices_{0, 1};
   const std::vector<CompareFlags> sortCompareFlags_{
       CompareFlags{.ascending = true},
@@ -319,10 +320,11 @@ class MergerTest : public OperatorTestBase {
       0,
       0,
       "none",
+      0,
       std::nullopt};
 
-  std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
-      std::make_shared<folly::Synchronized<common::SpillStats>>();
+  std::shared_ptr<exec::SpillStats> spillStats_ =
+      std::make_shared<exec::SpillStats>();
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
 } // namespace facebook::velox::exec::test

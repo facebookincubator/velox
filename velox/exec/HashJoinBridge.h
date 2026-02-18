@@ -53,8 +53,9 @@ class HashJoinBridge : public JoinBridge {
   /// Invoked by the build operator to set the built hash table.
   /// 'spillPartitionSet' contains the spilled partitions while building
   /// 'table' which only applies if the disk spilling is enabled.
+  /// Accepts both unique_ptr (regular joins) and shared_ptr (broadcast joins).
   void setHashTable(
-      std::unique_ptr<BaseHashTable> table,
+      std::shared_ptr<BaseHashTable> table,
       SpillPartitionSet spillPartitionSet,
       bool hasNullKeys,
       HashJoinTableSpillFunc&& tableSpillFunc);
@@ -143,6 +144,17 @@ class HashJoinBridge : public JoinBridge {
 
   bool testingHasMoreSpilledPartitions();
 
+  /// Return the next unclaimed row container id in the current hash table for
+  /// HashProbe drivers to output build-side rows.
+  int getAndIncrementUnclaimedRowContainerId() {
+    return unclaimedRowContainerId_.fetch_add(1);
+  }
+
+  /// Reset the next unclaimed row container id to 0.
+  void resetUnclaimedRowContainerId() {
+    unclaimedRowContainerId_.store(0);
+  }
+
  private:
   void appendSpilledHashTablePartitionsLocked(
       SpillPartitionSet&& spillPartitionSet);
@@ -182,6 +194,13 @@ class HashJoinBridge : public JoinBridge {
   // attempt to get table. It is reset after probe side finish the (sub) table
   // processing.
   bool probeStarted_;
+
+  // Keep track of the next row container id in a hash table that has not been
+  // processed by any hash probe driver. This is used when hash probe drivers
+  // output build-side rows. When drivers are allowed to output build-side rows
+  // in parallel, drivers call getAndIncrementClaimedRowContainerId() to ensure
+  // the row containers they process do not overlap with each other.
+  std::atomic_int unclaimedRowContainerId_{0};
 
   friend test::HashJoinBridgeTestHelper;
 };
@@ -253,7 +272,7 @@ SpillPartitionSet spillHashJoinTable(
     const HashBitRange& hashBitRange,
     const std::shared_ptr<const core::HashJoinNode>& joinNode,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats);
+    exec::SpillStats* spillStats);
 
 /// Returns the type used to spill a given hash table type. The function
 /// might attach a boolean column at the end of 'tableType' if 'joinType' needs

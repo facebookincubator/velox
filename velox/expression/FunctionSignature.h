@@ -53,7 +53,7 @@ enum class FunctionCanonicalName {
 /// a_precision + b_precision" in decimals).
 class SignatureVariable {
  public:
-  explicit SignatureVariable(
+  SignatureVariable(
       std::string name,
       std::optional<std::string> constraint,
       ParameterType type,
@@ -83,6 +83,10 @@ class SignatureVariable {
     VELOX_USER_CHECK(isTypeParameter());
     return comparableTypesOnly_;
   }
+
+  /// Return true if this variable describes a type and the specified type
+  /// satisfies the constraints.
+  bool isEligibleType(const Type& type) const;
 
   bool isTypeParameter() const {
     return type_ == ParameterType::kTypeParameter;
@@ -332,21 +336,22 @@ class FunctionSignatureBuilder {
   }
 
   FunctionSignatureBuilder& argumentType(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(false);
-    return *this;
+    return addArgument(type, /*constant=*/false, /*variableArity=*/false);
   }
 
   FunctionSignatureBuilder& constantArgumentType(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(true);
-    return *this;
+    return addArgument(type, /*constant=*/true, /*variableArity=*/false);
   }
 
   /// Variable arity arguments can appear only at the end of the argument list
   /// and their types must match the type specified in the last entry of
   /// 'argumentTypes'. Variable arity arguments can appear zero or more times.
   FunctionSignatureBuilder& variableArity() {
+    VELOX_USER_CHECK(
+        !variableArity_, "Only one variable arity argument is allowed.");
+    VELOX_USER_CHECK(
+        !argumentTypes_.empty(),
+        "Variable arity requires at least one argument");
     variableArity_ = true;
     return *this;
   }
@@ -354,24 +359,33 @@ class FunctionSignatureBuilder {
   /// Variable arity arguments can appear only at the end of the argument list
   /// and can appear zero or more times.
   FunctionSignatureBuilder& variableArity(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(false);
-    variableArity_ = true;
-    return *this;
+    return addArgument(type, /*constant=*/false, /*variableArity=*/true);
   }
 
   /// Variable arity arguments can appear only at the end of the argument list
   /// and can appear zero or more times.
   FunctionSignatureBuilder& constantVariableArity(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(true);
-    variableArity_ = true;
-    return *this;
+    return addArgument(type, /*constant=*/true, /*variableArity=*/true);
   }
 
   FunctionSignaturePtr build();
 
  private:
+  FunctionSignatureBuilder&
+  addArgument(const std::string& type, bool constant, bool variableArity) {
+    VELOX_USER_CHECK(
+        !variableArity_, "Cannot add arguments after variable arity argument");
+
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(constant);
+
+    if (variableArity) {
+      this->variableArity();
+    }
+
+    return *this;
+  }
+
   std::unordered_map<std::string, SignatureVariable> variables_;
   std::optional<TypeSignature> returnType_;
   std::vector<TypeSignature> argumentTypes_;

@@ -376,6 +376,28 @@ VectorPtr CastExpr::castToTime(
 
       return castResult;
     }
+    case TypeKind::TIMESTAMP: {
+      VectorPtr castResult;
+      context.ensureWritable(rows, TIME(), castResult);
+      (*castResult).clearNulls(rows);
+
+      auto* inputVector = input.as<SimpleVector<Timestamp>>();
+      auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
+
+      // Cast from TIMESTAMP to TIME extracts the time-of-day component
+      // (milliseconds since midnight) from the timestamp
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        const auto timestamp = inputVector->valueAt(row);
+        // Extract time-of-day using std::chrono.
+        // floor() also rounds towards negative infinity, so this correctly
+        // handles negative timestamps.
+        auto millis = std::chrono::milliseconds{timestamp.toMillis()};
+        auto timeOfDay = millis - std::chrono::floor<std::chrono::days>(millis);
+        resultFlatVector->set(row, timeOfDay.count());
+      });
+
+      return castResult;
+    }
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to TIME is not supported", fromType->toString());

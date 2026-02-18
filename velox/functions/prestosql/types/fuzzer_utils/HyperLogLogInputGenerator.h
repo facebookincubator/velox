@@ -22,7 +22,7 @@
 
 namespace facebook::velox::fuzzer {
 
-using facebook::velox::aggregate::prestosql::HllAccumulator;
+using common::hll::HllAccumulator;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"

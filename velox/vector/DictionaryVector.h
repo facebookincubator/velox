@@ -95,13 +95,13 @@ class DictionaryVector : public SimpleVector<T> {
     }
   }
 
-  const T valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
   /**
    * @return the value at the given index value for a dictionary entry, i.e.
    * gets the dictionary value by its indexed value.
    */
-  const T valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     VELOX_DCHECK(initialized_);
     VELOX_DCHECK(!isNullAt(idx), "found null value at: {}", idx);
     auto innerIndex = getDictionaryIndex(idx);
@@ -150,11 +150,6 @@ class DictionaryVector : public SimpleVector<T> {
     BaseVector::resizeIndices(
         BaseVector::length_, size, BaseVector::pool_, indices_, &rawIndices_);
     return indices_;
-  }
-
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + dictionaryValues_->retainedSize() +
-        indices_->capacity();
   }
 
   bool isScalar() const override {
@@ -270,6 +265,12 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setInternalState();
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return BaseVector::retainedSizeImpl() +
+        dictionaryValues_->retainedSize(totalStringBufferSize) +
+        indices_->capacity();
+  }
 
   BufferPtr indices_;
   const vector_size_t* rawIndices_ = nullptr;

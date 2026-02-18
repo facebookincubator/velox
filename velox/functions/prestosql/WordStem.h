@@ -97,8 +97,8 @@ struct WordStemFunction {
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const std::string& lang = "en") {
-    auto* stemmer = getStemmer(lang);
+      const arg_type<Varchar>& lang = "en") {
+    auto* stemmer = getStemmer(std::string(lang));
     VELOX_USER_CHECK_NOT_NULL(
         stemmer, "Unsupported stemmer language: {}", lang);
 

@@ -746,6 +746,17 @@ class BaseVector {
     return vector ? vector : create(type, 0, pool);
   }
 
+  /// Creates a vector matching the structure of a source vector, preserving
+  /// FLAT_MAP encoding where the source uses it. For nested types (ROW, ARRAY,
+  /// MAP), it recursively handles children to preserve encoding at each level.
+  /// BaseVector::create builds from type, without reference to encodings. This
+  /// will still flatten other encodings (e.g. dictionary, constant and lazy),
+  /// only preserving flat map as FlatMapVector.
+  static VectorPtr createEmptyLike(
+      const BaseVector* source,
+      vector_size_t size,
+      memory::MemoryPool* pool);
+
   /// Set 'nulls' to be the nulls buffer of this vector. This API should not be
   /// used on ConstantVector.
   void setNulls(const BufferPtr& nulls);
@@ -798,8 +809,17 @@ class BaseVector {
   }
 
   /// Returns the byte size of memory that is kept live through 'this'.
-  virtual uint64_t retainedSize() const {
-    return nulls_ ? nulls_->capacity() : 0;
+  uint64_t retainedSize() const {
+    uint64_t totalStringBufferSize{0};
+    return retainedSizeImpl(totalStringBufferSize);
+  }
+
+  /// Returns the byte size of memory that is kept live through 'this'. Also add
+  /// the total size of all string buffers recursively carried by 'this' to
+  /// totalStringBufferSize. To get the total size of all string buffers, set
+  /// the initial value of totalStringBufferSize to 0 when calling this method.
+  uint64_t retainedSize(uint64_t& totalStringBufferSize) const {
+    return retainedSizeImpl(totalStringBufferSize);
   }
 
   /// Returns an estimate of the 'retainedSize' of a flat representation of the
@@ -852,6 +872,16 @@ class BaseVector {
 
   /// Returns the value at specified index as a Variant.
   Variant variantAt(vector_size_t index) const;
+
+  /// Returns values for all rows as Variants.
+  std::vector<Variant> toVariants() const;
+
+  /// Creates a vector from a list of Variant values. The result is a flat
+  /// vector with one element per value.
+  static VectorPtr createFromVariants(
+      const TypePtr& type,
+      const std::vector<Variant>& values,
+      velox::memory::MemoryPool* pool);
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
@@ -970,6 +1000,13 @@ class BaseVector {
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
     return nulls_ ? Buffer::slice<bool>(nulls_, offset, length, pool_) : nulls_;
+  }
+
+  virtual uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const = 0;
+
+  uint64_t retainedSizeImpl() const {
+    return nulls_ ? nulls_->capacity() : 0;
   }
 
   TypePtr type_;

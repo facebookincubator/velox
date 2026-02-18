@@ -107,6 +107,66 @@ TEST_P(MultiTopNRowNumberTest, basic) {
   testLimit(5);
 }
 
+TEST_P(MultiTopNRowNumberTest, basicWithPeers) {
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({1, 1, 2, 2, 1, 2, 1, 1, 1, 1, 1}),
+      // Sorting key.
+      makeFlatVector<int64_t>({33, 11, 55, 44, 11, 22, 11, 11, 11, 33, 33}),
+      // Data. Mapping data to matching sorting keys to avoid ordering issues.
+      makeFlatVector<int64_t>({10, 50, 30, 40, 50, 60, 50, 50, 50, 10, 10}),
+  });
+
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    // Emit row numbers.
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // Do not emit row numbers.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {"c0"}, {"c1"}, limit, false)
+               .planNode();
+
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT c0, c1, c2 FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // No partitioning keys.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {}, {"c1"}, limit, true)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(1);
+  testLimit(2);
+  testLimit(3);
+  testLimit(5);
+}
+
 TEST_P(MultiTopNRowNumberTest, largeOutput) {
   // Make 10 vectors. Use different types for partitioning key, sorting key and
   // data. Use order of columns different from partitioning keys, followed by
@@ -591,6 +651,53 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, doubleClose) {
       functionName_);
 
   VELOX_ASSERT_THROW(assertQuery(plan, sql), errorMessage);
+}
+
+// This test verifies that TopNRowNumber operator handles OOM that occurs in the
+// middle of groupProbe, after inserting some new rows into the row container.
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {
+  const std::string errorMessage("Simulated OOM in groupProbe");
+  std::atomic_int insertCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashTable::insertEntry",
+      std::function<void(memory::MemoryPool*)>(
+          ([&](memory::MemoryPool* /*pool*/) {
+            // Trigger OOM after inserting some rows to simulate failure in the
+            // middle of groupProbe insertion.
+            if (++insertCount == 100) {
+              VELOX_FAIL(errorMessage);
+            }
+          })));
+
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row; }, nullEvery(11)),
+              // Sorting key.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (size - row) * 10; },
+                  [](auto row) { return row == 123; }),
+              // Partitioning key. Make sure to spread rows from the same
+              // partition across multiple batches.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5'000; }, nullEvery(7)),
+          }),
+      10);
+
+  core::PlanNodeId topNRowNumberId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1'000, true)
+                  .capturePlanNodeId(topNRowNumberId)
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool_.get()), errorMessage);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

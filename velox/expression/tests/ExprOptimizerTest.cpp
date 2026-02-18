@@ -149,6 +149,30 @@ TEST_F(ExprOptimizerTest, constantFolding) {
       ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), INTEGER()}));
 }
 
+TEST_F(ExprOptimizerTest, specialFormConstantFolding) {
+  // AND, OR.
+  testExpression("true and true", "true");
+  testExpression("false or false", "false");
+  testExpression("null::boolean and false", "false");
+  testExpression("true or null::boolean", "true");
+  testExpression(
+      "null::boolean and null::boolean and null::boolean", "null::boolean");
+  testExpression(
+      "null::boolean or null::boolean or null::boolean", "null::boolean");
+  testExpression("null::boolean and true", "null::boolean");
+  testExpression("false or null::boolean", "null::boolean");
+
+  // IF, SWITCH.
+  testExpression("if(true, 'hello', 'world')", "'hello'");
+  testExpression("case when false then 1 when true then 3 end", "3");
+  testExpression(
+      "case when false then 1 when false then 3 end", "null::bigint");
+  testExpression("case when false then 1 when false then 3 else 2 end", "2");
+  testExpression(
+      "case when false then 'hello' when false then 'world' when true then 'foo' else 'bar' end",
+      "'foo'");
+}
+
 TEST_F(ExprOptimizerTest, lambdas) {
   auto type = ROW({"a"}, {ARRAY(BIGINT())});
   testExpression(

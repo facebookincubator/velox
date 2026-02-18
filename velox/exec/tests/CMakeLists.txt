@@ -64,6 +64,7 @@ add_executable(
   LocalPartitionTest.cpp
   Main.cpp
   MarkDistinctTest.cpp
+  EnforceDistinctTest.cpp
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
@@ -91,12 +92,14 @@ add_executable(
   SortBufferTest.cpp
   SpatialIndexTest.cpp
   HilbertIndexTest.cpp
+  SpillStatsTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
   SplitListenerTest.cpp
   SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
+  StreamingEnforceDistinctTest.cpp
   TableScanTest.cpp
   TableWriterTest.cpp
   TaskListenerTest.cpp
@@ -149,6 +152,7 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
+  velox_dwio_orc_reader
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
   velox_exec
@@ -164,6 +168,7 @@ target_link_libraries(
   velox_test_util
   velox_type
   velox_type_test_lib
+  velox_trace
   velox_vector
   velox_vector_fuzzer
   velox_writer_fuzzer
@@ -228,6 +233,8 @@ add_executable(
   PrestoQueryRunnerIntermediateTypeTransformTestBase.cpp
   PrestoQueryRunnerTDigestTransformTest.cpp
   PrestoQueryRunnerQDigestTransformTest.cpp
+  PrestoQueryRunnerKHyperLogLogTransformTest.cpp
+  PrestoQueryRunnerSetDigestTransformTest.cpp
   PrestoQueryRunnerJsonTransformTest.cpp
   PrestoQueryRunnerIntervalTransformTest.cpp
   PrestoQueryRunnerTimeTransformTest.cpp

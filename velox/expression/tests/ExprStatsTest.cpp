@@ -423,3 +423,87 @@ TEST_F(ExprStatsTest, complexConstants) {
 
   ASSERT_TRUE(exec::unregisterExprSetListener(listener));
 }
+TEST_F(ExprStatsTest, selectiveCpuTrackingForUdfs) {
+  // Test selective CPU tracking for specific UDFs using
+  // kExprTrackCpuUsageUdfs config.
+  vector_size_t inputSize = 10;
+
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(inputSize, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(inputSize, [](auto row) { return row % 7; }),
+  });
+
+  auto rowType = asRowType(data->type());
+
+  // Helper to test selective CPU tracking with specified configuration.
+  auto testCpuTracking =
+      [&](bool enableGlobalTracking,
+          const std::string& funcList,
+          const std::vector<std::string>& expressions,
+          const std::unordered_set<std::string>& expectedFuncsWithNonZeroCpu) {
+        queryCtx_->testingOverrideConfigUnsafe({
+            {core::QueryConfig::kExprTrackCpuUsage,
+             enableGlobalTracking ? "true" : "false"},
+            {core::QueryConfig::kExprTrackCpuUsageForFunctions, funcList},
+        });
+
+        std::vector<Event> events;
+        auto listener = std::make_shared<TestListener>(events);
+        ASSERT_TRUE(exec::registerExprSetListener(listener));
+
+        {
+          auto exprSet = compileExpressions(expressions, rowType);
+          evaluate(*exprSet, data);
+        }
+
+        // Ensure listener is unregistered before accessing events.
+        ASSERT_TRUE(exec::unregisterExprSetListener(listener));
+
+        ASSERT_EQ(1, events.size());
+        auto stats = events.back().stats;
+
+        // Verify selective CPU tracking for the specified functions.
+        for (const auto& [funcName, funcStats] : stats) {
+          if (expectedFuncsWithNonZeroCpu.count(funcName)) {
+            ASSERT_GT(funcStats.timing.cpuNanos, 0) << funcName;
+          } else {
+            ASSERT_EQ(funcStats.timing.cpuNanos, 0) << funcName;
+          }
+        }
+      };
+
+  // Test with empty config - should work same as before.
+  testCpuTracking(false, "", {"c0 + c1", "c0 * c1"}, {});
+
+  // Test with single function name.
+  testCpuTracking(false, "plus", {"c0 + c1", "c0 * c1"}, {"plus"});
+
+  // Test with multiple function names.
+  testCpuTracking(
+      false, "plus,mod", {"c0 + c1", "c0 * c1", "c0 % 5"}, {"plus", "mod"});
+
+  // Test with mixed case function names (should be normalized to lowercase).
+  testCpuTracking(
+      false,
+      "PLUS,Multiply",
+      {"c0 + c1", "c0 * c1", "c0 % 5"},
+      {"plus", "multiply"});
+
+  // Test with extra commas and empty entries (should be handled gracefully).
+  testCpuTracking(
+      false, "plus,,multiply,", {"c0 + c1", "c0 * c1"}, {"plus", "multiply"});
+
+  // Test with larger expression trees.
+  testCpuTracking(
+      false,
+      "plus,pow",
+      {"(c0 + c1) * c1", "pow(c0 + c1, 2)"},
+      {"plus", "pow"});
+
+  // Test with global CPU tracking enabled.
+  testCpuTracking(
+      true,
+      "plus,pow",
+      {"(c0 + c1) * c1", "pow(c0 + c1, 2)"},
+      {"plus", "pow", "multiply", "cast"});
+}

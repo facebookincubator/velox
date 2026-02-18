@@ -26,7 +26,6 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
-  static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
 
   ExchangeClient(
       std::string taskId,
@@ -36,11 +35,13 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       uint64_t minOutputBatchBytes,
       memory::MemoryPool* pool,
       folly::Executor* executor,
-      int32_t requestDataSizesMaxWaitSec = 10)
+      int32_t requestDataSizesMaxWaitSec = 10,
+      bool skipRequestDataSizeWithSingleSource = false,
+      bool lazyFetching = false)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
-        kRequestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
+        requestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
         pool_(pool),
         executor_(executor),
         queue_(
@@ -53,7 +54,10 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         // ExchangeQueue 'minOutputBatchBytes' to be be 0 so that it always
         // unblocks. In short, 0 has a special meaning for ExchangeQueue
         minOutputBatchBytes_(
-            std::max(static_cast<uint64_t>(1), minOutputBatchBytes)) {
+            std::max(static_cast<uint64_t>(1), minOutputBatchBytes)),
+        skipRequestDataSizeWithSingleSource_(
+            skipRequestDataSizeWithSingleSource),
+        lazyFetching_(lazyFetching) {
     VELOX_CHECK_NOT_NULL(pool_);
     VELOX_CHECK_NOT_NULL(executor_);
     // NOTE: the executor is used to run async response callback from the
@@ -88,8 +92,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
 
   // Returns runtime statistics aggregated across all of the exchange sources.
   // ExchangeClient is expected to report background CPU time by including a
-  // runtime metric named ExchangeClient::kBackgroundCpuTimeMs.
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+  // runtime metric named Operator::kBackgroundCpuTimeNanos.
+  folly::F14FastMap<std::string, RuntimeMetric> stats();
 
   const std::shared_ptr<ExchangeQueue>& queue() const {
     return queue_;
@@ -103,7 +107,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
-  std::vector<std::unique_ptr<SerializedPage>>
+  std::vector<std::unique_ptr<SerializedPageBase>>
   next(int consumerId, uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   std::string toString() const;
@@ -111,7 +115,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   folly::dynamic toJson() const;
 
   std::chrono::seconds requestDataSizesMaxWaitSec() const {
-    return kRequestDataSizesMaxWaitSec_;
+    return requestDataSizesMaxWaitSec_;
   }
 
   const std::unordered_set<std::string>& getRemoteTaskIdList() const {
@@ -132,15 +136,42 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
     std::vector<int64_t> remainingBytes;
   };
 
+  // Selects exchange sources to request data from based on available queue
+  // capacity. Handles multiple sources by first requesting data sizes from all
+  // empty sources, then requesting actual data from producing sources based on
+  // their remaining bytes and available capacity. May initiate out-of-band
+  // transfers for large pages that exceed capacity to avoid deadlock
+  // situations. For single source case, delegates to
+  // pickupSingleSourceToRequestLocked which sets max request bytes based on
+  // available queue space instead of reported remaining bytes from exchange
+  // sources.
   std::vector<RequestSpec> pickSourcesToRequestLocked();
 
+  // Specialized single-source request picker for single-source exchange
+  // clients. Sets the max request bytes based on available space in the queue
+  // rather than the reported remaining bytes from exchange sources. The reason
+  // is that single source has no other alternative so just fetch as much as
+  // possible from that source. Returns a request spec for the single source
+  // when there is available capacity in the queue and no pending requests. If
+  // capacity is unavailable or requests are already pending, returns empty
+  // vector.
+  std::vector<RequestSpec> pickupSingleSourceToRequestLocked();
   void request(std::vector<RequestSpec>&& requestSpecs);
+
+  /// Returns true if skip request data size optimization is enabled for single
+  /// source exchanges.
+  bool skipRequestDataSizeWithSingleSource() const {
+    return skipRequestDataSizeWithSingleSource_ && queue_->hasNoMoreSources() &&
+        sources_.size() == 1;
+  }
+
+  folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
 
   // Handy for ad-hoc logging.
   const std::string taskId_;
   const int destination_;
   const int64_t maxQueuedBytes_;
-  const std::chrono::seconds kRequestDataSizesMaxWaitSec_;
+  const std::chrono::seconds requestDataSizesMaxWaitSec_;
 
   memory::MemoryPool* const pool_;
   folly::Executor* const executor_;
@@ -150,9 +181,20 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
 
+  folly::F14FastMap<std::string, RuntimeMetric> stats_;
+
   // The minimum byte size the consumer is expected to consume from
   // the exchange queue.
   const uint64_t minOutputBatchBytes_;
+
+  // Enable single source exchange optimization query config flag
+  // when there is only one exchange source.
+  const bool skipRequestDataSizeWithSingleSource_;
+
+  // If true, defer fetching until next() is called.
+  // If false (default), start fetching data immediately when remote tasks are
+  // added.
+  const bool lazyFetching_;
 
   // Total number of bytes in flight.
   int64_t totalPendingBytes_{0};

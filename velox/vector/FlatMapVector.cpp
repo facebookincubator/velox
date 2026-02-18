@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/vector/FlatMapVector.h"
 #include <folly/hash/Hash.h>
-#include "velox/vector/FlatVector.h"
+
+#include "velox/vector/FlatMapVector.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
 namespace {
@@ -34,9 +35,9 @@ std::optional<column_index_t> getKeyChannelImpl(
     return std::nullopt;
   }
 
-  auto distinctFlatKeys = distinctKeys->as<FlatVector<T>>();
+  auto simpleKeys = distinctKeys->as<SimpleVector<T>>();
   VELOX_CHECK(
-      distinctFlatKeys != nullptr,
+      simpleKeys != nullptr,
       "Incompatible vector type for flat map vector keys: {}",
       distinctKeys->toString());
 
@@ -51,7 +52,7 @@ std::optional<column_index_t> getKeyChannelImpl(
   // Here there was at least one hash match. Need to compare to the keys vector
   // to ensure it's an actual match and not a hash collision.
   for (auto it = range.first; it != range.second; ++it) {
-    if (distinctFlatKeys->valueAtFast(it->second) == keyValue) {
+    if (simpleKeys->valueAt(it->second) == keyValue) {
       return it->second;
     }
   }
@@ -545,7 +546,8 @@ void FlatMapVector::copyRanges(
       // Then we allocate a new key values vector and in map buffer.
       inMapsAt(channel, true) =
           AlignedBuffer::allocate<bool>(size(), pool(), false);
-      mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+      mapValues_.back() = BaseVector::createEmptyLike(
+          sourceFlatMap->mapValues_[i].get(), size(), pool());
     }
 
     // Finally, copy the map values and update the in map buffers.

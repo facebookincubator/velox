@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <gtest/gtest.h>
-
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -213,6 +213,31 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   }
 };
 
+TEST_F(PlanNodeTest, nestedLoopJoin) {
+  auto leftData = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      });
+
+  auto rightData = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  core::PlanNodeIdGenerator planNodeIdGenerator;
+  auto nextId = [&planNodeIdGenerator]() { return planNodeIdGenerator.next(); };
+
+  auto leftValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{leftData});
+  auto rightValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{rightData});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<NestedLoopJoinNode>(
+          nextId(), leftValues, rightValues, ROW({"a"}, VARCHAR())),
+      "Join output column type must match the input type: VARCHAR vs. INTEGER");
+}
+
 TEST_F(PlanNodeTest, indexLookupJoin) {
   const auto rowType = ROW({"name"}, {BIGINT()});
   const auto valueNode = std::make_shared<ValuesNode>("orderBy", rowData_);
@@ -347,6 +372,21 @@ TEST_F(PlanNodeTest, indexLookupJoin) {
             outputTypeWithDuplicateMatchColumn),
         "");
   }
+  {
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/false,
+            probeNode,
+            buildNode,
+            ROW({"c0", "c1"}, {VARCHAR(), BIGINT()})),
+        "Join output column type must match the input type: VARCHAR vs. BIGINT");
+  }
 }
 
 TEST_F(PlanNodeTest, partitionedOutputNode) {
@@ -457,5 +497,92 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
           serdeKind,
           source),
       "partitioning doesn't allow for partitioning keys");
+}
+
+TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
+  auto values = std::make_shared<ValuesNode>("values", rowData_);
+
+  const std::vector<FieldAccessTypedExprPtr> groupingKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<std::string> aggregateNames{"sum"};
+  const std::vector<AggregationNode::Aggregate> aggregates{
+      {.call = std::make_shared<CallTypedExpr>(BIGINT(), "sum"),
+       .rawInputTypes = {BIGINT()}}};
+
+  // noGroupsSpanBatches=true with preGroupedKeys (streaming aggregation) should
+  // succeed and the accessor should return true.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/true,
+        values);
+    ASSERT_TRUE(aggNode->noGroupsSpanBatches());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum() noGroupsSpanBatches] -> c0:BIGINT, sum:BIGINT\n");
+  }
+
+  // noGroupsSpanBatches=false with preGroupedKeys should succeed and the
+  // accessor should return false.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        values);
+    ASSERT_FALSE(aggNode->noGroupsSpanBatches());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
+
+  // noGroupsSpanBatches=true without preGroupedKeys (non-streaming aggregation)
+  // should fail.
+  VELOX_ASSERT_THROW(
+      std::make_shared<AggregationNode>(
+          "agg",
+          AggregationNode::Step::kSingle,
+          groupingKeys,
+          /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+          aggregateNames,
+          aggregates,
+          /*ignoreNullKeys=*/false,
+          /*noGroupsSpanBatches=*/true,
+          values),
+      "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
+
+  // noGroupsSpanBatches=false without preGroupedKeys should succeed.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        values);
+    ASSERT_FALSE(aggNode->noGroupsSpanBatches());
+    ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
 }
 } // namespace

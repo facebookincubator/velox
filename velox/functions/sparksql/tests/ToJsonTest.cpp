@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
@@ -53,9 +54,9 @@ TEST_F(ToJsonTest, basicStruct) {
 
 TEST_F(ToJsonTest, basicArray) {
   auto input = makeNullableArrayVector<int64_t>(
-      {{{1}},
-       {{2, std::nullopt, 3}},
-       {std::vector<std::optional<int64_t>>{}},
+      {std::vector<std::optional<int64_t>>{1},
+       std::vector<std::optional<int64_t>>{2, std::nullopt, 3},
+       common::testutil::optionalEmpty,
        std::nullopt});
   auto expected = makeNullableFlatVector<std::string>(
       {R"([1])", R"([2,null,3])", R"([])", std::nullopt});
@@ -65,20 +66,24 @@ TEST_F(ToJsonTest, basicArray) {
 TEST_F(ToJsonTest, basicMap) {
   // MAP(VARCHAR, BIGINT)
   auto input = makeNullableMapVector<std::string, int64_t>(
-      {{{{"a", 1}, {"b", 2}, {"c", 3}}},
+      {std::vector<std::pair<std::string, std::optional<int64_t>>>{
+           {"a", 1}, {"b", 2}, {"c", 3}},
        std::nullopt,
-       {std::vector<std::pair<std::string, std::optional<int64_t>>>{}},
-       {{{"a", 1}, {"b", std::nullopt}}}});
+       common::testutil::optionalEmpty,
+       std::vector<std::pair<std::string, std::optional<int64_t>>>{
+           {"a", 1}, {"b", std::nullopt}}});
   auto expected = makeNullableFlatVector<std::string>(
       {R"({"a":1,"b":2,"c":3})", std::nullopt, R"({})", R"({"a":1,"b":null})"});
   testToJson(input, expected);
 
   // MAP(BIGINT, VARCHAR)
   input = makeNullableMapVector<int64_t, std::string>(
-      {{{{1, "a"}, {2, "b"}, {3, "c"}}},
+      {std::vector<std::pair<int64_t, std::optional<std::string>>>{
+           {1, "a"}, {2, "b"}, {3, "c"}},
        std::nullopt,
-       {std::vector<std::pair<int64_t, std::optional<std::string>>>{}},
-       {{{1, "a"}, {2, std::nullopt}}}});
+       common::testutil::optionalEmpty,
+       std::vector<std::pair<int64_t, std::optional<std::string>>>{
+           {1, "a"}, {2, std::nullopt}}});
   expected = makeNullableFlatVector<std::string>(
       {R"({"1":"a","2":"b","3":"c"})",
        std::nullopt,
@@ -284,10 +289,10 @@ TEST_F(ToJsonTest, nestedMap) {
   auto data1 = makeNullableFlatVector<int32_t>(
       {0, 18321, -25567, 2932896, std::nullopt}, DateType::get());
   auto data2 = makeNullableArrayVector<std::string>(
-      {{{"a", "b", std::nullopt}},
-       {std::vector<std::optional<std::string>>{}},
-       {{"d", "e"}},
-       {{"f", std::nullopt, "h"}},
+      {std::vector<std::optional<std::string>>{"a", "b", std::nullopt},
+       common::testutil::optionalEmpty,
+       std::vector<std::optional<std::string>>{"d", "e"},
+       std::vector<std::optional<std::string>>{"f", std::nullopt, "h"},
        std::nullopt});
   auto data3 = makeNullableFlatVector<double>(
       {1.0, kNaNDouble, kInfDouble, -kInfDouble, std::nullopt});

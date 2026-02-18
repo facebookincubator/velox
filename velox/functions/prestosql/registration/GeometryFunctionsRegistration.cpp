@@ -32,6 +32,8 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "ST_GeomFromBinary"}});
   registerFunction<StAsTextFunction, Varchar, Geometry>(
       {{prefix + "ST_AsText"}});
+  registerFunction<SphericalAsTextFunction, Varchar, SphericalGeography>(
+      {{prefix + "ST_AsText"}});
   registerFunction<StAsBinaryFunction, Varbinary, Geometry>(
       {{prefix + "ST_AsBinary"}});
   registerFunction<StPointFunction, Geometry, double, double>(
@@ -46,6 +48,19 @@ void registerConstructors(const std::string& prefix) {
       {{prefix + "to_spherical_geography"}});
   registerFunction<ToGeometryFunction, Geometry, SphericalGeography>(
       {{prefix + "to_geometry"}});
+  registerFunction<
+      StSphericalCentroidFunction,
+      SphericalGeography,
+      SphericalGeography>({{prefix + "st_centroid"}});
+  registerFunction<
+      StSphericalDistanceFunction,
+      double,
+      SphericalGeography,
+      SphericalGeography>({{prefix + "st_distance"}});
+  registerFunction<StSphericalLengthFunction, double, SphericalGeography>(
+      {{prefix + "st_length"}});
+  registerFunction<StSphericalAreaFunction, double, SphericalGeography>(
+      {{prefix + "st_area"}});
 }
 
 void registerRelationPredicates(const std::string& prefix) {

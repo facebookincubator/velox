@@ -198,6 +198,11 @@ the join is executed using broadcast or partitioned strategy has no effect on
 the join execution itself. The only difference is that broadcast execution
 allows for dynamic filter pushdown while partitioned execution does not.
 
+HashJoinNode supports a ``useHashTableCache`` flag (used only by Presto-on-Spark)
+that enables caching of the hash table built for broadcast joins. When enabled,
+the first task to build the hash table stores it in a global cache, and subsequent
+tasks from same query reuse the cached table instead of rebuilding it.
+
 PartitionedOutput operator and OutputBufferManager support
 broadcasting the results of the plan evaluation. This functionality is enabled
 by setting boolean flag "broadcast" in the PartitionedOutputNode to true.

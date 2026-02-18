@@ -79,6 +79,9 @@ LogicalType fromVeloxType(const TypePtr& type) {
       if (type->isIntervalDayTime()) {
         return LogicalType::INTERVAL;
       }
+      if (type->isTime()) {
+        return LogicalType::TIME;
+      }
       return LogicalType::BIGINT;
     case TypeKind::REAL:
       return LogicalType::FLOAT;
@@ -138,6 +141,8 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       return VARCHAR();
     case LogicalTypeId::DATE:
       return DATE();
+    case LogicalTypeId::TIME:
+      return TIME();
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
     case LogicalTypeId::TIMESTAMP_TZ: {
@@ -191,6 +196,9 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       const auto name = ::duckdb::UserType::GetTypeName(type);
       if (auto customType = getCustomType(name, {})) {
         return customType;
+      }
+      if (name == "OPAQUE<void>") {
+        return OPAQUE<void>();
       }
       [[fallthrough]];
     }

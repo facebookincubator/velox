@@ -17,12 +17,14 @@
 #include <gtest/gtest.h>
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/functions/prestosql/tests/resources/GeometryTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/prestosql/types/BingTileType.h"
 
 using facebook::velox::functions::test::FunctionBaseTest;
 using namespace facebook::velox;
+using namespace facebook::velox::common::geospatial;
 
 class GeometryFunctionsTest : public FunctionBaseTest {
  public:
@@ -107,6 +109,12 @@ class GeometryFunctionsTest : public FunctionBaseTest {
       std::optional<std::string> input) {
     auto vec = makeNullableFlatVector<std::string>({input});
     return makeRowVector({vec});
+  }
+
+  bool aboutEquals(double a, double b) {
+    double diff = std::abs(a - b);
+    double scale = std::max(std::abs(a), std::abs(b));
+    return diff <= std::max(1e-5, 1e-5 * scale);
   }
 };
 
@@ -211,6 +219,11 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
         "to_hex(ST_AsBinary(ST_GeomFromBinary(from_hex(c0))))", wkt);
   };
 
+  const auto wktRoundTripSpherical = [&](const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>(
+        "ST_AsText(to_spherical_geography(ST_GeometryFromText(c0)))", a);
+  };
+
   const std::vector<std::string> wkts = {
       "POINT (1 2)",
       "LINESTRING (0 0, 10 10)",
@@ -243,6 +256,7 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
   for (size_t i = 0; i < wkts.size(); i++) {
     assert(i < wkbs.size() && i < bigEndianWkbs.size());
     EXPECT_EQ(wkts[i], wktRoundTrip(wkts[i]));
+    EXPECT_EQ(wkts[i], wktRoundTripSpherical(wkts[i]));
     EXPECT_EQ(wkbs[i], wktToWkb(wkts[i]));
     EXPECT_EQ(wkts[i], wkbToWkT(wkbs[i]));
     EXPECT_EQ(wkbs[i], wkbRoundTrip(wkbs[i]));
@@ -272,6 +286,8 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
   for (size_t i = 0; i < emptyGeometryWkts.size(); i++) {
     assert(i < emptyGeometryWkbs.size());
     EXPECT_EQ(wktRoundTrip(emptyGeometryWkts[i]), emptyGeometryWkts[i]);
+    EXPECT_EQ(
+        wktRoundTripSpherical(emptyGeometryWkts[i]), emptyGeometryWkts[i]);
     EXPECT_EQ(emptyGeometryWkbs[i], wktToWkb(emptyGeometryWkts[i]));
     EXPECT_EQ(emptyGeometryWkts[i], wkbToWkT(emptyGeometryWkbs[i]));
     EXPECT_EQ(emptyGeometryWkbs[i], wkbRoundTrip(emptyGeometryWkbs[i]));
@@ -1232,6 +1248,14 @@ TEST_F(GeometryFunctionsTest, testStIsSimpleValid) {
       "GEOMETRYCOLLECTION (POINT (1 2), POLYGON ((0 0, 0 1, 2 1, 1 1, 1 0, 0 0)))",
       false,
       false);
+  assertStIsValidSimpleFunc(
+      "MULTIPOLYGON (((18.6317421 49.9605785, 18.6318832 49.9607979, 18.6324683 49.9607312, 18.6332842 49.9605658, 18.6332003 49.9603557, 18.6339711 49.9602283, 18.6341994 49.9601905, 18.6343455 49.96016, 18.6344167 49.9601452, 18.6346696 49.9600919, 18.6349643 49.9600567, 18.6352271 49.9601455, 18.6354493 49.9600501, 18.6358024 49.9601071, 18.6358911 49.9600263, 18.6336542 49.9592453, 18.6334794 49.9591838, 18.6337483 49.9581339, 18.6335303 49.9580562, 18.6331284 49.9579122, 18.6324931 49.9576885, 18.6322503 49.9575998, 18.6321381 49.9581593, 18.6321172 49.9582692, 18.6324683 49.9583852, 18.6325255 49.9584004, 18.6327588 49.958489, 18.6324792 49.9588351, 18.6323941 49.9588049, 18.6323261 49.9587807, 18.6320354 49.9586789, 18.6319443 49.9592903, 18.6326731 49.9595648, 18.6331388 49.9594836, 18.6335981 49.959673, 18.6333065 49.9597934, 18.6328096 49.9600844, 18.6330209 49.9601348, 18.633424 49.9602597, 18.6332263 49.960317, 18.6315633 49.9597642, 18.6309331 49.9600741, 18.6317421 49.9605785)), ((18.6298591 49.9606201, 18.6298592 49.96062, 18.6298589 49.9606193, 18.6298591 49.9606201)))",
+      true,
+      true);
+  assertStIsValidSimpleFunc(
+      "MULTIPOLYGON (((18.6317421 49.9605785, 18.6318832 49.9607979, 18.6324683 49.9607312, 18.6332842 49.9605658, 18.6332003 49.9603557, 18.6339711 49.9602283, 18.6341994 49.9601905, 18.6343455 49.96016, 18.6344167 49.9601452, 18.6346696 49.9600919, 18.6349643 49.9600567, 18.6352271 49.9601455, 18.6354493 49.9600501, 18.6358024 49.9601071, 18.6358911 49.9600263, 18.6336542 49.9592453, 18.6334794 49.9591838, 18.6337483 49.9581339, 18.6335303 49.9580562, 18.6331284 49.9579122, 18.6324931 49.9576885, 18.6322503 49.9575998, 18.6321381 49.9581593, 18.6321172 49.9582692, 18.6324683 49.9583852, 18.6325255 49.9584004, 18.6327588 49.958489, 18.6324792 49.9588351, 18.6323941 49.9588049, 18.6323261 49.9587807, 18.6320354 49.9586789, 18.6319443 49.9592903, 18.6326731 49.9595648, 18.6331388 49.9594836, 18.6335981 49.959673, 18.6333065 49.9597934, 18.6328096 49.9600844, 18.6330209 49.9601348, 18.633424 49.9602597, 18.6332263 49.960317, 18.6315633 49.9597642, 18.6309331 49.9600741, 18.6317421 49.9605785)), ((18.6298591 49.9606201, 18.6298592 49.96062, 18.6298592 49.96062, 18.6298591 49.9606201)))",
+      false,
+      false);
 }
 
 TEST_F(GeometryFunctionsTest, testStArea) {
@@ -1443,15 +1467,14 @@ TEST_F(GeometryFunctionsTest, testStCentroid) {
             "ST_AsText(ST_Centroid(ST_GeometryFromText(c0)))", wkt);
 
         if (wkt.has_value()) {
-          ASSERT_TRUE(result.has_value());
-          ASSERT_TRUE(expected.has_value());
-          ASSERT_EQ(result.value(), expected.value());
+          ASSERT_EQ(result, expected);
         } else {
+          ASSERT_FALSE(expected.has_value());
           ASSERT_FALSE(result.has_value());
         }
       };
 
-  testStCentroidFunc("LINESTRING EMPTY", "POINT EMPTY");
+  testStCentroidFunc("LINESTRING EMPTY", std::nullopt);
   testStCentroidFunc("POINT (3 5)", "POINT (3 5)");
   testStCentroidFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POINT (2.5 5)");
   testStCentroidFunc("LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)");
@@ -2329,8 +2352,12 @@ TEST_F(GeometryFunctionsTest, testStEnvelope) {
       "GEOMETRYCOLLECTION (POINT (5 1), LINESTRING (3 4, 4 4))",
       "POLYGON ((3 1, 3 4, 5 4, 5 1, 3 1))");
   testStEnvelopeFunc(
-      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2868119, 119.094024 -27.2871725)))",
-      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094024 -27.2846569, 119.094024 -27.2871725, 119.094024 -27.2871725))");
+      "MULTIPOLYGON (((119.094024 -27.2871725, 119.094124 -27.2846569, 119.094124 -27.2868119, 119.094024 -27.2871725)))",
+      "POLYGON ((119.094024 -27.2871725, 119.094024 -27.2846569, 119.094124 -27.2846569, 119.094124 -27.2871725, 119.094024 -27.2871725))");
+
+  // Zero area envelope is valid
+  testStEnvelopeFunc(
+      "LINESTRING (1 1, 1 2)", "POLYGON ((1 1, 1 2, 1 2, 1 1, 1 1))");
 
   testStEnvelopeFunc("POLYGON EMPTY", "POLYGON EMPTY");
   testStEnvelopeFunc("MULTIPOLYGON EMPTY", "POLYGON EMPTY");
@@ -3239,39 +3266,27 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
   // Geometries at boundaries of tiles
   testGeometryToBingTilesFunc("POINT (0 0)", 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 1, {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+      fmt::format("POINT ({} 0)", kMaxLongitude), 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+      fmt::format("POINT (0 {})", kMinBingTileLatitude), 1, {{"3"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 1, {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMinBingTileLatitude),
       1,
       {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       1,
       {{"0"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMaxBingTileLatitude),
       1,
       {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMinBingTileLatitude),
       1,
       {{"3"}});
   testGeometryToBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
@@ -3279,31 +3294,19 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
   testGeometryToBingTilesFunc("LINESTRING (0 -1, 0 -2)", 1, {{"3"}});
   testGeometryToBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMinLongitude, kMinLongitude),
       1,
       {{"0"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMinLongitude, kMinLongitude),
       1,
       {{"2"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"1"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"3"}});
 
@@ -3392,14 +3395,11 @@ TEST_F(GeometryFunctionsTest, testGeometryToBingTiles) {
       8,
       {{"22200000"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 5, {{"20000"}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 5, {{"20000"}});
   testGeometryToBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 5, {{"10000"}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 5, {{"10000"}});
   testGeometryToBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       5,
       {{"00000"}});
 
@@ -3517,76 +3517,52 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   // Geometries at tile borders
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 0, {{""}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 0, {{""}});
+      fmt::format("POINT ({} 0)", kMaxLongitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 0, {{""}});
+      fmt::format("POINT (0 {})", kMinBingTileLatitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 0, {{""}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 0, {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMinBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMaxBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMinBingTileLatitude),
       0,
       {{""}});
   testGeometryToDissolvedBingTilesFunc("POINT (0 0)", 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMinLongitude), 1, {{"2"}});
+      fmt::format("POINT ({} 0)", kMinLongitude), 1, {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT ({} 0)", BingTileType::kMaxLongitude), 1, {{"3"}});
+      fmt::format("POINT ({} 0)", kMaxLongitude), 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMinLatitude), 1, {{"3"}});
+      fmt::format("POINT (0 {})", kMinBingTileLatitude), 1, {{"3"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format("POINT (0 {})", BingTileType::kMaxLatitude), 1, {{"1"}});
+      fmt::format("POINT (0 {})", kMaxBingTileLatitude), 1, {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMinBingTileLatitude),
       1,
       {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMinLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMinLongitude, kMaxBingTileLatitude),
       1,
       {{"0"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMaxBingTileLatitude),
       1,
       {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "POINT ({} {})",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMinLatitude),
+      fmt::format("POINT ({} {})", kMaxLongitude, kMinBingTileLatitude),
       1,
       {{"3"}});
   testGeometryToDissolvedBingTilesFunc("LINESTRING (-1 0, -2 0)", 1, {{"2"}});
@@ -3595,31 +3571,19 @@ TEST_F(GeometryFunctionsTest, testGeometryToDissolvedBingTiles) {
   testGeometryToDissolvedBingTilesFunc("LINESTRING (0 1, 0 2)", 1, {{"1"}});
 
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMinLongitude, kMinLongitude),
       1,
       {{"0"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMinLongitude,
-          BingTileType::kMinLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMinLongitude, kMinLongitude),
       1,
       {{"2"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} 1, {} 2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} 1, {} 2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"1"}});
   testGeometryToDissolvedBingTilesFunc(
-      fmt::format(
-          "LINESTRING ({} -1, {} -2)",
-          BingTileType::kMaxLongitude,
-          BingTileType::kMaxLongitude),
+      fmt::format("LINESTRING ({} -1, {} -2)", kMaxLongitude, kMaxLongitude),
       1,
       {{"3"}});
 
@@ -4214,4 +4178,386 @@ TEST_F(GeometryFunctionsTest, testToFromSphericalGeography) {
       testToFromSphericalGeographyFunc(
           "GEOMETRYCOLLECTION (POINT (1 1), GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), GEOMETRYCOLLECTION (POLYGON ((2 2, 2 -300, 3 3, 3 2, 2 2)))))"),
       "Latitude must be in range [-90, 90] and longitude must be in range [-180, 180]. Got latitude: -300 and longitude: 0");
+}
+
+TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
+  const auto testStSphericalCentroidFunction = [&](const std::optional<
+                                                       std::string>& wkt,
+                                                   const std::optional<
+                                                       std::string>&
+                                                       expectedWkt) {
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "st_astext(to_geometry(st_centroid(to_spherical_geography(ST_GeometryFromText(c0)))))",
+        wkt);
+
+    if (expectedWkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(result.value(), expectedWkt.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Empty geometries return null. Note that functions that return empty
+  // geometries might choose any type, so we should cover all types.
+  testStSphericalCentroidFunction("POINT EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("MULTIPOINT EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("LINESTRING EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("MULTILINESTRING EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("POLYGON EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("MULTIPOLYGON EMPTY", std::nullopt);
+  testStSphericalCentroidFunction("GEOMETRYCOLLECTION EMPTY", std::nullopt);
+
+  // Single point returns same point
+  testStSphericalCentroidFunction("POINT (3 5)", "POINT (3 5)");
+
+  // Single point in multipoint returns same point
+  testStSphericalCentroidFunction("MULTIPOINT (3 5)", "POINT (3 5)");
+
+  // Two points on opposite sides of equator at same longitude
+  testStSphericalCentroidFunction("MULTIPOINT (0 -45, 0 45)", "POINT (0 0)");
+
+  // Two points on equator at opposite longitudes
+  testStSphericalCentroidFunction("MULTIPOINT (45 0, -45 0)", "POINT (0 0)");
+
+  // Two antipodal points on the equator (0, 0) and (-180, 0)
+  // The result is arbitrary but GEOS calculates it as (-90 45)
+  testStSphericalCentroidFunction("MULTIPOINT (0 0, -180 0)", "POINT (-90 45)");
+
+  // Three points - the Java test expects (12.36780515862267, 0)
+  // We'll check with some tolerance
+  auto result = evaluateOnce<std::string>(
+      "st_astext(to_geometry(st_centroid(to_spherical_geography(ST_GeometryFromText(c0)))))",
+      std::optional<std::string>("MULTIPOINT (0 -45, 0 45, 30 0)"));
+  ASSERT_TRUE(result.has_value());
+
+  // Parse the result to check longitude is approximately 12.3678
+  std::string resultStr = result.value();
+  ASSERT_TRUE(resultStr.find("POINT (12.3678") != std::string::npos);
+
+  // Four symmetric points should give centroid at (0, 0)
+  testStSphericalCentroidFunction(
+      "MULTIPOINT (0 -45, 0 45, 30 0, -30 0)", "POINT (0 0)");
+
+  // Non-point/multipoint geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalCentroidFunction("LINESTRING (0 0, 1 1)", std::nullopt),
+      "ST_Centroid[SphericalGeography] only applies to Point or MultiPoint. Input type is: LineString");
+
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalCentroidFunction(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
+      "ST_Centroid[SphericalGeography] only applies to Point or MultiPoint. Input type is: Polygon");
+}
+TEST_F(GeometryFunctionsTest, testStSphericalDistance) {
+  const auto testStSphericalDistanceFunc = [&](const std::optional<std::string>&
+                                                   leftWkt,
+                                               const std::optional<std::string>&
+                                                   rightWkt,
+                                               const std::optional<double>&
+                                                   expected) {
+    std::optional<double> result = evaluateOnce<double>(
+        "st_distance(to_spherical_geography(ST_GeometryFromText(c0)), to_spherical_geography(ST_GeometryFromText(c1)))",
+        leftWkt,
+        rightWkt);
+
+    if (expected.has_value()) {
+      ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  // Happy cases
+  testStSphericalDistanceFunc(
+      "POINT (-86.67 36.12)", "POINT (-118.40 33.94)", 2886448.973436703);
+  testStSphericalDistanceFunc(
+      "POINT (-118.40 33.94)", "POINT (-86.67 36.12)", 2886448.973436703);
+  testStSphericalDistanceFunc(
+      "POINT (-71.0589 42.3601)",
+      "POINT (-71.2290 42.4430)",
+      16734.69743457461);
+  testStSphericalDistanceFunc(
+      "POINT (-86.67 36.12)", "POINT (-86.67 36.12)", 0.0);
+
+  // Non-point geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalDistanceFunc(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))",
+          "POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))",
+          std::nullopt),
+      "ST_Distance[SphericalGeography] only applies to Point. Input type is: Polygon");
+
+  // Empty points should return null
+  testStSphericalDistanceFunc("POINT EMPTY", "POINT (40 30)", std::nullopt);
+  testStSphericalDistanceFunc("POINT (20 10)", "POINT EMPTY", std::nullopt);
+  testStSphericalDistanceFunc("POINT EMPTY", "POINT EMPTY", std::nullopt);
+}
+
+TEST_F(GeometryFunctionsTest, testStSphericalLength) {
+  const auto testStSphericalLengthFunction =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& expected) {
+        std::optional<double> result = evaluateOnce<double>(
+            "st_length(to_spherical_geography(ST_GeometryFromText(c0)))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  double length = 4350866.6362;
+
+  // Empty linestring returns null
+  testStSphericalLengthFunction("LINESTRING EMPTY", std::nullopt);
+
+  // ST_Length is equivalent to sums of ST_DISTANCE between points in the
+  // LineString
+  testStSphericalLengthFunction(
+      "LINESTRING (-71.05 42.36, -87.62 41.87, -122.41 37.77)", length);
+
+  // Linestring has same length as its reverse
+  testStSphericalLengthFunction(
+      "LINESTRING (-122.41 37.77, -87.62 41.87, -71.05 42.36)", length);
+
+  // Path north pole -> south pole -> north pole should be roughly the
+  // circumference of the Earth
+  testStSphericalLengthFunction(
+      "LINESTRING (0.0 90.0, 0.0 -90.0, 0.0 90.0)", 4.003e7);
+
+  // Empty multi-linestring returns null
+  testStSphericalLengthFunction("MULTILINESTRING EMPTY", std::nullopt);
+
+  // Multi-linestring with one path is equivalent to a single linestring
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87, -122.41 37.77))", length);
+
+  // Multi-linestring with two disjoint paths has length equal to sum of lengths
+  // of lines
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87, -122.41 37.77), (-73.05 42.36, -89.62 41.87, -124.41 37.77))",
+      2 * length);
+
+  // Multi-linestring with adjacent paths is equivalent to a single linestring
+  testStSphericalLengthFunction(
+      "MULTILINESTRING ((-71.05 42.36, -87.62 41.87), (-87.62 41.87, -122.41 37.77))",
+      length);
+
+  // Non-linestring geometries should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalLengthFunction(
+          "POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", std::nullopt),
+      "ST_Length[SphericalGeography] only applies to LineString or MultiLineString. Input type is: Polygon");
+
+  // Invalid linestring should throw
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalLengthFunction("LINESTRING (0.0)", std::nullopt),
+      "Failed to parse WKT: ParseException: Expected number but encountered ')'");
+}
+
+TEST_F(GeometryFunctionsTest, testDegeneratePolygons) {
+  const auto testDegeneratePolygonsFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        auto res = evaluateOnce<std::string>(
+            "ST_AsText(ST_GeometryFromText(c0))", wkt);
+        if (expected.has_value()) {
+          ASSERT_TRUE(res.has_value());
+          ASSERT_EQ(expected.value(), res.value());
+        } else {
+          ASSERT_FALSE(res.has_value());
+        }
+      };
+
+  // Single polygon with CCW orientation - should orient to CW
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 3 4, 5 7, 1 2))",
+      "POLYGON ((1 2, 5 7, 3 4, 1 2))"); // note: this should be fine
+
+  // Single polygons with zero area
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 5 6, 3 4, 1 2))", "POLYGON ((1 2, 3 4, 5 6, 1 2))");
+
+  testDegeneratePolygonsFunc(
+      "POLYGON ((1 2, 3 4, 5 6, 1 2))", "POLYGON ((1 2, 5 6, 3 4, 1 2))");
+
+  // Single polygons with interior rings- should canonicalize so any shells have
+  // CW orientation and holes have CCW orientation.
+  testDegeneratePolygonsFunc(
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3))",
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))");
+
+  testDegeneratePolygonsFunc(
+      "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))",
+      "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3))");
+
+  // Multipolygons where polygons after the first are CCW for shell or CW for
+  // hole. These should be correctly oriented after serde.
+
+  // First polygon has CW shell and CCW hole, second polygon has CCW
+  // shell and CCW hole -> second polygon shell should be reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CW hole, second polygon has CCW
+  // shell and CCW hole -> first polygon hole and second polygon shell should be
+  // reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CCW shell and CW hole, second polygon has CCW
+  // shell and CW hole -> both polygons should have shell and hole reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CCW shell and CCW hole, second polygon has CCW
+  // shell and CCW hole -> both polygons should have shells reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 10 0, 10 10, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 20 0, 20 20, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CW hole, second polygon has CW
+  // shell and CW hole -> both polygons should have holes reoriented
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 3 7, 7 7, 7 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 6 14, 14 14, 14 6, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // MultiPolygons with zero-area rings. These rings are considered CCW before
+  // and after rotation, and can cause deformed multipolygons. This is being
+  // included to reach bug parity with Java, but we should alter these tests
+  // once we are able to implement the correct behavior!
+
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((1 1, 1 2, 1 3, 1 1)))",
+      "MULTIPOLYGON (((1 1, 1 3, 1 2, 1 1)))");
+
+  // First polygon has CW shell and CCW hole, second polygon has CW shell and
+  // zero-area hole
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 6 6)))");
+
+  // First polygon has CW shell and CCW hole, second polygon has zero-area shell
+  // and CCW hole
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3), (0 0, 0 10, 0 20, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and CCW hole, second polygon has CW shell
+  // and zero-area hole
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 9 9, 14 14, 9 9, 6 6)))");
+
+  // First polygon has CW shell and CCW hole, second polygon has zero-area shell
+  // and zero-area hole
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 0 10, 0 0), (6 6, 9 9, 14 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3), (0 0, 0 10, 0 20, 0 0), (6 6, 9 9, 14 14, 6 6)))");
+
+  // First polygon has zero-area shell and CCW hole, second polygon has CW shell
+  // and CCW hole
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 0 15, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6))))",
+      "MULTIPOLYGON (((0 0, 0 15, 0 10, 0 0), (3 3, 7 3, 7 7, 3 7, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has CW shell and zero-area hole, second polygon has CW shell
+  // and CCW hole-
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 10 10, 10 0, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+
+  // First polygon has zero-area shell and zero-area hole, second polygon has CW
+  // shell and CCW hole
+  testDegeneratePolygonsFunc(
+      "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))",
+      "MULTIPOLYGON (((0 0, 0 10, 0 5, 0 10, 0 0), (3 3, 7 3, 9 3, 3 3)), ((0 0, 0 20, 20 20, 20 0, 0 0), (6 6, 14 6, 14 14, 6 14, 6 6)))");
+}
+
+TEST_F(GeometryFunctionsTest, testStSphericalArea) {
+  const auto testStSphericalAreaFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& expected) {
+        std::optional<double> result = evaluateOnce<double>(
+            "st_area(to_spherical_geography(ST_GeometryFromText(c0)))", wkt);
+
+        if (expected.has_value()) {
+          ASSERT_TRUE(aboutEquals(expected.value(), result.value()));
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  // Happy cases
+  testStSphericalAreaFunc("POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))", 123.64E8);
+  testStSphericalAreaFunc(
+      "POLYGON((-122.150124 37.486095, -122.149201 37.486606, -122.145725 37.486580, -122.145923 37.483961, -122.149324 37.482480, -122.150837 37.483238,  -122.150901 37.485392, -122.150124 37.486095))",
+      163290.93943428437);
+
+  double angleOfOneKm = 0.008993201943349;
+  testStSphericalAreaFunc(
+      fmt::format(
+          "POLYGON((0 0, {} 0, {} {}, 0 {}, 0 0))",
+          angleOfOneKm,
+          angleOfOneKm,
+          angleOfOneKm,
+          angleOfOneKm),
+      1E6);
+
+  // 1/4th of an hemisphere, ie 1/8th of the planet, should be close to 4PiR2/8
+  // = 637.58E11
+  testStSphericalAreaFunc("POLYGON((90 0, 0 0, 0 90, 90 0))", 637.58E11);
+
+  // A Polygon with a large hole
+  testStSphericalAreaFunc(
+      "POLYGON((90 0, 0 0, 0 90, 90 0), (89 1, 1 1, 1 89, 89 1))", 348.04E10);
+
+  // Empty input should return null
+  testStSphericalAreaFunc("POLYGON EMPTY", std::nullopt);
+  testStSphericalAreaFunc("MULTIPOLYGON EMPTY", std::nullopt);
+  // Empty invalid types return null rather than throw in java, so we do the
+  // same here.
+  testStSphericalAreaFunc("POINT EMPTY", std::nullopt);
+
+  // Invalid data types
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalAreaFunc("POINT (0 1)", std::nullopt),
+      "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: Point");
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalAreaFunc("MULTIPOINT (1 2, 3 4)", std::nullopt),
+      "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: MultiPoint");
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalAreaFunc("LINESTRING (1 2, 3 4)", std::nullopt),
+      "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: LineString");
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalAreaFunc(
+          "MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))", std::nullopt),
+      "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: MultiLineString");
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalAreaFunc(
+          "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (3 4, 5 6))",
+          std::nullopt),
+      "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: GeometryCollection");
+
+  // Invalid Polygon (duplicated point)
+  VELOX_ASSERT_USER_THROW(
+      testStSphericalAreaFunc(
+          "POLYGON((0 0, 0 1, 1 1, 1 1, 1 0, 0 0))", std::nullopt),
+      "Polygon is not valid: it has two identical consecutive vertices");
+
+  // Test areas for all 50 US states
+  for (const auto& [stateName, area] :
+       facebook::velox::geometry_test_utils::usStateAreas) {
+    const auto& wkt =
+        facebook::velox::geometry_test_utils::usStateWkts.at(stateName);
+    testStSphericalAreaFunc(std::optional<std::string>(wkt), area);
+  }
+
+  testStSphericalAreaFunc(
+      "POLYGON((-135 85, -45 85, 45 85, 135 85, -135 85))", 619.00E9);
 }

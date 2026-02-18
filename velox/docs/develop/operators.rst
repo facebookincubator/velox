@@ -56,10 +56,12 @@ ValuesNode                  Values                                           Y
 LocalMergeNode              LocalMerge
 LocalPartitionNode          LocalPartition and LocalExchange
 EnforceSingleRowNode        EnforceSingleRow
+EnforceDistinctNode         EnforceDistinct or StreamingEnforceDistinct
 AssignUniqueIdNode          AssignUniqueId
 WindowNode                  Window
 RowNumberNode               RowNumber
 TopNRowNumberNode           TopNRowNumber
+MixedUnionNode              MixedUnion
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -547,6 +549,8 @@ and emitting results.
      - Join type: inner, left, right, full, left semi filter, left semi project, right semi filter, right semi project, anti. You can read about different join types in this `blog post <https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/>`_.
    * - nullAware
      - Applies to anti and semi project joins only. Indicates whether the join semantic is IN (nullAware = true) or EXISTS (nullAware = false).
+   * - useHashTableCache
+     - Optional. Used only by Presto-on-Spark. When true, enables caching of the hash table built for broadcast joins so that subsequent tasks can reuse it.
    * - leftKeys
      - Columns from the left hand side input that are part of the equality condition. At least one must be specified.
    * - rightKeys
@@ -850,6 +854,35 @@ values set to null. If input contains more than one row raises an exception.
 
 Used for queries with non-correlated sub-queries.
 
+EnforceDistinctNode
+~~~~~~~~~~~~~~~~~~~
+
+The EnforceDistinct operator ensures that input rows have unique values for
+specified key columns. It passes through all input rows unchanged, but throws
+an exception with a custom error message if any duplicate key values are
+detected. This is useful for validating uniqueness constraints at runtime,
+such as ensuring a correlated scalar subquery returns at most one row per group.
+
+When preGroupedKeys equals distinctKeys (i.e., input is clustered on the
+distinct keys), the streaming implementation is used which requires only O(1)
+memory. Otherwise, the hash-based implementation is used which requires O(n)
+memory to track all unique key combinations seen so far.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - distinctKeys
+     - List of columns that must have unique values.
+   * - preGroupedKeys
+     - Optional subset of distinctKeys that input is already clustered on. When
+       equal to distinctKeys, uses streaming enforcement with O(1) memory.
+   * - errorMessage
+     - Error message to include in the exception when duplicates are found.
+
 AssignUniqueIdNode
 ~~~~~~~~~~~~~~~~~~
 
@@ -996,6 +1029,35 @@ Mask is a boolean column set to true for a subset of input rows that collectivel
     - Name of the output mask column.
   * - distinctKeys
     - Names of grouping keys.
+
+MixedUnionNode
+~~~~~~~~~~~~~~
+
+The mixed union operation combines data from multiple input sources concurrently,
+producing a single output stream that interleaves rows from all sources. It does
+not enforce a sort order but does attempt to mix input sources according to
+specified ratios; after exhaustion it continues with remaining sources.
+
+All sources must produce the same output schema.
+
+MixedUnion runs single-threaded. Each source runs on its own pipeline and feeds
+data into the MixedUnion operator via a merge source queue.
+
+This operator performs a UNION ALL. It does not deduplicate rows.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - sources
+    - Two or more input plan nodes. All sources must have the same output type.
+  * - batchSizesPerSource
+    - Optional list of per-source batch sizes that controls how many rows are
+      taken from each source when mixing. If not specified or set to zero for a
+      source, a default batch size is used.
 
 Examples
 --------

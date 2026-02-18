@@ -1134,6 +1134,7 @@ class AggregationNode : public PlanNode {
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
+      bool noGroupsSpanBatches,
       PlanNodePtr source);
 
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
@@ -1155,6 +1156,7 @@ class AggregationNode : public PlanNode {
       const std::vector<vector_size_t>& globalGroupingSets,
       const std::optional<FieldAccessTypedExprPtr>& groupId,
       bool ignoreNullKeys,
+      bool noGroupsSpanBatches,
       PlanNodePtr source);
 
   class Builder {
@@ -1171,6 +1173,7 @@ class AggregationNode : public PlanNode {
       globalGroupingSets_ = other.globalGroupingSets();
       groupId_ = other.groupId();
       ignoreNullKeys_ = other.ignoreNullKeys();
+      noGroupsSpanBatches_ = other.noGroupsSpanBatches();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -1221,6 +1224,11 @@ class AggregationNode : public PlanNode {
       return *this;
     }
 
+    Builder& noGroupsSpanBatches(bool noGroupsSpanBatches) {
+      noGroupsSpanBatches_ = noGroupsSpanBatches;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -1255,6 +1263,7 @@ class AggregationNode : public PlanNode {
           globalGroupingSets_,
           groupId_,
           ignoreNullKeys_.value(),
+          noGroupsSpanBatches_,
           source_.value());
     }
 
@@ -1268,6 +1277,7 @@ class AggregationNode : public PlanNode {
     std::vector<vector_size_t> globalGroupingSets_ = kDefaultGlobalGroupingSets;
     std::optional<FieldAccessTypedExprPtr> groupId_ = kDefaultGroupId;
     std::optional<bool> ignoreNullKeys_;
+    bool noGroupsSpanBatches_{false};
     std::optional<PlanNodePtr> source_;
   };
 
@@ -1327,8 +1337,17 @@ class AggregationNode : public PlanNode {
     return globalGroupingSets_;
   }
 
-  std::optional<FieldAccessTypedExprPtr> groupId() const {
+  const std::optional<FieldAccessTypedExprPtr>& groupId() const {
     return groupId_;
+  }
+
+  /// When true, indicates that for streaming aggregation, no sort group spans
+  /// across input batches. Each input batch contains complete data for its
+  /// groups - no group will appear in any subsequent input batch. This allows
+  /// the streaming aggregation operator to immediately produce the aggregation
+  /// result for all the groups in each input batch.
+  bool noGroupsSpanBatches() const {
+    return noGroupsSpanBatches_;
   }
 
   std::string_view name() const override {
@@ -1367,8 +1386,15 @@ class AggregationNode : public PlanNode {
   const std::vector<Aggregate> aggregates_;
   const bool ignoreNullKeys_;
 
-  std::optional<FieldAccessTypedExprPtr> groupId_;
-  std::vector<vector_size_t> globalGroupingSets_;
+  const std::optional<FieldAccessTypedExprPtr> groupId_;
+  const std::vector<vector_size_t> globalGroupingSets_;
+
+  // When true, indicates that for streaming aggregation, no sort group spans
+  // across input batches. Each input batch contains complete data for its
+  // groups - no group will appear in any subsequent input batch. This allows
+  // the streaming aggregation operator to immediately produce the aggregation
+  // result for all the groups in each input batch.
+  const bool noGroupsSpanBatches_;
 
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
@@ -1437,6 +1463,11 @@ struct ColumnStatsSpec : public ISerializable {
     VELOX_CHECK(!aggregates.empty());
     VELOX_CHECK_EQ(aggregates.size(), aggregateNames.size());
   }
+
+  /// Returns the output row type that will be produced by this column stats
+  /// spec. The output type is determined by the grouping keys and aggregate
+  /// functions specified in the object.
+  RowTypePtr outputType() const;
 
   folly::dynamic serialize() const override;
 
@@ -2917,6 +2948,14 @@ inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
 }
 
+/// Returns true if the join type is "probe-only", meaning the output includes
+/// only columns from the probe side (plus possibly a mark column).
+/// These join types are: kLeftSemiFilter, kLeftSemiProject, and kAnti.
+inline bool isProbeOnlyJoin(JoinType joinType) {
+  return joinType == JoinType::kLeftSemiFilter ||
+      joinType == JoinType::kLeftSemiProject || joinType == JoinType::kAnti;
+}
+
 inline bool isNullAwareSupported(JoinType joinType) {
   return joinType == JoinType::kAnti ||
       joinType == JoinType::kLeftSemiProject ||
@@ -3059,6 +3098,15 @@ class AbstractJoinNode : public PlanNode {
     return isInnerJoin() || isLeftJoin() || isAntiJoin();
   }
 
+  /// Indicates if this joinNode can drop duplicate rows with same join key.
+  /// For left semi and anti join, it is not necessary to store duplicate rows.
+  bool canDropDuplicates() const {
+    // Left semi and anti join with no extra filter only needs to know whether
+    // there is a match. Hence, no need to store entries with duplicate keys.
+    return !filter() &&
+        (isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin());
+  }
+
   const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
     return leftKeys_;
   }
@@ -3107,7 +3155,8 @@ class HashJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      RowTypePtr outputType)
+      RowTypePtr outputType,
+      bool useHashTableCache = false)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3117,7 +3166,8 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(left),
             std::move(right),
             std::move(outputType)),
-        nullAware_{nullAware} {
+        nullAware_{nullAware},
+        useHashTableCache_{useHashTableCache} {
     validate();
 
     if (nullAware) {
@@ -3142,10 +3192,16 @@ class HashJoinNode : public AbstractJoinNode {
     explicit Builder(const HashJoinNode& other)
         : AbstractJoinNode::Builder<HashJoinNode, Builder>(other) {
       nullAware_ = other.isNullAware();
+      useHashTableCache_ = other.useHashTableCache();
     }
 
     Builder& nullAware(bool value) {
       nullAware_ = value;
+      return *this;
+    }
+
+    Builder& useHashTableCache(bool value) {
+      useHashTableCache_ = value;
       return *this;
     }
 
@@ -3175,11 +3231,13 @@ class HashJoinNode : public AbstractJoinNode {
           filter_.value_or(nullptr),
           left_.value(),
           right_.value(),
-          outputType_.value());
+          outputType_.value(),
+          useHashTableCache_.value_or(false));
     }
 
    private:
     std::optional<bool> nullAware_;
+    std::optional<bool> useHashTableCache_;
   };
 
   std::string_view name() const override {
@@ -3202,6 +3260,12 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  /// Returns whether hash table caching is enabled for broadcast joins.
+  /// Only used by Presto-on-Spark.
+  bool useHashTableCache() const {
+    return useHashTableCache_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3210,6 +3274,7 @@ class HashJoinNode : public AbstractJoinNode {
   void addDetails(std::stringstream& stream) const override;
 
   const bool nullAware_;
+  const bool useHashTableCache_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;
@@ -3373,8 +3438,9 @@ struct BetweenIndexLookupCondition : public IndexLookupCondition {
 using BetweenIndexLookupConditionPtr =
     std::shared_ptr<BetweenIndexLookupCondition>;
 
-/// Represents EQUAL index lookup condition: 'key' = 'value'. 'value' must be a
-/// constant value with the same type as 'key'.
+/// Represents EQUAL index lookup condition: 'key' = 'value'. 'value' can be
+/// either a constant value or a field access expression (probe side column)
+/// with the same type as 'key'.
 struct EqualIndexLookupCondition : public IndexLookupCondition {
   /// The value to compare against.
   TypedExprPtr value;
@@ -3521,7 +3587,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
-    bool hasMarker_;
+    bool hasMarker_{false};
   };
 
   bool supportsBarrier() const override {
@@ -3531,6 +3597,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   const TableScanNodePtr& lookupSource() const {
     return lookupSourceNode_;
   }
+
+  /// Returns true if the lookup source requires splits for index lookup.
+  /// This delegates to the table handle's needsIndexSplit() method.
+  bool needsIndexSplit() const;
 
   /// Returns the join conditions for index lookup that can't be converted into
   /// simple equality join conditions.
@@ -5198,6 +5268,77 @@ class MarkDistinctNode : public PlanNode {
 
 using MarkDistinctNodePtr = std::shared_ptr<const MarkDistinctNode>;
 
+/// Checks that input rows have unique values in the specified key columns.
+/// Passes through all input rows unchanged. Raises an exception if duplicate
+/// key values are detected.
+///
+/// Used to validate uniqueness constraints, such as ensuring a scalar subquery
+/// returns at most one row per group.
+///
+class EnforceDistinctNode : public PlanNode {
+ public:
+  /// @param distinctKeys Columns that must have unique values.
+  /// @param preGroupedKeys Subset of distinctKeys that input is already
+  /// clustered on. When preGroupedKeys equals distinctKeys, a streaming
+  /// implementation is used that compares consecutive rows instead of using a
+  /// hash table.
+  /// @param errorMessage Custom error message to show when duplicates are
+  /// found.
+  EnforceDistinctNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      std::vector<FieldAccessTypedExprPtr> preGroupedKeys,
+      std::string errorMessage,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  std::string_view name() const override {
+    return "EnforceDistinct";
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys() const {
+    return preGroupedKeys_;
+  }
+
+  /// Returns true if all distinct keys are pre-grouped, meaning input is
+  /// clustered on distinct keys and streaming enforcement can be used.
+  bool isPreGrouped() const {
+    return preGroupedKeys_.size() == distinctKeys_.size();
+  }
+
+  const std::string& errorMessage() const {
+    return errorMessage_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys_;
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
+  const std::string errorMessage_;
+  const std::vector<PlanNodePtr> sources_;
+};
+
+using EnforceDistinctNodePtr = std::shared_ptr<const EnforceDistinctNode>;
+
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
@@ -5406,6 +5547,141 @@ class TopNRowNumberNode : public PlanNode {
 
 using TopNRowNumberNodePtr = std::shared_ptr<const TopNRowNumberNode>;
 
+/// Union operator that combines data from multiple inputs.
+/// Supports both serial mode (process inputs one at a time) and
+/// mixed mode (process inputs simultaneously and combine results).
+class MixedUnionNode : public PlanNode {
+ public:
+  MixedUnionNode(const PlanNodeId& id, std::vector<PlanNodePtr> sources)
+      : MixedUnionNode(id, std::move(sources), {}) {}
+
+  MixedUnionNode(
+      const PlanNodeId& id,
+      std::vector<PlanNodePtr> sources,
+      std::vector<int64_t> batchSizesPerSource)
+      : PlanNode(id),
+        sources_(std::move(sources)),
+        batchSizesPerSource_(std::move(batchSizesPerSource)) {
+    VELOX_USER_CHECK(
+        !sources_.empty(), "Union node must have at least one source");
+
+    // All sources must have the same output type
+    outputType_ = sources_[0]->outputType();
+    for (size_t i = 1; i < sources_.size(); ++i) {
+      VELOX_USER_CHECK(
+          outputType_->equivalent(*sources_[i]->outputType()),
+          "All Union sources must have the same output type. "
+          "Source 0 type: {}, Source {} type: {}",
+          outputType_->toString(),
+          i,
+          sources_[i]->outputType()->toString());
+    }
+  }
+
+  class Builder {
+   public:
+    Builder() = default;
+
+    explicit Builder(const MixedUnionNode& other) {
+      id_ = other.id();
+      sources_ = other.sources();
+      batchSizesPerSource_ = other.batchSizesPerSource();
+    }
+
+    Builder& id(PlanNodeId id) {
+      id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& sources(std::vector<PlanNodePtr> sources) {
+      sources_ = std::move(sources);
+      return *this;
+    }
+
+    Builder& source(PlanNodePtr source) {
+      if (!sources_.has_value()) {
+        sources_ = std::vector<PlanNodePtr>{};
+      }
+      sources_->push_back(std::move(source));
+      return *this;
+    }
+
+    Builder& batchSizesPerSource(std::vector<int64_t> batchSizes) {
+      batchSizesPerSource_ = std::move(batchSizes);
+      return *this;
+    }
+
+    Builder& batchSizeForSource(int32_t sourceIndex, int64_t batchSize) {
+      if (!batchSizesPerSource_.has_value()) {
+        batchSizesPerSource_ = std::vector<int64_t>{};
+      }
+      if (sourceIndex >= batchSizesPerSource_->size()) {
+        batchSizesPerSource_->resize(sourceIndex + 1, 0);
+      }
+      (*batchSizesPerSource_)[sourceIndex] = batchSize;
+      return *this;
+    }
+
+    std::shared_ptr<MixedUnionNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "MixedUnionNode id is not set");
+      VELOX_USER_CHECK(
+          sources_.has_value() && !sources_->empty(),
+          "MixedUnionNode sources is not set or empty");
+
+      return std::make_shared<MixedUnionNode>(
+          id_.value(),
+          sources_.value(),
+          batchSizesPerSource_.value_or(std::vector<int64_t>{}));
+    }
+
+   private:
+    std::optional<PlanNodeId> id_;
+    std::optional<std::vector<PlanNodePtr>> sources_;
+    std::optional<std::vector<int64_t>> batchSizesPerSource_;
+  };
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  /// Returns the batch sizes per source index.
+  /// This controls how many rows are taken from each source when mixing.
+  const std::vector<int64_t>& batchSizesPerSource() const {
+    return batchSizesPerSource_;
+  }
+
+  /// Get batch size for a specific source index (returns 0 if not set).
+  int64_t getBatchSizeForSource(int32_t sourceIndex) const {
+    if (sourceIndex < 0 || sourceIndex >= batchSizesPerSource_.size()) {
+      return 0;
+    }
+    return batchSizesPerSource_[sourceIndex];
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  std::string_view name() const override {
+    return "MixedUnion";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+  const std::vector<PlanNodePtr> sources_;
+  RowTypePtr outputType_;
+  std::vector<int64_t> batchSizesPerSource_;
+};
+
+using MixedUnionNodePtr = std::shared_ptr<const MixedUnionNode>;
+
 class PlanNodeVisitorContext {
  public:
   virtual ~PlanNodeVisitorContext() = default;
@@ -5460,6 +5736,10 @@ class PlanNodeVisitor {
 
   virtual void visit(const MarkDistinctNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
+
+  virtual void visit(
+      const EnforceDistinctNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
 
   virtual void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
@@ -5517,6 +5797,9 @@ class PlanNodeVisitor {
       const = 0;
 
   virtual void visit(const WindowNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.

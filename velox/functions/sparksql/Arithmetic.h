@@ -626,4 +626,44 @@ struct CheckedDivideFunction {
   }
 };
 
+/// Implements integral division with truncation towards zero.
+/// Returns Null if divisor is 0.
+template <typename TExec>
+struct IntegralDivideFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const T& a, const T& b) {
+    if (b == 0) {
+      return false;
+    }
+    // In Java, Long.MIN_VALUE is -2^63 and Long.MAX_VALUE is 2^63 - 1.
+    // Dividing Long.MIN_VALUE by -1 overflows because the positive
+    // result (+2^63) cannot be represented in a signed 64-bit integer.
+    // Java integer arithmetic wraps around on overflow (two's complement),
+    // so Long.MIN_VALUE / -1 evaluates to Long.MIN_VALUE itself instead
+    // of throwing an exception.
+    if (a == std::numeric_limits<int64_t>::min() && b == -1) {
+      result = a;
+      return true;
+    }
+
+    result = a / b;
+    return true;
+  }
+};
+
+/// Implements integral division with truncation towards zero.
+/// Returns Error if divisor is 0 or overflow.
+template <typename TExec>
+struct CheckedIntegralDivideFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const T& a, const T& b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    VELOX_USER_RETURN(
+        a == std::numeric_limits<int64_t>::min() && b == -1,
+        "Overflow in integral divide");
+    result = a / b;
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

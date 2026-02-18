@@ -34,6 +34,7 @@ velox_add_library(
   ExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSource.cpp
+  SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
   GroupId.cpp
@@ -44,22 +45,26 @@ velox_add_library(
   HashPartitionFunction.cpp
   HashProbe.cpp
   HashTable.cpp
+  HashTableCache.cpp
   IndexLookupJoin.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  EnforceDistinct.cpp
   MemoryReclaimer.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  MixedUnion.cpp
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
   SpatialIndex.cpp
   SpatialJoinBuild.cpp
   SpatialJoinProbe.cpp
   Operator.cpp
+  OperatorTraceCtx.cpp
   OperatorTraceReader.cpp
   OperatorTraceScan.cpp
   OperatorTraceWriter.cpp
@@ -87,8 +92,10 @@ velox_add_library(
   SpatialJoinProbe.cpp
   Spill.cpp
   SpillFile.cpp
+  SpillStats.cpp
   Spiller.cpp
   StreamingAggregation.cpp
+  StreamingEnforceDistinct.cpp
   Strings.cpp
   TableScan.cpp
   TableWriteMerge.cpp
@@ -99,8 +106,6 @@ velox_add_library(
   TaskTraceWriter.cpp
   TopN.cpp
   TopNRowNumber.cpp
-  Trace.cpp
-  TraceUtil.cpp
   Unnest.cpp
   Values.cpp
   VectorHasher.cpp
@@ -120,6 +125,7 @@ velox_link_libraries(
   velox_expression
   velox_file
   velox_presto_serializer
+  velox_trace
   velox_time
   velox_test_util
   velox_vector
@@ -141,3 +147,4 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(prefixsort)
+add_subdirectory(trace)

@@ -47,6 +47,10 @@ class CudfHiveConnector final
     return false;
   }
 
+  bool supportsSplitPreload() const override {
+    return false;
+  }
+
   // TODO (dm): Re-add data sink
 
  protected:

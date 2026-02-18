@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/Operator.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
@@ -20,7 +21,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -31,12 +32,12 @@ OperatorCtx::OperatorCtx(
     DriverCtx* driverCtx,
     const core::PlanNodeId& planNodeId,
     int32_t operatorId,
-    const std::string& operatorType)
+    std::string_view operatorType)
     : driverCtx_(driverCtx),
       planNodeId_(planNodeId),
       operatorId_(operatorId),
       operatorType_(operatorType),
-      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType)) {}
+      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType_)) {}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
@@ -82,7 +83,7 @@ Operator::Operator(
     RowTypePtr outputType,
     int32_t operatorId,
     std::string planNodeId,
-    std::string operatorType,
+    std::string_view operatorType,
     std::optional<common::SpillConfig> spillConfig)
     : operatorCtx_(
           std::make_unique<OperatorCtx>(
@@ -93,14 +94,14 @@ Operator::Operator(
       outputType_(std::move(outputType)),
       spillConfig_(std::move(spillConfig)),
       dryRun_(
-          operatorCtx_->driverCtx()->traceConfig().has_value() &&
-          operatorCtx_->driverCtx()->traceConfig()->dryRun),
+          operatorCtx_->driverCtx()->traceCtx() &&
+          operatorCtx_->driverCtx()->traceCtx()->dryRun()),
       stats_(
           OperatorStats{
               operatorId,
               driverCtx->pipelineId,
               std::move(planNodeId),
-              std::move(operatorType)}) {}
+              std::string(operatorType)}) {}
 
 void Operator::maybeSetReclaimer() {
   VELOX_CHECK_NULL(pool()->reclaimer());
@@ -113,53 +114,22 @@ void Operator::maybeSetReclaimer() {
 }
 
 void Operator::maybeSetTracer() {
-  const auto& traceConfig = operatorCtx_->driverCtx()->traceConfig();
-  if (!traceConfig.has_value()) {
-    return;
-  }
+  const auto* traceCtx = operatorCtx_->driverCtx()->traceCtx();
 
-  const auto nodeId = planNodeId();
-  if (traceConfig->queryNodeId.empty() || traceConfig->queryNodeId != nodeId) {
-    return;
-  }
-
-  auto& tracedOpMap = operatorCtx_->driverCtx()->tracedOperatorMap;
-  if (const auto iter = tracedOpMap.find(operatorId());
-      iter != tracedOpMap.end()) {
-    LOG(WARNING) << "Operator " << iter->first << " with type of "
-                 << operatorType() << ", plan node " << nodeId
-                 << " might be the auxiliary operator of " << iter->second
-                 << " which has the same operator id";
-    return;
-  }
-  tracedOpMap.emplace(operatorId(), operatorType());
-
-  if (!trace::canTrace(operatorType())) {
-    VELOX_UNSUPPORTED("{} does not support tracing", operatorType());
-  }
-
-  const auto pipelineId = operatorCtx_->driverCtx()->pipelineId;
-  const auto driverId = operatorCtx_->driverCtx()->driverId;
-  LOG(INFO) << "Trace input for operator type: " << operatorType()
-            << ", operator id: " << operatorId() << ", pipeline: " << pipelineId
-            << ", driver: " << driverId << ", task: " << taskId();
-  const auto opTraceDirPath = trace::getOpTraceDirectory(
-      traceConfig->queryTraceDir, planNodeId(), pipelineId, driverId);
-  trace::createTraceDirectory(
-      opTraceDirPath,
-      operatorCtx_->driverCtx()->queryConfig().opTraceDirectoryCreateConfig());
-
-  if (dynamic_cast<SourceOperator*>(this) != nullptr) {
-    setupSplitTracer(opTraceDirPath);
-  } else {
-    setupInputTracer(opTraceDirPath);
+  if (traceCtx && traceCtx->shouldTrace(*this)) {
+    if (dynamic_cast<SourceOperator*>(this) != nullptr) {
+      splitTracer_ = traceCtx->createSplitTracer(*this);
+    } else {
+      inputTracer_ = traceCtx->createInputTracer(*this);
+    }
   }
 }
 
-void Operator::traceInput(const RowVectorPtr& input) {
+bool Operator::traceInput(const RowVectorPtr& input, ContinueFuture* future) {
   if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
-    inputTracer_->write(input);
+    return inputTracer_->write(input, future);
   }
+  return false;
 }
 
 void Operator::finishTrace() {
@@ -177,19 +147,6 @@ std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
 Operator::translators() {
   static std::vector<std::unique_ptr<PlanNodeTranslator>> translators;
   return translators;
-}
-
-void Operator::setupInputTracer(const std::string& opTraceDirPath) {
-  inputTracer_ = std::make_unique<trace::OperatorTraceInputWriter>(
-      this,
-      opTraceDirPath,
-      memory::traceMemoryPool(),
-      operatorCtx_->driverCtx()->traceConfig()->updateAndCheckTraceLimitCB);
-}
-
-void Operator::setupSplitTracer(const std::string& opTraceDirPath) {
-  splitTracer_ =
-      std::make_unique<trace::OperatorTraceSplitWriter>(this, opTraceDirPath);
 }
 
 // static
@@ -395,107 +352,131 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
 }
 
 void Operator::recordSpillStats() {
-  const auto lockedSpillStats = spillStats_->wlock();
   auto lockedStats = stats_.wlock();
-  lockedStats->spilledInputBytes += lockedSpillStats->spilledInputBytes;
-  lockedStats->spilledBytes += lockedSpillStats->spilledBytes;
-  lockedStats->spilledRows += lockedSpillStats->spilledRows;
-  lockedStats->spilledPartitions += lockedSpillStats->spilledPartitions;
-  lockedStats->spilledFiles += lockedSpillStats->spilledFiles;
-  if (lockedSpillStats->spillFillTimeNanos != 0) {
+  lockedStats->spilledInputBytes +=
+      spillStats_->spilledInputBytes.load(std::memory_order_relaxed);
+  lockedStats->spilledBytes +=
+      spillStats_->spilledBytes.load(std::memory_order_relaxed);
+  lockedStats->spilledRows +=
+      spillStats_->spilledRows.load(std::memory_order_relaxed);
+  lockedStats->spilledPartitions +=
+      spillStats_->spilledPartitions.load(std::memory_order_relaxed);
+  lockedStats->spilledFiles +=
+      spillStats_->spilledFiles.load(std::memory_order_relaxed);
+
+  const auto fillTime =
+      spillStats_->spillFillTimeNanos.load(std::memory_order_relaxed);
+  if (fillTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillFillTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillFillTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(fillTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillSortTimeNanos != 0) {
+  const auto sortTime =
+      spillStats_->spillSortTimeNanos.load(std::memory_order_relaxed);
+  if (sortTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillSortTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillSortTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(sortTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillExtractVectorTimeNanos != 0) {
+  const auto extractTime =
+      spillStats_->spillExtractVectorTimeNanos.load(std::memory_order_relaxed);
+  if (extractTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillExtractVectorTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillExtractVectorTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(extractTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillSerializationTimeNanos != 0) {
+  const auto serializationTime =
+      spillStats_->spillSerializationTimeNanos.load(std::memory_order_relaxed);
+  if (serializationTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillSerializationTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillSerializationTimeNanos),
+            static_cast<int64_t>(serializationTime),
             RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillFlushTimeNanos != 0) {
+  const auto flushTime =
+      spillStats_->spillFlushTimeNanos.load(std::memory_order_relaxed);
+  if (flushTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillFlushTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillFlushTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(flushTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillWrites != 0) {
+  const auto writes = spillStats_->spillWrites.load(std::memory_order_relaxed);
+  if (writes != 0) {
     lockedStats->addRuntimeStat(
-        kSpillWrites,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillWrites)});
+        kSpillWrites, RuntimeCounter{static_cast<int64_t>(writes)});
   }
-  if (lockedSpillStats->spillWriteTimeNanos != 0) {
+  const auto writeTime =
+      spillStats_->spillWriteTimeNanos.load(std::memory_order_relaxed);
+  if (writeTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillWriteTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillWriteTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(writeTime), RuntimeCounter::Unit::kNanos});
   }
-  if (lockedSpillStats->spillRuns != 0) {
+  const auto runs = spillStats_->spillRuns.load(std::memory_order_relaxed);
+  if (runs != 0) {
     lockedStats->addRuntimeStat(
-        kSpillRuns,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillRuns)});
-    common::updateGlobalSpillRunStats(lockedSpillStats->spillRuns);
+        kSpillRuns, RuntimeCounter{static_cast<int64_t>(runs)});
+    updateGlobalSpillRunStats(runs);
   }
 
-  if (lockedSpillStats->spillMaxLevelExceededCount != 0) {
+  const auto maxLevelExceeded =
+      spillStats_->spillMaxLevelExceededCount.load(std::memory_order_relaxed);
+  if (maxLevelExceeded != 0) {
     lockedStats->addRuntimeStat(
         kExceededMaxSpillLevel,
-        RuntimeCounter{static_cast<int64_t>(
-            lockedSpillStats->spillMaxLevelExceededCount)});
-    common::updateGlobalMaxSpillLevelExceededCount(
-        lockedSpillStats->spillMaxLevelExceededCount);
+        RuntimeCounter{static_cast<int64_t>(maxLevelExceeded)});
+    updateGlobalMaxSpillLevelExceededCount(maxLevelExceeded);
   }
 
-  if (lockedSpillStats->spillReadBytes != 0) {
+  const auto readBytes =
+      spillStats_->spillReadBytes.load(std::memory_order_relaxed);
+  if (readBytes != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadBytes,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadBytes),
-            RuntimeCounter::Unit::kBytes});
+            static_cast<int64_t>(readBytes), RuntimeCounter::Unit::kBytes});
   }
 
-  if (lockedSpillStats->spillReads != 0) {
+  const auto reads = spillStats_->spillReads.load(std::memory_order_relaxed);
+  if (reads != 0) {
     lockedStats->addRuntimeStat(
-        kSpillReads,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReads)});
+        kSpillReads, RuntimeCounter{static_cast<int64_t>(reads)});
   }
 
-  if (lockedSpillStats->spillReadTimeNanos != 0) {
+  const auto readTime =
+      spillStats_->spillReadTimeNanos.load(std::memory_order_relaxed);
+  if (readTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadTimeNanos),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(readTime), RuntimeCounter::Unit::kNanos});
   }
 
-  if (lockedSpillStats->spillDeserializationTimeNanos != 0) {
+  const auto deserializationTime =
+      spillStats_->spillDeserializationTimeNanos.load(
+          std::memory_order_relaxed);
+  if (deserializationTime != 0) {
     lockedStats->addRuntimeStat(
         kSpillDeserializationTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillDeserializationTimeNanos),
+            static_cast<int64_t>(deserializationTime),
             RuntimeCounter::Unit::kNanos});
   }
-  lockedSpillStats->reset();
+
+  // Collect filesystem I/O stats for spilling.
+  const auto ioStatsMap = spillStats_->ioStats.stats();
+  for (const auto& [statName, statValue] : ioStatsMap) {
+    lockedStats->addRuntimeStat(
+        statName, RuntimeCounter(statValue.sum, statValue.unit));
+  }
+
+  spillStats_->reset();
 }
 
 std::string Operator::toString() const {

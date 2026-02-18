@@ -85,4 +85,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   std::vector<velox::exec::IdentityProjection> identityProjections_;
 };
 
+bool canBeEvaluatedByCudf(
+    const std::vector<core::TypedExprPtr>& exprs,
+    core::QueryCtx* queryCtx);
+
 } // namespace facebook::velox::cudf_velox

@@ -20,11 +20,11 @@
 #include <optional>
 
 #include "velox/common/base/SpillConfig.h"
-#include "velox/common/base/SpillStats.h"
 #include "velox/common/base/TreeOfLosers.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileInputStream.h"
+#include "velox/exec/SpillStats.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/SerializedPageFile.h"
 #include "velox/vector/ComplexVector.h"
@@ -71,9 +71,9 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       const std::string& fileCreateConfig,
-      common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats);
+      exec::SpillStats* stats);
 
   /// Finishes this file writer and returns the written spill files info.
   ///
@@ -103,7 +103,7 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
 
   const std::vector<SpillSortKey> sortingKeys_;
 
-  folly::Synchronized<common::SpillStats>* const stats_;
+  exec::SpillStats* const stats_;
 
   // Updates the aggregated bytes of this query, and throws if exceeds
   // the max bytes limit.
@@ -123,7 +123,7 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
       const SpillFileInfo& fileInfo,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats);
+      exec::SpillStats* stats);
 
   uint32_t id() const {
     return id_;
@@ -152,7 +152,7 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
       const std::vector<SpillSortKey>& sortingKeys,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* stats);
+      exec::SpillStats* stats);
 
   // Records spill read stats at the end of read input.
   void updateFinalStats() override;
@@ -170,7 +170,7 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
 
   const std::vector<SpillSortKey> sortingKeys_;
 
-  folly::Synchronized<common::SpillStats>* const stats_;
+  exec::SpillStats* const stats_;
 };
 
 } // namespace facebook::velox::exec

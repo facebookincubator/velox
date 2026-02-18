@@ -155,8 +155,12 @@ Cast to Boolean
 From VARCHAR
 ^^^^^^^^^^^^
 
-The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case equivalents are allowed to be casted to boolean.
-Casting from other strings to boolean throws.
+*(ANSI compliant)*
+
+The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
+equivalents are allowed to be cast to boolean.
+Casting from invalid strings throws an error when ANSI mode is enabled,
+or returns NULL when ANSI mode is disabled.
 
 Valid examples
 
@@ -177,16 +181,38 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as boolean); -- NULL // Invalid argument
-  SELECT cast('nan' as boolean); -- NULL // Invalid argument
-  SELECT cast('infinity' as boolean); -- NULL // Invalid argument
-  SELECT cast('12' as boolean); -- NULL // Invalid argument
-  SELECT cast('-1' as boolean); -- NULL // Invalid argument
-  SELECT cast('tr' as boolean); -- NULL // Invalid argument
-  SELECT cast('tru' as boolean); -- NULL // Invalid argument
+  SELECT cast('1.7E308' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('nan' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('infinity' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('12' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-1' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tr' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tru' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to String
 --------------
+From DECIMAL
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a DECIMAL to STRING returns a plain decimal value.
+Scientific notation is not used.
+The scale is preserved and trailing zeros are kept.
+The conversion always succeeds with identical results for both ANSI ON and OFF modes.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(1.00 as decimal(10, 2)) as string); -- '1.00'
+  SELECT cast(cast(12.30 as decimal(10, 2)) as string); -- '12.30'
+  SELECT cast(cast(0.00000012 as decimal(10, 8)) as string); -- '0.00000012'
+  SELECT cast(cast(-1.00 as decimal(10, 2)) as string); -- '-1.00'
+  SELECT cast(cast(123456789.123456789 as decimal(18, 9)) as string); -- '123456789.123456789'
+  SELECT cast(cast(0.00 as decimal(5, 2)) as string); -- '0.00'
+  SELECT cast(cast(999.99 as decimal(5, 2)) as string); -- '999.99'
+  SELECT cast(cast(-0.01 as decimal(3, 2)) as string); -- '-0.01'
 
 From TIMESTAMP
 ^^^^^^^^^^^^^^
@@ -214,6 +240,8 @@ Cast to Date
 From strings
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 All Spark supported patterns are allowed:
 
   * ``[+-](YYYY-MM-DD)``
@@ -230,7 +258,9 @@ For the last two patterns, the trailing ``*`` can represent none or any sequence
   * "1970-01-01 (BC)"
 
 All leading and trailing UTF8 white-spaces will be trimmed before cast.
-Casting from invalid input values throws.
+
+When ANSI mode is enabled, casting from invalid input values throws an error.
+When ANSI mode is disabled, casting from invalid input values returns NULL.
 
 Valid examples
 

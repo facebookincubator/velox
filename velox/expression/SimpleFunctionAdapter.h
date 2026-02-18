@@ -216,14 +216,15 @@ class SimpleFunctionAdapter : public VectorFunction {
     bool mayHaveNullsRecursive{false};
   };
 
-  template <int32_t POSITION, typename... Values>
+  template <size_t POSITION, typename... Values>
   void unpackInitialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
+      memory::MemoryPool* memoryPool,
       const std::vector<VectorPtr>& packed,
       const Values*... values) const {
     if constexpr (POSITION == FUNC::num_args) {
-      return (*fn_).initialize(inputTypes, config, values...);
+      return (*fn_).initialize(inputTypes, config, memoryPool, values...);
     } else {
       if (packed.at(POSITION) != nullptr) {
         SelectivityVector rows(1);
@@ -232,11 +233,16 @@ class SimpleFunctionAdapter : public VectorFunction {
         auto oneValue = oneReader[0];
 
         unpackInitialize<POSITION + 1>(
-            inputTypes, config, packed, values..., &oneValue);
+            inputTypes, config, memoryPool, packed, values..., &oneValue);
       } else {
         using temp_type = exec_arg_at<POSITION>;
         unpackInitialize<POSITION + 1>(
-            inputTypes, config, packed, values..., (const temp_type*)nullptr);
+            inputTypes,
+            config,
+            memoryPool,
+            packed,
+            values...,
+            (const temp_type*)nullptr);
       }
     }
   }
@@ -245,11 +251,12 @@ class SimpleFunctionAdapter : public VectorFunction {
   SimpleFunctionAdapter(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      const std::vector<VectorPtr>& constantInputs)
+      const std::vector<VectorPtr>& constantInputs,
+      memory::MemoryPool* memoryPool = nullptr)
       : fn_{std::make_unique<FUNC>()} {
     if constexpr (FUNC::udf_has_initialize) {
       try {
-        unpackInitialize<0>(inputTypes, config, constantInputs);
+        unpackInitialize<0>(inputTypes, config, memoryPool, constantInputs);
       } catch (const VeloxRuntimeError&) {
         throw;
       } catch (const std::exception&) {
@@ -970,9 +977,10 @@ class SimpleFunctionAdapterFactoryImpl : public SimpleFunctionAdapterFactory {
   std::unique_ptr<VectorFunction> createVectorFunction(
       const std::vector<TypePtr>& inputTypes,
       const std::vector<VectorPtr>& constantInputs,
-      const core::QueryConfig& config) const override {
+      const core::QueryConfig& config,
+      memory::MemoryPool* memoryPool = nullptr) const override {
     return std::make_unique<SimpleFunctionAdapter<UDFHolder>>(
-        inputTypes, config, constantInputs);
+        inputTypes, config, constantInputs, memoryPool);
   }
 };
 

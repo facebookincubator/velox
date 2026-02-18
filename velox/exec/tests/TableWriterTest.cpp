@@ -82,7 +82,7 @@ TEST_F(BasicTableWriterTestBase, roundTrip) {
                      ->as<FlatVector<StringView>>();
   ASSERT_TRUE(details->isNullAt(0));
   ASSERT_FALSE(details->isNullAt(1));
-  folly::dynamic obj = folly::parseJson(details->valueAt(1));
+  folly::dynamic obj = folly::parseJson(std::string_view(details->valueAt(1)));
 
   ASSERT_EQ(size, obj["rowCount"].asInt());
   auto fileWriteInfos = obj["fileWriteInfos"];
@@ -180,7 +180,7 @@ TEST_F(BasicTableWriterTestBase, targetFileName) {
   auto results = AssertQueryBuilder(plan).copyResults(pool());
   auto* details = results->childAt(TableWriteTraits::kFragmentChannel)
                       ->asUnchecked<SimpleVector<StringView>>();
-  auto detail = folly::parseJson(details->valueAt(1));
+  auto detail = folly::parseJson(std::string_view(details->valueAt(1)));
   auto fileWriteInfos = detail["fileWriteInfos"];
   ASSERT_EQ(1, fileWriteInfos.size());
   ASSERT_EQ(fileWriteInfos[0]["writeFileName"].asString(), kFileName);
@@ -1817,7 +1817,8 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
     }
     if (!fragmentVector->isNullAt(i)) {
       ASSERT_FALSE(fragmentVector->isNullAt(i));
-      folly::dynamic obj = folly::parseJson(fragmentVector->valueAt(i));
+      folly::dynamic obj =
+          folly::parseJson(std::string_view(fragmentVector->valueAt(i)));
       if (testMode_ == TestMode::kUnpartitioned) {
         ASSERT_EQ(obj["targetPath"], outputDirectory->getPath());
         ASSERT_EQ(obj["writePath"], outputDirectory->getPath());
@@ -2815,8 +2816,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
       const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
       const int numPrevNonReclaimableAttempts =
           arbitrator->stats().numNonReclaimableAttempts;
-      auto queryCtx = core::QueryCtx::create(
-          executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+      auto queryCtx = core::QueryCtx::Builder()
+                          .executor(executor_.get())
+                          .pool(std::move(queryPool))
+                          .build();
       ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
       std::atomic_int numInputs{0};
@@ -2934,11 +2937,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
       const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
       const int numPrevNonReclaimableAttempts =
           arbitrator->stats().numNonReclaimableAttempts;
-      auto queryCtx = core::QueryCtx::create(
-          executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+      auto queryCtx = core::QueryCtx::Builder()
+                          .executor(executor_.get())
+                          .pool(std::move(queryPool))
+                          .build();
       ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
-      const auto spillStats = common::globalSpillStats();
+      const auto spillStats = globalSpillStats();
       std::atomic<int> numInputs{0};
       SCOPED_TESTVALUE_SET(
           "facebook::velox::exec::Driver::runInternal::addInput",
@@ -3006,7 +3011,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           numPrevNonReclaimableAttempts);
 
       waitForAllTasksToBeDeleted(3'000'000);
-      const auto updatedSpillStats = common::globalSpillStats();
+      const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
         ASSERT_GT(
@@ -3049,8 +3054,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
     const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
     const int numPrevNonReclaimableAttempts =
         arbitrator->stats().numNonReclaimableAttempts;
-    auto queryCtx = core::QueryCtx::create(
-        executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+    auto queryCtx = core::QueryCtx::Builder()
+                        .executor(executor_.get())
+                        .pool(std::move(queryPool))
+                        .build();
+
     ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
     memory::MemoryPool* compressionPool{nullptr};
@@ -3157,8 +3165,11 @@ DEBUG_ONLY_TEST_F(
   const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
   const int numPrevNonReclaimableAttempts =
       arbitrator->stats().numNonReclaimableAttempts;
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
+
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
@@ -3240,8 +3251,10 @@ DEBUG_ONLY_TEST_F(
   const int numPrevNonReclaimableAttempts =
       arbitrator->stats().numNonReclaimableAttempts;
   const int numPrevReclaimedBytes = arbitrator->stats().reclaimedUsedBytes;
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> writerNoMoreInput{false};
@@ -3340,8 +3353,10 @@ DEBUG_ONLY_TEST_F(
   const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
   const int numPrevNonReclaimableAttempts =
       arbitrator->stats().numNonReclaimableAttempts;
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
@@ -3384,7 +3399,7 @@ DEBUG_ONLY_TEST_F(
               {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
-  const auto spillStats = common::globalSpillStats();
+  const auto spillStats = globalSpillStats();
   const auto spillDirectory = TempDirectoryPath::create();
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
@@ -3410,7 +3425,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  const auto updatedSpillStats = common::globalSpillStats();
+  const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();
 }
@@ -3432,8 +3447,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableFileWriteError", kQueryMemoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
+
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic_bool injectWriterErrorOnce{true};
@@ -3500,8 +3518,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity / 4);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity / 4);
 
   auto fakeLeafPool = queryCtx->pool()->addLeafChild(
@@ -3587,14 +3607,18 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   auto fakeQueryPool =
       memory::memoryManager()->addRootPool("fake", kQueryMemoryCapacity);
-  auto fakeQueryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(fakeQueryPool));
+  auto fakeQueryCtx = core::QueryCtx::Builder()
+                          .executor(executor_.get())
+                          .pool(std::move(fakeQueryPool))
+                          .build();
   ASSERT_EQ(fakeQueryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   auto fakeLeafPool = fakeQueryCtx->pool()->addLeafChild(
@@ -3680,8 +3704,10 @@ DEBUG_ONLY_TEST_F(
           .data;
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic_bool writerCloseWaitFlag{true};

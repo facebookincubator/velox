@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionStreamingWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
@@ -43,9 +44,9 @@ Window::Window(
           windowNode->outputType(),
           operatorId,
           windowNode->id(),
-          "Window",
+          OperatorType::kWindow,
           windowNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kWindow)
               : std::nullopt),
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),

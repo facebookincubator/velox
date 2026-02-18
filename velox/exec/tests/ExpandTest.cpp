@@ -21,7 +21,6 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::exec {
-
 namespace {
 class ExpandTest : public OperatorTestBase {
  public:
@@ -37,7 +36,31 @@ class ExpandTest : public OperatorTestBase {
         });
   }
 };
-} // anonymous namespace
+
+TEST_F(ExpandTest, complexConstant) {
+  auto data = makeRowVectorData(3);
+  auto children = data->children();
+  auto arrayVector =
+      makeArrayVector<int32_t>({{1, 2, 3}, {1, 2, 3}, {1, 2, 3}});
+  children.push_back(arrayVector);
+  children.push_back(makeAllNullArrayVector(3, INTEGER()));
+  children.push_back(makeNullConstant(TypeKind::INTEGER, 3));
+  auto expected = makeRowVector(children);
+
+  auto plan = PlanBuilder(pool())
+                  .values({data})
+                  .expand(
+                      {{"k1",
+                        "k2",
+                        "a",
+                        "b",
+                        "ARRAY[1, 2, 3] as c",
+                        "null::integer[] as d",
+                        "null::integer as e"}})
+                  .planNode();
+
+  assertQuery(plan, expected);
+}
 
 TEST_F(ExpandTest, groupingSets) {
   auto data = makeRowVectorData(1'000);
@@ -151,4 +174,5 @@ TEST_F(ExpandTest, invalidUseCases) {
       "projections must not be empty.");
 }
 
+} // namespace
 } // namespace facebook::velox::exec

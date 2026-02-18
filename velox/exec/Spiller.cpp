@@ -37,7 +37,7 @@ SpillerBase::SpillerBase(
     uint64_t maxSpillRunRows,
     std::optional<SpillPartitionId> parentId,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : container_(container),
       executor_(spillConfig->executor),
       bits_(bits),
@@ -101,8 +101,9 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
 
     uint64_t totalRows{0};
     for (;;) {
-      const auto numRows = container_->listRows(
-          iterator, rows.size(), RowContainer::kUnlimited, rows.data());
+      // TODO: Reuse 'RowContainer::rowPointers_'.
+      const auto numRows =
+          container_->listRows(iterator, rows.size(), rows.data());
       if (numRows == 0) {
         lastRun = true;
         break;
@@ -143,7 +144,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
 }
 
 void SpillerBase::runSpill(bool lastRun) {
-  ++spillStats_->wlock()->spillRuns;
+  spillStats_->spillRuns.fetch_add(1, std::memory_order_relaxed);
 
   std::vector<std::shared_ptr<AsyncSource<SpillStatus>>> writes;
   for (const auto& [id, spillRun] : spillRuns_) {
@@ -308,13 +309,14 @@ void SpillerBase::extractSpill(
 }
 
 void SpillerBase::updateSpillExtractVectorTime(uint64_t timeNs) {
-  spillStats_->wlock()->spillExtractVectorTimeNanos += timeNs;
-  common::updateGlobalSpillExtractVectorTime(timeNs);
+  spillStats_->spillExtractVectorTimeNanos.fetch_add(
+      timeNs, std::memory_order_relaxed);
+  updateGlobalSpillExtractVectorTime(timeNs);
 }
 
 void SpillerBase::updateSpillSortTime(uint64_t timeNs) {
-  spillStats_->wlock()->spillSortTimeNanos += timeNs;
-  common::updateGlobalSpillSortTime(timeNs);
+  spillStats_->spillSortTimeNanos.fetch_add(timeNs, std::memory_order_relaxed);
+  updateGlobalSpillSortTime(timeNs);
 }
 
 void SpillerBase::checkEmptySpillRuns() const {
@@ -327,8 +329,8 @@ void SpillerBase::checkEmptySpillRuns() const {
 }
 
 void SpillerBase::updateSpillFillTime(uint64_t timeNs) {
-  spillStats_->wlock()->spillFillTimeNanos += timeNs;
-  common::updateGlobalSpillFillTime(timeNs);
+  spillStats_->spillFillTimeNanos.fetch_add(timeNs, std::memory_order_relaxed);
+  updateGlobalSpillFillTime(timeNs);
 }
 
 void SpillerBase::finishSpill(SpillPartitionSet& partitionSet) {
@@ -353,8 +355,8 @@ void SpillerBase::finishSpill(SpillPartitionSet& partitionSet) {
   }
 }
 
-common::SpillStats SpillerBase::stats() const {
-  return spillStats_->copy();
+exec::SpillStats SpillerBase::stats() const {
+  return *spillStats_;
 }
 
 std::string SpillerBase::toString() const {
@@ -388,7 +390,7 @@ NoRowContainerSpiller::NoRowContainerSpiller(
     std::optional<SpillPartitionId> parentId,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : NoRowContainerSpiller(
           std::move(rowType),
           parentId,
@@ -403,7 +405,7 @@ NoRowContainerSpiller::NoRowContainerSpiller(
     HashBitRange bits,
     const std::vector<SpillSortKey>& sortingKeys,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           nullptr,
           std::move(rowType),
@@ -436,7 +438,7 @@ SortOutputSpiller::SortOutputSpiller(
     RowContainer* container,
     RowTypePtr rowType,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),

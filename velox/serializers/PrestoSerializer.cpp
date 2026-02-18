@@ -88,6 +88,10 @@ PrestoVectorSerde::PrestoOptions toPrestoOptions(
       dynamic_cast<const PrestoVectorSerde::PrestoOptions*>(options);
   VELOX_CHECK_NOT_NULL(
       prestoOptions, "Serde options are not Presto-compatible");
+  VELOX_CHECK(
+      !(prestoOptions->useLosslessTimestamp &&
+        prestoOptions->useMicrosecondPrecision),
+      "useLosslessTimestamp and useMicrosecondPrecision are mutually exclusive");
   return *prestoOptions;
 }
 } // namespace

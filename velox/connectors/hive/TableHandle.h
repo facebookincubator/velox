@@ -169,8 +169,22 @@ class HiveTableHandle : public ConnectorTableHandle {
       common::SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
+      std::vector<std::string> indexColumns = {},
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
+      double sampleRate = 1.0);
+
+  /// Legacy constructor without indexColumns parameter for backward
+  /// compatibility.
+  HiveTableHandle(
+      std::string connectorId,
+      const std::string& tableName,
+      bool filterPushdownEnabled,
+      common::SubfieldFilters subfieldFilters,
+      const core::TypedExprPtr& remainingFilter,
+      const RowTypePtr& dataColumns,
+      const std::unordered_map<std::string, std::string>& tableParameters,
+      std::vector<HiveColumnHandlePtr> filterColumnHandles,
       double sampleRate = 1.0);
 
   const std::string& tableName() const {
@@ -179,6 +193,14 @@ class HiveTableHandle : public ConnectorTableHandle {
 
   const std::string& name() const override {
     return tableName();
+  }
+
+  bool supportsIndexLookup() const override {
+    return !indexColumns_.empty();
+  }
+
+  bool needsIndexSplit() const override {
+    return true;
   }
 
   [[deprecated]] bool isFilterPushdownEnabled() const {
@@ -214,6 +236,11 @@ class HiveTableHandle : public ConnectorTableHandle {
     return dataColumns_;
   }
 
+  /// Returns the names of the index columns for the table.
+  const std::vector<std::string>& indexColumns() const {
+    return indexColumns_;
+  }
+
   /// Extra parameters to pass down to file format reader layer.  Keys should be
   /// in dwio::common::TableParameter.
   const std::unordered_map<std::string, std::string>& tableParameters() const {
@@ -245,6 +272,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   const core::TypedExprPtr remainingFilter_;
   const double sampleRate_;
   const RowTypePtr dataColumns_;
+  const std::vector<std::string> indexColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
 };
@@ -252,3 +280,17 @@ class HiveTableHandle : public ConnectorTableHandle {
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
 
 } // namespace facebook::velox::connector::hive
+
+template <>
+struct fmt::formatter<
+    facebook::velox::connector::hive::HiveColumnHandle::ColumnType>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::connector::hive::HiveColumnHandle::ColumnType type,
+      format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::connector::hive::HiveColumnHandle::columnTypeName(
+            type),
+        ctx);
+  }
+};

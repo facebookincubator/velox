@@ -30,8 +30,8 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/type/parser/TypeParser.h"
 
 using namespace facebook::velox::runner;
 
@@ -64,7 +64,7 @@ RowTypePtr parseBatchRowType(Batch batch) {
     std::replace(parsedTypeString.begin(), parsedTypeString.end(), '<', '(');
     std::replace(parsedTypeString.begin(), parsedTypeString.end(), '>', ')');
     std::replace(parsedTypeString.begin(), parsedTypeString.end(), ':', ' ');
-    types.push_back(parseType(parsedTypeString));
+    types.push_back(functions::prestosql::parseType(parsedTypeString));
   }
 
   return ROW(std::move(names), std::move(types));
@@ -81,7 +81,7 @@ std::vector<RowVectorPtr> deserializeBatches(
   for (const auto& batch : resultBatches) {
     VELOX_CHECK(
         apache::thrift::is_non_optional_field_set_manually_or_by_serializer(
-            batch.serializedData_ref()));
+            batch.serializedData()));
     VELOX_CHECK(!batch.serializedData()->empty());
 
     // Deserialize binary data.

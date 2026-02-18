@@ -468,14 +468,14 @@ template <>
 struct MaterializeType<Varchar> {
   using nullable_t = std::string;
   using null_free_t = std::string;
-  static constexpr bool requiresMaterialization = false;
+  static constexpr bool requiresMaterialization = true;
 };
 
 template <>
 struct MaterializeType<Varbinary> {
   using nullable_t = std::string;
   using null_free_t = std::string;
-  static constexpr bool requiresMaterialization = false;
+  static constexpr bool requiresMaterialization = true;
 };
 
 } // namespace facebook::velox

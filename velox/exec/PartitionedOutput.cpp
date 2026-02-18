@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
@@ -132,7 +133,7 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
+      std::make_unique<PrestoSerializedPage>(
           stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
 
@@ -165,7 +166,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "PartitionedOutput"),
+          OperatorType::kPartitionedOutput),
       keyChannels_(toChannels(planNode->inputType(), planNode->keys())),
       numDestinations_(planNode->numPartitions()),
       replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),
@@ -187,7 +188,9 @@ PartitionedOutput::PartitionedOutput(
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
                             .maxPartitionedOutputBufferSize()),
-      eagerFlush_(eagerFlush),
+      eagerFlush_(
+          eagerFlush ||
+          ctx->task->queryCtx()->queryConfig().partitionedOutputEagerFlush()),
       serde_(getNamedVectorSerde(planNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()

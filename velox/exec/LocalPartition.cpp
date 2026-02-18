@@ -15,6 +15,8 @@
  */
 
 #include "velox/exec/LocalPartition.h"
+#include "velox/common/Casts.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/EncodedVectorCopy.h"
 
@@ -263,7 +265,7 @@ LocalExchange::LocalExchange(
           std::move(outputType),
           operatorId,
           planNodeId,
-          "LocalExchange"),
+          OperatorType::kLocalExchange),
       partition_{partition},
       queue_{operatorCtx_->task()->getLocalExchangeQueue(
           ctx->splitGroupId,
@@ -332,7 +334,7 @@ LocalPartition::LocalPartition(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "LocalPartition"),
+          OperatorType::kLocalPartition),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()},
@@ -420,6 +422,7 @@ RowVectorPtr LocalPartition::wrapChildren(
 void LocalPartition::copy(
     const RowVectorPtr& input,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const size_t partition,
     VectorPtr& target) {
   if (ranges.empty()) {
     return;
@@ -432,57 +435,153 @@ void LocalPartition::copy(
   }
 
   if (!target) {
-    target = BaseVector::create<RowVector>(outputType_, 0, pool());
+    target = getOrCreateVector(partition);
   }
   target->resize(target->size() + ranges.size());
   target->copyRanges(input.get(), ranges);
 }
 
-RowVectorPtr LocalPartition::processPartition(
+VectorPtr LocalPartition::getOrCreateVector(const size_t partition) {
+  auto reusable = queues_[partition]->getVector();
+  if (reusable) {
+    VELOX_CHECK_EQ(reusable->type(), outputType_);
+    reusable->unsafeResize(0);
+    for (auto i = 0; i < reusable->childrenSize(); ++i) {
+      reusable->childAt(i) = nullptr;
+    }
+    return reusable;
+  } else {
+    return BaseVector::create<RowVector>(outputType_, 0, pool());
+  }
+}
+
+void LocalPartition::populatePartitionBuffer(
     const RowVectorPtr& input,
-    vector_size_t size,
-    int partition,
-    const BufferPtr& indices,
-    const vector_size_t* rawIndices) {
+    const vector_size_t numPartitionRows,
+    const size_t partition,
+    const vector_size_t* rawIndices,
+    uint64_t& totalPartitionBufferSizeExcludingString,
+    uint64_t& totalPartitionStringBufferSize) {
+  VELOX_CHECK_GT(singlePartitionBufferSize_, 0);
+  copyRanges_.resize(numPartitionRows);
+
+  auto& partitionBuffer = partitionBuffers_[partition];
+  auto targetIndex = 0;
+  if (partitionBuffer) {
+    targetIndex = partitionBuffer->size();
+  }
+  for (int i = 0; i < numPartitionRows; i++) {
+    copyRanges_[i] = {rawIndices[i], targetIndex, 1};
+    targetIndex++;
+  }
+
+  copy(input, copyRanges_, partition, partitionBuffer);
+
+  if (partitionBuffer) {
+    uint64_t stringBufferSize{0};
+    auto totalSize = partitionBuffer->retainedSize(stringBufferSize);
+    totalPartitionBufferSizeExcludingString += totalSize - stringBufferSize;
+    totalPartitionStringBufferSize += stringBufferSize;
+  }
+}
+
+RowVectorPtr LocalPartition::createPartition(
+    const RowVectorPtr& input,
+    const vector_size_t numPartitionRows,
+    const size_t partition,
+    const BufferPtr& indices) {
   RowVectorPtr partitionData{nullptr};
   if (singlePartitionBufferSize_ > 0) {
-    if (partitionBuffers_.empty()) {
-      partitionBuffers_.resize(numPartitions_);
-    }
-    if (copyRanges_.size() < size) {
-      copyRanges_.resize(size);
-    }
-
     auto& partitionBuffer = partitionBuffers_[partition];
-    auto targetIndex = 0;
     if (partitionBuffer) {
-      targetIndex = partitionBuffer->size();
-    }
-    for (int i = 0; i < size; i++) {
-      copyRanges_[i] = {rawIndices[i], targetIndex, 1};
-      targetIndex++;
-    }
-
-    copy(
-        input,
-        folly::Range{copyRanges_.data(), static_cast<size_t>(size)},
-        partitionBuffer);
-
-    if (partitionBuffer &&
-        partitionBuffer->retainedSize() >= singlePartitionBufferSize_) {
-      partitionData = std::dynamic_pointer_cast<RowVector>(partitionBuffer);
-      VELOX_CHECK(partitionData);
+      partitionData =
+          checkedPointerCast<RowVector, BaseVector>(partitionBuffer);
       partitionBuffers_[partition] = nullptr;
     }
-  } else {
-    partitionData =
-        wrapChildren(input, size, indices, queues_[partition]->getVector());
+  } else if (numPartitionRows > 0) {
+    partitionData = wrapChildren(
+        input, numPartitionRows, indices, queues_[partition]->getVector());
   }
   return partitionData;
 }
 
+void LocalPartition::populateAndEnqueuePartitions(
+    RowVectorPtr input,
+    const std::vector<vector_size_t>& numRowsPerPartition,
+    const std::vector<BufferPtr>& indexBuffers,
+    const std::vector<vector_size_t*>& rawIndicesBuffers) {
+  uint64_t totalPartitionBufferSizeExcludingString = 0;
+  uint64_t totalPartitionStringBufferSize = 0;
+  uint16_t nonEmptyPartitionCount = 0;
+
+  // Populate partition buffers if in buffer mode.
+  if (singlePartitionBufferSize_ > 0) {
+    if (partitionBuffers_.empty()) {
+      partitionBuffers_.resize(numPartitions_);
+    }
+    for (auto partition = 0; partition < numPartitions_; partition++) {
+      populatePartitionBuffer(
+          input,
+          numRowsPerPartition[partition],
+          partition,
+          rawIndicesBuffers[partition],
+          totalPartitionBufferSizeExcludingString,
+          totalPartitionStringBufferSize);
+      if (partitionBuffers_[partition]) {
+        nonEmptyPartitionCount++;
+      }
+    }
+  } else {
+    nonEmptyPartitionCount = numPartitions_ -
+        std::count(numRowsPerPartition.begin(), numRowsPerPartition.end(), 0);
+  }
+  VELOX_CHECK_GT(
+      nonEmptyPartitionCount,
+      0,
+      "Input rows should be assigned to at least one partition");
+
+  // Calculate the partition buffer size across all partitions with amortized
+  // string buffer sizes.
+  auto balancedTotalPartitionBufferSize =
+      totalPartitionBufferSizeExcludingString +
+      (totalPartitionStringBufferSize / nonEmptyPartitionCount);
+  auto inputRetainedSize = input->retainedSize();
+
+  // Enqueue all partitions if one of the following conditions is met:
+  // 1. This operator is not in buffer mode.
+  // 2. This operator is in buffer mode and the total buffer size across all
+  // partitions exceeds 'singlePartitionBufferSize_ * numPartitions_'.
+  if (singlePartitionBufferSize_ == 0 ||
+      balancedTotalPartitionBufferSize >=
+          singlePartitionBufferSize_ * numPartitions_) {
+    auto perPartitionAmortizedSize =
+        (singlePartitionBufferSize_ > 0 ? balancedTotalPartitionBufferSize
+                                        : inputRetainedSize) /
+        nonEmptyPartitionCount;
+    for (auto partition = 0; partition < numPartitions_; partition++) {
+      auto partitionSize = numRowsPerPartition[partition];
+      auto partitionData = createPartition(
+          input, partitionSize, partition, indexBuffers[partition]);
+      if (!partitionData) {
+        continue;
+      }
+
+      ContinueFuture future;
+      auto reason = queues_[partition]->enqueue(
+          std::move(partitionData), perPartitionAmortizedSize, &future);
+      if (reason != BlockingReason::kNotBlocked) {
+        blockingReasons_.push_back(reason);
+        futures_.push_back(std::move(future));
+      }
+    }
+  }
+}
+
 void LocalPartition::addInput(RowVectorPtr input) {
   prepareForInput(input);
+  if (input->size() == 0) {
+    return;
+  }
 
   const auto singlePartition = numPartitions_ == 1
       ? 0
@@ -512,31 +611,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
     ++maxIndex[partition];
   }
 
-  const int64_t totalSize = input->retainedSize();
-  for (auto partition = 0; partition < numPartitions_; partition++) {
-    auto partitionSize = maxIndex[partition];
-    if (partitionSize == 0) {
-      // Do not enqueue empty partitions.
-      continue;
-    }
-
-    auto partitionData = processPartition(
-        input,
-        partitionSize,
-        partition,
-        indexBuffers_[partition],
-        rawIndices_[partition]);
-
-    if (partitionData) {
-      ContinueFuture future;
-      auto reason = queues_[partition]->enqueue(
-          partitionData, totalSize * partitionSize / numInput, &future);
-      if (reason != BlockingReason::kNotBlocked) {
-        blockingReasons_.push_back(reason);
-        futures_.push_back(std::move(future));
-      }
-    }
-  }
+  populateAndEnqueuePartitions(input, maxIndex, indexBuffers_, rawIndices_);
 }
 
 void LocalPartition::prepareForInput(RowVectorPtr& input) {
@@ -566,19 +641,36 @@ BlockingReason LocalPartition::isBlocked(ContinueFuture* future) {
 void LocalPartition::noMoreInput() {
   Operator::noMoreInput();
   if (!partitionBuffers_.empty()) {
+    uint64_t totalPartitionBufferSizeExcludingString = 0;
+    uint64_t totalPartitionStringBufferSize = 0;
+    uint16_t nonEmptyPartitionCount = 0;
     for (auto partition = 0; partition < numPartitions_; partition++) {
-      if (partitionBuffers_[partition] &&
-          partitionBuffers_[partition]->size() > 0) {
-        auto partitionData =
-            std::dynamic_pointer_cast<RowVector>(partitionBuffers_[partition]);
-        VELOX_CHECK(partitionData);
-        ContinueFuture future;
-        queues_[partition]->enqueue(
-            partitionData,
-            partitionBuffers_[partition]->retainedSize(),
-            &future);
+      if (partitionBuffers_[partition]) {
+        uint64_t stringBufferSize{0};
+        auto totalSize =
+            partitionBuffers_[partition]->retainedSize(stringBufferSize);
+        totalPartitionBufferSizeExcludingString += totalSize - stringBufferSize;
+        totalPartitionStringBufferSize += stringBufferSize;
+        nonEmptyPartitionCount++;
       }
-      partitionBuffers_[partition] = nullptr;
+    }
+    if (nonEmptyPartitionCount > 0) {
+      auto balancedPartitionBufferSize =
+          totalPartitionBufferSizeExcludingString +
+          (totalPartitionStringBufferSize / nonEmptyPartitionCount);
+      for (auto partition = 0; partition < numPartitions_; partition++) {
+        if (partitionBuffers_[partition]) {
+          auto partitionData = checkedPointerCast<RowVector, BaseVector>(
+              partitionBuffers_[partition]);
+          ContinueFuture future;
+
+          queues_[partition]->enqueue(
+              partitionData,
+              balancedPartitionBufferSize / nonEmptyPartitionCount,
+              &future);
+        }
+        partitionBuffers_[partition] = nullptr;
+      }
     }
     partitionBuffers_.resize(0);
     copyRanges_.resize(0);

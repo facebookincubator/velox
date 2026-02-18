@@ -30,6 +30,17 @@ class FunctionCallToSpecialForm {
   /// arguments, e.g. Try.
   virtual TypePtr resolveType(const std::vector<TypePtr>& argTypes) = 0;
 
+  /// Like 'resolveType', but with support for applying type conversions if a
+  /// special form signature doesn't match 'argTypes' exactly. Support varies
+  /// from special form to special form. By default, no coersions are attempted.
+  virtual TypePtr resolveTypeWithCorsions(
+      const std::vector<TypePtr>& argTypes,
+      [[maybe_unused]] std::vector<TypePtr>& coercions) {
+    coercions.clear();
+    coercions.resize(argTypes.size());
+    return resolveType(argTypes);
+  }
+
   /// Given the output Type, the child expresssions, and whether or not to track
   /// CPU usage, returns the SpecialForm.
   virtual ExprPtr constructSpecialForm(
@@ -46,6 +57,11 @@ class FunctionCallToSpecialForm {
 TypePtr resolveTypeForSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
+
+TypePtr resolveTypeForSpecialFormWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
 
 /// Returns the SpeicalForm associated with the functionName.  If functionName
 /// is not the name of a known SpecialForm, returns nulltpr.

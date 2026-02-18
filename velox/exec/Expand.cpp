@@ -15,6 +15,8 @@
  */
 #include "velox/exec/Expand.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 Expand::Expand(
@@ -26,11 +28,12 @@ Expand::Expand(
           expandNode->outputType(),
           operatorId,
           expandNode->id(),
-          "Expand") {
+          OperatorType::kExpand) {
   const auto& inputType = expandNode->inputType();
   const auto numRows = expandNode->projections().size();
   fieldProjections_.reserve(numRows);
   constantProjections_.reserve(numRows);
+  constantOutputs_.reserve(numRows);
   const auto numColumns = expandNode->names().size();
   for (const auto& rowProjections : expandNode->projections()) {
     std::vector<column_index_t> rowProjection;
@@ -58,6 +61,25 @@ Expand::Expand(
   }
 }
 
+void Expand::initialize() {
+  if (constantProjections_.empty()) {
+    return;
+  }
+  const auto numColumns = constantProjections_[0].size();
+  for (const auto& projections : constantProjections_) {
+    std::vector<VectorPtr> constantOutput;
+    constantOutput.reserve(numColumns);
+    for (const auto& constant : projections) {
+      if (constant) {
+        constantOutput.push_back(constant->toConstantVector(pool()));
+      } else {
+        constantOutput.push_back(nullptr);
+      }
+    }
+    constantOutputs_.emplace_back(std::move(constantOutput));
+  }
+}
+
 bool Expand::needsInput() const {
   return !noMoreInput_ && input_ == nullptr;
 }
@@ -81,21 +103,13 @@ RowVectorPtr Expand::getOutput() {
   std::vector<VectorPtr> outputColumns(outputType_->size());
 
   const auto& rowProjection = fieldProjections_[rowIndex_];
-  const auto& constantProjection = constantProjections_[rowIndex_];
+  const auto& constantProjection = constantOutputs_[rowIndex_];
   const auto numColumns = rowProjection.size();
 
   for (auto i = 0; i < numColumns; ++i) {
     if (rowProjection[i] == kConstantChannel) {
-      const auto& constantExpr = constantProjection[i];
-      if (constantExpr->value().isNull()) {
-        // Add null column.
-        outputColumns[i] = BaseVector::createNullConstant(
-            outputType_->childAt(i), numInput, pool());
-      } else {
-        // Add constant column.
-        outputColumns[i] = BaseVector::createConstant(
-            constantExpr->type(), constantExpr->value(), numInput, pool());
-      }
+      outputColumns[i] =
+          BaseVector::wrapInConstant(numInput, 0, constantProjection[i]);
     } else {
       outputColumns[i] = input_->childAt(rowProjection[i]);
     }

@@ -107,6 +107,8 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<MultiplyFunction>({prefix + "multiply"});
   registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
   registerBinaryNumeric<RemainderFunction>({prefix + "remainder"});
+  registerBinaryIntegralWithTReturn<IntegralDivideFunction, int64_t>(
+      {prefix + "div"});
   registerUnaryNumeric<UnaryMinusFunction>({prefix + "unaryminus"});
   registerFunction<
       UnaryMinusFunction,
@@ -121,6 +123,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerDecimalSubtract(prefix);
   registerDecimalMultiply(prefix);
   registerDecimalDivide(prefix);
+  registerDecimalIntegralDivide(prefix);
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 
@@ -128,6 +131,8 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerBinaryIntegralWithTReturn<CheckedIntegralDivideFunction, int64_t>(
+      {prefix + "checked_div"});
   registerFunction<sparksql::FactorialFunction, int64_t, int32_t>(
       {prefix + "factorial"});
 }

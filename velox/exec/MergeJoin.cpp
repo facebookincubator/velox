@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -48,11 +49,20 @@ MergeJoin::MergeJoin(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "MergeJoin"),
-      outputBatchSize_{outputBatchRows()},
+          OperatorType::kMergeJoin),
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
+      preferredOutputBatchRows_{
+          driverCtx->queryConfig().preferredOutputBatchRows()},
+      dynamicOutputBatchSizeEnabled_{
+          driverCtx->queryConfig().mergeJoinOutputBatchStartSize() != 0},
       joinType_{joinNode->joinType()},
       numKeys_{joinNode->leftKeys().size()},
       rightNodeId_{joinNode->sources()[1]->id()},
+      outputBatchSize_{
+          dynamicOutputBatchSizeEnabled_
+              ? driverCtx->queryConfig().mergeJoinOutputBatchStartSize()
+              : preferredOutputBatchRows_},
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
       core::MergeJoinNode::isSupported(joinType_),
@@ -111,12 +121,12 @@ void MergeJoin::initialize() {
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
         joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
         isSemiFilterJoin(joinType_)) {
-      joinTracker_ = JoinTracker(outputBatchSize_, pool());
+      joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
     }
   } else if (joinNode_->isAntiJoin()) {
     // Anti join needs to track the left side rows that have no match on the
     // right.
-    joinTracker_ = JoinTracker(outputBatchSize_, pool());
+    joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
   }
 
   joinNode_.reset();
@@ -226,28 +236,37 @@ void MergeJoin::addInput(RowVectorPtr input) {
 
 // static
 int32_t MergeJoin::compare(
-    const std::vector<column_index_t>& keys,
-    const RowVectorPtr& batch,
-    vector_size_t index,
-    const std::vector<column_index_t>& otherKeys,
-    const RowVectorPtr& otherBatch,
-    vector_size_t otherIndex) {
-  for (auto i = 0; i < keys.size(); ++i) {
+    const std::vector<column_index_t>& leftKeys,
+    const RowVectorPtr& leftBatch,
+    vector_size_t leftIndex,
+    const std::vector<column_index_t>& rightKeys,
+    const RowVectorPtr& rightBatch,
+    vector_size_t rightIndex) {
+  for (auto i = 0; i < leftKeys.size(); ++i) {
     static const CompareFlags kCompareFlags = {
         .equalsOnly = true,
         .nullHandlingMode =
             CompareFlags::NullHandlingMode::kNullAsIndeterminate};
-    const auto compare = batch->childAt(keys[i])->compare(
-        otherBatch->childAt(otherKeys[i]).get(),
-        index,
-        otherIndex,
-        kCompareFlags);
+    const auto compare = leftBatch->childAt(leftKeys[i])
+                             ->compare(
+                                 rightBatch->childAt(rightKeys[i]).get(),
+                                 leftIndex,
+                                 rightIndex,
+                                 kCompareFlags);
 
-    // Comparing null with anything will return std::nullopt.
     if (!compare.has_value()) {
-      // The SQL semantics of Presto and Spark will always return false if
-      // comparing a NULL value with any other value.
-      return -1;
+      // Under CompareFlags::NullHandlingMode::kNullAsIndeterminate,
+      // std::nullopt is returned in three cases:
+      //   1) Both the left key and the right key are null.
+      //   2) The left key is null, and the right key is not null.
+      //   3) The left key is not null, and the right key is null.
+      //
+      // However, the comparison result semantics differ:
+      // - Cases (1) and (2): return -1, meaning input_ should catch up with
+      // rightInput_.
+      // - Case (3): return 1, indicating the left key is considered greater,
+      //   so rightInput_ should catch up with input_ in the subsequent steps.
+      return leftBatch->childAt(leftKeys[i])->isNullAt(leftIndex) ? -1 : 1;
     } else if (compare.value() != 0) {
       return compare.value();
     }
@@ -559,7 +578,7 @@ bool MergeJoin::prepareOutput(
       } else {
         inputs[i] = BaseVector::create(
             filterInputType_->childAt(i),
-            outputBatchSize_,
+            preferredOutputBatchRows_,
             operatorCtx_->pool());
       }
     }
@@ -568,7 +587,7 @@ bool MergeJoin::prepareOutput(
         operatorCtx_->pool(),
         filterInputType_,
         nullptr,
-        outputBatchSize_,
+        preferredOutputBatchRows_,
         std::move(inputs));
   }
   return false;
@@ -751,6 +770,9 @@ RowVectorPtr MergeJoin::getOutput() {
   for (;;) {
     auto output = doGetOutput();
     if (output != nullptr && output->size() > 0) {
+      // Update the batch size based on the output before filtering.
+      updateOutputBatchSize(output);
+
       if (filter_) {
         output = applyFilter(output);
         if (output != nullptr) {
@@ -1269,6 +1291,34 @@ void MergeJoin::clearLeftInput() {
 
 void MergeJoin::clearRightInput() {
   rightInput_ = nullptr;
+}
+
+void MergeJoin::updateOutputBatchSize(const RowVectorPtr& output) {
+  if (!dynamicOutputBatchSizeEnabled_) {
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(output);
+
+  const auto outputSize = output->size();
+  VELOX_CHECK_GT(outputSize, 0);
+
+  // Calculate average row size from the current output batch.
+  const auto avgRowSize = output->estimateFlatSize() / outputSize;
+
+  if (avgRowSize == 0) {
+    // Avoid division by zero; keep current batch size.
+    return;
+  }
+
+  outputBatchSize_ = std::min(
+      static_cast<uint64_t>(preferredOutputBatchBytes_ / avgRowSize),
+      static_cast<uint64_t>(preferredOutputBatchRows_));
+
+  // Ensure we have at least 1 row.
+  if (outputBatchSize_ == 0) {
+    outputBatchSize_ = 1;
+  }
 }
 
 RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {

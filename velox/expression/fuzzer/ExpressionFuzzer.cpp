@@ -654,9 +654,8 @@ core::TypedExprPtr ExpressionFuzzer::generateArgFunction(const TypePtr& arg) {
   for (const auto& functionName : baseList) {
     if (findConcreteSignature(args, returnType, functionName)) {
       eligible.push_back(functionName);
-    } else if (
-        auto* signatureTemplate =
-            findSignatureTemplate(args, returnType, baseType, functionName)) {
+    } else if (findSignatureTemplate(
+                   args, returnType, baseType, functionName)) {
       eligible.push_back(functionName);
     }
   }

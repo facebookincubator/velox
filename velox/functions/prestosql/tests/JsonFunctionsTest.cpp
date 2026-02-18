@@ -251,6 +251,18 @@ TEST_F(JsonFunctionsTest, jsonFormat) {
   velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(JsonFunctionsTest, jsonParseErrorContext) {
+  auto data = makeRowVector(
+      {makeFlatVector<StringView>({"1]"}), makeFlatVector<StringView>({"2]"})});
+  // Verify that exceptions thrown have the correct error context information.
+  testContextMessageOnThrow(
+      "json_parse(c0)", data, "Top-level Expression: json_parse(c0)");
+  // Test twice to ensure that the context is correctly generated for each
+  // expression and not cached and reused.
+  testContextMessageOnThrow(
+      "json_parse(c1)", data, "Top-level Expression: json_parse(c1)");
+}
+
 TEST_F(JsonFunctionsTest, jsonParse) {
   const auto jsonParse = [&](std::optional<std::string> value) {
     return evaluateOnce<StringView>("json_parse(c0)", value);
@@ -739,7 +751,7 @@ TEST_F(JsonFunctionsTest, jsonArrayGet) {
     std::optional<StringView> s = json.has_value()
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
-    auto jsonInput = makeNullableFlatVector<std::string>({s}, jsontype);
+    auto jsonInput = makeNullableFlatVector<StringView>({s}, jsontype);
     auto indexInput = makeFlatVector<int64_t>(std::vector<int64_t>{index});
     return JsonFunctionsTest::jsonArrayGet(jsonInput, indexInput);
   };
@@ -1195,7 +1207,7 @@ TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
     std::optional<StringView> s = json.has_value()
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
-    auto varcharInput = makeNullableFlatVector<std::string>({s}, VARCHAR());
+    auto varcharInput = makeNullableFlatVector<StringView>({s}, VARCHAR());
     auto pathInput = makeFlatVector<std::string>({path});
     return JsonFunctionsTest::jsonExtract(varcharInput, pathInput, wrapInTry);
   };
@@ -1229,11 +1241,12 @@ TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
 
 TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
   // Array of strings.
-  auto data = makeRowVector({makeNullableFlatVector<std::string>(
-      {R"(["red","blue"])"_sv,
-       R"([null,null,"purple"])"_sv,
-       "[]"_sv,
-       "null"_sv})});
+  auto data = makeRowVector({makeNullableFlatVector<StringView>({
+      R"(["red","blue"])"_sv,
+      R"([null,null,"purple"])"_sv,
+      "[]"_sv,
+      "null"_sv,
+  })});
   auto expected = makeNullableArrayVector<StringView>(
       {{{"red"_sv, "blue"_sv}},
        {{std::nullopt, std::nullopt, "purple"_sv}},
@@ -1244,8 +1257,10 @@ TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
       "$internal$json_string_to_array_cast", ARRAY(VARCHAR()), data, expected);
 
   // Array of integers.
-  data = makeRowVector({makeNullableFlatVector<std::string>(
-      {R"(["10212","1015353"])"_sv, R"(["10322","285000"])"})});
+  data = makeRowVector({makeNullableFlatVector<StringView>({
+      R"(["10212","1015353"])"_sv,
+      R"(["10322","285000"])",
+  })});
   expected =
       makeNullableArrayVector<int64_t>({{10212, 1015353}, {10322, 285000}});
 
@@ -1255,19 +1270,21 @@ TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
 
 TEST_F(JsonFunctionsTest, jsonStringToMapCast) {
   // Map of strings.
-  auto data = makeRowVector({makeFlatVector<std::string>(
-      {R"({"red":1,"blue":2})"_sv,
-       R"({"green":3,"magenta":4})"_sv,
-       R"({"violet":1,"blue":2})"_sv,
-       R"({"yellow":1,"blue":2})"_sv,
-       R"({"purple":10,"cyan":5})"_sv})});
+  auto data = makeRowVector({makeFlatVector<StringView>({
+      R"({"red":1,"blue":2})"_sv,
+      R"({"green":3,"magenta":4})"_sv,
+      R"({"violet":1,"blue":2})"_sv,
+      R"({"yellow":1,"blue":2})"_sv,
+      R"({"purple":10,"cyan":5})"_sv,
+  })});
 
-  auto expected = makeMapVector<StringView, int64_t>(
-      {{{"red"_sv, 1}, {"blue"_sv, 2}},
-       {{"green"_sv, 3}, {"magenta"_sv, 4}},
-       {{"violet"_sv, 1}, {"blue"_sv, 2}},
-       {{"yellow"_sv, 1}, {"blue"_sv, 2}},
-       {{"purple"_sv, 10}, {"cyan"_sv, 5}}});
+  auto expected = makeMapVector<StringView, int64_t>({
+      {{"red"_sv, 1}, {"blue"_sv, 2}},
+      {{"green"_sv, 3}, {"magenta"_sv, 4}},
+      {{"violet"_sv, 1}, {"blue"_sv, 2}},
+      {{"yellow"_sv, 1}, {"blue"_sv, 2}},
+      {{"purple"_sv, 10}, {"cyan"_sv, 5}},
+  });
 
   checkInternalFn(
       "$internal$json_string_to_map_cast",
@@ -1278,12 +1295,13 @@ TEST_F(JsonFunctionsTest, jsonStringToMapCast) {
 
 TEST_F(JsonFunctionsTest, jsonStringToRowCast) {
   // Row of strings.
-  auto data = makeRowVector({makeFlatVector<std::string>(
-      {R"({"red":1,"blue":2})"_sv,
-       R"({"red":3,"blue":4})"_sv,
-       R"({"red":1,"blue":2})"_sv,
-       R"({"red":1,"blue":2})"_sv,
-       R"({"red":10,"blue":5})"_sv})});
+  auto data = makeRowVector({makeFlatVector<StringView>({
+      R"({"red":1,"blue":2})"_sv,
+      R"({"red":3,"blue":4})"_sv,
+      R"({"red":1,"blue":2})"_sv,
+      R"({"red":1,"blue":2})"_sv,
+      R"({"red":10,"blue":5})"_sv,
+  })});
 
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>({1, 3, 1, 1, 10}),

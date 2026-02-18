@@ -285,7 +285,7 @@ std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
   return copies;
 }
 
-uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
+uint64_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
   auto [cursor, results] = readCursor();
   uint64_t count = 0;
   for (const auto& result : results) {
@@ -293,6 +293,11 @@ uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
   }
   task = cursor->task();
   return count;
+}
+
+uint64_t AssertQueryBuilder::countResults() {
+  std::shared_ptr<Task> task;
+  return countResults(task);
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
@@ -306,17 +311,14 @@ AssertQueryBuilder::readCursor() {
       static std::atomic<uint64_t> cursorQueryId{0};
       const std::string queryId =
           fmt::format("TaskCursorQuery_{}", cursorQueryId++);
-      auto queryPool = memory::memoryManager()->addRootPool(
-          queryId, params_.maxQueryCapacity);
-      params_.queryCtx = core::QueryCtx::create(
-          executor_.get(),
-          core::QueryConfig({}),
-          std::
-              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-          cache::AsyncDataCache::getInstance(),
-          std::move(queryPool),
-          nullptr,
-          queryId);
+
+      params_.queryCtx = core::QueryCtx::Builder()
+                             .executor(executor_.get())
+                             .pool(
+                                 memory::memoryManager()->addRootPool(
+                                     queryId, params_.maxQueryCapacity))
+                             .queryId(queryId)
+                             .build();
     }
   }
   if (!configs_.empty()) {
@@ -334,7 +336,6 @@ AssertQueryBuilder::readCursor() {
       return;
     }
     auto& task = taskCursor->task();
-    VELOX_CHECK(!params_.barrierExecution || params_.serialExecution);
     if (params_.barrierExecution) {
       int numSplits{0};
       for (auto& [nodeId, nodeSplits] : splits_) {
@@ -350,14 +351,19 @@ AssertQueryBuilder::readCursor() {
         } else {
           task->addSplit(nodeId, std::move(nodeSplits[0]));
         }
-        nodeSplits.erase(nodeSplits.begin());
+        nodeSplits.erase(nodeSplits.cbegin());
       }
       if (numSplits > 0) {
         VELOX_CHECK_EQ(
             numSplits,
             splits_.size(),
             "Barrier task execution mode requires all the sources have the same number of splits");
-        task->requestBarrier();
+        if (!params_.serialExecution) {
+          // TODO: Hold the future and wait it in the next round.
+          task->requestBarrier().wait();
+        } else {
+          task->requestBarrier();
+        }
       } else {
         taskCursor->setNoMoreSplits();
       }

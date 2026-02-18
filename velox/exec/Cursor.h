@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include "velox/core/PlanNode.h"
@@ -21,19 +22,13 @@
 
 namespace facebook::velox::exec {
 
-/// Wait up to maxWaitMicros for all the task drivers to finish. The function
-/// returns true if all the drivers have finished, otherwise false.
-///
-/// NOTE: user must call this on a finished or failed task.
-bool waitForTaskDriversToFinish(
-    exec::Task* task,
-    uint64_t maxWaitMicros = 1'000'000);
-
 /// Parameters for initializing a TaskCursor or RowCursor.
 struct CursorParameters {
   /// Root node of the plan tree
   std::shared_ptr<const core::PlanNode> planNode;
 
+  /// Partition number if task is expected to receive data from a remote data
+  /// shuffle. Used to initialize ExchangeClient.
   int32_t destination{0};
 
   /// Maximum number of drivers per pipeline.
@@ -69,13 +64,13 @@ struct CursorParameters {
 
   /// Spilling directory, if not empty, then the task's spilling directory
   /// would be built from it.
-  std::string spillDirectory;
+  std::string spillDirectory = "";
 
   /// Callback function to dynamically create or determine the spill directory
   /// path at runtime. If provided, this callback is invoked when spilling is
   /// needed and must return a valid directory path. This allows for dynamic
   /// spill directory creation or path resolution based on runtime conditions.
-  std::function<std::string()> spillDirectoryCallback;
+  std::function<std::string()> spillDirectoryCallback = nullptr;
 
   bool copyResult = true;
 
@@ -87,65 +82,58 @@ struct CursorParameters {
 
   /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations
   /// in 'queryCtx' will be overridden by 'queryConfig'.
-  std::unordered_map<std::string, std::string> queryConfigs;
+  std::unordered_map<std::string, std::string> queryConfigs = {};
+
+  // Debugging related structures:
+
+  /// Callback type for breakpoints.
+  ///
+  /// Called with the current vector when the breakpoint is hit. The return
+  /// value semantics is "should block?"; returns true if the driver should stop
+  /// and produce the vector, false to continue without stopping.
+  ///
+  /// If callback is not specified (nullptr), assume the partial vector should
+  /// always be produced, which is the same as callback returning true (always
+  /// stop).
+  using BreakpointCallback = std::function<bool(const RowVectorPtr&)>;
+
+  /// Map type for breakpoints: plan node ID to optional callback.
+  using TBreakpointMap =
+      std::unordered_map<core::PlanNodeId, BreakpointCallback>;
+
+  /// Breakpoints enable step-by-step execution of a query plan, allowing users
+  /// to inspect intermediate results at operator boundaries containing
+  /// breakpoints. This is useful for debugging query execution and
+  /// understanding data flow through operators.
+  ///
+  /// Maps plan node IDs to optional callbacks. When a breakpoint is hit, the
+  /// callback (if non-null) is invoked with the current vector before the
+  /// cursor pauses.
+  TBreakpointMap breakpoints = {};
 };
 
-class TaskQueue {
- public:
-  struct TaskQueueEntry {
-    RowVectorPtr vector;
-    uint64_t bytes;
-  };
-
-  explicit TaskQueue(
-      uint64_t maxBytes,
-      const std::shared_ptr<memory::MemoryPool>& outputPool)
-      : pool_(
-            outputPool != nullptr ? outputPool
-                                  : memory::memoryManager()->addLeafPool()),
-        maxBytes_(maxBytes) {}
-
-  void setNumProducers(int32_t n) {
-    numProducers_ = n;
-  }
-
-  // Adds a batch of rows to the queue and returns kNotBlocked if the
-  // producer may continue. Returns kWaitForConsumer if the queue is
-  // full after the addition and sets '*future' to a future that is
-  // realized when the producer may continue.
-  exec::BlockingReason enqueue(
-      RowVectorPtr vector,
-      velox::ContinueFuture* future);
-
-  // Returns nullptr when all producers are at end. Otherwise blocks.
-  RowVectorPtr dequeue();
-
-  void close();
-
-  bool hasNext();
-
-  velox::memory::MemoryPool* pool() const {
-    return pool_.get();
-  }
-
- private:
-  // Owns the vectors in 'queue_', hence must be declared first.
-  std::shared_ptr<velox::memory::MemoryPool> pool_;
-  std::deque<TaskQueueEntry> queue_;
-  std::optional<int32_t> numProducers_;
-  int32_t producersFinished_ = 0;
-  uint64_t totalBytes_ = 0;
-  // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
-  // adding the result.
-  uint64_t maxBytes_;
-  std::mutex mutex_;
-  std::vector<ContinuePromise> producerUnblockPromises_;
-  bool consumerBlocked_ = false;
-  ContinuePromise consumerPromise_;
-  ContinueFuture consumerFuture_;
-  bool closed_ = false;
-};
-
+/// Abstract interface for iterating over query results. TaskCursor manages
+/// task execution and provides batch-level access to output vectors.
+///
+/// Example usage:
+/// @code
+///
+///   auto cursor = TaskCursor:create({
+///     .planNode = node,
+///   );
+///
+///   // Run through every output.
+///   while (cursor->moveNext()) {
+///     auto vector = cursor->current();
+///   }
+/// @endcode
+///
+/// If "breakpoints" are set in the CursorParameters input, then
+/// `cursor->moveStep()` will move the cursor to the next breakpoint, which is
+/// either the input of an operator with a breakpoint installed, or the next
+/// task output.
+///
+/// `cursor->moveNext()` will always move the cursor to the next task output.
 class TaskCursor {
  public:
   virtual ~TaskCursor() = default;
@@ -155,13 +143,26 @@ class TaskCursor {
   /// Starts the task if not started yet.
   virtual void start() = 0;
 
-  /// Fetches another batch from the task queue.
-  /// Starts the task if not started yet.
+  /// Fetches another batch from the task queue. Starts the task if not started
+  /// yet.
+  ///
+  /// @return Returns false is the task is done producing output.
   virtual bool moveNext() = 0;
 
-  virtual bool hasNext() = 0;
+  /// Steps through execution, returning either the input to the next operator
+  /// with a breakpoint installed, or the next task output. If no breakpoints
+  /// are set, then moveStep() == moveNext().
+  ///
+  /// @return Returns false is the task is done producing output.
+  virtual bool moveStep() = 0;
 
+  /// Returns the vector the cursor is currently on.
   virtual RowVectorPtr& current() = 0;
+
+  /// If breakpoints are set, returns the plan node that generated the trace. If
+  /// the cursor is at the task output or if there are no breakpoints,
+  /// returns empty string.
+  virtual core::PlanNodeId at() const = 0;
 
   virtual void setError(std::exception_ptr error) = 0;
 
@@ -172,6 +173,8 @@ class TaskCursor {
   virtual const std::shared_ptr<Task>& task() = 0;
 };
 
+/// Row-level cursor that wraps a TaskCursor and provides access to individual
+/// rows and column values within the result set.
 class RowCursor {
  public:
   explicit RowCursor(CursorParameters& params) {
@@ -191,8 +194,6 @@ class RowCursor {
 
   bool next();
 
-  bool hasNext();
-
   std::shared_ptr<Task> task() const {
     return cursor_->task();
   }
@@ -209,5 +210,13 @@ class RowCursor {
   vector_size_t currentRow_ = 0;
   vector_size_t numRows_ = 0;
 };
+
+/// Wait up to maxWaitMicros for all the task drivers to finish. The function
+/// returns true if all the drivers have finished, otherwise false.
+///
+/// NOTE: user must call this on a finished or failed task.
+bool waitForTaskDriversToFinish(
+    exec::Task* task,
+    uint64_t maxWaitMicros = 1'000'000);
 
 } // namespace facebook::velox::exec

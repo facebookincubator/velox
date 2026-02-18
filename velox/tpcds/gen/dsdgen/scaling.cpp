@@ -217,7 +217,8 @@ ds_key_t getIDCount(int nTable, DSDGenContext& dsdGenContext) {
  */
 ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
   static double nScale;
-  int nTable, nMultiplier, i, nBadScale = 0, nRowcountOffset = 0;
+  int nTable, nMultiplier, i, nRowcountOffset = 0;
+  // int nBadScale = 0;
   tdef* pTdef;
 
   if (!dsdGenContext.get_rowcount_init) {
@@ -270,7 +271,7 @@ ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
               dsdGenContext);
           break;
         case 300:
-          nBadScale = QERR_BAD_SCALE;
+          // nBadScale = QERR_BAD_SCALE;
           dsdGenContext.arRowcount[nTable].kBaseRowcount = dist_weight(
               NULL,
               "rowcounts",
@@ -279,7 +280,7 @@ ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
               dsdGenContext);
           break;
         case 100:
-          nBadScale = QERR_BAD_SCALE;
+          // nBadScale = QERR_BAD_SCALE;
           dsdGenContext.arRowcount[nTable].kBaseRowcount = dist_weight(
               NULL,
               "rowcounts",
@@ -288,7 +289,7 @@ ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
               dsdGenContext);
           break;
         case 10:
-          nBadScale = QERR_BAD_SCALE;
+          // nBadScale = QERR_BAD_SCALE;
           dsdGenContext.arRowcount[nTable].kBaseRowcount = dist_weight(
               NULL,
               "rowcounts",
@@ -297,7 +298,7 @@ ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
               dsdGenContext);
           break;
         case 1:
-          nBadScale = QERR_QUALIFICATION_SCALE;
+          // nBadScale = QERR_QUALIFICATION_SCALE;
           dsdGenContext.arRowcount[nTable].kBaseRowcount = dist_weight(
               NULL,
               "rowcounts",
@@ -306,7 +307,7 @@ ds_key_t get_rowcount(int table, DSDGenContext& dsdGenContext) {
               dsdGenContext);
           break;
         default:
-          nBadScale = QERR_BAD_SCALE;
+          // nBadScale = QERR_BAD_SCALE;
           int mem =
               dist_member(NULL, "rowcounts", nTable + 1, 3, dsdGenContext);
           switch (mem) {

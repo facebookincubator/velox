@@ -296,7 +296,7 @@ void buildScanSplitFromTableWriteResult(
   auto* fragments =
       writeResult[0]->childAt(1)->asChecked<SimpleVector<StringView>>();
   for (int i = 1; i < writeResult[0]->size(); ++i) {
-    auto fragment = folly::parseJson(fragments->valueAt(i));
+    auto fragment = folly::parseJson(std::string_view(fragments->valueAt(i)));
     auto fileName = fragment["fileWriteInfos"][0]["writeFileName"].asString();
     auto hiveSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         TableEvolutionFuzzer::connectorId(),
@@ -495,10 +495,12 @@ std::optional<AggregationConfig> generateAggregationConfig(
 
       auto type = schema->childAt(i);
       // Integer types: randomly choose between min/max or bitwise aggregations
-      // Note: Exclude DATE type as it doesn't support bitwise aggregations
+      // Note: Exclude DATE/Interval type as it doesn't support bitwise
+      // aggregations
       if ((type->isInteger() || type->isBigint() || type->isSmallint() ||
            type->isTinyint()) &&
-          !type->isDate()) {
+          !type->isDate() && !type->isIntervalDayTime() &&
+          !type->isIntervalYearMonth()) {
         if (folly::Random::oneIn(2, rng)) {
           availableIntegerColumns.push_back(i);
         } else {

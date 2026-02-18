@@ -17,6 +17,7 @@
 
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/HashTableCache.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
@@ -106,6 +107,25 @@ class HashBuild final : public Operator {
 
   // Invoked to set up hash table to build.
   void setupTable();
+
+  // Sets up hash table caching if enabled. Returns true if the cached table
+  // is already available or if this operator should wait for another task
+  // to build it, in which case further initialization should be skipped.
+  // Returns false if this operator should proceed with building the table.
+  bool setupCachedHashTable();
+
+  // Checks if a cached hash table is available and uses it if so.
+  // Returns true if the cached table was used (build can be skipped).
+  // Returns false if we need to build the table (cache miss).
+  bool getHashTableFromCache();
+
+  // Called when waiting for a cached hash table from another task.
+  // Returns true if the cached table was received and noMoreInput was called.
+  bool receivedCachedHashTable();
+
+  // Stores the built hash table in the cache for reuse by other tasks.
+  // No-op if hash table caching is not enabled.
+  void maybeSetHashTableInCache(const std::shared_ptr<BaseHashTable>& table);
 
   // Invoked when operator has finished processing the build input and wait for
   // all the other drivers to finish the processing. The last driver that
@@ -204,6 +224,35 @@ class HashBuild final : public Operator {
   // not.
   bool nonReclaimableState() const;
 
+  // True if we have enough rows and not enough duplicate join keys, i.e. more
+  // than 'abandonHashBuildDedupMinRows_' rows and more than
+  // 'abandonHashBuildDedupMinPct_' % of rows are unique.
+  bool abandonHashBuildDedupEarly(int64_t numDistinct) const;
+
+  // Invoked to abandon build deduped hash table.
+  void abandonHashBuildDedup();
+
+  // Returns true if this operator is using a cached hash table.
+  // When enabled, the hash table is built once and cached for reuse
+  // by other tasks within the same query and stage.
+  bool useHashTableCache() const {
+    return !cacheKey_.empty();
+  }
+
+  // Returns the hash table cache key for this operator.
+  // Only valid if useHashTableCache() returns true.
+  const std::string& cacheKey() const {
+    VELOX_CHECK(
+        useHashTableCache(),
+        "cacheKey() called when table caching is not enabled");
+    return cacheKey_;
+  }
+
+  // Determines the memory pool to use for the hash table.
+  // For cached hash tables, uses query-level pool so the table can
+  // outlive the task. For regular joins, uses operator pool.
+  memory::MemoryPool* tableMemoryPool() const;
+
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
@@ -217,11 +266,36 @@ class HashBuild final : public Operator {
   // not.
   const bool needProbedFlagSpill_;
 
+  // Indicates whether drop duplicate rows. Rows containing duplicate keys
+  // can be removed for left semi and anti join.
+  const bool dropDuplicates_;
+
+  // Maximum number of distinct values to keep when merging vector hashers
+  const size_t vectorHasherMaxNumDistinct_;
+
+  // Minimum number of rows to see before deciding to give up build no
+  // duplicates hash table.
+  const int32_t abandonHashBuildDedupMinRows_;
+
+  // Min unique rows pct for give up build deduped hash table. If more
+  // than this many rows are unique, build hash table in addInput phase is not
+  // worthwhile.
+  const int32_t abandonHashBuildDedupMinPct_;
+
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
   tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
 
   State state_{State::kRunning};
+
+  // For hash table caching: the cache key passed in at construction.
+  // If set, this operator coordinates via HashTableCache.
+  // Key format: "queryId:planNodeId"
+  std::string cacheKey_;
+
+  // For hash table caching: cached entry containing the shared table and pool.
+  // Retrieved from HashTableCache.
+  std::shared_ptr<HashTableCacheEntry> cacheEntry_;
 
   // The row type used for hash table build and disk spilling.
   RowTypePtr tableType_;
@@ -241,6 +315,9 @@ class HashBuild final : public Operator {
 
   // Container for the rows being accumulated.
   std::unique_ptr<BaseHashTable> table_;
+
+  // Used for building hash table while adding input rows.
+  std::unique_ptr<HashLookup> lookup_;
 
   // Key channels in 'input_'
   std::vector<column_index_t> keyChannels_;
@@ -268,6 +345,10 @@ class HashBuild final : public Operator {
   // True if this is a build side of an anti or left semi project join and has
   // at least one entry with null join keys.
   bool joinHasNullKeys_{false};
+
+  // Whether to abandon building a HashTable without duplicates in HashBuild
+  // addInput phase for left semi/anti join.
+  bool abandonHashBuildDedup_{false};
 
   // The type used to spill hash table which might attach a boolean column to
   // record the probed flag if 'needProbedFlagSpill_' is true.
@@ -310,6 +391,10 @@ class HashBuild final : public Operator {
 
   // Maps key channel in 'input_' to channel in key.
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap_;
+
+  // Count the number of hash table input rows for building deduped
+  // hash table. It will not be updated after abandonBuildNoDupHash_ is true.
+  int64_t numHashInputRows_ = 0;
 };
 
 inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
@@ -328,7 +413,7 @@ class HashBuildSpiller : public SpillerBase {
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   /// Invoked to spill all the rows stored in the row container of the hash
   /// build.

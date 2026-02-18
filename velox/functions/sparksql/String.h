@@ -167,9 +167,11 @@ struct Sha1HexStringFunction {
   void call(out_type<Varchar>& result, const arg_type<Varbinary>& input) {
     static const int kSha1Length = 20;
     result.resize(kSha1Length * 2);
+    VELOX_SUPPRESS_DEPRECATED_WARNING
     folly::ssl::OpenSSLHash::sha1(
         folly::MutableByteRange((uint8_t*)result.data(), kSha1Length),
         folly::ByteRange((const uint8_t*)input.data(), input.size()));
+    VELOX_UNSUPPRESS_DEPRECATED_WARNING
     encodeDigestToBase16((uint8_t*)result.data(), kSha1Length);
   }
 };

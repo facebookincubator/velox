@@ -44,6 +44,14 @@ uint64_t BufferedInput::nextFetchSize() const {
       });
 }
 
+void BufferedInput::reset() {
+  regions_.clear();
+  offsets_.clear();
+  buffers_.clear();
+  enqueuedToBufferOffset_.clear();
+  allocPool_->clear();
+}
+
 void BufferedInput::load(const LogType logType) {
   // no regions to load
   if (regions_.size() == 0) {
@@ -82,14 +90,15 @@ void BufferedInput::readToBuffer(
     uint64_t offset,
     folly::Range<char*> allocated,
     const LogType logType) {
-  uint64_t usec = 0;
+  uint64_t storageReadTimeUs = 0;
   {
-    MicrosecondTimer timer(&usec);
+    MicrosecondTimer timer(&storageReadTimeUs);
     input_->read(allocated.data(), allocated.size(), offset, logType);
   }
   if (auto* stats = input_->getStats()) {
     stats->read().increment(allocated.size());
-    stats->queryThreadIoLatency().increment(usec);
+    stats->queryThreadIoLatencyUs().increment(storageReadTimeUs);
+    stats->storageReadLatencyUs().increment(storageReadTimeUs);
   }
 }
 
@@ -114,8 +123,9 @@ std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
       // help faster lookup using enqueuedToBufferOffset_ later.
       [region, this, i = regions_.size() - 1]() {
         auto result = readInternal(region.offset, region.length, i);
-        VELOX_CHECK(
-            std::get<1>(result) != MAX_UINT64,
+        VELOX_CHECK_NE(
+            std::get<1>(result),
+            MAX_UINT64,
             "Fail to read region offset={} length={}",
             region.offset,
             region.length);

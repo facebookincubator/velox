@@ -44,7 +44,7 @@ void RemoteConnectorSplit::registerSerDe() {
 
 namespace {
 std::unique_ptr<folly::IOBuf> mergePages(
-    std::vector<std::unique_ptr<SerializedPage>>& pages) {
+    std::vector<std::unique_ptr<SerializedPageBase>>& pages) {
   VELOX_CHECK(!pages.empty());
   std::unique_ptr<folly::IOBuf> mergedBufs;
   for (const auto& page : pages) {
@@ -63,7 +63,7 @@ Exchange::Exchange(
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
     std::shared_ptr<ExchangeClient> exchangeClient,
-    const std::string& operatorType)
+    std::string_view operatorType)
     : SourceOperator(
           driverCtx,
           exchangeNode->outputType(),
@@ -101,7 +101,13 @@ void Exchange::getSplits(ContinueFuture* future) {
   for (;;) {
     exec::Split split;
     const auto reason = operatorCtx_->task()->getSplitOrFuture(
-        operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
+        operatorCtx_->driverCtx()->driverId,
+        operatorCtx_->driverCtx()->splitGroupId,
+        planNodeId(),
+        /*maxPreloadSplits=*/0,
+        /*preload=*/nullptr,
+        split,
+        *future);
     if (reason != BlockingReason::kNotBlocked) {
       addRemoteTaskIds(remoteTaskIds);
       return;
@@ -109,7 +115,7 @@ void Exchange::getSplits(ContinueFuture* future) {
 
     if (split.hasConnectorSplit()) {
       auto remoteSplit =
-          checked_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
+          checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit);
       if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
         splitTracer_->write(split);
       }
@@ -205,13 +211,15 @@ RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
       inputStream_ == nullptr || columnarPageIdx_ < currentPages_.size());
 
   // Iterate through pages
-  for (; columnarPageIdx_ < currentPages_.size();) {
+  while (columnarPageIdx_ < currentPages_.size()) {
     auto& page = currentPages_[columnarPageIdx_];
 
-    // Track raw bytes for stats (only once per page)
     if (!inputStream_) {
+      // NOTE: 'rawInputBytes' only counts bytes from pages processed from the
+      // beginning in this call. If processing resumes from the middle of a
+      // page, that page's bytes are not counted. This ensures each page is
+      // counted only once in 'rawInputBytes' across multiple calls.
       rawInputBytes += page->size();
-      // Create stream for this page
       inputStream_ = page->prepareStreamForDeserialize();
     }
 
@@ -229,16 +237,14 @@ RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
       resultOffset = result_->size();
     }
 
-    // If page is fully consumed
     if (inputStream_->atEnd()) {
+      // Page is fully consumed, free memory immediately, and move to the next.
       inputStream_ = nullptr;
-      // free memory immediately
       page.reset();
-      // move to next page
       ++columnarPageIdx_;
     }
 
-    // Stop if accumulated enough rows for this batch
+    // Stop if accumulated enough rows for this batch.
     if (resultOffset >= numRows) {
       break;
     }
@@ -251,19 +257,14 @@ RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
       result_->estimateFlatSize() / numOutputRows,
       estimatedRowSize_.value_or(1L));
 
-  // If processed all pages, clear the vector and reset state
+  // If processed all pages, clear the vector and reset state.
   if (columnarPageIdx_ >= currentPages_.size()) {
     VELOX_CHECK_NULL(inputStream_);
     currentPages_.clear();
     columnarPageIdx_ = 0;
   }
 
-  // Record stats
-  auto lockedStats = stats_.wlock();
-  lockedStats->rawInputBytes += rawInputBytes;
-  lockedStats->rawInputPositions += numOutputRows;
-  lockedStats->addInputVector(result_->estimateFlatSize(), numOutputRows);
-
+  recordInputStats(rawInputBytes);
   return result_;
 }
 
@@ -278,7 +279,8 @@ RowVectorPtr Exchange::getOutputFromRowPages(VectorSerde* serde) {
   if (inputStream_ == nullptr) {
     std::unique_ptr<folly::IOBuf> mergedBufs = mergePages(currentPages_);
     rawInputBytes += mergedBufs->computeChainDataLength();
-    mergedRowPage_ = std::make_unique<SerializedPage>(std::move(mergedBufs));
+    mergedRowPage_ =
+        std::make_unique<PrestoSerializedPage>(std::move(mergedBufs));
     inputStream_ = mergedRowPage_->prepareStreamForDeserialize();
   }
 
@@ -365,14 +367,12 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  const auto backgroundCpuTimeMs =
-      exchangeClientStats.find(ExchangeClient::kBackgroundCpuTimeMs);
-  if (backgroundCpuTimeMs != exchangeClientStats.end()) {
+  const auto iter = exchangeClientStats.find(Operator::kBackgroundCpuTimeNanos);
+  if (iter != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(backgroundCpuTimeMs->second.count),
+        static_cast<uint64_t>(iter->second.count),
         0,
-        static_cast<uint64_t>(backgroundCpuTimeMs->second.sum) *
-            Timestamp::kNanosecondsInMillisecond};
+        static_cast<uint64_t>(iter->second.sum)};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }

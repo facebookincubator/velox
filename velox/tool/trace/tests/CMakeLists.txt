@@ -18,12 +18,14 @@ add_executable(
   FilterProjectReplayerTest.cpp
   HashJoinReplayerTest.cpp
   IndexLookupJoinReplayerTest.cpp
+  MergeJoinReplayerTest.cpp
   OrderByReplayerTest.cpp
   PartitionedOutputReplayerTest.cpp
   TableScanReplayerTest.cpp
   TableWriterReplayerTest.cpp
   TopNRowNumberReplayerTest.cpp
   TraceFileToolTest.cpp
+  TraceReplayerConfigPromptTest.cpp
   UnnestReplayerTest.cpp
 )
 

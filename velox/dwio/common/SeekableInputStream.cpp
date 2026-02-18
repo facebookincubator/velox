@@ -163,8 +163,8 @@ bool SeekableArrayInputStream::SkipInt64(int64_t count) {
   return false;
 }
 
-google::protobuf::int64 SeekableArrayInputStream::ByteCount() const {
-  return static_cast<google::protobuf::int64>(position_);
+int64_t SeekableArrayInputStream::ByteCount() const {
+  return static_cast<int64_t>(position_);
 }
 
 void SeekableArrayInputStream::seekToPosition(PositionProvider& position) {
@@ -241,8 +241,8 @@ bool SeekableFileInputStream::SkipInt64(int64_t signedCount) {
   return position_ < length_;
 }
 
-google::protobuf::int64 SeekableFileInputStream::ByteCount() const {
-  return static_cast<google::protobuf::int64>(position_);
+int64_t SeekableFileInputStream::ByteCount() const {
+  return static_cast<int64_t>(position_);
 }
 
 void SeekableFileInputStream::seekToPosition(PositionProvider& location) {

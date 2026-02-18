@@ -135,7 +135,9 @@ function you are using.
 
 .. function:: ST_Equals(geometry1: Geometry, geometry2: Geometry) -> boolean
 
-    Returns ``true`` if the given geometries represent the same geometry.
+    Returns ``true`` if the given geometries represent the same geometry
+    according to ISO SQL/MM semantics. Also returns ``true`` if both geometries are empty,
+    regardless of their geometry types.
 
 .. function:: ST_Intersects(geometry1: Geometry, geometry2: Geometry) -> boolean
 
@@ -220,6 +222,17 @@ Spatial Operations
     at the expense of higher memory utilization. Null elements in the input
     array are ignored. Empty array input returns null.
 
+.. function:: geometry_union_agg(geometry: Geometry) -> union: Geometry
+
+    Returns a geometry that represents the point set union of the aggregated
+    input geometries. Null geometries are ignored. Empty input returns null.
+
+.. function:: convex_hull_agg(geometry: Geometry) -> union: Geometry
+
+    Returns a geometry that represents the convex hull of the points in the
+    aggregated input geometries.  Null geometries are ignored. Empty input
+    returns null.
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -253,6 +266,12 @@ Accessors
    Returns the length of a LineString or MultiLineString using Euclidean measurement
    on a two dimensional plane (based on spatial ref) in projected units. Will
    return an error if the input geometry is not a LineString or MultiLineString.
+
+.. function:: ST_Length(sphericalgeography: SphericalGeography) -> length: double
+
+    Returns the length of a ``LineString`` or ``MultiLineString`` on a spherical model of the
+    Earth. This is equivalent to the sum of great-circle distances between adjacent points
+    on the ``LineString``.
 
 .. function:: ST_PointN(linestring: Geometry, index: integer) -> point: geometry
 
@@ -292,6 +311,10 @@ Accessors
     reason. If the geometry is valid and simple (or ``NULL``), return ``NULL``.
     This function is relatively expensive.
 
+.. function:: great_circle_distance(latitude1, longitude1, latitude2, longitude2) -> double
+
+    Returns the great-circle distance between two points on Earth's surface in kilometers.
+
 .. function:: ST_Area(geometry: Geometry) -> area: double
 
     Returns the 2D Euclidean area of ``geometry``.
@@ -299,15 +322,35 @@ Accessors
     returns the sum of the areas of the individual geometries. Empty geometries
     return 0.
 
+.. function:: ST_Area(sphericalgeography: SphericalGeography) -> area: double
+
+    Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.
+
 .. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
 
     Returns the point value that is the mathematical centroid of ``geometry``.
-    Empty geometry inputs result in empty output.
+    Empty geometry inputs result in null output.
+
+.. function:: ST_Centroid(SphericalGeography) -> Point
+
+    Returns the point value that is the mathematical centroid of a spherical geometry.
+    Empty geometry inputs result in null output.
+
+    It supports Points and MultiPoints as input and returns the three-dimensional
+    centroid projected onto the surface of the (spherical) Earth.
+    For example, MULTIPOINT (0 -45, 0 45, 30 0, -30 0) returns Point(0, 0).
+    Note: In the case that the three-dimensional centroid is at (0, 0, 0)
+    (e.g. MULTIPOINT (0 0, -180 0)), the spherical centroid is undefined and an
+    arbitrary point will be returned.
 
 .. function:: ST_Distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
 
     Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
     between two geometries in projected units. Empty geometries result in null output.
+
+.. function:: ST_Distance(sphericalgeography1: SphericalGeography, sphericalgeography2: SphericalGeography) -> distance: double
+
+    Returns the great-circle distance in meters between two SphericalGeography points.
 
 .. function:: ST_GeometryType(geometry: Geometry) -> type: varchar
 
@@ -513,6 +556,16 @@ for more details.
 
     Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.
 
+.. function:: bing_tiles_around(latitude, longitude, zoom_level) -> array(BingTile)
+
+    Returns a collection of Bing tiles that surround the point specified
+    by the latitude and longitude arguments at a given zoom level.
+
+.. function:: bing_tiles_around(latitude, longitude, zoom_level, radius_in_km) -> array(BingTile)
+
+    Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
+    radius in km around a specified (latitude, longitude) point.
+
 .. function:: bing_tile_coordinates(tile: BingTile) -> coords: row(integer,integer)
 
     Returns the ``x``, ``y`` coordinates of a given Bing tile as ``row(x, y)``.
@@ -543,6 +596,16 @@ for more details.
     Throws an exception if childZoom is greater than the max zoom level, or
     childZoom is less than the tile's zoom.  The order is deterministic but not
     specified.
+
+.. function:: bing_tile_polygon(tile) -> Geometry
+
+    Returns the polygon representation of a given Bing tile.
+
+.. function:: bing_tile_at(latitude, longitude, zoom_level) -> BingTile
+
+    Returns a Bing tile at a given zoom level containing a point at a given latitude
+    and longitude. Latitude must be within ``[-85.05112878, 85.05112878]`` range.
+    Longitude must be within ``[-180, 180]`` range. Zoom levels from 1 to 23 are supported.
 
 .. function:: bing_tile_quadkey() -> quadKey: varchar
 

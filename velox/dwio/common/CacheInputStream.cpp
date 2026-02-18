@@ -142,8 +142,8 @@ bool CacheInputStream::SkipInt64(int64_t count) {
   return false;
 }
 
-google::protobuf::int64 CacheInputStream::ByteCount() const {
-  return static_cast<google::protobuf::int64>(position_);
+int64_t CacheInputStream::ByteCount() const {
+  return static_cast<int64_t>(position_);
 }
 
 void CacheInputStream::seekToPosition(PositionProvider& seekPosition) {
@@ -225,7 +225,8 @@ void CacheInputStream::loadSync(const Region& region) {
             .via(&folly::QueuedImmediateExecutor::instance())
             .wait();
       }
-      ioStats_->queryThreadIoLatency().increment(waitUs);
+      ioStats_->queryThreadIoLatencyUs().increment(waitUs);
+      ioStats_->cacheWaitLatencyUs().increment(waitUs);
       continue;
     }
 
@@ -252,7 +253,8 @@ void CacheInputStream::loadSync(const Region& region) {
       input_->read(ranges, region.offset, LogType::FILE);
     }
     ioStats_->read().increment(region.length);
-    ioStats_->queryThreadIoLatency().increment(storageReadUs);
+    ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
+    ioStats_->storageReadLatencyUs().increment(storageReadUs);
     ioStats_->incTotalScanTime(storageReadUs * 1'000);
     entry->setExclusiveToShared(!noCacheRetention_);
   } while (pin_.empty());
@@ -318,7 +320,8 @@ bool CacheInputStream::loadFromSsd(
   VELOX_CHECK(pin_.empty());
   pin_ = std::move(pins[0]);
   ioStats_->ssdRead().increment(region.length);
-  ioStats_->queryThreadIoLatency().increment(ssdLoadUs);
+  ioStats_->queryThreadIoLatencyUs().increment(ssdLoadUs);
+  ioStats_->ssdCacheReadLatencyUs().increment(ssdLoadUs);
   // Skip no-cache retention setting as data is loaded from ssd.
   entry.setExclusiveToShared();
   return true;
@@ -351,7 +354,12 @@ void CacheInputStream::loadPosition() {
           LOG(ERROR) << "IOERR: error in coalesced load " << e.what();
         }
       }
-      ioStats_->queryThreadIoLatency().increment(loadUs);
+      ioStats_->queryThreadIoLatencyUs().increment(loadUs);
+      if (load->isSsdLoad()) {
+        ioStats_->coalescedSsdLoadLatencyUs().increment(loadUs);
+      } else {
+        ioStats_->coalescedStorageLoadLatencyUs().increment(loadUs);
+      }
     }
 
     const auto nextLoadRegion = nextQuantizedLoadRegion(position_);

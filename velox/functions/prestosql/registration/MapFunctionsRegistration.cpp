@@ -17,16 +17,20 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/MapConcat.h"
+#include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/prestosql/Map.h"
+#include "velox/functions/prestosql/MapAppend.h"
 #include "velox/functions/prestosql/MapExcept.h"
 #include "velox/functions/prestosql/MapFunctions.h"
 #include "velox/functions/prestosql/MapIntersect.h"
 #include "velox/functions/prestosql/MapKeysByTopNValues.h"
+#include "velox/functions/prestosql/MapKeysOverlap.h"
 #include "velox/functions/prestosql/MapNormalize.h"
 #include "velox/functions/prestosql/MapSubset.h"
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
+#include "velox/functions/prestosql/MapUpdate.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
 #include "velox/functions/prestosql/RemapKeys.h"
 
@@ -94,12 +98,6 @@ void registerMapIntersect(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_intersect"});
-
-  registerFunction<
-      MapIntersectFunction,
-      Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_intersect"});
 }
 
 template <typename T>
@@ -127,12 +125,111 @@ void registerMapExcept(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_except"});
+}
+
+template <typename T>
+void registerMapKeysOverlapPrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapKeysOverlapPrimitiveFunction, T>,
+      bool,
+      Map<T, Generic<T1>>,
+      Array<T>>({prefix + "map_keys_overlap"});
+}
+
+void registerMapKeysOverlap(const std::string& prefix) {
+  registerMapKeysOverlapPrimitive<bool>(prefix);
+  registerMapKeysOverlapPrimitive<int8_t>(prefix);
+  registerMapKeysOverlapPrimitive<int16_t>(prefix);
+  registerMapKeysOverlapPrimitive<int32_t>(prefix);
+  registerMapKeysOverlapPrimitive<int64_t>(prefix);
+  registerMapKeysOverlapPrimitive<float>(prefix);
+  registerMapKeysOverlapPrimitive<double>(prefix);
+  registerMapKeysOverlapPrimitive<Timestamp>(prefix);
+  registerMapKeysOverlapPrimitive<Date>(prefix);
 
   registerFunction<
-      MapExceptFunction,
+      MapKeysOverlapVarcharFunction,
+      bool,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>>({prefix + "map_keys_overlap"});
+
+  registerFunction<
+      MapKeysOverlapFunction,
+      bool,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>>({prefix + "map_keys_overlap"});
+}
+
+template <typename Key>
+void registerMapAppendPrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapAppendPrimitiveFunction, Key>,
+      Map<Key, Generic<T1>>,
+      Map<Key, Generic<T1>>,
+      Array<Key>,
+      Array<Generic<T1>>>({prefix + "map_append"});
+}
+
+void registerMapAppend(const std::string& prefix) {
+  registerMapAppendPrimitive<bool>(prefix);
+  registerMapAppendPrimitive<int8_t>(prefix);
+  registerMapAppendPrimitive<int16_t>(prefix);
+  registerMapAppendPrimitive<int32_t>(prefix);
+  registerMapAppendPrimitive<int64_t>(prefix);
+  registerMapAppendPrimitive<float>(prefix);
+  registerMapAppendPrimitive<double>(prefix);
+  registerMapAppendPrimitive<Timestamp>(prefix);
+  registerMapAppendPrimitive<Date>(prefix);
+
+  registerFunction<
+      MapAppendVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>,
+      Array<Generic<T1>>>({prefix + "map_append"});
+
+  registerFunction<
+      MapAppendFunction,
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_except"});
+      Array<Generic<T1>>,
+      Array<Generic<T2>>>({prefix + "map_append"});
+}
+
+template <typename Key>
+void registerMapUpdatePrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapUpdatePrimitiveFunction, Key>,
+      Map<Key, Generic<T1>>,
+      Map<Key, Generic<T1>>,
+      Array<Key>,
+      Array<Generic<T1>>>({prefix + "map_update"});
+}
+
+void registerMapUpdate(const std::string& prefix) {
+  registerMapUpdatePrimitive<bool>(prefix);
+  registerMapUpdatePrimitive<int8_t>(prefix);
+  registerMapUpdatePrimitive<int16_t>(prefix);
+  registerMapUpdatePrimitive<int32_t>(prefix);
+  registerMapUpdatePrimitive<int64_t>(prefix);
+  registerMapUpdatePrimitive<float>(prefix);
+  registerMapUpdatePrimitive<double>(prefix);
+  registerMapUpdatePrimitive<Timestamp>(prefix);
+  registerMapUpdatePrimitive<Date>(prefix);
+
+  registerFunction<
+      MapUpdateVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>,
+      Array<Generic<T1>>>({prefix + "map_update"});
+
+  registerFunction<
+      MapUpdateFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>,
+      Array<Generic<T2>>>({prefix + "map_update"});
 }
 
 void registerMapRemoveNullValues(const std::string& prefix) {
@@ -159,8 +256,9 @@ void registerMapFunctions(const std::string& prefix) {
       udf_transform_values, prefix + "transform_values");
   registerMapFunction(prefix + "map", false /*allowDuplicateKeys*/);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_from_entries, prefix + "map_from_entries");
+  registerMapFromEntriesFunction(
+      prefix + "map_from_entries", /*throwForNull=*/true);
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, prefix + "map_zip_with");
@@ -212,6 +310,12 @@ void registerMapFunctions(const std::string& prefix) {
   registerMapIntersect(prefix);
 
   registerMapExcept(prefix);
+
+  registerMapKeysOverlap(prefix);
+
+  registerMapAppend(prefix);
+
+  registerMapUpdate(prefix);
 
   registerMapRemoveNullValues(prefix);
 

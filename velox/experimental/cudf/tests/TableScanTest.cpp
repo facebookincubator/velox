@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -28,8 +29,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -283,6 +282,73 @@ TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
   // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
+TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, "c");
+
+  createDuckDbTable(vectors);
+  const std::string duckDbSql =
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp";
+
+  auto splits = makeCudfHiveConnectorSplits(
+      {filePath, filePath, filePath, filePath, filePath});
+
+  // Helper to test scan all columns for the given splits
+  auto testScanAllColumnsUsingExperimentalReader =
+      [&](const core::PlanNodePtr& plan) {
+        auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                        .plan(plan)
+                        .splits(splits)
+                        .assertResults(duckDbSql);
+
+        // A quick sanity check for memory usage reporting. Check that peak
+        // total memory usage for the project node is > 0.
+        auto planStats = toPlanStats(task->taskStats());
+        auto scanNodeId = plan->id();
+        auto it = planStats.find(scanNodeId);
+        ASSERT_TRUE(it != planStats.end());
+        // TODO (dm): enable this test once we start to track gpu memory
+        // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+        //  Verifies there is no dynamic filter stats.
+        ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+
+        // TODO: We are not writing any customStats yet so disable this check
+        // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+      };
+
+  // Reset the CudfHiveConnector config to use the experimental cudf reader
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseExperimentalCudfReader,
+       "true"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
+
+  // Test scan all columns with buffered input datasource(s)
+  {
+    auto plan = tableScanNode();
+    testScanAllColumnsUsingExperimentalReader(plan);
+  }
+
+  // Test scan all columns with kvikIO datasource(s)
+  {
+    config.insert(
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseBufferedInput,
+         "false"});
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(std::move(config)));
+    auto plan = tableScanNode();
+    testScanAllColumnsUsingExperimentalReader(plan);
+  }
+}
+
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
@@ -460,24 +526,40 @@ TEST_F(TableScanTest, filterPushdown) {
 #endif
 }
 
-TEST_F(TableScanTest, splitOffset) {
-  auto vectors = makeVectors(1, 10);
+TEST_F(TableScanTest, splitOffsetAndLength) {
+  auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
 
-  auto plan = tableScanNode();
+  // Note that the number of row groups selected within `halfFileSize` may
+  // change in the future and this test may start failing. In such a case,
+  // just adjust the duckdb sql string accordingly.
+  const auto halfFileSize = fs::file_size(filePath->getPath()) / 2;
 
-  auto split = facebook::velox::connector::hive::HiveConnectorSplitBuilder(
-                   filePath->getPath())
-                   .connectorId(kCudfHiveConnectorId)
-                   .start(1)
-                   .fileFormat(dwio::common::FileFormat::PARQUET)
-                   .build();
+  // First half of file - OFFSET 0 LIMIT 6000
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, halfFileSize),
+      "SELECT * FROM tmp OFFSET 0 LIMIT 6000");
 
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .splits({split})
-          .assertEmptyResults(),
-      "CudfHiveDataSource cannot process splits with non-zero offset");
+  // Second half of file - OFFSET 6000 LIMIT 4000
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), halfFileSize),
+      "SELECT * FROM tmp OFFSET 6000 LIMIT 4000");
+
+  const auto fileSize = fs::file_size(filePath->getPath());
+
+  // All row groups
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, fileSize),
+      "SELECT * FROM tmp");
+
+  // No row groups
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
+      "SELECT * FROM tmp LIMIT 0");
 }

@@ -15,13 +15,16 @@
  */
 
 #include "velox/dwio/text/reader/TextReader.h"
+
+#include <boost/algorithm/string/predicate.hpp>
+#include <string>
+
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
-#include <string>
-
 namespace facebook::velox::text {
+namespace {
 
 using common::CompressionKind;
 
@@ -29,19 +32,17 @@ using dwio::common::EOFError;
 using dwio::common::RowReader;
 using dwio::common::verify;
 
-using folly::AsciiCaseInsensitive;
-using folly::StringPiece;
-
-constexpr const char* kTextfileCompressionExtensionGzip = ".gz";
-constexpr const char* kTextfileCompressionExtensionDeflate = ".deflate";
-constexpr const char* kTextfileCompressionExtensionZst = ".zst";
-constexpr const char* kTextfileCompressionExtensionLz4 = ".lz4";
-constexpr const char* kTextfileCompressionExtensionLzo = ".lzo";
-constexpr const char* kTextfileCompressionExtensionSnappy = ".snappy";
+static constexpr std::string_view kTextfileCompressionExtensionGzip{".gz"};
+static constexpr std::string_view kTextfileCompressionExtensionDeflate{
+    ".deflate"};
+static constexpr std::string_view kTextfileCompressionExtensionZst{".zst"};
+static constexpr std::string_view kTextfileCompressionExtensionLz4{".lz4"};
+static constexpr std::string_view kTextfileCompressionExtensionLzo{".lzo"};
+static constexpr std::string_view kTextfileCompressionExtensionSnappy{
+    ".snappy"};
 
 static std::string emptyString = std::string();
 
-namespace {
 constexpr const int32_t kDecompressionBufferFactor = 3;
 
 void resizeVector(
@@ -95,29 +96,24 @@ void resizeVector(
   }
 }
 
-bool endsWith(const std::string& str, const std::string& suffix) {
-  return str.size() >= suffix.size() &&
-      str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
 void setCompressionSettings(
     const std::string& filename,
     CompressionKind& kind,
     dwio::common::compression::CompressionOptions& compressionOptions) {
-  if (endsWith(filename, kTextfileCompressionExtensionLz4) ||
-      endsWith(filename, kTextfileCompressionExtensionLzo) ||
-      endsWith(filename, kTextfileCompressionExtensionSnappy)) {
+  if (filename.ends_with(kTextfileCompressionExtensionLz4) ||
+      filename.ends_with(kTextfileCompressionExtensionLzo) ||
+      filename.ends_with(kTextfileCompressionExtensionSnappy)) {
     VELOX_FAIL("Unsupported compression extension for file: {}", filename);
   }
-  if (endsWith(filename, kTextfileCompressionExtensionGzip)) {
+  if (filename.ends_with(kTextfileCompressionExtensionGzip)) {
     kind = CompressionKind::CompressionKind_GZIP;
     compressionOptions.format.zlib.windowBits =
         15; // 2^15-byte deflate window size
-  } else if (endsWith(filename, kTextfileCompressionExtensionDeflate)) {
+  } else if (filename.ends_with(kTextfileCompressionExtensionDeflate)) {
     kind = CompressionKind::CompressionKind_ZLIB;
     compressionOptions.format.zlib.windowBits =
         -15; // raw deflate, 2^15-byte window size
-  } else if (endsWith(filename, kTextfileCompressionExtensionZst)) {
+  } else if (filename.ends_with(kTextfileCompressionExtensionZst)) {
     kind = CompressionKind::CompressionKind_ZSTD;
   } else {
     kind = CompressionKind::CompressionKind_NONE;
@@ -165,20 +161,17 @@ TextRowReader::TextRowReader(
           std::make_shared<dwio::common::DataBuffer<char>>(contents_->pool)} {
   // Seek to first line at or after the specified region.
   if (contents_->compression == CompressionKind::CompressionKind_NONE) {
-    /**
-     * TODO: Inconsistent row skipping behavior (kept for Presto compatibility)
-     *
-     * Issue: When reading from byte offset > 0, we skip rows inclusively at the
-     * start position, but when reading from byte 0, no rows are skipped. This
-     * creates inconsistent behavior where a row at the boundary may be skipped
-     * when it should be included.
-     *
-     * Example: If pos_ = 10 is the first byte of row 2, that entire row gets
-     * skipped, even though it should be read.
-     *
-     * Proposed fix: streamPosition_ = (pos_ == 0) ? 0 : --pos_;
-     * This would skip rows exclusively of pos_, ensuring consistent behavior.
-     */
+    // TODO: Inconsistent row skipping behavior (kept for Presto compatibility)
+    // Issue: When reading from byte offset > 0, we skip rows inclusively at the
+    // start position, but when reading from byte 0, no rows are skipped. This
+    // creates inconsistent behavior where a row at the boundary may be skipped
+    // when it should be included.
+    //
+    // Example: If pos_ = 10 is the first byte of row 2, that entire row gets
+    // skipped, even though it should be read.
+    //
+    // Proposed fix: streamPosition_ = (pos_ == 0) ? 0 : --pos_;
+    // This would skip rows exclusively of pos_, ensuring consistent behavior.
     const auto streamPosition_ = pos_;
 
     contents_->inputStream = contents_->input->read(
@@ -264,34 +257,27 @@ uint64_t TextRowReader::next(
       DelimType delim = DelimTypeNone;
       const auto& ct = t->childAt(i);
       const auto& rct = reqT->childAt(i);
-      auto childVector = rowVecPtr->childAt(i).get();
+      BaseVector* childVector = nullptr;
 
       if (isSelectedField(ct)) {
+        childVector = rowVecPtr->childAt(i).get();
         ++colIndex;
       } else if (colIndex < reqChildCount && !projectSelectedType) {
-        // not selected and not projecting: set to null
-        if (childVector != nullptr) {
-          rowVecPtr->setNull(i, true);
-          childVector = nullptr;
-        }
+        // Not selected and not projecting: discard the child by setting it to
+        // nullptr. The projectColumns() function will later filter out unneeded
+        // columns based on the ScanSpec.
+        rowVecPtr->childAt(i) = nullptr;
         ++colIndex;
       } else {
-        // not selected and projecting: just discard the field
-        childVector = nullptr;
+        // Not selected and projecting: discard the child. Same reasoning as
+        // above.
+        rowVecPtr->childAt(i) = nullptr;
       }
 
       resizeVector(childVector, rowsRead);
       readElement(ct->type(), rct->type(), childVector, rowsRead, delim);
     }
 
-    // set null property
-    for (uint64_t i = colIndex; i < reqChildCount; i++) {
-      auto childVector = rowVecPtr->childAt(i).get();
-
-      if (childVector != nullptr) {
-        rowVecPtr->setNull(static_cast<vector_size_t>(i), true);
-      }
-    }
     (void)skipLine();
     ++currentRow_;
     ++rowsRead;
@@ -494,11 +480,9 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
   bool wasEscaped = false;
   th.ownedString_.clear();
 
-  /**
-  Processing has to be done character by characater instad of chunk by chunk.
-  This is to avoid edge case handling if escape character(s) are cut off at
-  the end of the chunk.
-  */
+  // Processing has to be done character by characater instad of chunk by chunk.
+  // This is to avoid edge case handling if escape character(s) are cut off at
+  // the end of the chunk.
   while (true) {
     auto v = th.getByteOptimized(delim);
     if (!th.isNone(delim)) {
@@ -808,8 +792,8 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
 
 namespace {
 
-static const StringView trueStringView = StringView{"TRUE"};
-static const StringView falseStringView = StringView{"FALSE"};
+static constexpr std::string_view kTrueStringView{"TRUE"};
+static constexpr std::string_view kFalseStringView{"FALSE"};
 
 } // namespace
 
@@ -824,21 +808,21 @@ bool TextRowReader::getBoolean(
   if (isNull) {
     return false;
   }
-  if (str.compare(trueStringView) == 0) {
+  if (str.compare(kTrueStringView) == 0) {
     return true;
   }
-  if (str.compare(falseStringView) == 0) {
+  if (str.compare(kFalseStringView) == 0) {
     return false;
   }
 
   switch (str.size()) {
     case 4:
-      if (StringPiece(str).equals("TRUE", AsciiCaseInsensitive())) {
+      if (boost::algorithm::iequals(str, kTrueStringView)) {
         return true;
       }
       break;
     case 5:
-      if (StringPiece(str).equals("FALSE", AsciiCaseInsensitive())) {
+      if (boost::algorithm::iequals(str, kFalseStringView)) {
         return false;
       }
       break;
@@ -852,11 +836,11 @@ bool TextRowReader::getBoolean(
 
 namespace {
 
-static const StringView NaNStringView = StringView{"NaN"};
-static const StringView InfinityStringView = StringView{"Infinity"};
-static const StringView ShortInfinityStringView = StringView{"Inf"};
-static const StringView NegInfinityStringView = StringView{"-Infinity"};
-static const StringView ShortNegInfinityStringView = StringView{"-Inf"};
+static constexpr std::string_view kNaNStringView{"NaN"};
+static constexpr std::string_view kInfinityStringView{"Infinity"};
+static constexpr std::string_view kShortInfinityStringView{"Inf"};
+static constexpr std::string_view kNegInfinityStringView{"-Infinity"};
+static constexpr std::string_view kShortNegInfinityStringView{"-Inf"};
 
 bool unacceptableFloatingPoint(std::string& s) {
   for (int i = 0; i < s.size(); ++i) {
@@ -866,18 +850,14 @@ bool unacceptableFloatingPoint(std::string& s) {
     }
   }
 
-  bool isNaN =
-      StringPiece(s).equals(StringPiece(NaNStringView), AsciiCaseInsensitive());
+  bool isNaN = boost::algorithm::iequals(s, kNaNStringView);
 
-  bool isInf = StringPiece(s).equals(
-      StringPiece(InfinityStringView), AsciiCaseInsensitive());
-  bool isShortInf = StringPiece(s).equals(
-      StringPiece(ShortInfinityStringView), AsciiCaseInsensitive());
+  bool isInf = boost::algorithm::iequals(s, kInfinityStringView);
+  bool isShortInf = boost::algorithm::iequals(s, kShortInfinityStringView);
 
-  bool isNegInf = StringPiece(s).equals(
-      StringPiece(NegInfinityStringView), AsciiCaseInsensitive());
-  bool isShortNegInf = StringPiece(s).equals(
-      StringPiece(ShortNegInfinityStringView), AsciiCaseInsensitive());
+  bool isNegInf = boost::algorithm::iequals(s, kNegInfinityStringView);
+  bool isShortNegInf =
+      boost::algorithm::iequals(s, kShortNegInfinityStringView);
 
   return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
 }

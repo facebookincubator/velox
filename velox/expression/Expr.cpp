@@ -695,16 +695,35 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
   if (strlen(basePath) == 0 && exceptionType == VeloxException::Type::kSystem) {
     basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
   }
+
+  const auto& owner = context->expr()->vectorFunctionMetadata().owner;
   if (strlen(basePath) == 0) {
-    return fmt::format("Top-level Expression: {}", context->expr()->toString());
+    if (owner.empty()) {
+      return fmt::format(
+          "Top-level Expression: {}", context->expr()->toString());
+    }
+    return fmt::format(
+        "Owner: {}. Top-level Expression: {}",
+        owner,
+        context->expr()->toString());
   }
 
   // Save input vector to a file.
   context->persistDataAndSql(basePath);
 
+  if (owner.empty()) {
+    return fmt::format(
+        "Top-level Expression: {}. Input data: {}. SQL expression: {}."
+        " All SQL expressions: {}. ",
+        context->expr()->toString(),
+        context->dataPath(),
+        context->sqlPath(),
+        context->allExprSqlPath());
+  }
   return fmt::format(
-      "Top-level Expression: {}. Input data: {}. SQL expression: {}."
+      "Owner: {}. Top-level Expression: {}. Input data: {}. SQL expression: {}."
       " All SQL expressions: {}. ",
+      owner,
       context->expr()->toString(),
       context->dataPath(),
       context->sqlPath(),
@@ -715,7 +734,12 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
 /// sub-expression. Returns the output of Expr::toString() for the
 /// sub-expression.
 std::string onException(VeloxException::Type /*exceptionType*/, void* arg) {
-  return static_cast<Expr*>(arg)->toString();
+  auto* expr = static_cast<Expr*>(arg);
+  const auto& owner = expr->vectorFunctionMetadata().owner;
+  if (owner.empty()) {
+    return static_cast<Expr*>(arg)->toString();
+  }
+  return fmt::format("Owner: {}. Expression: {}", owner, expr->toString());
 }
 } // namespace
 
@@ -1770,8 +1794,8 @@ common::Subfield extractSubfield(
         break;
       case TypeKind::VARCHAR:
         path.push_back(
-            std::make_unique<common::Subfield::StringSubscript>(
-                index->value()->as<ConstantVector<StringView>>()->value()));
+            std::make_unique<common::Subfield::StringSubscript>(std::string(
+                index->value()->as<ConstantVector<StringView>>()->value())));
         break;
       default:
         return {};

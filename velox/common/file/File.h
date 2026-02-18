@@ -36,31 +36,56 @@
 
 #include <folly/Executor.h>
 #include <folly/Range.h>
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <folly/futures/Future.h>
 #include <folly/io/IOBuf.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/FileIoTracer.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/Region.h"
 #include "velox/common/io/IoStatistics.h"
 
-#include <folly/container/F14Map.h>
-
 namespace facebook::velox {
 
-struct FileStorageContext {
-  /// Stats for IO operations
-  filesystems::File::IoStats* ioStats{nullptr};
+/// Free form statistics for file I/O operations. The keys are arbitrary
+/// strings, and values are RuntimeMetric. This class can be used to record
+/// observability about filesystem operations.
+class IoStats {
+ public:
+  IoStats() = default;
 
-  /// Options for file read operations
-  folly::F14FastMap<std::string, std::string> fileReadOps;
+  void addCounter(const std::string& name, RuntimeCounter counter);
 
-  FileStorageContext() = default;
+  void merge(const IoStats& other);
 
-  FileStorageContext(
-      filesystems::File::IoStats* stats,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {})
-      : ioStats(stats), fileReadOps(std::move(fileReadOps)) {}
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+
+ private:
+  folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
+};
+
+struct FileIoContext {
+  /// Stats for IO operations.
+  IoStats* ioStats{nullptr};
+
+  /// Options for file read operations.
+  folly::F14FastMap<std::string, std::string> fileOpts;
+
+  /// Tracer for IO operations, providing call stack context.
+  std::shared_ptr<FileIoTracer> ioTracer;
+
+  FileIoContext() = default;
+
+  explicit FileIoContext(
+      IoStats* stats,
+      folly::F14FastMap<std::string, std::string> fileOpts = {},
+      std::shared_ptr<FileIoTracer> tracer = nullptr)
+      : ioStats(stats),
+        fileOpts(std::move(fileOpts)),
+        ioTracer(std::move(tracer)) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.
@@ -75,7 +100,7 @@ class ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      const FileStorageContext& fileStorageContext = {}) const = 0;
+      const FileIoContext& context = {}) const = 0;
 
   // Same as above, but returns owned data directly.
   //
@@ -83,7 +108,7 @@ class ReadFile {
   virtual std::string pread(
       uint64_t offset,
       uint64_t length,
-      const FileStorageContext& fileStorageContext = {}) const;
+      const FileIoContext& context = {}) const;
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
@@ -92,7 +117,7 @@ class ReadFile {
   virtual uint64_t preadv(
       uint64_t /*offset*/,
       const std::vector<folly::Range<char*>>& /*buffers*/,
-      const FileStorageContext& fileStorageContext = {}) const;
+      const FileIoContext& context = {}) const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
   // The offsets don't need to be sorted.
@@ -107,7 +132,7 @@ class ReadFile {
   virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
-      const FileStorageContext& fileStorageContext = {}) const;
+      const FileIoContext& context = {}) const;
 
   /// Like preadv but may execute asynchronously and returns the read size or
   /// exception via SemiFuture. Use hasPreadvAsync() to check if the
@@ -116,10 +141,9 @@ class ReadFile {
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      const FileStorageContext& fileStorageContext = {}) const {
+      const FileIoContext& context = {}) const {
     try {
-      return folly::SemiFuture<uint64_t>(
-          preadv(offset, buffers, fileStorageContext));
+      return folly::SemiFuture<uint64_t>(preadv(offset, buffers, context));
     } catch (const std::exception& e) {
       return folly::makeSemiFuture<uint64_t>(e);
     }
@@ -243,12 +267,12 @@ class InMemoryReadFile : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      const FileStorageContext& fileStorageContext = {}) const override;
+      const FileIoContext& context = {}) const override;
 
   std::string pread(
       uint64_t offset,
       uint64_t length,
-      const FileStorageContext& fileStorageContext = {}) const override;
+      const FileIoContext& context = {}) const override;
 
   uint64_t size() const final {
     return file_.size();
@@ -262,6 +286,7 @@ class InMemoryReadFile : public ReadFile {
   void setShouldCoalesce(bool shouldCoalesce) {
     shouldCoalesce_ = shouldCoalesce;
   }
+
   bool shouldCoalesce() const final {
     return shouldCoalesce_;
   }
@@ -314,19 +339,19 @@ class LocalReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buf,
-      const FileStorageContext& fileStorageContext = {}) const final;
+      const FileIoContext& context = {}) const final;
 
   uint64_t size() const final;
 
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      const FileStorageContext& fileStorageContext = {}) const final;
+      const FileIoContext& context = {}) const final;
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      const FileStorageContext& fileStorageContext = {}) const override;
+      const FileIoContext& context = {}) const override;
 
   bool hasPreadvAsync() const override {
     return executor_ != nullptr;

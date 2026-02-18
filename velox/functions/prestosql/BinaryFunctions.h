@@ -89,9 +89,11 @@ struct Sha1Function {
   FOLLY_ALWAYS_INLINE
   void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
     result.resize(20);
+    VELOX_SUPPRESS_DEPRECATED_WARNING
     folly::ssl::OpenSSLHash::sha1(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
         folly::ByteRange((const uint8_t*)input.data(), input.size()));
+    VELOX_UNSUPPRESS_DEPRECATED_WARNING
   }
 };
 
@@ -167,10 +169,12 @@ struct HmacSha1Function {
   call(TOutput& result, const TInput& data, const TInput& key) {
     VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(20);
+    VELOX_SUPPRESS_DEPRECATED_WARNING
     folly::ssl::OpenSSLHash::hmac_sha1(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
         folly::ByteRange((const uint8_t*)key.data(), key.size()),
         folly::ByteRange((const uint8_t*)data.data(), data.size()));
+    VELOX_UNSUPPRESS_DEPRECATED_WARNING
   }
 };
 
@@ -521,6 +525,83 @@ struct Murmur3X64_128Function {
     result.resize(16);
     common::hll::Murmur3Hash128::hash(
         input.data(), input.size(), 0, result.data());
+  }
+};
+
+/// Computes FNV hash for the given data.
+/// FNV-1 multiplies then XORs, FNV-1a XORs then multiplies.
+template <typename HashType, bool XORFirst>
+FOLLY_ALWAYS_INLINE HashType computeFnvHash(
+    const unsigned char* data,
+    size_t size,
+    HashType offsetBasis,
+    HashType prime) {
+  HashType hash = offsetBasis;
+  for (auto i = 0; i < size; ++i) {
+    if constexpr (XORFirst) {
+      hash ^= data[i];
+      hash *= prime;
+    } else {
+      hash *= prime;
+      hash ^= data[i];
+    }
+  }
+  return hash;
+}
+
+template <typename T>
+struct Fnv1_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
+    static constexpr uint32_t kPrime = 0x01000193;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint32_t, false>(
+        data, input.size(), kOffsetBasis, kPrime);
+  }
+};
+
+template <typename T>
+struct Fnv1_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
+    static constexpr uint64_t kPrime = 0x100000001b3L;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint64_t, false>(
+        data, input.size(), kOffsetBasis, kPrime);
+  }
+};
+
+template <typename T>
+struct Fnv1a_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint32_t kOffsetBasis = 0x811c9dc5;
+    static constexpr uint32_t kPrime = 0x01000193;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint32_t, true>(
+        data, input.size(), kOffsetBasis, kPrime);
+  }
+};
+
+template <typename T>
+struct Fnv1a_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr uint64_t kOffsetBasis = 0xcbf29ce484222325L;
+    static constexpr uint64_t kPrime = 0x100000001b3L;
+    const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+    result = computeFnvHash<uint64_t, true>(
+        data, input.size(), kOffsetBasis, kPrime);
   }
 };
 

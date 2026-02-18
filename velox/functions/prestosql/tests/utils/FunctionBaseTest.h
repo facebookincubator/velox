@@ -94,7 +94,7 @@ class FunctionBaseTest : public testing::Test,
   core::TypedExprPtr makeTypedExpr(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_.pool());
   }
 
@@ -310,18 +310,11 @@ class FunctionBaseTest : public testing::Test,
                                : TReturn(result->valueAt(0));
   }
 
-  core::TypedExprPtr parseExpression(
-      const std::string& text,
-      const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
-    return core::Expressions::inferTypes(untyped, rowType, pool());
-  }
-
   std::unique_ptr<exec::ExprSet> compileExpression(
       const std::string& expr,
       const RowTypePtr& rowType) {
     std::vector<core::TypedExprPtr> expressions = {
-        parseExpression(expr, rowType)};
+        makeTypedExpr(expr, rowType)};
     return std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
   }
 
@@ -331,7 +324,7 @@ class FunctionBaseTest : public testing::Test,
     std::vector<core::TypedExprPtr> expressions;
     expressions.reserve(exprs.size());
     for (const auto& expr : exprs) {
-      expressions.emplace_back(parseExpression(expr, rowType));
+      expressions.emplace_back(makeTypedExpr(expr, rowType));
     }
     return std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
   }
@@ -354,7 +347,7 @@ class FunctionBaseTest : public testing::Test,
 
   /// Parses a timestamp string into Timestamp.
   /// Accepts strings formatted as 'YYYY-MM-DD HH:mm:ss[.nnn]'.
-  static Timestamp parseTimestamp(const std::string& text) {
+  static Timestamp parseTimestamp(std::string_view text) {
     return util::fromTimestampString(
                text.data(), text.size(), util::TimestampParseMode::kPrestoCast)
         .thenOrThrow(folly::identity, [&](const Status& status) {
@@ -362,10 +355,26 @@ class FunctionBaseTest : public testing::Test,
         });
   }
 
+  // TODO: Remove explicit std::string_view cast.
+  static Timestamp parseTimestamp(StringView text) {
+    return parseTimestamp(std::string_view(text));
+  }
+  static Timestamp parseTimestamp(const char* text) {
+    return parseTimestamp(std::string_view(text));
+  }
+
   /// Parses a date string into days since epoch.
   /// Accepts strings formatted as 'YYYY-MM-DD'.
-  static int32_t parseDate(const std::string& text) {
+  static int32_t parseDate(std::string_view text) {
     return DATE()->toDays(text);
+  }
+
+  // TODO: Remove explicit std::string_view cast.
+  static int32_t parseDate(StringView text) {
+    return parseDate(std::string_view(text));
+  }
+  static int32_t parseDate(const char* text) {
+    return parseDate(std::string_view(text));
   }
 
   /// Returns a vector of signatures for the given function name and return
@@ -392,6 +401,21 @@ class FunctionBaseTest : public testing::Test,
       core::QueryCtx::create(executor_.get())};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   parse::ParseOptions options_;
+
+  void testContextMessageOnThrow(
+      const std::string& expression,
+      const RowVectorPtr& data,
+      const std::string& expectedContextMessage) {
+    try {
+      evaluate(expression, data);
+      FAIL() << "Expected an exception";
+    } catch (const VeloxUserError& e) {
+      ASSERT_TRUE(e.context().find(expectedContextMessage) != std::string::npos)
+          << "Expected additional context in error message to contain '"
+          << expectedContextMessage << "', but received '" << e.context()
+          << "'.";
+    }
+  }
 
  private:
   template <typename T>

@@ -18,8 +18,12 @@
 #include <gtest/gtest.h>
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
+#include "folly/executors/IOThreadPoolExecutor.h"
 #include "folly/lang/Assume.h"
+#include "folly/synchronization/Baton.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -27,6 +31,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
@@ -38,14 +43,14 @@
 #include <memory>
 #include <numeric>
 
+namespace facebook::velox::dwrf {
+namespace {
+
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::type::fbhive;
-using namespace facebook::velox;
-using namespace facebook::velox::dwrf;
 using namespace facebook::velox::test;
 
-namespace {
 const std::string& getStructFile() {
   static const std::string structFile_ = getExampleFilePath("struct.orc");
   return structFile_;
@@ -74,12 +79,35 @@ const std::shared_ptr<const RowType>& getFlatmapSchema() {
   return schema_;
 }
 
+std::vector<common::Subfield> makeSubfields(
+    const std::vector<std::string>& paths) {
+  std::vector<common::Subfield> subfields;
+  subfields.reserve(paths.size());
+  for (auto& path : paths) {
+    subfields.emplace_back(path);
+  }
+  return subfields;
+}
+
+folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+groupSubfields(const std::vector<common::Subfield>& subfields) {
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>> grouped;
+  for (auto& subfield : subfields) {
+    auto& name =
+        static_cast<const common::Subfield::NestedField&>(*subfield.path()[0])
+            .name();
+    grouped[name].push_back(&subfield);
+  }
+  return grouped;
+}
+
 class TestReaderP
     : public testing::TestWithParam</* parallel decoding = */ bool>,
       public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    facebook::velox::common::testutil::TestValue::enable();
   }
 
   folly::Executor* executor() {
@@ -102,6 +130,7 @@ class TestReader : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    facebook::velox::common::testutil::TestValue::enable();
   }
 
   std::vector<VectorPtr> createBatches(
@@ -115,8 +144,6 @@ class TestReader : public testing::Test, public VectorTestBase {
     return batches;
   }
 };
-
-} // namespace
 
 TEST_F(TestReader, testWriterVersions) {
   EXPECT_EQ("original", writerVersionToString(ORIGINAL));
@@ -837,6 +864,60 @@ TEST_F(TestReader, testEstimatedSize) {
     auto rowReader = reader->createRowReader(rowReaderOpts);
     ASSERT_EQ(rowReader->estimatedRowSize(), 4);
   }
+}
+
+TEST_F(TestReader, testSubfieldEstimatedSize) {
+  dwio::common::ReaderOptions readerOpts{pool()};
+  std::shared_ptr<const RowType> schema =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+              a:int,\
+              b:struct<\
+                  a:int,\
+                  b:float,\
+                  c:string>,\
+              c:float>"));
+
+  std::shared_ptr<const RowType> outputType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+              a:int,\
+              b:struct<\
+                  a:int,\
+                  b:float,\
+                  c:string>>"));
+  // estimation with subfield filtering
+  auto subfields = makeSubfields({"a", "b.b"});
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      subfieldsByName = groupSubfields(subfields);
+  auto scanSpec = velox::connector::hive::makeScanSpec(
+      outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
+  readerOpts.setScanSpec(scanSpec);
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getStructFile(), readerOpts.memoryPool()),
+      readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  ASSERT_EQ(rowReader->estimatedRowSize(), 8);
+
+  // estimation with full struct field selection
+  dwio::common::ReaderOptions readerOpts2{pool()};
+  auto subfields2 = makeSubfields({"a", "b"});
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      subfields2ByName = groupSubfields(subfields2);
+  auto scanSpec2 = velox::connector::hive::makeScanSpec(
+      outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
+  readerOpts2.setScanSpec(scanSpec2);
+
+  auto reader2 = DwrfReader::create(
+      createFileBufferedInput(getStructFile(), readerOpts2.memoryPool()),
+      readerOpts2);
+  RowReaderOptions rowReaderOpts2;
+  rowReaderOpts2.setScanSpec(scanSpec2);
+
+  auto rowReader2 = reader2->createRowReader(rowReaderOpts2);
+  ASSERT_EQ(rowReader2->estimatedRowSize(), 15);
 }
 
 TEST_F(TestReader, testStatsCallbackFiredWithoutFiltering) {
@@ -2732,3 +2813,188 @@ TEST_F(TestReader, skipLongString) {
     validate(batch);
   }
 }
+
+TEST_F(TestReader, mapAsStruct) {
+  auto row = makeRowVector({
+      makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {{1, 6}, {3, 7}}}),
+  });
+  auto [writer, reader] = createWriterReader({row}, pool());
+  auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  spec->childByName("c0")->setFlatMapAsStruct(true);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 2);
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>({std::nullopt, 7}),
+              makeFlatVector<int64_t>({4, 6}),
+          }),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+TEST_F(TestReader, mapAsStructFilterAfterRead) {
+  auto row = makeRowVector({
+      makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {}, {{1, 6}, {3, 7}}}),
+      makeRowVector(
+          {makeConstant<int64_t>(0, 3)}, [](auto i) { return i == 0; }),
+  });
+  auto [writer, reader] = createWriterReader({row}, pool());
+  auto outType =
+      ROW({"c0", "c1"}, {ROW({"3", "1"}, BIGINT()), ROW({"c0"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  auto* c0Spec = spec->childByName("c0");
+  c0Spec->setFlatMapAsStruct(true);
+  c0Spec->setFilter(std::make_shared<common::IsNotNull>());
+  spec->childByName("c1")->setFilter(std::make_shared<common::IsNotNull>());
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 3);
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>({std::nullopt, 7}),
+              makeNullableFlatVector<int64_t>({std::nullopt, 6}),
+          }),
+      makeRowVector({makeConstant<int64_t>(0, 2)}),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+TEST_F(TestReader, mapAsStructAllEmpty) {
+  auto row = makeRowVector({makeMapVector<int32_t, int64_t>({{}, {}})});
+  auto [writer, reader] = createWriterReader({row}, pool());
+  auto outType = ROW({"c0"}, {ROW({"1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  spec->childByName("c0")->setFlatMapAsStruct(true);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 2);
+  auto expected = makeRowVector({
+      makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+// Verify DwrfRowReader can be destroyed while ParallelUnitLoader async load()
+// are in progress. This regression test ensures that:
+// 1. ParallelUnitLoader destructor doesn't wait for async load() operations
+// 2. Async load() from DwrfUnit can still function after ParallelUnitLoader
+// destruction and DwrfRowReader destruction, which means all dependencies in
+// DwrfUnit remain valid (eg ReaderBase)
+//
+// If a future change adds an unsafe raw pointer to DwrfUnit's dependencies that
+// would be freed by ParallelUnitLoader or DwrfRowReader's destruction, this
+// test may crash due to use-after-free.
+DEBUG_ONLY_TEST_F(TestReader, asyncLoadSurvivesReaderDestruction) {
+  const int kNumStripes = 2;
+  const int kRowsPerStripe = 100;
+  std::vector<VectorPtr> batches;
+  batches.reserve(kNumStripes);
+  for (int stripe = 0; stripe < kNumStripes; ++stripe) {
+    batches.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kRowsPerStripe,
+            [stripe](auto row) { return stripe * kRowsPerStripe + row; }),
+    }));
+  }
+
+  // Write the DWRF file - force each batch into its own stripe
+  auto config = std::make_shared<dwrf::Config>();
+
+  auto sink =
+      std::make_unique<MemorySink>(1 << 20, FileSink::Options{.pool = pool()});
+  auto* sinkPtr = sink.get();
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(batches[0]->type()),
+      batches,
+      config,
+      // Force flush after each batch to create separate stripes
+      E2EWriterTestUtil::simpleFlushPolicyFactory(true));
+
+  std::string data(sinkPtr->data(), sinkPtr->size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(std::move(data)), *pool());
+
+  std::atomic<int> asyncLoadsStarted{0};
+  std::atomic<int> asyncLoadsCompleted{0};
+  folly::Baton<> readerDestroyed;
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwio::common::ParallelUnitLoader::load",
+      std::function<void(void*)>([&](void*) {
+        // Only block the second stripe (index 1) - let the first stripe load
+        // normally so rowReader->next() can complete
+        // fetch_add returns the value before increment: 0 for first, 1 for
+        // second, etc.
+        if (asyncLoadsStarted.fetch_add(1) == 1) {
+          // Block here until reader is destroyed
+          readerDestroyed.wait();
+        }
+        asyncLoadsCompleted.fetch_add(1);
+      }));
+
+  auto ioExecutor = std::make_shared<folly::IOThreadPoolExecutor>(2);
+
+  // Make sure ReaderOptions and DwrfRowReader are freed after {} scope
+  {
+    dwio::common::ReaderOptions readerOpts(pool());
+    readerOpts.setFileFormat(FileFormat::DWRF);
+    auto reader = DwrfReader::create(std::move(input), readerOpts);
+
+    // Enable parallel unit load
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setParallelUnitLoadCount(2);
+    rowReaderOpts.setIOExecutor(ioExecutor.get());
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    VectorPtr batch;
+    rowReader->next(50, batch); // Read first stripe
+
+    auto start = std::chrono::steady_clock::now();
+    rowReader.reset();
+    auto duration = std::chrono::steady_clock::now() - start;
+    // Verify destruction was fast (didn't wait for async operations)
+    EXPECT_LT(duration, std::chrono::seconds(1))
+        << "Destruction should not wait for async loads";
+  }
+
+  // Now signal that reader is destroyed
+  readerDestroyed.post();
+
+  // Wait for async loads to complete
+  int maxWaitMs = 2000;
+  int waitedMs = 0;
+  while (asyncLoadsCompleted.load() < 2 && waitedMs < maxWaitMs) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    waitedMs += 100;
+  }
+
+  // Verify that both async loads completed successfully after reader
+  // destruction This proves the fix works: async operations can complete even
+  // after DwrfRowReader is destroyed because LoadUnit is captured as shared_ptr
+  EXPECT_EQ(asyncLoadsCompleted.load(), 2)
+      << "Both async loads should complete even after reader destruction. "
+      << "If this fails, it means async operations are being cancelled or "
+      << "crashing after DwrfRowReader destruction, indicating unsafe pointers.";
+
+  // Clean up
+  ioExecutor->join();
+}
+
+} // namespace
+} // namespace facebook::velox::dwrf

@@ -83,9 +83,9 @@ class SequenceVector : public SimpleVector<T> {
     }
   }
 
-  const T valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
-  const T valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
   }
 
@@ -146,10 +146,6 @@ class SequenceVector : public SimpleVector<T> {
 
   const BufferPtr& wrapInfo() const override {
     return sequenceLengths_;
-  }
-
-  uint64_t retainedSize() const override {
-    return sequenceValues_->retainedSize() + sequenceLengths_->capacity();
   }
 
   bool isScalar() const override {
@@ -223,6 +219,11 @@ class SequenceVector : public SimpleVector<T> {
   void setInternalState();
 
   bool checkLoadRange(size_t idx, size_t count) const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return sequenceValues_->retainedSize(totalStringBufferSize) +
+        sequenceLengths_->capacity();
+  }
 
   VectorPtr sequenceValues_;
   SimpleVector<T>* scalarSequenceValues_ = nullptr;

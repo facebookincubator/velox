@@ -495,7 +495,8 @@ PlanNodePtr toVeloxPlan(
       std::vector<FieldAccessTypedExprPtr>{}, // preGroupedKeys
       names,
       std::move(aggregates),
-      false, // ignoreNullKeys
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
       source);
 }
 

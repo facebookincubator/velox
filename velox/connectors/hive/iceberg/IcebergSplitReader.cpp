@@ -27,12 +27,12 @@ namespace facebook::velox::connector::hive::iceberg {
 IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
     const HiveTableHandlePtr& hiveTableHandle,
-    const std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+    const HiveColumnHandleMap* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
@@ -43,8 +43,8 @@ IcebergSplitReader::IcebergSplitReader(
           connectorQueryCtx,
           hiveConfig,
           readerOutputType,
+          ioStatistics,
           ioStats,
-          fsStats,
           fileHandleFactory,
           executor,
           scanSpec),
@@ -69,8 +69,7 @@ void IcebergSplitReader::prepareSplit(
 
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 
-  std::shared_ptr<const HiveIcebergSplit> icebergSplit =
-      std::dynamic_pointer_cast<const HiveIcebergSplit>(hiveSplit_);
+  auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(hiveSplit_);
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
@@ -87,8 +86,8 @@ void IcebergSplitReader::prepareSplit(
                 connectorQueryCtx_,
                 ioExecutor_,
                 hiveConfig_,
+                ioStatistics_,
                 ioStats_,
-                fsStats_,
                 runtimeStats,
                 splitOffset_,
                 hiveSplit_->connectorId));

@@ -214,6 +214,30 @@ void castToDate(
   });
 }
 
+void castToTime(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  auto* flatResult = result.as<FlatVector<int64_t>>();
+  const auto* timestampVector = input.as<SimpleVector<int64_t>>();
+
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    auto timestampWithTimezone = timestampVector->valueAt(row);
+    auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+
+    // Convert the UTC timestamp to the timezone of the timestamp
+    timestamp.toTimezone(
+        *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+
+    // Extract time-of-day using std::chrono. floor() rounds towards
+    // negative infinity, so this correctly handles negative timestamps.
+    auto millis = std::chrono::milliseconds{timestamp.toMillis()};
+    auto timeOfDay = millis - std::chrono::floor<std::chrono::days>(millis);
+    flatResult->set(row, timeOfDay.count());
+  });
+}
+
 class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
   TimestampWithTimeZoneCastOperator() = default;
 
@@ -246,6 +270,8 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
         return true;
       case TypeKind::INTEGER:
         return other->isDate();
+      case TypeKind::BIGINT:
+        return other->isTime();
       default:
         return false;
     }
@@ -341,6 +367,9 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     } else if (resultType->kind() == TypeKind::INTEGER) {
       VELOX_CHECK(resultType->isDate());
       castToDate(input, context, rows, *result);
+    } else if (resultType->kind() == TypeKind::BIGINT) {
+      VELOX_CHECK(resultType->isTime());
+      castToTime(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
           "Cast from TIMESTAMP WITH TIME ZONE to {} not yet supported",

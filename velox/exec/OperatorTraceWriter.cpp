@@ -23,15 +23,17 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/OperatorType.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 namespace facebook::velox::exec::trace {
 namespace {
+
 void recordOperatorSummary(Operator* op, folly::dynamic& obj) {
   obj[OperatorTraceTraits::kOpTypeKey] = op->operatorType();
   const auto stats = op->stats(/*clear=*/false);
-  if (op->operatorType() == "TableScan") {
+  if (op->operatorType() == OperatorType::kTableScan) {
     obj[OperatorTraceTraits::kNumSplitsKey] = stats.numSplits;
   }
   obj[OperatorTraceTraits::kPeakMemoryKey] =
@@ -41,6 +43,7 @@ void recordOperatorSummary(Operator* op, folly::dynamic& obj) {
   obj[OperatorTraceTraits::kRawInputRowsKey] = stats.rawInputPositions;
   obj[OperatorTraceTraits::kRawInputBytesKey] = stats.rawInputBytes;
 }
+
 } // namespace
 
 OperatorTraceInputWriter::OperatorTraceInputWriter(
@@ -58,9 +61,11 @@ OperatorTraceInputWriter::OperatorTraceInputWriter(
   VELOX_CHECK_NOT_NULL(traceFile_);
 }
 
-void OperatorTraceInputWriter::write(const RowVectorPtr& rows) {
+bool OperatorTraceInputWriter::write(
+    const RowVectorPtr& rows,
+    ContinueFuture*) {
   if (FOLLY_UNLIKELY(finished_)) {
-    return;
+    return false;
   }
 
   if (batch_ == nullptr) {
@@ -80,6 +85,7 @@ void OperatorTraceInputWriter::write(const RowVectorPtr& rows) {
   auto iobuf = out.getIOBuf();
   updateAndCheckTraceLimitCB_(iobuf->computeChainDataLength());
   traceFile_->append(std::move(iobuf));
+  return false;
 }
 
 void OperatorTraceInputWriter::finish() {

@@ -25,11 +25,11 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/FilterProjectReplayer.h"
 
@@ -277,8 +277,8 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                               .run();
   assertEqualResults({result}, {replayingResult1, replayingResult2});
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto opTraceDir =
       exec::trace::getOpTraceDirectory(taskTraceDir, projectNodeId_, 0, 0);
   const auto opTraceDataFile = exec::trace::getOpTraceInputFilePath(opTraceDir);
