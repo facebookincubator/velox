@@ -272,6 +272,30 @@ Array Functions
           SELECT l2_norm(MAP(ARRAY[1, 2], ARRAY[3.0, 4.0])); -- 5.0
           SELECT l2_norm(MAP(ARRAY[], ARRAY[])); -- 0.0
 
+.. function:: dot_product(array(T), array(T)) -> bigint/double
+
+    Computes the dot product of two arrays. The dot product is the sum of element-wise
+    products of corresponding elements. Both arrays must have the same length.
+    If either array is null, returns null. If arrays have different lengths, throws an error.
+    Null elements in arrays are treated as zero.
+    Returns bigint for integer arrays, double for floating-point arrays. ::
+
+          SELECT dot_product(ARRAY[1, 2, 3], ARRAY[4, 5, 6]); -- 32 (1*4 + 2*5 + 3*6)
+          SELECT dot_product(ARRAY[1.0, 2.0], ARRAY[3.0, 4.0]); -- 11.0 (1.0*3.0 + 2.0*4.0)
+          SELECT dot_product(ARRAY[1, NULL, 3], ARRAY[4, 5, 6]); -- 22 (1*4 + 0*5 + 3*6)
+          SELECT dot_product(ARRAY[], ARRAY[]); -- 0
+
+.. function:: dot_product(map(K, V), map(K, V)) -> bigint/double
+
+    Computes the dot product of two maps. For maps, the dot product is computed by
+    multiplying values with matching keys and summing the results. Keys present in only
+    one map contribute zero to the result. If either map is null, returns null.
+    Null values in maps are treated as zero.
+    Returns bigint for integer value maps, double for floating-point value maps. ::
+
+          SELECT dot_product(MAP(ARRAY[1, 2], ARRAY[10, 20]), MAP(ARRAY[1, 2], ARRAY[3, 4])); -- 110 (10*3 + 20*4)
+          SELECT dot_product(MAP(ARRAY['a', 'b'], ARRAY[1.0, 2.0]), MAP(ARRAY['a', 'c'], ARRAY[3.0, 4.0])); -- 3.0 (only 'a' matches)
+
 .. function:: array_sum(array(T)) -> bigint/double
 
     Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
