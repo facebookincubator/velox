@@ -4561,3 +4561,158 @@ TEST_F(GeometryFunctionsTest, testStSphericalArea) {
   testStSphericalAreaFunc(
       "POLYGON((-135 85, -45 85, 45 85, 135 85, -135 85))", 619.00E9);
 }
+
+TEST_F(GeometryFunctionsTest, testGooglePolylineFunctions) {
+  const auto testEncode = [&](const std::optional<std::vector<std::optional<std::string>>>& points,
+                              const std::optional<std::string>& expected) {
+    auto arrayVec = makeNullableArrayVector<std::string>({{points}});
+    auto input = makeRowVector({arrayVec});
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "google_polyline_encode(transform(c0, x -> ST_GEOMETRYFROMTEXT(x)))",
+        input);
+    
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(expected.value(), result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  const auto testCustomEncode = [&](const std::optional<std::vector<std::optional<std::string>>>& points,
+                                    const int32_t precision,
+                                    const std::optional<std::string>& expected) {
+    auto arrayVec = makeNullableArrayVector<std::string>({{points}});
+    auto precisionVec = makeFlatVector<int32_t>({precision});
+    auto input = makeRowVector({arrayVec, precisionVec});
+    std::optional<std::string> result = evaluateOnce<std::string>(
+        "google_polyline_encode(transform(c0, x -> ST_GEOMETRYFROMTEXT(x)), c1)",
+        input);
+    
+    if (expected.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_EQ(expected.value(), result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  const auto testDecode = [&](const std::optional<std::string>& encoded,
+                              const std::optional<std::vector<
+                              std::optional<std::string>>>& expectedPoints) {
+    auto encodeVec = makeFlatVector<std::string>({encoded.value()});
+    auto input = makeRowVector({encodeVec});
+    auto output = evaluate("transform(google_polyline_decode(c0), x -> ST_AsText(x))",
+                           input);
+    auto expected = makeNullableArrayVector<std::string>({{expectedPoints}});
+    facebook::velox::test::assertEqualVectors(expected, output);
+  };
+
+  const auto testCustomDecode = [&](const std::optional<std::string>& encoded,
+                                    const int32_t precision,
+                                    const std::optional<std::vector<
+                                    std::optional<std::string>>>& expectedPoints) {
+    auto encodeVec = makeFlatVector<std::string>({encoded.value()});
+    auto precisionVec = makeFlatVector<int32_t>({precision});
+    auto input = makeRowVector({encodeVec, precisionVec});
+    auto output = evaluate("transform(google_polyline_decode(c0, c1), x -> ST_AsText(x))",
+                            input);
+    auto expected = makeNullableArrayVector<std::string>({{expectedPoints}});
+    facebook::velox::test::assertEqualVectors(expected, output);
+  };
+
+    // Test with single point.
+  testEncode({{"POINT (38.5 -120.2)"}},
+              "_p~iF~ps|U");
+
+  // Test with two points.
+  testEncode({{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)"}},
+              "_p~iF~ps|U_ulLnnqC");
+
+  // Test default precision.
+  testEncode({{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}},
+              "_p~iF~ps|U_ulLnnqC_mqNvxq`@");
+
+  // Test with duplicate points.
+  testEncode({{"POINT (37.78327 -122.43877)", "POINT (37.75885 -122.43533)",
+              "POINT (37.76373 -122.41027)", "POINT (37.76781 -122.42538)",
+              "POINT (37.76781 -122.42538)","POINT (37.76835 -122.45422)",
+              "POINT (37.78327 -122.43877)"}},
+              "mpreFhyhjVrwCoTo]s{CoXl}A??kBfsDg|Aq_B");
+   // Test empty array returns empty string.
+  testEncode(std::vector<std::optional<std::string>>{}, "");
+
+  // Test encoding with custom precision.
+  testCustomEncode({{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}},
+                     6,
+                    "_izlhA~rlgdF_{geC~ywl@_kwzCn`{nI");
+
+  testCustomEncode({{"POINT (38.5 -120.2)"}},
+                     1,
+                    "aWbjA");
+
+  testCustomEncode({{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}},
+                     5,
+                     "_p~iF~ps|U_ulLnnqC_mqNvxq`@");
+
+  // Error case
+
+VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
+                                    0,
+                                    std::nullopt),
+                   "Minimum Polyline precision exponent should be 1");
+
+VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
+                                    -5,
+                                    std::nullopt),
+                   "Minimum Polyline precision exponent should be 1");
+
+  // Test with single point
+  testDecode("_p~iF~ps|U", 
+            {{"POINT (38.5 -120.2)"}});
+
+  // Test with multiple points.
+  testDecode("_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+            {{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}});
+
+  // Test with two points.
+  testDecode("_p~iF~ps|U_ulLnnqC",
+            {{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)"}});
+
+  // Test empty string.
+  testDecode("", std::vector<std::optional<std::string>>{});
+
+   // Test duplicatse points.
+  testDecode("mpreFhyhjVrwCoTo]s{CoXl}A??kBfsDg|Aq_B",
+             {{"POINT (37.78327 -122.43877)", "POINT (37.75885 -122.43533)",
+               "POINT (37.76373 -122.41027)", "POINT (37.76781 -122.42538)",
+               "POINT (37.76781 -122.42538)", "POINT (37.76835 -122.45422)",
+               "POINT (37.78327 -122.43877)"}});
+
+  // Test decoding with custom precision. 
+  testCustomDecode("_izlhA~rlgdF_{geC~ywl@_kwzCn`{nI",
+                   6,
+                  {{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}});
+
+  testCustomDecode("aWbjA",
+                   1,
+                   {{"POINT (38.5 -120.2)"}});
+
+  testCustomDecode("_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+                   5,
+                   {{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}});
+
+  VELOX_ASSERT_THROW(testDecode("A",
+                                std::nullopt),
+                    "Invalid polyline encoding: unexpected end of input");
+
+  VELOX_ASSERT_THROW(testCustomDecode("_p~iF~ps|U",
+                                      0,
+                                      std::nullopt),
+                     "Polyline precision exponent must be at least 1");
+
+  VELOX_ASSERT_THROW(testCustomDecode("_p~iF~ps|U",
+                                      -5,
+                                      std::nullopt),
+                     "Polyline precision exponent must be at least 1");
+}
