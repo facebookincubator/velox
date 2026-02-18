@@ -241,13 +241,13 @@ void HashAggregation::updateRuntimeStats() {
     }
   }
 
-  runtimeStats[BaseHashTable::kCapacity] =
+  runtimeStats[std::string(BaseHashTable::kCapacity)] =
       RuntimeMetric(hashTableStats.capacity);
-  runtimeStats[BaseHashTable::kNumRehashes] =
+  runtimeStats[std::string(BaseHashTable::kNumRehashes)] =
       RuntimeMetric(hashTableStats.numRehashes);
-  runtimeStats[BaseHashTable::kNumDistinct] =
+  runtimeStats[std::string(BaseHashTable::kNumDistinct)] =
       RuntimeMetric(hashTableStats.numDistinct);
-  runtimeStats[BaseHashTable::kNumTombstones] =
+  runtimeStats[std::string(BaseHashTable::kNumTombstones)] =
       RuntimeMetric(hashTableStats.numTombstones);
 }
 
@@ -272,10 +272,13 @@ void HashAggregation::resetPartialOutputIfNeed() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "flushRowCount", RuntimeCounter(numOutputRows_));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
+        std::string(HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(static_cast<int64_t>(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
@@ -299,7 +302,9 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat("abandonedPartialAggregation", RuntimeCounter(1));
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregation),
+        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
