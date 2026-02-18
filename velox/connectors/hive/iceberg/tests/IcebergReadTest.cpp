@@ -15,9 +15,10 @@
  */
 
 #include <folly/Singleton.h>
+#include <functional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -288,7 +289,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     for (int i = 0; i < splitCount; ++i) {
       splits.emplace_back(
-          std::make_shared<HiveIcebergSplit>(
+          std::make_shared<IcebergConnectorSplit>(
               kIcebergConnectorId,
               dataFilePath,
               fileFomat_,
@@ -309,20 +310,34 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::unordered_set<int>& partitionIndices = {}) {
     ColumnHandleMap assignments;
+    int32_t fieldId = 1;
+    std::function<parquet::ParquetFieldId(const TypePtr&, int32_t&)> makeField =
+        [&makeField](
+            const TypePtr& type,
+            int32_t& currentFieldId) -> parquet::ParquetFieldId {
+      const int32_t currentId = currentFieldId++;
+      std::vector<parquet::ParquetFieldId> children;
+      children.reserve(type->size());
+      for (auto i = 0; i < type->size(); ++i) {
+        children.push_back(makeField(type->childAt(i), currentFieldId));
+      }
+      return parquet::ParquetFieldId{currentId, children};
+    };
     for (auto i = 0; i < rowType->size(); ++i) {
       const auto& columnName = rowType->nameOf(i);
       const auto& columnType = rowType->childAt(i);
       auto columnHandleType = partitionIndices.contains(i)
-          ? HiveColumnHandle::ColumnType::kPartitionKey
-          : HiveColumnHandle::ColumnType::kRegular;
+          ? IcebergColumnHandle::ColumnType::kPartitionKey
+          : IcebergColumnHandle::ColumnType::kRegular;
 
+      auto field = makeField(columnType, fieldId);
       assignments.insert(
           {columnName,
-           std::make_shared<HiveColumnHandle>(
+           std::make_shared<IcebergColumnHandle>(
                columnName,
                columnHandleType,
                columnType,
-               columnType,
+               field,
                std::vector<common::Subfield>{})});
     }
 
@@ -358,7 +373,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
                         ->size();
 
     std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-    return {std::make_shared<HiveIcebergSplit>(
+    return {std::make_shared<IcebergConnectorSplit>(
         kIcebergConnectorId,
         path,
         dwio::common::FileFormat::PARQUET,

@@ -744,7 +744,7 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
       const auto file = filesystems::getFileSystem(filePath, nullptr)
                             ->openFileForRead(filePath);
       splits.push_back(
-          std::make_shared<HiveIcebergSplit>(
+          std::make_shared<IcebergConnectorSplit>(
               test::kIcebergConnectorId,
               filePath,
               fileFormat_,
@@ -764,14 +764,14 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
       {"c_date",
        std::make_shared<IcebergColumnHandle>(
            "c_date",
-           HiveColumnHandle::ColumnType::kPartitionKey,
+           IcebergColumnHandle::ColumnType::kPartitionKey,
            DATE(),
            parquet::ParquetFieldId{0, {}},
            std::vector<common::Subfield>{})},
       {"c_value",
        std::make_shared<IcebergColumnHandle>(
            "c_value",
-           HiveColumnHandle::ColumnType::kRegular,
+           IcebergColumnHandle::ColumnType::kRegular,
            INTEGER(),
            parquet::ParquetFieldId{1, {}})},
   };

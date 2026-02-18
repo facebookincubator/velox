@@ -180,8 +180,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? HiveColumnHandle::ColumnType::kPartitionKey
-                : HiveColumnHandle::ColumnType::kRegular,
+                ? IcebergColumnHandle::ColumnType::kPartitionKey
+                : IcebergColumnHandle::ColumnType::kRegular,
             type,
             field));
   }
@@ -292,7 +292,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
     splits.push_back(
-        std::make_shared<HiveIcebergSplit>(
+        std::make_shared<IcebergConnectorSplit>(
             kIcebergConnectorId,
             filePath,
             fileFormat_,

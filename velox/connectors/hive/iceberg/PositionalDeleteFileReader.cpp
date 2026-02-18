@@ -76,12 +76,18 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   RowTypePtr deleteFileSchema =
       ROW(std::move(deleteColumnNames), std::move(deleteColumnTypes));
 
-  deleteSplit_ = std::make_shared<HiveConnectorSplit>(
+  deleteSplit_ = std::make_shared<IcebergConnectorSplit>(
       connectorId,
       deleteFile_.filePath,
       deleteFile_.fileFormat,
       0,
-      deleteFile_.fileSizeInBytes);
+      deleteFile_.fileSizeInBytes,
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      /*cacheable=*/true,
+      std::unordered_map<std::string, std::string>{});
 
   // Create the Reader and RowReader
 

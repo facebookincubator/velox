@@ -22,10 +22,10 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
+struct IcebergConnectorSplit : public HiveConnectorSplit {
   std::vector<IcebergDeleteFile> deleteFiles;
 
-  HiveIcebergSplit(
+  IcebergConnectorSplit(
       const std::string& connectorId,
       const std::string& filePath,
       dwio::common::FileFormat fileFormat,
@@ -41,7 +41,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       std::optional<FileProperties> fileProperties = std::nullopt);
 
   // For tests only
-  HiveIcebergSplit(
+  IcebergConnectorSplit(
       const std::string& connectorId,
       const std::string& filePath,
       dwio::common::FileFormat fileFormat,

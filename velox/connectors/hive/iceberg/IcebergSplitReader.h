@@ -16,8 +16,12 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/SplitReader.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -27,7 +31,7 @@ struct IcebergDeleteFile;
 class IcebergSplitReader : public SplitReader {
  public:
   IcebergSplitReader(
-      const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
+      const std::shared_ptr<const IcebergConnectorSplit>& icebergSplit,
       const HiveTableHandlePtr& hiveTableHandle,
       const HiveColumnHandleMap* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,

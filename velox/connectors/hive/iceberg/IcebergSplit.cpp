@@ -20,7 +20,7 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-HiveIcebergSplit::HiveIcebergSplit(
+IcebergConnectorSplit::IcebergConnectorSplit(
     const std::string& connectorId,
     const std::string& filePath,
     dwio::common::FileFormat fileFormat,
@@ -55,7 +55,7 @@ HiveIcebergSplit::HiveIcebergSplit(
 }
 
 // For tests only
-HiveIcebergSplit::HiveIcebergSplit(
+IcebergConnectorSplit::IcebergConnectorSplit(
     const std::string& connectorId,
     const std::string& filePath,
     dwio::common::FileFormat fileFormat,

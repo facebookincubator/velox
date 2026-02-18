@@ -86,14 +86,15 @@ class IcebergSplitReaderBenchmark {
       float deleteRate,
       uint32_t nextSize);
 
-  std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>
+  std::vector<std::shared_ptr<connector::hive::iceberg::IcebergConnectorSplit>>
   createIcebergSplitsWithPositionalDelete(
       int32_t deleteRowsPercentage,
       int32_t deleteFilesCount);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
-  std::shared_ptr<connector::hive::HiveConnectorSplit> makeIcebergSplit(
+  std::shared_ptr<connector::hive::iceberg::IcebergConnectorSplit>
+  makeIcebergSplit(
       const std::string& dataFilePath,
       const std::vector<connector::hive::iceberg::IcebergDeleteFile>&
           deleteFiles = {});

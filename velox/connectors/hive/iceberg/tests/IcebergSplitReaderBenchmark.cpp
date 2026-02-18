@@ -94,7 +94,7 @@ std::vector<std::string> IcebergSplitReaderBenchmark::listFiles(
   return files;
 }
 
-std::shared_ptr<HiveConnectorSplit>
+std::shared_ptr<IcebergConnectorSplit>
 IcebergSplitReaderBenchmark::makeIcebergSplit(
     const std::string& dataFilePath,
     const std::vector<IcebergDeleteFile>& deleteFiles) {
@@ -103,7 +103,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
   auto readFile = std::make_shared<LocalReadFile>(dataFilePath);
   const int64_t fileSize = readFile->size();
 
-  return std::make_shared<HiveIcebergSplit>(
+  return std::make_shared<IcebergConnectorSplit>(
       kHiveConnectorId,
       dataFilePath,
       fileFomat_,
@@ -152,11 +152,11 @@ std::string IcebergSplitReaderBenchmark::writePositionDeleteFile(
   return deleteFilePath;
 }
 
-std::vector<std::shared_ptr<HiveConnectorSplit>>
+std::vector<std::shared_ptr<IcebergConnectorSplit>>
 IcebergSplitReaderBenchmark::createIcebergSplitsWithPositionalDelete(
     int32_t deleteRowsPercentage,
     int32_t deleteFilesCount) {
-  std::vector<std::shared_ptr<HiveConnectorSplit>> splits;
+  std::vector<std::shared_ptr<IcebergConnectorSplit>> splits;
 
   std::vector<std::string> deleteFilePaths;
   std::vector<std::string> dataFilePaths = listFiles(fileFolder_->getPath());
@@ -273,7 +273,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   auto scanSpec =
       createScanSpec(*batches, rowType, filterSpecs, hitRows, filters);
 
-  std::vector<std::shared_ptr<HiveConnectorSplit>> splits =
+  std::vector<std::shared_ptr<IcebergConnectorSplit>> splits =
       createIcebergSplitsWithPositionalDelete(deletePct, 1);
 
   core::TypedExprPtr remainingFilterExpr;
@@ -328,13 +328,14 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   suspender.dismiss();
 
   uint64_t resultSize = 0;
-  for (std::shared_ptr<HiveConnectorSplit> split : splits) {
+  HiveColumnHandleMap partitionKeys;
+  for (std::shared_ptr<IcebergConnectorSplit> split : splits) {
     scanSpec->resetCachedValues(true);
     std::unique_ptr<IcebergSplitReader> icebergSplitReader =
         std::make_unique<IcebergSplitReader>(
             split,
             hiveTableHandle,
-            nullptr,
+            &partitionKeys,
             connectorQueryCtx_.get(),
             hiveConfig,
             rowType,
