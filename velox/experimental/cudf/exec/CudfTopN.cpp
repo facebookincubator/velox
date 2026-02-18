@@ -18,8 +18,8 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/copy.hpp>
-#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/detail/gather.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
 
@@ -84,7 +84,8 @@ CudfVectorPtr CudfTopN::mergeTopK(
     tableViews.push_back(batch->getTableView());
     inputStreams.push_back(batch->stream());
   }
-  // Ensure all upstream batch-producing streams are visible on the merge stream.
+  // Ensure all upstream batch-producing streams are visible on the merge
+  // stream.
   cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);

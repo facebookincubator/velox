@@ -262,7 +262,8 @@ TEST_F(TopNTest, numericTopNSynchronization) {
     });
     auto key = makeFlatVector<double>(batchSize, [&](vector_size_t row) {
       // Repeat a small key space to force tie-breaking on c0.
-      auto bucket = static_cast<int64_t>((row + batch * 13) % 10007); // A custom hash.
+      auto bucket =
+          static_cast<int64_t>((row + batch * 13) % 10007); // A custom hash.
       return static_cast<double>(bucket);
     });
     auto payload = makeFlatVector<int64_t>(batchSize, [&](vector_size_t row) {
@@ -273,20 +274,21 @@ TEST_F(TopNTest, numericTopNSynchronization) {
 
   createDuckDbTable(vectors);
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .topN(
-                      {"c1 DESC NULLS LAST", "c0 ASC NULLS LAST"},
-                      topN,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .topN({"c1 DESC NULLS LAST", "c0 ASC NULLS LAST"}, topN, false)
+          .planNode();
 
-  // Force configuration to maximize chance of replicating a missing stream sync.
+  // Force configuration to maximize chance of replicating a missing stream
+  // sync.
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, batchSize)
       .config(cudf_velox::CudfQueryConfig::kCudfTopNBatchSize, 1)
-      .assertResults(fmt::format(
-          "SELECT c0, c1, c2 FROM tmp ORDER BY c1 DESC, c0 LIMIT {}", topN));
+      .assertResults(
+          fmt::format(
+              "SELECT c0, c1, c2 FROM tmp ORDER BY c1 DESC, c0 LIMIT {}",
+              topN));
 }
 
 TEST_F(TopNTest, empty) {
