@@ -352,6 +352,7 @@ core::PlanNodePtr getTraceNode(
         aggregationNode->groupId(),
         aggregationNode->ignoreNullKeys(),
         aggregationNode->noGroupsSpanBatches(),
+        aggregationNode->preferStreamingAggregation(),
         std::make_shared<DummySourceNode>(
             aggregationNode->sources().front()->outputType()));
   }

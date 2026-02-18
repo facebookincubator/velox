@@ -1547,5 +1547,63 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
       velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
       9);
 }
+
+TEST_P(StreamingAggregationTest, globalAggregation) {
+  // Create test data with multiple batches
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+  });
+
+  createDuckDbTable({data});
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .streamingAggregation(
+                        {}, // No grouping keys - global aggregation
+                        {"count(1)", "sum(c0)", "min(c1)", "max(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        false)
+                    .planNode();
+
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .assertResults("SELECT count(1), sum(c0), min(c1), max(c1) FROM tmp");
+  }
+}
+
+TEST_P(StreamingAggregationTest, globalAggregationMultipleBatches) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>({4, 5, 6}),
+          makeFlatVector<int64_t>({40, 50, 60}),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>({7, 8, 9}),
+          makeFlatVector<int64_t>({70, 80, 90}),
+      }),
+  };
+
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .streamingAggregation(
+                      {}, // No grouping keys - global aggregation
+                      {"count(1)", "sum(c0)", "avg(c1)", "min(c0)", "max(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT count(1), sum(c0), avg(c1), min(c0), max(c1) FROM tmp");
+}
 } // namespace
 } // namespace facebook::velox::exec

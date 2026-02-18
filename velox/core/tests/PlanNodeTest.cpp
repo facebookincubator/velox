@@ -523,9 +523,11 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/true,
+        /*preferStreamingAggregation=*/false,
         values);
     ASSERT_TRUE(aggNode->noGroupsSpanBatches());
     ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
     ASSERT_EQ(
         aggNode->toString(true),
         "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum() noGroupsSpanBatches] -> c0:BIGINT, sum:BIGINT\n");
@@ -543,9 +545,11 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
         values);
     ASSERT_FALSE(aggNode->noGroupsSpanBatches());
     ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
     ASSERT_EQ(
         aggNode->toString(true),
         "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
@@ -563,6 +567,7 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
           aggregates,
           /*ignoreNullKeys=*/false,
           /*noGroupsSpanBatches=*/true,
+          /*preferStreamingAggregation=*/false,
           values),
       "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
 
@@ -577,12 +582,137 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         aggregates,
         /*ignoreNullKeys=*/false,
         /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
         values);
     ASSERT_FALSE(aggNode->noGroupsSpanBatches());
     ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_FALSE(aggNode->shouldUseStreamingAggregation());
     ASSERT_EQ(
         aggNode->toString(true),
         "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
+}
+
+TEST_F(PlanNodeTest, aggregationNodePreferStreamingAggregation) {
+  auto values = std::make_shared<ValuesNode>("values", rowData_);
+
+  const std::vector<std::string> aggregateNames{"sum", "count"};
+  const std::vector<AggregationNode::Aggregate> aggregates{
+      {.call = std::make_shared<CallTypedExpr>(BIGINT(), "sum"),
+       .rawInputTypes = {BIGINT()}},
+      {.call = std::make_shared<CallTypedExpr>(BIGINT(), "count"),
+       .rawInputTypes = {BIGINT()}}};
+
+  // Global aggregation with preferStreamingAggregation=true.
+  // Should use streaming aggregation.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        /*groupingKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/true,
+        values);
+    ASSERT_TRUE(aggNode->preferStreamingAggregation());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
+    ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING sum := sum(), count := count()] -> sum:BIGINT, count:BIGINT\n");
+  }
+
+  // Global aggregation with preferStreamingAggregation=false (default).
+  // Should use hash aggregation.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        /*groupingKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
+        values);
+    ASSERT_FALSE(aggNode->preferStreamingAggregation());
+    ASSERT_FALSE(aggNode->shouldUseStreamingAggregation());
+    ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE sum := sum(), count := count()] -> sum:BIGINT, count:BIGINT\n");
+  }
+
+  // Grouped aggregation with preferStreamingAggregation=true.
+  // Should NOT use streaming aggregation (grouping keys present, not
+  // pre-grouped).
+  {
+    const std::vector<FieldAccessTypedExprPtr> groupingKeys{
+        std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/true,
+        values);
+    ASSERT_TRUE(aggNode->preferStreamingAggregation());
+    ASSERT_FALSE(aggNode->shouldUseStreamingAggregation());
+    ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE [c0] sum := sum(), count := count()] -> c0:BIGINT, sum:BIGINT, count:BIGINT\n");
+  }
+
+  // Pre-grouped aggregation with preferStreamingAggregation=false.
+  // Should still use streaming aggregation (pre-grouped takes precedence).
+  {
+    const std::vector<FieldAccessTypedExprPtr> groupingKeys{
+        std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+    const std::vector<FieldAccessTypedExprPtr> preGroupedKeys{
+        std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        /*preferStreamingAggregation=*/false,
+        values);
+    ASSERT_FALSE(aggNode->preferStreamingAggregation());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum(), count := count()] -> c0:BIGINT, sum:BIGINT, count:BIGINT\n");
+  }
+
+  // Builder pattern with preferStreamingAggregation.
+  {
+    auto aggNode = AggregationNode::Builder()
+                       .id("agg")
+                       .step(AggregationNode::Step::kSingle)
+                       .groupingKeys({})
+                       .preGroupedKeys({})
+                       .aggregateNames(aggregateNames)
+                       .aggregates(aggregates)
+                       .ignoreNullKeys(false)
+                       .preferStreamingAggregation(true)
+                       .source(values)
+                       .build();
+    ASSERT_TRUE(aggNode->preferStreamingAggregation());
+    ASSERT_TRUE(aggNode->shouldUseStreamingAggregation());
   }
 }
 } // namespace
