@@ -43,9 +43,8 @@ class PrestoCastHooks : public CastHooks {
   Expected<int32_t> castStringToDate(
       const StringView& dateString) const override;
 
-  // Casts string to TIME using TIME()->valueToTime().
   Expected<int64_t> castStringToTime(
-      const StringView& timeString,
+      StringView timeString,
       const tz::TimeZone* timeZone,
       int64_t sessionStartTimeMs) const override;
 

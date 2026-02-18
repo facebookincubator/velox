@@ -1143,16 +1143,8 @@ TEST_F(SparkCastExprTest, stringToTime) {
     auto result =
         evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
 
-    // Manually verify results since DuckDB doesn't support TIME type.
-    ASSERT_EQ(result->size(), expectedValues.size());
-    ASSERT_TRUE(result->type()->isTime());
-
-    auto* flatResult = result->as<FlatVector<int64_t>>();
-    for (size_t i = 0; i < expectedValues.size(); i++) {
-      ASSERT_FALSE(result->isNullAt(i)) << "Row " << i << " should not be null";
-      ASSERT_EQ(flatResult->valueAt(i), expectedValues[i])
-          << "Mismatch at row " << i;
-    }
+    auto expected = makeFlatVector<int64_t>(expectedValues, TIME());
+    assertEqualVectors(expected, result);
   }
 
   // Test invalid time strings with ANSI mode disabled - should return NULL.
@@ -1163,13 +1155,9 @@ TEST_F(SparkCastExprTest, stringToTime) {
     auto result =
         evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
 
-    // All should be null.
-    ASSERT_EQ(result->size(), 6);
-    ASSERT_TRUE(result->type()->isTime());
-    for (size_t i = 0; i < 6; i++) {
-      ASSERT_TRUE(result->isNullAt(i))
-          << "Row " << i << " should be null for invalid input";
-    }
+    auto expected = makeNullableFlatVector<int64_t>(
+        std::vector<std::optional<int64_t>>(6, std::nullopt), TIME());
+    assertEqualVectors(expected, result);
   }
 
   // Test invalid time strings with ANSI mode enabled - should throw.

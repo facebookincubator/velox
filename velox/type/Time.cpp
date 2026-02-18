@@ -41,9 +41,12 @@ bool parseNumber(const char* data, size_t size, size_t& pos, int32_t& result) {
   return true;
 }
 
-// Helper: Parse fractional seconds (milliseconds)
-Expected<int32_t>
-parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
+// Helper: Parse fractional seconds scaled to requested precision.
+Expected<int32_t> parseFractionalSeconds(
+    const char* data,
+    size_t size,
+    size_t& pos,
+    int32_t fractionalPrecision) {
   if (pos >= size || data[pos] != '.') {
     return 0; // No fractional part
   }
@@ -56,7 +59,7 @@ parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
             "Invalid time format: fractional seconds incomplete"));
   }
 
-  // Parse fractional seconds (milliseconds)
+  // Parse fractional seconds.
   int32_t fractionalPart = 0;
 
   const char* start = data + pos;
@@ -72,16 +75,21 @@ parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
   size_t digitCount = parseResult.ptr - start;
   pos += digitCount;
 
-  // Check that we don't have more than 3 digits (millisecond precision)
-  if (digitCount > 3) {
-    return folly::makeUnexpected(
-        Status::UserError(
-            "Invalid time format: Microsecond precision not supported"));
+  if (digitCount > static_cast<size_t>(fractionalPrecision)) {
+    const char* precisionError =
+        "Invalid time format: precision beyond supported range";
+    if (fractionalPrecision == 3) {
+      precisionError =
+          "Invalid time format: Microsecond precision not supported";
+    } else if (fractionalPrecision == 6) {
+      precisionError =
+          "Invalid time format: precision beyond microseconds not supported";
+    }
+    return folly::makeUnexpected(Status::UserError(precisionError));
   }
 
-  // Convert to milliseconds by padding with zeros if needed
-  // e.g., .1 -> 100ms, .12 -> 120ms, .123 -> 123ms
-  for (size_t i = digitCount; i < 3; i++) {
+  // Convert to target precision by padding with zeros if needed.
+  for (size_t i = digitCount; i < fractionalPrecision; i++) {
     fractionalPart *= 10;
   }
 
@@ -99,9 +107,9 @@ Status validateTimeComponents(const TimeComponents& components) {
   if (components.second < 0 || components.second >= kSecsPerMinute) {
     return Status::UserError("Invalid second value: {}", components.second);
   }
-  if (components.millis < 0 || components.millis >= kMsecsPerSec) {
+  if (components.fraction < 0 || components.fraction >= kMsecsPerSec) {
     return Status::UserError(
-        "Invalid millisecond value: {}", components.millis);
+        "Invalid millisecond value: {}", components.fraction);
   }
   return Status::OK();
 }
@@ -111,7 +119,7 @@ Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
   int64_t result = static_cast<int64_t>(components.hour) * kMillisInHour +
       static_cast<int64_t>(components.minute) * kMillisInMinute +
       static_cast<int64_t>(components.second) * kMillisInSecond +
-      static_cast<int64_t>(components.millis);
+      static_cast<int64_t>(components.fraction);
 
   // Validate time range (0 to 86399999 ms in a day)
   if (result < 0 || result >= kMillisInDay) {
@@ -123,8 +131,13 @@ Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
   return result;
 }
 
-// Helper: Parse time components from string (H:m[:s[.SSS]])
-Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
+} // namespace
+
+Expected<TimeComponents> parseTimeComponents(
+    const char* buf,
+    size_t len,
+    bool requireSeconds,
+    int32_t fractionalPrecision) {
   TimeComponents components;
   size_t pos = 0;
 
@@ -147,7 +160,6 @@ Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
         Status::UserError("Invalid time format: failed to parse minute"));
   }
 
-  // Check if there's a second ':' for seconds (OPTIONAL)
   if (pos < len && buf[pos] == ':') {
     pos++; // Skip the ':'
 
@@ -158,13 +170,17 @@ Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
     }
 
     // Parse optional fractional seconds
-    auto millisResult = parseFractionalSeconds(buf, len, pos);
-    if (millisResult.hasError()) {
-      return folly::makeUnexpected(millisResult.error());
+    auto fractionResult =
+        parseFractionalSeconds(buf, len, pos, fractionalPrecision);
+    if (fractionResult.hasError()) {
+      return folly::makeUnexpected(fractionResult.error());
     }
-    components.millis = millisResult.value();
+    components.fraction = fractionResult.value();
+  } else if (requireSeconds) {
+    return folly::makeUnexpected(
+        Status::UserError("Invalid time format: expected ':' after minute"));
   }
-  // If no second ':', seconds and millis remain at 0 (default)
+  // If no second ':', seconds and fraction remain at 0 (default)
 
   // Check for trailing characters
   if (pos < len) {
@@ -177,10 +193,9 @@ Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
   return components;
 }
 
-} // namespace
-
 Expected<int64_t> fromTimeString(const char* buf, size_t len) {
-  auto componentsResult = parseTimeComponents(buf, len);
+  auto componentsResult =
+      parseTimeComponents(buf, len, /*requireSeconds*/ false, 3);
   if (componentsResult.hasError()) {
     return folly::makeUnexpected(componentsResult.error());
   }

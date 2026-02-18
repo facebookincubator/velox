@@ -23,8 +23,8 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/expression/PrestoCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec {
@@ -82,7 +82,7 @@ Expected<int32_t> PrestoCastHooks::castStringToDate(
 }
 
 Expected<int64_t> PrestoCastHooks::castStringToTime(
-    const StringView& timeString,
+    StringView timeString,
     const tz::TimeZone* timeZone,
     int64_t sessionStartTimeMs) const {
   try {

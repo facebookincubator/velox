@@ -17,13 +17,11 @@
 #pragma once
 
 #include <fmt/format.h>
-
 #include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
 

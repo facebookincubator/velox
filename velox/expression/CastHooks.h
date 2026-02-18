@@ -54,15 +54,15 @@ class CastHooks {
   virtual Expected<int32_t> castStringToDate(
       const StringView& dateString) const = 0;
 
-  /// Casts string to TIME (microseconds since midnight as BIGINT).
-  /// Supports format: HH:mm:ss[.SSSSSS]
+  /// Casts string to TIME. The accepted format and precision depend on the
+  /// policy (e.g., Presto uses milliseconds; Spark uses microseconds).
   /// 'timeString' has been processed by removeWhiteSpaces.
   /// @param timeString The time string to parse
   /// @param timeZone The timezone for conversion (can be nullptr)
   /// @param sessionStartTimeMs Session start time in milliseconds for DST
   /// handling
   virtual Expected<int64_t> castStringToTime(
-      const StringView& timeString,
+      StringView timeString,
       const tz::TimeZone* timeZone,
       int64_t sessionStartTimeMs) const = 0;
 

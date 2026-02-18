@@ -112,9 +112,9 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
 }
 
 Expected<int64_t> SparkCastHooks::castStringToTime(
-    const StringView& timeString,
-    const tz::TimeZone* /* timeZone */,
-    int64_t /* sessionStartTimeMs */) const {
+    StringView timeString,
+    const tz::TimeZone* /*timeZone*/,
+    int64_t /*sessionStartTimeMs*/) const {
   // Spark represents TIME as BIGINT (microseconds since midnight).
   // Parse directly to microseconds - validation and error handling
   // flow through CAST/TRY_CAST semantics automatically.

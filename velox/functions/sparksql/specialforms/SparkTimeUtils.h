@@ -25,7 +25,7 @@ namespace facebook::velox::functions::sparksql {
 /// Returns microseconds since midnight (0 to 86399999999).
 Expected<int64_t> fromTimeStringMicros(const char* buf, size_t len);
 
-inline Expected<int64_t> fromTimeStringMicros(const StringView& str) {
+inline Expected<int64_t> fromTimeStringMicros(StringView str) {
   return fromTimeStringMicros(str.data(), str.size());
 }
 

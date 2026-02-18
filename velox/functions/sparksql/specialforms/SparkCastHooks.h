@@ -57,7 +57,7 @@ class SparkCastHooks : public exec::CastHooks {
   ///   microseconds)
   /// Expects timeString to be trimmed by CastExpr::removeWhiteSpaces.
   Expected<int64_t> castStringToTime(
-      const StringView& timeString,
+      StringView timeString,
       const tz::TimeZone* timeZone,
       int64_t sessionStartTimeMs) const override;
 
