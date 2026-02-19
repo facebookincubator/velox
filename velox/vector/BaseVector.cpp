@@ -478,7 +478,7 @@ VectorPtr BaseVector::createInternal(
 }
 
 // static
-VectorPtr BaseVector::createEmptyLike(
+VectorPtr BaseVector::createEmptyLikeInternal(
     const BaseVector* source,
     vector_size_t size,
     memory::MemoryPool* pool) {
@@ -494,7 +494,7 @@ VectorPtr BaseVector::createEmptyLike(
       children.reserve(rowType.size());
       for (size_t i = 0; i < rowType.size(); ++i) {
         children.push_back(
-            createEmptyLike(sourceRow->childAt(i).get(), size, pool));
+            createEmptyLikeInternal(sourceRow->childAt(i).get(), size, pool));
       }
       return std::make_shared<RowVector>(
           pool, type, nullptr, size, std::move(children));
@@ -503,7 +503,8 @@ VectorPtr BaseVector::createEmptyLike(
       auto offsets = allocateOffsets(size, pool);
       auto sizes = allocateSizes(size, pool);
       auto* sourceArray = wrapped->as<ArrayVector>();
-      auto elements = createEmptyLike(sourceArray->elements().get(), 0, pool);
+      auto elements =
+          createEmptyLikeInternal(sourceArray->elements().get(), 0, pool);
       return std::make_shared<ArrayVector>(
           pool,
           type,
@@ -530,8 +531,9 @@ VectorPtr BaseVector::createEmptyLike(
       auto offsets = allocateOffsets(size, pool);
       auto sizes = allocateSizes(size, pool);
       auto* sourceMap = wrapped->as<MapVector>();
-      auto keys = createEmptyLike(sourceMap->mapKeys().get(), 0, pool);
-      auto values = createEmptyLike(sourceMap->mapValues().get(), 0, pool);
+      auto keys = createEmptyLikeInternal(sourceMap->mapKeys().get(), 0, pool);
+      auto values =
+          createEmptyLikeInternal(sourceMap->mapValues().get(), 0, pool);
       return std::make_shared<MapVector>(
           pool,
           type,
