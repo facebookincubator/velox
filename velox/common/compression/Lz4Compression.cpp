@@ -588,8 +588,9 @@ Expected<uint64_t> Lz4HadoopCodec::compress(
             folly::Endian::big(static_cast<uint32_t>(inputLength));
         const uint32_t compressedLength =
             folly::Endian::big(static_cast<uint32_t>(compressedSize));
-        folly::storeUnaligned(output, decompressedLength);
-        folly::storeUnaligned(output + sizeof(uint32_t), compressedLength);
+        folly::storeUnaligned<uint32_t>(output, decompressedLength);
+        folly::storeUnaligned<uint32_t>(
+            output + sizeof(uint32_t), compressedLength);
         return kPrefixLength + compressedSize;
       });
 }
