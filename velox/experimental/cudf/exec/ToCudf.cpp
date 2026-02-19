@@ -288,6 +288,11 @@ bool CompileState::compile(bool allowCpuFallback) {
 }
 
 std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
+
+rmm::device_async_resource_ref get_output_mr() {
+  return output_mr_.get();
+}
 
 struct CudfDriverAdapter {
   CudfDriverAdapter(bool allowCpuFallback)
@@ -336,6 +341,14 @@ void registerCudf() {
   cudf::set_current_device_resource(mr.get());
   mr_ = mr;
 
+  const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
+  if (!outputMrMode.empty() && outputMrMode != mrMode) {
+    output_mr_ = cudf_velox::createMemoryResource(
+        outputMrMode, CudfConfig::getInstance().memoryPercent);
+  } else {
+    output_mr_ = mr_;
+  }
+
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
   CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
@@ -354,6 +367,7 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  output_mr_ = nullptr;
   mr_ = nullptr;
   exec::DriverFactory::adapters.erase(
       std::remove_if(
@@ -385,6 +399,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfMemoryPercent) != config.end()) {
     memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfOutputMr) != config.end()) {
+    outputMemoryResource = config[kCudfOutputMr];
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
