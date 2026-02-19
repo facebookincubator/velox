@@ -202,6 +202,21 @@ const std::unordered_map<std::string, std::string>& binaryOperatorMap() {
   return binaryOperatorMap;
 }
 
+// Returns a list of presto functions that do not use ()
+// Date-time functions affected:
+// https://prestodb.io/docs/current/functions/datetime.html#date-and-time-functions
+const std::unordered_set<std::string> functionsWithoutParenthesisList() {
+  static const std::unordered_set<std::string> functionsWithoutParenthesisList =
+      {
+          "current_date",
+          "current_time",
+          "current_timestamp",
+          "localtime",
+          "localtimestamp",
+      };
+  return functionsWithoutParenthesisList;
+}
+
 std::string toCallSql(const core::CallTypedExprPtr& call) {
   std::stringstream sql;
   // Some functions require special SQL syntax, so handle them first.
@@ -329,6 +344,9 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
       toCallInputsSql({call->inputs()[i]}, sql);
     }
     sql << " end";
+  } else if (functionsWithoutParenthesisList().contains(call->name())) {
+    // Functions that don't use () to represent no arguments.
+    sql << call->name();
   } else {
     // Regular function call syntax.
     sql << call->name() << "(";
