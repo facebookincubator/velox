@@ -16,7 +16,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/CudfQueryConfig.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>

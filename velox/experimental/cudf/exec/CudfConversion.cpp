@@ -14,15 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
-
-// TODO(kn): enable after redesign of CudfFromVelox
-// #include "velox/experimental/cudf/CudfNoDefaults.h"
 
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"

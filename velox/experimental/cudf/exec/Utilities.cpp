@@ -20,132 +20,11 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
-#include <cudf/utilities/default_stream.hpp>
-#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
-#include <cudf/utilities/prefetch.hpp>
 
-#include <rmm/mr/arena_memory_resource.hpp>
-#include <rmm/mr/cuda_async_managed_memory_resource.hpp>
-#include <rmm/mr/cuda_async_memory_resource.hpp>
-#include <rmm/mr/cuda_memory_resource.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
-#include <rmm/mr/managed_memory_resource.hpp>
-#include <rmm/mr/owning_wrapper.hpp>
-#include <rmm/mr/pool_memory_resource.hpp>
-#include <rmm/mr/prefetch_resource_adaptor.hpp>
-
-#include <common/base/Exceptions.h>
-
-#include <cstdlib>
 #include <limits>
-#include <memory>
-#include <string_view>
 
 namespace facebook::velox::cudf_velox {
-
-namespace {
-/// \brief Makes a cuda resource
-[[nodiscard]] auto makeCudaMr() {
-  return std::make_shared<rmm::mr::cuda_memory_resource>();
-}
-
-/// \brief Makes a pool<cuda> resource
-[[nodiscard]] auto makePoolMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      makeCudaMr(), rmm::percent_of_free_device_memory(percent));
-}
-
-/// \brief Makes an async resource
-[[nodiscard]] auto makeAsyncMr() {
-  return std::make_shared<rmm::mr::cuda_async_memory_resource>();
-}
-
-/// \brief Makes a managed resource
-[[nodiscard]] auto makeManagedMr() {
-  return std::make_shared<rmm::mr::managed_memory_resource>();
-}
-
-/// \brief Makes a prefetch<managed> resource
-[[nodiscard]] auto makePrefetchManagedMr() {
-  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
-      makeManagedMr());
-}
-
-/// \brief Makes an arena<cuda> resource
-[[nodiscard]] auto makeArenaMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::arena_memory_resource>(
-      makeCudaMr(), rmm::percent_of_free_device_memory(percent));
-}
-
-/// \brief Makes a pool<managed> resource
-[[nodiscard]] auto makeManagedPoolMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      makeManagedMr(), rmm::percent_of_free_device_memory(percent));
-}
-
-/// \brief Makes a prefetch<pool<managed>> resource
-[[nodiscard]] auto makePrefetchManagedPoolMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
-      makeManagedPoolMr(percent));
-}
-
-/// \brief Makes a managed_async resource (experimental, requires CUDA 13+)
-[[nodiscard]] auto makeManagedAsyncMr() {
-  return std::make_shared<rmm::mr::cuda_async_managed_memory_resource>();
-}
-
-/// \brief Makes a prefetch<managed_async> resource (experimental, requires CUDA
-/// 13+)
-[[nodiscard]] auto makePrefetchManagedAsyncMr() {
-  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
-      makeManagedAsyncMr());
-}
-
-void enablePrefetching() {
-  cudf::prefetch::enable();
-}
-
-} // namespace
-
-std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
-    std::string_view mode,
-    int percent) {
-  if (mode == "cuda")
-    return makeCudaMr();
-  if (mode == "pool")
-    return makePoolMr(percent);
-  if (mode == "async")
-    return makeAsyncMr();
-  if (mode == "arena")
-    return makeArenaMr(percent);
-  if (mode == "managed")
-    return makeManagedMr();
-  if (mode == "managed_pool")
-    return makeManagedPoolMr(percent);
-  if (mode == "managed_async")
-    return makeManagedAsyncMr();
-  if (mode == "prefetch_managed") {
-    enablePrefetching();
-    return makePrefetchManagedMr();
-  }
-  if (mode == "prefetch_managed_pool") {
-    enablePrefetching();
-    return makePrefetchManagedPoolMr(percent);
-  }
-  if (mode == "prefetch_managed_async") {
-    enablePrefetching();
-    return makePrefetchManagedAsyncMr();
-  }
-  VELOX_FAIL(
-      "Unknown memory resource mode: " + std::string(mode) +
-      "\nExpecting: cuda, pool, async, arena, managed, prefetch_managed, " +
-      "managed_pool, prefetch_managed_pool, managed_async, prefetch_managed_async");
-}
-
-cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
-  return cudf::detail::global_cuda_stream_pool();
-};
 
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
@@ -285,13 +164,6 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   }
   stream.synchronize();
   return outputTables;
-}
-
-std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
-
-rmm::device_async_resource_ref get_output_mr() {
-  return output_mr_.get();
 }
 
 CudaEvent::CudaEvent(unsigned int flags) {

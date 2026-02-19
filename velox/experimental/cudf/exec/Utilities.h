@@ -18,38 +18,13 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
-#include <rmm/resource_ref.hpp>
 
 #include <memory>
-#include <string_view>
 
 namespace facebook::velox::cudf_velox {
-
-extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-extern std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
-
-/// Returns the memory resource designated for output vector allocations.
-rmm::device_async_resource_ref get_output_mr();
-
-/**
- * @brief Creates a memory resource based on the given mode.
- *
- * @param mode rmm::mr::pool_memory_resource mode.
- * @param percent The initial percent of GPU memory to allocate for memory
- * resource.
- */
-[[nodiscard]] std::shared_ptr<rmm::mr::device_memory_resource>
-createMemoryResource(std::string_view mode, int percent);
-
-/**
- * @brief Returns the global CUDA stream pool used by cudf.
- */
-[[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
 
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
