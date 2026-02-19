@@ -474,6 +474,42 @@ struct DecimalDivideFunction {
   uint8_t rPrecision_;
 };
 
+// Decimal divide function that returns error on division by zero or overflow.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalDivideFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/,
+      B* /*b*/) {
+    auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
+    auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
+    auto [rPrecision, rScale] =
+        DecimalUtil::computeDivideResultPrecisionScale<allowPrecisionLoss>(
+            aPrecision, aScale, bPrecision, bScale);
+    rPrecision_ = rPrecision;
+    aRescale_ = rScale - aScale + bScale;
+  }
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    bool overflow = false;
+    DecimalUtil::divideWithRoundUp<R, A, B>(out, a, b, aRescale_, overflow);
+    VELOX_USER_RETURN(
+        overflow || !velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_),
+        "Decimal overflow in divide");
+    return Status::OK();
+  }
+
+ private:
+  uint8_t aRescale_;
+  uint8_t rPrecision_;
+};
+
 // Decimal integral divide function implementation.
 struct DecimalIntegralDivideBase {
   void initializeBase(const std::vector<TypePtr>& inputTypes) {
@@ -686,6 +722,14 @@ using DivideFunctionAllowPrecisionLoss = DecimalDivideFunction<TExec, true>;
 template <typename TExec>
 using DivideFunctionDenyPrecisionLoss = DecimalDivideFunction<TExec, false>;
 
+template <typename TExec>
+using CheckedDivideFunctionAllowPrecisionLoss =
+    CheckedDecimalDivideFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedDivideFunctionDenyPrecisionLoss =
+    CheckedDecimalDivideFunction<TExec, false>;
+
 std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
   std::string wholeDigits = fmt::format(
       "min(38, {a_precision} - {a_scale} + {b_scale})",
@@ -813,6 +857,11 @@ void registerDecimalDivide(const std::string& prefix) {
       prefix + "divide", getDivideConstraintsAllowPrecisionLoss());
   registerDecimalDivide<DivideFunctionDenyPrecisionLoss>(
       prefix + "divide" + kDenyPrecisionLoss,
+      getDivideConstraintsDenyPrecisionLoss());
+  registerDecimalDivide<CheckedDivideFunctionAllowPrecisionLoss>(
+      prefix + "checked_divide", getDivideConstraintsAllowPrecisionLoss());
+  registerDecimalDivide<CheckedDivideFunctionDenyPrecisionLoss>(
+      prefix + "checked_divide" + kDenyPrecisionLoss,
       getDivideConstraintsDenyPrecisionLoss());
 }
 
