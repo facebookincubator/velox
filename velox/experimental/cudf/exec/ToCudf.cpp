@@ -287,13 +287,6 @@ bool CompileState::compile(bool allowCpuFallback) {
   return replacementsMade;
 }
 
-std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
-
-rmm::device_async_resource_ref get_output_mr() {
-  return output_mr_.get();
-}
-
 struct CudfDriverAdapter {
   CudfDriverAdapter(bool allowCpuFallback)
       : allowCpuFallback_{allowCpuFallback} {}

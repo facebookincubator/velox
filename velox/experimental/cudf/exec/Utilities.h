@@ -23,11 +23,18 @@
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/mr/device_memory_resource.hpp>
+#include <rmm/resource_ref.hpp>
 
 #include <memory>
 #include <string_view>
 
 namespace facebook::velox::cudf_velox {
+
+extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+extern std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
+
+/// Returns the memory resource designated for output vector allocations.
+rmm::device_async_resource_ref get_output_mr();
 
 /**
  * @brief Creates a memory resource based on the given mode.

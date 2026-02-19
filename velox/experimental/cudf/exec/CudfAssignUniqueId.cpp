@@ -15,7 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/lists/filling.hpp>
 

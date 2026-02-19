@@ -287,6 +287,13 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   return outputTables;
 }
 
+std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
+
+rmm::device_async_resource_ref get_output_mr() {
+  return output_mr_.get();
+}
+
 CudaEvent::CudaEvent(unsigned int flags) {
   cudaEvent_t ev{};
   cudaEventCreateWithFlags(&ev, flags);
