@@ -68,6 +68,10 @@ class HiveIndexSource : public IndexSource,
     return pool_;
   }
 
+  uint32_t maxRowsPerIndexRequest() const {
+    return maxRowsPerIndexRequest_;
+  }
+
   const RowTypePtr& outputType() const {
     return outputType_;
   }
@@ -99,8 +103,7 @@ class HiveIndexSource : public IndexSource,
   // Validates and initializes join conditions:
   // - Converts filter conditions (with constant values) to filters_.
   // - Non-filter conditions are stored in joinConditions_.
-  // Returns a list of index column names used by joinConditions_.
-  std::vector<std::string> initJoinConditions(
+  void initJoinConditions(
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const ColumnHandleMap& assignments);
 
@@ -122,6 +125,7 @@ class HiveIndexSource : public IndexSource,
   const std::shared_ptr<HiveConfig> hiveConfig_;
   memory::MemoryPool* const pool_;
   core::ExpressionEvaluator* const expressionEvaluator_;
+  const uint32_t maxRowsPerIndexRequest_;
 
   const HiveTableHandlePtr tableHandle_;
   const RowTypePtr requestType_;

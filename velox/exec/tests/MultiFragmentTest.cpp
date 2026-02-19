@@ -3208,29 +3208,32 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
     if (testData.scaleEnabled) {
       ASSERT_EQ(
           planStats.at(scanNodeId)
-              .customStats.count(TableScan::kNumRunningScaleThreads),
+              .customStats.count(
+                  std::string(TableScan::kNumRunningScaleThreads)),
           1);
       if (testData.expectScaleUp) {
         ASSERT_GE(
             planStats.at(scanNodeId)
-                .customStats[TableScan::kNumRunningScaleThreads]
+                .customStats[std::string(TableScan::kNumRunningScaleThreads)]
                 .sum,
             1);
         ASSERT_LE(
             planStats.at(scanNodeId)
-                .customStats[TableScan::kNumRunningScaleThreads]
+                .customStats[std::string(TableScan::kNumRunningScaleThreads)]
                 .sum,
             numLeafDrivers);
       } else {
         ASSERT_EQ(
             planStats.at(scanNodeId)
-                .customStats.count(TableScan::kNumRunningScaleThreads),
+                .customStats.count(
+                    std::string(TableScan::kNumRunningScaleThreads)),
             1);
       }
     } else {
       ASSERT_EQ(
           planStats.at(scanNodeId)
-              .customStats.count(TableScan::kNumRunningScaleThreads),
+              .customStats.count(
+                  std::string(TableScan::kNumRunningScaleThreads)),
           0);
     }
   }
