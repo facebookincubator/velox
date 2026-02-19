@@ -1386,46 +1386,53 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
   }
   VELOX_CHECK(table_->rows(), "Should not move rows in hash joins");
   char* data[kBatchSize];
-  while (auto numRows = iterator(data, kBatchSize)) {
-    filterTableInput_->resize(numRows);
-    filterTableInputRows_.resizeFill(numRows, true);
+
+  while (auto numBuildRows = iterator(data, kBatchSize)) {
+    // Extract build-side columns once per build batch.
+    filterTableInput_->resize(numBuildRows);
+    filterTableInputRows_.resizeFill(numBuildRows, true);
     for (auto& projection : filterTableProjections_) {
       table_->extractColumn(
-          folly::Range<char* const*>(data, numRows),
+          folly::Range<char* const*>(data, numBuildRows),
           projection.inputChannel,
           filterTableInput_->childAt(projection.outputChannel));
     }
     rows.applyToSelected([&](vector_size_t row) {
+      if (filterPassedRows.isValid(row)) {
+        return;
+      }
       for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
             BaseVector::wrapInConstant(
-                numRows, row, input_->childAt(projection.inputChannel));
+                numBuildRows, row, input_->childAt(projection.inputChannel));
       }
       EvalCtx evalCtx(
           operatorCtx_->execCtx(), filter_.get(), filterTableInput_.get());
       filter_->eval(filterTableInputRows_, evalCtx, filterTableResult_);
+      
+      bool passed = false;
       if (auto* values = getFlatFilterResult(filterTableResult_[0])) {
-        if (!bits::testSetBits(
-                values, 0, numRows, [](vector_size_t) { return false; })) {
-          filterPassedRows.setValid(row, true);
-        }
+        passed = !bits::testSetBits(
+            values, 0, numBuildRows, [](vector_size_t) { return false; });
       } else {
         decodedFilterTableResult_.decode(
             *filterTableResult_[0], filterTableInputRows_);
         if (decodedFilterTableResult_.isConstantMapping()) {
-          if (!decodedFilterTableResult_.isNullAt(0) &&
-              decodedFilterTableResult_.valueAt<bool>(0)) {
-            filterPassedRows.setValid(row, true);
-          }
+          passed = !decodedFilterTableResult_.isNullAt(0) &&
+              decodedFilterTableResult_.valueAt<bool>(0);
         } else {
-          for (vector_size_t i = 0; i < numRows; ++i) {
+          for (vector_size_t i = 0; i < numBuildRows; ++i) {
             if (!decodedFilterTableResult_.isNullAt(i) &&
                 decodedFilterTableResult_.valueAt<bool>(i)) {
-              filterPassedRows.setValid(row, true);
+              passed = true;
               break;
             }
           }
         }
+      }
+      
+      if (passed) {
+        filterPassedRows.setValid(row, true);
       }
     });
   }
