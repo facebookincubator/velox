@@ -397,6 +397,23 @@ the maps. All null values in the original maps are coalesced to 0.</p>
 </dd></dl>
 
 </section>
+<section id="array-aggregate-functions">
+<h2>Array Aggregate Functions<a class="headerlink" href="#array-aggregate-functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="array_union_sum">
+<span class="sig-name descname"><span class="pre">array_union_sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_union_sum" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the element-wise sum of all input arrays.
+Arrays of different lengths are extended to the longest with zeros.
+Null elements are treated as 0. Supported types for T are:
+TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+Overflow is checked for integer types.</p>
+<p>A variadic form <code class="docutils literal notranslate"><span class="pre">array_union_sum(c1,</span> <span class="pre">c2,</span> <span class="pre">...,</span> <span class="pre">cN)</span></code> is also supported,
+where each argument is a scalar at a fixed array position. This avoids
+per-row array construction overhead when the number of positions is known
+at query time.</p>
+</dd></dl>
+
+</section>
 <section id="approximate-aggregate-functions">
 <h2>Approximate Aggregate Functions<a class="headerlink" href="#approximate-aggregate-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
@@ -1207,6 +1224,10 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#map_agg"><code class="docutils literal notranslate"><span class="pre">map_agg()</span></code></a></li>
 <li><a class="reference internal" href="#map_union"><code class="docutils literal notranslate"><span class="pre">map_union()</span></code></a></li>
 <li><a class="reference internal" href="#map_union_sum"><code class="docutils literal notranslate"><span class="pre">map_union_sum()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#array-aggregate-functions">Array Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#array_union_sum"><code class="docutils literal notranslate"><span class="pre">array_union_sum()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#approximate-aggregate-functions">Approximate Aggregate Functions</a><ul>
