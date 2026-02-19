@@ -24,15 +24,16 @@
 #include <glog/logging.h>
 #include <immintrin.h>
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 #include "folly/chrono/Hardware.h"
+#include "velox/common/base/SuccinctPrinter.h"
 
 namespace facebook::velox {
 
@@ -40,14 +41,7 @@ namespace facebook::velox {
 // thread context only to do micro-benchmarks.
 class HardwareTimer {
  public:
-  struct Entry {
-    uint64_t iter_count;
-    double total_ns;
-    double avg_ns;
-  };
-
-  explicit HardwareTimer(const char* context_name)
-      : context_name_(context_name) {}
+  explicit HardwareTimer(const char* contextName) : contextName_(contextName) {}
 
   HardwareTimer(const HardwareTimer&) = delete;
   HardwareTimer& operator=(const HardwareTimer&) = delete;
@@ -55,25 +49,35 @@ class HardwareTimer {
   HardwareTimer& operator=(HardwareTimer&&) = delete;
 
   void start() {
-    start_cycles_ = folly::hardware_timestamp();
+    startCycles_ = folly::hardware_timestamp();
   }
 
   void end() {
-    const uint64_t end_cycles = folly::hardware_timestamp();
-    total_cycles_ += end_cycles - start_cycles_;
-    ++iter_count_;
+    const uint64_t endCycles = folly::hardware_timestamp();
+    totalCycles_ += endCycles - startCycles_;
+    ++iterCount_;
   }
 
   ~HardwareTimer() {
-    if (iter_count_ == 0) {
+    if (iterCount_ == 0) {
       return;
     }
-    const double total_ns =
-        static_cast<double>(total_cycles_) / estimate_tsc_freq_ghz();
-    const double avg_ns = total_ns / static_cast<double>(iter_count_);
+    const double totalNs =
+        static_cast<double>(totalCycles_) / estimateTscFreqGhz();
+    const double avgNs = totalNs / static_cast<double>(iterCount_);
     std::ostringstream keyStream;
-    keyStream << context_name_ << " [tid:" << std::this_thread::get_id() << "]";
-    entries()[keyStream.str()] = {iter_count_, total_ns, avg_ns};
+    keyStream << contextName_ << " [tid:" << std::this_thread::get_id() << "]";
+    entries()[keyStream.str()] = {iterCount_, totalNs, avgNs};
+  }
+
+  static void init(const std::string& name = "") {
+    auto& map = entries();
+    if (!map.empty()) {
+      throw std::runtime_error(
+          "HardwareTimer::init() called but entries map is not empty. "
+          "Call cleanup() before re-initializing.");
+    }
+    globalContextName() = name;
   }
 
   static void cleanup() {
@@ -81,16 +85,20 @@ class HardwareTimer {
     if (map.empty()) {
       return;
     }
-    printTable(map);
+    printTable(map, globalContextName());
     map.clear();
+    globalContextName().clear();
   }
 
  private:
-  const char* context_name_{};
-
-  uint64_t total_cycles_{};
-  uint64_t start_cycles_{};
-  uint64_t iter_count_{};
+  struct Entry {
+    // The number of iterations the instrumented section of the code is invoked.
+    uint64_t iterCount;
+    // The total execution time the instrumented section of the code is invoked.
+    double totalNs;
+    // The avg execution time the instrumented section of the code is invoked.
+    double avgNs;
+  };
 
   using EntriesMap = std::map<std::string, Entry>;
 
@@ -99,7 +107,12 @@ class HardwareTimer {
     return map;
   }
 
-  static double estimate_tsc_freq_ghz(
+  static std::string& globalContextName() {
+    static std::string name;
+    return name;
+  }
+
+  double estimateTscFreqGhz(
       std::chrono::milliseconds window = std::chrono::milliseconds(100)) {
     static const double cached = [&]() {
       using clock = std::chrono::steady_clock;
@@ -123,7 +136,7 @@ class HardwareTimer {
     return cached;
   }
 
-  static void printTable(const EntriesMap& map) {
+  static void printTable(const EntriesMap& map, const std::string& title) {
     int nameWidth = static_cast<int>(std::string("Context").size());
     int runsWidth = static_cast<int>(std::string("Runs").size());
     int totalWidth = static_cast<int>(std::string("Total").size());
@@ -141,9 +154,9 @@ class HardwareTimer {
     for (const auto& [name, entry] : map) {
       Row row;
       row.name = name;
-      row.runs = std::to_string(entry.iter_count);
-      row.total = formatAutoUnit(entry.total_ns);
-      row.avg = formatAutoUnit(entry.avg_ns);
+      row.runs = std::to_string(entry.iterCount);
+      row.total = succinctNanos(static_cast<uint64_t>(entry.totalNs));
+      row.avg = succinctNanos(static_cast<uint64_t>(entry.avgNs));
       nameWidth = std::max(nameWidth, static_cast<int>(row.name.size()));
       runsWidth = std::max(runsWidth, static_cast<int>(row.runs.size()));
       totalWidth = std::max(totalWidth, static_cast<int>(row.total.size()));
@@ -162,6 +175,14 @@ class HardwareTimer {
 
     std::ostringstream oss;
     oss << "\n\033[1;34m" << sep << "\033[0m\n";
+    if (!title.empty()) {
+      oss << "\033[1;34m| \033[0m"
+          << "\033[1;37m" << std::left
+          << std::setw(nameWidth + runsWidth + totalWidth + avgWidth + 4)
+          << title << "\033[0m"
+          << "\033[1;34m|\033[0m\n";
+      oss << "\033[1;34m" << sep << "\033[0m\n";
+    }
     oss << "\033[1;34m| \033[0m"
         << "\033[1;33m" << std::left << std::setw(nameWidth) << "Context"
         << "\033[0m"
@@ -190,39 +211,14 @@ class HardwareTimer {
           << "\033[1;34m|\033[0m\n";
     }
 
-    oss << "\033[1;34m" << sep << "\033[0m";
-    LOG(INFO) << oss.str();
+    oss << "\033[1;34m" << sep << "\033[0m\n";
+    std::cerr << "\nBreakdown:\n" << oss.str();
   }
 
-  static std::string formatAutoUnit(double valueInNanoseconds) {
-    static constexpr struct {
-      double threshold_ns;
-      const char* label;
-      double divisor;
-    } kUnits[] = {
-        {1e3, " ns", 1.0},
-        {1e6, " us", 1e3},
-        {1e9, " ms", 1e6},
-        {60.0 * 1e9, " s", 1e9},
-        {std::numeric_limits<double>::infinity(), " min", 60.0 * 1e9}};
-
-    double v = valueInNanoseconds;
-    const char* label = " ns";
-    const double abs_v = std::fabs(v);
-    for (const auto& u : kUnits) {
-      label = u.label;
-      if (abs_v < u.threshold_ns) {
-        v /= u.divisor;
-        break;
-      }
-    }
-
-    std::ostringstream oss;
-    oss.setf(std::ios::fixed);
-    oss.precision(5);
-    oss << v << label;
-    return oss.str();
-  }
+  const char* contextName_{};
+  uint64_t totalCycles_{};
+  uint64_t startCycles_{};
+  uint64_t iterCount_{};
 };
 
 } // namespace facebook::velox
