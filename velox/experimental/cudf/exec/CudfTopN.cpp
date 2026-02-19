@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/CudfQueryConfig.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/copy.hpp>
@@ -118,7 +120,7 @@ CudfVectorPtr CudfTopN::getTopKBatch(CudfVectorPtr cudfInput, int32_t k) {
     return nullptr;
   }
   auto stream = cudfInput->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = cudf_velox::get_output_mr();
   auto values = cudfInput->getTableView();
   auto result = getTopK(values, k, stream, mr);
   auto const size = result->num_rows();
@@ -148,7 +150,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
       });
   if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
-    auto mr = cudf::get_current_device_resource_ref();
+    auto mr = cudf_velox::get_output_mr();
 
     auto result = mergeTopK(topNBatches_, count_, stream, mr);
     topNBatches_.clear();
@@ -167,7 +169,7 @@ RowVectorPtr CudfTopN::getOutput() {
   }
 
   auto stream = topNBatches_[0]->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = cudf_velox::get_output_mr();
   auto result = mergeTopK(topNBatches_, count_, stream, mr);
   topNBatches_.clear();
   finished_ = noMoreInput_ && topNBatches_.empty();
