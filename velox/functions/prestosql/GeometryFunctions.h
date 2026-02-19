@@ -18,6 +18,7 @@
 
 #include <geos/geom/Coordinate.h>
 #include <geos/geom/CoordinateArraySequence.h>
+#include <geos/geom/CoordinateSequenceFactory.h>
 #include <geos/geom/Envelope.h>
 #include <geos/io/GeoJSON.h>
 #include <geos/io/GeoJSONReader.h>
@@ -230,11 +231,18 @@ struct StContainsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->contains(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->contains(&*rightGeosGeometry);
         , "Failed to check geometry contains");
@@ -251,11 +259,18 @@ struct StCrossesFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->crosses(&*rightGeosGeometry);
         , "Failed to check geometry crosses");
@@ -272,11 +287,18 @@ struct StDisjointFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = true;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->disjoint(&*rightGeosGeometry);
         , "Failed to check geometry disjoint");
@@ -293,11 +315,22 @@ struct StEqualsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        // Technically two empty geometries are not equal, but GEOS treats them
+        // as equal, so we default to GEOS in that case.
+        !(leftGeosGeometry->getEnvelopeInternal()->isNull() &&
+          rightGeosGeometry->getEnvelopeInternal()->isNull()) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->equals(&*rightGeosGeometry);
         , "Failed to check geometry equals");
@@ -314,11 +347,18 @@ struct StIntersectsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->intersects(&*rightGeosGeometry);
         , "Failed to check geometry intersects");
@@ -335,11 +375,18 @@ struct StOverlapsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->overlaps(&*rightGeosGeometry);
         , "Failed to check geometry overlaps");
@@ -356,11 +403,18 @@ struct StTouchesFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->touches(&*rightGeosGeometry);
         , "Failed to check geometry touches");
@@ -377,11 +431,18 @@ struct StWithinFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !rightGeosGeometry->getEnvelopeInternal()->contains(
+            leftGeosGeometry->getEnvelopeInternal())) {
+      result = false;
+      return Status::OK();
+    }
+
     GEOS_TRY(
         result = leftGeosGeometry->within(&*rightGeosGeometry);
         , "Failed to check geometry within");
@@ -400,12 +461,17 @@ struct StDifferenceFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
-    // if envelopes are disjoint
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      result = leftGeometry;
+      return Status::OK();
+    }
 
     std::unique_ptr<geos::geom::Geometry> outputGeometry;
     GEOS_TRY(
@@ -439,18 +505,28 @@ struct StBoundaryFunction {
 
 template <typename T>
 struct StIntersectionFunction {
+  StIntersectionFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
+
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE Status call(
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
-    // if envelopes are disjoint
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(rightGeometry);
+    if (!geospatial::hasGeometryCollection(
+            *leftGeosGeometry, *rightGeosGeometry) &&
+        !leftGeosGeometry->getEnvelopeInternal()->intersects(
+            rightGeosGeometry->getEnvelopeInternal())) {
+      auto emptyGeometry = factory_->createEmptyGeometry();
+      common::geospatial::GeometrySerializer::serialize(*emptyGeometry, result);
+      return Status::OK();
+    }
 
     std::unique_ptr<geos::geom::Geometry> outputGeometry;
     GEOS_TRY(
@@ -460,6 +536,9 @@ struct StIntersectionFunction {
     common::geospatial::GeometrySerializer::serialize(*outputGeometry, result);
     return Status::OK();
   }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
 };
 
 template <typename T>
@@ -470,8 +549,6 @@ struct StSymDifferenceFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
-    // if envelopes are disjoint
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -495,8 +572,6 @@ struct StUnionFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit if
-    // one/both are empty
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -1177,12 +1252,40 @@ struct StNumInteriorRingFunction {
 
 template <typename T>
 struct StConvexHullFunction {
+  StConvexHullFunction() {
+    factory_ = geos::geom::GeometryFactory::create();
+  }
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE Status
   call(out_type<Geometry>& result, const arg_type<Geometry>& geometry) {
     std::unique_ptr<geos::geom::Geometry> geosGeometry =
         common::geospatial::GeometryDeserializer::deserialize(geometry);
+
+    if (!geospatial::isGeometryCollection(*geosGeometry)) {
+      auto* env = geosGeometry->getEnvelopeInternal();
+      auto minX = env->getMinX();
+      auto minY = env->getMinY();
+      auto maxX = env->getMaxX();
+      auto maxY = env->getMaxY();
+
+      if ((minX == maxX) && (minY == maxY)) {
+        // Envelope is a point, so that's the minimum convex hull
+        auto res = std::unique_ptr<geos::geom::Point>(
+            factory_->createPoint(geos::geom::Coordinate(minX, minY)));
+        common::geospatial::GeometrySerializer::serialize(*res, result);
+      }
+
+      if ((minX == maxX) || (minY == maxY)) {
+        // Envelope is a line, so that's the minimum convex hull
+        auto coords = factory_->getCoordinateSequenceFactory()->create(
+            {geos::geom::Coordinate(minX, minY),
+             geos::geom::Coordinate(maxX, maxY)});
+
+        common::geospatial::GeometrySerializer::serialize(
+            *(factory_->createLineString(std::move(coords))), result);
+      }
+    }
 
     if (geosGeometry->isEmpty() ||
         geosGeometry->getGeometryTypeId() ==
@@ -1194,7 +1297,11 @@ struct StConvexHullFunction {
     }
     return Status::OK();
   }
+
+ private:
+  geos::geom::GeometryFactory::Ptr factory_;
 };
+
 class StCoordDimFunction : public facebook::velox::exec::VectorFunction {
  public:
   void apply(
