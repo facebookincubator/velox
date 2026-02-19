@@ -2502,11 +2502,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
   ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 1);
   const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
   const auto& totalPauseTime =
-      driverStats.runtimeStats.at(DriverStats::kTotalPauseTime);
+      driverStats.runtimeStats.at(std::string(DriverStats::kTotalPauseTime));
   ASSERT_EQ(totalPauseTime.count, 1);
   ASSERT_GE(totalPauseTime.sum, 0);
-  const auto& totalOffThreadTime =
-      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  const auto& totalOffThreadTime = driverStats.runtimeStats.at(
+      std::string(DriverStats::kTotalOffThreadTime));
   ASSERT_EQ(totalOffThreadTime.count, 1);
   ASSERT_GE(totalOffThreadTime.sum, 0);
 
@@ -2543,9 +2543,11 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   ASSERT_EQ(taskStats.pipelineStats.size(), 1);
   ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 4);
   const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
-  ASSERT_EQ(driverStats.runtimeStats.count(DriverStats::kTotalPauseTime), 0);
-  const auto& totalOffThreadTime =
-      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  ASSERT_EQ(
+      driverStats.runtimeStats.count(std::string(DriverStats::kTotalPauseTime)),
+      0);
+  const auto& totalOffThreadTime = driverStats.runtimeStats.at(
+      std::string(DriverStats::kTotalOffThreadTime));
   ASSERT_EQ(totalOffThreadTime.count, 1);
   ASSERT_GE(totalOffThreadTime.sum, 0);
 }

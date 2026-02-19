@@ -76,6 +76,10 @@ Expected<int32_t> parseFractionalSeconds(
   pos += digitCount;
 
   if (digitCount > static_cast<size_t>(fractionalPrecision)) {
+    if (fractionalPrecision == 3) {
+      return folly::makeUnexpected(
+          Status::UserError("Microsecond precision not supported"));
+    }
     return folly::makeUnexpected(
         Status::UserError(
             "Invalid time format: precision {} not supported",

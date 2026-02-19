@@ -18,6 +18,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -118,9 +119,9 @@ HashProbe::HashProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "HashProbe",
+          OperatorType::kHashProbe,
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "HashProbe")
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
@@ -398,7 +399,8 @@ void HashProbe::pushdownDynamicFilters() {
               checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
                   filter.get());
           addRuntimeStat(
-              "bloomFilterSize", RuntimeCounter(bloomFilter->blocksByteSize()));
+              std::string(HashProbe::kBloomFilterSize),
+              RuntimeCounter(bloomFilter->blocksByteSize()));
         }
         dynamicFiltersProducedOnChannels_.insert(sourceChannel);
         for (auto* peer : findPeerOperators()) {
@@ -1121,7 +1123,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   const auto inputSize = input_->size();
 
   if (replacedWithDynamicFilter_) {
-    addRuntimeStat("replacedWithDynamicFilterRows", RuntimeCounter(inputSize));
+    addRuntimeStat(
+        std::string(HashProbe::kReplacedWithDynamicFilterRows),
+        RuntimeCounter(inputSize));
     auto output = Operator::fillOutput(inputSize, nullptr);
     input_ = nullptr;
     return output;
