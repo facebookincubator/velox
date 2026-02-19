@@ -142,7 +142,8 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
       : rowGroup.columnChunk(0).hasDictionaryPageOffset()
       ? rowGroup.columnChunk(0).dictionaryPageOffset()
       : rowGroup.columnChunk(0).dataPageOffset();
-  VELOX_CHECK_GT(fileOffset, 0);
+  // In case the file_offset is 0 relative to the end of PAR1
+  VELOX_CHECK_GE(fileOffset, 0);
 
   auto length = rowGroup.hasTotalCompressedSize()
       ? rowGroup.totalCompressedSize()

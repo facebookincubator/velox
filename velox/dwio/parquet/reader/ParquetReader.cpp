@@ -1249,7 +1249,8 @@ class ParquetRowReader::Impl {
           : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
           ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
           : rowGroups_[i].columns[0].meta_data.data_page_offset;
-      VELOX_CHECK_GT(fileOffset, 0);
+      // In case the file_offset is 0 relative to the end of PAR1
+      VELOX_CHECK_GE(fileOffset, 0);
       auto rowGroupInRange =
           (fileOffset >= options_.offset() && fileOffset < options_.limit());
 
