@@ -229,8 +229,12 @@ void CudfHashJoinBuild::noMoreInput() {
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
+  // Using output_mr here to allow spilling queued up large tables
   auto tbls = getConcatenatedTableBatched(
-      inputs_, joinNode_->sources()[1]->outputType(), stream);
+      inputs_,
+      joinNode_->sources()[1]->outputType(),
+      stream,
+      cudf_velox::get_output_mr());
 
   // Release input data after synchronizing
   stream.synchronize();
@@ -564,8 +568,12 @@ void CudfHashJoinProbe::noMoreInput() {
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
+  // Using output_mr here to allow spilling queued up large tables
   auto tbl = getConcatenatedTable(
-      inputs_, joinNode_->sources()[1]->outputType(), stream);
+      inputs_,
+      joinNode_->sources()[1]->outputType(),
+      stream,
+      cudf_velox::get_output_mr());
 
   // Release input data after synchronizing
   stream.synchronize();
@@ -1425,7 +1433,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       // lot of matches we'll get outCols of similar size. This concatenation
       // will overflow. Try emitting result of one right chunk at a time.
       if (!toConcat.empty()) {
-        auto out = concatenateTables(std::move(toConcat), stream);
+        auto out = concatenateTables(
+            std::move(toConcat), stream, cudf_velox::get_output_mr());
         finished_ = true;
         auto size = out->num_rows();
         if (out->num_columns() == 0 || size == 0) {
@@ -1502,7 +1511,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   finished_ =
       noMoreInput_ && !joinNode_->isRightJoin() && !joinNode_->isFullJoin();
 
-  auto cudfOutput = concatenateTables(std::move(cudfOutputs), stream);
+  auto cudfOutput = concatenateTables(
+      std::move(cudfOutputs), stream, cudf_velox::get_output_mr());
   auto const size = cudfOutput->num_rows();
   if (cudfOutput->num_columns() == 0 or size == 0) {
     return nullptr;

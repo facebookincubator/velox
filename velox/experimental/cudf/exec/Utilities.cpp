@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -28,7 +29,8 @@ namespace facebook::velox::cudf_velox {
 
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   // Check for empty vector
   VELOX_CHECK_GT(tables.size(), 0);
 
@@ -42,8 +44,7 @@ std::unique_ptr<cudf::table> concatenateTables(
       tables.end(),
       std::back_inserter(tableViews),
       [&](const auto& tbl) { return tbl->view(); });
-  return cudf::concatenate(
-      tableViews, stream, cudf::get_current_device_resource_ref());
+  return cudf::concatenate(tableViews, stream, mr);
 }
 
 std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
@@ -72,7 +73,8 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   // Check for empty vector
   if (tables.size() == 0) {
     return makeEmptyTable(tableType);
@@ -96,8 +98,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
     return tables[0]->release();
   }
 
-  auto output = cudf::concatenate(
-      tableViews, stream, cudf::get_current_device_resource_ref());
+  auto output = cudf::concatenate(tableViews, stream, mr);
   stream.synchronize();
   return output;
 }
@@ -105,7 +106,8 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::table>> concatTables;
   // Check for empty vector
   if (tables.size() == 0) {
@@ -147,7 +149,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
               std::vector<cudf::table_view>(
                   tableViews.begin() + startpos, tableViews.begin() + i),
               stream,
-              cudf::get_current_device_resource_ref()));
+              mr));
       startpos = i;
       runningRows = 0;
     }
@@ -160,7 +162,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             std::vector<cudf::table_view>(
                 tableViews.begin() + startpos, tableViews.end()),
             stream,
-            cudf::get_current_device_resource_ref()));
+            mr));
   }
   stream.synchronize();
   return outputTables;

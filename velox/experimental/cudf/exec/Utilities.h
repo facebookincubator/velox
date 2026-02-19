@@ -29,7 +29,8 @@ namespace facebook::velox::cudf_velox {
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 // Concatenate a vector of cuDF tables into a single table.
 // This function joins the streams owned by individual tables on the passed
@@ -37,7 +38,8 @@ namespace facebook::velox::cudf_velox {
 [[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 /**
  * @brief Concatenates multiple CUDF tables with automatic batching based on
@@ -68,7 +70,8 @@ namespace facebook::velox::cudf_velox {
 getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 /**
  * @brief Wrapper for CUDA events used for stream synchronization.
