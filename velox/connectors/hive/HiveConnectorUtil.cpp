@@ -684,6 +684,8 @@ void configureRowReaderOptions(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
+    rowReaderOptions.setIndexEnabled(
+        hiveConfig->indexEnabled(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
