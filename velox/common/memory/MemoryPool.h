@@ -1110,27 +1110,29 @@ template <typename T>
 class StlAllocator {
  public:
   typedef T value_type;
-  MemoryPool& pool;
+  MemoryPool* pool;
 
-  /* implicit */ StlAllocator(MemoryPool& pool) : pool{pool} {}
+  /* implicit */ StlAllocator(MemoryPool& pool) : pool{&pool} {}
 
-  explicit StlAllocator(MemoryPool* pool) : pool{*pool} {}
+  explicit StlAllocator(MemoryPool* pool) : pool{pool} {
+    VELOX_CHECK_NOT_NULL(pool);
+  }
 
   template <typename U>
   /* implicit */ StlAllocator(const StlAllocator<U>& a) : pool{a.pool} {}
 
   T* allocate(size_t n) {
-    return static_cast<T*>(pool.allocate(checkedMultiply(n, sizeof(T))));
+    return static_cast<T*>(pool->allocate(checkedMultiply(n, sizeof(T))));
   }
 
   void deallocate(T* p, size_t n) {
-    pool.free(p, checkedMultiply(n, sizeof(T)));
+    pool->free(p, checkedMultiply(n, sizeof(T)));
   }
 
   template <typename T1>
   bool operator==(const StlAllocator<T1>& rhs) const {
     if constexpr (std::is_same_v<T, T1>) {
-      return &this->pool == &rhs.pool;
+      return this->pool == rhs.pool;
     }
     return false;
   }
