@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/sorting.hpp>
@@ -87,8 +89,13 @@ void CudfOrderBy::noMoreInput() {
 
   auto keys = tbl->view().select(sortKeys_);
   auto values = tbl->view();
-  auto result =
-      cudf::sort_by_key(values, keys, columnOrder_, nullOrder_, stream);
+  auto result = cudf::sort_by_key(
+      values,
+      keys,
+      columnOrder_,
+      nullOrder_,
+      stream,
+      cudf_velox::get_output_mr());
   auto const size = result->num_rows();
   outputTable_ = std::make_shared<CudfVector>(
       pool(), outputType_, size, std::move(result), stream);

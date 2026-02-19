@@ -21,6 +21,9 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+// TODO(kn): enable after redesign of CudfFromVelox
+// #include "velox/experimental/cudf/CudfNoDefaults.h"
+
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
@@ -252,16 +255,18 @@ RowVectorPtr CudfToVelox::getOutput() {
       auto cudfTableView = input->getTableView();
       auto partitions = std::vector<cudf::size_type>{
           static_cast<cudf::size_type>(targetBatchSize - totalSize)};
-      auto tableSplits = cudf::split(cudfTableView, partitions);
+      auto tableSplits = cudf::split(cudfTableView, partitions, stream);
 
       // Create new CudfVector from the first part
-      auto firstPart = std::make_unique<cudf::table>(tableSplits[0], stream);
+      auto firstPart = std::make_unique<cudf::table>(
+          tableSplits[0], stream, cudf_velox::get_temp_mr());
       auto firstPartSize = firstPart->num_rows();
       auto firstPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), firstPartSize, std::move(firstPart), stream);
 
       // Create new CudfVector from the second part
-      auto secondPart = std::make_unique<cudf::table>(tableSplits[1], stream);
+      auto secondPart = std::make_unique<cudf::table>(
+          tableSplits[1], stream, cudf_velox::get_temp_mr());
       auto secondPartSize = secondPart->num_rows();
       auto secondPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), secondPartSize, std::move(secondPart), stream);

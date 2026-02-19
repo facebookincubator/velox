@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -279,7 +280,7 @@ void CudfFilterProject::filter(
     inputViews.push_back(col->view());
   }
   auto filterColumn = filterEvaluator_->eval(
-      inputViews, stream, cudf::get_current_device_resource_ref(), true);
+      inputViews, stream, cudf_velox::get_temp_mr(), true);
   auto filterColumnView = asView(filterColumn);
   bool shouldApplyFilter = [&]() {
     if (filterColumnView.has_nulls()) {
@@ -291,7 +292,7 @@ void CudfFilterProject::filter(
         *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
         cudf::data_type(cudf::type_id::BOOL8),
         stream,
-        cudf::get_current_device_resource_ref());
+        cudf_velox::get_temp_mr());
     using ScalarType = cudf::scalar_type_t<bool>;
     auto result = static_cast<ScalarType*>(isAllTrue.get());
     // If filter is not all true, apply the filter
@@ -300,8 +301,8 @@ void CudfFilterProject::filter(
   if (shouldApplyFilter) {
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
-    auto filteredTable =
-        cudf::apply_boolean_mask(*filterTable, filterColumnView, stream);
+    auto filteredTable = cudf::apply_boolean_mask(
+        *filterTable, filterColumnView, stream, cudf_velox::get_output_mr());
     inputTableColumns = filteredTable->release();
   }
 }
@@ -317,7 +318,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
   std::vector<ColumnOrView> columns;
   for (auto& projectEvaluator : projectEvaluators_) {
     columns.push_back(projectEvaluator->eval(
-        inputViews, stream, cudf::get_current_device_resource_ref(), true));
+        inputViews, stream, cudf_velox::get_output_mr(), true));
   }
 
   // Rearrange columns to match outputType_
@@ -334,7 +335,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
       auto view = std::get<cudf::column_view>(columnOrView);
       outputColumns[resultProjections_[i].outputChannel] =
           std::make_unique<cudf::column>(
-              view, stream, cudf::get_current_device_resource_ref());
+              view, stream, cudf_velox::get_output_mr());
     }
   }
 
@@ -357,7 +358,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
       outputColumns[identity.outputChannel] = std::make_unique<cudf::column>(
           *inputTableColumns[identity.inputChannel],
           stream,
-          cudf::get_current_device_resource_ref());
+          cudf_velox::get_output_mr());
     }
     VELOX_CHECK_GT(inputChannelCount[identity.inputChannel], 0);
     inputChannelCount[identity.inputChannel]--;
