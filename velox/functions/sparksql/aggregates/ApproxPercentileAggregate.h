@@ -17,13 +17,16 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
-namespace facebook::velox::aggregate::prestosql {
+namespace facebook::velox::exec {
+struct AggregateRegistrationResult;
+}
 
-void registerApproxPercentileAggregate(
-    const std::vector<std::string>& names,
+namespace facebook::velox::functions::aggregate::sparksql {
+
+exec::AggregateRegistrationResult registerApproxPercentileAggregate(
+    const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
 
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::functions::aggregate::sparksql
