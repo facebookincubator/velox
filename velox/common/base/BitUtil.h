@@ -753,7 +753,7 @@ inline uint64_t nextPowerOfTwo(uint64_t size) {
   return 2 * lower;
 }
 
-inline bool isPowerOfTwo(uint64_t size) {
+constexpr bool isPowerOfTwo(uint64_t size) {
   return (size & (size - 1)) == 0;
 }
 
