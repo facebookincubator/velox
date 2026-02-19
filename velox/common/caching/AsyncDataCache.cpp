@@ -955,7 +955,7 @@ void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
 void AsyncDataCache::saveToSsd(bool saveAll) {
   std::vector<CachePin> pins;
   VELOX_CHECK(ssdCache_->writeInProgress());
-  ssdSaveable_ = 0;
+  ssdSaveable_ = false;
   for (auto& shard : shards_) {
     shard->appendSsdSaveable(saveAll, pins);
   }

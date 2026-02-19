@@ -712,5 +712,151 @@ TEST_F(CustomTraceTest, parallelHashJoinBreakpoints) {
   EXPECT_GT(numFinalOutputs, 0);
 }
 
+// Tests that moveStep(planId) only stops at breakpoints matching the specified
+// plan node ID, skipping breakpoints for other nodes.
+TEST_F(CustomTraceTest, moveStepWithPlanId) {
+  const size_t size = 10;
+  auto input1 = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto input2 = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>(size, [](auto row) { return row + 10; })});
+
+  core::PlanNodeId project1, project2, project3;
+  auto plan = PlanBuilder()
+                  .values({input1, input2})
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project1)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project2)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project3)
+                  .planNode();
+
+  // Set breakpoints on all three project nodes.
+  auto cursor = TaskCursor::create({
+      .planNode = plan,
+      .serialExecution = true,
+      .breakpoints = toBreakpointsMap({project1, project2, project3}),
+  });
+
+  // Step targeting project2 should skip project1 and stop at project2.
+  EXPECT_TRUE(cursor->moveStep(project2));
+  EXPECT_EQ(cursor->at(), project2);
+
+  // Step targeting project3 should skip project2 (for the remaining pipeline)
+  // and stop at project3.
+  EXPECT_TRUE(cursor->moveStep(project3));
+  EXPECT_EQ(cursor->at(), project3);
+
+  // Step with no filter stops at the next breakpoint (project1 for second
+  // batch).
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), "");
+
+  // First batch final output was produced above. Now step targeting project1
+  // for the second input batch.
+  EXPECT_TRUE(cursor->moveStep(project1));
+  EXPECT_EQ(cursor->at(), project1);
+
+  // Step targeting project3 should skip project2 and stop at project3.
+  EXPECT_TRUE(cursor->moveStep(project3));
+  EXPECT_EQ(cursor->at(), project3);
+
+  // Final output for second batch.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), "");
+
+  // No more data.
+  EXPECT_FALSE(cursor->moveStep());
+}
+
+// Tests that moveStep(planId) only stops at breakpoints matching the specified
+// plan node ID when using moveStep with no filter (empty planId), the original
+// behavior is preserved (stop at any breakpoint).
+TEST_F(CustomTraceTest, moveStepWithPlanIdDefaultBehavior) {
+  const size_t size = 10;
+  auto input = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+
+  core::PlanNodeId project1, project2;
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project1)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project2)
+                  .planNode();
+
+  auto cursor = TaskCursor::create({
+      .planNode = plan,
+      .serialExecution = true,
+      .breakpoints = toBreakpointsMap({project1, project2}),
+  });
+
+  // Default moveStep() (empty planId) should stop at project1.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), project1);
+
+  // Default moveStep() should stop at project2.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), project2);
+
+  // Final output.
+  EXPECT_TRUE(cursor->moveStep());
+  EXPECT_EQ(cursor->at(), "");
+
+  EXPECT_FALSE(cursor->moveStep());
+}
+
+// Tests moveStep(planId) with parallel execution.
+TEST_F(CustomTraceTest, parallelMoveStepWithPlanId) {
+  constexpr int kNumDrivers = 4;
+  constexpr int kNumBatches = 3;
+
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < kNumBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {"a"},
+        {
+            makeFlatVector<int64_t>(
+                10, [&](auto row) { return row + i * 100; }),
+        }));
+  }
+
+  core::PlanNodeId project1, project2;
+  auto plan = PlanBuilder()
+                  .values(batches, /*parallelizable=*/true)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project1)
+                  .project({"a * 10 as a"})
+                  .capturePlanNodeId(project2)
+                  .planNode();
+
+  auto cursor = TaskCursor::create({
+      .planNode = plan,
+      .maxDrivers = kNumDrivers,
+      .breakpoints = toBreakpointsMap({project1, project2}),
+  });
+
+  int numProject2Hits = 0;
+  int numFinalOutputs = 0;
+
+  // Only step to project2 breakpoints, skipping project1.
+  while (cursor->moveStep(project2)) {
+    if (cursor->at() == project2) {
+      ++numProject2Hits;
+    } else {
+      EXPECT_EQ(cursor->at(), "");
+      ++numFinalOutputs;
+    }
+  }
+
+  // Each of the 4 drivers processes all 3 batches, hitting project2 once per
+  // batch.
+  EXPECT_EQ(numProject2Hits, kNumDrivers * kNumBatches);
+  EXPECT_EQ(numFinalOutputs, kNumDrivers * kNumBatches);
+}
+
 } // namespace
 } // namespace facebook::velox::exec::trace::test

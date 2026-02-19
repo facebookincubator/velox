@@ -31,6 +31,7 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorTraceCtx.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -131,11 +132,11 @@ inline size_t numSourceNodes(const core::PlanNode* planNode) {
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
-  op.runtimeStats["runningAddInputWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningAddInputWallNanos)] =
       RuntimeMetric(op.addInputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
-  op.runtimeStats["runningGetOutputWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningGetOutputWallNanos)] =
       RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
-  op.runtimeStats["runningFinishWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningFinishWallNanos)] =
       RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
@@ -185,7 +186,8 @@ std::string makeUuid() {
 
 // Returns true if an operator is a hash join operator given 'operatorType'.
 bool isHashJoinOperator(const std::string& operatorType) {
-  return (operatorType == "HashBuild") || (operatorType == "HashProbe");
+  return (operatorType == OperatorType::kHashBuild) ||
+      (operatorType == OperatorType::kHashProbe);
 }
 
 class QueueSplitsStore : public SplitsStore {
@@ -208,16 +210,8 @@ class QueueSplitsStore : public SplitsStore {
       split = getSplit(maxPreloadSplits, preload);
       return true;
     }
-    if (driverId.has_value()) {
-      // Delivers a barrier exactly once for each driver from the same plan
-      // node.
-      if (barrierSplits_.contains(driverId.value())) {
-        split = barrierSplits_[driverId.value()];
-        barrierSplits_.erase(driverId.value());
-        return true;
-      }
-    } else {
-      barrierSplits_.clear();
+    if (tryGetBarrier(driverId, split)) {
+      return true;
     }
     if (noMoreSplits_) {
       return true;
@@ -2572,7 +2566,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
             const auto hasNextSplit = store->nextSplit(
-                /*driverId=*/0,
+                /*driverId=*/std::nullopt,
                 /*maxPreloadSplits=*/0,
                 /*preload=*/nullptr,
                 splits.emplace_back(),
