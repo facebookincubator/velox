@@ -1394,6 +1394,37 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
   return {std::move(cursor), std::move(result)};
 }
 
+std::pair<std::unique_ptr<TaskCursor>, uint64_t> countResults(
+    const CursorParameters& params,
+    std::function<void(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
+  auto cursor = TaskCursor::create(params);
+  uint64_t numRows = 0;
+  auto* task = cursor->task().get();
+  cursor->start();
+  while (!cursor->noMoreSplits()) {
+    addSplits(cursor.get());
+    while (cursor->moveNext()) {
+      numRows += cursor->current()->size();
+      testingMaybeTriggerAbort(task);
+    }
+  }
+
+  if (!waitForTaskCompletion(task, maxWaitMicros)) {
+    if (task->state() != TaskState::kFinished &&
+        task->state() != TaskState::kRunning) {
+      waitForTaskDriversToFinish(task, maxWaitMicros);
+      std::rethrow_exception(task->error());
+    } else {
+      VELOX_FAIL(
+          "Failed to wait for task to complete after {}, task: {}",
+          succinctMicros(maxWaitMicros),
+          task->toString());
+    }
+  }
+  return {std::move(cursor), numRows};
+}
+
 bool waitForTaskFinish(
     exec::Task* task,
     TaskState expectedState,
