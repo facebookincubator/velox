@@ -51,6 +51,11 @@ __attribute__((
     noinline)) rmm::device_async_resource_ref
 get_current_device_resource_ref();
 
+struct allow_default_stream_t {};
+constexpr allow_default_stream_t allow_default_stream{};
+
+rmm::cuda_stream_view get_default_stream(allow_default_stream_t);
+
 #endif
 
 } // namespace cudf

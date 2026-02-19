@@ -159,7 +159,8 @@ RowVectorPtr CudfFromVelox::getOutput() {
 }
 
 void CudfFromVelox::close() {
-  cudf::get_default_stream().synchronize();
+  // TODO(kn): Remove default stream after redesign of CudfFromVelox
+  cudf::get_default_stream(cudf::allow_default_stream).synchronize();
   exec::Operator::close();
   inputs_.clear();
 }
