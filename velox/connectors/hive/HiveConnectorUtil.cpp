@@ -108,16 +108,13 @@ void addSubfields(
     }
   }
   subfields.resize(newSize);
+
   switch (type.kind()) {
     case TypeKind::ROW: {
       folly::F14FastMap<std::string, std::vector<SubfieldSpec>> required;
       for (auto& subfield : subfields) {
         auto* element = subfield.subfield->path()[level].get();
-        auto* nestedField = element->as<common::Subfield::NestedField>();
-        VELOX_CHECK(
-            nestedField,
-            "Unsupported for row subfields pruning: {}",
-            element->toString());
+        auto* nestedField = element->asChecked<common::Subfield::NestedField>();
         required[nestedField->name()].push_back(subfield);
       }
       const auto& rowType = type.asRow();
@@ -369,6 +366,30 @@ void checkColumnHandleConsistent(
       x.name(),
       x.hiveType()->toString(),
       y.hiveType()->toString());
+}
+
+std::shared_ptr<common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
+        outputSubfields,
+    const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns,
+    const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
+    memory::MemoryPool* pool) {
+  return makeScanSpec(
+      rowType,
+      outputSubfields,
+      subfieldFilters,
+      /*indexColumns=*/{},
+      dataColumns,
+      partitionKeys,
+      infoColumns,
+      specialColumns,
+      disableStatsBasedFilterReorder,
+      pool);
 }
 
 std::shared_ptr<common::ScanSpec> makeScanSpec(
