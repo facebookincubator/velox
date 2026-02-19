@@ -202,11 +202,20 @@ void fixedWidthScan(
           int32_t numRowsInBuffer,
           int32_t rowOffset,
           const T* buffer) {
-        rowLoop(
+        if constexpr (!hasFilter && !hasHook && !scatter) {
+          if (isDense(&rows[rowIndex], numRowsInBuffer)) {
+            std::memcpy(
+                rawValues + numValues,
+                buffer + rows[rowIndex] - rowOffset,
+                sizeof(T) * numRowsInBuffer);
+            numValues += numRowsInBuffer;
+            return;
+          }
+        }
+        rowLoop<kStep>(
             rows,
             rowIndex,
             rowIndex + numRowsInBuffer,
-            kStep,
             [&](int32_t rowIndex) {
               auto firstRow = rows[rowIndex];
               if (!hasFilter) {
@@ -223,7 +232,7 @@ void fixedWidthScan(
                         kStep,
                         rawValues);
                   } else {
-                    simd::memcpy(
+                    FOLLY_BUILTIN_MEMCPY(
                         rawValues + numValues,
                         buffer + firstRow - rowOffset,
                         sizeof(T) * kStep);
