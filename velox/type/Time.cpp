@@ -76,16 +76,10 @@ Expected<int32_t> parseFractionalSeconds(
   pos += digitCount;
 
   if (digitCount > static_cast<size_t>(fractionalPrecision)) {
-    const char* precisionError =
-        "Invalid time format: precision beyond supported range";
-    if (fractionalPrecision == 3) {
-      precisionError =
-          "Invalid time format: Microsecond precision not supported";
-    } else if (fractionalPrecision == 6) {
-      precisionError =
-          "Invalid time format: precision beyond microseconds not supported";
-    }
-    return folly::makeUnexpected(Status::UserError(precisionError));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Invalid time format: precision {} not supported",
+            fractionalPrecision));
   }
 
   // Convert to target precision by padding with zeros if needed.
@@ -195,7 +189,7 @@ Expected<TimeComponents> parseTimeComponents(
 
 Expected<int64_t> fromTimeString(const char* buf, size_t len) {
   auto componentsResult =
-      parseTimeComponents(buf, len, /*requireSeconds*/ false, 3);
+      parseTimeComponents(buf, len, /*requireSeconds=*/false, 3);
   if (componentsResult.hasError()) {
     return folly::makeUnexpected(componentsResult.error());
   }
