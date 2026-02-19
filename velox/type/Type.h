@@ -40,6 +40,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/type/CastRule.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
@@ -2315,6 +2316,9 @@ class CustomTypeFactory {
 
   virtual AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const = 0;
+
+  /// Returns cast rules for this custom type.
+  virtual std::vector<CastRule> getCastRules() const;
 };
 
 class AbstractInputGenerator {
@@ -2420,9 +2424,7 @@ AbstractInputGeneratorPtr getCustomTypeInputGenerator(
 
 // Allows us to transparently use folly::toAppend(), folly::join(), etc.
 template <class TString>
-void toAppend(
-    const std::shared_ptr<const facebook::velox::Type>& type,
-    TString* result) {
+void toAppend(const std::shared_ptr<const Type>& type, TString* result) {
   result->append(type->toString());
 }
 
