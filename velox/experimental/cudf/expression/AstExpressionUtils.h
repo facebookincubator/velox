@@ -17,9 +17,12 @@
 #pragma once
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+// TODO(kn): in another PR
+// #include "velox/experimental/cudf/CudfNoDefaults.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -619,7 +622,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
       auto result = cudf_expression->eval(
           inputColumnViews,
           stream,
-          cudf::get_current_device_resource_ref(),
+          cudf_velox::get_output_mr(),
           /*finalize=*/true);
       precomputedColumns.push_back(std::move(result));
       continue;
@@ -631,7 +634,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
           inputColumnViews[dependent_column_index].size(),
           stream,
-          cudf::get_current_device_resource_ref());
+          cudf_velox::get_output_mr());
       precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.
