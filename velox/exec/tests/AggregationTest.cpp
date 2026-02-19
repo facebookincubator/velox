@@ -1215,8 +1215,7 @@ TEST_F(AggregationTest, spillAll) {
                                     .values(inputs)
                                     .singleAggregation({"c0"}, {}, {})
                                     .planNode())
-                                .copyResults(pool_.get())
-                                ->size();
+                                .countResults();
 
   auto plan = PlanBuilder()
                   .values(inputs)

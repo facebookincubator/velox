@@ -929,16 +929,16 @@ std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const core::PlanNodePtr& plan) {
   CursorParameters params;
   params.planNode = plan;
-  auto [cursor, results] = readCursor(params);
-  assertEmptyResults(results);
+  auto [cursor, count] = countResults(params);
+  EXPECT_EQ(0, count);
   return cursor->task();
 }
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const CursorParameters& params) {
   VELOX_DCHECK_NOT_NULL(params.planNode);
-  auto [cursor, results] = readCursor(params);
-  assertEmptyResults(results);
+  auto [cursor, count] = countResults(params);
+  EXPECT_EQ(0, count);
   return cursor->task();
 }
 
