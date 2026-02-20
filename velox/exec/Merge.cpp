@@ -506,7 +506,8 @@ void SourceStream::copyToOutput(RowVectorPtr& output) {
 
 bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
   ContinueFuture future;
-  auto reason = source_->next(data_, &future);
+  bool drained{false};
+  auto reason = source_->next(data_, &future, drained);
   if (reason != BlockingReason::kNotBlocked) {
     needData_ = true;
     futures.emplace_back(std::move(future));
