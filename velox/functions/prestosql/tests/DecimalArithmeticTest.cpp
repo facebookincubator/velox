@@ -590,7 +590,8 @@ TEST_F(DecimalArithmeticTest, roundN) {
 // @TODO: Refactor other tests to use this style for clarity. See Issue #16464.
 
 TEST_F(DecimalArithmeticTest, floorAndCeil) {
-  // short DECIMAL(3,2) -> short DECIMAL(2.0)
+  // Short DECIMAL(3,2) -> Short DECIMAL(2.0).
+  // e.g. floor(0.49) = 0, floor(-0.49) = -1, ceil(0.49) = 1, ceil(-0.49) = 0
   {
     const auto inType = DECIMAL(3, 2);
     const auto outType = DECIMAL(2, 0);
@@ -618,7 +619,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
     testCeil(-99, 0);
   }
 
-  // short DECIMAL(5,2) -> short DECIMAL(4,0)
+  // Short DECIMAL(5,2) -> Short DECIMAL(4,0).
+  // e.g. floor(123.45) = 123, floor(-123.45) = -124, ceil(123.45) = 124,
+  // ceil(-123.45) = -123
   {
     const auto inType = DECIMAL(5, 2);
     const auto outType = DECIMAL(4, 0);
@@ -652,7 +655,8 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
     testCeil(-12399, -123);
   }
 
-  // short DECIMAL(18,0) -> short DECIMAL(18,0)
+  // Short DECIMAL(18,0) -> Short DECIMAL(18,0).
+  // Min and max are unchanged if there are no fractional digits.
   {
     const auto inType = DECIMAL(18, 0);
     const auto outType = DECIMAL(18, 0);
@@ -666,7 +670,8 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
     testCeil(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMin);
   }
 
-  // long DECIMAL(20,2) -> long DECIMAL(19,0)
+  // Long DECIMAL(20,2) -> Long DECIMAL(19,0).
+  // e.g. floor(0.49) = 0, floor(-0.49) = -1, ceil(0.49) = 1, ceil(-0.49) = 0
   {
     const auto inType = DECIMAL(20, 2);
     const auto outType = DECIMAL(19, 0);
@@ -694,7 +699,9 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
     testCeil(-99, 0);
   }
 
-  // long DECIMAL(38,5) -> long DECIMAL(34,0)
+  // Long DECIMAL(38,5) -> Long DECIMAL(34,0).
+  // Min and max are rounded to the nearest whole number within the range of the
+  // output type.
   {
     const auto inType = DECIMAL(38, 5);
     const auto outType = DECIMAL(34, 0);
@@ -708,7 +715,8 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
     testCeil(DecimalUtil::kLongDecimalMin, -DecimalUtil::kPowersOfTen[33] + 1);
   }
 
-  // long DECIMAL(38,0) -> long DECIMAL(38,0)
+  // Long DECIMAL(38,0) -> Long DECIMAL(38,0).
+  // Min and max are unchanged if there are no fractional digits.
   {
     const auto inType = DECIMAL(38, 0);
     const auto outType = DECIMAL(38, 0);
@@ -722,7 +730,8 @@ TEST_F(DecimalArithmeticTest, floorAndCeil) {
     testCeil(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
   }
 
-  // long DECIMAL(19,19) -> short DECIMAL(1,0)
+  // Long DECIMAL(19,19) -> Short DECIMAL(1,0).
+  // e.g. floor(0.1234567890123456789) = 0, ceil(0.1234567890123456789) = 1
   {
     const auto inType = DECIMAL(19, 19);
     const auto outType = DECIMAL(1, 0);
