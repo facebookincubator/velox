@@ -16,6 +16,7 @@ find_package(CUB REQUIRED)
 find_package(Thrust REQUIRED)
 
 add_executable(velox_gpu_hash_table_test HashTableTest.cu)
+target_compile_options(velox_gpu_hash_table_test PRIVATE ${VELOX_CUDA_DEBUG_FLAGS})
 target_link_libraries(
   velox_gpu_hash_table_test
   Folly::folly
