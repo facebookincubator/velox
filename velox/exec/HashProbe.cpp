@@ -1409,7 +1409,7 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
       EvalCtx evalCtx(
           operatorCtx_->execCtx(), filter_.get(), filterTableInput_.get());
       filter_->eval(filterTableInputRows_, evalCtx, filterTableResult_);
-      
+
       bool passed = false;
       if (auto* values = getFlatFilterResult(filterTableResult_[0])) {
         passed = !bits::testSetBits(
@@ -1430,7 +1430,6 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           }
         }
       }
-      
       if (passed) {
         filterPassedRows.setValid(row, true);
       }
