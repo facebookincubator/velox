@@ -374,6 +374,11 @@ struct SimpleTypeTrait<Time> : public TypeTraits<TypeKind::BIGINT> {
   static constexpr const char* name = "TIME";
 };
 
+template <>
+struct SimpleTypeTrait<TimeMicroUtc> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "TIME MICRO UTC";
+};
+
 template <typename T, bool comparable, bool orderable>
 struct SimpleTypeTrait<Generic<T, comparable, orderable>> {
   static constexpr TypeKind typeKind = TypeKind::INVALID;
