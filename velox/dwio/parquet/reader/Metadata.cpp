@@ -163,7 +163,7 @@ common::CompressionKind thriftCodecToCompressionKind(
     case thrift::CompressionCodec::LZO:
       return common::CompressionKind::CompressionKind_LZO;
     case thrift::CompressionCodec::LZ4:
-      return common::CompressionKind::CompressionKind_LZ4;
+      return common::CompressionKind::CompressionKind_LZ4_HADOOP;
     case thrift::CompressionCodec::ZSTD:
       return common::CompressionKind::CompressionKind_ZSTD;
     case thrift::CompressionCodec::LZ4_RAW:
@@ -202,6 +202,11 @@ bool ColumnChunkMetaDataPtr::hasStatistics() const {
 bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
   return hasMetadata() &&
       thriftColumnChunkPtr(ptr_)->meta_data.__isset.dictionary_page_offset;
+}
+
+bool ColumnChunkMetaDataPtr::hasIndexPage() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.index_page_offset;
 }
 
 std::unique_ptr<dwio::common::ColumnStatistics>
