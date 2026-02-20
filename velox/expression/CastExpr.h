@@ -21,20 +21,43 @@
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
+namespace facebook::velox {
+class CastRegistry;
+} // namespace facebook::velox
+
 namespace facebook::velox::exec {
 
 /// Custom operator for casts from and to custom types.
+/// The base class provides default implementations of isSupportedFromType and
+/// isSupportedToType that use CastRegistry as the single source of truth.
+/// Subclasses can either:
+/// 1. Implement typeName() to use the default CastRegistry-based logic, OR
+/// 2. Override isSupportedFromType/isSupportedToType directly (legacy approach)
 class CastOperator {
  public:
   virtual ~CastOperator() = default;
 
+  /// Returns the custom type name this operator handles.
+  /// Used by default isSupportedFromType/isSupportedToType implementations.
+  /// Default implementation throws - subclasses should override this OR
+  /// override isSupportedFromType/isSupportedToType directly.
+  virtual const std::string& typeName() const {
+    static const std::string kEmpty;
+    VELOX_UNREACHABLE(
+        "CastOperator::typeName() must be overridden if using default "
+        "isSupportedFromType/isSupportedToType implementations");
+    return kEmpty;
+  }
+
   /// Determines whether the cast operator supports casting to the custom type
-  /// from the other type.
-  virtual bool isSupportedFromType(const TypePtr& other) const = 0;
+  /// from the other type. Default implementation uses CastRegistry.
+  /// Subclasses can override this directly OR implement typeName().
+  virtual bool isSupportedFromType(const TypePtr& other) const;
 
   /// Determines whether the cast operator supports casting from the custom type
-  /// to the other type.
-  virtual bool isSupportedToType(const TypePtr& other) const = 0;
+  /// to the other type. Default implementation uses CastRegistry.
+  /// Subclasses can override this directly OR implement typeName().
+  virtual bool isSupportedToType(const TypePtr& other) const;
 
   /// Casts an input vector to the custom type. This function should not throw
   /// when processing input rows, but report errors via context.setError().

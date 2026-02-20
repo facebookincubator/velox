@@ -26,6 +26,7 @@
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/ComplexVector.h"
@@ -34,6 +35,19 @@
 #include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
+
+// Default implementations of CastOperator methods that use CastRegistry.
+bool CastOperator::isSupportedFromType(const TypePtr& other) const {
+  return CastRegistry::instance()
+      .findRule(other->name(), typeName())
+      .has_value();
+}
+
+bool CastOperator::isSupportedToType(const TypePtr& other) const {
+  return CastRegistry::instance()
+      .findRule(typeName(), other->name())
+      .has_value();
+}
 
 namespace {
 
