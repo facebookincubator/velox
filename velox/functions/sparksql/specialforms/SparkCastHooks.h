@@ -78,6 +78,10 @@ class SparkCastHooks : public exec::CastHooks {
 
   exec::PolicyType getPolicy() const override;
 
+  bool isAnsiEnabled() const {
+    return config_.sparkAnsiEnabled();
+  }
+
  private:
   // Casts a number to a timestamp. The number is treated as the number of
   // seconds since the epoch (1970-01-01 00:00:00 UTC).
