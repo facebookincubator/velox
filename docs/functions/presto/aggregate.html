@@ -407,10 +407,17 @@ Arrays of different lengths are extended to the longest with zeros.
 Null elements are treated as 0. Supported types for T are:
 TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
 Overflow is checked for integer types.</p>
-<p>A variadic form <code class="docutils literal notranslate"><span class="pre">array_union_sum(c1,</span> <span class="pre">c2,</span> <span class="pre">...,</span> <span class="pre">cN)</span></code> is also supported,
-where each argument is a scalar at a fixed array position. This avoids
-per-row array construction overhead when the number of positions is known
-at query time.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">array_union_sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">T)</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Variadic form where each scalar argument’s position determines the
+index into the result array. Sums are accumulated across rows.
+This avoids per-row array construction overhead when the number of
+positions is known at query time.</p>
+</div></blockquote>
 </dd></dl>
 
 </section>

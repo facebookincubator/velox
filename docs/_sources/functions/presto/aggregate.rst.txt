@@ -318,10 +318,13 @@ Array Aggregate Functions
     TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
     Overflow is checked for integer types.
 
-    A variadic form ``array_union_sum(c1, c2, ..., cN)`` is also supported,
-    where each argument is a scalar at a fixed array position. This avoids
-    per-row array construction overhead when the number of positions is known
-    at query time.
+.. function:: array_union_sum(T, T, ..., T) -> array(T)
+   :noindex:
+
+    Variadic form where each scalar argument's position determines the
+    index into the result array. Sums are accumulated across rows.
+    This avoids per-row array construction overhead when the number of
+    positions is known at query time.
 
 Approximate Aggregate Functions
 -------------------------------
