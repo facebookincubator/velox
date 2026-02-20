@@ -1849,5 +1849,498 @@ TEST(VariantTest, accessWrongTypeVariantValue) {
       intVar.value<TypeKind::VARCHAR>(), "wrong kind! INTEGER != VARCHAR");
 }
 
+// Tests for C++ container type conversions (std::map, std::unordered_map,
+// std::vector).
+
+TEST(VariantTest, createFromStdVector) {
+  // Simple vector of integers.
+  std::vector<int32_t> intVec = {1, 2, 3, 4, 5};
+  auto variant = Variant::create<std::vector<int32_t>>(intVec);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<int32_t>>();
+  EXPECT_EQ(result, intVec);
+}
+
+TEST(VariantTest, createFromStdVectorDouble) {
+  std::vector<double> doubleVec = {1.1, 2.2, 3.3, 4.4};
+  auto variant = Variant::create<std::vector<double>>(doubleVec);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<double>>();
+  EXPECT_EQ(result.size(), doubleVec.size());
+  for (size_t i = 0; i < result.size(); ++i) {
+    EXPECT_DOUBLE_EQ(result[i], doubleVec[i]);
+  }
+}
+
+TEST(VariantTest, createFromStdVectorString) {
+  std::vector<std::string> strVec = {"apple", "banana", "cherry"};
+  auto variant = Variant::create<std::vector<std::string>>(strVec);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<std::string>>();
+  EXPECT_EQ(result, strVec);
+}
+
+TEST(VariantTest, createFromEmptyStdVector) {
+  std::vector<int32_t> emptyVec;
+  auto variant = Variant::create<std::vector<int32_t>>(emptyVec);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<int32_t>>();
+  EXPECT_TRUE(result.empty());
+}
+
+TEST(VariantTest, createFromStdMap) {
+  std::map<int32_t, double> intDoubleMap = {{1, 1.1}, {2, 2.2}, {3, 3.3}};
+  auto variant = Variant::create<std::map<int32_t, double>>(intDoubleMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::map<int32_t, double>>();
+  EXPECT_EQ(result, intDoubleMap);
+}
+
+TEST(VariantTest, createFromStdMapStringKey) {
+  std::map<std::string, int64_t> strIntMap = {
+      {"one", 1}, {"two", 2}, {"three", 3}};
+  auto variant = Variant::create<std::map<std::string, int64_t>>(strIntMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::map<std::string, int64_t>>();
+  EXPECT_EQ(result, strIntMap);
+}
+
+TEST(VariantTest, createFromEmptyStdMap) {
+  std::map<int32_t, std::string> emptyMap;
+  auto variant = Variant::create<std::map<int32_t, std::string>>(emptyMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::map<int32_t, std::string>>();
+  EXPECT_TRUE(result.empty());
+}
+
+TEST(VariantTest, createFromStdUnorderedMap) {
+  std::unordered_map<int32_t, double> intDoubleMap = {
+      {1, 1.1}, {2, 2.2}, {3, 3.3}};
+  auto variant =
+      Variant::create<std::unordered_map<int32_t, double>>(intDoubleMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::unordered_map<int32_t, double>>();
+  EXPECT_EQ(result, intDoubleMap);
+}
+
+TEST(VariantTest, createFromStdUnorderedMapStringKey) {
+  std::unordered_map<std::string, int64_t> strIntMap = {
+      {"one", 1}, {"two", 2}, {"three", 3}};
+  auto variant =
+      Variant::create<std::unordered_map<std::string, int64_t>>(strIntMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::unordered_map<std::string, int64_t>>();
+  EXPECT_EQ(result, strIntMap);
+}
+
+TEST(VariantTest, createFromEmptyStdUnorderedMap) {
+  std::unordered_map<int32_t, std::string> emptyMap;
+  auto variant =
+      Variant::create<std::unordered_map<int32_t, std::string>>(emptyMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::unordered_map<int32_t, std::string>>();
+  EXPECT_TRUE(result.empty());
+}
+
+// Nested container tests.
+
+TEST(VariantTest, nestedVectorOfVectors) {
+  std::vector<std::vector<int32_t>> nestedVec = {
+      {1, 2, 3}, {4, 5}, {6, 7, 8, 9}};
+  auto variant = Variant::create<std::vector<std::vector<int32_t>>>(nestedVec);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<std::vector<int32_t>>>();
+  EXPECT_EQ(result, nestedVec);
+}
+
+TEST(VariantTest, nestedMapOfMaps) {
+  std::map<int32_t, std::map<int32_t, double>> nestedMap = {
+      {1, {{10, 1.1}, {20, 2.2}}},
+      {2, {{30, 3.3}, {40, 4.4}}},
+  };
+  auto variant =
+      Variant::create<std::map<int32_t, std::map<int32_t, double>>>(nestedMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::map<int32_t, std::map<int32_t, double>>>();
+  EXPECT_EQ(result, nestedMap);
+}
+
+TEST(VariantTest, nestedUnorderedMapOfUnorderedMaps) {
+  std::unordered_map<int32_t, std::unordered_map<int32_t, double>> nestedMap = {
+      {1, {{10, 1.1}, {20, 2.2}}},
+      {2, {{30, 3.3}, {40, 4.4}}},
+  };
+  auto variant = Variant::create<
+      std::unordered_map<int32_t, std::unordered_map<int32_t, double>>>(
+      nestedMap);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<
+      std::unordered_map<int32_t, std::unordered_map<int32_t, double>>>();
+  EXPECT_EQ(result, nestedMap);
+}
+
+TEST(VariantTest, mapOfVectors) {
+  std::map<std::string, std::vector<int32_t>> mapOfVecs = {
+      {"odds", {1, 3, 5, 7}},
+      {"evens", {2, 4, 6, 8}},
+  };
+  auto variant =
+      Variant::create<std::map<std::string, std::vector<int32_t>>>(mapOfVecs);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::map<std::string, std::vector<int32_t>>>();
+  EXPECT_EQ(result, mapOfVecs);
+}
+
+TEST(VariantTest, unorderedMapOfVectors) {
+  std::unordered_map<std::string, std::vector<double>> mapOfVecs = {
+      {"temps", {98.6, 99.1, 97.8}},
+      {"pressures", {14.7, 15.0, 14.5}},
+  };
+  auto variant =
+      Variant::create<std::unordered_map<std::string, std::vector<double>>>(
+          mapOfVecs);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result =
+      variant.value<std::unordered_map<std::string, std::vector<double>>>();
+  EXPECT_EQ(result, mapOfVecs);
+}
+
+TEST(VariantTest, vectorOfMaps) {
+  std::vector<std::map<std::string, int32_t>> vecOfMaps = {
+      {{"a", 1}, {"b", 2}},
+      {{"c", 3}, {"d", 4}, {"e", 5}},
+  };
+  auto variant =
+      Variant::create<std::vector<std::map<std::string, int32_t>>>(vecOfMaps);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<std::map<std::string, int32_t>>>();
+  EXPECT_EQ(result, vecOfMaps);
+}
+
+TEST(VariantTest, vectorOfUnorderedMaps) {
+  std::vector<std::unordered_map<int32_t, std::string>> vecOfMaps = {
+      {{1, "one"}, {2, "two"}},
+      {{3, "three"}, {4, "four"}, {5, "five"}},
+  };
+  auto variant =
+      Variant::create<std::vector<std::unordered_map<int32_t, std::string>>>(
+          vecOfMaps);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result =
+      variant.value<std::vector<std::unordered_map<int32_t, std::string>>>();
+  EXPECT_EQ(result, vecOfMaps);
+}
+
+// Deeply nested container tests.
+
+TEST(VariantTest, deeplyNestedMapOfMapOfVectors) {
+  std::map<int32_t, std::map<int32_t, std::vector<double>>> deepNested = {
+      {1, {{10, {1.1, 1.2}}, {20, {2.1, 2.2, 2.3}}}},
+      {2, {{30, {3.1}}, {40, {4.1, 4.2}}}},
+  };
+  auto variant = Variant::create<
+      std::map<int32_t, std::map<int32_t, std::vector<double>>>>(deepNested);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result =
+      variant
+          .value<std::map<int32_t, std::map<int32_t, std::vector<double>>>>();
+  EXPECT_EQ(result, deepNested);
+}
+
+TEST(VariantTest, deeplyNestedUnorderedMapOfUnorderedMapOfVectors) {
+  std::unordered_map<int32_t, std::unordered_map<int32_t, std::vector<double>>>
+      deepNested = {
+          {1, {{10, {1.1, 1.2}}, {20, {2.1, 2.2, 2.3}}}},
+          {2, {{30, {3.1}}, {40, {4.1, 4.2}}}},
+      };
+  auto variant = Variant::create<std::unordered_map<
+      int32_t,
+      std::unordered_map<int32_t, std::vector<double>>>>(deepNested);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result = variant.value<std::unordered_map<
+      int32_t,
+      std::unordered_map<int32_t, std::vector<double>>>>();
+  EXPECT_EQ(result, deepNested);
+}
+
+TEST(VariantTest, vectorOfVectorOfVectors) {
+  std::vector<std::vector<std::vector<int32_t>>> tripleNested;
+  tripleNested.push_back(
+      {std::vector<int32_t>{1, 2}, std::vector<int32_t>{3, 4}});
+  tripleNested.push_back({std::vector<int32_t>{5, 6}});
+  tripleNested.push_back(
+      {std::vector<int32_t>{7}, std::vector<int32_t>{8, 9, 10}});
+
+  auto variant =
+      Variant::create<std::vector<std::vector<std::vector<int32_t>>>>(
+          tripleNested);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::ARRAY);
+
+  auto result = variant.value<std::vector<std::vector<std::vector<int32_t>>>>();
+  EXPECT_EQ(result, tripleNested);
+}
+
+// Mixed container types tests.
+
+TEST(VariantTest, mapWithUnorderedMapValues) {
+  std::map<std::string, std::unordered_map<int32_t, double>> mixed = {
+      {"group1", {{1, 1.1}, {2, 2.2}}},
+      {"group2", {{3, 3.3}, {4, 4.4}}},
+  };
+  auto variant = Variant::create<
+      std::map<std::string, std::unordered_map<int32_t, double>>>(mixed);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result =
+      variant
+          .value<std::map<std::string, std::unordered_map<int32_t, double>>>();
+  EXPECT_EQ(result, mixed);
+}
+
+TEST(VariantTest, unorderedMapWithMapValues) {
+  std::unordered_map<int32_t, std::map<std::string, int64_t>> mixed = {
+      {1, {{"a", 10}, {"b", 20}}},
+      {2, {{"c", 30}, {"d", 40}}},
+  };
+  auto variant = Variant::create<
+      std::unordered_map<int32_t, std::map<std::string, int64_t>>>(mixed);
+
+  EXPECT_FALSE(variant.isNull());
+  EXPECT_EQ(variant.kind(), TypeKind::MAP);
+
+  auto result =
+      variant
+          .value<std::unordered_map<int32_t, std::map<std::string, int64_t>>>();
+  EXPECT_EQ(result, mixed);
+}
+
+// Type trait tests.
+
+TEST(VariantTest, isStdMapTrait) {
+  EXPECT_TRUE((is_std_map_v<std::map<int, int>>));
+  EXPECT_TRUE((is_std_map_v<std::map<std::string, double>>));
+  EXPECT_FALSE((is_std_map_v<std::unordered_map<int, int>>));
+  EXPECT_FALSE(is_std_map_v<std::vector<int>>);
+  EXPECT_FALSE(is_std_map_v<int>);
+  EXPECT_FALSE(is_std_map_v<std::string>);
+}
+
+TEST(VariantTest, isStdUnorderedMapTrait) {
+  EXPECT_TRUE((is_std_unordered_map_v<std::unordered_map<int, int>>));
+  EXPECT_TRUE(
+      (is_std_unordered_map_v<std::unordered_map<std::string, double>>));
+  EXPECT_FALSE((is_std_unordered_map_v<std::map<int, int>>));
+  EXPECT_FALSE(is_std_unordered_map_v<std::vector<int>>);
+  EXPECT_FALSE(is_std_unordered_map_v<int>);
+  EXPECT_FALSE(is_std_unordered_map_v<std::string>);
+}
+
+TEST(VariantTest, isStdVectorTrait) {
+  EXPECT_TRUE(is_std_vector_v<std::vector<int>>);
+  EXPECT_TRUE(is_std_vector_v<std::vector<std::string>>);
+  EXPECT_TRUE((is_std_vector_v<std::vector<std::vector<int>>>));
+  EXPECT_FALSE((is_std_vector_v<std::map<int, int>>));
+  EXPECT_FALSE((is_std_vector_v<std::unordered_map<int, int>>));
+  EXPECT_FALSE(is_std_vector_v<int>);
+  EXPECT_FALSE(is_std_vector_v<std::string>);
+}
+
+TEST(VariantTest, isStdContainerTrait) {
+  EXPECT_TRUE(is_std_container_v<std::vector<int>>);
+  EXPECT_TRUE((is_std_container_v<std::map<int, int>>));
+  EXPECT_TRUE((is_std_container_v<std::unordered_map<int, int>>));
+  EXPECT_TRUE((is_std_container_v<std::vector<std::map<int, int>>>));
+  EXPECT_FALSE(is_std_container_v<int>);
+  EXPECT_FALSE(is_std_container_v<double>);
+  EXPECT_FALSE(is_std_container_v<std::string>);
+}
+
+// CppToType tests for containers.
+
+TEST(VariantTest, cppToTypeVector) {
+  EXPECT_EQ(CppToType<std::vector<int32_t>>::typeKind, TypeKind::ARRAY);
+  EXPECT_EQ(CppToType<std::vector<std::string>>::typeKind, TypeKind::ARRAY);
+  EXPECT_EQ(
+      CppToType<std::vector<std::vector<double>>>::typeKind, TypeKind::ARRAY);
+}
+
+TEST(VariantTest, cppToTypeMap) {
+  EXPECT_EQ((CppToType<std::map<int32_t, double>>::typeKind), TypeKind::MAP);
+  EXPECT_EQ(
+      (CppToType<std::map<std::string, int64_t>>::typeKind), TypeKind::MAP);
+  EXPECT_EQ(
+      (CppToType<std::map<int32_t, std::map<int32_t, double>>>::typeKind),
+      TypeKind::MAP);
+}
+
+TEST(VariantTest, cppToTypeUnorderedMap) {
+  EXPECT_EQ(
+      (CppToType<std::unordered_map<int32_t, double>>::typeKind),
+      TypeKind::MAP);
+  EXPECT_EQ(
+      (CppToType<std::unordered_map<std::string, int64_t>>::typeKind),
+      TypeKind::MAP);
+  EXPECT_EQ(
+      (CppToType<
+          std::unordered_map<int32_t, std::unordered_map<int32_t, double>>>::
+           typeKind),
+      TypeKind::MAP);
+}
+
+// Round-trip tests to ensure conversion preserves data.
+
+TEST(VariantTest, roundTripLargeVector) {
+  std::vector<int64_t> largeVec(1000);
+  for (size_t i = 0; i < largeVec.size(); ++i) {
+    largeVec[i] = static_cast<int64_t>(i * i);
+  }
+
+  auto variant = Variant::create<std::vector<int64_t>>(largeVec);
+  auto result = variant.value<std::vector<int64_t>>();
+
+  EXPECT_EQ(result, largeVec);
+}
+
+TEST(VariantTest, roundTripLargeMap) {
+  std::map<int32_t, std::string> largeMap;
+  for (int i = 0; i < 100; ++i) {
+    largeMap[i] = "value_" + std::to_string(i);
+  }
+
+  auto variant = Variant::create<std::map<int32_t, std::string>>(largeMap);
+  auto result = variant.value<std::map<int32_t, std::string>>();
+
+  EXPECT_EQ(result, largeMap);
+}
+
+TEST(VariantTest, roundTripLargeUnorderedMap) {
+  std::unordered_map<std::string, double> largeMap;
+  for (int i = 0; i < 100; ++i) {
+    largeMap["key_" + std::to_string(i)] = i * 0.1;
+  }
+
+  auto variant =
+      Variant::create<std::unordered_map<std::string, double>>(largeMap);
+  auto result = variant.value<std::unordered_map<std::string, double>>();
+
+  EXPECT_EQ(result, largeMap);
+}
+
+// Edge case tests.
+
+TEST(VariantTest, vectorWithSingleElement) {
+  std::vector<int32_t> singleVec = {42};
+  auto variant = Variant::create<std::vector<int32_t>>(singleVec);
+  auto result = variant.value<std::vector<int32_t>>();
+
+  EXPECT_EQ(result.size(), 1);
+  EXPECT_EQ(result[0], 42);
+}
+
+TEST(VariantTest, mapWithSingleEntry) {
+  std::map<std::string, int32_t> singleMap = {{"only", 1}};
+  auto variant = Variant::create<std::map<std::string, int32_t>>(singleMap);
+  auto result = variant.value<std::map<std::string, int32_t>>();
+
+  EXPECT_EQ(result.size(), 1);
+  EXPECT_EQ(result["only"], 1);
+}
+
+TEST(VariantTest, unorderedMapWithSingleEntry) {
+  std::unordered_map<int32_t, std::string> singleMap = {{99, "ninety-nine"}};
+  auto variant =
+      Variant::create<std::unordered_map<int32_t, std::string>>(singleMap);
+  auto result = variant.value<std::unordered_map<int32_t, std::string>>();
+
+  EXPECT_EQ(result.size(), 1);
+  EXPECT_EQ(result[99], "ninety-nine");
+}
+
+TEST(VariantTest, vectorOfEmptyVectors) {
+  std::vector<std::vector<int32_t>> vecOfEmpty = {{}, {}, {}};
+  auto variant = Variant::create<std::vector<std::vector<int32_t>>>(vecOfEmpty);
+  auto result = variant.value<std::vector<std::vector<int32_t>>>();
+
+  EXPECT_EQ(result.size(), 3);
+  for (const auto& inner : result) {
+    EXPECT_TRUE(inner.empty());
+  }
+}
+
+TEST(VariantTest, mapOfEmptyMaps) {
+  std::map<int32_t, std::map<int32_t, int32_t>> mapOfEmpty = {
+      {1, {}},
+      {2, {}},
+  };
+  auto variant = Variant::create<std::map<int32_t, std::map<int32_t, int32_t>>>(
+      mapOfEmpty);
+  auto result = variant.value<std::map<int32_t, std::map<int32_t, int32_t>>>();
+
+  EXPECT_EQ(result.size(), 2);
+  EXPECT_TRUE(result[1].empty());
+  EXPECT_TRUE(result[2].empty());
+}
+
 } // namespace
 } // namespace facebook::velox::test
