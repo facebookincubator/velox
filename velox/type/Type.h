@@ -26,12 +26,14 @@
 #include <ctime>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
 #include <typeindex>
+#include <unordered_map>
 #include <vector>
 
 #include <velox/common/Enums.h>
@@ -373,6 +375,38 @@ constexpr bool is_nested_kind(TypeKind kind) {
   return kind == TypeKind::ARRAY || kind == TypeKind::MAP ||
       kind == TypeKind::ROW;
 }
+
+// Type traits for detecting C++ container types.
+template <typename T>
+struct is_std_map : std::false_type {};
+
+template <typename K, typename V>
+struct is_std_map<std::map<K, V>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_std_map_v = is_std_map<T>::value;
+
+template <typename T>
+struct is_std_unordered_map : std::false_type {};
+
+template <typename K, typename V>
+struct is_std_unordered_map<std::unordered_map<K, V>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_std_unordered_map_v = is_std_unordered_map<T>::value;
+
+template <typename T>
+struct is_std_vector : std::false_type {};
+
+template <typename E>
+struct is_std_vector<std::vector<E>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_std_vector_v = is_std_vector<T>::value;
+
+template <typename T>
+inline constexpr bool is_std_container_v =
+    is_std_map_v<T> || is_std_unordered_map_v<T> || is_std_vector_v<T>;
 
 template <TypeKind KIND>
 struct TypeFactory;
