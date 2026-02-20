@@ -836,6 +836,11 @@ RowTypePtr getFinalStepBufferedType(
   return ROW(std::move(names), std::move(types));
 }
 
+std::string makeCudfAggregationOperatorName(core::AggregationNode::Step step) {
+  return std::string{"CudfAggregation"} +
+      std::string{core::AggregationNode::toName(step)};
+}
+
 } // namespace
 
 namespace facebook::velox::cudf_velox {
@@ -849,9 +854,7 @@ CudfHashAggregation::CudfHashAggregation(
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "CudfPartialAggregation"
-              : "CudfAggregation",
+          makeCudfAggregationOperatorName(aggregationNode->step()),
           std::nullopt),
       NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
@@ -863,6 +866,8 @@ CudfHashAggregation::CudfHashAggregation(
           !hasFinalAggs(aggregationNode->aggregates())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      isSingleStep_(
+          aggregationNode->step() == core::AggregationNode::Step::kSingle),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
 
@@ -894,14 +899,15 @@ void CudfHashAggregation::initialize() {
       outputType_,
       aggregationInput.constants);
   streamingEnabled_ = !hasCompanionAggregates(aggregationNode_->aggregates()) &&
-      !isGlobal_ &&
-      aggregationNode_->step() != core::AggregationNode::Step::kSingle;
+      !isGlobal_;
 
   // Make aggregators for intermediate step when streaming is enabled.
   // Distinct does not need any aggregators.
   if (streamingEnabled_ && !isDistinct_) {
-    bufferedResultType_ =
-        (aggregationNode_->step() == core::AggregationNode::Step::kFinal)
+    const bool isFinalOrSingle =
+        aggregationNode_->step() == core::AggregationNode::Step::kFinal ||
+        aggregationNode_->step() == core::AggregationNode::Step::kSingle;
+    bufferedResultType_ = isFinalOrSingle
         ? getFinalStepBufferedType(*aggregationNode_)
         : outputType_;
 
@@ -911,6 +917,19 @@ void CudfHashAggregation::initialize() {
         core::AggregationNode::Step::kIntermediate,
         bufferedResultType_,
         nullConstants);
+
+    if (isSingleStep_) {
+      partialAggregators_ = toAggregators(
+          *aggregationNode_,
+          core::AggregationNode::Step::kPartial,
+          bufferedResultType_,
+          aggregationInput.constants);
+      finalAggregators_ = toAggregators(
+          *aggregationNode_,
+          core::AggregationNode::Step::kFinal,
+          outputType_,
+          nullConstants);
+    }
   }
 
   // Check that aggregate result type match the output type.
@@ -1082,6 +1101,42 @@ void CudfHashAggregation::computeFinalGroupbyStreaming(CudfVectorPtr tbl) {
   bufferedResult_ = compactedOutput;
 }
 
+void CudfHashAggregation::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
+  auto inputTableStream = tbl->stream();
+  auto permutedInputView = tbl->getTableView().select(
+      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+  auto groupbyOnInput = doGroupByAggregation(
+      permutedInputView,
+      groupingKeyOutputChannels_,
+      partialAggregators_,
+      bufferedResultType_,
+      inputTableStream);
+
+  if (bufferedResult_) {
+    std::vector<cudf::table_view> tablesToConcat;
+    tablesToConcat.push_back(bufferedResult_->getTableView());
+    tablesToConcat.push_back(groupbyOnInput->getTableView());
+
+    auto partialOutputStream = bufferedResult_->stream();
+    cudf::detail::join_streams(
+        std::vector<rmm::cuda_stream_view>{inputTableStream},
+        partialOutputStream);
+
+    auto concatenatedTable =
+        cudf::concatenate(tablesToConcat, partialOutputStream);
+
+    auto compactedOutput = doGroupByAggregation(
+        concatenatedTable->view(),
+        groupingKeyOutputChannels_,
+        intermediateAggregators_,
+        bufferedResultType_,
+        partialOutputStream);
+    bufferedResult_ = compactedOutput;
+  } else {
+    bufferedResult_ = groupbyOnInput;
+  }
+}
+
 void CudfHashAggregation::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (input->size() == 0) {
@@ -1100,6 +1155,11 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
       // Handle partial groupby aggregation.
       computePartialGroupbyStreaming(cudfInput);
     }
+    return;
+  }
+
+  if (isSingleStep_ && streamingEnabled_ && !isGlobal_ && !isDistinct_) {
+    computeSingleGroupbyStreaming(cudfInput);
     return;
   }
 
@@ -1257,7 +1317,27 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     return nullptr;
   }
 
-  if (!isPartialOutput_ && !isGlobal_ && !isDistinct_ && streamingEnabled_) {
+  // Single streaming: finalize with final-step aggregators.
+  if (isSingleStep_ && !isGlobal_ && !isDistinct_ && streamingEnabled_) {
+    finished_ = true;
+    if (!bufferedResult_) {
+      return nullptr;
+    }
+    auto stream = bufferedResult_->stream();
+    auto result = doGroupByAggregation(
+        bufferedResult_->getTableView(),
+        groupingKeyOutputChannels_,
+        finalAggregators_,
+        outputType_,
+        stream);
+    stream.synchronize();
+    bufferedResult_.reset();
+    return result;
+  }
+
+  // Final streaming: finalize with the step's own aggregators.
+  if (!isPartialOutput_ && !isSingleStep_ && !isGlobal_ && !isDistinct_ &&
+      streamingEnabled_) {
     if (!noMoreInput_) {
       return nullptr;
     }

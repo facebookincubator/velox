@@ -126,6 +126,10 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<Aggregator>> aggregators_;
   std::vector<std::unique_ptr<Aggregator>> intermediateAggregators_;
+  // Used for kSingle streaming: partial-step aggregators (raw -> intermediate)
+  // and final-step aggregators (intermediate -> final).
+  std::vector<std::unique_ptr<Aggregator>> partialAggregators_;
+  std::vector<std::unique_ptr<Aggregator>> finalAggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
@@ -136,6 +140,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // Distinct means it's a count distinct on the groupby keys, without any
   // aggregations
   const bool isDistinct_;
+  // Single means it's a single step aggregation (partial + final combined).
+  const bool isSingleStep_;
   // Streaming aggregation is disabled if companion aggregates are present.
   bool streamingEnabled_{true};
 
@@ -160,6 +166,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   void computePartialDistinctStreaming(CudfVectorPtr tbl);
 
   void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
+
+  void computeSingleGroupbyStreaming(CudfVectorPtr tbl);
 
   CudfVectorPtr bufferedResult_;
   RowTypePtr bufferedResultType_;
