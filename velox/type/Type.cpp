@@ -1534,13 +1534,13 @@ StringView TimeType::valueToString(int64_t value, char* const startPos) const {
 
   fmt::format_to_n(
       startPos,
-      kTimeToVarcharRowSize,
+      getTimeToVarcharRowSize(),
       "{:02d}:{:02d}:{:02d}.{:03d}",
       hours,
       minutes,
       seconds,
       millis);
-  return StringView{startPos, kTimeToVarcharRowSize};
+  return StringView{startPos, getTimeToVarcharRowSize()};
 }
 
 int64_t TimeType::valueToTime(const StringView& timeStr) const {

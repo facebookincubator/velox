@@ -1563,19 +1563,38 @@ FOLLY_ALWAYS_INLINE bool Type::isDate() const {
   return this == DATE().get();
 }
 
-/// Represents TIME as a bigint (milliseconds since midnight).
+enum class TimePrecision : int8_t {
+  kMilliseconds = 3, // Presto: milliseconds since midnight (10^3 ms = 1 second)
+  kMicroseconds = 6, // Spark: microseconds since midnight (10^6 μs = 1 second)
+};
+
+/// Represents TIME as a bigint with configurable precision.
+/// - Presto: milliseconds since midnight (precision = kMilliseconds).
+/// - Spark: microseconds since midnight (precision = kMicroseconds). Not
+/// timezone aware.
 class TimeType final : public BigintType {
-  TimeType() = default;
+  constexpr TimeType(TimePrecision precision = TimePrecision::kMilliseconds)
+      : precision_(precision) {}
 
  public:
-  static std::shared_ptr<const TimeType> get() {
-    VELOX_CONSTEXPR_SINGLETON TimeType kInstance;
-    return {std::shared_ptr<const TimeType>{}, &kInstance};
+  static std::shared_ptr<const TimeType> get(
+      TimePrecision precision = TimePrecision::kMilliseconds) {
+    // Use separate singletons for each precision
+    if (precision == TimePrecision::kMilliseconds) {
+      VELOX_CONSTEXPR_SINGLETON TimeType kInstanceMillis(
+          TimePrecision::kMilliseconds);
+      return {std::shared_ptr<const TimeType>{}, &kInstanceMillis};
+    }
+    VELOX_CONSTEXPR_SINGLETON TimeType kInstanceMicros(
+        TimePrecision::kMicroseconds);
+    return {std::shared_ptr<const TimeType>{}, &kInstanceMicros};
   }
 
   bool equivalent(const Type& other) const override {
-    // Pointer comparison works since this type is a singleton.
-    return this == &other;
+    if (auto* otherTime = dynamic_cast<const TimeType*>(&other)) {
+      return precision_ == otherTime->precision_;
+    }
+    return false;
   }
 
   const char* name() const override {
@@ -1587,18 +1606,20 @@ class TimeType final : public BigintType {
   }
 
   /// Returns the time 'value' (milliseconds since midnight) formatted as
-  /// HH:MM:SS.mmm .
+  /// HH:MM:SS.mmm. Compatible with Presto.
   /// It is the callers responsiblity to ensure that the value is in range
   /// and converted to the right time zone.
   StringView valueToString(int64_t value, char* const startPos) const;
 
   /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
-  /// since midnight. It is the caller's responsibility to ensure that the
-  /// input string is valid and handle error conditions as needed.
+  /// since midnight. Compatible with Presto.
+  /// It is the caller's responsibility to ensure that the input string is valid
+  /// and handle error conditions as needed.
   int64_t valueToTime(const StringView& timeStr) const;
 
   /// Parses a time string in HH:MM:SS[.sss] format and returns milliseconds
-  /// since midnight, applying timezone conversion if provided.
+  /// since midnight, applying timezone conversion if provided. Compatible with
+  /// Presto.
   /// @param timeStr The time string to parse
   /// @param timeZone Optional timezone for conversion
   /// @param sessionStartTimeMs Session start time in milliseconds for timezone
@@ -1610,8 +1631,15 @@ class TimeType final : public BigintType {
 
   folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return TimeType::get();
+  static TypePtr deserialize(const folly::dynamic& obj) {
+    // Check if precision is specified in serialized form.
+    if (obj.count("precision")) {
+      auto precisionValue = obj["precision"].asInt();
+      return TimeType::get(
+          precisionValue == 6 ? TimePrecision::kMicroseconds
+                              : TimePrecision::kMilliseconds);
+    }
+    return TimeType::get(TimePrecision::kMilliseconds);
   }
 
   bool isOrderable() const override {
@@ -1622,21 +1650,35 @@ class TimeType final : public BigintType {
     return true;
   }
 
-  // When casting from TIME to varchar , the resultant varchar will always
-  // be 12 bytes long (HH:MM:SS.mmm).
-  static const size_t kTimeToVarcharRowSize = 12;
+  /// When casting from TIME to varchar, the resultant varchar size depends on
+  /// precision: 12 bytes for milliseconds (HH:MM:SS.mmm), 15 bytes for
+  /// microseconds (HH:MM:SS.mmmmmm).
+  int32_t getTimeToVarcharRowSize() const {
+    return precision_ == TimePrecision::kMilliseconds ? 12 : 15;
+  }
 
-  /// Minimum valid time value (milliseconds since midnight): 00:00:00.000
-  static constexpr int64_t kMin = 0;
+  int64_t getMin() const {
+    return 0;
+  }
 
-  /// Maximum valid time value (milliseconds since midnight): 23:59:59.999
-  static constexpr int64_t kMax = kMillisInDay - 1;
+  // Maximum valid time value based on precision. For milliseconds: 23:59:59.999
+  // (86,399,999 ms). For microseconds: 23:59:59.999999 (86,399,999,999 μs).
+  int64_t getMax() const {
+    return precision_ == TimePrecision::kMilliseconds ? kMillisInDay - 1
+                                                      : kMillisInDay * 1000 - 1;
+  }
+
+  // Maximum valid time value (milliseconds): 23:59:59.999.
+  static constexpr int64_t kMillisInDay = 86400000;
+
+  const TimePrecision precision_;
 };
 
 using TimeTypePtr = std::shared_ptr<const TimeType>;
 
-FOLLY_ALWAYS_INLINE TimeTypePtr TIME() {
-  return TimeType::get();
+FOLLY_ALWAYS_INLINE TimeTypePtr
+TIME(TimePrecision precision = TimePrecision::kMilliseconds) {
+  return TimeType::get(precision);
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isTime() const {

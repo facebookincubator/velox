@@ -131,8 +131,13 @@ upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
 
-TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
-TIME type is backed by BIGINT physical type.
+TIME type represents time from midnight UTC with configurable precision.
+TIME type is backed by BIGINT physical type and supports two precision modes:
+
+* **Millisecond precision (Presto)**: Time is stored as milliseconds since midnight (0 to 86,399,999).
+  Valid range is 00:00:00.000 to 23:59:59.999. This is the default precision.
+* **Microsecond precision (Spark)**: Time is stored as microseconds since midnight (0 to 86,399,999,999).
+  Valid range is 00:00:00.000000 to 23:59:59.999999.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -292,7 +297,7 @@ Presto. These differences require us to implement the same functions
 separately for each system in Velox, such as min, max and collect_set. The
 key differences are listed below.
 
-* Spark operates on timestamps with "microsecond" precision while Presto with
+* Spark operates on TIMESTAMP and TIME types with "microsecond" precision while Presto with
   "millisecond" precision.
   Example::
 
@@ -303,6 +308,8 @@ key differences are listed below.
               (cast('2014-03-08 09:00:00.012345678' as timestamp))
       ) AS t(ts);
       -- 2014-03-08 09:00:00.012345
+
+      SELECT cast(time'12:30:45.123456' as bigint);  -- 45,045,123,456
 
 * In function comparisons, nested null values are handled as values.
   Example::
