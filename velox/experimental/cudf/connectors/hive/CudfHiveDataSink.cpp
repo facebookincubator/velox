@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSink.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
@@ -158,14 +159,14 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
   // Convert the input RowVectorPtr to cudf::table
   auto stream = cudfGlobalStreamPool().get_stream();
   auto cudfInput = with_arrow::toCudfTable(
-      input, input->pool(), stream, cudf::get_current_device_resource_ref());
+      input, input->pool(), stream, cudf_velox::get_temp_mr());
   stream.synchronize();
   VELOX_CHECK_NOT_NULL(
       cudfInput, "Failed to convert input RowVectorPtr to cudf::table");
 
   // Check if the writer doesn't already exist
   if (writer_ == nullptr) {
-    writer_ = createCudfWriter(cudfInput->view());
+    writer_ = createCudfWriter(cudfInput->view(), stream);
   }
 
   // Write the table to the sink
@@ -175,7 +176,9 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
 }
 
 std::unique_ptr<cudf::io::chunked_parquet_writer>
-CudfHiveDataSink::createCudfWriter(cudf::table_view cudfTable) {
+CudfHiveDataSink::createCudfWriter(
+    cudf::table_view cudfTable,
+    rmm::cuda_stream_view stream) {
   // Create a table_input_metadata from the input
   auto tableInputMetadata = createCudfTableInputMetadata(cudfTable);
 
@@ -258,7 +261,8 @@ CudfHiveDataSink::createCudfWriter(cudf::table_view cudfTable) {
     }
   }
 
-  return std::make_unique<cudf::io::chunked_parquet_writer>(cudfWriterOptions);
+  return std::make_unique<cudf::io::chunked_parquet_writer>(
+      cudfWriterOptions, stream);
 }
 
 cudf::io::table_input_metadata CudfHiveDataSink::createCudfTableInputMetadata(
