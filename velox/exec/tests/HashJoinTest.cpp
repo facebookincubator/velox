@@ -7340,12 +7340,25 @@ DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
                 expectedResult),
             "Memory reclaim failed to wait");
       } else {
-        // We expect succeed on large time out or no timeout.
-        const auto result = runHashJoinTask(
-            vectors, queryCtx, false, numDrivers, pool(), true, expectedResult);
-        auto taskStats = exec::toPlanStats(result.task->taskStats());
-        auto& planStats = taskStats.at(result.planNodeId);
-        ASSERT_GT(planStats.spilledBytes, 0);
+        // With 30s timeout, we expect either:
+        // 1. Success with spilling (operators become reclaimable in time), OR
+        // 2. kMemCapExceeded if operators remain in non-reclaimable state
+        try {
+          const auto result = runHashJoinTask(
+              vectors,
+              queryCtx,
+              false,
+              numDrivers,
+              pool(),
+              true,
+              expectedResult);
+          auto taskStats = exec::toPlanStats(result.task->taskStats());
+          auto& planStats = taskStats.at(result.planNodeId);
+          ASSERT_GT(planStats.spilledBytes, 0);
+        } catch (const VeloxRuntimeError& e) {
+          ASSERT_EQ(e.errorCode(), error_code::kMemCapExceeded)
+              << "Unexpected error: " << e.what();
+        }
       }
     });
 

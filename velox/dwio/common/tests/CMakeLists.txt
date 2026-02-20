@@ -50,6 +50,7 @@ add_executable(
   RetryTests.cpp
   ScanSpecTest.cpp
   SortingWriterTest.cpp
+  StreamUtilTest.cpp
   BufferedInputTest.cpp
   CachedBufferedInputTest.cpp
   DirectBufferedInputTest.cpp
