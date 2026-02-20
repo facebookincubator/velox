@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/HashTableCache.h"
@@ -54,6 +56,13 @@ class HashBuild final : public Operator {
     kFinish = 5,
   };
   static std::string stateName(State state);
+
+  /// Runtime stat keys for hash build.
+  /// Maximum spill level reached during hash join build.
+  static constexpr std::string_view kMaxSpillLevel = "maxSpillLevel";
+  /// Whether dedup hash build was abandoned.
+  static constexpr std::string_view kAbandonBuildNoDupHash =
+      "abandonBuildNoDupHash";
 
   HashBuild(
       int32_t operatorId,
@@ -413,8 +422,7 @@ class HashBuildSpiller : public SpillerBase {
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats,
-      filesystems::File::IoStats* spillFsStats);
+      exec::SpillStats* spillStats);
 
   /// Invoked to spill all the rows stored in the row container of the hash
   /// build.

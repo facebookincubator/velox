@@ -92,8 +92,8 @@ Generic Configuration
    * - parallel_join_build_rows_enabled
      - bool
      - false
-     - If true, the hash probe drivers can output build-side rows in parallel for full and right joins (only when spilling is not
-     - enabled by hash probe). If false, only the last prober is allowed to output build-side rows.
+     - If true, the hash probe drivers can output build\-side rows in parallel for full and right joins (only when spilling is not
+       enabled by hash probe). If false, only the last prober is allowed to output build\-side rows.
    * - max_local_exchange_buffer_size
      - integer
      - 32MB
@@ -791,6 +791,12 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
+   * - hive.max-rows-per-index-request
+     - hive.max_rows_per_index_request
+     - integer
+     - 0
+     - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
+       after filtering. 0 means no limit (default).
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

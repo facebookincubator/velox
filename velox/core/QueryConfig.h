@@ -420,7 +420,19 @@ class QueryConfig {
   static constexpr const char* kSpillFileCreateConfig =
       "spill_file_create_config";
 
-  /// Default offset spill start partition bit. It is used with
+  /// Config used to create aggregation spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kAggregationSpillFileCreateConfig =
+      "aggregation_spill_file_create_config";
+
+  /// Config used to create hash join spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kHashJoinSpillFileCreateConfig =
+      "hash_join_spill_file_create_config";
+
+  /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
   /// spill.
@@ -500,6 +512,12 @@ class QueryConfig {
   /// If false, null fields are included with a null value.
   static constexpr const char* kSparkJsonIgnoreNullFields =
       "spark.json_ignore_null_fields";
+
+  /// If true, collect_list aggregate function will ignore nulls in the input.
+  /// Defaults to true to match Spark's default behavior. Set to false to
+  /// include nulls (RESPECT NULLS). Introduced in Spark 4.2 (SPARK-55256).
+  static constexpr const char* kSparkCollectListIgnoreNulls =
+      "spark.collect_list.ignore_nulls";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -1193,6 +1211,14 @@ class QueryConfig {
     return get<std::string>(kSpillFileCreateConfig, "");
   }
 
+  std::string aggregationSpillFileCreateConfig() const {
+    return get<std::string>(kAggregationSpillFileCreateConfig, "");
+  }
+
+  std::string hashJoinSpillFileCreateConfig() const {
+    return get<std::string>(kHashJoinSpillFileCreateConfig, "");
+  }
+
   int32_t minSpillableReservationPct() const {
     constexpr int32_t kDefaultPct = 5;
     return get<int32_t>(kMinSpillableReservationPct, kDefaultPct);
@@ -1283,6 +1309,10 @@ class QueryConfig {
 
   bool sparkJsonIgnoreNullFields() const {
     return get<bool>(kSparkJsonIgnoreNullFields, true);
+  }
+
+  bool sparkCollectListIgnoreNulls() const {
+    return get<bool>(kSparkCollectListIgnoreNulls, true);
   }
 
   bool exprTrackCpuUsage() const {

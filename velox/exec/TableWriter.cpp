@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/TableWriter.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -28,9 +29,11 @@ TableWriter::TableWriter(
           tableWriteNode->outputType(),
           operatorId,
           tableWriteNode->id(),
-          "TableWrite",
+          OperatorType::kTableWrite,
           tableWriteNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    OperatorType::kTableWrite)
               : std::nullopt),
       driverCtx_(driverCtx),
       connectorPool_(driverCtx_->task->addConnectorPoolLocked(
@@ -318,7 +321,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
             currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
-    *spillStats_->wlock() += stats.spillStats;
+    *spillStats_ += stats.spillStats;
   }
 }
 

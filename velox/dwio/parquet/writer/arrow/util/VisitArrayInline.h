@@ -24,24 +24,23 @@
 
 namespace facebook::velox::parquet::arrow::util {
 
-#define ARRAY_VISIT_INLINE(TYPE_CLASS)                                         \
-  case ::arrow::TYPE_CLASS##Type::type_id:                                     \
-    return visitor->Visit(                                                     \
-        ::arrow::internal::checked_cast<                                       \
-            const typename TypeTraits<::arrow::TYPE_CLASS##Type>::ArrayType&>( \
-            array),                                                            \
+#define ARRAY_VISIT_INLINE(TYPE_CLASS)                                      \
+  case ::arrow::TYPE_CLASS##Type::type_id:                                  \
+    return visitor->visit(                                                  \
+        ::arrow::internal::checked_cast<const typename ::arrow::TypeTraits< \
+            ::arrow::TYPE_CLASS##Type>::ArrayType&>(array),                 \
         std::forward<ARGS>(args)...);
 
-/// \brief Apply the visitors Visit() method specialized to the array type
+/// \brief Apply the visitors Visit() method specialized to the array type.
 ///
 /// \tparam VISITOR Visitor type that implements Visit() for all array types.
-/// \tparam ARGS Additional arguments, if any, will be passed to the Visit
-/// function after the `arr` argument \return Status
+/// \tparam ARGS Additional arguments, if any, will be passed to the Visit.
+/// Function after the `arr` argument \return Status.
 ///
 /// A visitor is a type that implements specialized logic for each Arrow type.
 /// Example usage:
 ///
-/// ```
+/// ```.
 /// class ExampleVisitor {
 ///   arrow::Status Visit(arrow::NumericArray<Int32Type> arr) { ... }
 ///   arrow::Status Visit(arrow::NumericArray<Int64Type> arr) { ... }
@@ -49,10 +48,10 @@ namespace facebook::velox::parquet::arrow::util {
 /// }
 /// ExampleVisitor visitor;
 /// VisitArrayInline(some_array, &visitor);
-/// ```
+/// ```.
 template <typename VISITOR, typename... ARGS>
 inline Status
-VisitArrayInline(const Array& array, VISITOR* visitor, ARGS&&... args) {
+visitArrayInline(const Array& array, VISITOR* visitor, ARGS&&... args) {
   switch (array.type_id()) {
     ARROW_GENERATE_FOR_ALL_TYPES(ARRAY_VISIT_INLINE);
     default:

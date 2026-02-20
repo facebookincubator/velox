@@ -29,7 +29,7 @@ WaveHiveDataSource::WaveHiveDataSource(
     folly::Executor* executor,
     const connector::ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const exec::ExprSet* remainingFilter,
     std::shared_ptr<common::MetadataFilter> metadataFilter) {
   params_.hiveTableHandle = hiveTableHandle;
@@ -40,7 +40,7 @@ WaveHiveDataSource::WaveHiveDataSource(
   params_.executor = executor;
   params_.connectorQueryCtx = connectorQueryCtx;
   params_.hiveConfig = hiveConfig;
-  params_.ioStats = ioStats;
+  params_.ioStatistics = ioStatistics;
   remainingFilter_ = remainingFilter ? remainingFilter->exprs().at(0) : nullptr;
   metadataFilter_ = metadataFilter;
 }
@@ -68,8 +68,8 @@ void WaveHiveDataSource::setFromDataSource(
   splitReader_ = std::move(source->splitReader_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
-  source->params_.ioStats->merge(*params_.ioStats);
-  params_.ioStats = std::move(source->params_.ioStats);
+  source->params_.ioStatistics->merge(*params_.ioStatistics);
+  params_.ioStatistics = std::move(source->params_.ioStatistics);
 }
 
 void WaveHiveDataSource::addSplit(
@@ -174,7 +174,7 @@ void WaveHiveDataSource::registerConnector() {
          folly::Executor* executor,
          const connector::ConnectorQueryCtx* connectorQueryCtx,
          const std::shared_ptr<HiveConfig>& hiveConfig,
-         const std::shared_ptr<io::IoStatistics>& ioStats,
+         const std::shared_ptr<io::IoStatistics>& ioStatistics,
          const exec::ExprSet* remainingFilter,
          std::shared_ptr<common::MetadataFilter> metadataFilter) {
         return std::make_shared<WaveHiveDataSource>(
@@ -186,7 +186,7 @@ void WaveHiveDataSource::registerConnector() {
             executor,
             connectorQueryCtx,
             hiveConfig,
-            ioStats,
+            ioStatistics,
             remainingFilter,
             metadataFilter);
       });

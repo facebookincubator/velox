@@ -647,14 +647,6 @@ template <>
 void VectorHasher::analyzeValue(StringView value);
 
 template <>
-inline bool VectorHasher::tryMapToRange(
-    const StringView* /*values*/,
-    const SelectivityVector& /*rows*/,
-    uint64_t* /*result*/) {
-  return false;
-}
-
-template <>
 inline uint64_t VectorHasher::valueId(StringView value) {
   auto size = value.size();
   auto data = value.data();
@@ -748,10 +740,12 @@ inline bool VectorHasher::tryMapToRange(
 }
 
 template <>
-bool VectorHasher::tryMapToRange(
+inline bool VectorHasher::tryMapToRange(
     const StringView* /*values*/,
     const SelectivityVector& /*rows*/,
-    uint64_t* /*result*/);
+    uint64_t* /*result*/) {
+  return false;
+}
 
 template <>
 bool VectorHasher::makeValueIdsFlatNoNulls<bool>(

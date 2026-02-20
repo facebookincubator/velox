@@ -47,11 +47,15 @@ PYBIND11_MODULE(runner, m) {
       .def(
           "step",
           &velox::py::PyTaskIterator::step,
+          py::arg("plan_id") = "",
           py::keep_alive<0, 1>(),
           py::doc(R"(
         Steps through execution, returning either the input to the next
         operator with a breakpoint installed, or the next task output.
         If no breakpoints are set, then step() behaves like next().
+
+        If plan_id is specified, only stops at a breakpoint matching the
+        given plan node ID; breakpoints for other nodes are skipped.
           )"))
       .def(
           "current",
@@ -135,10 +139,28 @@ PYBIND11_MODULE(runner, m) {
           &velox::py::PyLocalDebuggerRunner::setBreakpoint,
           py::arg("plan_node_id"),
           py::doc(R"(
-        Sets a breakpoint at the specified plan node.
+        Sets a breakpoint at the specified plan node. The breakpoint will
+        always stop execution.
 
         Args:
           plan_node_id: The ID of the plan node where execution should pause.
+          )"))
+      .def(
+          "set_hook",
+          &velox::py::PyLocalDebuggerRunner::setHook,
+          py::arg("plan_node_id"),
+          py::arg("callback"),
+          py::doc(R"(
+        Sets a breakpoint with a callback at the specified plan node.
+
+        The callback is invoked with a Vector when the breakpoint is hit.
+        If the callback returns True, execution stops and the vector is
+        produced. If the callback returns False, execution continues
+        without stopping.
+
+        Args:
+          plan_node_id: The ID of the plan node where the hook is installed.
+          callback: Python function that takes a Vector and returns bool.
           )"));
 
   m.def(
