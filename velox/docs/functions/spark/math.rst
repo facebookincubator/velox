@@ -46,10 +46,16 @@ Mathematical Functions
 
     Returns inverse hyperbolic tangent of ``x``.
 
-.. spark:function:: add(x, y) -> [same as x]
+.. spark:function:: add(x, y) -> [same as x] (ANSI compliant)
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    Corresponds to sparks's operator ``+``.
+    For integral types, overflow returns NULL when ANSI mode is disabled;
+    throws an error otherwise.
+
+    Corresponds to Spark's operator ``+``. ::
+
+        SELECT 2147483647 + 1; -- -2147483648 (ANSI OFF) / ERROR (ANSI ON)
+        SELECT 127 + 1; -- -128 (ANSI OFF) / ERROR (ANSI ON) for TINYINT
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -138,12 +144,28 @@ Mathematical Functions
 .. spark:function:: divide(x, y) -> double
 
     Returns the results of dividing x by y. Performs floating point division.
-    Supported type is DOUBLE.
+    Supported types are DOUBLE and FLOAT.
+    Division by zero returns NULL (no error in any mode).
     Corresponds to Spark's operator ``/``. ::
 
-        SELECT 3 / 2; -- 1.5
-        SELECT 2L / 2L; -- 1.0
-        SELECT 3 / 0; -- NULL
+        SELECT 3.0 / 2.0; -- 1.5
+        SELECT 2.0 / 2.0; -- 1.0
+        SELECT 3.0 / 0.0; -- NULL
+
+.. spark:function:: divide(x, y) -> [same as x] (ANSI compliant for integers)
+
+    Returns the results of dividing x by y. Performs integer division.
+    Supported types are TINYINT, SMALLINT, INTEGER, and BIGINT.
+    Division by zero returns NULL when ANSI mode is disabled; throws an error otherwise.
+    Overflow (MIN_VALUE / -1) returns MIN_VALUE when ANSI mode is disabled; throws an error otherwise.
+
+    Corresponds to Spark's operator ``/``. ::
+
+        SELECT 10 / 3; -- 3
+        SELECT -10 / 3; -- -3
+        SELECT 5 / 0; -- NULL (ANSI OFF) / ERROR (ANSI ON)
+        SELECT -128 / -1; -- -128 (ANSI OFF) / ERROR (ANSI ON) for TINYINT
+        SELECT -2147483648 / -1; -- -2147483648 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
 
 .. spark:function:: divide(x, y) -> decimal
 
@@ -231,10 +253,16 @@ Mathematical Functions
 
     Returns the square root of ``x``.
 
-.. spark:function:: multiply(x, y) -> [same as x]
+.. spark:function:: multiply(x, y) -> [same as x] (ANSI compliant)
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
-    Corresponds to Spark's operator ``*``.
+    For integral types, overflow returns NULL when ANSI mode is disabled;
+    throws an error otherwise.
+
+    Corresponds to Spark's operator ``*``. ::
+
+        SELECT 2147483647 * 2; -- -2 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
+        SELECT 127 * 2; -- -2 (ANSI OFF) / ERROR (ANSI ON) for TINYINT
 
 .. spark:function:: multiply(x, y) -> [decimal]
 
@@ -328,10 +356,16 @@ Mathematical Functions
 
     Returns hyperbolic sine of ``x``.
 
-.. spark:function:: subtract(x, y) -> [same as x]
+.. spark:function:: subtract(x, y) -> [same as x] (ANSI compliant)
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    Corresponds to Spark's operator ``-``.
+    For integral types, overflow returns NULL when ANSI mode is disabled;
+    throws an error otherwise.
+
+    Corresponds to Spark's operator ``-``. ::
+
+        SELECT -2147483648 - 1; -- 2147483647 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
+        SELECT -128 - 1; -- 127 (ANSI OFF) / ERROR (ANSI ON) for TINYINT
 
 .. spark:function:: subtract(x, y) -> decimal
 
@@ -345,9 +379,16 @@ Mathematical Functions
         SELECT CAST(99999999999999999999999999999999.99998 as DECIMAL(38, 6)) - CAST(-0.00001 as DECIMAL(38, 5)); -- DECIMAL(38, 6) 99999999999999999999999999999999.999990
         SELECT CAST(-99999999999999999999999999999999990.0 as DECIMAL(38, 3)) - CAST(0.00001 as DECIMAL(38, 7)); -- DECIMAL(38, 6) NULL
 
-.. spark:function:: unaryminus(x) -> [same as x]
+.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the negative of ``x``. For integral types, negating the minimum value
+    returns the same minimum value when ANSI mode is disabled; throws an error otherwise.
+
+    Corresponds to Spark's unary operator ``-``. ::
+
+        SELECT -42; -- -42
+        SELECT -(-128); -- -128 (ANSI OFF) / ERROR (ANSI ON) for TINYINT
+        SELECT -(-2147483648); -- -2147483648 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
 
 .. spark:function:: unhex(x) -> varbinary
 
