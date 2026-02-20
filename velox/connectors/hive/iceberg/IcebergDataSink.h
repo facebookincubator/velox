@@ -258,9 +258,11 @@ class IcebergDataSink : public HiveDataSink {
   // size limits). Each entry corresponds to one individual data file.
   std::vector<IcebergDataFileStatisticsPtr> dataFileStats_;
 
-  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
-
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
+
+#ifdef VELOX_ENABLE_PARQUET
+  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
+#endif
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

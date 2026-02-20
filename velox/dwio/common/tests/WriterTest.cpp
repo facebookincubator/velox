@@ -51,9 +51,13 @@ class MockWriter : public Writer {
 
   void abort() override {}
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  void close() override {}
+#else
   std::unique_ptr<FileMetadata> close() override {
     return nullptr;
   }
+#endif
 };
 
 TEST(WriterTest, stateString) {

@@ -90,7 +90,11 @@ class Writer : public dwio::common::Writer {
     return true;
   }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  virtual void close() override;
+#else
   virtual std::unique_ptr<dwio::common::FileMetadata> close() override;
+#endif
 
   virtual void abort() override;
 
