@@ -175,6 +175,57 @@ BENCHMARK(cappedByteLengthUnicodeUnicode, iters) {
   folly::doNotOptimizeAway(total);
 }
 
+// ---------------------------------------------------------------------------
+// cappedLengthUnicode benchmarks
+// ---------------------------------------------------------------------------
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(cappedLengthUnicodeASCII, iters) {
+  folly::BenchmarkSuspender suspender;
+  StringCoreBenchmark::init(StringCoreBenchmark::StringProfile::kAscii);
+  suspender.dismiss();
+
+  int64_t total = 0;
+  for (unsigned i = 0; i < iters; ++i) {
+    for (const auto& s : StringCoreBenchmark::strings()) {
+      total +=
+          stringCore::cappedLengthUnicode(s.data(), s.size(), FLAGS_max_chars);
+    }
+  }
+  folly::doNotOptimizeAway(total);
+}
+
+BENCHMARK(cappedLengthUnicodeMixed, iters) {
+  folly::BenchmarkSuspender suspender;
+  StringCoreBenchmark::init(StringCoreBenchmark::StringProfile::kMixed);
+  suspender.dismiss();
+
+  int64_t total = 0;
+  for (unsigned i = 0; i < iters; ++i) {
+    for (const auto& s : StringCoreBenchmark::strings()) {
+      total +=
+          stringCore::cappedLengthUnicode(s.data(), s.size(), FLAGS_max_chars);
+    }
+  }
+  folly::doNotOptimizeAway(total);
+}
+
+BENCHMARK(cappedLengthUnicodeUnicode, iters) {
+  folly::BenchmarkSuspender suspender;
+  StringCoreBenchmark::init(StringCoreBenchmark::StringProfile::kUnicode);
+  suspender.dismiss();
+
+  int64_t total = 0;
+  for (unsigned i = 0; i < iters; ++i) {
+    for (const auto& s : StringCoreBenchmark::strings()) {
+      total +=
+          stringCore::cappedLengthUnicode(s.data(), s.size(), FLAGS_max_chars);
+    }
+  }
+  folly::doNotOptimizeAway(total);
+}
+
 int32_t main(int32_t argc, char** argv) {
   folly::Init init{&argc, &argv};
   folly::runBenchmarks();
