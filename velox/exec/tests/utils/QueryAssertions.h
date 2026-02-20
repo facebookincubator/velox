@@ -188,6 +188,18 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
         },
     uint64_t maxWaitMicros = 5'000'000);
 
+/// Run the query and return the number of result rows.
+std::pair<std::unique_ptr<TaskCursor>, uint64_t> countResults(
+    const CursorParameters& params,
+    std::function<void(TaskCursor*)> addSplits =
+        [](TaskCursor* taskCursor) {
+          if (taskCursor->noMoreSplits()) {
+            return;
+          }
+          taskCursor->setNoMoreSplits();
+        },
+    uint64_t maxWaitMicros = 5'000'000);
+
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
 /// returning to ensure it's stable e.g. the Driver isn't updating it anymore.

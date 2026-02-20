@@ -205,6 +205,12 @@ class AssertQueryBuilder {
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 
+  std::pair<std::unique_ptr<TaskCursor>, uint64_t> countCursor();
+
+  void prepareQueryCtx();
+
+  std::function<void(exec::TaskCursor*)> makeAddSplits();
+
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
         folly::hardware_concurrency());
