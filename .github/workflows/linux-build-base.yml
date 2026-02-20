@@ -235,33 +235,37 @@ jobs:
 
       - name: Copy Shared Libraries for cuDF Test Binaries
         if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        env:
+          CUDF_DIR: _build/release/velox/experimental/cudf
         run: |
-          mkdir -p _build/release/cudf-libs
+          mkdir -p $CUDF_DIR/cudf-libs
           deps=$( \
-            for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
+            for exe in $CUDF_DIR/tests/velox_cudf_*; \
               do ldd "$exe" 2>/dev/null; done | \
             sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | \
-            # don't copy cuda libraries
+            # don't copy cuda runtime and certain system libraries
             sed '/libcuda/ d' |  \
             sed '/librt.so/ d' |  \
+            sed '/libm.so/ d' |  \
+            sed '/libstdc++.so/ d' |  \
             sed '/ld-linux-x86-64.so/ d' |  \
             sed '/libc.so/ d' | sort -u \
           ) && \
-          # copy all "real" files and symlink targets to _build/release/cudf-libs
+          # copy all "real" files and symlink targets to $CUDF_DIR/cudf-libs
           ( \
             echo "$deps" | \
             xargs readlink -f | \
-            xargs -I {} cp {} _build/release/cudf-libs/ \
+            xargs -I {} cp {} $CUDF_DIR/cudf-libs/ \
           ) && \
           # filter out which libraries are symlinks
           lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) && \
           # write new symlinks to the same folder, with targets in the same folder
           ( \
-            cd _build/release/cudf-libs && \
+            cd $CUDF_DIR/cudf-libs && \
             echo "$lndeps" | \
             xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}
           ) && \
-          tar -cvf _build/release/cudf-libs.tar -C _build/release cudf-libs
+          tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
 
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -273,7 +277,7 @@ jobs:
             velox/experimental/cudf/tests/CMakeLists.txt
             _build/release/velox/experimental/cudf/tests/velox_cudf_*
             _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-            _build/release/cudf-libs.tar
+            _build/release/velox/experimental/cudf/cudf-libs.tar
           retention-days: ${{ env.RETENTION }}
 
   cudf-tests:
@@ -281,6 +285,8 @@ jobs:
     needs: adapters
     if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes && always() }}
     timeout-minutes: 30
+    env:
+      CUDF_DIR: _build/release/velox/experimental/cudf
     steps:
       - name: Check NVIDIA Driver Version
         run: |
@@ -300,28 +306,19 @@ jobs:
           # Change hardcoded workspace path in CTestTestfile.cmake to the runner workspace
           echo $PWD
           echo ${{ github.workspace }}
-          sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-          grep "Source directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
-          grep "Build directory" _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
+          sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' $CUDF_DIR/tests/CTestTestfile.cmake
+          grep "Source directory" $CUDF_DIR/tests/CTestTestfile.cmake
+          grep "Build directory" $CUDF_DIR/tests/CTestTestfile.cmake
           (cd _build/release && tar -xf cudf-libs.tar)
-          echo "$PWD/_build/release/cudf-libs" | sudo tee /etc/ld.so.conf.d/cudftests.conf > /dev/null
           ls _build/release/cudf-libs/
-          sudo ldconfig -v
-          echo $( \
-            for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
-              do ldd "$exe" 2>/dev/null; done | \
-            sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | sort -u
-          )
-          MISSING=$(for exe in _build/release/velox/experimental/cudf/tests/velox_cudf_*; \
-            do ldd "$exe" 2>/dev/null; done | \
-            grep "not found" | awk '{print $1}' | sort -u); \
-          if [ -n "$MISSING" ]; then echo "Missing libraries:"; echo "$MISSING"; exit 1; \
-          else echo "No missing libraries found"; fi
+          # Patch test executables
+          for exe in $CUDF_DIR/tests/velox_cudf_*; \
+            do patchelf --set-rpath '$ORIGIN/../cudf-libs' "$exe"
+          done
 
       - name: Run cuDF Tests
         run: |
-          export LD_LIBRARY_PATH="$PWD/_build/release/cudf-libs:$LD_LIBRARY_PATH"
-          cd _build/release/velox/experimental/cudf/tests/
+          cd $CUDF_DIR/tests/
           ctest --output-on-failure
 
   ubuntu-debug:
