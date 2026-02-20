@@ -452,7 +452,8 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$split_to_map",
     "$internal$canonicalize",
     "$internal$contains",
-    "localtime", // localtime cannot be called with paranthesis:
+    "current_time", // current_time cannot be called with parenthesis
+    "localtime", // localtime cannot be called with parenthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
     "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
     // Fuzzer and the underlying engine are confused about SetDigest functions
