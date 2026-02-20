@@ -454,8 +454,12 @@ void IcebergDataSink::closeInternal() {
     for (auto i = 0; i < writers_.size(); ++i) {
       memory::NonReclaimableSectionGuard nonReclaimableGuard(
           writerInfo_[i]->nonReclaimableSectionHolder.get());
+
+#ifdef VELOX_ENABLE_PARQUET
       dataFileStats_.emplace_back(
           parquetStatsCollector_->aggregate(writers_[i]->close()));
+#endif
+
       finalizeWriterFile(i);
     }
   } else {

@@ -175,10 +175,16 @@ void TextWriter::flush() {
   bufferedWriterSink_->flush();
 }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+void TextWriter::close() {
+  bufferedWriterSink_->close();
+}
+#else
 std::unique_ptr<dwio::common::FileMetadata> TextWriter::close() {
   bufferedWriterSink_->close();
   return std::make_unique<TextFileMetadata>();
 }
+#endif
 
 void TextWriter::abort() {
   bufferedWriterSink_->abort();

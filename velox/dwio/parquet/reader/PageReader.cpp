@@ -362,7 +362,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      if (type_->type()->isShortDecimal() &&
+      if ((type_->type()->isShortDecimal() || type_->type()->isTime()) &&
           parquetType == thrift::Type::INT32) {
         auto veloxTypeLength = type_->type()->cppSizeInBytes();
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
@@ -390,7 +390,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
         }
         stats_.pageLoadTimeNs.increment(readUs * 1'000);
       }
-      if (type_->type()->isShortDecimal() &&
+      if ((type_->type()->isShortDecimal() || type_->type()->isTime()) &&
           parquetType == thrift::Type::INT32) {
         auto values = dictionary_.values->asMutable<int64_t>();
         auto parquetValues = dictionary_.values->asMutable<int32_t>();

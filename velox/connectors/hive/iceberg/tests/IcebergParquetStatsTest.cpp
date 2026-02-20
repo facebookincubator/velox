@@ -22,6 +22,8 @@
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
+using namespace facebook::velox::common::testutil;
+
 namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
@@ -98,7 +100,7 @@ class IcebergParquetStatsTest : public test::IcebergTestBase {
   writeDataAndGetAllStats(
       const RowVectorPtr& data,
       const std::vector<test::PartitionField>& partitionFields = {}) {
-    const auto outputDir = exec::test::TempDirectoryPath::create();
+    const auto outputDir = TempDirectoryPath::create();
     auto dataSink = createDataSinkAndAppendData(
         {data}, outputDir->getPath(), partitionFields);
     auto commitTasks = dataSink->close();
