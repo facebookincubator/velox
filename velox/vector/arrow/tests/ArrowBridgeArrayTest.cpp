@@ -658,7 +658,7 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
       vectorMaker_.flatVectorNullable(col1),
   });
 
-  // Setting a few null elements.
+  // Setting null elements in the parent RowVector
   vector->setNull(1, true);
   vector->setNull(3, true);
   vector->setNull(7, true);
@@ -677,8 +677,11 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
   EXPECT_NE(nullptr, arrowArray.children);
   EXPECT_EQ(nullptr, arrowArray.dictionary);
 
-  // Validate data in the children arrays.
-  validateNumericalArray(col1, *arrowArray.children[0]);
+  // Expect children arrays to inherit parent nulls.
+  // Positions 1, 3, 7 are null in parent, so child must also be null there.
+  std::vector<std::optional<int64_t>> expectedCol1 = {
+      0, std::nullopt, 2, std::nullopt, 4, 5, 6, std::nullopt, 8, 9};
+  validateNumericalArray(expectedCol1, *arrowArray.children[0]);
 
   // Check if the null buffer has the correct bits set.
   const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
@@ -690,6 +693,117 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
   arrowArray.release(&arrowArray);
   EXPECT_EQ(nullptr, arrowArray.release);
   EXPECT_EQ(nullptr, arrowArray.private_data);
+}
+
+// Test that parent struct nulls are propagated to children during Arrow export.
+// This ensures the invariant that if null bitmap says NOT-NULL, data is valid.
+TEST_F(ArrowBridgeArrayExportTest, rowVectorNullPropagation) {
+  // Create child with no nulls
+  auto child = vectorMaker_.flatVector<int64_t>({10, 20, 30, 40, 50});
+
+  // Create parent with nulls at positions 1 and 3
+  auto parent = vectorMaker_.rowVector({child});
+  parent->setNull(1, true);
+  parent->setNull(3, true);
+  parent->setNullCount(2);
+
+  ArrowArray arrowArray;
+  velox::exportToArrow(parent, arrowArray, pool_.get(), options_);
+
+  // Verify parent structure
+  EXPECT_EQ(5, arrowArray.length);
+  EXPECT_EQ(2, arrowArray.null_count);
+
+  // Verify child null propagation
+  ArrowArray* childArrow = arrowArray.children[0];
+  EXPECT_NE(nullptr, childArrow);
+  EXPECT_GE(childArrow->null_count, 2); // At least 2 nulls from parent
+
+  // Verify the null bits in child
+  const uint64_t* childNulls =
+      static_cast<const uint64_t*>(childArrow->buffers[0]);
+  EXPECT_NE(nullptr, childNulls);
+  EXPECT_TRUE(bits::isBitNull(childNulls, 1)); // Parent null at 1
+  EXPECT_TRUE(bits::isBitNull(childNulls, 3)); // Parent null at 3
+  EXPECT_FALSE(bits::isBitNull(childNulls, 0)); // Not null
+  EXPECT_FALSE(bits::isBitNull(childNulls, 2)); // Not null
+  EXPECT_FALSE(bits::isBitNull(childNulls, 4)); // Not null
+
+  arrowArray.release(&arrowArray);
+}
+
+// Test that parent struct nulls are propagated to TIMESTAMP children.
+TEST_F(ArrowBridgeArrayExportTest, rowVectorNullPropagationTimestamp) {
+  // Create timestamp child - values at positions 1, 3 are garbage
+  auto child = vectorMaker_.flatVector<Timestamp>(
+      {Timestamp(1000, 0),
+       Timestamp(2000, 0),
+       Timestamp(3000, 0),
+       Timestamp(4000, 0),
+       Timestamp(5000, 0)});
+
+  // Create parent with nulls at positions 1 and 3
+  auto parent = vectorMaker_.rowVector({child});
+  parent->setNull(1, true);
+  parent->setNull(3, true);
+  parent->setNullCount(2);
+
+  ArrowArray arrowArray;
+  // Garbage data at null positions should be skipped
+  EXPECT_NO_THROW(
+      velox::exportToArrow(parent, arrowArray, pool_.get(), options_));
+
+  // Verify child null propagation
+  ArrowArray* childArrow = arrowArray.children[0];
+  EXPECT_NE(nullptr, childArrow);
+  EXPECT_GE(childArrow->null_count, 2);
+
+  const uint64_t* childNulls =
+      static_cast<const uint64_t*>(childArrow->buffers[0]);
+  EXPECT_NE(nullptr, childNulls);
+  EXPECT_TRUE(bits::isBitNull(childNulls, 1));
+  EXPECT_TRUE(bits::isBitNull(childNulls, 3));
+
+  arrowArray.release(&arrowArray);
+}
+
+// Test null propagation with multiple children of different types.
+TEST_F(ArrowBridgeArrayExportTest, rowVectorNullPropagationMultipleChildren) {
+  auto intChild = vectorMaker_.flatVector<int64_t>({10, 20, 30, 40});
+  auto doubleChild = vectorMaker_.flatVector<double>({1.1, 2.2, 3.3, 4.4});
+  auto stringChild = vectorMaker_.flatVector<std::string>({"a", "b", "c", "d"});
+  auto timestampChild = vectorMaker_.flatVector<Timestamp>(
+      {Timestamp(100, 0),
+       Timestamp(200, 0),
+       Timestamp(300, 0),
+       Timestamp(400, 0)});
+
+  auto parent = vectorMaker_.rowVector(
+      {intChild, doubleChild, stringChild, timestampChild});
+  parent->setNull(1, true);
+  parent->setNull(2, true);
+  parent->setNullCount(2);
+
+  ArrowArray arrowArray;
+  EXPECT_NO_THROW(
+      velox::exportToArrow(parent, arrowArray, pool_.get(), options_));
+
+  // All children should have nulls at positions 1 and 2
+  for (int i = 0; i < 4; ++i) {
+    ArrowArray* childArrow = arrowArray.children[i];
+    EXPECT_NE(nullptr, childArrow);
+    EXPECT_GE(childArrow->null_count, 2);
+
+    const uint64_t* childNulls =
+        static_cast<const uint64_t*>(childArrow->buffers[0]);
+    EXPECT_NE(nullptr, childNulls);
+    EXPECT_FALSE(bits::isBitNull(childNulls, 0));
+    EXPECT_TRUE(bits::isBitNull(childNulls, 1));
+    EXPECT_TRUE(bits::isBitNull(childNulls, 2));
+    EXPECT_FALSE(bits::isBitNull(childNulls, 3));
+  }
+
+  arrowArray.release(&arrowArray);
 }
 
 TEST_F(ArrowBridgeArrayExportTest, rowVectorEmpty) {
