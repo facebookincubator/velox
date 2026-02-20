@@ -92,7 +92,18 @@ template <>
 struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
 
 template <>
-struct CppToType<Time> : public CppToTypeBase<TypeKind::BIGINT> {};
+struct CppToType<Time> : public CppToTypeBase<TypeKind::BIGINT> {
+  static auto create() {
+    return TIME();
+  }
+};
+
+template <>
+struct CppToType<TimeMicro> : public CppToTypeBase<TypeKind::BIGINT> {
+  static auto create() {
+    return TIME_MICRO();
+  }
+};
 
 // TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
 // can declare "registered" types explicitly

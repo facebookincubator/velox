@@ -112,6 +112,7 @@ TEST_F(TypeParserTest, varbinary) {
 
 TEST_F(TypeParserTest, time) {
   ASSERT_EQ(*parseType("time"), *TIME());
+  ASSERT_EQ(*parseType("time micro"), *TIME_MICRO());
 }
 
 TEST_F(TypeParserTest, timeWithTimeZoneType) {

@@ -1563,14 +1563,62 @@ FOLLY_ALWAYS_INLINE bool Type::isDate() const {
   return this == DATE().get();
 }
 
-/// Represents TIME as a bigint (milliseconds since midnight).
-class TimeType final : public BigintType {
-  TimeType() = default;
+enum class TimePrecision : int8_t {
+  kMilliseconds = 3, // Presto: milliseconds since midnight (10^3 ms = 1 second)
+  kMicroseconds = 6, // Spark: microseconds since midnight (10^6 μs = 1 second)
+};
 
+VELOX_DECLARE_ENUM_NAME(TimePrecision);
+
+/// Base template class for TIME types with configurable precision.
+/// - Presto: milliseconds since midnight (precision = kMilliseconds).
+/// - Spark: microseconds since midnight (precision = kMicroseconds). Not
+/// timezone aware.
+template <TimePrecision PRECISION>
+class TimeType : public BigintType {
  public:
-  static std::shared_ptr<const TimeType> get() {
-    VELOX_CONSTEXPR_SINGLETON TimeType kInstance;
-    return {std::shared_ptr<const TimeType>{}, &kInstance};
+  static_assert(
+      PRECISION == TimePrecision::kMilliseconds ||
+      PRECISION == TimePrecision::kMicroseconds);
+
+  std::string toString() const override {
+    return name();
+  }
+
+  int64_t getMin() const {
+    return 0;
+  }
+
+  /// Maximum valid time value based on precision. For milliseconds:
+  /// 23:59:59.999 (86,399,999 ms). For microseconds: 23:59:59.999999
+  /// (86,399,999,999 μs).
+  int64_t getMax() const {
+    return PRECISION == TimePrecision::kMilliseconds ? kMillisInDay - 1
+                                                     : kMillisInDay * 1000 - 1;
+  }
+
+  /// When casting from TIME to varchar, the resultant varchar size depends on
+  /// precision: 12 bytes for milliseconds (HH:MM:SS.mmm), 15 bytes for
+  /// microseconds (HH:MM:SS.mmmmmm).
+  int32_t timeToVarcharRowSize() const {
+    return PRECISION == TimePrecision::kMilliseconds ? 12 : 15;
+  }
+
+ protected:
+  constexpr TimeType() = default;
+};
+
+// TIME type with millisecond precision (Presto-compatible).
+class TimeMilliPrecisionType final
+    : public TimeType<TimePrecision::kMilliseconds> {
+ public:
+  static std::shared_ptr<const TimeMilliPrecisionType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimeMilliPrecisionType kInstance;
+    return {std::shared_ptr<const TimeMilliPrecisionType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "TIME";
   }
 
   bool equivalent(const Type& other) const override {
@@ -1578,16 +1626,12 @@ class TimeType final : public BigintType {
     return this == &other;
   }
 
-  const char* name() const override {
-    return "TIME";
-  }
+  folly::dynamic serialize() const override;
 
-  std::string toString() const override {
-    return name();
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 
   /// Returns the time 'value' (milliseconds since midnight) formatted as
-  /// HH:MM:SS.mmm .
+  /// HH:MM:SS.mmm.
   /// It is the callers responsiblity to ensure that the value is in range
   /// and converted to the right time zone.
   StringView valueToString(int64_t value, char* const startPos) const;
@@ -1608,19 +1652,31 @@ class TimeType final : public BigintType {
       const tz::TimeZone* timeZone,
       int64_t sessionStartTimeMs) const;
 
+ private:
+  constexpr TimeMilliPrecisionType() = default;
+};
+
+// TIME type with microsecond precision (Spark-compatible).
+class TimeMicroPrecisionType final
+    : public TimeType<TimePrecision::kMicroseconds> {
+ public:
+  static std::shared_ptr<const TimeMicroPrecisionType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimeMicroPrecisionType kInstance;
+    return {std::shared_ptr<const TimeMicroPrecisionType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "TIME MICRO";
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
   folly::dynamic serialize() const override;
 
-  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
-    return TimeType::get();
-  }
-
-  bool isOrderable() const override {
-    return true;
-  }
-
-  bool isComparable() const override {
-    return true;
-  }
+  static TypePtr deserialize(const folly::dynamic& obj);
 
   /// Converts microseconds since midnight to a compact ISO-8601 time string by
   /// following rules:
@@ -1648,31 +1704,33 @@ class TimeType final : public BigintType {
   /// - 86'399'999'999 -> "23:59:59.999999"
   static std::string toCompactIso8601(int64_t microseconds);
 
-  // When casting from TIME to varchar , the resultant varchar will always
-  // be 12 bytes long (HH:MM:SS.mmm).
-  static const size_t kTimeToVarcharRowSize = 12;
-
-  /// Minimum valid time value (milliseconds since midnight): 00:00:00.000
-  static constexpr int64_t kMin = 0;
-
-  /// Maximum valid time value (milliseconds since midnight): 23:59:59.999
-  static constexpr int64_t kMax = kMillisInDay - 1;
+ private:
+  constexpr TimeMicroPrecisionType() = default;
 };
 
-using TimeTypePtr = std::shared_ptr<const TimeType>;
-
+// Convenience pointer type (defaults to millisecond precision).
+using TimeTypePtr = std::shared_ptr<const TimeMilliPrecisionType>;
 FOLLY_ALWAYS_INLINE TimeTypePtr TIME() {
-  return TimeType::get();
+  return TimeMilliPrecisionType::get();
+}
+
+using TimeMicroPrecisionTypePtr = std::shared_ptr<const TimeMicroPrecisionType>;
+FOLLY_ALWAYS_INLINE TimeMicroPrecisionTypePtr TIME_MICRO() {
+  return TimeMicroPrecisionType::get();
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isTime() const {
-  // Pointer comparison works since this type is a singleton.
-  return (this == TIME().get());
+  return (this == TIME().get()) || (this == TIME_MICRO().get());
 }
 
 struct Time {
  private:
   Time() {}
+};
+
+struct TimeMicro {
+ private:
+  TimeMicro() {}
 };
 
 /// Used as T for SimpleVector subclasses that wrap another vector when

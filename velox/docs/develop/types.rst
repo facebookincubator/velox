@@ -116,6 +116,7 @@ DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
 INTERVAL DAY TO SECOND  BIGINT
 INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
+TIME_MICRO              BIGINT
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -131,8 +132,9 @@ upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
 
-TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
-TIME type is backed by BIGINT physical type.
+TIME type represents time in milliseconds from midnight UTC. Thus min/max value can range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
+TIME_MICRO type represents time in microseconds from midnight. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999 modulo 24 hours.
+TIME and TIME_MICRO types are backed by BIGINT physical type.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -303,6 +305,11 @@ key differences are listed below.
               (cast('2014-03-08 09:00:00.012345678' as timestamp))
       ) AS t(ts);
       -- 2014-03-08 09:00:00.012345
+
+* Spark operates on the TIME_MICRO type for "microsecond" precision, while Presto uses the standard TIME type.
+  Example::
+
+      SELECT cast(time'12:30:45.123456' as bigint);  -- 45,045,123,456
 
 * In function comparisons, nested null values are handled as values.
   Example::
