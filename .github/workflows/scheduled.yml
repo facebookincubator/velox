@@ -1475,3 +1475,73 @@ jobs:
     uses: ./.github/workflows/linux-build-base.yml
     with:
       use-clang: true
+
+  ubuntu-debug-bundled-deps:
+    runs-on: 16-core-ubuntu
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    name: Ubuntu debug with bundled dependencies
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+    defaults:
+      run:
+        shell: bash
+        working-directory: velox
+    steps:
+
+      - name: Get Ccache Stash
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-ubuntu-debug-bundled-deps
+
+      - name: Ensure Stash Dirs Exists
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p "$CCACHE_DIR"
+
+      - uses: actions/checkout@v5
+        with:
+          path: velox
+          persist-credentials: false
+
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps
+
+      - name: Clear CCache Statistics
+        run: |
+          ccache -sz
+
+      - name: Make Debug Build
+        env:
+          VELOX_DEPENDENCY_SOURCE: BUNDLED
+          ICU_SOURCE: SYSTEM
+          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
+        run: |
+          EXTRA_CMAKE_FLAGS=(
+            "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_EXAMPLES=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_GEO=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_MONO_LIBRARY=ON"
+            "-DVELOX_BUILD_SHARED=ON"
+            "-DVELOX_ENABLE_FAISS=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+          )
+          make debug
+
+      - name: CCache after
+        run: |
+          ccache -vs
+
+      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-ubuntu-debug-bundled-deps
+
+      - name: Run Tests
+        run: |
+          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error

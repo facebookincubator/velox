@@ -261,7 +261,7 @@ jobs:
 
       - name: Make Debug Build
         env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
+          VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
         run: |
