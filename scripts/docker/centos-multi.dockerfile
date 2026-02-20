@@ -98,7 +98,9 @@ CMD ["/bin/bash"]
 ########################
 FROM base-image AS pyvelox
 
-ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}"
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
+ && echo "/usr/local/lib64" >> /etc/ld.so.conf.d/velox_deps.conf \
+ && ldconfig
 
 ########################
 # Stage: Adapters Build#
@@ -163,10 +165,12 @@ ENV HADOOP_HOME=/usr/local/hadoop \
     JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk \
     PATH=/usr/lib/jvm/java-1.8.0-openjdk/bin:${PATH}
 
-# thrift1 requires shared libraries copied from /deps to /usr/local.
-ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}"
-
 COPY --from=adapters-build /deps /usr/local
+
+# thrift1 requires shared libraries copied from /deps to /usr/local.
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
+ && echo "/usr/local/lib64" >> /etc/ld.so.conf.d/velox_deps.conf \
+ && ldconfig
 
 COPY scripts/setup-classpath.sh /
 ENTRYPOINT ["/bin/bash", "-c", "source /setup-classpath.sh && source /opt/rh/gcc-toolset-12/enable && exec \"$@\"", "--"]
