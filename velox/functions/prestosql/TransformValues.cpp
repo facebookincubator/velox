@@ -16,8 +16,6 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
-#include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -39,36 +37,23 @@ class TransformValuesFunction : public exec::VectorFunction {
 
     auto flatMap = flattenMap(rows, args[0], decodedMap);
 
-    std::vector<VectorPtr> lambdaArgs = {
+    auto numElements = flatMap->mapKeys()->size();
+    const std::vector<VectorPtr> lambdaArgs = {
         flatMap->mapKeys(), flatMap->mapValues()};
-    auto numValues = flatMap->mapValues()->size();
-
     SelectivityVector validRowsInReusedResult =
-        toElementRows<MapVector>(numValues, rows, flatMap.get());
+        toElementRows<MapVector>(numElements, rows, flatMap.get());
 
     VectorPtr transformedValues;
-
-    auto elementToTopLevelRows = getElementToTopLevelRows(
-        numValues, rows, flatMap.get(), context.pool());
-
-    // Loop over lambda functions and apply these to values of the map.
-    // In most cases there will be only one function and the loop will run once.
-    auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
-    while (auto entry = it.next()) {
-      auto valueRows =
-          toElementRows<MapVector>(numValues, *entry.rows, flatMap.get());
-      auto wrapCapture = toWrapCapture<MapVector>(
-          numValues, entry.callable, *entry.rows, flatMap);
-
-      entry.callable->apply(
-          valueRows,
-          &validRowsInReusedResult,
-          wrapCapture,
-          &context,
-          lambdaArgs,
-          elementToTopLevelRows,
-          &transformedValues);
-    }
+    // Apply lambda to map values.
+    applyLambdaToElements<MapVector>(
+        args[1],
+        rows,
+        numElements,
+        flatMap,
+        lambdaArgs,
+        validRowsInReusedResult,
+        context,
+        transformedValues);
 
     // Set nulls for rows not present in 'rows'.
     BufferPtr newNulls = addNullsForUnselectedRows(flatMap, rows);
