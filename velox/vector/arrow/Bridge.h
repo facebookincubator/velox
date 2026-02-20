@@ -40,6 +40,12 @@ struct ArrowOptions {
   std::optional<std::string> timestampTimeZone{std::nullopt};
   // Export VARCHAR and VARBINARY to Arrow 15 StringView format
   bool exportToStringView = false;
+  // Export VARBINARY as UTF-8 string (for consumers that lack binary support).
+  bool exportVarbinaryAsString = false;
+  // Respect the width component of decimal type format string.
+  // Default value requires Arrow 18.0+ or NanoArrow 0.7.0+.
+  // Client code (e.g. Gluten) must set this to false for older Arrow versions.
+  bool useDecimalTypeWidth = true;
 };
 
 namespace facebook::velox {
