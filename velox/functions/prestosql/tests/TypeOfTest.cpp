@@ -63,6 +63,9 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("timestamp", typeOf(TIMESTAMP()));
   EXPECT_EQ("date", typeOf(DATE()));
   EXPECT_EQ("time", typeOf(TIME()));
+  EXPECT_EQ("time milli utc", typeOf(TimeMilliPrecisionUtcType::get()));
+  EXPECT_EQ("time micro", typeOf(TimeMicroPrecisionType::get()));
+  EXPECT_EQ("time micro utc", typeOf(TIME_MICRO_UTC()));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 

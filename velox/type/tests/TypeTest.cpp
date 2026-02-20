@@ -1219,7 +1219,7 @@ TEST(TypeTest, toSummaryString) {
 
 TEST(TypeTest, time) {
   const auto timeType = TIME();
-  ASSERT_EQ(timeType->toString(), "TIME");
+
   ASSERT_EQ(timeType->size(), 0);
   VELOX_ASSERT_THROW(timeType->childAt(0), "scalar type has no children");
   ASSERT_EQ(timeType->kind(), TypeKind::BIGINT); // Physical type
@@ -1238,12 +1238,119 @@ TEST(TypeTest, time) {
   ASSERT_TRUE(timeType->isComparable());
 
   testTypeSerde(timeType);
+
+  ASSERT_EQ(timeType->toString(), "TIME");
+  ASSERT_EQ(timeType->getMin(), 0);
+  ASSERT_EQ(timeType->getMax(), 86'399'999);
+}
+
+TEST(TypeTest, timeMilliUtc) {
+  const auto timeType = TimeMilliPrecisionUtcType::get();
+
+  ASSERT_EQ(timeType->size(), 0);
+  VELOX_ASSERT_THROW(timeType->childAt(0), "scalar type has no children");
+  ASSERT_EQ(timeType->kind(), TypeKind::BIGINT); // Physical type
+  EXPECT_STREQ(timeType->kindName(), "BIGINT"); // Physical kind name
+  ASSERT_EQ(timeType->begin(), timeType->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(timeType), 1);
+
+  // Test logical vs physical type behavior (similar to DATE test)
+  ASSERT_TRUE(timeType->kindEquals(BIGINT())); // Same physical kind
+  ASSERT_NE(*timeType, *BIGINT()); // Different logical types
+  ASSERT_FALSE(timeType->equivalent(*BIGINT())); // Not equivalent
+  ASSERT_FALSE(BIGINT()->equivalent(*timeType)); // Not equivalent reverse
+
+  // Test orderability and comparability
+  ASSERT_TRUE(timeType->isOrderable());
+  ASSERT_TRUE(timeType->isComparable());
+
+  testTypeSerde(timeType);
+
+  ASSERT_EQ(timeType->toString(), "TIME MILLI UTC");
+  ASSERT_EQ(timeType->getMin(), 0);
+  ASSERT_EQ(timeType->getMax(), 86'399'999);
+}
+
+TEST(TypeTest, timeMicro) {
+  const auto timeType = TimeMicroPrecisionType::get();
+  ASSERT_EQ(timeType->size(), 0);
+  VELOX_ASSERT_THROW(timeType->childAt(0), "scalar type has no children");
+  ASSERT_EQ(timeType->kind(), TypeKind::BIGINT); // Physical type
+  EXPECT_STREQ(timeType->kindName(), "BIGINT"); // Physical kind name
+  ASSERT_EQ(timeType->begin(), timeType->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(timeType), 1);
+
+  // Test logical vs physical type behavior (similar to DATE test)
+  ASSERT_TRUE(timeType->kindEquals(BIGINT())); // Same physical kind
+  ASSERT_NE(*timeType, *BIGINT()); // Different logical types
+  ASSERT_FALSE(timeType->equivalent(*BIGINT())); // Not equivalent
+  ASSERT_FALSE(BIGINT()->equivalent(*timeType)); // Not equivalent reverse
+
+  // Test orderability and comparability
+  ASSERT_TRUE(timeType->isOrderable());
+  ASSERT_TRUE(timeType->isComparable());
+
+  testTypeSerde(timeType);
+  ASSERT_EQ(timeType->toString(), "TIME MICRO");
+  ASSERT_EQ(timeType->getMin(), 0);
+  ASSERT_EQ(timeType->getMax(), 86'399'999'999);
+}
+
+TEST(TypeTest, timeMicroUtc) {
+  const auto timeType = TIME_MICRO_UTC();
+  ASSERT_EQ(timeType->size(), 0);
+  VELOX_ASSERT_THROW(timeType->childAt(0), "scalar type has no children");
+  ASSERT_EQ(timeType->kind(), TypeKind::BIGINT); // Physical type
+  EXPECT_STREQ(timeType->kindName(), "BIGINT"); // Physical kind name
+  ASSERT_EQ(timeType->begin(), timeType->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(timeType), 1);
+
+  // Test logical vs physical type behavior (similar to DATE test)
+  ASSERT_TRUE(timeType->kindEquals(BIGINT())); // Same physical kind
+  ASSERT_NE(*timeType, *BIGINT()); // Different logical types
+  ASSERT_FALSE(timeType->equivalent(*BIGINT())); // Not equivalent
+  ASSERT_FALSE(BIGINT()->equivalent(*timeType)); // Not equivalent reverse
+
+  // Test orderability and comparability
+  ASSERT_TRUE(timeType->isOrderable());
+  ASSERT_TRUE(timeType->isComparable());
+
+  testTypeSerde(timeType);
+  ASSERT_EQ(timeType->toString(), "TIME MICRO UTC");
+  ASSERT_EQ(timeType->getMin(), 0);
+  ASSERT_EQ(timeType->getMax(), 86'399'999'999);
+}
+
+TEST(TypeTest, timeTypeComparison) {
+  auto TIME_MILLI_UTC = []() { return TimeMilliPrecisionUtcType::get(); };
+  auto TIME_MICRO = []() { return TimeMicroPrecisionType::get(); };
+
+  EXPECT_TRUE(TIME()->equivalent(*TIME()));
+  EXPECT_TRUE(TIME_MILLI_UTC()->equivalent(*TIME_MILLI_UTC()));
+  EXPECT_TRUE(TIME_MICRO()->equivalent(*TIME_MICRO()));
+  EXPECT_TRUE(TIME_MICRO_UTC()->equivalent(*TIME_MICRO_UTC()));
+
+  EXPECT_FALSE(TIME()->equivalent(*TIME_MILLI_UTC()));
+  EXPECT_FALSE(TIME()->equivalent(*TIME_MICRO()));
+  EXPECT_FALSE(TIME()->equivalent(*TIME_MICRO_UTC()));
+
+  EXPECT_FALSE(TIME_MILLI_UTC()->equivalent(*TIME()));
+  EXPECT_FALSE(TIME_MILLI_UTC()->equivalent(*TIME_MICRO()));
+  EXPECT_FALSE(TIME_MILLI_UTC()->equivalent(*TIME_MICRO_UTC()));
+
+  EXPECT_FALSE(TIME_MICRO()->equivalent(*TIME()));
+  EXPECT_FALSE(TIME_MICRO()->equivalent(*TIME_MILLI_UTC()));
+  EXPECT_FALSE(TIME_MICRO()->equivalent(*TIME_MICRO_UTC()));
+
+  EXPECT_FALSE(TIME_MICRO_UTC()->equivalent(*TIME()));
+  EXPECT_FALSE(TIME_MICRO_UTC()->equivalent(*TIME_MILLI_UTC()));
+  EXPECT_FALSE(TIME_MICRO_UTC()->equivalent(*TIME_MICRO()));
 }
 
 TEST(TypeTest, timeToIso8601) {
   const auto toIso8601 =
       [](int64_t hours, int64_t minutes, int64_t seconds, int64_t micros) {
-        return TimeType::toCompactIso8601(
+        return TimeMicroPrecisionUtcType::toCompactIso8601(
             hours * util::kMicrosPerHour + minutes * util::kMicrosPerMinute +
             seconds * util::kMicrosPerSec + micros);
       };
