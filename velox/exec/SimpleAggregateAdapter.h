@@ -18,8 +18,42 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::exec {
+
+// AggregateInputType is similar to Row but allows Variadic as the last element.
+// Unlike Row, this type is not meant to be serialized or used as a data type
+// in Velox vectors - it's only used for type deduction in
+// SimpleAggregateAdapter.
+template <typename... T>
+struct AggregateInputType {
+  template <size_t idx>
+  using type_at = typename std::tuple_element<idx, std::tuple<T...>>::type;
+
+  static const size_t size_ = sizeof...(T);
+
+  // Verify that Variadic, if present, is only at the last position.
+  static_assert(
+      []() constexpr {
+        if constexpr (sizeof...(T) <= 1) {
+          return true;
+        } else {
+          // Check that no element except possibly the last is Variadic
+          constexpr bool checks[] = {!isVariadicType<T>::value...};
+          for (size_t i = 0; i < sizeof...(T) - 1; ++i) {
+            if (!checks[i]) {
+              return false;
+            }
+          }
+          return true;
+        }
+      }(),
+      "Variadic can only appear at the end of aggregation input type");
+
+ private:
+  AggregateInputType() {}
+};
 
 // The writer type of T used in simple UDAF interface. An instance of
 // out_type allows writing one row into the output vector.
@@ -249,8 +283,7 @@ class SimpleAggregateAdapter : public Aggregate {
       inputDecoded_[i].decode(*args[i], rows);
     }
 
-    addRawInputImpl(
-        groups, rows, std::make_index_sequence<FUNC::InputType::size_>{});
+    addRawInputImpl(groups, rows);
   }
 
   // Similar to addRawInput, but add inputs to one single accumulator.
@@ -267,8 +300,7 @@ class SimpleAggregateAdapter : public Aggregate {
       inputDecoded_[i].decode(*args[i], rows);
     }
 
-    addSingleGroupRawInputImpl(
-        group, rows, std::make_index_sequence<FUNC::InputType::size_>{});
+    addSingleGroupRawInputImpl(group, rows);
   }
 
   bool supportsToIntermediate() const override {
@@ -285,11 +317,7 @@ class SimpleAggregateAdapter : public Aggregate {
         inputDecoded[i].decode(*args[i], rows);
       }
 
-      toIntermediateImpl(
-          inputDecoded,
-          rows,
-          result,
-          std::make_index_sequence<FUNC::InputType::size_>{});
+      toIntermediateImpl(inputDecoded, rows, result);
     } else {
       VELOX_UNREACHABLE(
           "toIntermediate should only be called when support_to_intermediate_ is true.");
@@ -408,18 +436,97 @@ class SimpleAggregateAdapter : public Aggregate {
   }
 
  private:
-  template <std::size_t... Is>
-  void addRawInputImpl(
+  // Check if InputType has a variadic argument (must be at the last position).
+  static constexpr bool hasVariadicInput() {
+    if constexpr (FUNC::InputType::size_ == 0) {
+      return false;
+    } else {
+      return isVariadicType<typename FUNC::InputType::template type_at<
+          FUNC::InputType::size_ - 1>>::value;
+    }
+  }
+
+  static constexpr bool has_variadic_input_ = hasVariadicInput();
+
+  // The position in InputType where the variadic argument starts.
+  static constexpr int32_t variadicStartPosition_ =
+      has_variadic_input_ ? FUNC::InputType::size_ - 1 : FUNC::InputType::size_;
+
+  // Check if an input at POSITION is non-null for the given row. For
+  // non-variadic inputs this checks isSet(). For variadic inputs this checks
+  // hasTopLevelNull(), which inspects each variadic element's top-level
+  // nullity. This matches the expression layer's per-input null deselection
+  // for simple scalar functions.
+  template <size_t POSITION, typename TReader>
+  static bool isInputNonNull(const TReader& reader, vector_size_t row) {
+    if constexpr (POSITION >= variadicStartPosition_) {
+      return !reader.hasTopLevelNull(row);
+    } else {
+      return reader.isSet(row);
+    }
+  }
+
+  // Generic recursive unpacking function that creates VectorReaders for each
+  // input type and invokes the callback with all accumulated readers.
+  template <std::size_t POSITION, typename Callback, typename... TReader>
+  void unpackInputs(
+      const std::vector<DecodedVector>& inputDecoded,
+      const Callback& callback,
+      TReader&... readers) const {
+    if constexpr (POSITION == FUNC::InputType::size_) {
+      callback(readers...);
+    } else if constexpr (isVariadicType<
+                             typename FUNC::InputType::template type_at<
+                                 POSITION>>::value) {
+      static_assert(
+          POSITION == FUNC::InputType::size_ - 1,
+          "Variadic must be the last argument");
+      using VariadicT = typename FUNC::InputType::template type_at<POSITION>;
+      VectorReader<VariadicT> variadicReader(
+          inputDecoded, variadicStartPosition_);
+      callback(readers..., variadicReader);
+    } else {
+      VectorReader<typename FUNC::InputType::template type_at<POSITION>> reader(
+          &inputDecoded[POSITION]);
+      unpackInputs<POSITION + 1>(inputDecoded, callback, readers..., reader);
+    }
+  }
+
+  void addRawInputImpl(char** groups, const SelectivityVector& rows) {
+    unpackInputs<0>(inputDecoded_, [&](auto&... readers) {
+      addRawInputWithReaders(groups, rows, readers...);
+    });
+  }
+
+  template <typename... TReader>
+  void addRawInputWithReaders(
       char** groups,
       const SelectivityVector& rows,
-      std::index_sequence<Is...>) {
-    std::tuple<VectorReader<typename FUNC::InputType::template type_at<Is>>...>
-        readers{&inputDecoded_[Is]...};
+      TReader&... readers) {
+    addRawInputWithReadersImpl(
+        groups,
+        rows,
+        std::make_index_sequence<sizeof...(TReader)>{},
+        readers...);
+  }
+
+  // Process rows with the accumulated readers. Use Is to access the original
+  // input types to create OptionalAccessor.
+  template <std::size_t... Is, typename... TReader>
+  void addRawInputWithReadersImpl(
+      char** groups,
+      const SelectivityVector& rows,
+      std::index_sequence<Is...>,
+      TReader&... readers) {
+    static_assert(
+        sizeof...(Is) == FUNC::InputType::size_,
+        "Reader count must match InputType size");
 
     if constexpr (aggregate_default_null_behavior_) {
       rows.applyToSelected([&](auto row) {
-        // If any input is null, we ignore the whole row.
-        if (!(std::get<Is>(readers).isSet(row) && ...)) {
+        // If any input is null, we ignore the whole row. For variadic
+        // arguments, this includes nulls within the variadic elements.
+        if (!(isInputNonNull<Is>(readers, row) && ...)) {
           return;
         }
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
@@ -427,7 +534,7 @@ class SimpleAggregateAdapter : public Aggregate {
           tracker.emplace(groups[row][rowSizeOffset_], *allocator_);
         }
         auto group = value<typename FUNC::AccumulatorType>(groups[row]);
-        group->addInput(allocator_, std::get<Is>(readers)[row]...);
+        group->addInput(allocator_, readers[row]...);
         clearNull(groups[row]);
       });
     } else {
@@ -440,7 +547,7 @@ class SimpleAggregateAdapter : public Aggregate {
         bool nonNull = group->addInput(
             allocator_,
             OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
-                &std::get<Is>(readers), (int64_t)row}...);
+                &readers, (int64_t)row}...);
         if (nonNull) {
           clearNull(groups[row]);
         }
@@ -448,26 +555,50 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
-  template <std::size_t... Is>
-  void addSingleGroupRawInputImpl(
+  void addSingleGroupRawInputImpl(char* group, const SelectivityVector& rows) {
+    unpackInputs<0>(inputDecoded_, [&](auto&... readers) {
+      addSingleGroupRawInputWithReaders(group, rows, readers...);
+    });
+  }
+
+  template <typename... TReader>
+  void addSingleGroupRawInputWithReaders(
       char* group,
       const SelectivityVector& rows,
-      std::index_sequence<Is...>) {
-    std::tuple<VectorReader<typename FUNC::InputType::template type_at<Is>>...>
-        readers{&inputDecoded_[Is]...};
+      TReader&... readers) {
+    addSingleGroupRawInputWithReadersImpl(
+        group,
+        rows,
+        std::make_index_sequence<sizeof...(TReader)>{},
+        readers...);
+  }
+
+  // Process rows for a single group with the accumulated readers. Use Is to
+  // access the original input types to create OptionalAccessor.
+  template <std::size_t... Is, typename... TReader>
+  void addSingleGroupRawInputWithReadersImpl(
+      char* group,
+      const SelectivityVector& rows,
+      std::index_sequence<Is...>,
+      TReader&... readers) {
+    static_assert(
+        sizeof...(Is) == FUNC::InputType::size_,
+        "Reader count must match InputType size");
+
     auto accumulator = value<typename FUNC::AccumulatorType>(group);
 
     if constexpr (aggregate_default_null_behavior_) {
       rows.applyToSelected([&](auto row) {
-        // If any input is null, we ignore the whole row.
-        if (!(std::get<Is>(readers).isSet(row) && ...)) {
+        // If any input is null, we ignore the whole row. For variadic
+        // arguments, this includes nulls within the variadic elements.
+        if (!(isInputNonNull<Is>(readers, row) && ...)) {
           return;
         }
         std::optional<RowSizeTracker<char, uint32_t>> tracker;
         if constexpr (!accumulator_is_fixed_size_) {
           tracker.emplace(group[rowSizeOffset_], *allocator_);
         }
-        accumulator->addInput(allocator_, std::get<Is>(readers)[row]...);
+        accumulator->addInput(allocator_, readers[row]...);
         clearNull(group);
       });
     } else {
@@ -479,7 +610,7 @@ class SimpleAggregateAdapter : public Aggregate {
         bool nonNull = accumulator->addInput(
             allocator_,
             OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
-                &std::get<Is>(readers), (int64_t)row}...);
+                &readers, (int64_t)row}...);
         if (nonNull) {
           clearNull(group);
         }
@@ -487,15 +618,10 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
-  template <std::size_t... Is>
   void toIntermediateImpl(
       const std::vector<DecodedVector>& inputDecoded,
       const SelectivityVector& rows,
-      VectorPtr& result,
-      std::index_sequence<Is...>) const {
-    std::tuple<VectorReader<typename FUNC::InputType::template type_at<Is>>...>
-        readers{&inputDecoded[Is]...};
-
+      VectorPtr& result) const {
     VELOX_CHECK(result);
     result->ensureWritable(rows);
     auto* rawNulls = result->mutableRawNulls();
@@ -508,29 +634,56 @@ class SimpleAggregateAdapter : public Aggregate {
     exec::VectorWriter<typename FUNC::IntermediateType> writer;
     writer.init(*flatResult);
 
+    unpackInputs<0>(inputDecoded, [&](auto&... readers) {
+      toIntermediateWithReaders(rows, writer, readers...);
+    });
+    writer.finish();
+  }
+
+  template <typename... TReader>
+  void toIntermediateWithReaders(
+      const SelectivityVector& rows,
+      exec::VectorWriter<typename FUNC::IntermediateType>& writer,
+      TReader&... readers) const {
+    toIntermediateWithReadersImpl(
+        rows,
+        writer,
+        std::make_index_sequence<sizeof...(TReader)>{},
+        readers...);
+  }
+
+  // Process rows for toIntermediate with the accumulated readers.
+  template <std::size_t... Is, typename... TReader>
+  void toIntermediateWithReadersImpl(
+      const SelectivityVector& rows,
+      exec::VectorWriter<typename FUNC::IntermediateType>& writer,
+      std::index_sequence<Is...>,
+      TReader&... readers) const {
+    static_assert(
+        sizeof...(Is) == FUNC::InputType::size_,
+        "Reader count must match InputType size");
+
     if constexpr (aggregate_default_null_behavior_) {
       rows.applyToSelected([&](auto row) {
         writer.setOffset(row);
-        // If any input is null, we ignore the whole row.
-        if (!(std::get<Is>(readers).isSet(row) && ...)) {
+        // If any input is null, we ignore the whole row. For variadic
+        // arguments, this includes nulls within the variadic elements.
+        if (!(isInputNonNull<Is>(readers, row) && ...)) {
           writer.commitNull();
           return;
         }
-        bool nonNull = FUNC::toIntermediate(
-            writer.current(), std::get<Is>(readers)[row]...);
+        bool nonNull = FUNC::toIntermediate(writer.current(), readers[row]...);
         writer.commit(nonNull);
       });
-      writer.finish();
     } else {
       rows.applyToSelected([&](auto row) {
         writer.setOffset(row);
         bool nonNull = FUNC::toIntermediate(
             writer.current(),
             OptionalAccessor<typename FUNC::InputType::template type_at<Is>>{
-                &std::get<Is>(readers), (int64_t)row}...);
+                &readers, (int64_t)row}...);
         writer.commit(nonNull);
       });
-      writer.finish();
     }
   }
 
