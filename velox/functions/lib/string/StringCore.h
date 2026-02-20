@@ -46,6 +46,8 @@
 namespace facebook::velox::functions {
 namespace stringCore {
 
+namespace simd = ::facebook::velox::simd;
+
 /// Check if a given string is ascii
 static bool isAscii(const char* str, size_t length);
 
@@ -282,8 +284,32 @@ lengthUnicode(const char* inputBuffer, size_t bufferLength) {
   return size;
 }
 
+namespace detail {
+
+// Returns the byte length of a UTF-8 character based on its first byte.
+// This is an optimistic check that only looks at the first byte.
+// We have this helper instead of using utf8proc_char_length because:
+// 1. It is FOLLY_ALWAYS_INLINE, making it faster in tight loops.
+// 2. It avoids the explicit 'c <= 127' check by treating all non-multi-byte
+//    start bytes (including ASCII and invalid bytes) as 1 byte.
+// 3. It ensures we always progress by at least 1 byte even on invalid data.
+FOLLY_ALWAYS_INLINE int32_t getUtf8CharLength(uint8_t c) {
+  if (c >= 192 && c <= 223) {
+    return 2;
+  }
+  if (c >= 224 && c <= 239) {
+    return 3;
+  }
+  if (c >= 240 && c <= 247) {
+    return 4;
+  }
+  return 1;
+}
+
+} // namespace detail
+
 /**
- * Return an capped length(controlled by maxChars) of a unicode string. The
+ * Return a capped length(controlled by maxChars) of a unicode string. The
  * returned length is not greater than maxChars.
  *
  * This method is used to tell whether a string is longer or the same length of
@@ -291,11 +317,11 @@ lengthUnicode(const char* inputBuffer, size_t bufferLength) {
  * providing maxChars we can get better performance by avoid calculating whole
  * length of a string which might be very long.
  *
- * @param input input buffer that hold the string
- * @param size size of input buffer
- * @param maxChars stop counting characters if the string is longer
- * than this value
- * @return the number of characters represented by the input utf8 string
+ * @param input Input buffer that hold the string.
+ * @param size Size of input buffer.
+ * @param maxChars Stop counting characters if the string is longer
+ * than this value.
+ * @return The number of characters represented by the input utf8 string.
  */
 FOLLY_ALWAYS_INLINE int64_t
 cappedLengthUnicode(const char* input, size_t size, int64_t maxChars) {
@@ -304,41 +330,125 @@ cappedLengthUnicode(const char* input, size_t size, int64_t maxChars) {
   auto currentChar = input;
   int64_t numChars = 0;
 
-  // Use maxChars to early stop to avoid calculating the whole
-  // length of long string.
+  constexpr int32_t batchSize = xsimd::batch<uint8_t>::size;
+  const auto highBitMask = xsimd::broadcast<uint8_t>(0x80);
+  const auto continuationMask = xsimd::broadcast<uint8_t>(0xc0);
+
+  // Use SIMD to process the string in blocks of the native register width.
+  while (currentChar + batchSize <= end && numChars < maxChars) {
+    auto batch = xsimd::batch<uint8_t>::load_unaligned(
+        reinterpret_cast<const uint8_t*>(currentChar));
+
+    // Fast path for pure ASCII blocks.
+    if (LIKELY(!xsimd::any(batch >= highBitMask))) {
+      int64_t jump =
+          std::min(static_cast<int64_t>(batchSize), maxChars - numChars);
+      currentChar += jump;
+      numChars += jump;
+      continue;
+    }
+
+    // Mixed UTF-8: Count character starts (bytes where (byte & 0xC0) != 0x80)
+    const auto isCharStart = (batch & continuationMask) != highBitMask;
+    const uint32_t mask = static_cast<uint32_t>(simd::toBitMask(isCharStart));
+    int32_t countInBlock = __builtin_popcount(mask);
+
+    if (numChars + countInBlock < maxChars) {
+      numChars += countInBlock;
+      currentChar += batchSize;
+    } else {
+      // We hit maxChars within this block.
+      return maxChars;
+    }
+  }
+
+  // Standard UTF-8 path for the remainder or strings shorter than a block.
+  // Skip continuation bytes (0x80..0xBF) without counting — they belong to
+  // a character whose leading byte was already counted by the SIMD loop.
   while (currentChar < end && numChars < maxChars) {
-    auto charSize = utf8proc_char_length(currentChar);
-    // Skip bad byte if we get utf length < 0.
-    currentChar += UNLIKELY(charSize < 0) ? 1 : charSize;
-    numChars++;
+    const uint8_t c = static_cast<uint8_t>(*currentChar);
+    if ((c & 0xC0) != 0x80) {
+      currentChar += detail::getUtf8CharLength(c);
+      numChars++;
+    } else {
+      currentChar++;
+    }
   }
 
   return numChars;
 }
 
 ///
-/// Return an capped length in bytes(controlled by maxChars) of a unicode
-/// string. The returned length may be greater than maxCharacters if there are
+/// Returns a capped length in bytes (controlled by maxChars) of a Unicode
+/// string. The returned length may be greater than maxChars if there are
 /// multi-byte characters present in the input string.
 ///
-/// This method is used to help with indexing unicode strings by byte position.
+/// This method is used to help with indexing Unicode strings by byte position.
 /// It is used to find the byte position of the Nth character in a string.
 ///
-/// @param input input buffer that hold the string
-/// @param size size of input buffer
-/// @param maxChars stop counting characters if the string is longer
-/// than this value
-/// @return the number of bytes represented by the input utf8 string up to
-/// maxChars
+/// @param input Input buffer that holds the string.
+/// @param size Size of the input buffer.
+/// @param maxChars Stop counting characters if the string is longer than this
+/// value.
+/// @return The number of bytes represented by the input UTF-8 string up to
+/// maxChars.
 ///
 FOLLY_ALWAYS_INLINE int64_t
 cappedByteLengthUnicode(const char* input, int64_t size, int64_t maxChars) {
   int64_t utf8Position = 0;
-  int64_t numCharacters = 0;
-  while (utf8Position < size && numCharacters < maxChars) {
-    auto charSize = utf8proc_char_length(input + utf8Position);
-    utf8Position += UNLIKELY(charSize < 0) ? 1 : charSize;
-    numCharacters++;
+
+  constexpr int32_t batchSize = xsimd::batch<uint8_t>::size;
+  const auto highBitMask = xsimd::broadcast<uint8_t>(0x80);
+  const auto continuationMask = xsimd::broadcast<uint8_t>(0xc0);
+
+  // Use SIMD to process the string in blocks of the native register width.
+  auto remainingChars = maxChars;
+  while (utf8Position + batchSize <= size && remainingChars > 0) {
+    auto batch = xsimd::batch<uint8_t>::load_unaligned(
+        reinterpret_cast<const uint8_t*>(input + utf8Position));
+
+    // Fast path for pure ASCII blocks.
+    if (LIKELY(!xsimd::any(batch >= highBitMask))) {
+      int64_t jump = std::min(static_cast<int64_t>(batchSize), remainingChars);
+      utf8Position += jump;
+      remainingChars -= jump;
+      continue;
+    }
+
+    // Mixed UTF-8: Identify character starts in the block.
+    const auto isCharStart = (batch & continuationMask) != highBitMask;
+    uint32_t mask = static_cast<uint32_t>(simd::toBitMask(isCharStart));
+    int32_t countInBlock = __builtin_popcount(mask);
+
+    // Consume the whole block if the character limit isn't reached yet.
+    if (countInBlock < remainingChars) {
+      utf8Position += batchSize;
+      remainingChars -= countInBlock;
+    } else {
+      // Target character position is within this block. Use bit-scanning (ctz)
+      // to find the exact byte index of the (maxChars)-th character.
+      int32_t needed = remainingChars;
+      while (mask) {
+        if (--needed == 0) {
+          const int32_t bit = __builtin_ctz(mask);
+          uint8_t startByte = static_cast<uint8_t>(input[utf8Position + bit]);
+          return utf8Position + bit + detail::getUtf8CharLength(startByte);
+        }
+        mask &= (mask - 1);
+      }
+      VELOX_UNREACHABLE();
+    }
+  }
+
+  // Standard UTF-8 path for the remainder or strings shorter than a block.
+  while (utf8Position < size && remainingChars > 0) {
+    const uint8_t currentByte = static_cast<uint8_t>(input[utf8Position]);
+    if ((currentByte & 0xC0) != 0x80) {
+      utf8Position += detail::getUtf8CharLength(currentByte);
+      remainingChars--;
+    } else {
+      utf8Position++;
+    }
   }
   return utf8Position;
 }
