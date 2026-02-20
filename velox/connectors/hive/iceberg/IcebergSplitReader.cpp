@@ -80,11 +80,13 @@ void IcebergSplitReader::prepareSplit(
     if (deleteFile.content == FileContent::kPositionalDeletes) {
       if (deleteFile.recordCount > 0) {
         // Skip the delete file if all delete positions are before this split.
+        // TODO: Skip delete files where all positions are after the split, if
+        // split row count becomes available.
         auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
         if (auto posUpperBoundIt = deleteFile.upperBounds.find(posColumn->id);
             posUpperBoundIt != deleteFile.upperBounds.end()) {
-          const int64_t deleteUpperBound = std::stoll(posUpperBoundIt->second);
-          if (deleteUpperBound < static_cast<int64_t>(splitOffset_)) {
+          auto deleteUpperBound = folly::to<uint64_t>(posUpperBoundIt->second);
+          if (deleteUpperBound < splitOffset_) {
             continue;
           }
         }
