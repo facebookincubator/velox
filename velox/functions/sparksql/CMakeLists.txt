@@ -17,13 +17,13 @@ velox_add_library(
   velox_functions_spark_impl
   ArrayGetFunction.cpp
   ArraySort.cpp
-  Transform.cpp
   CharVarcharUtils.cpp
   Comparisons.cpp
   ConcatWs.cpp
   DecimalArithmetic.cpp
   DecimalCeil.cpp
   DecimalCompare.cpp
+  FilterFunction.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
@@ -33,6 +33,7 @@ velox_add_library(
   Size.cpp
   String.cpp
   TimestampUtils.cpp
+  Transform.cpp
   UnscaledValueFunction.cpp
 )
 
