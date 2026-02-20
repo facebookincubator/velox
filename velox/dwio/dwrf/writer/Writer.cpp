@@ -798,6 +798,17 @@ void Writer::flush() {
   flushInternal(false);
 }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+void Writer::close() {
+  checkRunning();
+  auto exitGuard = folly::makeGuard([this]() {
+    flushPolicy_->onClose();
+    setState(State::kClosed);
+  });
+  flushInternal(true);
+  writerBase_->close();
+}
+#else
 std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   checkRunning();
   auto exitGuard = folly::makeGuard([this]() {
@@ -808,6 +819,7 @@ std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   writerBase_->close();
   return std::make_unique<DwrfFileMetadata>();
 }
+#endif
 
 void Writer::abort() {
   checkRunning();

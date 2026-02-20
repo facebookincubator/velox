@@ -221,11 +221,18 @@ class Writer : public dwio::common::Writer {
     return true;
   }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  // Closes 'this'. After close, data can no longer be added and the completed
+  // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
+  // live until destruction of 'this'.
+  void close() override;
+#else
   // Closes 'this'. After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
   // live until destruction of 'this'. Returns file metadata, or null if no
   // metadata is available (e.g. for an empty file).
   std::unique_ptr<dwio::common::FileMetadata> close() override;
+#endif
 
   void abort() override;
 
