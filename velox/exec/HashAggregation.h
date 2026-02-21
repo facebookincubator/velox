@@ -59,6 +59,12 @@ class HashAggregation : public Operator {
 
   bool isFinished() override;
 
+  /// HashAggregation can reclaim via lightweight campact interface even when
+  /// spilling is not enabled.
+  bool canReclaim() const override {
+    return true;
+  }
+
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 

@@ -90,17 +90,39 @@ struct Accumulator<StringView> {
     }
   }
 
- private:
-  // Copies active strings to new storage and frees old storage. Peak memory
-  // is approximately 2x activeBytes + evictedBytes, since both storages coexist
-  // temporarily.
-  void compact() {
-    if (summary.size() == 0) {
-      return;
+  uint64_t compact() {
+    if (summary.size() == 0 || evictedBytes_ == 0) {
+      return 0;
     }
 
+    const auto bytesFreed = evictedBytes_;
     const auto capacity = summary.capacity();
     const auto currentSize = summary.size();
+
+    // Copy non-inline string data to an untraced heap buffer. This allows us to
+    // free the old pool storage before allocating new pool storage, helping to
+    // avoid spikes in memory usage.
+    std::unique_ptr<char[]> heapBuffer;
+    if (activeBytes_ > 0) {
+      heapBuffer = std::make_unique<char[]>(activeBytes_);
+    }
+
+    std::vector<StringView> heapViews(currentSize);
+    char* heapPtr = heapBuffer.get();
+    for (auto i = 0; i < currentSize; ++i) {
+      StringView v = summary.values()[i];
+      if (!v.isInline()) {
+        std::memcpy(heapPtr, v.data(), v.size());
+        heapViews[i] = StringView(heapPtr, v.size());
+        heapPtr += v.size();
+      } else {
+        heapViews[i] = v;
+      }
+    }
+
+    const int64_t* counts = summary.counts();
+
+    strings.free(*allocator);
 
     Strings compactedStrings;
     Summary<StringView> compactedSummary{
@@ -108,24 +130,21 @@ struct Accumulator<StringView> {
     compactedSummary.setCapacity(capacity);
 
     uint64_t compactedActiveBytes = 0;
-    for (auto i = 0; i < currentSize; ++i) {
-      StringView v = summary.values()[i];
-      int64_t cnt = summary.counts()[i];
+    for (size_t i = 0; i < currentSize; ++i) {
+      StringView v = heapViews[i];
       if (!v.isInline()) {
         compactedActiveBytes += v.size();
         v = compactedStrings.append(v, *allocator);
       }
-      compactedSummary.insert(v, cnt);
+      compactedSummary.insert(v, counts[i]);
     }
 
     VELOX_CHECK_EQ(compactedActiveBytes, activeBytes_);
-
-    // Free old storage.
-    strings.free(*allocator);
-
     strings = std::move(compactedStrings);
     summary = std::move(compactedSummary);
     evictedBytes_ = 0;
+
+    return bytesFreed;
   }
 };
 
@@ -310,6 +329,19 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
 
   void destroyInternal(folly::Range<char**> groups) override {
     destroyAccumulators<Accumulator<T>>(groups);
+  }
+
+  uint64_t compact(folly::Range<char**> groups) override {
+    if constexpr (!std::is_same_v<T, StringView>) {
+      return 0;
+    }
+    uint64_t totalFreed = 0;
+    for (auto* group : groups) {
+      if (isInitialized(group)) {
+        totalFreed += value<Accumulator<T>>(group)->compact();
+      }
+    }
+    return totalFreed;
   }
 
  private:
