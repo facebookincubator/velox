@@ -232,6 +232,38 @@ bool GroupingSet::hasSpilled() const {
   return outputSpiller_ != nullptr;
 }
 
+uint64_t GroupingSet::compact() {
+  if (aggregates_.empty()) {
+    return 0;
+  }
+
+  uint64_t totalFreedBytes = 0;
+
+  if (isGlobal_) {
+    if (globalAggregationInitialized_ && lookup_ != nullptr) {
+      char* group = lookup_->hits[0];
+      for (auto& aggregate : aggregates_) {
+        totalFreedBytes += aggregate.function->compact(folly::Range(&group, 1));
+      }
+    }
+  } else if (table_ != nullptr) {
+    auto* rows = table_->rows();
+    if (rows != nullptr && rows->numRows() > 0) {
+      RowContainerIterator iter;
+      std::vector<char*> groups(1'000);
+      while (auto numRows =
+                 rows->listRows(&iter, groups.size(), groups.data())) {
+        for (auto& aggregate : aggregates_) {
+          totalFreedBytes +=
+              aggregate.function->compact(folly::Range(groups.data(), numRows));
+        }
+      }
+    }
+  }
+
+  return totalFreedBytes;
+}
+
 bool GroupingSet::hasOutput() {
   return noMoreInput_ || remainingInput_;
 }

@@ -469,6 +469,19 @@ void HashAggregation::reclaim(
 
   updateEstimatedOutputRowSize();
 
+  // Try lightweight compaction first before spilling.
+  if (const auto compactedBytes = groupingSet_->compact(); compactedBytes > 0) {
+    stats.reclaimedBytes += compactedBytes;
+    pool()->release();
+    if (compactedBytes >= targetBytes) {
+      return;
+    }
+  }
+
+  if (!canSpill()) {
+    return;
+  }
+
   if (noMoreInput_) {
     if (groupingSet_->hasSpilled()) {
       LOG(WARNING)

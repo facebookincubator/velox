@@ -128,6 +128,11 @@ class GroupingSet {
   /// Returns true if spilling has triggered on this grouping set.
   bool hasSpilled() const;
 
+  /// Performs lightweight memory compaction across all aggregates before
+  /// spilling. Iterates over all groups and calls Aggregate::compact() on each
+  /// aggregate function. Returns the total number of bytes freed.
+  uint64_t compact();
+
   /// Returns the hashtable stats.
   HashTableStats hashTableStats() const {
     return table_ ? table_->stats() : HashTableStats{};
