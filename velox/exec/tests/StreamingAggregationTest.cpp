@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/StreamingAggregation.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -1547,5 +1549,41 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
       velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
       9);
 }
+// Verify that during createOutput, the aggregation state is destroyed.
+DEBUG_ONLY_TEST_P(StreamingAggregationTest, singleAggregationCleansState) {
+  auto size = 1'000;
+
+  VectorPtr keys =
+      makeFlatVector<int32_t>(size, [](auto row) { return row / 10; });
+
+  auto data = addPayload({keys, keys, keys, keys}, 1);
+
+  bool checkedAtLeastOnce = false;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::StreamingAggregation::createOutput",
+      std::function<void(StreamingAggregation*)>([&](StreamingAggregation*) {
+        checkedAtLeastOnce = true;
+        EXPECT_GT(NonPODInt64::destructed, 0);
+      }));
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .streamingAggregation(
+                      {"c0"},
+                      {"sumnonpod(1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false,
+                      true /* noGroupsSpanBatches */)
+                  .planNode();
+
+  config(AssertQueryBuilder(plan), 100).copyResults(pool());
+
+  EXPECT_TRUE(checkedAtLeastOnce)
+      << "TestValue callback was never invoked; createOutput may not have "
+         "been called";
+  EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
+}
+
 } // namespace
 } // namespace facebook::velox::exec
