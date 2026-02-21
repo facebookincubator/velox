@@ -1430,6 +1430,9 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
 TEST_P(
     MultiThreadedHashJoinTest,
     nullAwareAntiJoinWithFilterBatchedEvaluation) {
+  // Use >1024 build rows to trigger multiple batches in
+  // applyFilterOnTableRowsForNullAwareJoin (kBatchSize is 1024), exercising the
+  // per-batch deselect of filterPassedRows from rows.
   auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
@@ -1442,8 +1445,8 @@ TEST_P(
     return makeRowVector(
         {"u0", "u1"},
         {
-            makeFlatVector<int32_t>(128, [](auto row) { return row % 25; }),
-            makeFlatVector<int32_t>(128, [](auto row) { return row * 2; }),
+            makeFlatVector<int32_t>(2048, [](auto row) { return row % 25; }),
+            makeFlatVector<int32_t>(2048, [](auto row) { return row * 2; }),
         });
   });
 

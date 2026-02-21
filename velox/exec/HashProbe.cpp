@@ -1378,7 +1378,7 @@ const uint64_t* getFlatFilterResult(VectorPtr& result) {
 } // namespace
 
 void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
-    const SelectivityVector& rows,
+    SelectivityVector& rows,
     SelectivityVector& filterPassedRows,
     std::function<int32_t(char**, int32_t)> iterator) {
   if (!rows.hasSelections()) {
@@ -1398,10 +1398,13 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           filterTableInput_->childAt(projection.outputChannel));
     }
     rows.applyToSelected([&](vector_size_t row) {
-      if (filterPassedRows.isValid(row)) {
-        return;
-      }
-      for (auto& projection : filterInputProjections_) {
+      VELOX_CHECK(
+          !filterPassedRows.isValid(row),
+          "Overlap detected: row {} in both rows and filterPassedRows",
+          row);
+    });
+    rows.deselect(filterPassedRows);
+    rows.applyToSelected([&](vector_size_t row) {      for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
             BaseVector::wrapInConstant(
                 numBuildRows, row, input_->childAt(projection.inputChannel));
@@ -1476,7 +1479,6 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   if (buildSideHasNullKeys_) {
     prepareNullKeyProbeHashers();
     BaseHashTable::NullKeyRowsIterator iter;
-    nullKeyProbeRows.deselect(filterPassedRows);
     applyFilterOnTableRowsForNullAwareJoin(
         nullKeyProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
           return table_->listNullKeyRows(
@@ -1484,7 +1486,6 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
         });
   }
   BaseHashTable::RowsIterator iter;
-  crossJoinProbeRows.deselect(filterPassedRows);
   applyFilterOnTableRowsForNullAwareJoin(
       crossJoinProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
         return table_->listAllRows(
