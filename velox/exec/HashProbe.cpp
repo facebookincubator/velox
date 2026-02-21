@@ -1401,10 +1401,11 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
     const auto numSelectedBefore = rows.countSelected();
     rows.deselect(filterPassedRows);
     const auto numDeselected = numSelectedBefore - rows.countSelected();
-    if (numDeselected > 0) {
-      LOG(INFO) << "Deselected " << numDeselected
-                << " probe rows that passed filter in a previous build batch";
-    }
+    VELOX_CHECK_EQ(
+        numDeselected,
+        0,
+        "Per-batch deselect optimization visited: deselected {} probe rows",
+        numDeselected);
     rows.applyToSelected([&](vector_size_t row) {
       for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
