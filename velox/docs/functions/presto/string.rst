@@ -18,6 +18,9 @@ String Functions
     locale-sensitive, context-sensitive, or one-to-many mappings required for
     some languages. Specifically, this will return incorrect results for
     Lithuanian, Turkish and Azeri.
+    
+    The "string" input parameter indicates an input of either type `varchar` or `varchar(n)`.
+    The output type where indicates as "varchar" is always of type `varchar`.
 
 .. function:: bit_length(string) -> integer
 

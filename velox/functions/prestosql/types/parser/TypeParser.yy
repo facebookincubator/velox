@@ -95,7 +95,7 @@ field_name : WORD     { $$ = $1; }
  * Varchar and varbinary have an optional `(int)`
  * e.g. both `varchar` and `varchar(4)` are valid.
  */
-variable_type : VARIABLE LPAREN NUMBER RPAREN  { $$ = facebook::velox::functions::prestosql::typeFromString($1); }
+variable_type : VARIABLE LPAREN NUMBER RPAREN  { $$ = facebook::velox::functions::prestosql::variableTypeFromString($1, $3); }
               | VARIABLE                       { $$ = facebook::velox::functions::prestosql::typeFromString($1); }
               ;
 

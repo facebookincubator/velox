@@ -58,6 +58,7 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("decimal(25,7)", typeOf(DECIMAL(25, 7)));
 
   EXPECT_EQ("varchar", typeOf(VARCHAR()));
+  EXPECT_EQ("varchar(10)", typeOf(VARCHAR(10)));
   EXPECT_EQ("varbinary", typeOf(VARBINARY()));
 
   EXPECT_EQ("timestamp", typeOf(TIMESTAMP()));
