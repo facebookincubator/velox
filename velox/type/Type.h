@@ -651,6 +651,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool isIntervalDayTime() const;
 
+  bool isIntervalDayTimeMicros() const;
+
   bool isTime() const;
 
   bool isDate() const;
@@ -1453,6 +1455,65 @@ INTERVAL_DAY_TIME() {
 FOLLY_ALWAYS_INLINE bool Type::isIntervalDayTime() const {
   // Pointer comparison works since this type is a singleton.
   return (this == INTERVAL_DAY_TIME().get());
+}
+
+constexpr long kMicrosInMills = 1000;
+constexpr long kMicrosInSecond = 1000 * kMicrosInMills;
+constexpr long kMicrosInMinute = 60 * kMicrosInSecond;
+constexpr long kMicrosInHour = 60 * kMicrosInMinute;
+constexpr long kMicrosInDay = 24 * kMicrosInHour;
+
+/// Time interval in microseconds.
+///
+/// This type stores day-time intervals with microsecond precision, matching
+/// Spark's DayTimeIntervalType semantics. Contrast with IntervalDayTimeType
+/// which stores milliseconds (Presto semantics).
+class IntervalDayTimeMicrosType final: public BigintType {
+  IntervalDayTimeMicrosType() = default;
+
+  public:
+    static std::shared_ptr<const IntervalDayTimeMicrosType> get() {
+      VELOX_CONSTEXPR_SINGLETON IntervalDayTimeMicrosType kInstance;
+      return {std::shared_ptr<const IntervalDayTimeMicrosType>{}, &kInstance};
+    }
+
+    const char* name() const override {
+      return "INTERVAL DAY TO SECOND MICROS";
+    }
+
+    bool equivalent(const Type& other) const override {
+      // Pointer comparison works since this type is a singleton.
+      return this == &other;
+    }
+
+    std::string toString() const override {
+      return name();
+    }
+
+    /// Returns the interval 'value' (microseconds) formatted as DAYS
+    /// HOURS:MINUTES:SECONDS.MICROS. For example, 1 03:48:20.100000.
+    std::string valueToString(int64_t value) const;
+
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["name"] = "IntervalDayTimeMicrosType";
+      obj["type"] = name();
+      return obj;
+    }
+
+    static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+      return IntervalDayTimeMicrosType::get();
+    }
+};
+
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeMicrosType>
+INTERVAL_DAY_TIME_MICROS() {
+  return IntervalDayTimeMicrosType::get();
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isIntervalDayTimeMicros() const {
+  // Pointer comparison works since this type is a singleton.
+  return (this == INTERVAL_DAY_TIME_MICROS().get());
 }
 
 constexpr long kMonthInYear = 12;
