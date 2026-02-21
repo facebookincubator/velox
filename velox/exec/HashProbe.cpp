@@ -1397,6 +1397,14 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           projection.inputChannel,
           filterTableInput_->childAt(projection.outputChannel));
     }
+
+    rows.applyToSelected([&](vector_size_t row) {
+      VELOX_CHECK(
+          !filterPassedRows.isValid(row),
+          "Overlap detected: row {} in both rows and filterPassedRows",
+          row);
+    });
+    
     rows.deselect(filterPassedRows);
     rows.applyToSelected([&](vector_size_t row) {
       for (auto& projection : filterInputProjections_) {
