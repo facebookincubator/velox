@@ -442,6 +442,21 @@ struct DecimalMultiplyFunction {
   int32_t deltaScale_;
 };
 
+// Decimal multiply function that returns error on overflow.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalMultiplyFunction
+    : DecimalMultiplyFunction<TExec, allowPrecisionLoss> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    bool valid = DecimalMultiplyFunction<TExec, allowPrecisionLoss>::
+        template call<R, A, B>(out, a, b);
+    VELOX_USER_RETURN(!valid, "Decimal overflow in multiply");
+    return Status::OK();
+  }
+};
+
 template <typename TExec, bool allowPrecisionLoss>
 struct DecimalDivideFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -686,6 +701,14 @@ using DivideFunctionAllowPrecisionLoss = DecimalDivideFunction<TExec, true>;
 template <typename TExec>
 using DivideFunctionDenyPrecisionLoss = DecimalDivideFunction<TExec, false>;
 
+template <typename TExec>
+using CheckedMultiplyFunctionAllowPrecisionLoss =
+    CheckedDecimalMultiplyFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedMultiplyFunctionDenyPrecisionLoss =
+    CheckedDecimalMultiplyFunction<TExec, false>;
+
 std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
   std::string wholeDigits = fmt::format(
       "min(38, {a_precision} - {a_scale} + {b_scale})",
@@ -805,6 +828,11 @@ void registerDecimalMultiply(const std::string& prefix) {
       prefix + "multiply", makeConstraints(rPrecision, rScale, true));
   registerDecimalBinary<MultiplyFunctionDenyPrecisionLoss>(
       prefix + "multiply" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+  registerDecimalBinary<CheckedMultiplyFunctionAllowPrecisionLoss>(
+      prefix + "checked_multiply", makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<CheckedMultiplyFunctionDenyPrecisionLoss>(
+      prefix + "checked_multiply" + kDenyPrecisionLoss,
       makeConstraints(rPrecision, rScale, false));
 }
 
