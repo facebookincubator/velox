@@ -1398,14 +1398,8 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           filterTableInput_->childAt(projection.outputChannel));
     }
 
-    const auto numSelectedBefore = rows.countSelected();
+    // Skip probe rows that already passed the filter on a previous build batch.
     rows.deselect(filterPassedRows);
-    const auto numDeselected = numSelectedBefore - rows.countSelected();
-    VELOX_CHECK_EQ(
-        numDeselected,
-        0,
-        "Per-batch deselect optimization visited: deselected {} probe rows",
-        numDeselected);
     rows.applyToSelected([&](vector_size_t row) {
       for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
