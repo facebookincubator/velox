@@ -1432,12 +1432,17 @@ TEST_P(
     nullAwareAntiJoinWithFilterBatchedEvaluation) {
   // Use >1024 build rows to trigger multiple batches in
   // applyFilterOnTableRowsForNullAwareJoin (kBatchSize is 1024), exercising the
-  // per-batch deselect of filterPassedRows from rows.
+  // per-batch deselect of filterPassedRows from rows. Include null probe keys
+  // so that crossJoinProbeRows is non-empty and the cross-join path iterates
+  // all 2048 build rows across 2 batches.
   auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
         {
-            makeFlatVector<int32_t>(256, [](auto row) { return row % 50; }),
+            makeFlatVector<int32_t>(
+                256,
+                [](auto row) { return row % 50; },
+                [](auto row) { return row < 4; }),
             makeFlatVector<int32_t>(256, [](auto row) { return row; }),
         });
   });
@@ -1461,7 +1466,7 @@ TEST_P(
       .joinFilter("t1 <> u1")
       .joinOutputLayout({"t0", "t1"})
       .referenceQuery(
-          "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 <> u1)")
+          "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 <> u1)")
       .checkSpillStats(false)
       .run();
 }
