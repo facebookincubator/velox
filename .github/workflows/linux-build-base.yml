@@ -38,9 +38,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake
 
       - name: Download cuDF Test Binaries
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
-        with:
-          name: cudftestbinaries
+        run: |
+          wget https://github.com/facebookincubator/velox/actions/runs/22242605424/artifacts/5597200044
+          unzip cudftestbinaries
 
       - name: Adapt Downloaded Files
         run: |
