@@ -1527,6 +1527,77 @@ TEST_F(ParquetTableScanTest, intToBigintRead) {
   assertEqualVectors(bigintDataFileVectors->childAt(0), rows->childAt(0));
 }
 
+TEST_F(ParquetTableScanTest, intReadWithNarrowerType) {
+  // Reading a wider integer as a narrower one causes unchecked truncation and
+  // two’s complement reinterpretation, resulting in values INT_MAX becoming -1.
+  RowVectorPtr intVectors = makeRowVector(
+      {"c1", "c2", "c3"},
+      {
+          makeFlatVector<int16_t>(
+              {123,
+               std::numeric_limits<int8_t>::max(),
+               std::numeric_limits<int8_t>::min(),
+               std::numeric_limits<int16_t>::max(),
+               std::numeric_limits<int16_t>::min()}),
+          makeFlatVector<int32_t>(
+              {123,
+               std::numeric_limits<int16_t>::max(),
+               std::numeric_limits<int16_t>::min(),
+               std::numeric_limits<int32_t>::max(),
+               std::numeric_limits<int32_t>::min()}),
+          makeFlatVector<int64_t>(
+              {123,
+               std::numeric_limits<int32_t>::max(),
+               std::numeric_limits<int32_t>::min(),
+               std::numeric_limits<int64_t>::max(),
+               std::numeric_limits<int64_t>::min()}),
+      });
+
+  RowVectorPtr smallerIntVectors = makeRowVector(
+      {"c1", "c2", "c3"},
+      {
+          makeFlatVector<int8_t>({
+              123,
+              std::numeric_limits<int8_t>::max(),
+              std::numeric_limits<int8_t>::min(),
+              -1,
+              0,
+          }),
+          makeFlatVector<int16_t>({{
+              123,
+              std::numeric_limits<int16_t>::max(),
+              std::numeric_limits<int16_t>::min(),
+              -1,
+              0,
+          }}),
+          makeFlatVector<int32_t>({
+              123,
+              std::numeric_limits<int32_t>::max(),
+              std::numeric_limits<int32_t>::min(),
+              -1,
+              0,
+          }),
+      });
+
+  auto dataFile = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(dataFile->getPath(), {intVectors}, options);
+
+  auto rowType = ROW({"c1", "c2", "c3"}, {TINYINT(), SMALLINT(), INTEGER()});
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .endTableScan()
+                .planNode();
+
+  auto split = makeSplit(dataFile->getPath());
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  auto rows = result->as<RowVector>();
+
+  assertEqualVectors(smallerIntVectors->childAt(0), rows->childAt(0));
+}
+
 TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
   // decimal.parquet holds two columns (a: DECIMAL(5, 2), b: DECIMAL(20, 5)) and
   // 20 rows (10 rows per group). Data is in plain uncompressed format:
