@@ -25,6 +25,8 @@
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/prestosql/ArithmeticImpl.h"
+#include "velox/type/CppToType.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -664,6 +666,68 @@ struct CheckedIntegralDivideFunction {
     result = a / b;
     return Status::OK();
   }
+};
+
+/// Spark-specific round function with ANSI mode support.
+/// When spark.sql.ansi.enabled is true, throws on integer overflow from
+/// rounding with negative scale. When disabled, silently wraps (matches
+/// non-ANSI Spark behavior).
+template <typename TExec>
+struct RoundFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/,
+      const int32_t* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput& a, const int32_t b = 0) {
+    if constexpr (std::is_integral_v<TInput>) {
+      if (b >= 0) {
+        result = a;
+        return Status::OK();
+      }
+      // Negative scale: round to tens/hundreds/etc.
+      const double factor = std::pow(10, b);
+      const double rounded =
+          std::round(static_cast<double>(a) * factor) / factor;
+      if (ansiEnabled_) {
+        if (FOLLY_UNLIKELY(
+                rounded >
+                    static_cast<double>(std::numeric_limits<TInput>::max()) ||
+                rounded <
+                    static_cast<double>(std::numeric_limits<TInput>::min()))) {
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError(
+              "Arithmetic overflow: round({}, {}) cannot be represented as {}",
+              a,
+              b,
+              CppToType<TInput>::name);
+        }
+      }
+      result = static_cast<TInput>(rounded);
+    } else {
+      result = round<TInput, int32_t, true>(a, b);
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 } // namespace facebook::velox::functions::sparksql

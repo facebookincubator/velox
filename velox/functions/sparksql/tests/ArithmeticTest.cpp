@@ -929,5 +929,92 @@ TEST_F(CbrtTest, cbrt) {
   EXPECT_TRUE(std::isnan(cbrt(kNan).value()));
 }
 
+class RoundAnsiTest : public SparkFunctionBaseTest {
+ protected:
+  template <typename T>
+  std::optional<T> roundAnsi(std::optional<T> a, std::optional<int32_t> b) {
+    return evaluateOnce<T>("round(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> roundAnsi(std::optional<T> a) {
+    return evaluateOnce<T>("round(c0)", a);
+  }
+};
+
+TEST_F(RoundAnsiTest, integerNegativeScaleNoOverflow) {
+  // ANSI off: rounding works normally.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(roundAnsi<int32_t>(124, -1), 120);
+  EXPECT_EQ(roundAnsi<int32_t>(125, -1), 130);
+  EXPECT_EQ(roundAnsi<int32_t>(1234, -2), 1200);
+  EXPECT_EQ(roundAnsi<int64_t>(-125, -1), -130);
+  EXPECT_EQ(roundAnsi<int32_t>(0, -1), 0);
+
+  // ANSI on: same results when no overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(roundAnsi<int32_t>(124, -1), 120);
+  EXPECT_EQ(roundAnsi<int32_t>(125, -1), 130);
+  EXPECT_EQ(roundAnsi<int32_t>(1234, -2), 1200);
+  EXPECT_EQ(roundAnsi<int64_t>(-125, -1), -130);
+}
+
+TEST_F(RoundAnsiTest, integerOverflowAnsiOff) {
+  // ANSI off: overflow wraps silently.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // round(127, -1) = 130, which overflows int8_t. No error in non-ANSI mode.
+  auto result = roundAnsi<int8_t>(127, -1);
+  EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(RoundAnsiTest, integerOverflowAnsiOn) {
+  // ANSI on: overflow throws.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(roundAnsi<int8_t>(127, -1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(roundAnsi<int8_t>(-128, -1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(roundAnsi<int16_t>(32767, -1), "Arithmetic overflow");
+
+  // No overflow: fits after rounding.
+  EXPECT_EQ(roundAnsi<int8_t>(120, -1), 120);
+  EXPECT_EQ(roundAnsi<int8_t>(124, -1), 120);
+
+  // try() catches the error.
+  auto result = evaluateOnce<int8_t>(
+      "try(round(c0, c1))",
+      std::optional<int8_t>(127),
+      std::optional<int32_t>(-1));
+  EXPECT_EQ(result, std::nullopt);
+}
+
+TEST_F(RoundAnsiTest, integerNoScale) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // No scale or scale >= 0: returns input unchanged, no overflow possible.
+  EXPECT_EQ(roundAnsi<int8_t>(42), 42);
+  EXPECT_EQ(roundAnsi<int32_t>(12345, 0), 12345);
+  EXPECT_EQ(roundAnsi<int64_t>(99999, 5), 99999);
+  EXPECT_EQ(roundAnsi<int8_t>(std::nullopt), std::nullopt);
+}
+
+TEST_F(RoundAnsiTest, floatingPoint) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Floating point: no overflow possible.
+  EXPECT_DOUBLE_EQ(roundAnsi<double>(1.5, 0).value(), 2.0);
+  EXPECT_DOUBLE_EQ(roundAnsi<double>(2.5, 0).value(), 3.0);
+  EXPECT_FLOAT_EQ(roundAnsi<float>(1.45f, 1).value(), 1.5f);
+  EXPECT_DOUBLE_EQ(roundAnsi<double>(123.456, -1).value(), 120.0);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
