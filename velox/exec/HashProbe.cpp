@@ -1398,14 +1398,13 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           filterTableInput_->childAt(projection.outputChannel));
     }
 
-    rows.applyToSelected([&](vector_size_t row) {
-      VELOX_CHECK(
-          !filterPassedRows.isValid(row),
-          "Overlap detected: row {} in both rows and filterPassedRows",
-          row);
-    });
-    
+    const auto numSelectedBefore = rows.countSelected();
     rows.deselect(filterPassedRows);
+    const auto numDeselected = numSelectedBefore - rows.countSelected();
+    if (numDeselected > 0) {
+      LOG(INFO) << "Deselected " << numDeselected
+                << " probe rows that passed filter in a previous build batch";
+    }
     rows.applyToSelected([&](vector_size_t row) {
       for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
@@ -1478,6 +1477,8 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
       crossJoinProbeRows.setValid(probeRow, true);
     }
   }
+  nullKeyProbeRows.updateBounds();
+  crossJoinProbeRows.updateBounds();
 
   if (buildSideHasNullKeys_) {
     prepareNullKeyProbeHashers();
