@@ -394,16 +394,27 @@ TEST_F(FilterProjectTest, barrier) {
                   .capturePlanNodeId(projectPlanNodeId)
                   .planNode();
   struct {
+    bool serialExecution;
     bool barrierExecution;
     int numOutputRows;
 
     std::string toString() const {
       return fmt::format(
-          "barrierExecution {}, numOutputRows {}",
+          "serialExecution {}, barrierExecution {}, numOutputRows {}",
+          serialExecution,
           barrierExecution,
           numOutputRows);
     }
-  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
+  } testSettings[] = {
+      {true, true, 23},
+      {true, false, 23},
+      {false, true, 23},
+      {false, false, 23},
+      {true, true, 200},
+      {true, false, 200},
+      {false, true, 200},
+      {false, false, 200},
+  };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
     auto task =
@@ -415,7 +426,8 @@ TEST_F(FilterProjectTest, barrier) {
                 core::QueryConfig::kPreferredOutputBatchRows,
                 std::to_string(testData.numOutputRows))
             .splits(makeHiveConnectorSplits(tempFiles))
-            .serialExecution(true)
+            .serialExecution(testData.serialExecution)
+            .maxDrivers(testData.serialExecution ? 1 : 3)
             .barrierExecution(testData.barrierExecution)
             .assertResults("SELECT c0, c1, c0 + c1 FROM tmp WHERE c1 % 10 > 0");
     const auto taskStats = task->taskStats();

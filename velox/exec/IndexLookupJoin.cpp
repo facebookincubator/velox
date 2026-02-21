@@ -18,6 +18,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -184,7 +185,7 @@ IndexLookupJoin::IndexLookupJoin(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "IndexLookupJoin"),
+          OperatorType::kIndexLookupJoin),
       splitOutput_{driverCtx->queryConfig().indexLookupJoinSplitOutput()},
       // TODO: support to update output batch size with output size stats during
       // the lookup processing.
@@ -481,12 +482,13 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
   while (true) {
     exec::Split split;
     const auto reason = driverCtx->task->getSplitOrFuture(
+        driverCtx->driverId,
         driverCtx->splitGroupId,
         indexSourceNodeId_,
-        split,
-        indexSplitFuture_,
         /*maxPreloadSplits=*/0,
-        /*preload=*/nullptr);
+        /*preload=*/nullptr,
+        split,
+        indexSplitFuture_);
     if (reason != BlockingReason::kNotBlocked) {
       *future = std::move(indexSplitFuture_);
       return false;

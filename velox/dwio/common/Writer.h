@@ -16,12 +16,11 @@
 
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <optional>
+#include <ostream>
 #include <string>
 
-#include "velox/vector/ComplexVector.h"
+#include "velox/common/base/Portability.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -91,7 +90,7 @@ class Writer {
   /// Validates the state transition from 'oldState' to 'newState'.
   static void checkStateTransition(State oldState, State newState);
 
-  State state_{State::kInit};
+  tsan_atomic<State> state_{State::kInit};
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
