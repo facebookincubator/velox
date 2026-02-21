@@ -1404,7 +1404,8 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           row);
     });
     rows.deselect(filterPassedRows);
-    rows.applyToSelected([&](vector_size_t row) {      for (auto& projection : filterInputProjections_) {
+    rows.applyToSelected([&](vector_size_t row) {
+      for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
             BaseVector::wrapInConstant(
                 numBuildRows, row, input_->childAt(projection.inputChannel));
