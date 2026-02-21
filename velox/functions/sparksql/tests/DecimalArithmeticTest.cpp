@@ -88,6 +88,26 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       std::optional<U> u) {
     return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
   }
+
+  template <typename T, typename U>
+  std::optional<int128_t> checkedAdd(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int128_t>("checked_add(c0, c1)", {tType, uType}, t, u);
+  }
+
+  template <typename T, typename U>
+  std::optional<int128_t> checkedSubtract(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int128_t>(
+        "checked_subtract(c0, c1)", {tType, uType}, t, u);
+  }
+
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -832,6 +852,251 @@ TEST_F(DecimalArithmeticTest, checkedDiv) {
           HugeInt::parse("99999999999999999999999999999999999999"),
           1)),
       "Overflow in integral divide");
+}
+
+TEST_F(DecimalArithmeticTest, checkedAdd) {
+  // Normal cases should work.
+  // Use DECIMAL(18, 2) so result precision (19) exceeds 18 (long decimal).
+  EXPECT_EQ(
+      (checkedAdd<int64_t, int64_t>(DECIMAL(18, 2), DECIMAL(18, 2), 100, 200)),
+      300);
+  EXPECT_EQ(
+      (checkedAdd<int64_t, int128_t>(
+          DECIMAL(18, 2), DECIMAL(20, 2), 100, 200)),
+      300);
+  EXPECT_EQ(
+      (checkedAdd<int128_t, int64_t>(
+          DECIMAL(20, 2), DECIMAL(18, 2), 100, 200)),
+      300);
+  EXPECT_EQ(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(20, 2), DECIMAL(20, 2), 100, 200)),
+      300);
+
+  // Adding with zero.
+  EXPECT_EQ(
+      (checkedAdd<int64_t, int64_t>(DECIMAL(18, 2), DECIMAL(18, 2), 0, 100)),
+      100);
+
+  // Adding negative numbers.
+  EXPECT_EQ(
+      (checkedAdd<int64_t, int64_t>(DECIMAL(18, 2), DECIMAL(18, 2), -100, 50)),
+      -50);
+
+  // Result precision capped at 38, no overflow.
+  EXPECT_EQ(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(38, 0), DECIMAL(38, 0), 100, 200)),
+      300);
+
+  // Near-boundary success: large values through addLarge path, but fits.
+  EXPECT_EQ(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("49999999999999999999999999999999999999"),
+          HugeInt::parse("49999999999999999999999999999999999999"))),
+      HugeInt::parse("99999999999999999999999999999999999998"));
+
+  // Positive overflow should throw.
+  VELOX_ASSERT_USER_THROW(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          HugeInt::parse("99999999999999999999999999999999999999"))),
+      "Decimal overflow in add");
+
+  // Positive overflow with large positive and small positive.
+  VELOX_ASSERT_USER_THROW(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          1)),
+      "Decimal overflow in add");
+
+  // Negative overflow should throw.
+  VELOX_ASSERT_USER_THROW(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("-99999999999999999999999999999999999999"),
+          HugeInt::parse("-99999999999999999999999999999999999999"))),
+      "Decimal overflow in add");
+
+  // Negative overflow with large negative and small negative.
+  VELOX_ASSERT_USER_THROW(
+      (checkedAdd<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("-99999999999999999999999999999999999999"),
+          -1)),
+      "Decimal overflow in add");
+}
+
+TEST_F(DecimalArithmeticTest, checkedSubtract) {
+  // Normal cases should work.
+  // Use DECIMAL(18, 2) so result precision (19) exceeds 18 (long decimal).
+  EXPECT_EQ(
+      (checkedSubtract<int64_t, int64_t>(
+          DECIMAL(18, 2), DECIMAL(18, 2), 300, 200)),
+      100);
+  EXPECT_EQ(
+      (checkedSubtract<int64_t, int128_t>(
+          DECIMAL(18, 2), DECIMAL(20, 2), 300, 200)),
+      100);
+  EXPECT_EQ(
+      (checkedSubtract<int128_t, int64_t>(
+          DECIMAL(20, 2), DECIMAL(18, 2), 300, 200)),
+      100);
+  EXPECT_EQ(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(20, 2), DECIMAL(20, 2), 300, 200)),
+      100);
+
+  // Subtracting zero.
+  EXPECT_EQ(
+      (checkedSubtract<int64_t, int64_t>(
+          DECIMAL(18, 2), DECIMAL(18, 2), 100, 0)),
+      100);
+
+  // Subtracting negative (effectively adding).
+  EXPECT_EQ(
+      (checkedSubtract<int64_t, int64_t>(
+          DECIMAL(18, 2), DECIMAL(18, 2), 100, -50)),
+      150);
+
+  // Result precision capped at 38, no overflow.
+  EXPECT_EQ(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(38, 0), DECIMAL(38, 0), 300, 200)),
+      100);
+
+  // Near-boundary success: large values through addLarge path, but fits.
+  EXPECT_EQ(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("49999999999999999999999999999999999999"),
+          HugeInt::parse("-49999999999999999999999999999999999999"))),
+      HugeInt::parse("99999999999999999999999999999999999998"));
+
+  // Negative overflow should throw.
+  VELOX_ASSERT_USER_THROW(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("-99999999999999999999999999999999999999"),
+          HugeInt::parse("99999999999999999999999999999999999999"))),
+      "Decimal overflow in subtract");
+
+  // Negative overflow with large negative and small positive.
+  VELOX_ASSERT_USER_THROW(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("-99999999999999999999999999999999999999"),
+          1)),
+      "Decimal overflow in subtract");
+
+  // Positive overflow should throw.
+  VELOX_ASSERT_USER_THROW(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          HugeInt::parse("-99999999999999999999999999999999999999"))),
+      "Decimal overflow in subtract");
+
+  // Positive overflow with large positive and small negative.
+  VELOX_ASSERT_USER_THROW(
+      (checkedSubtract<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          -1)),
+      "Decimal overflow in subtract");
+}
+
+TEST_F(DecimalArithmeticTest, checkedAddDenyPrecisionLoss) {
+  const std::string denyPrecisionLoss = "_deny_precision_loss";
+
+  // Normal case: DECIMAL(38, 7) + DECIMAL(10, 0).
+  testArithmeticFunction(
+      "checked_add" + denyPrecisionLoss,
+      makeFlatVector(
+          std::vector<int128_t>{21232100, 29998888, 42345678, 42135632},
+          DECIMAL(38, 7)),
+      {makeFlatVector(
+           std::vector<int128_t>{11232100, 9998888, 12345678, 2135632},
+           DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))});
+
+  // Overflow during scale alignment should throw instead of returning null.
+  // These cases only overflow under deny-precision-loss because the full scale
+  // is preserved (not reduced), requiring a larger rescale factor.
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_add" + denyPrecisionLoss,
+          makeFlatVector(
+              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          {makeNullableLongDecimalVector(
+               {"-99999999999999999999999999999999990000"}, DECIMAL(38, 3)),
+           makeFlatVector(
+               std::vector<int128_t>{-100}, DECIMAL(38, 7))}),
+      "Decimal overflow in add");
+
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_add" + denyPrecisionLoss,
+          makeFlatVector(
+              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          {makeNullableLongDecimalVector(
+               {"99999999999999999999999999999999999000"}, DECIMAL(38, 3)),
+           makeFlatVector(
+               std::vector<int128_t>{9999999}, DECIMAL(38, 7))}),
+      "Decimal overflow in add");
+}
+
+TEST_F(DecimalArithmeticTest, checkedSubtractDenyPrecisionLoss) {
+  const std::string denyPrecisionLoss = "_deny_precision_loss";
+
+  // Normal case: DECIMAL(38, 7) - DECIMAL(10, 0).
+  testArithmeticFunction(
+      "checked_subtract" + denyPrecisionLoss,
+      makeFlatVector(
+          std::vector<int128_t>{1232100, -10001112, -17654322, -37864368},
+          DECIMAL(38, 7)),
+      {makeFlatVector(
+           std::vector<int128_t>{11232100, 9998888, 12345678, 2135632},
+           DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))});
+
+  // Overflow during scale alignment should throw instead of returning null.
+  // These cases only overflow under deny-precision-loss because the full scale
+  // is preserved (not reduced), requiring a larger rescale factor.
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_subtract" + denyPrecisionLoss,
+          makeFlatVector(
+              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          {makeNullableLongDecimalVector(
+               {"-99999999999999999999999999999999990000"}, DECIMAL(38, 3)),
+           makeFlatVector(
+               std::vector<int128_t>{100}, DECIMAL(38, 7))}),
+      "Decimal overflow in subtract");
+
+  VELOX_ASSERT_USER_THROW(
+      testArithmeticFunction(
+          "checked_subtract" + denyPrecisionLoss,
+          makeFlatVector(
+              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          {makeNullableLongDecimalVector(
+               {"99999999999999999999999999999999999000"}, DECIMAL(38, 3)),
+           makeFlatVector(
+               std::vector<int128_t>{-9999999}, DECIMAL(38, 7))}),
+      "Decimal overflow in subtract");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
