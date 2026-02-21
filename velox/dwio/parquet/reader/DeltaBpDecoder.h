@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <type_traits>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -23,7 +25,12 @@ namespace facebook::velox::parquet {
 
 // DeltaBpDecoder is adapted from Apache Arrow:
 // https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
+template <typename T>
 class DeltaBpDecoder {
+  static_assert(
+      std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>,
+      "DeltaBpDecoder only supports int32_t and int64_t");
+
  public:
   explicit DeltaBpDecoder(const char* start) : bufferStart_(start) {
     initHeader();
@@ -86,11 +93,11 @@ class DeltaBpDecoder {
     return static_cast<int64_t>(totalValuesRemaining_);
   }
 
-  template <typename T>
-  void readValues(T* values, int32_t numValues) {
+  template <typename V>
+  void readValues(V* values, int32_t numValues) {
     VELOX_DCHECK_LE(numValues, totalValuesRemaining_);
     for (auto i = 0; i < numValues; i++) {
-      values[i] = T(readLong());
+      values[i] = V(readLong());
     }
   }
 
@@ -118,10 +125,12 @@ class DeltaBpDecoder {
   }
 
   void initHeader() {
+    int64_t firstValue;
     if (!getVlqInt(valuesPerBlock_) || !getVlqInt(miniBlocksPerBlock_) ||
-        !getVlqInt(totalValueCount_) || !getZigZagVlqInt(lastValue_)) {
+        !getVlqInt(totalValueCount_) || !getZigZagVlqInt(firstValue)) {
       VELOX_FAIL("initHeader EOF");
     }
+    lastValue_ = static_cast<T>(firstValue);
 
     VELOX_CHECK_GT(valuesPerBlock_, 0, "cannot have zero value per block");
     VELOX_CHECK_EQ(
@@ -212,9 +221,12 @@ class DeltaBpDecoder {
         deltaBitWidth_);
     // Addition between minDelta_, packed int and lastValue_ should be treated
     // as unsigned addition. Overflow is as expected.
-    value = static_cast<uint64_t>(minDelta_) + static_cast<uint64_t>(value) +
-        static_cast<uint64_t>(lastValue_);
-    lastValue_ = value;
+    // Use T-width unsigned arithmetic so that INT32 values wrap at 32 bits.
+    using UT = std::make_unsigned_t<T>;
+    lastValue_ = static_cast<T>(
+        static_cast<UT>(static_cast<T>(minDelta_)) +
+        static_cast<UT>(static_cast<T>(value)) + static_cast<UT>(lastValue_));
+    value = lastValue_;
     valuesRemainingCurrentMiniBlock_--;
     totalValuesRemaining_--;
 
@@ -248,7 +260,7 @@ class DeltaBpDecoder {
   std::vector<uint8_t> deltaBitWidths_;
   uint64_t deltaBitWidth_;
 
-  int64_t lastValue_;
+  T lastValue_;
 };
 
 } // namespace facebook::velox::parquet

@@ -58,6 +58,7 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::Integer, TypeKind::INTEGER>({"integer", "int"});
   setupMetadata<TokenType::Long, TypeKind::BIGINT>("bigint");
   setupMetadata<TokenType::Date, TypeKind::INTEGER>("date");
+  setupMetadata<TokenType::Time, TypeKind::BIGINT>("time");
   setupMetadata<TokenType::Float, TypeKind::REAL>({"float", "real"});
   setupMetadata<TokenType::Double, TypeKind::DOUBLE>("double");
   setupMetadata<TokenType::Decimal, TypeKind::BIGINT>("decimal");
@@ -121,6 +122,8 @@ Result HiveTypeParser::parseType() {
           std::atoi(precision.value.data()), std::atoi(scale.value.data()))};
     } else if (nt.metadata->tokenString[0] == "date") {
       return Result{DATE()};
+    } else if (nt.metadata->tokenString[0] == "time") {
+      return Result{TIME()};
     }
     auto scalarType = createScalarType(nt.typeKind());
     VELOX_CHECK_NOT_NULL(

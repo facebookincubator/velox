@@ -745,8 +745,14 @@ void PageReader::makeDecoder() {
     case Encoding::DELTA_BINARY_PACKED:
       switch (parquetType) {
         case thrift::Type::INT32:
+          deltaBpDecoder64_.reset();
+          deltaBpDecoder32_ =
+              std::make_unique<DeltaBpDecoder<int32_t>>(pageData_);
+          break;
         case thrift::Type::INT64:
-          deltaBpDecoder_ = std::make_unique<DeltaBpDecoder>(pageData_);
+          deltaBpDecoder32_.reset();
+          deltaBpDecoder64_ =
+              std::make_unique<DeltaBpDecoder<int64_t>>(pageData_);
           break;
         default:
           VELOX_UNSUPPORTED(
@@ -820,8 +826,10 @@ void PageReader::skip(int64_t numRows) {
     stringDecoder_->skip(toSkip);
   } else if (booleanDecoder_) {
     booleanDecoder_->skip(toSkip);
-  } else if (deltaBpDecoder_) {
-    deltaBpDecoder_->skip(toSkip);
+  } else if (deltaBpDecoder32_) {
+    deltaBpDecoder32_->skip(toSkip);
+  } else if (deltaBpDecoder64_) {
+    deltaBpDecoder64_->skip(toSkip);
   } else if (deltaByteArrDecoder_) {
     deltaByteArrDecoder_->skip(toSkip);
   } else if (rleBooleanDecoder_) {
