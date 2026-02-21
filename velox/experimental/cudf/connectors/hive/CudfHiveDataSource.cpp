@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
@@ -244,7 +245,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
           dataSource_,
           columnChunkByteRanges,
           stream_,
-          cudf::get_current_device_resource_ref());
+          cudf_velox::get_temp_mr());
 
       // Wait for all pending reads to complete
       std::get<2>(ioData).wait();
@@ -261,7 +262,8 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
           hybridScanState_->columnChunkData_,
           readerOptions_,
           stream_,
-          cudf::get_current_device_resource_ref());
+          cudf_velox::get_output_mr());
+      // TODO: check remainingFilterExprSet_ flag here to choose mr
     });
 
     if (not exptSplitReader_->has_next_table_chunk()) {
@@ -294,7 +296,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       inputViews.push_back(col->view());
     }
     auto filterResult = cudfExpressionEvaluator_->eval(
-        inputViews, stream_, cudf::get_current_device_resource_ref());
+        inputViews, stream_, cudf_velox::get_temp_mr());
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     // Keep only rows where the filter is true
@@ -302,7 +304,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
         *originalTable,
         asView(filterResult),
         stream_,
-        cudf::get_current_device_resource_ref());
+        cudf_velox::get_output_mr());
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);
@@ -329,7 +331,11 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRows, std::move(cudfTable), stream_)
       : with_arrow::toVeloxColumn(
-            cudfTable->view(), pool_, outputType_->names(), stream_);
+            cudfTable->view(),
+            pool_,
+            outputType_->names(),
+            stream_,
+            cudf_velox::get_temp_mr());
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr
@@ -530,7 +536,7 @@ CudfParquetReaderPtr CudfHiveDataSource::createSplitReader() {
       cudfHiveConfig_->maxPassReadLimit(),
       readerOptions_,
       stream_,
-      cudf::get_current_device_resource_ref());
+      cudf_velox::get_output_mr());
 }
 
 CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {
