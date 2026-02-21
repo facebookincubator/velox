@@ -214,6 +214,48 @@ VectorPtr CastExpr::castFromIntervalDayTime(
   }
 }
 
+VectorPtr CastExpr::castFromIntervalDayTimeMicros(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, toType, castResult);
+  (*castResult).clearNulls(rows);
+
+  auto* inputFlatVector = input.as<SimpleVector<int64_t>>();
+  switch (toType->kind()) {
+    case TypeKind::VARCHAR: {
+      auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        try {
+          auto output = INTERVAL_DAY_TIME_MICROS()->valueToString(
+              inputFlatVector->valueAt(row));
+          auto writer = exec::StringWriter(resultFlatVector, row);
+          writer.resize(output.size());
+          ::memcpy(writer.data(), output.data(), output.size());
+          writer.finalize();
+        } catch (const VeloxException& ue) {
+          if (!ue.isUserError()) {
+            throw;
+          }
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, toType) + " " + ue.message());
+        } catch (const std::exception& e) {
+          VELOX_USER_FAIL(
+              makeErrorMessage(input, row, toType) + " " + e.what());
+        }
+      });
+      return castResult;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          INTERVAL_DAY_TIME_MICROS()->toString(),
+          toType->toString());
+  }
+}
+
 VectorPtr CastExpr::castFromTime(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -839,6 +881,13 @@ void CastExpr::applyPeeled(
   } else if (fromType->isIntervalDayTime()) {
     result = castFromIntervalDayTime(rows, input, context, toType);
   } else if (toType->isIntervalDayTime()) {
+    VELOX_UNSUPPORTED(
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
+  } else if (fromType->isIntervalDayTimeMicros()) {
+    result = castFromIntervalDayTimeMicros(rows, input, context, toType);
+  } else if (toType->isIntervalDayTimeMicros()) {
     VELOX_UNSUPPORTED(
         "Cast from {} to {} is not supported",
         fromType->toString(),

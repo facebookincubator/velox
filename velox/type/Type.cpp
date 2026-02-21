@@ -263,6 +263,8 @@ void Type::registerSerDe() {
 
   registry.Register("IntervalDayTimeType", IntervalDayTimeType::deserialize);
   registry.Register(
+    "IntervalDayTimeMicrosType", IntervalDayTimeMicrosType::deserialize);
+  registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
   registry.Register("TimeType", TimeType::deserialize);
@@ -1290,6 +1292,38 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
   return buf;
 }
 
+std::string IntervalDayTimeMicrosType::valueToString(int64_t value) const {
+  static const char* kIntervalFormat = "%s%lld %02d:%02d:%02d.%06d";
+
+  int128_t remainMicros = value;
+  std::string sign{};
+  if (remainMicros < 0) {
+    sign = "-";
+    remainMicros = -remainMicros;
+  }
+  const int64_t days = remainMicros / kMicrosInDay;
+  remainMicros -= days * kMicrosInDay;
+  const int64_t hours = remainMicros / kMicrosInHour;
+  remainMicros -= hours * kMicrosInHour;
+  const int64_t minutes = remainMicros / kMicrosInMinute;
+  remainMicros -= minutes * kMicrosInMinute;
+  const int64_t seconds = remainMicros / kMicrosInSecond;
+  remainMicros -= seconds * kMicrosInSecond;
+  char buf[64];
+  snprintf(
+      buf,
+      sizeof(buf),
+      kIntervalFormat,
+      sign.c_str(),
+      days,
+      hours,
+      minutes,
+      seconds,
+      remainMicros);
+
+  return buf;
+}
+
 std::string IntervalYearMonthType::valueToString(int32_t value) const {
   std::ostringstream oss;
   auto sign = "";
@@ -1355,6 +1389,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
+      {"INTERVAL DAY TO SECOND MICROS", INTERVAL_DAY_TIME_MICROS()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
       {"TIME", TIME()},

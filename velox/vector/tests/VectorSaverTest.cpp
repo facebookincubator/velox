@@ -390,6 +390,11 @@ TEST_F(VectorSaverTest, flatIntervalDayTime) {
   testRoundTrip(opts, INTERVAL_DAY_TIME());
 }
 
+TEST_F(VectorSaverTest, flatIntervalDayTimeMicros) {
+  VectorFuzzer::Options opts = fuzzerOptions();
+  testRoundTrip(opts, INTERVAL_DAY_TIME_MICROS());
+}
+
 TEST_F(VectorSaverTest, row) {
   auto opts = fuzzerOptions();
 

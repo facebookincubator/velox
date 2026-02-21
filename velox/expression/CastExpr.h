@@ -204,6 +204,12 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& toType);
 
+  VectorPtr castFromIntervalDayTimeMicros(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType);
+
   VectorPtr castFromTime(
       const SelectivityVector& rows,
       const BaseVector& input,

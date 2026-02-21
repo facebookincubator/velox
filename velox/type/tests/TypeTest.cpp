@@ -196,6 +196,46 @@ TEST(TypeTest, intervalDayTime) {
   testTypeSerde(interval);
 }
 
+TEST(TypeTest, intervalDayTimeMicros) {
+  const auto interval = INTERVAL_DAY_TIME_MICROS();
+  ASSERT_EQ(interval->toString(), "INTERVAL DAY TO SECOND MICROS");
+  ASSERT_EQ(interval->size(), 0);
+  VELOX_ASSERT_THROW(interval->childAt(0), "scalar type has no children");
+  ASSERT_EQ(interval->kind(), TypeKind::BIGINT);
+  EXPECT_STREQ(interval->kindName(), "BIGINT");
+  ASSERT_EQ(interval->begin(), interval->end());
+  ASSERT_EQ(approximateTypeEncodingwidth(interval), 1);
+
+  // Physically BIGINT, but logically distinct from both BIGINT and
+  // IntervalDayTimeType (milliseconds).
+  EXPECT_TRUE(interval->kindEquals(BIGINT()));
+  ASSERT_NE(*interval, *BIGINT());
+  ASSERT_FALSE(interval->equivalent(*BIGINT()));
+  ASSERT_FALSE(BIGINT()->equivalent(*interval));
+  ASSERT_NE(*interval, *INTERVAL_DAY_TIME());
+  ASSERT_FALSE(interval->equivalent(*INTERVAL_DAY_TIME()));
+  ASSERT_FALSE(INTERVAL_DAY_TIME()->equivalent(*interval));
+
+  const int64_t micros = kMicrosInDay * 5 + kMicrosInHour * 4 +
+      kMicrosInMinute * 6 + kMicrosInSecond * 7 + 98000;
+  ASSERT_EQ(
+      "5 04:06:07.098000", INTERVAL_DAY_TIME_MICROS()->valueToString(micros));
+
+  // Sub-millisecond precision is preserved.
+  const int64_t microsWithSubMs = kMicrosInDay * 1 + kMicrosInHour * 2 +
+      kMicrosInMinute * 3 + kMicrosInSecond * 4 + 567890;
+  ASSERT_EQ(
+      "1 02:03:04.567890",
+      INTERVAL_DAY_TIME_MICROS()->valueToString(microsWithSubMs));
+
+  // Negative interval.
+  ASSERT_EQ(
+      "-1 02:03:04.567890",
+      INTERVAL_DAY_TIME_MICROS()->valueToString(-microsWithSubMs));
+
+  testTypeSerde(interval);
+}
+
 TEST(TypeTest, intervalYearMonth) {
   const auto interval = INTERVAL_YEAR_MONTH();
   ASSERT_EQ(interval->toString(), "INTERVAL YEAR TO MONTH");
