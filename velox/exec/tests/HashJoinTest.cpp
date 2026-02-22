@@ -24,6 +24,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -1607,10 +1608,10 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
 
         for (auto& pipeline : task->taskStats().pipelineStats) {
           for (auto op : pipeline.operatorStats) {
-            if (op.operatorType == "HashBuild") {
+            if (op.operatorType == OperatorType::kHashBuild) {
               nullJoinBuildKeyCount += op.numNullKeys;
             }
-            if (op.operatorType == "HashProbe") {
+            if (op.operatorType == OperatorType::kHashProbe) {
               nullJoinProbeKeyCount += op.numNullKeys;
             }
           }
@@ -1663,10 +1664,10 @@ TEST_P(MultiThreadedHashJoinTest, nullStatsWithEmptyBuild) {
 
         for (auto& pipeline : task->taskStats().pipelineStats) {
           for (auto op : pipeline.operatorStats) {
-            if (op.operatorType == "HashBuild") {
+            if (op.operatorType == OperatorType::kHashBuild) {
               nullJoinBuildKeyCount += op.numNullKeys;
             }
-            if (op.operatorType == "HashProbe") {
+            if (op.operatorType == OperatorType::kHashProbe) {
               nullJoinProbeKeyCount += op.numNullKeys;
             }
           }
