@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <cudf/ast/detail/expression_parser.hpp>
 #include <cudf/ast/expressions.hpp>
@@ -27,6 +28,16 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+std::pair<int128_t, int128_t> getInt128BoundsForType(const TypePtr& type) {
+  if (type->isDecimal()) {
+    const auto [precision, _] = getDecimalPrecisionScale(*type);
+    const auto maxAbs = DecimalUtil::kPowersOfTen[precision] - 1;
+    return {-maxAbs, maxAbs};
+  }
+  return {
+      std::numeric_limits<int128_t>::min(),
+      std::numeric_limits<int128_t>::max()};
+}
 
 template <
     typename RangeT,
@@ -175,6 +186,101 @@ std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
   } else {
     VELOX_FAIL("Unsupported type for buildBigintRangeExpr: {}", Kind);
   }
+}
+
+std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    const TypePtr& columnTypePtr) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto* hugeintRange = static_cast<const common::HugeintRange*>(&filter);
+  const auto lower = hugeintRange->lower();
+  const auto upper = hugeintRange->upper();
+
+  const auto [minVal, maxVal] = getInt128BoundsForType(columnTypePtr);
+  const bool skipLowerBound = lower <= minVal;
+  const bool skipUpperBound = upper >= maxVal;
+
+  auto addLiteral = [&](int128_t value) -> const cudf::ast::expression& {
+    variant veloxVariant = value;
+    const auto& literal = makeScalarAndLiteral<TypeKind::HUGEINT>(
+        columnTypePtr, veloxVariant, scalars);
+    return tree.push(literal);
+  };
+
+  if (lower == upper) {
+    if (skipLowerBound || skipUpperBound) {
+      return tree.push(Operation{Op::NOT_EQUAL, columnRef, columnRef});
+    }
+    auto const& literal = addLiteral(lower);
+    return tree.push(Operation{Op::EQUAL, columnRef, literal});
+  }
+
+  const cudf::ast::expression* lowerExpr = nullptr;
+  if (!skipLowerBound) {
+    auto const& lowerLiteral = addLiteral(lower);
+    lowerExpr =
+        &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+  }
+
+  const cudf::ast::expression* upperExpr = nullptr;
+  if (!skipUpperBound) {
+    auto const& upperLiteral = addLiteral(upper);
+    upperExpr = &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+  }
+
+  if (lowerExpr && upperExpr) {
+    return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+  } else if (lowerExpr) {
+    return *lowerExpr;
+  } else if (upperExpr) {
+    return *upperExpr;
+  }
+
+  // No bounds => pass-through filter.
+  return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+}
+
+template <TypeKind Kind, typename FilterT, typename ValueT>
+const cudf::ast::expression& buildHashInListExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    const cudf::ast::expression& columnRef,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const TypePtr& columnTypePtr,
+    bool isNegated = false) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto* valuesFilter = dynamic_cast<const FilterT*>(&filter);
+  VELOX_CHECK_NOT_NULL(valuesFilter, "Filter is not a hash-table list filter");
+  auto const& values = valuesFilter->values();
+  VELOX_CHECK(!values.empty(), "Empty List filter not supported");
+
+  std::vector<const cudf::ast::expression*> exprVec;
+  for (const auto& value : values) {
+    variant veloxVariant = static_cast<ValueT>(value);
+    auto const& literal = tree.push(
+        makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars));
+    auto const& equalExpr = tree.push(
+        Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
+    exprVec.push_back(&equalExpr);
+  }
+
+  const cudf::ast::expression* result = exprVec[0];
+  for (size_t i = 1; i < exprVec.size(); ++i) {
+    result = &tree.push(
+        Operation{
+            isNegated ? Op::NULL_LOGICAL_AND : Op::NULL_LOGICAL_OR,
+            *result,
+            *exprVec[i]});
+  }
+
+  return *result;
 }
 
 template <typename T>
@@ -352,6 +458,21 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       return result.get();
     }
 
+    case common::FilterKind::kHugeintRange: {
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      auto const& expr =
+          buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
+      return expr.get();
+    }
+
+    case common::FilterKind::kBigintValuesUsingHashTable: {
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      return buildHashInListExpr<
+          TypeKind::BIGINT,
+          common::BigintValuesUsingHashTable,
+          int64_t>(filter, tree, columnRef, scalars, columnType);
+    }
+
     case common::FilterKind::kBigintValuesUsingBitmask: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
       // Dispatch by the column's integer kind and cast filter values to it.
@@ -366,6 +487,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           mr,
           columnType);
       return result.get();
+    }
+
+    case common::FilterKind::kHugeintValuesUsingHashTable: {
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      return buildHashInListExpr<
+          TypeKind::HUGEINT,
+          common::HugeintValuesUsingHashTable,
+          int128_t>(filter, tree, columnRef, scalars, columnType);
     }
 
     case common::FilterKind::kBytesValues: {
