@@ -20,6 +20,7 @@
 #include "velox/functions/prestosql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/functions/prestosql/aggregates/ArbitraryAggregate.h"
 #include "velox/functions/prestosql/aggregates/ArrayAggAggregate.h"
+#include "velox/functions/prestosql/aggregates/ArrayUnionSumAggregate.h"
 #include "velox/functions/prestosql/aggregates/AverageAggregate.h"
 #include "velox/functions/prestosql/aggregates/BitwiseAggregates.h"
 #include "velox/functions/prestosql/aggregates/BitwiseXorAggregate.h"
@@ -338,6 +339,10 @@ void registerAllAggregateFunctions(
       overwrite);
   registerArrayAggAggregate(
       {prefix + kArrayAgg}, withCompanionFunctions, overwrite);
+  // array_union_sum is a Velox-only function, not available in Presto.
+  if (!onlyPrestoSignatures) {
+    registerArrayUnionSumAggregate(prefix, withCompanionFunctions, overwrite);
+  }
   registerAverageAggregate({prefix + kAvg}, withCompanionFunctions, overwrite);
   registerBitwiseAndAggregate(
       {prefix + kBitwiseAnd},
