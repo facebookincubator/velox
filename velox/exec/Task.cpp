@@ -30,7 +30,8 @@
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
-#include "velox/exec/OperatorTraceConfig.h"
+#include "velox/exec/OperatorTraceCtx.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -115,14 +116,27 @@ std::string errorMessageImpl(const std::exception_ptr& exception) {
   return message;
 }
 
+// Returns the number of source nodes to process for a given plan node.
+// For most nodes, this is the number of sources. For index lookup join,
+// only the first source (probe side) is processed as a source node.
+inline size_t numSourceNodes(const core::PlanNode* planNode) {
+  if (!isIndexLookupJoin(planNode)) {
+    return planNode->sources().size();
+  }
+  const auto* indexNode =
+      checkedPointerCast<const core::IndexLookupJoinNode>(planNode);
+  VELOX_CHECK_EQ(indexNode->sources().size(), 2);
+  return !indexNode->needsIndexSplit() ? 1 : indexNode->sources().size();
+}
+
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
-  op.runtimeStats["runningAddInputWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningAddInputWallNanos)] =
       RuntimeMetric(op.addInputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
-  op.runtimeStats["runningGetOutputWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningGetOutputWallNanos)] =
       RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
-  op.runtimeStats["runningFinishWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningFinishWallNanos)] =
       RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
@@ -149,7 +163,7 @@ void buildSplitStates(
   }
 
   const auto& sources = planNode->sources();
-  const auto numSources = isIndexLookupJoin(planNode) ? 1 : sources.size();
+  const auto numSources = numSourceNodes(planNode);
   for (auto i = 0; i < numSources; ++i) {
     buildSplitStates(sources[i].get(), allIds, splitStateMap);
   }
@@ -172,24 +186,31 @@ std::string makeUuid() {
 
 // Returns true if an operator is a hash join operator given 'operatorType'.
 bool isHashJoinOperator(const std::string& operatorType) {
-  return (operatorType == "HashBuild") || (operatorType == "HashProbe");
+  return (operatorType == OperatorType::kHashBuild) ||
+      (operatorType == OperatorType::kHashProbe);
 }
 
 class QueueSplitsStore : public SplitsStore {
  public:
   using SplitsStore::SplitsStore;
 
-  void requestBarrier(std::vector<ContinuePromise>& promises) override {
-    addSplit(Split::createBarrier(), promises);
+  void requestBarrier(
+      uint32_t numDrivers,
+      std::vector<ContinuePromise>& promises) override {
+    addSplit(Split::createBarrier(numDrivers), promises);
   }
 
   bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
+      std::optional<uint32_t> driverId,
       int maxPreloadSplits,
-      const ConnectorSplitPreloadFunc& preload) override {
+      const ConnectorSplitPreloadFunc& preload,
+      Split& split,
+      ContinueFuture& future) override {
     if (!splits_.empty()) {
       split = getSplit(maxPreloadSplits, preload);
+      return true;
+    }
+    if (tryGetBarrier(driverId, split)) {
       return true;
     }
     if (noMoreSplits_) {
@@ -378,7 +399,7 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       firstNodeNotSupportingBarrier_(
           planFragment_.firstNodeNotSupportingBarrier()),
-      traceConfig_(maybeMakeTraceConfig()),
+      traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
@@ -458,11 +479,6 @@ Task::~Task() {
 }
 
 void Task::ensureBarrierSupport() const {
-  VELOX_CHECK_EQ(
-      mode_,
-      Task::ExecutionMode::kSerial,
-      "Task doesn't support barriered execution.");
-
   VELOX_CHECK_NULL(
       firstNodeNotSupportingBarrier_,
       "Task doesn't support barriered execution. Name of the first node that "
@@ -498,6 +514,8 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
+    VELOX_CHECK_EQ(factory->numDrivers, 1);
+    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
 
   // Create drivers.
@@ -1015,6 +1033,7 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       numDriversUngrouped_ += factory->numDrivers;
     }
     numTotalDrivers_ += factory->numTotalDrivers;
+    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
   }
@@ -1636,7 +1655,7 @@ void Task::addSplitToStoreLocked(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   if (split.isBarrier()) {
-    splitsStore->requestBarrier(promises);
+    splitsStore->requestBarrier(split.barrier->numDrivers, promises);
     return;
   }
   auto* queueSplitsStore =
@@ -1793,7 +1812,8 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
 
   promises.reserve(leafPlanNodeIds.size());
   for (const auto& leafPlanNode : leafPlanNodeIds) {
-    auto barrierSplit = Split::createBarrier();
+    const auto barrierSplit =
+        Split::createBarrier(numDriversPerLeafNode_.at(leafPlanNode));
     auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
     addSplitLocked(splitState, barrierSplit, promises);
   }
@@ -1954,12 +1974,13 @@ bool Task::isAllSplitsFinishedLocked() {
 }
 
 BlockingReason Task::getSplitOrFuture(
+    uint32_t driverId,
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId,
-    exec::Split& split,
-    ContinueFuture& future,
     int32_t maxPreloadSplits,
-    const ConnectorSplitPreloadFunc& preload) {
+    const ConnectorSplitPreloadFunc& preload,
+    exec::Split& split,
+    ContinueFuture& future) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
   auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
@@ -1968,7 +1989,8 @@ BlockingReason Task::getSplitOrFuture(
         splitsStore,
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
-  return splitsStore->nextSplit(split, future, maxPreloadSplits, preload)
+  return splitsStore->nextSplit(
+             driverId, maxPreloadSplits, preload, split, future)
       ? BlockingReason::kNotBlocked
       : BlockingReason::kWaitForSplit;
 }
@@ -2543,8 +2565,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           }
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
-            VELOX_CHECK(
-                store->nextSplit(splits.emplace_back(), future, 0, nullptr));
+            const auto hasNextSplit = store->nextSplit(
+                /*driverId=*/std::nullopt,
+                /*maxPreloadSplits=*/0,
+                /*preload=*/nullptr,
+                splits.emplace_back(),
+                future);
+            VELOX_CHECK(hasNextSplit);
           }
         }
         if (!splits.empty()) {
@@ -3168,7 +3195,7 @@ std::string Task::errorMessage() const {
 }
 
 StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
-  TestValue::adjust("facebook::velox::exec::Task::enter", &state);
+  TestValue::adjust("facebook::velox::exec::Task::enter", this);
   std::lock_guard<std::timed_mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
   state.isEnqueued = false;
@@ -3447,22 +3474,27 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return exchangeClients_[pipelineId];
 }
 
-std::unique_ptr<trace::TraceConfig> Task::maybeMakeTraceConfig() const {
+std::unique_ptr<trace::TraceCtx> Task::maybeMakeTraceCtx() const {
   if (!queryCtx_->queryConfig().queryTraceEnabled()) {
     return nullptr;
   }
-  // TODO: Make the actual trace implementation pluggable.
-  return trace::OperatorTraceConfig::maybeCreate(
+
+  if (queryCtx_->traceCtxProvider()) {
+    return queryCtx_->traceCtxProvider()(*queryCtx_, planFragment());
+  }
+  // Fallback to default trace.
+  return trace::OperatorTraceCtx::maybeCreate(
       *queryCtx_, planFragment(), taskId());
 }
 
 void Task::maybeInitTrace() {
-  if (!traceConfig_) {
+  if (!traceCtx_) {
     return;
   }
 
-  auto metadataWriter = traceConfig_->createMetadataTracer();
-  metadataWriter->write(*queryCtx_, *planFragment_.planNode);
+  if (auto metadataWriter = traceCtx_->createMetadataTracer()) {
+    metadataWriter->write(*queryCtx_, *planFragment_.planNode);
+  }
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

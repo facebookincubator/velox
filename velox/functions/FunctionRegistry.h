@@ -46,6 +46,13 @@ FunctionSignatureMap getVectorFunctionSignatures();
 /// the entries are not deterministic.
 std::optional<bool> isDeterministic(const std::string& functionName);
 
+/// Returns if a function has default null behavior (null in any input produces
+/// null output) by fetching all registry entries for the given function name
+/// and checking if all of them have default null behavior.
+/// Returns std::nullopt if the function is not found. Returns false if any of
+/// the entries do not have default null behavior.
+std::optional<bool> isDefaultNullBehavior(const std::string& functionName);
+
 /// Given a function name and argument types, returns
 /// the return type if function exists otherwise returns nullptr
 TypePtr resolveFunction(
@@ -142,6 +149,19 @@ std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadata(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
+
+/// Like 'resolveVectorFunctionWithMetadata', but with support for applying type
+/// coercions if no signature matches 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve the function successfully. Contains one entry per argument. The
+/// entry is null if no coercion is required for that argument. The entry is not
+/// null if coercion is necessary.
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadataWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
 
 /// Given name of a function, removes it from both the simple and vector
 /// function registries (including all signatures).

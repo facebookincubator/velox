@@ -17,11 +17,27 @@
 #include "velox/functions/prestosql/aggregates/ClassificationAggregation.h"
 #include "velox/common/base/IOUtils.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
+const auto kSignatures =
+    std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>{
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("array(double)")
+            .intermediateType("varbinary")
+            .argumentType("bigint")
+            .argumentType("boolean")
+            .argumentType("double")
+            .build(),
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("array(double)")
+            .intermediateType("varbinary")
+            .argumentType("bigint")
+            .argumentType("boolean")
+            .argumentType("double")
+            .argumentType("double")
+            .build()};
 
 enum class ClassificationType {
   kFallout = 0,
@@ -612,13 +628,13 @@ class ClassificationAggregation : public exec::Aggregate {
 
 template <ClassificationType T>
 void registerAggregateFunctionImpl(
-    const std::string& name,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite,
     const std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
         signatures) {
   exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
       [](core::AggregationNode::Step,
          const std::vector<TypePtr>& args,
@@ -637,52 +653,44 @@ void registerAggregateFunctionImpl(
 }
 } // namespace
 
-void registerClassificationFunctions(
-    const std::string& prefix,
+void registerFalloutAggregation(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
-  const auto signatures =
-      std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>{
-          exec::AggregateFunctionSignatureBuilder()
-              .returnType("array(double)")
-              .intermediateType("varbinary")
-              .argumentType("bigint")
-              .argumentType("boolean")
-              .argumentType("double")
-              .build(),
-          exec::AggregateFunctionSignatureBuilder()
-              .returnType("array(double)")
-              .intermediateType("varbinary")
-              .argumentType("bigint")
-              .argumentType("boolean")
-              .argumentType("double")
-              .argumentType("double")
-              .build()};
   registerAggregateFunctionImpl<ClassificationType::kFallout>(
-      prefix + kClassificationFallout,
-      withCompanionFunctions,
-      overwrite,
-      signatures);
+      names, withCompanionFunctions, overwrite, kSignatures);
+}
+
+void registerPrecisionAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerAggregateFunctionImpl<ClassificationType::kPrecision>(
-      prefix + kClassificationPrecision,
-      withCompanionFunctions,
-      overwrite,
-      signatures);
+      names, withCompanionFunctions, overwrite, kSignatures);
+}
+
+void registerRecallAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerAggregateFunctionImpl<ClassificationType::kRecall>(
-      prefix + kClassificationRecall,
-      withCompanionFunctions,
-      overwrite,
-      signatures);
+      names, withCompanionFunctions, overwrite, kSignatures);
+}
+
+void registerMissRateAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerAggregateFunctionImpl<ClassificationType::kMissRate>(
-      prefix + kClassificationMissRate,
-      withCompanionFunctions,
-      overwrite,
-      signatures);
+      names, withCompanionFunctions, overwrite, kSignatures);
+}
+
+void registerThresholdAggregation(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerAggregateFunctionImpl<ClassificationType::kThresholds>(
-      prefix + kClassificationThreshold,
-      withCompanionFunctions,
-      overwrite,
-      signatures);
+      names, withCompanionFunctions, overwrite, kSignatures);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

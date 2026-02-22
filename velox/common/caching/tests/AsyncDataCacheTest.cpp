@@ -362,6 +362,10 @@ class TestingCoalescedLoad : public CoalescedLoad {
     return sum;
   }
 
+  bool isSsdLoad() const override {
+    return false;
+  }
+
  protected:
   const std::shared_ptr<AsyncDataCache> cache_;
   const std::vector<Request> requests_;
@@ -413,6 +417,10 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       throw;
     }
     return pins;
+  }
+
+  bool isSsdLoad() const override {
+    return true;
   }
 
  private:
@@ -1492,6 +1500,65 @@ TEST_P(AsyncDataCacheTest, ssdWriteOptions) {
       // SSD cache write stops right after the first entry in each shard.
       // Only a few entries can be written.
       EXPECT_LE(stats.ssdStats->entriesWritten, 20);
+    }
+  }
+}
+
+TEST_P(AsyncDataCacheTest, ssdFlushThresholdBytes) {
+  constexpr uint64_t kRamBytes = 16UL << 20; // 16 MB
+  constexpr uint64_t kSsdBytes = 64UL << 20; // 64 MB
+
+  struct {
+    double maxWriteRatio;
+    double ssdSavableRatio;
+    int32_t minSsdSavableBytes;
+    uint64_t ssdFlushThresholdBytes;
+    bool expectedSaveToSsd;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxWriteRatio {}, ssdSavableRatio {}, minSsdSavableBytes {}, ssdFlushThresholdBytes {}, expectedSaveToSsd {}",
+          maxWriteRatio,
+          ssdSavableRatio,
+          minSsdSavableBytes,
+          ssdFlushThresholdBytes,
+          expectedSaveToSsd);
+    }
+  } testSettings[] = {
+      // Ratio-based threshold not met, ssdFlushThresholdBytes disabled (0).
+      // No flush expected.
+      {0.8, 0.95, 32 << 20, 0, false},
+      // Ratio-based threshold not met, but ssdFlushThresholdBytes is small
+      // (1MB).
+      // Flush expected due to absolute threshold.
+      {0.8, 0.95, 32 << 20, 1UL << 20, true},
+      // Ratio-based threshold met. ssdFlushThresholdBytes disabled.
+      // Flush expected due to ratio.
+      {0.8, 0.3, 4 << 20, 0, true},
+      // Both thresholds could trigger. Flush expected.
+      {0.8, 0.3, 4 << 20, 1UL << 20, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    initializeCache(
+        kRamBytes,
+        kSsdBytes,
+        0,
+        true,
+        AsyncDataCache::Options(
+            testData.maxWriteRatio,
+            testData.ssdSavableRatio,
+            testData.minSsdSavableBytes,
+            AsyncDataCache::kDefaultNumShards,
+            testData.ssdFlushThresholdBytes));
+    // Load data half of the in-memory capacity.
+    loadLoop(0, kRamBytes / 2);
+    waitForPendingLoads();
+    auto stats = cache_->refreshStats();
+    if (testData.expectedSaveToSsd) {
+      EXPECT_GT(stats.ssdStats->entriesWritten, 0);
+    } else {
+      EXPECT_EQ(stats.ssdStats->entriesWritten, 0);
     }
   }
 }

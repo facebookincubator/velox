@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spiller.h"
@@ -76,6 +78,9 @@ class TopNRowNumberSpiller;
 
 class TopNRowNumber : public Operator {
  public:
+  /// Runtime stat key indicating partial TopN was abandoned.
+  static constexpr std::string_view kAbandonedPartial = "abandonedPartial";
+
   TopNRowNumber(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -138,6 +143,9 @@ class TopNRowNumber : public Operator {
     std::priority_queue<char*, std::vector<char*, StlAllocator<char*>>, Compare>
         rows;
 
+    // Temporary storage for rows with the highest rank in the partition.
+    std::vector<char*, StlAllocator<char*>> tempTopRankRows;
+
     RowComparator& rowComparator;
 
     // This is the greatest rank seen so far in the input rows. Note: rank is
@@ -161,6 +169,7 @@ class TopNRowNumber : public Operator {
 
     TopRows(HashStringAllocator* allocator, RowComparator& comparator)
         : rows{{comparator}, StlAllocator<char*>(allocator)},
+          tempTopRankRows(StlAllocator<char*>(allocator)),
           rowComparator(comparator) {}
   };
 
@@ -209,9 +218,7 @@ class TopNRowNumber : public Operator {
   // Computes the rank for the next row to be output
   // (all output rows in memory).
   template <core::TopNRowNumberNode::RankFunction TRank>
-  void computeNextRankInMemory(
-      const TopRows& partition,
-      vector_size_t rowIndex);
+  void computeNextRankInMemory(TopRows& partition, vector_size_t rowIndex);
 
   // Appends numRows of the current partition to the output. Note: The rows are
   // popped in reverse order of the rank.

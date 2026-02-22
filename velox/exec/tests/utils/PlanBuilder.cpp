@@ -390,6 +390,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
         dataColumns_,
+        indexColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
         filterColumnHandles_);
   }
@@ -1045,10 +1046,10 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
       agg.rawInputTypes = rawInputTypes[i];
     }
 
-    if (untypedExpr.maskExpr != nullptr) {
+    if (untypedExpr.filter != nullptr) {
       auto maskExpr =
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-              inferTypes(untypedExpr.maskExpr));
+              inferTypes(untypedExpr.filter));
       VELOX_CHECK_NOT_NULL(
           maskExpr,
           "FILTER clause must use a column name, not an expression: {}",
@@ -2245,26 +2246,26 @@ class WindowTypeResolver {
 };
 
 const core::WindowNode::Frame createWindowFrame(
-    const duckdb::IExprWindowFrame& windowFrame,
+    const parse::WindowFrame& windowFrame,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
   core::WindowNode::Frame frame;
-  frame.type = (windowFrame.type == duckdb::WindowType::kRows)
+  frame.type = (windowFrame.type == parse::WindowType::kRows)
       ? core::WindowNode::WindowType::kRows
       : core::WindowNode::WindowType::kRange;
 
   auto boundTypeConversion =
-      [](duckdb::BoundType boundType) -> core::WindowNode::BoundType {
+      [](parse::BoundType boundType) -> core::WindowNode::BoundType {
     switch (boundType) {
-      case duckdb::BoundType::kCurrentRow:
+      case parse::BoundType::kCurrentRow:
         return core::WindowNode::BoundType::kCurrentRow;
-      case duckdb::BoundType::kFollowing:
+      case parse::BoundType::kFollowing:
         return core::WindowNode::BoundType::kFollowing;
-      case duckdb::BoundType::kPreceding:
+      case parse::BoundType::kPreceding:
         return core::WindowNode::BoundType::kPreceding;
-      case duckdb::BoundType::kUnboundedFollowing:
+      case parse::BoundType::kUnboundedFollowing:
         return core::WindowNode::BoundType::kUnboundedFollowing;
-      case duckdb::BoundType::kUnboundedPreceding:
+      case parse::BoundType::kUnboundedPreceding:
         return core::WindowNode::BoundType::kUnboundedPreceding;
     }
     VELOX_UNREACHABLE();
@@ -2281,7 +2282,7 @@ const core::WindowNode::Frame createWindowFrame(
 }
 
 std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
-    const duckdb::IExprWindowFunction& windowExpr,
+    const parse::WindowExpr& windowExpr,
     const std::string& windowString,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
@@ -2304,7 +2305,7 @@ std::pair<
     std::vector<core::FieldAccessTypedExprPtr>,
     std::vector<core::SortOrder>>
 parseOrderByKeys(
-    const duckdb::IExprWindowFunction& windowExpr,
+    const parse::WindowExpr& windowExpr,
     const std::string& windowString,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
@@ -2518,6 +2519,27 @@ PlanBuilder& PlanBuilder::markDistinct(
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::enforceDistinct(
+    const std::vector<std::string>& distinctKeys,
+    std::string errorMessage,
+    const std::vector<std::string>& preGroupedKeys) {
+  VELOX_CHECK_NOT_NULL(planNode_, "EnforceDistinct cannot be the source node");
+  planNode_ = std::make_shared<core::EnforceDistinctNode>(
+      nextPlanNodeId(),
+      fields(planNode_->outputType(), distinctKeys),
+      fields(planNode_->outputType(), preGroupedKeys),
+      std::move(errorMessage),
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::streamingEnforceDistinct(
+    const std::vector<std::string>& distinctKeys,
+    std::string errorMessage) {
+  return enforceDistinct(distinctKeys, std::move(errorMessage), distinctKeys);
 }
 
 core::PlanNodeId PlanBuilder::nextPlanNodeId() {

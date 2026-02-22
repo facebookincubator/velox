@@ -19,7 +19,6 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -291,7 +290,9 @@ class NonNumericArbitrary : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       const folly::Range<const vector_size_t*>& groupBoundaries) override {
     VELOX_CHECK(clusteredInput_);
-    decoded_.decode(*args[0]);
+    // Since we're going through the process of decoding anyway, store the base
+    // so that downstream operators don't need to.
+    const auto base = decoded_.decodeAndGetBase(args[0]);
     vector_size_t groupStart = 0;
     auto forEachEmptyAccumulator = [&](auto func) {
       for (auto groupEnd : groupBoundaries) {
@@ -307,15 +308,15 @@ class NonNumericArbitrary : public exec::Aggregate {
     };
     if (rows.isAllSelected() && !decoded_.mayHaveNulls()) {
       forEachEmptyAccumulator([&](auto /*groupEnd*/, auto* accumulator) {
-        accumulator->vector = args[0];
-        accumulator->index = groupStart;
+        accumulator->vector = base;
+        accumulator->index = decoded_.index(groupStart);
       });
     } else {
       forEachEmptyAccumulator([&](auto groupEnd, auto* accumulator) {
         for (auto i = groupStart; i < groupEnd; ++i) {
           if (rows.isValid(i) && !decoded_.isNullAt(i)) {
-            accumulator->vector = args[0];
-            accumulator->index = i;
+            accumulator->vector = base;
+            accumulator->index = decoded_.index(i);
             break;
           }
         }
@@ -412,7 +413,7 @@ class NonNumericArbitrary : public exec::Aggregate {
 } // namespace
 
 void registerArbitraryAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -423,16 +424,16 @@ void registerArbitraryAggregate(
           .argumentType("T")
           .build()};
 
-  std::vector<std::string> names = {prefix + kArbitrary, prefix + kAnyValue};
   exec::registerAggregateFunction(
       names,
       std::move(signatures),
-      [name = names.front()](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {

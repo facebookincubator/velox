@@ -25,7 +25,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
-#include "velox/dwio/parquet/writer/ParquetFieldId.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -95,7 +95,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
   double bufferGrowRatio = 1.5;
 
-  arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
+  arrow::Encoding::type encoding = arrow::Encoding::kPlain;
 
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>

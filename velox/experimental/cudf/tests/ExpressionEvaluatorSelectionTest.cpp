@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -74,13 +75,17 @@ class CudfExpressionSelectionTest : public ::testing::Test {
 };
 
 TEST_F(CudfExpressionSelectionTest, astRoot) {
-  auto prev = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
   CudfConfig::getInstance().astExpressionEnabled = true;
+  CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
-  ASSERT_NE(ast, nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prev;
+  auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
+  ASSERT_TRUE(ast != nullptr || jit != nullptr);
+  CudfConfig::getInstance().astExpressionEnabled = prevAst;
+  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
@@ -92,15 +97,19 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
-  auto prev = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
   CudfConfig::getInstance().astExpressionEnabled = true;
+  CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr(
       "(year(date) > 2020) AND (length(name) < 10)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
-  ASSERT_NE(ast, nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prev;
+  auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
+  ASSERT_TRUE(ast != nullptr || jit != nullptr);
+  CudfConfig::getInstance().astExpressionEnabled = prevAst;
+  CudfConfig::getInstance().jitExpressionEnabled = prevJit;
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {

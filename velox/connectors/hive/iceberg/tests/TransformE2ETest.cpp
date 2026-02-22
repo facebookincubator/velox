@@ -19,6 +19,8 @@
 #include <folly/json.h>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -223,8 +225,6 @@ class TransformE2ETest : public test::IcebergTestBase {
       const std::string& partitionPath,
       const std::string& partitionFilter,
       const int32_t expectedRowCount) {
-    auto splits = createSplitsForDirectory(partitionPath);
-
     auto scanPlan = PlanBuilder()
                         .startTableScan()
                         .connectorId(test::kIcebergConnectorId)
@@ -233,7 +233,9 @@ class TransformE2ETest : public test::IcebergTestBase {
                         .planNode();
 
     const auto actualRowCount =
-        AssertQueryBuilder(scanPlan).splits(splits).countResults();
+        AssertQueryBuilder(scanPlan)
+            .splits(createSplitsForDirectory(partitionPath))
+            .countResults();
 
     ASSERT_EQ(actualRowCount, expectedRowCount);
 
@@ -245,7 +247,9 @@ class TransformE2ETest : public test::IcebergTestBase {
                                 .filter(partitionFilter)
                                 .planNode();
     const auto filteredRowCount =
-        AssertQueryBuilder(filterPlan).splits(splits).countResults();
+        AssertQueryBuilder(filterPlan)
+            .splits(createSplitsForDirectory(partitionPath))
+            .countResults();
     ASSERT_EQ(expectedRowCount, filteredRowCount);
   }
 
@@ -276,6 +280,7 @@ class TransformE2ETest : public test::IcebergTestBase {
     const auto dataSink = createDataSinkAndAppendData(
         {rowVector}, outputDirectory->getPath(), partitionTransforms);
 
+    dataSink->close();
     auto commitMessages = dataSink->commitMessage();
     VELOX_CHECK_EQ(commitMessages.size(), 1);
     auto commitData = folly::parseJson(commitMessages[0]);
@@ -283,7 +288,6 @@ class TransformE2ETest : public test::IcebergTestBase {
         folly::parseJson(commitData["partitionDataJson"].asString());
     auto partitionValues = partitionDataJson["partitionValues"];
     VELOX_CHECK_EQ(partitionValues.size(), 1);
-    dataSink->close();
     return partitionValues[0];
   }
 };
@@ -532,9 +536,9 @@ TEST_F(TransformE2ETest, year) {
                             .filter(yearFilter(year))
                             .planNode();
 
-        auto splits = createSplitsForDirectory(dir);
-        auto partitionRowCount =
-            AssertQueryBuilder(datePlan).splits(splits).countResults();
+        auto partitionRowCount = AssertQueryBuilder(datePlan)
+                                     .splits(createSplitsForDirectory(dir))
+                                     .countResults();
 
         auto countPlan = PlanBuilder()
                              .startTableScan()
@@ -542,8 +546,9 @@ TEST_F(TransformE2ETest, year) {
                              .outputType(rowType)
                              .endTableScan()
                              .planNode();
-        auto totalPartitionCount =
-            AssertQueryBuilder(countPlan).splits(splits).countResults();
+        auto totalPartitionCount = AssertQueryBuilder(countPlan)
+                                       .splits(createSplitsForDirectory(dir))
+                                       .countResults();
         ASSERT_EQ(partitionRowCount, totalPartitionCount);
         break;
       }
@@ -705,6 +710,85 @@ TEST_F(TransformE2ETest, multipleTransformsOnSameColumn) {
       }
     }
   }
+}
+
+TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
+  auto rowType = ROW({"c_date", "c_value"}, {DATE(), INTEGER()});
+
+  static const std::vector<int32_t> dates = {20147, 19816};
+  std::vector<RowVectorPtr> batches;
+  for (auto i = 0; i < kDefaultNumBatches; i++) {
+    batches.emplace_back(makeRowVector(
+        rowType->names(),
+        {makeFlatVector<int32_t>(
+             kDefaultRowsPerBatch,
+             [](auto row) { return dates[row % dates.size()]; },
+             nullptr,
+             DATE()),
+         makeFlatVector<int32_t>(
+             kDefaultRowsPerBatch, [](auto row) { return row; })}));
+  }
+
+  auto outputDirectory = writeBatchesWithTransforms(
+      batches, {{0, TransformType::kIdentity, std::nullopt}});
+
+  auto partitionDirs = verifyPartitionCount(outputDirectory->getPath(), 2);
+
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+
+  for (const auto& dir : partitionDirs) {
+    const auto daysSinceEpoch =
+        dirName(dir) == "c_date=2025-02-28" ? "20147" : "19816";
+
+    for (const auto& filePath : listFiles(dir)) {
+      const auto file = filesystems::getFileSystem(filePath, nullptr)
+                            ->openFileForRead(filePath);
+      splits.push_back(
+          std::make_shared<HiveIcebergSplit>(
+              test::kIcebergConnectorId,
+              filePath,
+              fileFormat_,
+              0,
+              file->size(),
+              std::unordered_map<std::string, std::optional<std::string>>{
+                  {"c_date", daysSinceEpoch}},
+              std::nullopt,
+              std::unordered_map<std::string, std::string>{},
+              nullptr,
+              /*cacheable=*/true,
+              std::vector<IcebergDeleteFile>()));
+    }
+  }
+
+  ColumnHandleMap assignments{
+      {"c_date",
+       std::make_shared<IcebergColumnHandle>(
+           "c_date",
+           HiveColumnHandle::ColumnType::kPartitionKey,
+           DATE(),
+           parquet::ParquetFieldId{0, {}},
+           std::vector<common::Subfield>{})},
+      {"c_value",
+       std::make_shared<IcebergColumnHandle>(
+           "c_value",
+           HiveColumnHandle::ColumnType::kRegular,
+           INTEGER(),
+           parquet::ParquetFieldId{1, {}})},
+  };
+
+  auto filterPlan = PlanBuilder()
+                        .startTableScan()
+                        .connectorId(test::kIcebergConnectorId)
+                        .outputType(rowType)
+                        .assignments(assignments)
+                        .remainingFilter("c_date = DATE '2025-02-28'")
+                        .endTableScan()
+                        .planNode();
+
+  const auto filteredRowCount =
+      AssertQueryBuilder(filterPlan).splits(splits).countResults();
+
+  ASSERT_EQ(filteredRowCount, kDefaultRowsPerBatch);
 }
 #endif
 

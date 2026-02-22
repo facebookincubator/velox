@@ -17,11 +17,14 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
 void registerNoisyApproxSfmAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& noisyApproxSetSfmNames,
+    const std::vector<std::string>& noisyApproxDistinctSfmNames,
+    const std::vector<std::string>& noisyApproxSetSfmFromIndexAndZerosNames,
     bool withCompanionFunctions,
     bool overwrite);
 

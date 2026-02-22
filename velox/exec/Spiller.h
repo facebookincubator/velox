@@ -17,6 +17,7 @@
 
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/HashBitRange.h"
 #include "velox/exec/RowContainer.h"
 
@@ -46,7 +47,7 @@ class SpillerBase {
     return finalized_;
   }
 
-  common::SpillStats stats() const;
+  exec::SpillStats stats() const;
 
   std::string toString() const;
 
@@ -60,7 +61,7 @@ class SpillerBase {
       uint64_t maxSpillRunRows,
       std::optional<SpillPartitionId> parentId,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   // Invoked to spill. If 'startRowIter' is not null, then we only spill rows
   // from row container starting at the offset pointed by 'startRowIter'.
@@ -148,7 +149,7 @@ class SpillerBase {
 
   const std::optional<SpillPartitionId> parentId_;
 
-  folly::Synchronized<common::SpillStats>* const spillStats_;
+  exec::SpillStats* const spillStats_;
 
   const std::vector<CompareFlags> compareFlags_;
 
@@ -207,7 +208,7 @@ class NoRowContainerSpiller : public SpillerBase {
       std::optional<SpillPartitionId> parentId,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   void spill(
       const SpillPartitionId& partitionId,
@@ -226,7 +227,7 @@ class NoRowContainerSpiller : public SpillerBase {
       HashBitRange bits,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
  private:
   std::string type() const override {
@@ -246,7 +247,7 @@ class MergeSpiller final : public NoRowContainerSpiller {
       HashBitRange bits,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats)
+      exec::SpillStats* spillStats)
       : NoRowContainerSpiller(
             std::move(rowType),
             parentId,
@@ -265,7 +266,7 @@ class SortInputSpiller : public SpillerBase {
       RowTypePtr rowType,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats)
+      exec::SpillStats* spillStats)
       : SpillerBase(
             container,
             std::move(rowType),
@@ -297,7 +298,7 @@ class SortOutputSpiller : public SpillerBase {
       RowContainer* container,
       RowTypePtr rowType,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   void spill(SpillRows& rows);
 

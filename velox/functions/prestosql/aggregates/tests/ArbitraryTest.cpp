@@ -28,7 +28,59 @@ namespace facebook::velox::aggregate::test {
 
 namespace {
 
-class ArbitraryTest : public AggregationTestBase {};
+class ArbitraryTest : public AggregationTestBase {
+ protected:
+  // Runs the clustered-input streaming-aggregation test loop.
+  // 'makeBatch' is called for each batch and must return a pair of RowVectors:
+  //   first  = flat reference data (loaded into DuckDB),
+  //   second = (possibly encoded) data fed to Velox.
+  // When both are the same vector the caller can return {v, v}.
+  void testClusteredInput(
+      std::function<std::pair<RowVectorPtr, RowVectorPtr>(int batchSize, int i)>
+          makeBatch) {
+    constexpr int kSize = 1000;
+    for (int batchRows : {kSize, 13}) {
+      std::vector<RowVectorPtr> flatData;
+      std::vector<RowVectorPtr> encodedData;
+      for (int i = 0; i < kSize; i += batchRows) {
+        auto batchSize = std::min(batchRows, kSize - i);
+        auto [flat, encoded] = makeBatch(batchSize, i);
+        flatData.push_back(flat);
+        encodedData.push_back(encoded);
+      }
+      createDuckDbTable(flatData);
+      for (bool mask : {false, true}) {
+        auto builder = PlanBuilder().values(encodedData);
+        std::string expected;
+        if (mask) {
+          builder.partialStreamingAggregation(
+              {"c0"}, {"arbitrary(c1)"}, {"c2"});
+          expected =
+              "select c0, first(c1) filter (where c2 and c1 is not null) from tmp group by 1";
+        } else {
+          builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"});
+          expected =
+              "select c0, first(c1) filter (where c1 is not null) from tmp group by 1";
+        }
+        auto plan = builder.finalAggregation().planNode();
+        for (int32_t flushRows : {0, 1}) {
+          SCOPED_TRACE(
+              fmt::format(
+                  "mask={} batchRows={} flushRows={}",
+                  mask,
+                  batchRows,
+                  flushRows));
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
+              .config(
+                  core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+                  flushRows)
+              .assertResults(expected);
+        }
+      }
+    }
+  }
+};
 
 TEST_F(ArbitraryTest, noNulls) {
   // Create vectors without nulls because DuckDB's "first" aggregate does not
@@ -468,46 +520,98 @@ TEST_F(ArbitraryTest, spilling) {
 }
 
 TEST_F(ArbitraryTest, clusteredInput) {
-  constexpr int kSize = 1000;
-  for (int batchRows : {kSize, 13}) {
-    std::vector<RowVectorPtr> data;
-    for (int i = 0; i < kSize; i += batchRows) {
-      auto size = std::min(batchRows, kSize - i);
-      data.push_back(makeRowVector({
-          makeFlatVector<int64_t>(size, [&](auto j) { return (i + j) / 17; }),
-          makeFlatVector<std::string>(
-              size, [&](auto j) { return std::to_string(i + j); }),
-          makeFlatVector<bool>(size, [&](auto j) { return (i + j) % 11 == 0; }),
-      }));
-    }
-    createDuckDbTable(data);
-    for (bool mask : {false, true}) {
-      auto builder = PlanBuilder().values(data);
-      std::string expected;
-      if (mask) {
-        builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"}, {"c2"});
-        expected = "select c0, first(c1) filter (where c2) from tmp group by 1";
-      } else {
-        builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"});
-        expected = "select c0, first(c1) from tmp group by 1";
-      }
-      auto plan = builder.finalAggregation().planNode();
-      for (int32_t flushRows : {0, 1}) {
-        SCOPED_TRACE(
-            fmt::format(
-                "mask={} batchRows={} flushRows={}",
-                mask,
-                batchRows,
-                flushRows));
-        AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
-            .config(
-                core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
-                flushRows)
-            .assertResults(expected);
-      }
-    }
-  }
+  testClusteredInput([&](int batchSize, int i) {
+    auto row = makeRowVector({
+        makeFlatVector<int64_t>(
+            batchSize, [&](auto j) { return (i + j) / 17; }),
+        makeFlatVector<std::string>(
+            batchSize, [&](auto j) { return std::to_string(i + j); }),
+        makeFlatVector<bool>(
+            batchSize, [&](auto j) { return (i + j) % 11 == 0; }),
+    });
+    return std::make_pair(row, row);
+  });
+}
+
+// Tests that addRawClusteredInput correctly decodes dictionary-encoded inputs
+// and stores the base vector in the accumulator. Uses a non-identity dictionary
+// mapping (reversed) so that storing the wrong vector/index pair would produce
+// incorrect results.
+TEST_F(ArbitraryTest, clusteredInputDictionaryEncoded) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto keys = makeFlatVector<int64_t>(
+        batchSize, [&](auto j) { return (i + j) / 17; });
+    auto values = makeFlatVector<std::string>(
+        batchSize, [&](auto j) { return std::to_string(i + j); });
+    auto mask = makeFlatVector<bool>(
+        batchSize, [&](auto j) { return (i + j) % 11 == 0; });
+
+    auto reversedBase = makeFlatVector<std::string>(batchSize, [&](auto j) {
+      return std::to_string(i + (batchSize - 1 - j));
+    });
+    auto indices =
+        makeIndices(batchSize, [&](auto idx) { return batchSize - 1 - idx; });
+    auto dictValues =
+        BaseVector::wrapInDictionary(nullptr, indices, batchSize, reversedBase);
+
+    return std::make_pair(
+        makeRowVector({keys, values, mask}),
+        makeRowVector({keys, dictValues, mask}));
+  });
+}
+
+// Tests that addRawClusteredInput correctly decodes constant-encoded inputs.
+// When input is a ConstantVector, decodeAndGetBase returns the underlying flat
+// vector and the decoded index, both of which must be stored consistently in
+// the accumulator.
+TEST_F(ArbitraryTest, clusteredInputConstantEncoded) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto keys = makeFlatVector<int64_t>(
+        batchSize, [&](auto j) { return (i + j) / 17; });
+    auto constantValue = fmt::format("batch_{}", i);
+    auto values = makeFlatVector<std::string>(
+        batchSize, [&](auto /*j*/) { return constantValue; });
+    auto mask = makeFlatVector<bool>(
+        batchSize, [&](auto j) { return (i + j) % 11 == 0; });
+
+    auto singleValue =
+        makeFlatVector<std::string>(1, [&](auto) { return constantValue; });
+    auto constValues = BaseVector::wrapInConstant(batchSize, 0, singleValue);
+
+    return std::make_pair(
+        makeRowVector({keys, values, mask}),
+        makeRowVector({keys, constValues, mask}));
+  });
+}
+
+// Tests dictionary-encoded inputs with nulls injected via the dictionary's null
+// bitmap. This exercises the null-skipping branch in addRawClusteredInput with
+// encoded vectors where the accumulator must correctly store the base vector
+// and decoded index for the first non-null row.
+TEST_F(ArbitraryTest, clusteredInputDictionaryEncodedWithNulls) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto keys = makeFlatVector<int64_t>(
+        batchSize, [&](auto j) { return (i + j) / 17; });
+    auto values = makeFlatVector<std::string>(
+        batchSize,
+        [&](auto j) { return std::to_string(i + j); },
+        [&](auto j) { return (i + j) % 3 == 0; });
+    auto mask = makeFlatVector<bool>(
+        batchSize, [&](auto j) { return (i + j) % 11 == 0; });
+
+    auto reversedBase = makeFlatVector<std::string>(batchSize, [&](auto j) {
+      return std::to_string(i + (batchSize - 1 - j));
+    });
+    auto indices =
+        makeIndices(batchSize, [&](auto idx) { return batchSize - 1 - idx; });
+    auto nulls = makeNulls(batchSize, [&](auto j) { return (i + j) % 3 == 0; });
+    auto dictValues =
+        BaseVector::wrapInDictionary(nulls, indices, batchSize, reversedBase);
+
+    return std::make_pair(
+        makeRowVector({keys, values, mask}),
+        makeRowVector({keys, dictValues, mask}));
+  });
 }
 
 } // namespace

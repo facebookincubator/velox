@@ -299,7 +299,7 @@ T read(const char*& input) {
 
 template <typename T>
 void write(T value, char*& out) {
-  folly::storeUnaligned(out, value);
+  folly::storeUnaligned<T>(out, value);
   out += sizeof(T);
 }
 } // namespace detail
@@ -1347,10 +1347,6 @@ QuantileDigest<T, Allocator>::getDistributionFunction(T rangeStart, T rangeEnd)
     const {
   std::vector<CdfEntry, RebindAlloc<CdfEntry>> cdf(
       RebindAlloc<CdfEntry>(counts_.get_allocator()));
-
-  if (weightedCount_ == 0 || root_ == -1) {
-    return cdf;
-  }
 
   VELOX_USER_CHECK_LE(
       rangeStart,

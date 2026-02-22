@@ -16,6 +16,7 @@
 
 #include "velox/exec/MarkDistinct.h"
 #include "velox/common/base/Range.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/vector/FlatVector.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ MarkDistinct::MarkDistinct(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "MarkDistinct") {
+          OperatorType::kMarkDistinct) {
   const auto& inputType = planNode->sources()[0]->outputType();
 
   // Set all input columns as identity projection.
@@ -43,9 +44,10 @@ MarkDistinct::MarkDistinct(
   // We will use result[0] for distinct mask output.
   resultProjections_.emplace_back(0, inputType->size());
 
-  groupingSet_ = GroupingSet::createForMarkDistinct(
+  groupingSet_ = GroupingSet::createForDistinct(
       inputType,
       createVectorHashers(inputType, planNode->distinctKeys()),
+      /*preGroupedKeys=*/{},
       operatorCtx_.get(),
       &nonReclaimableSection_);
 
@@ -53,7 +55,7 @@ MarkDistinct::MarkDistinct(
 }
 
 void MarkDistinct::addInput(RowVectorPtr input) {
-  groupingSet_->addInput(input, false /*mayPushdown*/);
+  groupingSet_->addInput(input, /*mayPushdown=*/false);
 
   input_ = std::move(input);
 }

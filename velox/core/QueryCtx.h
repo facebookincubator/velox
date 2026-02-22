@@ -26,7 +26,13 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
+namespace facebook::velox::exec::trace {
+class TraceCtx;
+}
+
 namespace facebook::velox::core {
+
+struct PlanFragment;
 
 /// Query execution context that manages resources and configuration for a
 /// query.
@@ -72,6 +78,9 @@ namespace facebook::velox::core {
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
   using ReleaseCallback = std::function<void()>;
+  using TraceCtxProvider = std::function<std::unique_ptr<exec::trace::TraceCtx>(
+      core::QueryCtx&,
+      const core::PlanFragment&)>;
 
   ~QueryCtx();
 
@@ -173,6 +182,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    Builder& traceCtxProvider(TraceCtxProvider provider) {
+      traceCtxProvider_ = std::move(provider);
+      return *this;
+    }
+
     /// Constructs and returns a QueryCtx with the configured parameters.
     ///
     /// @return Shared pointer to the newly created QueryCtx instance
@@ -189,6 +203,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::string queryId_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
+    TraceCtxProvider traceCtxProvider_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -294,6 +309,14 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// the max query trace bytes limit.
   void updateTracedBytesAndCheckLimit(uint64_t bytes);
 
+  TraceCtxProvider traceCtxProvider() {
+    return traceCtxProvider_;
+  }
+
+  void setTraceCtxProvider(TraceCtxProvider provider) {
+    traceCtxProvider_ = std::move(provider);
+  }
+
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
   }
@@ -322,7 +345,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
       const std::string& queryId = "",
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
+      TraceCtxProvider traceCtxProvider = nullptr);
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -401,6 +425,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   // Callbacks invoked before destruction to clean up external resources.
   std::deque<ReleaseCallback> releaseCallbacks_;
+
+  // A function that constructs a custom trace ctx object.
+  TraceCtxProvider traceCtxProvider_;
 };
 
 // Represents the state of one thread of query execution.

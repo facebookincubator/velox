@@ -27,7 +27,7 @@
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
-#include "velox/exec/trace/TraceConfig.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -153,8 +153,8 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   /// Returns query trace config if specified.
-  const trace::TraceConfig* traceConfig() const {
-    return traceConfig_.get();
+  const trace::TraceCtx* traceCtx() const {
+    return traceCtx_.get();
   }
 
   /// Returns ConsumerSupplier passed in the constructor.
@@ -439,12 +439,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// so many of splits at the head of the queue are preloading. If
   /// they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
+      uint32_t driverId,
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload,
       exec::Split& split,
-      ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      const ConnectorSplitPreloadFunc& preload = nullptr);
+      ContinueFuture& future);
 
   /// Returns the scaled scan controller for a given table scan node if the
   /// query has configured.
@@ -1118,7 +1119,7 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t pipelineId) const;
 
   // Builds the query trace config.
-  std::unique_ptr<trace::TraceConfig> maybeMakeTraceConfig() const;
+  std::unique_ptr<trace::TraceCtx> maybeMakeTraceCtx() const;
 
   // Create a 'QueryMetadtaWriter' to trace the query metadata if the query
   // trace enabled.
@@ -1165,7 +1166,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // and all its plan nodes support barrier processing.
   const core::PlanNode* firstNodeNotSupportingBarrier_{};
 
-  const std::unique_ptr<trace::TraceConfig> traceConfig_;
+  const std::unique_ptr<trace::TraceCtx> traceCtx_;
 
   inline static std::atomic_uint64_t numCreatedTasks_;
 
@@ -1220,6 +1221,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {

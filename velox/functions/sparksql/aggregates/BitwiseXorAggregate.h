@@ -17,12 +17,13 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "velox/exec/AggregateUtil.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
-exec::AggregateRegistrationResult registerBitwiseXorAggregate(
+std::vector<exec::AggregateRegistrationResult> registerBitwiseXorAggregate(
     const std::string& name,
     bool withCompanionFunctions,
     bool overwrite);

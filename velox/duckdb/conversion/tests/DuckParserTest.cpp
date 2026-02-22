@@ -22,6 +22,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::duckdb;
+using namespace facebook::velox::parse;
 
 namespace {
 std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
@@ -128,8 +129,8 @@ std::string parseAgg(const std::string& expression) {
     out << " " << toString(aggregateExpr.orderBy);
   }
 
-  if (aggregateExpr.maskExpr != nullptr) {
-    out << " FILTER " << aggregateExpr.maskExpr->toString();
+  if (aggregateExpr.filter != nullptr) {
+    out << " FILTER " << aggregateExpr.filter->toString();
   }
 
   return out.str();
@@ -414,8 +415,9 @@ TEST(DuckParserTest, cast) {
       "cast(\"str_col\" as INTERVAL DAY TO SECOND)",
       parseExpr("cast(str_col as interval day to second)")->toString());
 
-  // Unsupported casts for now.
-  EXPECT_THROW(parseExpr("cast('2020-01-01' as TIME)"), std::runtime_error);
+  EXPECT_EQ(
+      "cast(2020-01-01 as TIME)",
+      parseExpr("cast('2020-01-01' as TIME)")->toString());
 
   // Complex types.
   EXPECT_EQ(
@@ -460,6 +462,8 @@ TEST(DuckParserTest, ifCase) {
   EXPECT_EQ(
       "if(\"a\",plus(\"b\",\"c\"),g(\"d\"))",
       parseExpr("if(a, b + c, g(d))")->toString());
+
+  EXPECT_EQ("if(gt(\"a\",0),10)", parseExpr("if(a > 0, 10, null)")->toString());
 
   // CASE statements.
   EXPECT_EQ(
@@ -692,6 +696,24 @@ TEST(DuckParserTest, windowWithIntegerConstant) {
   auto constant = std::dynamic_pointer_cast<const core::ConstantExpr>(param);
   ASSERT_TRUE(constant != nullptr) << param->toString() << " is not a constant";
   EXPECT_EQ(*constant->type(), *INTEGER());
+}
+
+TEST(DuckParserTest, parseScalarOrWindowExpr) {
+  ParseOptions options;
+
+  // Scalar expression returns ExprPtr.
+  auto scalar = parseScalarOrWindowExpr("a + b", options);
+  ASSERT_TRUE(std::holds_alternative<core::ExprPtr>(scalar));
+  EXPECT_EQ(std::get<core::ExprPtr>(scalar)->toString(), "plus(\"a\",\"b\")");
+
+  // Window expression returns WindowExpr.
+  auto window =
+      parseScalarOrWindowExpr("row_number() over (order by a)", options);
+  ASSERT_TRUE(std::holds_alternative<WindowExpr>(window));
+  auto& windowExpr = std::get<WindowExpr>(window);
+  EXPECT_EQ(windowExpr.functionCall->toString(), "row_number()");
+  EXPECT_EQ(windowExpr.orderBy.size(), 1);
+  EXPECT_TRUE(windowExpr.orderBy[0].ascending);
 }
 
 TEST(DuckParserTest, invalidExpression) {

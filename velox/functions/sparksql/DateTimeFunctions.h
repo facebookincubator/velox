@@ -783,33 +783,44 @@ template <typename T>
 struct DayNameFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  static constexpr std::string_view kDayNames[] =
+      {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    // Based on the fact that the Unix epoch is Thursday.
+    auto dayOfWeek = (4 + date) % 7;
+    if (dayOfWeek < 0) {
+      dayOfWeek += 7;
+    }
+    result.append(StringView(kDayNames[dayOfWeek]));
+  }
+};
+
+template <typename T>
+struct MonthNameFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr std::string_view kMonthNames[] = {
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"};
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Date>& date) {
     const auto tm = getDateTime(date);
-    switch (tm.tm_wday) {
-      case 0:
-        result.append("Sun");
-        break;
-      case 1:
-        result.append("Mon");
-        break;
-      case 2:
-        result.append("Tue");
-        break;
-      case 3:
-        result.append("Wed");
-        break;
-      case 4:
-        result.append("Thu");
-        break;
-      case 5:
-        result.append("Fri");
-        break;
-      default:
-        result.append("Sat");
-        break;
-    }
+    result.append(kMonthNames[tm.tm_mon]);
   }
 };
 

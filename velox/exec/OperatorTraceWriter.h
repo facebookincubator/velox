@@ -18,9 +18,9 @@
 
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/OperatorTraceConfig.h"
+#include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/Split.h"
-#include "velox/exec/trace/TraceConfig.h"
+#include "velox/exec/trace/TraceCtx.h"
 #include "velox/exec/trace/TraceWriter.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/VectorStream.h"
@@ -45,7 +45,7 @@ class OperatorTraceInputWriter : public TraceInputWriter {
       UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB);
 
   /// Serializes rows and writes out each batch.
-  void write(const RowVectorPtr& rows) override;
+  bool write(const RowVectorPtr& rows, ContinueFuture* future) override;
 
   /// Closes the data file and writes out the data summary.
   void finish() override;

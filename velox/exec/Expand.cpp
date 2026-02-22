@@ -15,6 +15,8 @@
  */
 #include "velox/exec/Expand.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 Expand::Expand(
@@ -26,7 +28,7 @@ Expand::Expand(
           expandNode->outputType(),
           operatorId,
           expandNode->id(),
-          "Expand") {
+          OperatorType::kExpand) {
   const auto& inputType = expandNode->inputType();
   const auto numRows = expandNode->projections().size();
   fieldProjections_.reserve(numRows);

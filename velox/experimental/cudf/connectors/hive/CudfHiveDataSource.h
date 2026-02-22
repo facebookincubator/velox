@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
@@ -30,12 +31,14 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
+#include <cudf/ast/expressions.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 
 #include <mutex>
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -92,8 +95,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   CudfParquetReaderPtr createSplitReader();
   CudfHybridScanReaderPtr createExperimentalSplitReader();
 
-  // Clear split_ and splitReader after split has been fully processed.  Keep
-  // readers around to hold adaptation.
+  // Clear split_ and splitReaders after split has been fully processed.
   void resetSplit();
   // Clear cudfTable_ and currentCudfTableView_ once we have successfully
   // converted it to `RowVectorPtr` and returned.
@@ -124,9 +126,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // cuDF split reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
   std::shared_ptr<cudf::io::datasource> dataSource_;
-  std::unique_ptr<std::once_flag> tableMaterialized_;
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
+  std::unique_ptr<HybridScanState> hybridScanState_;
   bool useExperimentalSplitReader_;
   rmm::cuda_stream_view stream_;
 
@@ -136,10 +138,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   RowTypePtr readerOutputType_;
 
   // Columns to read.
+  std::unordered_set<std::string> readColumnSet_;
   std::vector<std::string> readColumnNames_;
 
-  std::shared_ptr<io::IoStatistics> ioStats_;
-  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<velox::IoStats> ioStats_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
 
@@ -158,6 +161,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
   common::SubfieldFilters subfieldFilters_;
+  // Cached combined subfield filter expression owned by 'subfieldTree_'.
+  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
   dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
@@ -165,7 +170,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Create callback data for total scan timing calculation
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;
-    std::shared_ptr<io::IoStatistics> ioStats;
+    std::shared_ptr<io::IoStatistics> ioStatistics;
   };
 
   // Host callback function to calculate total scan time

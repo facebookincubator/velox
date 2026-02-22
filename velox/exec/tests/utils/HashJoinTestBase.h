@@ -24,6 +24,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -60,24 +61,27 @@ inline std::string TestParamToName(const TestParam& param) {
       param.parallelBuildSideRowsEnabled ? "with" : "without");
 }
 
+using SplitPath =
+    std::unordered_map<core::PlanNodeId, std::vector<std::string>>;
+
 using SplitInput =
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>;
 
 // Returns aggregated spilled stats by build and probe operators from 'task'.
-std::pair<common::SpillStats, common::SpillStats> taskSpilledStats(
+std::pair<exec::SpillStats, exec::SpillStats> taskSpilledStats(
     const exec::Task& task) {
-  common::SpillStats buildStats;
-  common::SpillStats probeStats;
+  exec::SpillStats buildStats;
+  exec::SpillStats probeStats;
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
-      if (op.operatorType == "HashBuild") {
+      if (op.operatorType == OperatorType::kHashBuild) {
         buildStats.spilledInputBytes += op.spilledInputBytes;
         buildStats.spilledBytes += op.spilledBytes;
         buildStats.spilledRows += op.spilledRows;
         buildStats.spilledPartitions += op.spilledPartitions;
         buildStats.spilledFiles += op.spilledFiles;
-      } else if (op.operatorType == "HashProbe") {
+      } else if (op.operatorType == OperatorType::kHashProbe) {
         probeStats.spilledInputBytes += op.spilledInputBytes;
         probeStats.spilledBytes += op.spilledBytes;
         probeStats.spilledRows += op.spilledRows;
@@ -95,8 +99,8 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
-      if ((op.operatorType == "HashBuild") ||
-          (op.operatorType == "HashProbe")) {
+      if ((op.operatorType == OperatorType::kHashBuild) ||
+          (op.operatorType == OperatorType::kHashProbe)) {
         if (!expectedSpill) {
           ASSERT_EQ(op.runtimeStats[Operator::kSpillRuns].count, 0);
           ASSERT_EQ(op.runtimeStats[Operator::kSpillFillTime].count, 0);
@@ -114,7 +118,7 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
           ASSERT_EQ(
               op.runtimeStats[Operator::kSpillDeserializationTime].count, 0);
         } else {
-          if (op.operatorType == "HashBuild") {
+          if (op.operatorType == OperatorType::kHashBuild) {
             ASSERT_GT(op.runtimeStats[Operator::kSpillRuns].count, 0);
             ASSERT_GT(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
             ASSERT_GT(
@@ -169,12 +173,15 @@ int32_t maxHashBuildSpillLevel(const exec::Task& task) {
   int32_t maxSpillLevel = -1;
   for (auto& pipelineStat : task.taskStats().pipelineStats) {
     for (auto& operatorStat : pipelineStat.operatorStats) {
-      if (operatorStat.operatorType == "HashBuild") {
-        if (operatorStat.runtimeStats.count("maxSpillLevel") == 0) {
+      if (operatorStat.operatorType == OperatorType::kHashBuild) {
+        if (operatorStat.runtimeStats.count(
+                std::string(HashBuild::kMaxSpillLevel)) == 0) {
           continue;
         }
         maxSpillLevel = std::max<int32_t>(
-            maxSpillLevel, operatorStat.runtimeStats["maxSpillLevel"].max);
+            maxSpillLevel,
+            operatorStat.runtimeStats[std::string(HashBuild::kMaxSpillLevel)]
+                .max);
       }
     }
   }
@@ -189,11 +196,11 @@ std::pair<int32_t, int32_t> numTaskSpillFiles(const exec::Task& task) {
       if (operatorStat.runtimeStats.count("spillFileSize") == 0) {
         continue;
       }
-      if (operatorStat.operatorType == "HashBuild") {
+      if (operatorStat.operatorType == OperatorType::kHashBuild) {
         numBuildFiles += operatorStat.runtimeStats["spillFileSize"].count;
         continue;
       }
-      if (operatorStat.operatorType == "HashProbe") {
+      if (operatorStat.operatorType == OperatorType::kHashProbe) {
         numProbeFiles += operatorStat.runtimeStats["spillFileSize"].count;
       }
     }
@@ -375,8 +382,20 @@ class HashJoinBuilder {
     return *this;
   }
 
-  HashJoinBuilder& inputSplits(const SplitInput& inputSplits) {
-    makeInputSplits_ = [inputSplits] { return inputSplits; };
+  HashJoinBuilder& inputSplits(const SplitPath& splitPaths) {
+    makeInputSplits_ = [splitPaths] {
+      SplitInput inputSplits;
+      for (const auto& [nodeId, paths] : splitPaths) {
+        std::vector<exec::Split> splits;
+        splits.reserve(paths.size());
+        for (const auto& path : paths) {
+          splits.emplace_back(
+              exec::Split(HiveConnectorSplitBuilder(path).build()));
+        }
+        inputSplits[nodeId] = std::move(splits);
+      }
+      return inputSplits;
+    };
     return *this;
   }
 
@@ -783,7 +802,6 @@ class HashJoinBuilder {
   bool hashProbeFinishEarlyOnEmptyBuild_{true};
   bool parallelJoinBuildRowsEnabled_{false};
 
-  SplitInput inputSplits_;
   std::function<SplitInput()> makeInputSplits_;
   core::PlanNodePtr planNode_;
   std::unordered_map<std::string, std::string> configs_;
@@ -879,15 +897,13 @@ class HashJoinTestBase : public HiveConnectorTestBase {
                       outputLayout,
                       joinType)
                   .planNode();
-    SplitInput splitInput = {
-        {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-        {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    SplitPath splitPaths = {
+        {probeScanId, {probeFile->getPath()}},
+        {buildScanId, {buildFile->getPath()}},
     };
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splitInput)
+        .inputSplits(splitPaths)
         .checkSpillStats(false)
         .referenceQuery(referenceQuery)
         .run();

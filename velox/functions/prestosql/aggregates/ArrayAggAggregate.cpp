@@ -18,7 +18,6 @@
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ValueList.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
@@ -218,6 +217,12 @@ class ArrayAggAggregate : public exec::Aggregate {
           }
         } else {
           elements->copyRanges(currentSource->get(), ranges);
+        }
+      } else {
+        // Nothing to aggregate, mandatory behavior is to return nulls instead
+        // of empty array
+        for (int32_t i = 0; i < numGroups; ++i) {
+          vector->setNull(i, true);
         }
       }
     } else {
@@ -428,7 +433,7 @@ class ArrayAggAggregate : public exec::Aggregate {
 } // namespace
 
 void registerArrayAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -439,17 +444,16 @@ void registerArrayAggAggregate(
           .argumentType("E")
           .build()};
 
-  auto name = prefix + kArrayAgg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+            argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<ArrayAggAggregate>(
             resultType, config.prestoArrayAggIgnoreNulls());
       },
@@ -458,7 +462,7 @@ void registerArrayAggAggregate(
 }
 
 void registerInternalArrayAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -469,18 +473,17 @@ void registerInternalArrayAggAggregate(
           .argumentType("E")
           .build()};
 
-  auto name = prefix + "$internal$array_agg";
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+            argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<ArrayAggAggregate>(
             resultType, /*ignoreNulls*/ false);
       },

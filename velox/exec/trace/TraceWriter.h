@@ -36,8 +36,10 @@ class TraceInputWriter {
  public:
   virtual ~TraceInputWriter() = default;
 
-  /// Serializes rows and writes out each batch.
-  virtual void write(const RowVectorPtr& rows) = 0;
+  /// Serializes rows and writes out each batch. Return whether the driver
+  /// should block the pipeline. If it returns true, a future needs to be set
+  /// (returned) to signal the driver when it can resume execution.
+  virtual bool write(const RowVectorPtr& rows, ContinueFuture* future) = 0;
 
   /// Closes the data file and writes out the data summary.
   virtual void finish() = 0;

@@ -16,6 +16,8 @@
 
 #include "velox/exec/StreamingAggregation.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 StreamingAggregation::StreamingAggregation(
@@ -28,8 +30,8 @@ StreamingAggregation::StreamingAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation"),
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation),
       maxOutputBatchSize_{outputBatchRows()},
       minOutputBatchSize_{
           operatorCtx_->driverCtx()
@@ -365,11 +367,13 @@ RowVectorPtr StreamingAggregation::getOutput() {
 
   RowVectorPtr output;
 
+  // we do not respect minOutputBatchRows or outputDueToBatchBytes
+  // when noGroupsSpanBatches is set
   const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
   const bool outputDueToBatchBytes =
       numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
-  if ((noGroupsSpanBatches_ || numPrevGroups > 0) &&
-      (outputDueToBatchSize || outputDueToBatchBytes)) {
+  if (noGroupsSpanBatches_ ||
+      (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes))) {
     size_t numOutputGroups{0};
     if (noGroupsSpanBatches_) {
       numOutputGroups = numGroups_;

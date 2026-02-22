@@ -47,6 +47,13 @@ class DuckSqlExpressionsParser : public SqlExpressionsParser {
 
   OrderByClause parseOrderByExpr(const std::string& expr) override;
 
+  AggregateExpr parseAggregateExpr(const std::string& expr) override;
+
+  WindowExpr parseWindowExpr(const std::string& expr) override;
+
+  std::variant<core::ExprPtr, WindowExpr> parseScalarOrWindowExpr(
+      const std::string& expr) override;
+
  private:
   const facebook::velox::duckdb::ParseOptions options_;
 };

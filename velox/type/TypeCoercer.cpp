@@ -50,6 +50,16 @@ allowedCoercions() {
   add(BIGINT(), {DOUBLE()});
   add(REAL(), {DOUBLE()});
   add(DATE(), {TIMESTAMP()});
+  add(UNKNOWN(),
+      {TINYINT(),
+       BOOLEAN(),
+       SMALLINT(),
+       INTEGER(),
+       BIGINT(),
+       REAL(),
+       DOUBLE(),
+       VARCHAR(),
+       VARBINARY()});
 
   return coercions;
 }
@@ -76,7 +86,10 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
 std::optional<int32_t> TypeCoercer::coercible(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  if (fromType->isUnKnown()) {
+  if (fromType->isUnknown()) {
+    if (toType->isUnknown()) {
+      return 0;
+    }
     return 1;
   }
 
@@ -139,11 +152,11 @@ TypePtr leastCommonSuperRowType(const RowType& a, const RowType& b) {
 
 // static
 TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
-  if (a->isUnKnown()) {
+  if (a->isUnknown()) {
     return b;
   }
 
-  if (b->isUnKnown()) {
+  if (b->isUnknown()) {
     return a;
   }
 

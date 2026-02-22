@@ -23,14 +23,14 @@
 # * INSTALL_PREREQUISITES="N": Skip installation of packages for build.
 # * PROMPT_ALWAYS_RESPOND="n": Automatically respond to interactive prompts.
 #     Use "n" to never wipe directories.
-# * VELOX_CUDA_VERSION="12.8": Which version of CUDA to install, will pick up
+# * VELOX_CUDA_VERSION="12.9": Which version of CUDA to install, will pick up
 #   CUDA_VERSION from the env
 # * VELOX_UCX_VERSION="1.19.0": Which version of ucx to install, will pick up
 #   UCX_VERSION from the env
 
 set -efx -o pipefail
 
-VELOX_CUDA_VERSION=${CUDA_VERSION:-"12.8"}
+VELOX_CUDA_VERSION=${CUDA_VERSION:-"12.9"}
 VELOX_UCX_VERSION=${UCX_VERSION:-"1.19.0"}
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-centos9.sh

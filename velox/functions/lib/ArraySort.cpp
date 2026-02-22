@@ -514,7 +514,7 @@ std::shared_ptr<exec::VectorFunction> makeArraySort(
     bool nullsFirst,
     bool throwOnNestedNull) {
   const auto elementType = inputArgs.front().type->childAt(0);
-  if (elementType->isUnKnown()) {
+  if (elementType->isUnknown()) {
     return createTyped<TypeKind::UNKNOWN>(
         inputArgs, ascending, nullsFirst, throwOnNestedNull);
   }

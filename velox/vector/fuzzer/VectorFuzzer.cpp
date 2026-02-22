@@ -208,6 +208,51 @@ void fuzzFlatPrimitiveImpl(
   }
 }
 
+bool containsFlatMapVector(const BaseVector* vector) {
+  if (!vector) {
+    return false;
+  }
+
+  // Unwrap any dictionary/constant encoding to get to the base.
+  while (VectorEncoding::isDictionary(vector->encoding()) ||
+         vector->encoding() == VectorEncoding::Simple::CONSTANT) {
+    vector = vector->valueVector().get();
+    if (!vector) {
+      return false;
+    }
+  }
+
+  if (vector->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return true;
+  }
+
+  // Check children for complex types.
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::ROW: {
+      auto* row = vector->asUnchecked<RowVector>();
+      for (const auto& child : row->children()) {
+        if (containsFlatMapVector(child.get())) {
+          return true;
+        }
+      }
+      break;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* array = vector->asUnchecked<ArrayVector>();
+      return containsFlatMapVector(array->elements().get());
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* map = vector->asUnchecked<MapVector>();
+      return containsFlatMapVector(map->mapKeys().get()) ||
+          containsFlatMapVector(map->mapValues().get());
+    }
+    default:
+      break;
+  }
+
+  return false;
+}
+
 // Servers as a wrapper around a vector that will be used to load a lazyVector.
 // Ensures that the loaded vector will only contain valid rows for the row set
 // that it was loaded for. NOTE: If the vector is a multi-level dictionary, the
@@ -394,7 +439,7 @@ VectorPtr VectorFuzzer::fuzzConstant(
     if (coinToss(opts_.nullRatio)) {
       return BaseVector::createNullConstant(type, size, pool_);
     }
-    if (type->isUnKnown()) {
+    if (type->isUnknown()) {
       return BaseVector::createNullConstant(type, size, pool_);
     } else {
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -533,7 +578,7 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
   VELOX_CHECK(type->isPrimitiveType());
   auto vector = BaseVector::create(type, size, pool_);
 
-  if (type->isUnKnown()) {
+  if (type->isUnknown()) {
     auto* rawNulls = vector->mutableRawNulls();
     bits::fillBits(rawNulls, 0, size, bits::kNull);
   } else {
@@ -1162,6 +1207,12 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
     vector_size_t vectorSize) {
   DecodedVector decoded;
   decoded.decode(*vector_, rows, false);
+
+  // FlatMapVector copy into MapVector vector is not supported. Let's preserve
+  // encodings to avoid runtime checks.
+  if (containsFlatMapVector(decoded.base())) {
+    return vector_->testingCopyPreserveEncodings(vector_->pool());
+  }
 
   if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
     VectorPtr result;

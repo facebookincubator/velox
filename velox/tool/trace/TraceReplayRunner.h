@@ -47,7 +47,7 @@ namespace facebook::velox::tool::trace {
 class TraceReplayRunner {
  public:
   TraceReplayRunner();
-  virtual ~TraceReplayRunner() = default;
+  virtual ~TraceReplayRunner();
 
   /// Initializes the trace replay runner by setting the velox runtime
   /// environment for the trace replay. It is invoked before run().
