@@ -216,11 +216,13 @@ void ScaleWriterPartitioningLocalPartition::close() {
   auto lockedStats = stats_.wlock();
   if (scaleStats.numScaledPartitions != 0) {
     lockedStats->addRuntimeStat(
-        kScaledPartitions, RuntimeCounter(scaleStats.numScaledPartitions));
+        std::string(kScaledPartitions),
+        RuntimeCounter(scaleStats.numScaledPartitions));
   }
   if (scaleStats.numBalanceTriggers != 0) {
     lockedStats->addRuntimeStat(
-        kRebalanceTriggers, RuntimeCounter(scaleStats.numBalanceTriggers));
+        std::string(kRebalanceTriggers),
+        RuntimeCounter(scaleStats.numBalanceTriggers));
   }
 }
 
@@ -311,6 +313,6 @@ void ScaleWriterLocalPartition::close() {
     return;
   }
   stats_.wlock()->addRuntimeStat(
-      kScaledWriters, RuntimeCounter(numWriters_ - 1));
+      std::string(kScaledWriters), RuntimeCounter(numWriters_ - 1));
 }
 } // namespace facebook::velox::exec

@@ -165,7 +165,7 @@ TEST_F(WindowTest, spillBatchReadTinyPartitions) {
   ASSERT_GT(stats.spilledPartitions, 0);
   ASSERT_EQ(
       stats.operatorStats.at("Window")
-          ->customStats[Window::kWindowSpillReadNumBatches]
+          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
           .sum,
       size / minReadBatchRows);
 }
@@ -218,7 +218,7 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
   ASSERT_GT(stats.spilledPartitions, 0);
   ASSERT_EQ(
       stats.operatorStats.at("Window")
-          ->customStats[Window::kWindowSpillReadNumBatches]
+          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
           .sum,
       size / partitionRows);
 }
@@ -264,7 +264,10 @@ TEST_F(WindowTest, spillUnsupported) {
   ASSERT_EQ(stats.spilledPartitions, 0);
   auto opStats = toOperatorStats(task->taskStats());
   ASSERT_GT(
-      opStats.at("Window").runtimeStats[Operator::kSpillNotSupported].sum, 1);
+      opStats.at("Window")
+          .runtimeStats[std::string(Operator::kSpillNotSupported)]
+          .sum,
+      1);
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {

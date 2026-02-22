@@ -298,7 +298,7 @@ void Merge::recordMergeStats() {
         mergeStats_.streamingSourceReadEndTimeUs,
         mergeStats_.streamingSourceReadStartTimeUs);
     lockedStats->addRuntimeStat(
-        kStreamingSourceReadWallNanos,
+        std::string(kStreamingSourceReadWallNanos),
         RuntimeCounter(
             (mergeStats_.streamingSourceReadEndTimeUs -
              mergeStats_.streamingSourceReadStartTimeUs) *
@@ -312,7 +312,7 @@ void Merge::recordMergeStats() {
         mergeStats_.streamingSourceReadEndTimeUs);
     VELOX_CHECK_GT(numSpilledRows_, 0);
     lockedStats->addRuntimeStat(
-        kSpilledSourceReadWallNanos,
+        std::string(kSpilledSourceReadWallNanos),
         RuntimeCounter(
             (mergeStats_.spilledSourceReadEndTimeUs -
              mergeStats_.streamingSourceReadEndTimeUs) *
@@ -859,10 +859,10 @@ void MergeExchange::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        Operator::kShuffleSerdeKind,
+        std::string(Operator::kShuffleSerdeKind),
         RuntimeCounter(static_cast<int64_t>(serde_->kind())));
     lockedStats->addRuntimeStat(
-        Operator::kShuffleCompressionKind,
+        std::string(Operator::kShuffleCompressionKind),
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
   }
 }
