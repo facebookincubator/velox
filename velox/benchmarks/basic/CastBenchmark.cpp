@@ -87,6 +87,11 @@ int main(int argc, char** argv) {
       [](auto row) { return fmt::format("2024-05-{:02d}", 1 + row % 30); });
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
+  auto validTimeStrings =
+      vectorMaker.flatVector<std::string>(vectorSize, [](auto row) {
+        return fmt::format(
+            "{:02d}:{:02d}:{:02d}", row % 24, row % 60, row % 60);
+      });
 
   benchmarkBuilder
       .addBenchmarkSet(
@@ -124,6 +129,12 @@ int main(int argc, char** argv) {
           "cast_timestamp_as_varchar",
           vectorMaker.rowVector({"timestamp"}, {timestampInput}))
       .addExpression("cast", "cast (timestamp as varchar)");
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "cast_varchar_as_time",
+          vectorMaker.rowVector({"valid_time"}, {validTimeStrings}))
+      .addExpression("cast_valid", "cast (valid_time as time)");
 
   benchmarkBuilder
       .addBenchmarkSet(

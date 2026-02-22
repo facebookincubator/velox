@@ -15,13 +15,16 @@
  */
 
 #include <cmath>
+#include <exception>
 
 #include <double-conversion/double-conversion.h>
 #include <folly/Expected.h>
 
+#include "velox/common/base/VeloxException.h"
 #include "velox/expression/PrestoCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec {
@@ -76,6 +79,19 @@ Expected<int32_t> PrestoCastHooks::castStringToDate(
   // Cast from string to date allows only complete ISO 8601 formatted strings:
   // [+-](YYYY-MM-DD).
   return util::fromDateString(dateString, util::ParseMode::kPrestoCast);
+}
+
+Expected<int64_t> PrestoCastHooks::castStringToTime(
+    StringView timeString,
+    const tz::TimeZone* timeZone,
+    int64_t sessionStartTimeMs) const {
+  try {
+    return TIME()->valueToTime(timeString, timeZone, sessionStartTimeMs);
+  } catch (const VeloxException& e) {
+    return folly::makeUnexpected(Status::UserError(e.message()));
+  } catch (const std::exception& e) {
+    return folly::makeUnexpected(Status::UserError(e.what()));
+  }
 }
 
 Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
