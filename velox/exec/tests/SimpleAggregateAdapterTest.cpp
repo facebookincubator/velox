@@ -29,6 +29,8 @@ namespace {
 const char* const kSimpleAvg = "simple_avg";
 const char* const kSimpleArrayAgg = "simple_array_agg";
 const char* const kSimpleCountNulls = "simple_count_nulls";
+const char* const kSimpleVariadicSum = "simple_variadic_sum";
+const char* const kSimpleVariadicArrayAgg = "simple_variadic_array_agg";
 
 class SimpleAverageAggregationTest : public AggregationTestBase {
  protected:
@@ -600,6 +602,384 @@ TEST_F(SimpleFuncLevelVariableAggregationTest, simpleAggregateVariables) {
       {},
       {expected},
       {});
+}
+
+class SimpleVariadicSumAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerSimpleVariadicSumAggregate(kSimpleVariadicSum);
+  }
+};
+
+TEST_F(SimpleVariadicSumAggregationTest, basicVariadicSum) {
+  {
+    // Test global with 3 variadic arguments: sum each column across rows.
+    // Input:
+    //   Row 1: count=3, a=1, b=2, c=3
+    //   Row 2: count=3, a=4, b=5, c=6
+    // Expected output: [1+4, 2+5, 3+6] = [5, 7, 9]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<int64_t>({3, 3}),
+        makeFlatVector<int64_t>({1, 4}),
+        makeFlatVector<int64_t>({2, 5}),
+        makeFlatVector<int64_t>({3, 6}),
+    });
+
+    auto expected = makeRowVector({makeArrayVector<int64_t>({{5, 7, 9}})});
+
+    testAggregations(
+        {inputVectors},
+        {},
+        {"simple_variadic_sum(c0, c1, c2, c3)"},
+        {expected});
+  }
+
+  {
+    // Test with grouping.
+    // Group true: [1+5, 2+6] = [6, 8]
+    // Group false: [3+7, 4+8] = [10, 12]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<int64_t>({2, 2, 2, 2}),
+        makeFlatVector<int64_t>({1, 3, 5, 7}),
+        makeFlatVector<int64_t>({2, 4, 6, 8}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({true, false}),
+        makeArrayVector<int64_t>({{6, 8}, {10, 12}}),
+    });
+
+    testAggregations(
+        {inputVectors},
+        {"c0"},
+        {"simple_variadic_sum(c1, c2, c3)"},
+        {expected});
+  }
+}
+
+TEST_F(SimpleVariadicSumAggregationTest, variadicSumWithNulls) {
+  {
+    // Test global handling of null values in variadic arguments.
+    // With default null behavior, rows with any null variadic element are
+    // skipped entirely.
+    // Row 0: variadic=[1, null, 3] -> SKIPPED (null in variadic)
+    // Row 1: variadic=[4, 5, 6]   -> processed
+    // Row 2: variadic=[7, 8, 9]   -> processed
+    // Expected: [4+7, 5+8, 6+9] = [11, 13, 15]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<int64_t>({3, 3, 3}),
+        makeNullableFlatVector<int64_t>({1, 4, 7}),
+        makeNullableFlatVector<int64_t>({std::nullopt, 5, 8}),
+        makeNullableFlatVector<int64_t>({3, 6, 9}),
+    });
+
+    auto expected = makeRowVector({makeArrayVector<int64_t>({{11, 13, 15}})});
+
+    testAggregations(
+        {inputVectors},
+        {},
+        {"simple_variadic_sum(c0, c1, c2, c3)"},
+        {expected});
+  }
+
+  {
+    // Test with grouping and null values.
+    // Row 0 (true):  variadic=[1, 2, 3]    -> processed
+    // Row 1 (false): variadic=[4, null, 6]  -> SKIPPED
+    // Row 2 (true):  variadic=[null, 8, 9]  -> SKIPPED
+    // Row 3 (false): variadic=[10, 11, 12]  -> processed
+    // Group true: only row 0 -> [1, 2, 3]
+    // Group false: only row 3 -> [10, 11, 12]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<int64_t>({3, 3, 3, 3}),
+        makeNullableFlatVector<int64_t>({1, 4, std::nullopt, 10}),
+        makeNullableFlatVector<int64_t>({2, std::nullopt, 8, 11}),
+        makeNullableFlatVector<int64_t>({3, 6, 9, 12}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({true, false}),
+        makeArrayVector<int64_t>({{1, 2, 3}, {10, 11, 12}}),
+    });
+
+    testAggregations(
+        {inputVectors},
+        {"c0"},
+        {"simple_variadic_sum(c1, c2, c3, c4)"},
+        {expected});
+  }
+}
+
+TEST_F(SimpleVariadicSumAggregationTest, singleVariadicArg) {
+  {
+    // Test global with only 1 variadic argument.
+    // Input:
+    //   Row 1: dummy=1, a=10
+    //   Row 2: dummy=1, a=20
+    // Expected output: [10+20] = [30]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<int64_t>({1, 1}),
+        makeFlatVector<int64_t>({10, 20}),
+    });
+
+    auto expected = makeRowVector({makeArrayVector<int64_t>({{30}})});
+
+    testAggregations(
+        {inputVectors}, {}, {"simple_variadic_sum(c0, c1)"}, {expected});
+  }
+
+  {
+    // Test with only 1 variadic argument with grouping.
+    // Group true: [10+30] = [40]
+    // Group false: [20+40] = [60]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<int64_t>({1, 1, 1, 1}),
+        makeFlatVector<int64_t>({10, 20, 30, 40}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({true, false}),
+        makeArrayVector<int64_t>({{40}, {60}}),
+    });
+
+    testAggregations(
+        {inputVectors}, {"c0"}, {"simple_variadic_sum(c1, c2)"}, {expected});
+  }
+}
+
+TEST_F(SimpleVariadicSumAggregationTest, noVariadicArg) {
+  {
+    // Test global with no variadic argument.
+    // Expected output: []
+    auto inputVectors = makeRowVector({
+        makeFlatVector<int64_t>({1, 1}),
+    });
+
+    auto expected = makeRowVector({makeArrayVector<int64_t>({{}})});
+
+    testAggregations(
+        {inputVectors}, {}, {"simple_variadic_sum(c0)"}, {expected});
+  }
+
+  {
+    // Test with no variadic argument with grouping.
+    // Group true: []
+    // Group false: []
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<int64_t>({1, 1, 1, 1}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({true, false}),
+        makeArrayVector<int64_t>({{}, {}}),
+    });
+
+    testAggregations(
+        {inputVectors}, {"c0"}, {"simple_variadic_sum(c1)"}, {expected});
+  }
+}
+
+class SimpleVariadicArrayAggAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerSimpleVariadicArrayAggAggregate(kSimpleVariadicArrayAgg);
+  }
+};
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, basicVariadicArrayAgg) {
+  {
+    // Test global with 3 variadic arguments: collect all values into a single
+    // array. Input:
+    //   Row 1: a=1, b=2, c=3
+    //   Row 2: a=4, b=5, c=6
+    // Expected output: [1, 2, 3, 4, 5, 6]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<int64_t>({1, 4}),
+        makeFlatVector<int64_t>({2, 5}),
+        makeFlatVector<int64_t>({3, 6}),
+    });
+
+    auto expected =
+        makeRowVector({makeArrayVector<int64_t>({{1, 2, 3, 4, 5, 6}})});
+
+    testAggregations(
+        {inputVectors},
+        {},
+        {"simple_variadic_array_agg(c0, c1, c2)"},
+        {"array_sort(a0)"},
+        {expected});
+  }
+
+  {
+    // Test with grouping.
+    // Group true: rows 1 and 3 -> [1, 2, 5, 6]
+    // Group false: rows 2 and 4 -> [3, 4, 7, 8]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<int64_t>({1, 3, 5, 7}),
+        makeFlatVector<int64_t>({2, 4, 6, 8}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        makeArrayVector<int64_t>({{3, 4, 7, 8}, {1, 2, 5, 6}}),
+    });
+
+    testAggregations(
+        {inputVectors},
+        {"c0"},
+        {"simple_variadic_array_agg(c1, c2)"},
+        {"c0", "array_sort(a0)"},
+        {expected});
+  }
+}
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, variadicArrayAggWithNulls) {
+  {
+    // Test global handling of null values in variadic arguments.
+    // Nulls should be included in the output array (non-default null behavior).
+    // Row 1: 1, null, 3
+    // Row 2: 4, 5, null
+    // Expected: [1, 3, 4, 5, null, null]
+    auto inputVectors = makeRowVector({
+        makeNullableFlatVector<int64_t>({1, 4}),
+        makeNullableFlatVector<int64_t>({std::nullopt, 5}),
+        makeNullableFlatVector<int64_t>({3, std::nullopt}),
+    });
+
+    auto expected = makeRowVector({vectorMaker_.arrayVectorNullable<int64_t>(
+        {{{1, 3, 4, 5, std::nullopt, std::nullopt}}})});
+
+    testAggregations(
+        {inputVectors},
+        {},
+        {"simple_variadic_array_agg(c0, c1, c2)"},
+        {"array_sort(a0)"},
+        {expected});
+  }
+
+  {
+    // Test with grouping and null values.
+    // Group true: rows 1, 3 -> [1, null, 3, 5, 7, null]
+    // Group false: rows 2, 4 -> [2, 4, null, 6, null, 8]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeNullableFlatVector<int64_t>({1, 2, 5, 6}),
+        makeNullableFlatVector<int64_t>({std::nullopt, 4, 7, std::nullopt}),
+        makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt, 8}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        vectorMaker_.arrayVectorNullable<int64_t>(
+            {{{2, 4, 6, 8, std::nullopt, std::nullopt}},
+             {{1, 3, 5, 7, std::nullopt, std::nullopt}}}),
+    });
+
+    testAggregations(
+        {inputVectors},
+        {"c0"},
+        {"simple_variadic_array_agg(c1, c2, c3)"},
+        {"c0", "array_sort(a0)"},
+        {expected});
+  }
+}
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, variadicArrayAggStrings) {
+  {
+    // Test global with string type to verify Generic<T1> works with different
+    // types.
+    auto inputVectors = makeRowVector({
+        makeFlatVector<StringView>({"a", "d"}),
+        makeFlatVector<StringView>({"b", "e"}),
+        makeFlatVector<StringView>({"c", "f"}),
+    });
+
+    auto expected = makeRowVector(
+        {makeArrayVector<StringView>({{"a", "b", "c", "d", "e", "f"}})});
+
+    testAggregations(
+        {inputVectors},
+        {},
+        {"simple_variadic_array_agg(c0, c1, c2)"},
+        {"array_sort(a0)"},
+        {expected});
+  }
+
+  {
+    // Test with grouping and string type.
+    // Group true: rows 1, 3 -> ["a", "b", "e", "f"]
+    // Group false: rows 2, 4 -> ["c", "d", "g", "h"]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<StringView>({"a", "c", "e", "g"}),
+        makeFlatVector<StringView>({"b", "d", "f", "h"}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        makeArrayVector<StringView>(
+            {{"c", "d", "g", "h"}, {"a", "b", "e", "f"}}),
+    });
+
+    testAggregations(
+        {inputVectors},
+        {"c0"},
+        {"simple_variadic_array_agg(c1, c2)"},
+        {"c0", "array_sort(a0)"},
+        {expected});
+  }
+}
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, singleVariadicArg) {
+  {
+    // Test global with only 1 variadic argument.
+    // Input:
+    //   Row 1: a=10
+    //   Row 2: a=20
+    //   Row 3: a=30
+    // Expected output: [10, 20, 30]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<int64_t>({10, 20, 30}),
+    });
+
+    auto expected = makeRowVector({makeArrayVector<int64_t>({{10, 20, 30}})});
+
+    testAggregations(
+        {inputVectors},
+        {},
+        {"simple_variadic_array_agg(c0)"},
+        {"array_sort(a0)"},
+        {expected});
+  }
+
+  {
+    // Test with only 1 variadic argument with grouping.
+    // Group true: [10, 30]
+    // Group false: [20, 40]
+    auto inputVectors = makeRowVector({
+        makeFlatVector<bool>({true, false, true, false}),
+        makeFlatVector<int64_t>({10, 20, 30, 40}),
+    });
+
+    auto expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        makeArrayVector<int64_t>({{20, 40}, {10, 30}}),
+    });
+
+    testAggregations(
+        {inputVectors},
+        {"c0"},
+        {"simple_variadic_array_agg(c1)"},
+        {"c0", "array_sort(a0)"},
+        {expected});
+  }
 }
 
 } // namespace

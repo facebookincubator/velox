@@ -28,4 +28,10 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
 exec::AggregateRegistrationResult registerSimpleArrayAggAggregate(
     const std::string& name);
 
+exec::AggregateRegistrationResult registerSimpleVariadicSumAggregate(
+    const std::string& name);
+
+exec::AggregateRegistrationResult registerSimpleVariadicArrayAggAggregate(
+    const std::string& name);
+
 } // namespace facebook::velox::aggregate

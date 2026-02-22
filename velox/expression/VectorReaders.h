@@ -560,6 +560,11 @@ struct VectorReader<Variadic<T>> {
       int32_t startPosition)
       : childReaders_{prepareChildReaders(decodedArgs, startPosition)} {}
 
+  explicit VectorReader(
+      const std::vector<DecodedVector>& decodedVecs,
+      int32_t startPosition)
+      : childReaders_{prepareChildReaders(decodedVecs, startPosition)} {}
+
   exec_in_t operator[](vector_size_t offset) const {
     return {&childReaders_, offset};
   }
@@ -572,6 +577,18 @@ struct VectorReader<Variadic<T>> {
     // The Variadic itself can never be null, only the values of the underlying
     // Types
     return true;
+  }
+
+  // Returns true if any immediate variadic element is null at the given row.
+  // Unlike containsNull(), this checks only the top-level nullity of each
+  // element (via isSet), not recursive nulls within complex types.
+  bool hasTopLevelNull(vector_size_t index) const {
+    for (const auto& childReader : childReaders_) {
+      if (!childReader->isSet(index)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool containsNull(vector_size_t index) const {
@@ -623,14 +640,32 @@ struct VectorReader<Variadic<T>> {
   auto prepareChildReaders(
       std::vector<std::optional<LocalDecodedVector>>& decodedArgs,
       int32_t startPosition) {
-    std::vector<std::unique_ptr<VectorReader<T>>> childReaders;
-    childReaders.reserve(decodedArgs.size() - startPosition);
-
-    for (int i = startPosition; i < decodedArgs.size(); ++i) {
-      childReaders.emplace_back(
-          std::make_unique<VectorReader<T>>(decodedArgs.at(i).value().get()));
+    std::vector<const DecodedVector*> decodedPtrs;
+    decodedPtrs.reserve(decodedArgs.size() - startPosition);
+    for (size_t i = startPosition; i < decodedArgs.size(); ++i) {
+      decodedPtrs.push_back(decodedArgs.at(i).value().get());
     }
+    return prepareChildReadersImpl(decodedPtrs);
+  }
 
+  auto prepareChildReaders(
+      const std::vector<DecodedVector>& decodedArgs,
+      int32_t startPosition) {
+    std::vector<const DecodedVector*> decodedPtrs;
+    decodedPtrs.reserve(decodedArgs.size() - startPosition);
+    for (size_t i = startPosition; i < decodedArgs.size(); ++i) {
+      decodedPtrs.push_back(&decodedArgs[i]);
+    }
+    return prepareChildReadersImpl(decodedPtrs);
+  }
+
+  auto prepareChildReadersImpl(
+      const std::vector<const DecodedVector*>& decodedPtrs) {
+    std::vector<std::unique_ptr<VectorReader<T>>> childReaders;
+    childReaders.reserve(decodedPtrs.size());
+    for (const auto* decoded : decodedPtrs) {
+      childReaders.emplace_back(std::make_unique<VectorReader<T>>(decoded));
+    }
     return childReaders;
   }
 
