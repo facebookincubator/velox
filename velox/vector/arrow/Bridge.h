@@ -42,13 +42,11 @@ struct ArrowOptions {
   bool exportToStringView = false;
   // Export VARBINARY as UTF-8 string (for consumers that lack binary support).
   bool exportVarbinaryAsString = false;
-  // support Decimal64 if requested, otherwise handle as Decimal128
-  // only valid for Arrow 18.0+ or NanoArrow 0.7.0+
-#if ARROW_VERSION_MAJOR >= 18
-  bool supportDecimal64Type = true;
-#else
-  bool supportDecimal64Type = false;
-#endif
+  // Respect the width component of decimal type format string on export.
+  // Default to false for now until Arrow 18 upgrade is complete and Parquet
+  // reader/writer code is adapted to support Decimal64. CUDF I/O sets this to
+  // true as it uses NanoArrow 0.7.0 which already supports Decimal64.
+  bool useDecimalTypeWidth = false;
 };
 
 namespace facebook::velox {

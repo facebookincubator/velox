@@ -124,7 +124,7 @@ std::unique_ptr<cudf::table> toCudfTable(
       .flattenDictionary = true,
       .flattenConstant = true,
       .exportVarbinaryAsString = true,
-      .supportDecimal64Type = true};
+      .useDecimalTypeWidth = true};
   ArrowArray arrowArray;
   exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),

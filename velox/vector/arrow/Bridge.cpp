@@ -265,7 +265,7 @@ const char* exportArrowFormatStr(
   if (type->isDecimal()) {
     // Decimal types encode the precision and scale values.
     const auto& [precision, scale] = getDecimalPrecisionScale(*type);
-    if (options.supportDecimal64Type) {
+    if (options.useDecimalTypeWidth) {
       // Add the (optional) bit-width suffix.
       const int bitWidth = type->isShortDecimal() ? 64 : 128;
       formatBuffer = fmt::format("d:{},{},{}", precision, scale, bitWidth);
@@ -504,7 +504,7 @@ void gatherFromBuffer(
     rows.apply([&](vector_size_t i) {
       bits::setBit(dst, j++, bits::isBitSet(src, i));
     });
-  } else if (type.isShortDecimal() && !options.supportDecimal64Type) {
+  } else if (type.isShortDecimal() && !options.useDecimalTypeWidth) {
     rows.apply([&](vector_size_t i) {
       int128_t value = buf.as<int64_t>()[i];
       memcpy(dst + (j++) * sizeof(int128_t), &value, sizeof(int128_t));
@@ -728,7 +728,7 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // - Velox's Timestamp representation (2x 64bit values) does not have an
   // equivalent in Arrow.
   // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
-  if (options.supportDecimal64Type) {
+  if (options.useDecimalTypeWidth) {
     // short decimal is zero-copy
     return !type->isTimestamp() && !type->isTime();
   } else {
@@ -740,7 +740,7 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
 // Returns the size of a single element of a given `type` in the target arrow
 // buffer.
 size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
-  if (type->isShortDecimal() && !options.supportDecimal64Type) {
+  if (type->isShortDecimal() && !options.useDecimalTypeWidth) {
     return sizeof(int128_t);
   } else if (type->isTimestamp()) {
     return sizeof(int64_t);
