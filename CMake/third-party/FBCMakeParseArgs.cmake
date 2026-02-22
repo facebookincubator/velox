@@ -1,5 +1,5 @@
 #
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # Helper function for parsing arguments to a CMake function.
 #
