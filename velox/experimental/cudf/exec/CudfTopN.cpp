@@ -19,6 +19,7 @@
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
 
@@ -73,11 +74,23 @@ CudfVectorPtr CudfTopN::mergeTopK(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   std::vector<cudf::table_view> tableViews;
+  std::vector<rmm::cuda_stream_view> inputStreams;
+  tableViews.reserve(topNBatches.size());
+  inputStreams.reserve(topNBatches.size());
   for (const auto& batch : topNBatches) {
+    if (!batch) {
+      continue;
+    }
     tableViews.push_back(batch->getTableView());
+    inputStreams.push_back(batch->stream());
   }
+  // Ensure all upstream batch-producing streams are visible on the merge
+  // stream.
+  cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
+  // Ensure input-stream deallocations don't race with merge reads.
+  joinStreamsBack(inputStreams, stream);
   // slice it
   auto topk =
       cudf::split(
