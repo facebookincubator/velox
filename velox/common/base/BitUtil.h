@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <string>
 
 #ifdef __BMI2__
@@ -92,6 +93,14 @@ inline void clearBit(T* bits, uint64_t idx) {
 template <typename T>
 inline void setBit(T* bits, uint64_t idx, bool value) {
   value ? setBit(bits, idx) : clearBit(bits, idx);
+}
+
+/// Branchless: sets the bit at idx if value is true, no-op if false.
+/// Assumes target memory is pre-zeroed for unset bits.
+template <typename T>
+inline void maybeSetBit(T* bits, uint64_t idx, bool value) {
+  auto* bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
+  bitsAs8Bit[idx / 8] |= (static_cast<uint8_t>(value) << (idx % 8));
 }
 
 inline void negateBit(void* bits, uint64_t idx) {
@@ -1026,6 +1035,100 @@ void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
     }
   }
 }
+
+/// Returns the number of bits required to store the value.
+/// For a value of 0, returns 1.
+inline int bitsRequired(uint64_t value) noexcept {
+  return 64 - __builtin_clzll(value | 1);
+}
+
+/// Packs bools into bitmap. bitmap must point to a region large enough.
+/// Does not clear bitmap first — bit i is set if bools[i] is true OR
+/// bit i was already set.
+void packBitmap(std::span<const bool> bools, char* bitmap);
+
+/// Finds the index of the n'th set bit in [begin, end) in bitmap.
+/// Returns end if not found. Returns begin if begin >= end or n == 0.
+uint32_t
+findSetBit(const char* bitmap, uint32_t begin, uint32_t end, uint32_t n);
+
+/// Debug: prints bits of a numeric type in nibble groups.
+template <typename T>
+std::string printBits(T c) {
+  std::string result;
+  for (int i = 0; i < (sizeof(T) << 3); ++i) {
+    if (i > 0 && i % 4 == 0) {
+      result += ' ';
+    }
+    if (c & 1) {
+      result += '1';
+    } else {
+      result += '0';
+    }
+    c >>= 1;
+  }
+  // We actually want little endian order.
+  std::reverse(result.begin(), result.end());
+  return result;
+}
+
+/// Read-only view over a bitmap stored as char*.
+class Bitmap {
+ public:
+  Bitmap(const void* bitmap, uint32_t size)
+      : bitmap_{static_cast<char*>(const_cast<void*>(bitmap))}, size_{size} {}
+
+  bool test(uint32_t pos) const {
+    return isBitSet(reinterpret_cast<const uint8_t*>(bitmap_), pos);
+  }
+
+  uint32_t size() const {
+    return size_;
+  }
+
+  const void* bits() const {
+    return bitmap_;
+  }
+
+ protected:
+  char* bitmap_;
+  uint32_t size_;
+};
+
+/// Mutable bitmap builder.
+class BitmapBuilder : public Bitmap {
+ public:
+  BitmapBuilder(void* bitmap, uint32_t size) : Bitmap{bitmap, size} {}
+
+  void set(uint32_t pos) {
+    setBit(reinterpret_cast<uint8_t*>(bitmap_), pos);
+  }
+
+  void maybeSet(uint32_t pos, bool bit) {
+    maybeSetBit(bitmap_, pos, bit);
+  }
+
+  void set(uint32_t begin, uint32_t end) {
+    fillBits(
+        reinterpret_cast<uint64_t*>(bitmap_),
+        static_cast<int32_t>(begin),
+        static_cast<int32_t>(end),
+        true);
+  }
+
+  void clear(uint32_t begin, uint32_t end) {
+    fillBits(
+        reinterpret_cast<uint64_t*>(bitmap_),
+        static_cast<int32_t>(begin),
+        static_cast<int32_t>(end),
+        false);
+  }
+
+  /// Copy the specified range from the source bitmap into this one. It
+  /// guarantees |begin| is the beginning bit offset, but may copy more beyond
+  /// |end|.
+  void copy(const Bitmap& other, uint32_t begin, uint32_t end);
+};
 
 } // namespace bits
 } // namespace velox
