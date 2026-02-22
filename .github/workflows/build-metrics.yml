@@ -66,6 +66,7 @@ jobs:
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
             "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_AVRO=ON"
             "-DVELOX_ENABLE_PARQUET=ON"
             "-DVELOX_ENABLE_HDFS=ON"
             "-DVELOX_ENABLE_S3=ON"
