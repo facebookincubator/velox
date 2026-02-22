@@ -384,7 +384,7 @@ void PrefixSort::sortInternal(
     auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
     if (sortLayout_.numNormalizedKeys > 0) {
       addThreadLocalRuntimeStat(
-          PrefixSort::kNumPrefixSortKeys,
+          std::string(PrefixSort::kNumPrefixSortKeys),
           RuntimeCounter(
               sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
     }

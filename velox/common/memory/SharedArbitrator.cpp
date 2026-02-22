@@ -467,25 +467,25 @@ void SharedArbitrator::finishArbitration(ArbitrationOperation* op) {
     RECORD_HISTOGRAM_METRIC_VALUE(
         kMetricArbitratorOpExecTimeMs, stats.executionTimeNs / 1'000'000);
     addThreadLocalRuntimeStat(
-        kMemoryArbitrationWallNanos,
+        std::string(kMemoryArbitrationWallNanos),
         RuntimeCounter(stats.executionTimeNs, RuntimeCounter::Unit::kNanos));
   }
 
   if (stats.localArbitrationWaitTimeNs != 0) {
     addThreadLocalRuntimeStat(
-        kLocalArbitrationWaitWallNanos,
+        std::string(kLocalArbitrationWaitWallNanos),
         RuntimeCounter(
             stats.localArbitrationWaitTimeNs, RuntimeCounter::Unit::kNanos));
   }
   if (stats.localArbitrationExecTimeNs != 0) {
     addThreadLocalRuntimeStat(
-        kLocalArbitrationExecutionWallNanos,
+        std::string(kLocalArbitrationExecutionWallNanos),
         RuntimeCounter(
             stats.localArbitrationExecTimeNs, RuntimeCounter::Unit::kNanos));
   }
   if (stats.globalArbitrationWaitTimeNs != 0) {
     addThreadLocalRuntimeStat(
-        kGlobalArbitrationWaitWallNanos,
+        std::string(kGlobalArbitrationWaitWallNanos),
         RuntimeCounter(
             stats.globalArbitrationWaitTimeNs, RuntimeCounter::Unit::kNanos));
     RECORD_HISTOGRAM_METRIC_VALUE(
@@ -1616,13 +1616,14 @@ void SharedArbitrator::unregisterFactory() {
 void SharedArbitrator::incrementGlobalArbitrationWaitCount() {
   RECORD_METRIC_VALUE(kMetricArbitratorGlobalArbitrationWaitCount);
   addThreadLocalRuntimeStat(
-      kGlobalArbitrationWaitCount,
+      std::string(kGlobalArbitrationWaitCount),
       RuntimeCounter(1, RuntimeCounter::Unit::kNone));
 }
 
 void SharedArbitrator::incrementLocalArbitrationCount() {
   RECORD_METRIC_VALUE(kMetricArbitratorLocalArbitrationCount);
   addThreadLocalRuntimeStat(
-      kLocalArbitrationCount, RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+      std::string(kLocalArbitrationCount),
+      RuntimeCounter(1, RuntimeCounter::Unit::kNone));
 }
 } // namespace facebook::velox::memory

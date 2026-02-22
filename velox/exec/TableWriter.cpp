@@ -296,27 +296,27 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
     }
     if (stats.numWrittenFiles != 0) {
       lockedStats->addRuntimeStat(
-          kNumWrittenFiles, RuntimeCounter(stats.numWrittenFiles));
+          std::string(kNumWrittenFiles), RuntimeCounter(stats.numWrittenFiles));
     }
     if (stats.writeIOTimeUs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteIOTime,
+          std::string(kWriteIOTime),
           RuntimeCounter(
               stats.writeIOTimeUs * 1000, RuntimeCounter::Unit::kNanos));
     }
     if (stats.recodeTimeNs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteRecodeTime,
+          std::string(kWriteRecodeTime),
           RuntimeCounter(stats.recodeTimeNs, RuntimeCounter::Unit::kNanos));
     }
     if (stats.compressionTimeNs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteCompressionTime,
+          std::string(kWriteCompressionTime),
           RuntimeCounter(
               stats.compressionTimeNs, RuntimeCounter::Unit::kNanos));
     }
     lockedStats->addRuntimeStat(
-        kRunningWallNanos,
+        std::string(kRunningWallNanos),
         RuntimeCounter(
             currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
   }

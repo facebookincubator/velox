@@ -191,7 +191,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
         {"localExchangeSource.numPages", RuntimeMetric(numPages_)},
         {"localExchangeSource.totalBytes",
          RuntimeMetric(totalBytes_, RuntimeCounter::Unit::kBytes)},
-        {Operator::kBackgroundCpuTimeNanos,
+        {std::string(Operator::kBackgroundCpuTimeNanos),
          RuntimeMetric(123 * 1000000, RuntimeCounter::Unit::kNanos)},
     };
   }

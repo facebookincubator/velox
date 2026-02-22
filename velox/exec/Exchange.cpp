@@ -347,10 +347,10 @@ void Exchange::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        Operator::kShuffleSerdeKind,
+        std::string(Operator::kShuffleSerdeKind),
         RuntimeCounter(static_cast<int64_t>(serdeKind_)));
     lockedStats->addRuntimeStat(
-        Operator::kShuffleCompressionKind,
+        std::string(Operator::kShuffleCompressionKind),
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
   }
 }
@@ -367,7 +367,8 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  const auto iter = exchangeClientStats.find(Operator::kBackgroundCpuTimeNanos);
+  const auto iter =
+      exchangeClientStats.find(std::string(Operator::kBackgroundCpuTimeNanos));
   if (iter != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
         static_cast<uint64_t>(iter->second.count),
