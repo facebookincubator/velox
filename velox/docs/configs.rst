@@ -990,6 +990,11 @@ Each query can override the config by setting corresponding query session proper
      -
      - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
        The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
+   * - hive.s3.aws-imds-enabled
+     - bool
+     - true
+     - It makes no sense to enable the IMDS option in instances other than EC2. Enabling it on machines outside of EC2 will result
+       in very high first-time read latency for object storage. However, to maintain semantics, it is currently enabled by default.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
