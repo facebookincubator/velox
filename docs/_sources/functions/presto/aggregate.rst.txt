@@ -307,6 +307,25 @@ Map Aggregate Functions
     Returns the union of all the input maps summing the values of matching keys in all
     the maps. All null values in the original maps are coalesced to 0.
 
+Array Aggregate Functions
+-------------------------
+
+.. function:: array_union_sum(array(T)) -> array(T)
+
+    Returns the element-wise sum of all input arrays.
+    Arrays of different lengths are extended to the longest with zeros.
+    Null elements are treated as 0. Supported types for T are:
+    TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    Overflow is checked for integer types.
+
+.. function:: array_union_sum(T, T, ..., T) -> array(T)
+   :noindex:
+
+    Variadic form where each scalar argument's position determines the
+    index into the result array. Sums are accumulated across rows.
+    This avoids per-row array construction overhead when the number of
+    positions is known at query time.
+
 Approximate Aggregate Functions
 -------------------------------
 

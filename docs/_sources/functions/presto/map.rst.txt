@@ -107,19 +107,6 @@ Map Functions
         SELECT map_normalize(map(array['a', 'b', 'c', 'd'], array[1, null, 4, 5])); -- {a=0.1, b=null, c=0.4, d=0.5}
         SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 0, -1])); -- {a=Infinity, b=NaN, c=-Infinity}
 
-.. function:: map_values_in_range(map(K,V), lower_bound, upper_bound) -> map(K,V)
-
-    Returns a map containing only the entries from the input map whose values
-    fall within the specified range [lower_bound, upper_bound] (inclusive).
-    Entries with values less than lower_bound or greater than upper_bound are removed.
-    Entries with null values are preserved in the output.
-    V must be a numeric type (integer, bigint, real, or double). ::
-
-        SELECT map_values_in_range(MAP(ARRAY[1, 2, 3, 4], ARRAY[10, 20, 30, 40]), 15, 35); -- {2 -> 20, 3 -> 30}
-        SELECT map_values_in_range(MAP(ARRAY['a', 'b', 'c'], ARRAY[1.5, 2.5, 3.5]), 2.0, 3.0); -- {b -> 2.5}
-        SELECT map_values_in_range(MAP(ARRAY[1, 2], ARRAY[null, 50]), 0, 100); -- {1 -> null, 2 -> 50}
-        SELECT map_values_in_range(MAP(ARRAY[1, 2, 3], ARRAY[5, 50, 500]), 10, 100); -- {2 -> 50}
-
 .. function:: map_remove_null_values(map(K,V)) -> map(K,V)
 
     Returns a map by removing all the keys in input map with null values. If input
