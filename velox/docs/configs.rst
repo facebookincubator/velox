@@ -993,8 +993,8 @@ Each query can override the config by setting corresponding query session proper
    * - hive.s3.aws-imds-enabled
      - bool
      - true
-     - It makes no sense to enable the IMDS option in instances other than EC2. Enabling it on machines outside of EC2 will result
-       in very high first-time read latency for object storage. However, to maintain semantics, it is currently enabled by default.
+     - AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
+       We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
