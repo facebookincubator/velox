@@ -1127,12 +1127,6 @@ std::unique_ptr<Filter> createNegatedBigintValues(
   return createBigintValuesFilter(values, nullAllowed, true);
 }
 
-std::unique_ptr<Filter> createStringValues(
-    const std::vector<std::string>& values,
-    bool nullAllowed) {
-  return std::make_unique<BytesValues>(values, nullAllowed);
-}
-
 BigintMultiRange::BigintMultiRange(
     std::vector<std::unique_ptr<BigintRange>> ranges,
     bool nullAllowed)

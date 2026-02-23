@@ -707,7 +707,7 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
         for (const auto& value : uniqueValues_) {
           values.emplace_back(value.asString());
         }
-        return common::createStringValues(values, nullAllowed);
+        return std::make_unique<common::BytesValues>(values, nullAllowed);
       }
       [[fallthrough]];
     default:

@@ -380,6 +380,10 @@ void HashProbe::initializeResultIter() {
 
 void HashProbe::pushdownDynamicFilters() {
   auto* driver = operatorCtx_->driverCtx()->driver;
+  const bool hashProbeStringDynamicFilterPushdownEnabled =
+      operatorCtx_->driverCtx()
+          ->queryConfig()
+          .hashProbeStringDynamicFilterPushdownEnabled();
   auto numFilters = driver->pushdownFilters(
       this,
       keyChannels_,
@@ -391,9 +395,7 @@ void HashProbe::pushdownDynamicFilters() {
         auto& hasher = *table_->hashers()[sourceChannel];
         if (hasher.typeKind() == TypeKind::VARCHAR ||
             hasher.typeKind() == TypeKind::VARBINARY) {
-          if (!operatorCtx_->driverCtx()
-                   ->queryConfig()
-                   .hashProbeStringDynamicFilterPushdownEnabled()) {
+          if (!hashProbeStringDynamicFilterPushdownEnabled) {
             return false;
           }
         }
