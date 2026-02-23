@@ -23,7 +23,7 @@ target_link_libraries(
   velox_file
   velox_gcs
   velox_hive_connector
-  velox_temp_path
+  velox_test_util
   GTest::gmock
   GTest::gtest
   GTest::gtest_main

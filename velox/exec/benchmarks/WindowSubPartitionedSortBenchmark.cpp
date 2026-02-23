@@ -39,6 +39,8 @@ static constexpr int32_t kNumVectors = 200;
 static constexpr int32_t kRowsPerVector = 10'000;
 
 namespace {
+using namespace facebook::velox::common::testutil;
+
 class BenchmarkRecorder {
  public:
   BenchmarkRecorder() = default;

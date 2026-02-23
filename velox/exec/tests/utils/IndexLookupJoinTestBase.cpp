@@ -20,7 +20,8 @@
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 namespace facebook::velox::exec::test {
-using namespace facebook::velox::test;
+using namespace facebook::velox::common::testutil;
+using velox::test::assertEqualVectors;
 
 namespace {
 std::vector<std::string> appendMarker(const std::vector<std::string> columns) {

@@ -24,15 +24,16 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::cache;
@@ -99,7 +100,7 @@ class CacheTest : public ::testing::Test {
     std::unique_ptr<SsdCache> ssd;
     if (ssdBytes > 0) {
       FLAGS_velox_ssd_odirect = false;
-      tempDirectory_ = exec::test::TempDirectoryPath::create();
+      tempDirectory_ = TempDirectoryPath::create();
       const SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
           ssdBytes,
@@ -110,7 +111,8 @@ class CacheTest : public ::testing::Test {
           checksumEnabled,
           checksumEnabled);
       ssd = std::make_unique<SsdCache>(config);
-      ssdCacheHelper_ = std::make_unique<test::SsdCacheTestHelper>(ssd.get());
+      ssdCacheHelper_ =
+          std::make_unique<cache::test::SsdCacheTestHelper>(ssd.get());
       groupStats_ = &ssd->groupStats();
     }
     memory::MmapAllocator::Options options;
@@ -118,7 +120,7 @@ class CacheTest : public ::testing::Test {
     allocator_ = std::make_shared<memory::MmapAllocator>(options);
     cache_ = AsyncDataCache::create(allocator_.get(), std::move(ssd));
     asyncDataCacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     cache_->setVerifyHook(checkEntry);
     for (auto i = 0; i < kMaxStreams; ++i) {
       streamIds_.push_back(
@@ -437,12 +439,12 @@ class CacheTest : public ::testing::Test {
   std::mutex mutex_;
   std::vector<StringIdLease> fileIds_;
   folly::F14FastMap<uint64_t, std::shared_ptr<TestReadFile>> pathToInput_;
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
   cache::FileGroupStats* groupStats_ = nullptr;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
-  std::unique_ptr<test::SsdCacheTestHelper> ssdCacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
+  std::unique_ptr<cache::test::SsdCacheTestHelper> ssdCacheHelper_;
   std::shared_ptr<IoStatistics> ioStatistics_;
   std::shared_ptr<facebook::velox::IoStats> ioStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
@@ -930,7 +932,8 @@ TEST_F(CacheTest, noCacheRetention) {
     const auto cacheEntries = asyncDataCacheHelper_->cacheEntries();
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
-          std::make_unique<test::AsyncDataCacheEntryTestHelper>(cacheEntry);
+          std::make_unique<cache::test::AsyncDataCacheEntryTestHelper>(
+              cacheEntry);
       if (testData.noCacheRetention) {
         ASSERT_EQ(cacheEntryHelper->accessStats().numUses, 0);
         ASSERT_EQ(cacheEntryHelper->accessStats().lastUse, 0);

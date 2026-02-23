@@ -19,7 +19,7 @@ set(
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
-  velox_temp_path
+  velox_test_util
   GTest::gtest
   GTest::gtest_main
   GTest::gmock

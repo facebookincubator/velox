@@ -17,14 +17,16 @@
 #include "velox/common/base/Fs.h"
 #include <gtest/gtest.h>
 #include "boost/filesystem.hpp"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::common {
 
 class FsTest : public testing::Test {};
 
 TEST_F(FsTest, createDirectory) {
-  auto dir = exec::test::TempDirectoryPath::create();
+  auto dir = TempDirectoryPath::create();
   auto rootPath = dir->getPath();
   auto tmpDirectoryPath = rootPath + "/first/second/third";
   // First time should generate directory successfully.

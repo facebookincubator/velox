@@ -24,6 +24,7 @@
 using facebook::velox::test::BatchMaker;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class LocalPartitionTest : public HiveConnectorTestBase {
