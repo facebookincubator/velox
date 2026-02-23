@@ -147,21 +147,6 @@ cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
   return cudf::detail::global_cuda_stream_pool();
 };
 
-void joinStreamsBack(
-    const std::vector<rmm::cuda_stream_view>& inputStreams,
-    rmm::cuda_stream_view outputStream) {
-  if (inputStreams.empty()) {
-    return;
-  }
-  CudaEvent outputDone;
-  outputDone.recordFrom(outputStream);
-  for (const auto& inputStream : inputStreams) {
-    if (inputStream.value() != outputStream.value()) {
-      outputDone.waitOn(inputStream);
-    }
-  }
-}
-
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream) {

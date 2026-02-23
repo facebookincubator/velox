@@ -23,6 +23,8 @@
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
 
+#include <algorithm>
+
 namespace facebook::velox::cudf_velox {
 CudfTopN::CudfTopN(
     int32_t operatorId,
@@ -84,13 +86,21 @@ CudfVectorPtr CudfTopN::mergeTopK(
     tableViews.push_back(batch->getTableView());
     inputStreams.push_back(batch->stream());
   }
-  // Ensure all upstream batch-producing streams are visible on the merge
-  // stream.
   cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
-  // Ensure input-stream deallocations don't race with merge reads.
-  joinStreamsBack(inputStreams, stream);
+  // Ensure input-stream deallocations don't race with merge stream.
+  if (!inputStreams.empty()) {
+    std::for_each(
+        inputStreams.begin(),
+        inputStreams.end(),
+        [&stream](rmm::cuda_stream_view inputStream) {
+          if (inputStream.value() != stream.value()) {
+            cudf::detail::join_streams(
+                std::vector<rmm::cuda_stream_view>{stream}, inputStream);
+          }
+        });
+  }
   // slice it
   auto topk =
       cudf::split(

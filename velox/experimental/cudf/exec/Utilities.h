@@ -44,13 +44,6 @@ createMemoryResource(std::string_view mode, int percent);
  */
 [[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
 
-// Make producer streams wait on consumer stream completion.
-// Use after launching work on `outputStream` that reads inputs produced on
-// `inputStreams` to prevent early deallocation on those streams.
-void joinStreamsBack(
-    const std::vector<rmm::cuda_stream_view>& inputStreams,
-    rmm::cuda_stream_view outputStream);
-
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
