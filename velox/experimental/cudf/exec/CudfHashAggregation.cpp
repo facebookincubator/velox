@@ -24,6 +24,7 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -1174,10 +1175,14 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
       numOutputRows == 0 ? 0 : (numOutputRows * 1.0) / numInputRows_ * 100;
   {
     auto lockedStats = stats_.wlock();
-    lockedStats->addRuntimeStat("flushRowCount", RuntimeCounter(numOutputRows));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(exec::HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows));
+    lockedStats->addRuntimeStat(
+        std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(exec::HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(aggregationPct));
   }
 
   numInputRows_ = 0;

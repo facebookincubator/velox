@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -72,7 +73,7 @@ class ToCudfSelectionTest : public OperatorTestBase {
     auto stats = task->taskStats();
     for (const auto& pipelineStats : stats.pipelineStats) {
       for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType == "Aggregation") {
+        if (operatorStats.operatorType == OperatorType::kAggregation) {
           return true;
         }
       }

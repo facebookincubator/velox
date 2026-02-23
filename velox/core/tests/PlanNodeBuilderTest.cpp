@@ -74,7 +74,7 @@ class PlanNodeBuilderTest : public testing::Test, public test::VectorTestBase {
         agg.rawInputTypes = rawInputArgs[i];
       }
 
-      VELOX_CHECK_NULL(untypedExpr.maskExpr);
+      VELOX_CHECK_NULL(untypedExpr.filter);
       VELOX_CHECK(!untypedExpr.distinct);
       VELOX_CHECK(untypedExpr.orderBy.empty());
 
