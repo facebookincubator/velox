@@ -17,6 +17,7 @@
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -570,6 +571,52 @@ TEST_F(MapUnionSumTest, decimalKey) {
       {{{{1000}, 3}, {{1001}, 2}}}, MAP(DECIMAL(30, 2), BIGINT()))});
   testAggregations(
       {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, ipAddressKey) {
+  // Helper to convert IP string to int128_t.
+  auto ipToInt128 = [](std::string_view ipAddr) -> int128_t {
+    return ipaddress::tryGetIPv6asInt128FromString(ipAddr).value();
+  };
+
+  // Test on nulls.
+  auto nullData =
+      makeRowVector({makeAllNullMapVector(3, IPADDRESS(), BIGINT())});
+  testAggregations({nullData}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+
+  auto ip1 = ipToInt128("192.168.1.1");
+  auto ip2 = ipToInt128("10.0.0.1");
+  auto ip3 = ipToInt128("172.16.0.1");
+
+  // Test global aggregation with IPADDRESS keys.
+  auto data = makeMapVector<int128_t, int64_t>(
+      {{{ip1, 10}, {ip2, 20}}, {{ip1, 5}, {ip3, 15}}},
+      MAP(IPADDRESS(), BIGINT()));
+  auto expected = makeRowVector({makeMapVector<int128_t, int64_t>(
+      {{{ip1, 15}, {ip2, 20}, {ip3, 15}}}, MAP(IPADDRESS(), BIGINT()))});
+  testAggregations(
+      {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+
+  // Test group-by aggregation with IPADDRESS keys.
+  auto groupByData = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2}),
+      makeMapVector<int128_t, int64_t>(
+          {{{ip1, 10}, {ip2, 20}},
+           {{ip1, 5}, {ip3, 15}},
+           {{ip1, 3}, {ip2, 7}},
+           {{ip3, 25}}},
+          MAP(IPADDRESS(), BIGINT())),
+  });
+
+  auto groupByExpected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<int128_t, int64_t>(
+          {{{ip1, 13}, {ip2, 27}}, {{ip1, 5}, {ip3, 40}}},
+          MAP(IPADDRESS(), BIGINT())),
+  });
+
+  testAggregations(
+      {groupByData}, {"c0"}, {"map_union_sum(c1)"}, {groupByExpected});
 }
 
 } // namespace
