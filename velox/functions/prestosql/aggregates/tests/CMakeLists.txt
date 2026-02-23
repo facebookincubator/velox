@@ -20,6 +20,7 @@ add_executable(
   ApproxPercentileTest.cpp
   ArbitraryTest.cpp
   ArrayAggTest.cpp
+  ArrayUnionSumTest.cpp
   AverageAggregationTest.cpp
   BitwiseAggregationTest.cpp
   BoolAndOrTest.cpp

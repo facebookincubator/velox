@@ -113,6 +113,12 @@ int main(int argc, char** argv) {
 
   // List of functions that have known bugs that cause crashes or failures.
   std::unordered_set<std::string> skipFunctions = {
+      // Velox-only function, not available in Presto.
+      "array_union_sum",
+      "array_union_sum_partial",
+      "array_union_sum_merge",
+      "array_union_sum_extract",
+      "array_union_sum_merge_extract",
       // https://github.com/prestodb/presto/issues/24936
       "classification_fall_out",
       "classification_precision",
