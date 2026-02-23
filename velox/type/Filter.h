@@ -2514,10 +2514,6 @@ std::unique_ptr<Filter> createNegatedBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed);
 
-/// Create a BytesValues filter for string types.
-std::unique_ptr<Filter> createStringValues(
-    const std::vector<std::string>& values,
-    bool nullAllowed);
 } // namespace facebook::velox::common
 
 template <>
