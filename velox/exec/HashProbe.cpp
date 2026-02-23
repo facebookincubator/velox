@@ -1472,12 +1472,11 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
       crossJoinProbeRows.setValid(probeRow, true);
     }
   }
-  nullKeyProbeRows.updateBounds();
-  crossJoinProbeRows.updateBounds();
 
   if (buildSideHasNullKeys_) {
     prepareNullKeyProbeHashers();
     BaseHashTable::NullKeyRowsIterator iter;
+    nullKeyProbeRows.updateBounds();
     applyFilterOnTableRowsForNullAwareJoin(
         nullKeyProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
           return table_->listNullKeyRows(
@@ -1485,6 +1484,7 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
         });
   }
   BaseHashTable::RowsIterator iter;
+  crossJoinProbeRows.updateBounds();
   applyFilterOnTableRowsForNullAwareJoin(
       crossJoinProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
         return table_->listAllRows(
