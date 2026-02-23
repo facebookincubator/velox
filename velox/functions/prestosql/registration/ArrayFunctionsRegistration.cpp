@@ -89,6 +89,20 @@ inline void registerArrayFrequencyFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayLeastFrequentFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayLeastFrequentFunction, T>,
+      Array<T>,
+      Array<T>>({prefix + "array_least_frequent"});
+
+  registerFunction<
+      ParameterBinder<ArrayLeastFrequentFunction, T>,
+      Array<T>,
+      Array<T>,
+      int64_t>({prefix + "array_least_frequent"});
+}
+
+template <typename T>
 inline void registerArrayNormalizeFunctions(const std::string& prefix) {
   registerFunction<
       ParameterBinder<ArrayNormalizeFunction, T>,
@@ -352,6 +366,18 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayFrequencyFunctions<Timestamp>(prefix);
   registerArrayFrequencyFunctions<Date>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
+
+  registerArrayLeastFrequentFunctions<bool>(prefix);
+  registerArrayLeastFrequentFunctions<int8_t>(prefix);
+  registerArrayLeastFrequentFunctions<int16_t>(prefix);
+  registerArrayLeastFrequentFunctions<int32_t>(prefix);
+  registerArrayLeastFrequentFunctions<int64_t>(prefix);
+  registerArrayLeastFrequentFunctions<int128_t>(prefix);
+  registerArrayLeastFrequentFunctions<float>(prefix);
+  registerArrayLeastFrequentFunctions<double>(prefix);
+  registerArrayLeastFrequentFunctions<Timestamp>(prefix);
+  registerArrayLeastFrequentFunctions<Date>(prefix);
+  registerArrayLeastFrequentFunctions<Varchar>(prefix);
 
   registerArrayNormalizeFunctions<int8_t>(prefix);
   registerArrayNormalizeFunctions<int16_t>(prefix);
