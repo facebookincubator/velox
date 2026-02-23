@@ -2218,6 +2218,46 @@ TEST_F(DateTimeFunctionsTest, millisecondTime) {
   assertEqualVectors(expectedWithNulls, resultWithNulls);
 }
 
+TEST_F(DateTimeFunctionsTest, millisecondTimeWithTimezone) {
+  const auto millisecond = [&](std::optional<int64_t> timeWithTimezone) {
+    return evaluateOnce<int64_t>(
+        "millisecond(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
+  };
+
+  const auto parse = [](std::string_view timeString) -> std::optional<int64_t> {
+    auto result =
+        util::fromTimeWithTimezoneString(timeString.data(), timeString.size());
+    VELOX_CHECK(!result.hasError(), "{}", result.error().message());
+    return result.value();
+  };
+
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+
+  EXPECT_EQ(0, millisecond(parse("00:00:00.000+00:00")));
+  EXPECT_EQ(123, millisecond(parse("06:11:37.123+00:00")));
+  EXPECT_EQ(123, millisecond(parse("06:11:37.123-05:00")));
+  EXPECT_EQ(123, millisecond(parse("06:11:37.123+05:30")));
+  EXPECT_EQ(999, millisecond(parse("23:59:59.999+14:00")));
+  EXPECT_EQ(1, millisecond(parse("00:00:00.001-14:00")));
+
+  auto input = makeNullableFlatVector<int64_t>(
+      {
+          parse("00:00:00.000+00:00"),
+          parse("06:11:37.123+00:00"),
+          std::nullopt,
+          parse("23:59:59.999+14:00"),
+          parse("00:00:00.001-14:00"),
+      },
+      TIME_WITH_TIME_ZONE());
+
+  auto result =
+      evaluate<FlatVector<int64_t>>("millisecond(c0)", makeRowVector({input}));
+
+  auto expected = makeNullableFlatVector<int64_t>(
+      {0, 123, std::nullopt, 999, 1});
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {
   const auto millis = 5 * kMillisInDay + 7 * kMillisInHour +
       11 * kMillisInMinute + 13 * kMillisInSecond + 17;
