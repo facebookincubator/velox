@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/ArrowStream.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::exec {
@@ -27,7 +28,7 @@ ArrowStream::ArrowStream(
           arrowStreamNode->outputType(),
           operatorId,
           arrowStreamNode->id(),
-          "ArrowStream") {
+          OperatorType::kArrowStream) {
   arrowStream_ = arrowStreamNode->arrowStream();
 }
 

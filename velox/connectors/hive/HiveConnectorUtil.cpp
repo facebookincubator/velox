@@ -108,16 +108,13 @@ void addSubfields(
     }
   }
   subfields.resize(newSize);
+
   switch (type.kind()) {
     case TypeKind::ROW: {
       folly::F14FastMap<std::string, std::vector<SubfieldSpec>> required;
       for (auto& subfield : subfields) {
         auto* element = subfield.subfield->path()[level].get();
-        auto* nestedField = element->as<common::Subfield::NestedField>();
-        VELOX_CHECK(
-            nestedField,
-            "Unsupported for row subfields pruning: {}",
-            element->toString());
+        auto* nestedField = element->asChecked<common::Subfield::NestedField>();
         required[nestedField->name()].push_back(subfield);
       }
       const auto& rowType = type.asRow();
