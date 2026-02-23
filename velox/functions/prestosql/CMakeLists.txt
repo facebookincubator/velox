@@ -52,6 +52,7 @@ velox_add_library(
   MapEntries.cpp
   MapKeysAndValues.cpp
   MapSubset.cpp
+  MapTopNValues.cpp
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
