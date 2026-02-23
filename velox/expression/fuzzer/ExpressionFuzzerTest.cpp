@@ -72,6 +72,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::ArrayLeastFrequentArgValuesGenerator;
 using facebook::velox::fuzzer::AtTimezoneArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
@@ -120,6 +121,8 @@ std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
 
 std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
     argValuesGenerators = {
+        {"array_least_frequent",
+         std::make_shared<ArrayLeastFrequentArgValuesGenerator>()},
         {"at_timezone", std::make_shared<AtTimezoneArgValuesGenerator>()},
         {"at_timezone_convert",
          std::make_shared<AtTimezoneArgValuesGenerator>()},
