@@ -35,6 +35,12 @@ TEST_F(MapTopNValuesTest, emptyMap) {
       makeArrayVectorFromJson<int64_t>({
           "[]",
       }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int64_t>({
+          "[]",
+      }));
 }
 
 TEST_F(MapTopNValuesTest, basic) {
@@ -68,6 +74,9 @@ TEST_F(MapTopNValuesTest, basic) {
 
   assertEqualVectors(expected, result);
 
+  result = evaluate("map_top_n_values(c0, 3, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
+
   // n = 0. Expect empty maps.
   result = evaluate("map_top_n_values(c0, 0)", data);
 
@@ -85,9 +94,16 @@ TEST_F(MapTopNValuesTest, basic) {
 
   assertEqualVectors(expected, result);
 
+  result = evaluate("map_top_n_values(c0, 0, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
+
   // n is negative. Expect an error.
   VELOX_ASSERT_THROW(
       evaluate("map_top_n_values(c0, -1)", data),
+      "n must be greater than or equal to 0");
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_top_n_values(c0, -1, (x,y) -> y)", data),
       "n must be greater than or equal to 0");
 }
 
@@ -100,6 +116,14 @@ TEST_F(MapTopNValuesTest, complexKeys) {
 
   assertEqualVectors(
       evaluate("map_top_n_values(c0, 1)", input),
+      makeArrayVectorFromJson<std::string>({
+          "[\"y\"]",
+          "[\"dw\"]",
+          "[\"dd\"]",
+      }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 1, (x,y) -> y)", input),
       makeArrayVectorFromJson<std::string>({
           "[\"y\"]",
           "[\"dw\"]",
@@ -139,6 +163,17 @@ TEST_F(MapTopNValuesTest, floatingPointValues) {
   });
 
   assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 3, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 3, (x,y) -> x)", data);
+  expected = makeArrayVectorFromJson<double>({
+      "[2.0, 4.9, 1.2]",
+      "[2.0, 4.9, null]",
+  });
+
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(MapTopNValuesTest, edgeCaseValues) {
@@ -159,6 +194,9 @@ TEST_F(MapTopNValuesTest, edgeCaseValues) {
   });
 
   assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 2, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(MapTopNValuesTest, stringValuesWithSpecialChars) {
@@ -177,6 +215,9 @@ TEST_F(MapTopNValuesTest, stringValuesWithSpecialChars) {
       R"(["  ", " "])",
   });
 
+  assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 2, (x,y) -> y)", data);
   assertEqualVectors(expected, result);
 }
 } // namespace
