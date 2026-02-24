@@ -692,6 +692,51 @@ TEST_F(E2EFilterTest, date) {
       20);
 }
 
+TEST_F(E2EFilterTest, time) {
+  struct {
+    parquet::arrow::Encoding::type encoding;
+    bool enableDictionary;
+    bool keepNulls;
+  } testCases[] = {
+      {parquet::arrow::Encoding::kPlain, false, true},
+      {parquet::arrow::Encoding::kPlain, true, true},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, false},
+  };
+
+  for (const auto& testCase : testCases) {
+    options_.encoding = testCase.encoding;
+    bool enableDictionary = testCase.enableDictionary;
+    bool keepNulls = testCase.keepNulls;
+    SCOPED_TRACE(
+        fmt::format(
+            "Encoding: {}, Dictionary: {}, KeepNulls: {}",
+            static_cast<int>(options_.encoding),
+            enableDictionary,
+            keepNulls));
+
+    options_.enableDictionary = enableDictionary;
+    options_.dataPageSize = 4 * 1024;
+    const int valMax = enableDictionary ? 1000 : 86399999;
+
+    testWithTypes(
+        "time_val:time",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "time_val",
+              0, // min
+              valMax, // max
+              22, // repeats
+              19, // rareFrequency
+              0, // rareMin
+              valMax, // rareMax
+              keepNulls); // keepNulls
+        },
+        false,
+        {"time_val"},
+        20);
+  }
+}
+
 TEST_F(E2EFilterTest, combineRowGroup) {
   rowsInRowGroup_ = 5;
   rowType_ = ROW({"c0"}, {INTEGER()});
