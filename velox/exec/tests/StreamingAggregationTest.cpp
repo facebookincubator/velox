@@ -15,14 +15,17 @@
  */
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/Expressions.h"
+
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec {
 namespace {

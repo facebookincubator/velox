@@ -19,20 +19,21 @@
 #include <gmock/gmock.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "arrow/testing/gtest_util.h"
 #include "arrow/util/crc32.h"
 
 namespace facebook::velox::parquet::arrow {
+using namespace facebook::velox::common::testutil;
 namespace {
 void writeToFile(
-    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<TempFilePath> filePath,
     std::shared_ptr<arrow::Buffer> buffer) {
   auto localWriteFile =
       std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
@@ -963,7 +964,7 @@ class TestParquetFileReader : public ::testing::Test {
   void assertInvalidFileThrows(const std::shared_ptr<Buffer>& buffer) {
     auto reader = std::make_shared<BufferReader>(buffer);
     // Write the buffer to a temp file path.
-    auto filePath = exec::test::TempFilePath::create();
+    auto filePath = common::testutil::TempFilePath::create();
     writeToFile(filePath, buffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
@@ -1019,7 +1020,7 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
 
   auto reader = std::make_shared<BufferReader>(buffer);
   // Write the buffer to a temp file path.
-  auto filePath = exec::test::TempFilePath::create();
+  auto filePath = TempFilePath::create();
   writeToFile(filePath, buffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =

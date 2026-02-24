@@ -25,6 +25,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 class IndexLookupJoinTestBase : public HiveConnectorTestBase {
  protected:

@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/config/Config.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include <azure/storage/blobs/blob_container_client.hpp>
 #include <azure/storage/blobs/block_blob_client.hpp>
@@ -28,6 +28,7 @@
 namespace facebook::velox::filesystems {
 
 using namespace Azure::Storage::Blobs;
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 static std::string_view kAzuriteServerExecutableName{"azurite-blob"};
 static std::string_view kAzuriteSearchPath{":/usr/bin/azurite"};
 

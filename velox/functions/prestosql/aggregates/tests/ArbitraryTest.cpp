@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
 using namespace facebook::velox::window::test;
@@ -509,7 +510,7 @@ TEST_F(ArbitraryTest, spilling) {
   AssertQueryBuilder builder(plan);
 
   exec::TestScopedSpillInjection scopedSpillInjection(100);
-  spillDirectory = exec::test::TempDirectoryPath::create();
+  spillDirectory = TempDirectoryPath::create();
   builder.spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kAggregationSpillEnabled, "true")

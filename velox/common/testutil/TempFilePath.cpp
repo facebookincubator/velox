@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/common/testutil/TempFilePath.h"
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::common::testutil {
 
 TempFilePath::~TempFilePath() {
   ::unlink(tempPath_.c_str());
@@ -46,4 +46,4 @@ std::vector<std::string> toFilePaths(
   }
   return filePaths;
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::common::testutil
