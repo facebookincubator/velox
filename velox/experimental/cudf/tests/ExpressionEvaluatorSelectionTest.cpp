@@ -283,6 +283,23 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   ASSERT_TRUE(canBeEvaluatedByCudf(ok1, /*deep=*/true));
 }
 
+TEST_F(CudfExpressionSelectionTest, scalarSignatureExportSanity) {
+  auto signatureMap = getCudfFunctionSignatureMap();
+
+  auto coalesceIt = signatureMap.find("coalesce");
+  ASSERT_NE(coalesceIt, signatureMap.end());
+  ASSERT_FALSE(coalesceIt->second.empty());
+
+  bool foundCoalesceVarArg = false;
+  for (const auto* signature : coalesceIt->second) {
+    if (signature->toString().find("...") != std::string::npos) {
+      foundCoalesceVarArg = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(foundCoalesceVarArg);
+}
+
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
   // TODO (dm): This is required for passing of castAndTryCast test but breaks
   // others. This is because ASTExpr agrees to support bad casts. remove after

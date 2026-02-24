@@ -95,6 +95,12 @@ bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();
 
+// Returns standalone cuDF function signatures. AST and JIT expression
+// evaluators do not expose signature registries and are checked dynamically via
+// canEvaluate; adding exhaustive AST/JIT metadata is left as follow-up work.
+std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+getCudfFunctionSignatureMap();
+
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;

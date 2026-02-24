@@ -266,6 +266,26 @@ static bool matchCallAgainstSignatures(
 
 } // namespace
 
+// Get function signatures map from the CUDF registry
+std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+getCudfFunctionSignatureMap() {
+  std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+      result;
+  const auto& registry = getCudfFunctionRegistry();
+
+  for (const auto& [name, spec] : registry) {
+    std::vector<const exec::FunctionSignature*> signatures;
+    for (const auto& sig : spec.signatures) {
+      signatures.push_back(sig.get());
+    }
+    if (!signatures.empty()) {
+      result[name] = signatures;
+    }
+  }
+
+  return result;
+}
+
 class SplitFunction : public CudfFunction {
  public:
   SplitFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
