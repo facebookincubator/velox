@@ -26,8 +26,8 @@ std::string DebugUtil::toString(
     rmm::cuda_stream_view stream,
     vector_size_t from,
     vector_size_t to) {
-  auto rowVector = with_arrow::toVeloxColumn(
-      table, pool_.get(), "", stream, cudf_velox::get_temp_mr());
+  auto rowVector =
+      with_arrow::toVeloxColumn(table, pool_.get(), "", stream, get_temp_mr());
   stream.synchronize();
   return rowVector->toString(from, to);
 }

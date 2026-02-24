@@ -31,7 +31,7 @@
 // being substituted, ensuring the call (and thus the error) survives.
 //
 // For intentional explicit usage where you want the current device memory
-// resource, use cudf_velox::get_temp_mr(). It calls the underlying RMM
+// resource, use get_temp_mr(). It calls the underlying RMM
 // function directly, bypassing the error-attributed cudf wrapper.
 
 #include <rmm/cuda_stream_view.hpp>

@@ -69,7 +69,7 @@ RowVectorPtr CudfAssignUniqueId::getOutput() {
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
   auto stream = cudfVector->stream();
   auto uniqueIdColumn =
-      generateIdColumn(input_->size(), stream, cudf_velox::get_output_mr());
+      generateIdColumn(input_->size(), stream, get_output_mr());
   auto size = cudfVector->size();
   auto columns = cudfVector->release()->release();
   columns.push_back(std::move(uniqueIdColumn));

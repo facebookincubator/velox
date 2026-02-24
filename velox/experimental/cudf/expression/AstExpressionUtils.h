@@ -622,7 +622,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
       auto result = cudf_expression->eval(
           inputColumnViews,
           stream,
-          cudf_velox::get_output_mr(),
+          get_output_mr(),
           /*finalize=*/true);
       precomputedColumns.push_back(std::move(result));
       continue;
@@ -634,7 +634,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
           inputColumnViews[dependent_column_index].size(),
           stream,
-          cudf_velox::get_output_mr());
+          get_output_mr());
       precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.

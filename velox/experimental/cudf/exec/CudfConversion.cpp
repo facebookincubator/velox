@@ -144,8 +144,8 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto stream = cudfGlobalStreamPool().get_stream();
 
   // Convert RowVector to cudf table
-  auto tbl = with_arrow::toCudfTable(
-      input, input->pool(), stream, cudf_velox::get_output_mr());
+  auto tbl =
+      with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
 
   stream.synchronize();
 
@@ -229,8 +229,8 @@ RowVectorPtr CudfToVelox::getOutput() {
       finished_ = noMoreInput_ && inputs_.empty();
       return nullptr;
     }
-    RowVectorPtr output = with_arrow::toVeloxColumn(
-        tableView, pool(), "", stream, cudf_velox::get_temp_mr());
+    RowVectorPtr output =
+        with_arrow::toVeloxColumn(tableView, pool(), "", stream, get_temp_mr());
     stream.synchronize();
     finished_ = noMoreInput_ && inputs_.empty();
     output->setType(outputType_);
@@ -258,15 +258,15 @@ RowVectorPtr CudfToVelox::getOutput() {
       auto tableSplits = cudf::split(cudfTableView, partitions, stream);
 
       // Create new CudfVector from the first part
-      auto firstPart = std::make_unique<cudf::table>(
-          tableSplits[0], stream, cudf_velox::get_temp_mr());
+      auto firstPart =
+          std::make_unique<cudf::table>(tableSplits[0], stream, get_temp_mr());
       auto firstPartSize = firstPart->num_rows();
       auto firstPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), firstPartSize, std::move(firstPart), stream);
 
       // Create new CudfVector from the second part
-      auto secondPart = std::make_unique<cudf::table>(
-          tableSplits[1], stream, cudf_velox::get_temp_mr());
+      auto secondPart =
+          std::make_unique<cudf::table>(tableSplits[1], stream, get_temp_mr());
       auto secondPartSize = secondPart->num_rows();
       auto secondPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), secondPartSize, std::move(secondPart), stream);
@@ -289,8 +289,8 @@ RowVectorPtr CudfToVelox::getOutput() {
   }
 
   // Concatenate the selected tables on the GPU
-  auto resultTable = getConcatenatedTable(
-      selectedInputs, outputType_, stream, cudf_velox::get_temp_mr());
+  auto resultTable =
+      getConcatenatedTable(selectedInputs, outputType_, stream, get_temp_mr());
 
   // Convert the concatenated table to a RowVector
   const auto size = resultTable->num_rows();
@@ -300,7 +300,7 @@ RowVectorPtr CudfToVelox::getOutput() {
   }
 
   RowVectorPtr output = with_arrow::toVeloxColumn(
-      resultTable->view(), pool(), "", stream, cudf_velox::get_temp_mr());
+      resultTable->view(), pool(), "", stream, get_temp_mr());
   stream.synchronize();
   finished_ = noMoreInput_ && inputs_.empty();
   output->setType(outputType_);

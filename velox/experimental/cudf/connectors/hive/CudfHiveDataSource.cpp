@@ -243,10 +243,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       // for each input byte range, and a future to wait for all reads to
       // complete
       auto ioData = fetchByteRangesAsync(
-          dataSource_,
-          columnChunkByteRanges,
-          stream_,
-          cudf_velox::get_temp_mr());
+          dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
 
       // Wait for all pending reads to complete
       std::get<2>(ioData).wait();
@@ -263,7 +260,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
           hybridScanState_->columnChunkData_,
           readerOptions_,
           stream_,
-          cudf_velox::get_output_mr());
+          get_output_mr());
       // TODO: check remainingFilterExprSet_ flag here to choose mr
     });
 
@@ -296,16 +293,13 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     for (auto& col : cudfTableColumns) {
       inputViews.push_back(col->view());
     }
-    auto filterResult = cudfExpressionEvaluator_->eval(
-        inputViews, stream_, cudf_velox::get_temp_mr());
+    auto filterResult =
+        cudfExpressionEvaluator_->eval(inputViews, stream_, get_temp_mr());
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     // Keep only rows where the filter is true
     cudfTable = cudf::apply_boolean_mask(
-        *originalTable,
-        asView(filterResult),
-        stream_,
-        cudf_velox::get_output_mr());
+        *originalTable, asView(filterResult), stream_, get_output_mr());
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);
@@ -336,7 +330,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
             pool_,
             outputType_->names(),
             stream_,
-            cudf_velox::get_temp_mr());
+            get_temp_mr());
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr
@@ -537,7 +531,7 @@ CudfParquetReaderPtr CudfHiveDataSource::createSplitReader() {
       cudfHiveConfig_->maxPassReadLimit(),
       readerOptions_,
       stream_,
-      cudf_velox::get_output_mr());
+      get_output_mr());
 }
 
 CudfHybridScanReaderPtr CudfHiveDataSource::createExperimentalSplitReader() {

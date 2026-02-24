@@ -87,7 +87,7 @@ RowVectorPtr CudfLimit::getOutput() {
         cudfInput->stream());
 
     auto materializedTable = std::make_unique<cudf::table>(
-        slicedTable[0], cudfInput->stream(), cudf_velox::get_output_mr());
+        slicedTable[0], cudfInput->stream(), get_output_mr());
 
     remainingOffset_ = 0;
     remainingLimit_ -= outputSize;
@@ -125,7 +125,7 @@ RowVectorPtr CudfLimit::getOutput() {
       cudfInput->stream());
 
   auto materializedTable = std::make_unique<cudf::table>(
-      slicedTable[0], cudfInput->stream(), cudf_velox::get_output_mr());
+      slicedTable[0], cudfInput->stream(), get_output_mr());
 
   auto output = std::make_shared<cudf_velox::CudfVector>(
       input_->pool(),
