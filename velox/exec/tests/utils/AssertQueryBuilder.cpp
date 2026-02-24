@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include <gtest/gtest.h>
 #include "velox/exec/Cursor.h"
 
 namespace facebook::velox::exec::test {
@@ -220,9 +221,10 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
-  auto [cursor, results] = readCursor();
-  test::assertEmptyResults(results);
-  return cursor->task();
+  std::shared_ptr<Task> task;
+  auto count = countResults(task);
+  EXPECT_EQ(0, count);
+  return task;
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
@@ -286,11 +288,7 @@ std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
 }
 
 uint64_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
-  auto [cursor, results] = readCursor();
-  uint64_t count = 0;
-  for (const auto& result : results) {
-    count += result->size();
-  }
+  auto [cursor, count] = countCursor();
   task = cursor->task();
   return count;
 }
@@ -300,10 +298,7 @@ uint64_t AssertQueryBuilder::countResults() {
   return countResults(task);
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-AssertQueryBuilder::readCursor() {
-  VELOX_CHECK_NOT_NULL(params_.planNode);
-
+void AssertQueryBuilder::prepareQueryCtx() {
   if (!configs_.empty() || !connectorSessionProperties_.empty()) {
     if (params_.queryCtx == nullptr) {
       // NOTE: the destructor of 'executor_' will wait for all the async task
@@ -330,8 +325,10 @@ AssertQueryBuilder::readCursor() {
           connectorId, std::move(sessionProperties));
     }
   }
+}
 
-  return test::readCursor(params_, [&](exec::TaskCursor* taskCursor) {
+std::function<void(exec::TaskCursor*)> AssertQueryBuilder::makeAddSplits() {
+  return [&](exec::TaskCursor* taskCursor) {
     if (taskCursor->noMoreSplits()) {
       return;
     }
@@ -381,6 +378,20 @@ AssertQueryBuilder::readCursor() {
       }
       taskCursor->setNoMoreSplits();
     }
-  });
+  };
+}
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+AssertQueryBuilder::readCursor() {
+  VELOX_CHECK_NOT_NULL(params_.planNode);
+  prepareQueryCtx();
+  return test::readCursor(params_, makeAddSplits());
+}
+
+std::pair<std::unique_ptr<TaskCursor>, uint64_t>
+AssertQueryBuilder::countCursor() {
+  VELOX_CHECK_NOT_NULL(params_.planNode);
+  prepareQueryCtx();
+  return test::countResults(params_, makeAddSplits());
 }
 } // namespace facebook::velox::exec::test

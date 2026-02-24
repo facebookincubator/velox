@@ -810,6 +810,39 @@ void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
       sql);
 }
 
+void forEachVector(
+    TaskCursor* cursor,
+    std::function<void(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros,
+    std::function<void(const RowVectorPtr&)> callback) {
+  auto* task = cursor->task().get();
+  cursor->start();
+  while (!cursor->noMoreSplits()) {
+    addSplits(cursor);
+    while (cursor->moveNext()) {
+      callback(cursor->current());
+      testingMaybeTriggerAbort(task);
+    }
+  }
+
+  if (!waitForTaskCompletion(task, maxWaitMicros)) {
+    // NOTE: there is async memory arbitration might fail the task after all the
+    // results have been consumed and before the task finishes. So we might run
+    // into the failed task state in some rare case such as exposed by
+    // concurrent memory arbitration test.
+    if (task->state() != TaskState::kFinished &&
+        task->state() != TaskState::kRunning) {
+      waitForTaskDriversToFinish(task, maxWaitMicros);
+      std::rethrow_exception(task->error());
+    } else {
+      VELOX_FAIL(
+          "Failed to wait for task to complete after {}, task: {}",
+          succinctMicros(maxWaitMicros),
+          task->toString());
+    }
+  }
+}
+
 } // namespace
 
 std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
@@ -929,16 +962,16 @@ std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const core::PlanNodePtr& plan) {
   CursorParameters params;
   params.planNode = plan;
-  auto [cursor, results] = readCursor(params);
-  assertEmptyResults(results);
+  auto [cursor, count] = countResults(params);
+  EXPECT_EQ(0, count);
   return cursor->task();
 }
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const CursorParameters& params) {
   VELOX_DCHECK_NOT_NULL(params.planNode);
-  auto [cursor, results] = readCursor(params);
-  assertEmptyResults(results);
+  auto [cursor, count] = countResults(params);
+  EXPECT_EQ(0, count);
   return cursor->task();
 }
 
@@ -1361,37 +1394,29 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     std::function<void(TaskCursor*)> addSplits,
     uint64_t maxWaitMicros) {
   auto cursor = TaskCursor::create(params);
-  // 'result' borrows memory from cursor so the life cycle must be shorter.
+  // 'result' borrows memory from cursor so its life cycle must be shorter.
+  // This ensures that during an exception, 'result' is destroyed before
+  // 'cursor'.
   std::vector<RowVectorPtr> result;
-  auto* task = cursor->task().get();
-  cursor->start();
-  while (!cursor->noMoreSplits()) {
-    addSplits(cursor.get());
-    while (cursor->moveNext()) {
-      auto vector = cursor->current();
-      vector->loadedVector();
-      result.push_back(std::move(vector));
-      testingMaybeTriggerAbort(task);
-    }
-  }
-
-  if (!waitForTaskCompletion(task, maxWaitMicros)) {
-    // NOTE: there is async memory arbitration might fail the task after all the
-    // results have been consumed and before the task finishes. So we might run
-    // into the failed task state in some rare case such as exposed by
-    // concurrent memory arbitration test.
-    if (task->state() != TaskState::kFinished &&
-        task->state() != TaskState::kRunning) {
-      waitForTaskDriversToFinish(task, maxWaitMicros);
-      std::rethrow_exception(task->error());
-    } else {
-      VELOX_FAIL(
-          "Failed to wait for task to complete after {}, task: {}",
-          succinctMicros(maxWaitMicros),
-          task->toString());
-    }
-  }
+  forEachVector(
+      cursor.get(), std::move(addSplits), maxWaitMicros, [&](auto& vector) {
+        vector->loadedVector();
+        result.push_back(std::move(vector));
+      });
   return {std::move(cursor), std::move(result)};
+}
+
+std::pair<std::unique_ptr<TaskCursor>, uint64_t> countResults(
+    const CursorParameters& params,
+    std::function<void(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
+  auto cursor = TaskCursor::create(params);
+  uint64_t numRows = 0;
+  forEachVector(
+      cursor.get(), std::move(addSplits), maxWaitMicros, [&](auto& vector) {
+        numRows += vector->size();
+      });
+  return {std::move(cursor), numRows};
 }
 
 bool waitForTaskFinish(

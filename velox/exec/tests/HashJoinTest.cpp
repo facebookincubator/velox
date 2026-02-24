@@ -8491,10 +8491,10 @@ TEST_P(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
              .planNode();
 
   // Result should be empty since the IP addresses are different
-  result = AssertQueryBuilder(plan).copyResults(pool());
-  ASSERT_EQ(result->size(), 0)
+  auto actualRows = AssertQueryBuilder(plan).countResults();
+  ASSERT_EQ(0, actualRows)
       << "Expected no matches between different IP addresses, but got "
-      << result->size() << " rows";
+      << actualRows << " rows";
 }
 
 /// Test hash join where build-side keys have a type that supports custom
@@ -8534,13 +8534,11 @@ TEST_P(HashJoinTest, arrayBasedLookupCustomComparisonType) {
                       core::JoinType::kInner)
                   .planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
-
   // The probe side consists of the values 0-1023, the build side consists of
   // the values 0-255. If custom comparison is not respected, the join will
   // produce 256 values (0-255). When custom comparison is respected equality is
   // treated mod 256 so we get 1024 values (0-1023).
-  EXPECT_EQ(result->size(), 1'024);
+  EXPECT_EQ(AssertQueryBuilder(plan).countResults(), 1'024);
 }
 
 DEBUG_ONLY_TEST_P(
@@ -8801,7 +8799,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashJoinSpillFileCreateConfig) {
       .config(
           core::QueryConfig::kHashJoinSpillFileCreateConfig,
           "test_hashjoin_config")
-      .copyResults(pool_.get());
+      .countResults();
 
   ASSERT_TRUE(hashJoinConfigVerified.load());
   ASSERT_TRUE(defaultConfigVerified.load());
