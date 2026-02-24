@@ -14,8 +14,8 @@
 
 add_executable(
   velox_functions_spark_aggregates_test
-  AverageAggregationTest.cpp
   ApproxPercentileAggregateTest.cpp
+  AverageAggregationTest.cpp
   BitwiseXorAggregationTest.cpp
   BloomFilterAggAggregateTest.cpp
   CentralMomentsAggregationTest.cpp
