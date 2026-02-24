@@ -699,12 +699,12 @@ class ReaderOptions : public io::ReaderOptions {
     randomSkip_ = std::move(randomSkip);
   }
 
-  bool noCacheRetention() const {
-    return noCacheRetention_;
+  bool cacheable() const {
+    return cacheable_;
   }
 
-  void setNoCacheRetention(bool noCacheRetention) {
-    noCacheRetention_ = noCacheRetention;
+  void setCacheable(bool cacheable) {
+    cacheable_ = cacheable;
   }
 
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
