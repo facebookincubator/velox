@@ -24,7 +24,7 @@
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/fuzzer/DivideArgTypesGenerator.h"
-#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
@@ -75,8 +75,9 @@ std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>
         {"minus", std::make_shared<PlusMinusArgTypesGenerator>()},
         {"multiply", std::make_shared<MultiplyArgTypesGenerator>()},
         {"divide", std::make_shared<DivideArgTypesGenerator>()},
-        {"floor", std::make_shared<FloorAndRoundArgTypesGenerator>()},
-        {"round", std::make_shared<FloorAndRoundArgTypesGenerator>()},
+        {"floor", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
+        {"ceil", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
+        {"round", std::make_shared<FloorCeilRoundArgTypesGenerator>()},
         {"mod", std::make_shared<ModulusArgTypesGenerator>()},
         {"truncate", std::make_shared<TruncateArgTypesGenerator>()}};
 
