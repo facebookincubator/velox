@@ -729,10 +729,10 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // equivalent in Arrow.
   // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
   if (options.useDecimalTypeWidth) {
-    // short decimal is zero-copy
+    // Short decimal is zero-copy.
     return !type->isTimestamp() && !type->isTime();
   } else {
-    // short decimal requires conversion
+    // Short decimal requires conversion.
     return !type->isShortDecimal() && !type->isTimestamp() && !type->isTime();
   }
 }
@@ -1285,34 +1285,32 @@ void exportToArrowImpl(
 // The input format string should be in the form "d:precision,scale<,bitWidth>".
 // bitWidth is optional and may be 64 or 128 if provided.
 
-int32_t parseDecimalBitWidthOrDefault(const char* format) {
-  std::string formatStr(format);
-  auto firstCommaIdx = formatStr.find(',', 2);
-  auto secondCommaIdx = formatStr.find(',', firstCommaIdx + 1);
-  if (secondCommaIdx == std::string::npos) {
+int32_t parseDecimalBitWidthOrDefault(const std::string_view format) {
+  auto firstCommaIdx = format.find(',', 2);
+  auto secondCommaIdx = format.find(',', firstCommaIdx + 1);
+  if (secondCommaIdx == std::string_view::npos) {
     // Default per Arrow C data interface conventions.
     return 128;
   }
   // Parse the bitWidth.
-  std::string::size_type sz;
-  int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
+  std::string::size_type sz{};
+  int32_t bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
   return bitWidth;
 }
 
-TypePtr parseDecimalFormat(const char* format) {
-  std::string invalidFormatMsg =
+TypePtr parseDecimalFormat(const std::string_view format) {
+  const std::string_view invalidFormatMsg =
       "Unable to convert '{}' ArrowSchema decimal format to Velox decimal";
   try {
-    std::string::size_type sz;
-    std::string formatStr(format);
+    std::string_view::size_type sz;
 
-    auto firstCommaIdx = formatStr.find(',', 2);
-    auto secondCommaIdx = formatStr.find(',', firstCommaIdx + 1);
+    auto firstCommaIdx = format.find(',', 2);
+    auto secondCommaIdx = format.find(',', firstCommaIdx + 1);
 
-    if (firstCommaIdx == std::string::npos ||
-        formatStr.size() == firstCommaIdx + 1 ||
-        (secondCommaIdx != std::string::npos &&
-         formatStr.size() == secondCommaIdx + 1)) {
+    if (firstCommaIdx == std::string_view::npos ||
+        format.size() == firstCommaIdx + 1 ||
+        (secondCommaIdx != std::string_view::npos &&
+         format.size() == secondCommaIdx + 1)) {
       VELOX_USER_FAIL(invalidFormatMsg, format);
     }
 
@@ -1320,20 +1318,19 @@ TypePtr parseDecimalFormat(const char* format) {
     int precision = std::stoi(&format[2], &sz);
     int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
     if (secondCommaIdx != std::string::npos) {
-      // bitWidth is provided
-      // we only support 64 or 128
+      // BitWidth is provided. We only support 64 or 128.
       int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
-      // return type depends on bitWidth
+      // Return type depends on bitWidth.
       if (bitWidth == 64) {
         return std::make_shared<ShortDecimalType>(precision, scale);
       } else if (bitWidth == 128) {
         return std::make_shared<LongDecimalType>(precision, scale);
       }
       VELOX_USER_FAIL(
-          "Conversion failed for '{}'. Only 64 and 128-bit decimals are supported.",
+          "Conversion failed for '{}'. Only 64 and 128-bit decimal types are supported.",
           format);
     }
-    // otherwise return type depends on precision
+    // Otherwise return type depends on precision.
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
     VELOX_USER_FAIL(invalidFormatMsg, format);
@@ -2273,7 +2270,7 @@ VectorPtr importFromArrowImpl(
         isTime32);
   } else if (type->isShortDecimal()) {
     // Validate the format bitWidth
-    const int32_t bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
+    const auto bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
     if (bitWidth == 64) {
       return createShortDecimalVector(
           pool,
