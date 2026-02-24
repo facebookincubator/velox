@@ -2662,6 +2662,141 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
   }
 }
 
+// Verifies that when splitOutput_ is false, trailing input rows that have no
+// lookup matches are included in the current output batch rather than being
+// emitted in a separate batch via produceRemainingOutputForLeftJoin.
+TEST_P(IndexLookupJoinTest, leftJoinTrailingMissesWithNoSplitOutput) {
+  IndexTableData tableData;
+  generateIndexTableData({500, 1, 1}, tableData, pool_);
+
+  struct {
+    int numProbeBatches;
+    int numRowsPerProbeBatch;
+    int maxBatchRows;
+    int equalMatchPct;
+    bool splitOutput;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numProbeBatches: {}, numRowsPerProbeBatch: {}, maxBatchRows: {}, equalMatchPct: {}, splitOutput: {}",
+          numProbeBatches,
+          numRowsPerProbeBatch,
+          maxBatchRows,
+          equalMatchPct,
+          splitOutput);
+    }
+  } testSettings[] = {
+      // With splitOutput=false, trailing misses should be folded into the
+      // current batch. With splitOutput=true, they are emitted separately.
+      {10, 100, 200, 10, false},
+      {10, 100, 200, 50, false},
+      {10, 100, 200, 2, false},
+      {1, 500, 1000, 10, false},
+      {1, 500, 1000, 50, false},
+      {10, 50, 200, 10, false},
+      // With no matches, all rows are misses.
+      {10, 100, 200, 0, false},
+      // 100% matches - no trailing misses exist.
+      {10, 100, 200, 100, false},
+      // splitOutput=true as comparison.
+      {10, 100, 200, 10, true},
+      {10, 100, 200, 50, true},
+      {10, 100, 200, 0, true},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    const auto probeVectors = generateProbeInput(
+        testData.numProbeBatches,
+        testData.numRowsPerProbeBatch,
+        1,
+        tableData,
+        pool_,
+        {"t0", "t1", "t2"},
+        GetParam().hasNullKeys,
+        {},
+        {},
+        testData.equalMatchPct);
+    std::vector<std::shared_ptr<TempFilePath>> probeFiles =
+        createProbeFiles(probeVectors);
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", {tableData.tableVectors});
+
+    const auto indexTable = TestIndexTable::create(
+        /*numEqualJoinKeys=*/3,
+        tableData.keyVectors,
+        tableData.valueVectors,
+        *pool());
+    const auto indexTableHandle = makeIndexTableHandle(
+        indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        makeScanOutputType({"u0", "u1", "u2", "u5"}),
+        makeIndexColumnHandles({"u0", "u1", "u2", "u5"}));
+
+    auto plan = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        /*filter=*/"",
+        /*hasMarker=*/false,
+        core::JoinType::kLeft,
+        {"t4", "u5"});
+    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+    queryBuilder.plan(plan)
+        .config(
+            core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
+            std::to_string(GetParam().numPrefetches))
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(testData.maxBatchRows))
+        .config(
+            core::QueryConfig::kPreferredOutputBatchBytes,
+            std::to_string(1ULL << 30))
+        .config(
+            core::QueryConfig::kIndexLookupJoinSplitOutput,
+            testData.splitOutput ? "true" : "false")
+        .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+        .serialExecution(GetParam().serialExecution)
+        .barrierExecution(GetParam().serialExecution);
+    if (GetParam().needsIndexSplit) {
+      queryBuilder.split(
+          indexScanNodeId_,
+          Split(
+              std::make_shared<TestIndexConnectorSplit>(
+                  kTestIndexConnectorName)));
+    }
+    const auto task = queryBuilder.assertResults(
+        "SELECT t.c4, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+
+    // Verify match column correctness for all cases.
+    const auto probeScanId = probeScanNodeId_;
+    auto planWithMatchColumn = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        /*filter=*/"",
+        /*hasMarker=*/true,
+        core::JoinType::kLeft,
+        {"t4", "u5"});
+    verifyResultWithMatchColumn(
+        plan,
+        probeScanId,
+        planWithMatchColumn,
+        probeScanNodeId_,
+        probeFiles,
+        GetParam().needsIndexSplit);
+  }
+}
+
 DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
   IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
