@@ -412,8 +412,8 @@ by combining user-specified <code class="docutils literal notranslate"><span cla
 framework is responsible for deterministic partitioning of the data and assigning unique
 <cite>spark.partition_id</cite> to each thread (in a deterministic way) .
 <code class="docutils literal notranslate"><span class="pre">seed</span></code> must be constant. NULL <code class="docutils literal notranslate"><span class="pre">seed</span></code> is identical to zero <code class="docutils literal notranslate"><span class="pre">seed</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>    <span class="o">--</span> <span class="mf">0.5488135024422883</span>
-<span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="mf">0.5488135024422883</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>    <span class="o">--</span> <span class="mf">0.7604953758285915</span>
+<span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="mf">0.7604953758285915</span>
 </pre></div>
 </div>
 </dd></dl>
