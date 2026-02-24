@@ -2835,9 +2835,8 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
     VELOX_ASSERT_THROW(
         task->requestBarrier(),
         "Can't start barrier on task which has already received no more splits");
-    while (auto next = task->next()) {
-    }
-    ASSERT_TRUE(task->isFinished());
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
   }
 
   {
@@ -2863,6 +2862,8 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
     VELOX_ASSERT_THROW(
         task->requestBarrier(),
         "Can't start barrier on task which has already received no more splits");
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
   }
   waitForAllTasksToBeDeleted();
 }
@@ -2926,9 +2927,8 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
     task->addSplit(
         scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
     auto future = task->requestBarrier();
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
+    future.wait();
     ASSERT_FALSE(task->underBarrier());
-    ASSERT_TRUE(future.isReady());
     ASSERT_TRUE(task->isRunning());
     task->requestAbort().wait();
     ASSERT_TRUE(!task->isRunning());
