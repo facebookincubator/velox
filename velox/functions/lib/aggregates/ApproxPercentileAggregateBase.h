@@ -347,7 +347,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   static constexpr int32_t kSparkDefaultAccuracy = 10000;
   double accuracy_{
       kAccuracyIsErrorBound ? kMissingNormalizedValue
-                        : static_cast<double>(kSparkDefaultAccuracy)};
+                            : static_cast<double>(kSparkDefaultAccuracy)};
 
   std::optional<Percentiles> percentiles_;
   DecodedVector decodedValue_;
