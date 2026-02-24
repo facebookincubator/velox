@@ -1792,6 +1792,69 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
+TEST_F(ParquetReaderTest, readTimeMillis) {
+  // Write TIME data using the parquet writer.
+  // The writer exports Velox TIME as Arrow time32 with milliseconds unit,
+  // which maps to Parquet TIME_MILLIS (INT32).
+  const auto rowType = ROW({"time_col"}, {TIME()});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {makeNullableFlatVector<int64_t>(
+          {1, 1'000, 3'600'000, std::nullopt, 43'200'000, 86'399'999},
+          TIME())});
+  auto sink = write(data);
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 6ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_TRUE(col0->type()->isTime());
+
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
+  const auto rowType =
+      ROW({"id", "time_col", "name"}, {INTEGER(), TIME(), VARCHAR()});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>(
+              {0, 1'000, 3'600'000, 43'200'000, 86'399'999}, TIME()),
+          makeFlatVector<StringView>({"a", "b", "c", "d", "e"}),
+      });
+
+  auto sink = write(data);
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 5ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 3ULL);
+  EXPECT_EQ(type->childAt(0)->type()->kind(), TypeKind::INTEGER);
+  EXPECT_TRUE(type->childAt(1)->type()->isTime());
+  EXPECT_EQ(type->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+}
+
 // Comprehensive test matrix covering all combinations:
 // - Nulls: No nulls, With nulls
 // - Dictionary: Enabled, Disabled
