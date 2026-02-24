@@ -22,6 +22,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h" // @manual
@@ -30,7 +31,6 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -109,6 +109,7 @@ DEFINE_string(
 using namespace facebook::velox::tests::utils;
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 using fuzzer::coinToss;
@@ -157,7 +158,7 @@ class MemoryArbitrationFuzzer {
     return boost::random::uniform_int_distribution<int32_t>(min, max)(rng_);
   }
 
-  std::shared_ptr<test::TempDirectoryPath> maybeGenerateFaultySpillDirectory();
+  std::shared_ptr<TempDirectoryPath> maybeGenerateFaultySpillDirectory();
 
   // Returns a list of randomly generated key types for join and aggregation.
   std::vector<TypePtr> generateKeyTypes(int32_t numKeys);
@@ -876,12 +877,12 @@ std::string MemoryArbitrationFuzzer::extractQueryIdFromSpillPath(
 // Stats that keeps track of per thread execution status in verify()
 folly::ConcurrentHashMap<std::string, folly::Unit> spillFsTaskSet;
 
-std::shared_ptr<test::TempDirectoryPath>
+std::shared_ptr<TempDirectoryPath>
 MemoryArbitrationFuzzer::maybeGenerateFaultySpillDirectory() {
   FuzzerGenerator fsRng(rng_());
   const auto injectFsFault = coinToss(fsRng, FLAGS_spill_faulty_fs_ratio);
   if (!injectFsFault) {
-    return exec::test::TempDirectoryPath::create(false);
+    return TempDirectoryPath::create(false);
   }
   using OpType = FaultFileOperation::Type;
   static const std::vector<std::unordered_set<OpType>> opTypes{
@@ -892,7 +893,7 @@ MemoryArbitrationFuzzer::maybeGenerateFaultySpillDirectory() {
       {OpType::kRead, OpType::kWrite},
       {OpType::kReadv, OpType::kWrite}};
 
-  const auto directory = exec::test::TempDirectoryPath::create(true);
+  const auto directory = TempDirectoryPath::create(true);
   auto faultyFileSystem = std::dynamic_pointer_cast<FaultyFileSystem>(
       filesystems::getFileSystem(directory->getPath(), nullptr));
   faultyFileSystem->setFileInjectionHook(
@@ -918,7 +919,7 @@ MemoryArbitrationFuzzer::maybeGenerateFaultySpillDirectory() {
 
 void MemoryArbitrationFuzzer::verify() {
   auto spillDirectory = maybeGenerateFaultySpillDirectory();
-  const auto tableScanDir = exec::test::TempDirectoryPath::create(false);
+  const auto tableScanDir = TempDirectoryPath::create(false);
 
   auto plans = allPlans(tableScanDir->getPath());
 

@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/SpillStats.h"
+#include "velox/exec/SpillStats.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
-using namespace facebook::velox::common;
+using namespace facebook::velox::exec;
 
 TEST(SpillStatsTest, spillStats) {
   SpillStats stats1;

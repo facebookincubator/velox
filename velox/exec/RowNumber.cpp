@@ -15,6 +15,7 @@
  */
 #include "velox/exec/RowNumber.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
@@ -28,9 +29,9 @@ RowNumber::RowNumber(
           rowNumberNode->outputType(),
           operatorId,
           rowNumberNode->id(),
-          "RowNumber",
+          OperatorType::kRowNumber,
           rowNumberNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kRowNumber)
               : std::nullopt),
       limit_{rowNumberNode->limit()},
       generateRowNumber_{rowNumberNode->generateRowNumber()} {
@@ -388,7 +389,8 @@ void RowNumber::reclaim(
                  << spillConfig_->maxSpillLevel
                  << ", and abandon spilling for memory pool: "
                  << pool()->name();
-    ++spillStats_->wlock()->spillMaxLevelExceededCount;
+    spillStats_->spillMaxLevelExceededCount.fetch_add(
+        1, std::memory_order_relaxed);
     return;
   }
 
@@ -408,8 +410,7 @@ SpillPartitionIdSet RowNumber::spillHashTable() {
       tableType,
       spillPartitionBits_,
       &spillConfig,
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 
   hashTableSpiller->spill();
   hashTableSpiller->finishSpill(spillHashTablePartitionSet_);
@@ -430,8 +431,7 @@ void RowNumber::setupInputSpiller(
       restoringPartitionId_,
       spillPartitionBits_,
       &spillConfig,
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 
   const auto& hashers = table_->hashers();
 
@@ -546,8 +546,7 @@ RowNumberHashTableSpiller::RowNumberHashTableSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    filesystems::File::IoStats* spillFsStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -557,8 +556,7 @@ RowNumberHashTableSpiller::RowNumberHashTableSpiller(
           spillConfig->maxSpillRunRows,
           parentId,
           spillConfig,
-          spillStats,
-          spillFsStats) {}
+          spillStats) {}
 
 void RowNumberHashTableSpiller::spill() {
   SpillerBase::spill(nullptr);

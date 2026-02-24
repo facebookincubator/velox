@@ -18,6 +18,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -118,9 +119,9 @@ HashProbe::HashProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "HashProbe",
+          OperatorType::kHashProbe,
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
@@ -253,8 +254,7 @@ void HashProbe::maybeSetupInputSpiller(
       restoringPartitionId_,
       HashBitRange(bitOffset, bitOffset + spillConfig()->numPartitionBits),
       spillConfig(),
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 
   // Set the spill partitions to the corresponding ones at the build side. We
   // only spill the seen partitions from the build side. For the ones not seen
@@ -399,7 +399,8 @@ void HashProbe::pushdownDynamicFilters() {
               checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
                   filter.get());
           addRuntimeStat(
-              "bloomFilterSize", RuntimeCounter(bloomFilter->blocksByteSize()));
+              std::string(HashProbe::kBloomFilterSize),
+              RuntimeCounter(bloomFilter->blocksByteSize()));
         }
         dynamicFiltersProducedOnChannels_.insert(sourceChannel);
         for (auto* peer : findPeerOperators()) {
@@ -1122,7 +1123,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   const auto inputSize = input_->size();
 
   if (replacedWithDynamicFilter_) {
-    addRuntimeStat("replacedWithDynamicFilterRows", RuntimeCounter(inputSize));
+    addRuntimeStat(
+        std::string(HashProbe::kReplacedWithDynamicFilterRows),
+        RuntimeCounter(inputSize));
     auto output = Operator::fillOutput(inputSize, nullptr);
     input_ = nullptr;
     return output;
@@ -1744,13 +1747,14 @@ void HashProbe::noMoreInputInternal() {
         spillInputPartitionIds_.size(),
         inputSpiller_->state().spilledPartitionIdSet().size());
     inputSpiller_->finishSpill(inputSpillPartitionSet_);
-    VELOX_CHECK_EQ(spillStats_->rlock()->spillSortTimeNanos, 0);
+    VELOX_CHECK_EQ(
+        spillStats_->spillSortTimeNanos.load(std::memory_order_relaxed), 0);
   }
 
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
 
-  // Reset flags about outputing build-side rows in parallel.
+  // Reset flags about outputting build-side rows in parallel.
   buildSideOutputRowContainerId_ = -1;
 
   // NOTE: if 'canSpill()' is false and 'outputBuildRowsInParallel' is
@@ -1759,7 +1763,7 @@ void HashProbe::noMoreInputInternal() {
   // needs to wait and might expect spill gets triggered by the other probe
   // operators, or there is previously spilled table partition(s) that needs to
   // restore. If 'outputBuildRowsInParallel', it needs to wait to all drivers
-  // start outputing build-side rows in parallel only after all drivers finish
+  // start outputting build-side rows in parallel only after all drivers finish
   // probe processing.
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
@@ -1784,7 +1788,7 @@ void HashProbe::noMoreInputInternal() {
   lastProber_ = true;
   joinBridge_->resetUnclaimedRowContainerId();
   // If 'outputBuildRowsInParallel' is true, wake up all peers to start
-  // outputing build-side rows in parallel. Otherwise, only let the last prober
+  // outputting build-side rows in parallel. Otherwise, only let the last prober
   // proceed.
   if (outputBuildRowsInParallel) {
     wakeupPeerOperators();
@@ -2038,8 +2042,7 @@ void HashProbe::spillOutput() {
       std::nullopt,
       HashBitRange{},
       spillConfig(),
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
   outputSpiller->setPartitionsSpilled({SpillPartitionId(0)});
 
   RowVectorPtr output{nullptr};
@@ -2107,7 +2110,8 @@ void HashProbe::checkMaxSpillLevel(
           << "Exceeded spill level limit: " << config->maxSpillLevel
           << ", and disable spilling for memory pool: " << pool()->name();
       exceededMaxSpillLevelLimit_ = true;
-      ++spillStats_->wlock()->spillMaxLevelExceededCount;
+      spillStats_->spillMaxLevelExceededCount.fetch_add(
+          1, std::memory_order_relaxed);
       return;
     }
   }

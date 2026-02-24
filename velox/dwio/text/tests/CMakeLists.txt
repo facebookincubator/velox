@@ -17,7 +17,7 @@ set(
   velox_dwio_common_test_utils
   velox_vector_test_lib
   velox_exec_test_lib
-  velox_temp_path
+  velox_test_util
   GTest::gtest
   GTest::gtest_main
   GTest::gmock

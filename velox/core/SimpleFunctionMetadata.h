@@ -1054,17 +1054,6 @@ class UDFHolder {
     }
   }
 
-  // Overload for backward compatibility with callers that don't pass
-  // MemoryPool (e.g., Koski batch functions).
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      const typename exec_resolver<TArgs>::in_type*... constantArgs) {
-    if constexpr (udf_has_initialize_without_pool) {
-      return instance_.initialize(inputTypes, config, constantArgs...);
-    }
-  }
-
   FOLLY_ALWAYS_INLINE Status call(
       exec_return_type& out,
       bool& notNull,

@@ -19,6 +19,7 @@
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/HashTableCache.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
@@ -56,9 +57,9 @@ HashBuild::HashBuild(
           nullptr,
           operatorId,
           joinNode->id(),
-          "HashBuild",
+          OperatorType::kHashBuild,
           joinNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashBuild)
               : std::nullopt),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
@@ -175,7 +176,7 @@ bool HashBuild::getHashTableFromCache() {
   if (!cacheEntry_->buildComplete) {
     // Cache miss - we need to build the table.
     stats_.wlock()->addRuntimeStat(
-        BaseHashTable::kHashTableCacheMiss, RuntimeCounter(1));
+        std::string(BaseHashTable::kHashTableCacheMiss), RuntimeCounter(1));
     return false;
   }
 
@@ -187,7 +188,7 @@ bool HashBuild::getHashTableFromCache() {
       cacheEntry_->table, {}, cacheEntry_->hasNullKeys, nullptr);
   // Record cache hit metric.
   stats_.wlock()->addRuntimeStat(
-      BaseHashTable::kHashTableCacheHit, RuntimeCounter(1));
+      std::string(BaseHashTable::kHashTableCacheHit), RuntimeCounter(1));
   return true;
 }
 
@@ -318,7 +319,8 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       LOG(WARNING) << "Exceeded spill level limit: " << config->maxSpillLevel
                    << ", and disable spilling for memory pool: "
                    << pool()->name();
-      ++spillStats_->wlock()->spillMaxLevelExceededCount;
+      spillStats_->spillMaxLevelExceededCount.fetch_add(
+          1, std::memory_order_relaxed);
       exceededMaxSpillLevelLimit_ = true;
       return;
     }
@@ -333,8 +335,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       HashBitRange(
           startPartitionBit, startPartitionBit + config->numPartitionBits),
       config,
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
   spillInputIndicesBuffers_.resize(numPartitions);
@@ -890,7 +891,7 @@ bool HashBuild::finishHashBuild() {
                                : nullptr);
   }
   stats_.wlock()->addRuntimeStat(
-      BaseHashTable::kBuildWallNanos,
+      std::string(BaseHashTable::kBuildWallNanos),
       RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
 
   addRuntimeStats();
@@ -1048,20 +1049,20 @@ void HashBuild::addRuntimeStats() {
   for (const auto& timing : table_->parallelJoinBuildStats().partitionTimings) {
     lockedStats->getOutputTiming.add(timing);
     lockedStats->addRuntimeStat(
-        BaseHashTable::kParallelJoinPartitionWallNanos,
+        std::string(BaseHashTable::kParallelJoinPartitionWallNanos),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
     lockedStats->addRuntimeStat(
-        BaseHashTable::kParallelJoinPartitionCpuNanos,
+        std::string(BaseHashTable::kParallelJoinPartitionCpuNanos),
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
   }
 
   for (const auto& timing : table_->parallelJoinBuildStats().buildTimings) {
     lockedStats->getOutputTiming.add(timing);
     lockedStats->addRuntimeStat(
-        BaseHashTable::kParallelJoinBuildWallNanos,
+        std::string(BaseHashTable::kParallelJoinBuildWallNanos),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
     lockedStats->addRuntimeStat(
-        BaseHashTable::kParallelJoinBuildCpuNanos,
+        std::string(BaseHashTable::kParallelJoinBuildCpuNanos),
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
   }
 
@@ -1070,12 +1071,13 @@ void HashBuild::addRuntimeStats() {
     lockedStats->getOutputTiming.add(timing);
     if (timing.wallNanos > 0) {
       lockedStats->addRuntimeStat(
-          BaseHashTable::kParallelJoinBloomFilterPartitionWallNanos,
+          std::string(
+              BaseHashTable::kParallelJoinBloomFilterPartitionWallNanos),
           RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
     }
     if (timing.cpuNanos > 0) {
       lockedStats->addRuntimeStat(
-          BaseHashTable::kParallelJoinBloomFilterPartitionCpuNanos,
+          std::string(BaseHashTable::kParallelJoinBloomFilterPartitionCpuNanos),
           RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
     }
   }
@@ -1085,12 +1087,12 @@ void HashBuild::addRuntimeStats() {
     lockedStats->getOutputTiming.add(timing);
     if (timing.wallNanos > 0) {
       lockedStats->addRuntimeStat(
-          BaseHashTable::kParallelJoinBloomFilterBuildWallNanos,
+          std::string(BaseHashTable::kParallelJoinBloomFilterBuildWallNanos),
           RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos));
     }
     if (timing.cpuNanos > 0) {
       lockedStats->addRuntimeStat(
-          BaseHashTable::kParallelJoinBloomFilterBuildCpuNanos,
+          std::string(BaseHashTable::kParallelJoinBloomFilterBuildCpuNanos),
           RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos));
     }
   }
@@ -1107,27 +1109,27 @@ void HashBuild::addRuntimeStats() {
     }
   }
 
-  lockedStats->runtimeStats[BaseHashTable::kCapacity] =
+  lockedStats->runtimeStats[std::string(BaseHashTable::kCapacity)] =
       RuntimeMetric(hashTableStats.capacity);
-  lockedStats->runtimeStats[BaseHashTable::kNumRehashes] =
+  lockedStats->runtimeStats[std::string(BaseHashTable::kNumRehashes)] =
       RuntimeMetric(hashTableStats.numRehashes);
-  lockedStats->runtimeStats[BaseHashTable::kNumDistinct] =
+  lockedStats->runtimeStats[std::string(BaseHashTable::kNumDistinct)] =
       RuntimeMetric(hashTableStats.numDistinct);
   if (hashTableStats.numTombstones != 0) {
-    lockedStats->runtimeStats[BaseHashTable::kNumTombstones] =
+    lockedStats->runtimeStats[std::string(BaseHashTable::kNumTombstones)] =
         RuntimeMetric(hashTableStats.numTombstones);
   }
 
   // Add max spilling level stats if spilling has been triggered.
   if (spiller_ != nullptr && spiller_->spillTriggered()) {
     lockedStats->addRuntimeStat(
-        "maxSpillLevel",
+        std::string(HashBuild::kMaxSpillLevel),
         RuntimeCounter(
             spillConfig()->spillLevel(spiller_->hashBits().begin())));
   }
 
   lockedStats->addRuntimeStat(
-      BaseHashTable::kVectorHasherMergeCpuNanos,
+      std::string(BaseHashTable::kVectorHasherMergeCpuNanos),
       RuntimeCounter(
           table_->vectorHasherMergeTiming().cpuNanos,
           RuntimeCounter::Unit::kNanos));
@@ -1380,8 +1382,7 @@ HashBuildSpiller::HashBuildSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats,
-    filesystems::File::IoStats* spillFsStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -1391,8 +1392,7 @@ HashBuildSpiller::HashBuildSpiller(
           spillConfig->maxSpillRunRows,
           parentId,
           spillConfig,
-          spillStats,
-          spillFsStats),
+          spillStats),
       spillProbeFlag_(needRightSideJoin(joinType)) {
   VELOX_CHECK(container_->accumulators().empty());
 }
@@ -1448,7 +1448,8 @@ void HashBuild::abandonHashBuildDedup() {
   // The hash table is no longer directly constructed in addInput. The data
   // that was previously inserted into the hash table is already in the
   // RowContainer.
-  addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
+  addRuntimeStat(
+      std::string(HashBuild::kAbandonBuildNoDupHash), RuntimeCounter(1));
   abandonHashBuildDedup_ = true;
   table_->setAllowDuplicates(true);
   lookup_.reset();

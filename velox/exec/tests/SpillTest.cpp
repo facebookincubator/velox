@@ -21,10 +21,10 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -33,7 +33,7 @@ using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::filesystems;
-using facebook::velox::exec::test::TempDirectoryPath;
+using namespace facebook::velox::common::testutil;
 
 namespace {
 static const int64_t kGB = 1'000'000'000;
@@ -137,7 +137,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
 
   void SetUp() override {
     allocator_ = memory::memoryManager()->allocator();
-    tempDir_ = exec::test::TempDirectoryPath::create();
+    tempDir_ = TempDirectoryPath::create();
     filesystems::registerLocalFileSystem();
     rng_.seed(1);
     compressionKind_ = TestParam{GetParam()}.compressionKind;
@@ -237,7 +237,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     batchesByPartition_.clear();
     values_.clear();
     runtimeStats_.clear();
-    spillStats_.wlock()->reset();
+    spillStats_.reset();
 
     fileNamePrefix_ = "test";
     values_.resize(numBatches * numRowsPerBatch);
@@ -283,7 +283,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     // vectors have the ith element = i * 'numBatches' + batch, where batch is
     // the batch number of the vector in the partition. When read back, both
     // partitions produce an ascending sequence of integers without gaps.
-    spillStats_.wlock()->reset();
+    spillStats_.reset();
     const std::optional<common::PrefixSortConfig> prefixSortConfig =
         enablePrefixSort_
         ? std::optional<common::PrefixSortConfig>(common::PrefixSortConfig())
@@ -303,8 +303,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
         pool(),
         &spillStats_);
     ASSERT_EQ(targetFileSize, state_->targetFileSize());
-    ASSERT_EQ(spillStats_.rlock()->spilledPartitions, 0);
-    ASSERT_EQ(spillStats_.rlock()->spilledPartitions, 0);
+    ASSERT_EQ(spillStats_.spilledPartitions, 0);
+    ASSERT_EQ(spillStats_.spilledPartitions, 0);
     ASSERT_TRUE(state_->spilledPartitionIdSet().empty());
     ASSERT_EQ(compressionKind_, state_->compressionKind());
     ASSERT_EQ(state_->sortingKeys().size(), numSortKeys);
@@ -370,7 +370,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
             partitionId));
       }
     }
-    ASSERT_EQ(spillStats_.rlock()->spilledPartitions, partitionIds.size());
+    ASSERT_EQ(spillStats_.spilledPartitions, partitionIds.size());
     for (const auto& partitionId : partitionIds) {
       ASSERT_TRUE(state_->spilledPartitionIdSet().contains(partitionId));
     }
@@ -384,10 +384,9 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     if (targetFileSize > 1) {
       expectedFiles /= 2;
     }
-    ASSERT_EQ(spillStats_.rlock()->spilledFiles, expectedFiles);
+    ASSERT_EQ(spillStats_.spilledFiles, expectedFiles);
     ASSERT_GT(
-        spillStats_.rlock()->spilledBytes,
-        numPartitions * numBatches * sizeof(int64_t));
+        spillStats_.spilledBytes, numPartitions * numBatches * sizeof(int64_t));
     int numFinishedFiles{0};
     for (const auto& partitionId : partitionIds) {
       numFinishedFiles += state_->numFinishedFiles(partitionId);
@@ -441,7 +440,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
             compareFlags.empty() ? true : compareFlags[0].nullsFirst,
             compareFlags.empty() ? true : compareFlags[0].ascending));
 
-    const auto prevGStats = common::globalSpillStats();
+    const auto prevGStats = globalSpillStats();
 
     SpillPartitionIdSet partitionIds = genPartitionIdSet(numPartitions);
 
@@ -453,7 +452,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
         numRowsPerBatch,
         numDuplicates,
         compareFlags);
-    const auto stats = spillStats_.copy();
+    const auto& stats = spillStats_;
     ASSERT_EQ(stats.spilledPartitions, numPartitions);
     ASSERT_EQ(stats.spilledFiles, expectedNumSpilledFiles);
     ASSERT_GT(stats.spilledBytes, 0);
@@ -466,7 +465,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     // NOTE: the following stats are not collected by spill state.
     ASSERT_EQ(stats.spillFillTimeNanos, 0);
     ASSERT_EQ(stats.spillSortTimeNanos, 0);
-    const auto newGStats = common::globalSpillStats();
+    const auto newGStats = globalSpillStats();
     ASSERT_EQ(
         prevGStats.spilledPartitions + stats.spilledPartitions,
         newGStats.spilledPartitions);
@@ -529,8 +528,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
       spillConfig.fileCreateConfig = "";
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
-          spillPartition.createOrderedReader(
-              spillConfig, pool(), &spillStats_, /*fsStats=*/nullptr);
+          spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -569,7 +567,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       }
     }
 
-    const auto finalStats = spillStats_.copy();
+    const auto& finalStats = spillStats_;
     ASSERT_EQ(finalStats.spillReadBytes, finalStats.spilledBytes);
     ASSERT_GT(finalStats.spillReads, 0);
     ASSERT_GT(finalStats.spillReadTimeNanos, 0);
@@ -677,7 +675,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
   folly::F14FastMap<SpillPartitionId, std::vector<RowVectorPtr>>
       batchesByPartition_;
   std::string fileNamePrefix_;
-  folly::Synchronized<common::SpillStats> spillStats_;
+  exec::SpillStats spillStats_;
   std::unique_ptr<SpillState> state_;
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
   std::unique_ptr<TestRuntimeStatWriter> statWriter_;
@@ -706,7 +704,7 @@ TEST_P(SpillTest, spillState) {
 TEST_P(SpillTest, spillTimestamp) {
   // Verify that timestamp type retains it nanosecond precision when spilled and
   // read back.
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto tempDirectory = TempDirectoryPath::create();
   std::vector<CompareFlags> emptyCompareFlags;
   const std::string spillPath = tempDirectory->getPath() + "/test";
   std::vector<Timestamp> timeValues = {
@@ -750,12 +748,12 @@ TEST_P(SpillTest, spillTimestamp) {
   spillConfig.writeBufferSize = 1 << 20;
   spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
   spillConfig.fileCreateConfig = "";
-  auto merge = spillPartition.createOrderedReader(
-      spillConfig, pool(), &spillStats_, /*fsStats=*/nullptr);
+  auto merge =
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(
-      spillPartition.createOrderedReader(
-          spillConfig, pool(), &spillStats_, /*fsStats=*/nullptr) == nullptr);
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_) ==
+      nullptr);
   for (auto i = 0; i < timeValues.size(); ++i) {
     auto* stream = merge->next();
     ASSERT_NE(stream, nullptr);
@@ -1511,7 +1509,7 @@ TEST_P(SpillTest, validatePerSpillWriteSize) {
     }
   };
 
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto tempDirectory = TempDirectoryPath::create();
   SpillState state(
       [&]() -> const std::string& { return tempDirectory->getPath(); },
       updateSpilledBytesCb_,
@@ -1535,7 +1533,7 @@ TEST_P(SpillTest, validatePerSpillWriteSize) {
 
 namespace {
 SpillFiles makeFakeSpillFiles(int32_t numFiles) {
-  auto tempDir = exec::test::TempDirectoryPath::create();
+  auto tempDir = TempDirectoryPath::create();
   static uint32_t fakeFileId{0};
   SpillFiles files;
   files.reserve(numFiles);

@@ -58,6 +58,17 @@ Map Functions
         SELECT map_append(MAP(ARRAY[1], ARRAY[10]), ARRAY[2, 3], ARRAY[null, 30]); -- {1 -> 10, 2 -> null, 3 -> 30}
         SELECT map_append(MAP(ARRAY[1], ARRAY[10]), ARRAY[], ARRAY[]); -- {1 -> 10}
 
+.. function:: map_update(map(K,V), array(K), array(V)) -> map(K,V)
+
+    Returns a map with values updated for the specified keys. If a key exists in the input map, its value is updated in place (preserving original order). If a key doesn't exist, it is added to the end of the map.
+    Keys and values arrays must have the same length. Duplicate keys in the keys array are not allowed.
+    Null keys are ignored. Null values are preserved in the output map. For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal. ::
+
+        SELECT map_update(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), ARRAY[2, 4], ARRAY[200, 400]); -- {1 -> 10, 2 -> 200, 3 -> 30, 4 -> 400}
+        SELECT map_update(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), ARRAY['a', 'c'], ARRAY[100, 300]); -- {'a' -> 100, 'b' -> 2, 'c' -> 300}
+        SELECT map_update(MAP(ARRAY[1], ARRAY[10]), ARRAY[1, 2], ARRAY[null, 20]); -- {1 -> null, 2 -> 20}
+        SELECT map_update(MAP(ARRAY[1, 2], ARRAY[10, 20]), ARRAY[], ARRAY[]); -- {1 -> 10, 2 -> 20}
+
 .. function:: map_concat(map1(K,V), map2(K,V), ..., mapN(K,V)) -> map(K,V)
 
    Returns the union of all the given maps. If a key is found in multiple given maps,
@@ -95,6 +106,19 @@ Map Functions
         SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 4, 5])); -- {a=0.1, b=0.4, c=0.5}
         SELECT map_normalize(map(array['a', 'b', 'c', 'd'], array[1, null, 4, 5])); -- {a=0.1, b=null, c=0.4, d=0.5}
         SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 0, -1])); -- {a=Infinity, b=NaN, c=-Infinity}
+
+.. function:: map_values_in_range(map(K,V), lower_bound, upper_bound) -> map(K,V)
+
+    Returns a map containing only the entries from the input map whose values
+    fall within the specified range [lower_bound, upper_bound] (inclusive).
+    Entries with values less than lower_bound or greater than upper_bound are removed.
+    Entries with null values are preserved in the output.
+    V must be a numeric type (integer, bigint, real, or double). ::
+
+        SELECT map_values_in_range(MAP(ARRAY[1, 2, 3, 4], ARRAY[10, 20, 30, 40]), 15, 35); -- {2 -> 20, 3 -> 30}
+        SELECT map_values_in_range(MAP(ARRAY['a', 'b', 'c'], ARRAY[1.5, 2.5, 3.5]), 2.0, 3.0); -- {b -> 2.5}
+        SELECT map_values_in_range(MAP(ARRAY[1, 2], ARRAY[null, 50]), 0, 100); -- {1 -> null, 2 -> 50}
+        SELECT map_values_in_range(MAP(ARRAY[1, 2, 3], ARRAY[5, 50, 500]), 10, 100); -- {2 -> 50}
 
 .. function:: map_remove_null_values(map(K,V)) -> map(K,V)
 

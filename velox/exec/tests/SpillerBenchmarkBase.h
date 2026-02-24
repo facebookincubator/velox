@@ -19,8 +19,8 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Spiller.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -37,6 +37,8 @@ DECLARE_uint64(spiller_benchmark_min_spill_run_size);
 DECLARE_uint64(spiller_benchmark_write_buffer_size);
 
 namespace facebook::velox::exec::test {
+
+/// This test measures
 /// This test measures the spill input overhead in spill join & probe.
 class SpillerBenchmarkBase {
  public:
@@ -65,12 +67,12 @@ class SpillerBenchmarkBase {
   std::unique_ptr<VectorFuzzer> vectorFuzzer_;
   std::vector<RowVectorPtr> rowVectors_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDir_;
+  std::shared_ptr<velox::common::testutil::TempDirectoryPath> tempDir_;
   std::string spillDir_;
   std::shared_ptr<filesystems::FileSystem> fs_;
   std::unique_ptr<SpillerBase> spiller_;
   // Stats.
   uint64_t executionTimeUs_{0};
-  folly::Synchronized<common::SpillStats> spillStats_;
+  exec::SpillStats spillStats_;
 };
 } // namespace facebook::velox::exec::test

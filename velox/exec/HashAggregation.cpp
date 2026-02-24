@@ -16,6 +16,7 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -32,10 +33,15 @@ HashAggregation::HashAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation",
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation,
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    aggregationNode->step() ==
+                            core::AggregationNode::Step::kPartial
+                        ? OperatorType::kPartialAggregation
+                        : OperatorType::kAggregation)
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
@@ -114,8 +120,7 @@ void HashAggregation::initialize() {
       &nonReclaimableSection_,
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),
-      spillStats_.get(),
-      spillFsStats());
+      spillStats_.get());
 
   aggregationNode_.reset();
 }
@@ -236,13 +241,13 @@ void HashAggregation::updateRuntimeStats() {
     }
   }
 
-  runtimeStats[BaseHashTable::kCapacity] =
+  runtimeStats[std::string(BaseHashTable::kCapacity)] =
       RuntimeMetric(hashTableStats.capacity);
-  runtimeStats[BaseHashTable::kNumRehashes] =
+  runtimeStats[std::string(BaseHashTable::kNumRehashes)] =
       RuntimeMetric(hashTableStats.numRehashes);
-  runtimeStats[BaseHashTable::kNumDistinct] =
+  runtimeStats[std::string(BaseHashTable::kNumDistinct)] =
       RuntimeMetric(hashTableStats.numDistinct);
-  runtimeStats[BaseHashTable::kNumTombstones] =
+  runtimeStats[std::string(BaseHashTable::kNumTombstones)] =
       RuntimeMetric(hashTableStats.numTombstones);
 }
 
@@ -267,10 +272,13 @@ void HashAggregation::resetPartialOutputIfNeed() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "flushRowCount", RuntimeCounter(numOutputRows_));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
+        std::string(HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(static_cast<int64_t>(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
@@ -294,7 +302,9 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat("abandonedPartialAggregation", RuntimeCounter(1));
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregation),
+        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }

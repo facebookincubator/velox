@@ -69,7 +69,7 @@ std::unique_ptr<dwio::common::FileSink> createHiveFileSink(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     memory::MemoryPool* sinkPool,
     io::IoStatistics* ioStats,
-    filesystems::File::IoStats* fileSystemStats) {
+    IoStats* fileSystemStats) {
   return dwio::common::FileSink::create(
       path,
       {
@@ -524,7 +524,7 @@ HiveDataSink::HiveDataSink(
       partitionKeyAsLowerCase_(hiveConfig_->isPartitionPathAsLowerCase(
           connectorQueryCtx_->sessionProperties())),
       fileNameGenerator_(insertTableHandle_->fileNameGenerator()) {
-  fileSystemStats_ = std::make_unique<filesystems::File::IoStats>();
+  fileSystemStats_ = std::make_unique<IoStats>();
 
   if (isBucketed()) {
     VELOX_USER_CHECK_LT(
@@ -621,6 +621,7 @@ void HiveDataSink::write(size_t index, RowVectorPtr input) {
   writers_[index]->write(dataInput);
   writerInfo_[index]->inputSizeInBytes += dataInput->estimateFlatSize();
   writerInfo_[index]->numWrittenRows += dataInput->size();
+  writerInfo_[index]->currentFileWrittenRows += dataInput->size();
 
   // File rotation is not supported for bucketed tables (require one file per
   // bucket with predictable name) or sorted writes (SortingWriter not
@@ -642,12 +643,7 @@ uint64_t HiveDataSink::getCurrentFileBytes(size_t writerIndex) const {
   const auto baselineBytes = writerInfo_[writerIndex]->cumulativeWrittenBytes;
   // Sanity check: total should always be >= baseline since ioStats is
   // never reset and cumulative is a snapshot of rawBytesWritten at rotation.
-  VELOX_DCHECK_GE(
-      totalBytes,
-      baselineBytes,
-      "rawBytesWritten ({}) < cumulativeWrittenBytes ({})",
-      totalBytes,
-      baselineBytes);
+  VELOX_DCHECK_GE(totalBytes, baselineBytes);
   return totalBytes - baselineBytes;
 }
 
@@ -665,6 +661,9 @@ void HiveDataSink::finalizeWriterFile(size_t index) {
   fileInfo.writeFileName = info->currentWriteFileName;
   fileInfo.targetFileName = info->currentTargetFileName;
   fileInfo.fileSize = currentFileBytes;
+  fileInfo.numRows = info->currentFileWrittenRows;
+  // Reset for next file.
+  info->currentFileWrittenRows = 0;
   info->writtenFiles.push_back(std::move(fileInfo));
 
   // Update cumulative stats as a snapshot of total stats so far.
@@ -777,9 +776,8 @@ DataSink::Stats HiveDataSink::stats() const {
     const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
     stats.numWrittenFiles += info->writtenFiles.size();
-    const auto spillStats = info->spillStats->rlock();
-    if (!spillStats->empty()) {
-      stats.spillStats += *spillStats;
+    if (!info->spillStats->empty()) {
+      stats.spillStats += *info->spillStats;
     }
   }
   return stats;
