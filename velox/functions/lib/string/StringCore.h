@@ -314,8 +314,53 @@ cappedUnicodeImpl(const char* input, size_t size, int64_t maxChars) {
   size_t position = 0;
   int64_t numChars = 0;
 
-  // Fast path for tiny ASCII strings to avoid extra overhead.
-  if (size < 16) {
+  if (size >= 16) {
+    // Use SIMD to process the string in blocks of the native register width.
+    constexpr size_t kBatchSize = xsimd::batch<uint8_t>::size;
+    const auto highBitMask = xsimd::broadcast<uint8_t>(0x80);
+    const auto continuationMask = xsimd::broadcast<uint8_t>(0xc0);
+
+    while (position + kBatchSize <= size && numChars < maxChars) {
+      auto batch = xsimd::batch<uint8_t>::load_unaligned(
+          reinterpret_cast<const uint8_t*>(input + position));
+
+      // Fast path for pure ASCII blocks.
+      if (LIKELY(!xsimd::any(batch >= highBitMask))) {
+        const int64_t jump =
+            std::min(static_cast<int64_t>(kBatchSize), maxChars - numChars);
+        position += jump;
+        numChars += jump;
+        continue;
+      }
+
+      // Mixed UTF-8: Count character starts (bytes where (byte & 0xc0) != 0x80)
+      const auto isCharStart = (batch & continuationMask) != highBitMask;
+      uint32_t mask = static_cast<uint32_t>(simd::toBitMask(isCharStart));
+      int32_t countInBlock = __builtin_popcount(mask);
+
+      if (numChars + countInBlock < maxChars) {
+        numChars += countInBlock;
+        position += kBatchSize;
+      } else {
+        // We hit maxChars within this block.
+        if constexpr (kReturnBytes) {
+          int32_t needed = maxChars - numChars;
+          while (mask) {
+            if (--needed == 0) {
+              const int32_t bit = __builtin_ctz(mask);
+              uint8_t startByte = static_cast<uint8_t>(input[position + bit]);
+              return position + bit + getUtf8CharLength(startByte);
+            }
+            mask &= (mask - 1);
+          }
+          VELOX_UNREACHABLE();
+        } else {
+          return maxChars;
+        }
+      }
+    }
+  } else {
+    // Small-size path to avoid SIMD setup and reduce UTF-8 overhead.
     bool allAscii = true;
     for (size_t i = 0; i < size; ++i) {
       if (static_cast<uint8_t>(input[i]) & 0x80) {
@@ -325,51 +370,6 @@ cappedUnicodeImpl(const char* input, size_t size, int64_t maxChars) {
     }
     if (allAscii) {
       return std::min<int64_t>(maxChars, static_cast<int64_t>(size));
-    }
-  }
-
-  // Use SIMD to process the string in blocks of the native register width.
-  constexpr size_t kBatchSize = xsimd::batch<uint8_t>::size;
-  const auto highBitMask = xsimd::broadcast<uint8_t>(0x80);
-  const auto continuationMask = xsimd::broadcast<uint8_t>(0xc0);
-
-  while (position + kBatchSize <= size && numChars < maxChars) {
-    auto batch = xsimd::batch<uint8_t>::load_unaligned(
-        reinterpret_cast<const uint8_t*>(input + position));
-
-    // Fast path for pure ASCII blocks.
-    if (LIKELY(!xsimd::any(batch >= highBitMask))) {
-      const int64_t jump =
-          std::min(static_cast<int64_t>(kBatchSize), maxChars - numChars);
-      position += jump;
-      numChars += jump;
-      continue;
-    }
-
-    // Mixed UTF-8: Count character starts (bytes where (byte & 0xc0) != 0x80)
-    const auto isCharStart = (batch & continuationMask) != highBitMask;
-    uint32_t mask = static_cast<uint32_t>(simd::toBitMask(isCharStart));
-    int32_t countInBlock = __builtin_popcount(mask);
-
-    if (numChars + countInBlock < maxChars) {
-      numChars += countInBlock;
-      position += kBatchSize;
-    } else {
-      // We hit maxChars within this block.
-      if constexpr (kReturnBytes) {
-        int32_t needed = maxChars - numChars;
-        while (mask) {
-          if (--needed == 0) {
-            const int32_t bit = __builtin_ctz(mask);
-            uint8_t startByte = static_cast<uint8_t>(input[position + bit]);
-            return position + bit + getUtf8CharLength(startByte);
-          }
-          mask &= (mask - 1);
-        }
-        VELOX_UNREACHABLE();
-      } else {
-        return maxChars;
-      }
     }
   }
 
