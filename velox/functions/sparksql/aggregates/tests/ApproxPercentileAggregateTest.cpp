@@ -15,8 +15,8 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
-#include "math.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"

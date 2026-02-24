@@ -28,7 +28,7 @@ template <typename T>
 using PrestoApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/true,
-    /*kAccuracyIsDouble=*/true>;
+    /*kAccuracyIsErrorBound=*/true>;
 
 bool validPercentileType(const Type& type) {
   if (type.kind() == TypeKind::DOUBLE) {

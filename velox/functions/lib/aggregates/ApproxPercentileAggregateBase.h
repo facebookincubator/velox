@@ -19,10 +19,8 @@
 #include <optional>
 #include <vector>
 
-#include "velox/common/base/RandomUtil.h"
-#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/lib/KllSketch.h"
+#include "velox/functions/lib/KllSketchAccumulator.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -41,151 +39,7 @@ enum ApproxPercentileIntermediateTypeChildIndex {
   kLevels = 8,
 };
 
-template <typename T, typename Allocator>
-struct KllSketchTypeTraits {
-  using KllSketchType = functions::kll::KllSketch<T, Allocator, std::less<T>>;
-};
-
-template <>
-struct KllSketchTypeTraits<float, StlAllocator<float>> {
-  using KllSketchType = functions::kll::KllSketch<
-      float,
-      StlAllocator<float>,
-      util::floating_point::NaNAwareLessThan<float>>;
-};
-
-template <>
-struct KllSketchTypeTraits<double, StlAllocator<double>> {
-  using KllSketchType = functions::kll::KllSketch<
-      double,
-      StlAllocator<double>,
-      util::floating_point::NaNAwareLessThan<double>>;
-};
-
-template <>
-struct KllSketchTypeTraits<float, std::allocator<float>> {
-  using KllSketchType = functions::kll::KllSketch<
-      float,
-      std::allocator<float>,
-      util::floating_point::NaNAwareLessThan<float>>;
-};
-
-template <>
-struct KllSketchTypeTraits<double, std::allocator<double>> {
-  using KllSketchType = functions::kll::KllSketch<
-      double,
-      std::allocator<double>,
-      util::floating_point::NaNAwareLessThan<double>>;
-};
-
-template <typename T, typename Allocator = StlAllocator<T>>
-using KllSketch = typename KllSketchTypeTraits<T, Allocator>::KllSketchType;
-
-template <typename T>
-using KllView = functions::kll::detail::View<T>;
-
-inline unsigned getRandomSeed(std::optional<uint32_t> fixedRandomSeed) {
-  return fixedRandomSeed.has_value() ? *fixedRandomSeed : random::getSeed();
-}
-
-template <typename T>
-struct KllSketchAccumulator {
-  explicit KllSketchAccumulator(
-      HashStringAllocator* allocator,
-      std::optional<uint32_t> fixedRandomSeed)
-      : sketch_(
-            functions::kll::kDefaultK,
-            StlAllocator<T>(allocator),
-            getRandomSeed(fixedRandomSeed)),
-        largeCountValues_(StlAllocator<std::pair<T, int64_t>>(allocator)) {}
-
-  void setPrestoAccuracy(double accuracy) {
-    sketch_.setK(functions::kll::kFromEpsilon(accuracy));
-  }
-
-  void setSparkAccuracy(int32_t sparkAccuracy) {
-    double epsilon = 1.0 / static_cast<double>(sparkAccuracy);
-    sketch_.setK(functions::kll::kFromEpsilon(epsilon));
-  }
-
-  void append(T value) {
-    sketch_.insert(value);
-  }
-
-  void append(
-      T value,
-      int64_t weight,
-      HashStringAllocator* allocator,
-      std::optional<uint32_t> fixedRandomSeed) {
-    constexpr int64_t kLargeCountThreshold = 1000;
-    if (weight < kLargeCountThreshold) {
-      for (int64_t i = 0; i < weight; ++i) {
-        sketch_.insert(value);
-      }
-    } else {
-      largeCountValues_.push_back({value, weight});
-    }
-  }
-
-  void append(const KllView<T>& view) {
-    sketch_.mergeViews(folly::Range(&view, 1));
-  }
-
-  void append(const std::vector<KllView<T>>& views) {
-    sketch_.mergeViews(views);
-  }
-
-  void flush(
-      HashStringAllocator* allocator,
-      std::optional<uint32_t> fixedRandomSeed) {
-    mergeLargeCountValuesIntoSketch(
-        StlAllocator<T>(allocator), sketch_, fixedRandomSeed);
-    largeCountValues_.clear();
-    sketch_.finish();
-  }
-
-  KllSketch<T, std::allocator<T>> compact(
-      std::optional<uint32_t> fixedRandomSeed) const {
-    KllSketch<T, std::allocator<T>> newSketch =
-        KllSketch<T, std::allocator<T>>::fromView(
-            sketch_.toView(),
-            std::allocator<T>(),
-            getRandomSeed(fixedRandomSeed));
-    mergeLargeCountValuesIntoSketch(
-        std::allocator<T>(), newSketch, fixedRandomSeed);
-    newSketch.compact();
-    return newSketch;
-  }
-
-  const KllSketch<T>& getSketch() const {
-    return sketch_;
-  }
-
- private:
-  template <typename Allocator, typename Compare>
-  void mergeLargeCountValuesIntoSketch(
-      const Allocator& allocator,
-      functions::kll::KllSketch<T, Allocator, Compare>& sketch,
-      std::optional<uint32_t> fixedRandomSeed) const {
-    if (largeCountValues_.empty()) {
-      return;
-    }
-    std::vector<functions::kll::KllSketch<T, Allocator, Compare>> sketches;
-    sketches.reserve(largeCountValues_.size());
-    for (auto [x, n] : largeCountValues_) {
-      sketches.push_back(
-          functions::kll::KllSketch<T, Allocator, Compare>::fromRepeatedValue(
-              x, n, sketch_.k(), allocator, getRandomSeed(fixedRandomSeed)));
-    }
-    sketch.merge(folly::Range(sketches.begin(), sketches.end()));
-  }
-
-  KllSketch<T> sketch_;
-  std::vector<std::pair<T, int64_t>, StlAllocator<std::pair<T, int64_t>>>
-      largeCountValues_;
-};
-
-template <typename T, bool kHasWeight, bool kAccuracyIsDouble>
+template <typename T, bool kHasWeight, bool kAccuracyIsErrorBound>
 class ApproxPercentileAggregateBase : public exec::Aggregate {
  public:
   ApproxPercentileAggregateBase(
@@ -225,12 +79,13 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         if (decodedValue_.isNullAt(row) || decodedWeight_.isNullAt(row)) {
           return;
         }
+
         auto tracker = trackRowSize(groups[row]);
         auto accumulator = initRawAccumulator(groups[row]);
-        auto val = decodedValue_.valueAt<T>(row);
+        auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
         checkWeight(weight);
-        accumulator->append(val, weight, allocator_, fixedRandomSeed_);
+        accumulator->append(value, weight, allocator_, fixedRandomSeed_);
       });
     } else {
       if (decodedValue_.mayHaveNulls()) {
@@ -238,6 +93,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
           if (decodedValue_.isNullAt(row)) {
             return;
           }
+
           auto accumulator = initRawAccumulator(groups[row]);
           accumulator->append(decodedValue_.valueAt<T>(row));
         });
@@ -265,17 +121,19 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
 
+    auto tracker = trackRowSize(group);
     auto accumulator = initRawAccumulator(group);
+
     if (kHasWeight && hasWeight_) {
-      auto tracker = trackRowSize(group);
       rows.applyToSelected([&](auto row) {
         if (decodedValue_.isNullAt(row) || decodedWeight_.isNullAt(row)) {
           return;
         }
-        auto val = decodedValue_.valueAt<T>(row);
+
+        auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
         checkWeight(weight);
-        accumulator->append(val, weight, allocator_, fixedRandomSeed_);
+        accumulator->append(value, weight, allocator_, fixedRandomSeed_);
       });
     } else {
       if (decodedValue_.mayHaveNulls()) {
@@ -283,6 +141,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
           if (decodedValue_.isNullAt(row)) {
             return;
           }
+
           accumulator->append(decodedValue_.valueAt<T>(row));
         });
       } else {
@@ -387,11 +246,11 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       rowResult->childAt(kAccuracy) =
           BaseVector::createNullConstant(DOUBLE(), numGroups, pool);
 
+      // Set nulls for all rows.
       auto rawNulls = rowResult->mutableRawNulls();
       bits::fillBits(rawNulls, 0, rowResult->size(), bits::kNull);
       return;
     }
-
     auto& values = percentiles_->values;
     auto size = values.size();
     auto elements =
@@ -416,7 +275,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
             static_cast<bool&&>(percentiles_->isArray));
 
     bool isDefaultAccuracy = false;
-    if constexpr (kAccuracyIsDouble) {
+    if constexpr (kAccuracyIsErrorBound) {
       isDefaultAccuracy = (accuracy_ == kMissingNormalizedValue);
     }
     rowResult->childAt(kAccuracy) = std::make_shared<ConstantVector<double>>(
@@ -425,7 +284,6 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         isDefaultAccuracy,
         DOUBLE(),
         static_cast<double&&>(accuracy_));
-
     auto k = rowResult->childAt(kK)->asFlatVector<int32_t>();
     auto n = rowResult->childAt(kN)->asFlatVector<int64_t>();
     auto minValue = rowResult->childAt(kMinValue)->asFlatVector<T>();
@@ -488,7 +346,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   static constexpr double kMissingNormalizedValue = -1;
   static constexpr int32_t kSparkDefaultAccuracy = 10000;
   double accuracy_{
-      kAccuracyIsDouble ? kMissingNormalizedValue
+      kAccuracyIsErrorBound ? kMissingNormalizedValue
                         : static_cast<double>(kSparkDefaultAccuracy)};
 
   std::optional<Percentiles> percentiles_;
@@ -501,7 +359,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      new (groups[i] + offset_) AccumulatorType(allocator_, fixedRandomSeed_);
+      auto group = groups[i];
+      new (group + offset_) AccumulatorType(allocator_, fixedRandomSeed_);
     }
   }
 
@@ -515,7 +374,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
   AccumulatorType* initRawAccumulator(char* group) {
     auto accumulator = value<AccumulatorType>(group);
-    if constexpr (kAccuracyIsDouble) {
+    if constexpr (kAccuracyIsErrorBound) {
       if (accuracy_ != kMissingNormalizedValue) {
         accumulator->setPrestoAccuracy(accuracy_);
       }
@@ -530,13 +389,10 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       const std::vector<VectorPtr>& args) {
     size_t argIndex = 0;
     decodedValue_.decode(*args[argIndex++], rows, true);
-
     if (kHasWeight && hasWeight_) {
       decodedWeight_.decode(*args[argIndex++], rows, true);
     }
-
     checkSetPercentile(rows, *args[argIndex++]);
-
     if (hasAccuracy_) {
       decodedAccuracy_.decode(*args[argIndex++], rows, true);
       checkSetAccuracy(rows);
@@ -548,9 +404,9 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       const SelectivityVector& rows,
       const BaseVector& vec) {
     DecodedVector decoded(vec, rows);
+
     auto* base = decoded.base();
     auto baseFirstRow = decoded.index(rows.begin());
-
     if (!decoded.isConstantMapping()) {
       rows.applyToSelected([&](vector_size_t row) {
         VELOX_USER_CHECK(!decoded.isNullAt(row), "Percentile cannot be null");
@@ -601,13 +457,16 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       vector_size_t len) {
     if (!percentiles_) {
       VELOX_USER_CHECK_GT(len, 0, "Percentile cannot be empty");
-      percentiles_ = {.values = std::vector<double>(len), .isArray = isArray};
+      percentiles_ = {
+          .values = std::vector<double>(len),
+          .isArray = isArray,
+      };
       for (vector_size_t i = 0; i < len; ++i) {
         VELOX_USER_CHECK(!percentiles.isNullAt(i), "Percentile cannot be null");
-        auto val = percentiles.valueAt<double>(offset + i);
-        VELOX_USER_CHECK_GE(val, 0, "Percentile must be between 0 and 1");
-        VELOX_USER_CHECK_LE(val, 1, "Percentile must be between 0 and 1");
-        percentiles_->values[i] = val;
+        auto value = percentiles.valueAt<double>(offset + i);
+        VELOX_USER_CHECK_GE(value, 0, "Percentile must be between 0 and 1");
+        VELOX_USER_CHECK_LE(value, 1, "Percentile must be between 0 and 1");
+        percentiles_->values[i] = value;
       }
     } else {
       VELOX_USER_CHECK_EQ(
@@ -659,7 +518,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       return;
     }
 
-    if constexpr (kAccuracyIsDouble) {
+    if constexpr (kAccuracyIsErrorBound) {
       if (decodedAccuracy_.isConstantMapping()) {
         VELOX_USER_CHECK(
             !decodedAccuracy_.isNullAt(0), "Accuracy cannot be null");
@@ -668,12 +527,12 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         rows.applyToSelected([&](auto row) {
           VELOX_USER_CHECK(
               !decodedAccuracy_.isNullAt(row), "Accuracy cannot be null");
-          const auto acc = decodedAccuracy_.valueAt<double>(row);
+          const auto accuracy = decodedAccuracy_.valueAt<double>(row);
           if (accuracy_ == kMissingNormalizedValue) {
-            checkSetPrestoAccuracy(acc);
+            checkSetPrestoAccuracy(accuracy);
           }
           VELOX_USER_CHECK_EQ(
-              acc,
+              accuracy,
               accuracy_,
               "Accuracy argument must be constant for all input rows");
         });
@@ -813,15 +672,15 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       baseRows = &innerRows;
     }
 
-    DecodedVector decodedPct(*rowVec->childAt(kPercentiles), *baseRows);
+    DecodedVector percentiles(*rowVec->childAt(kPercentiles), *baseRows);
     auto percentileIsArray =
         rowVec->childAt(kPercentilesIsArray)->asUnchecked<SimpleVector<bool>>();
     auto accuracy =
         rowVec->childAt(kAccuracy)->asUnchecked<SimpleVector<double>>();
     auto k = rowVec->childAt(kK)->asUnchecked<SimpleVector<int32_t>>();
     auto n = rowVec->childAt(kN)->asUnchecked<SimpleVector<int64_t>>();
-    auto minVec = rowVec->childAt(kMinValue)->asUnchecked<SimpleVector<T>>();
-    auto maxVec = rowVec->childAt(kMaxValue)->asUnchecked<SimpleVector<T>>();
+    auto minValue = rowVec->childAt(kMinValue)->asUnchecked<SimpleVector<T>>();
+    auto maxValue = rowVec->childAt(kMaxValue)->asUnchecked<SimpleVector<T>>();
     auto items = rowVec->childAt(kItems)->asUnchecked<ArrayVector>();
     auto levels = rowVec->childAt(kLevels)->asUnchecked<ArrayVector>();
 
@@ -842,7 +701,6 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     if constexpr (kSingleGroup) {
       views.reserve(rows.end());
     }
-
     rows.applyToSelected([&](auto row) {
       if (decoded.isNullAt(row)) {
         return;
@@ -851,17 +709,17 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       if (percentileIsArray->isNullAt(i)) {
         return;
       }
-
       if (!accumulator) {
         if constexpr (kHasWeight) {
-          int indexInBaseVector = decodedPct.index(i);
-          auto percentilesBase = decodedPct.base()->asUnchecked<ArrayVector>();
+          int indexInBaseVector = percentiles.index(i);
+          auto percentilesBase = percentiles.base()->asUnchecked<ArrayVector>();
+          auto percentileBaseElements =
+              percentilesBase->elements()->asFlatVector<double>();
           if constexpr (checkIntermediateInputs) {
-            auto percentileBaseElements =
-                percentilesBase->elements()->asFlatVector<double>();
             VELOX_USER_CHECK(percentileBaseElements);
             VELOX_USER_CHECK(!percentilesBase->isNullAt(indexInBaseVector));
           }
+
           bool isArray = percentileIsArray->valueAt(i);
           DecodedVector decodedElements(*percentilesBase->elements());
           checkSetPercentileValues(
@@ -870,11 +728,11 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
               percentilesBase->offsetAt(indexInBaseVector),
               percentilesBase->sizeAt(indexInBaseVector));
         } else {
-          auto pctArrayVec = decodedPct.base()->asUnchecked<ArrayVector>();
+          auto pctArrayVec = percentiles.base()->asUnchecked<ArrayVector>();
           auto pctElementsVec =
               pctArrayVec->elements()->asUnchecked<FlatVector<double>>();
-          int32_t pctOffset = pctArrayVec->offsetAt(decodedPct.index(i));
-          int32_t pctSize = pctArrayVec->sizeAt(decodedPct.index(i));
+          int32_t pctOffset = pctArrayVec->offsetAt(percentiles.index(i));
+          int32_t pctSize = pctArrayVec->sizeAt(percentiles.index(i));
           std::vector<double> pctVals(pctSize);
           for (int32_t j = 0; j < pctSize; ++j) {
             pctVals[j] = pctElementsVec->valueAt(pctOffset + j);
@@ -884,14 +742,13 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         }
 
         if (!accuracy->isNullAt(i)) {
-          if constexpr (kAccuracyIsDouble) {
+          if constexpr (kAccuracyIsErrorBound) {
             checkSetPrestoAccuracy(accuracy->valueAt(i));
           } else {
             setValidSparkAccuracy(static_cast<int32_t>(accuracy->valueAt(i)));
           }
         }
       }
-
       if constexpr (kSingleGroup) {
         if (!accumulator) {
           accumulator = initRawAccumulator(group);
@@ -901,16 +758,16 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       }
 
       if constexpr (checkIntermediateInputs) {
-        VELOX_USER_CHECK(!(
-            k->isNullAt(i) || n->isNullAt(i) || minVec->isNullAt(i) ||
-            maxVec->isNullAt(i) || items->isNullAt(i) || levels->isNullAt(i)));
+        VELOX_USER_CHECK(
+            !(k->isNullAt(i) || n->isNullAt(i) || minValue->isNullAt(i) ||
+              maxValue->isNullAt(i) || items->isNullAt(i) ||
+              levels->isNullAt(i)));
       }
-
       KllView<T> v{
           .k = static_cast<uint32_t>(k->valueAt(i)),
           .n = static_cast<size_t>(n->valueAt(i)),
-          .minValue = minVec->valueAt(i),
-          .maxValue = maxVec->valueAt(i),
+          .minValue = minValue->valueAt(i),
+          .maxValue = maxValue->valueAt(i),
           .items =
               {rawItems + items->offsetAt(i),
                static_cast<size_t>(items->sizeAt(i))},
@@ -918,7 +775,6 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
               {rawLevels + levels->offsetAt(i),
                static_cast<size_t>(levels->sizeAt(i))},
       };
-
       if constexpr (kSingleGroup) {
         views.push_back(v);
       } else {
@@ -926,9 +782,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         accumulator->append(v);
       }
     });
-
     if constexpr (kSingleGroup) {
-      if (!views.empty() && accumulator) {
+      if (!views.empty()) {
         auto tracker = trackRowSize(group);
         accumulator->append(views);
       }

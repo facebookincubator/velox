@@ -30,7 +30,7 @@ template <typename T>
 using SparkApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/false,
-    /*kAccuracyIsDouble=*/false>;
+    /*kAccuracyIsErrorBound=*/false>;
 
 void addSignatures(
     const std::string& inputType,
