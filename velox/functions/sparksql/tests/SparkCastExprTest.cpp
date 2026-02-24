@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include <gtest/gtest.h>
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/Time.h"
 
 using namespace facebook::velox;
 namespace facebook::velox::test {
@@ -1091,6 +1093,90 @@ TEST_F(SparkCastExprTest, decimalToString) {
             {100, std::nullopt, 1230, std::nullopt}, DECIMAL(10, 2)),
         makeNullableFlatVector<std::string>(
             {"1.00", std::nullopt, "12.30", std::nullopt}));
+  }
+}
+
+TEST_F(SparkCastExprTest, stringToTime) {
+  // Test valid time strings with ANSI mode disabled (default).
+  // Use scope guard to ensure ANSI config is reset even if test fails.
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Note: Spark TIME is represented as microseconds since midnight.
+  {
+    auto input = makeFlatVector<std::string>(
+        {"00:00:00",
+         "01:30:00",
+         "12:00:00",
+         "23:59:59",
+         "01:30:45",
+         "12:03:17",
+         "23:59:59.999",
+         "00:00:00.000",
+         "12:03:17.123",
+         "12:03:17.123456",
+         "12:03:17.456",
+         "1:2:3",
+         "1:02:03",
+         "01:2:3",
+         " 12:30:45 "});
+
+    std::vector<int64_t> expectedValues = {
+        0LL, // 00:00:00 = 0 microseconds
+        5400000000LL, // 01:30:00 = 1.5 hours in microseconds
+        43200000000LL, // 12:00:00 = 12 hours in microseconds
+        86399000000LL, // 23:59:59 = 86399 seconds in microseconds
+        5445000000LL, // 01:30:45
+        43397000000LL, // 12:03:17
+        86399999000LL, // 23:59:59.999
+        0LL, // 00:00:00.000
+        43397123000LL, // 12:03:17.123
+        43397123456LL, // 12:03:17.123456
+        43397456000LL, // 12:03:17.456
+        3723000000LL, // 1:2:3
+        3723000000LL, // 1:02:03
+        3723000000LL, // 01:2:3
+        45045000000LL}; // 12:30:45 with whitespace
+
+    auto result =
+        evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
+
+    auto expected = makeFlatVector<int64_t>(expectedValues, TIME());
+    assertEqualVectors(expected, result);
+  }
+
+  // Test invalid time strings with ANSI mode disabled - should return NULL.
+  {
+    auto input = makeFlatVector<std::string>(
+        {"24:00:00", "12:60:00", "12:30:60", "12:30", "abc", ""});
+
+    auto result =
+        evaluateCast(VARCHAR(), TIME(), makeRowVector({input}), false);
+
+    auto expected = makeNullableFlatVector<int64_t>(
+        std::vector<std::optional<int64_t>>(6, std::nullopt), TIME());
+    assertEqualVectors(expected, result);
+  }
+
+  // Test invalid time strings with ANSI mode enabled - should throw.
+  {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+    auto testInvalidString = [this](const std::string& value) {
+      auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      VELOX_ASSERT_THROW(
+          evaluateCast(VARCHAR(), TIME(), input, false), "Cannot cast");
+    };
+
+    testInvalidString("24:00:00");
+    testInvalidString("12:60:00");
+    testInvalidString("12:30:60");
+    testInvalidString("12:30");
+    testInvalidString("abc");
+    testInvalidString("");
   }
 }
 

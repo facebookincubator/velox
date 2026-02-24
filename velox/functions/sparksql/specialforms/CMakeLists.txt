@@ -22,6 +22,7 @@ velox_add_library(
   MakeDecimal.cpp
   SparkCastExpr.cpp
   SparkCastHooks.cpp
+  SparkTimeUtils.cpp
 )
 
 velox_link_libraries(

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+#include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
@@ -320,6 +322,65 @@ class CastExpr : public SpecialForm {
 
   bool setNullInResultAtError() const {
     return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
+  }
+
+  /// Helper function to set error status or null in result based on cast
+  /// policy. Centralizes error handling logic used across different cast
+  /// operations.
+  /// @param row The row index where the error occurred
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  /// @param details Optional error details message
+  template <typename TResult>
+  void setCastError(
+      vector_size_t row,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException,
+      const std::string& details = "") const {
+    if (setNullInResultAtError()) {
+      result->setNull(row, true);
+    } else {
+      wrapException = false;
+      if (context.captureErrorDetails()) {
+        if (!details.empty()) {
+          context.setStatus(row, Status::UserError("{}", details));
+        } else {
+          context.setStatus(row, Status::UserError());
+        }
+      } else {
+        context.setStatus(row, Status::UserError());
+      }
+    }
+  }
+
+  /// Helper to set result or error from Expected<T> cast result.
+  /// If castResult has an error, sets the error in context. Otherwise, sets
+  /// the value in castResult directly to result.
+  /// @param row The row index being processed
+  /// @param castResult The Expected<T> result from cast operation
+  /// @param errorPrefix Error message prefix (e.g., from makeErrorMessage)
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  template <typename T, typename TResult>
+  void setResultOrError(
+      vector_size_t row,
+      const Expected<T>& castResult,
+      const std::string& errorPrefix,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException) const {
+    if (castResult.hasError()) {
+      const auto errorDetails =
+          fmt::format("{} {}", errorPrefix, castResult.error().message());
+      setCastError(row, context, result, wrapException, errorDetails);
+    } else {
+      result->set(row, castResult.value());
+    }
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);
