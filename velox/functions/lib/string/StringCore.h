@@ -292,16 +292,8 @@ namespace detail {
 //    start bytes (including ASCII and invalid bytes) as 1 byte.
 // 3. It ensures we always progress by at least 1 byte even on invalid data.
 FOLLY_ALWAYS_INLINE int32_t getUtf8CharLength(uint8_t c) {
-  if (c >= 192 && c <= 223) {
-    return 2;
-  }
-  if (c >= 224 && c <= 239) {
-    return 3;
-  }
-  if (c >= 240 && c <= 247) {
-    return 4;
-  }
-  return 1;
+  auto n = std::countl_zero((~static_cast<uint32_t>(c) << 24) | 1);
+  return (n == 0 || n > 4) ? 1 : n;
 }
 
 // Helper function to unify cappedLengthUnicode and cappedByteLengthUnicode.
@@ -313,10 +305,10 @@ FOLLY_ALWAYS_INLINE int64_t
 cappedUnicodeImpl(const char* input, size_t size, int64_t maxChars) {
   size_t position = 0;
   int64_t numChars = 0;
+  constexpr size_t kBatchSize = xsimd::batch<uint8_t>::size;
 
-  if (size >= 16) {
+  if (size >= kBatchSize) {
     // Use SIMD to process the string in blocks of the native register width.
-    constexpr size_t kBatchSize = xsimd::batch<uint8_t>::size;
     const auto highBitMask = xsimd::broadcast<uint8_t>(0x80);
     const auto continuationMask = xsimd::broadcast<uint8_t>(0xc0);
 
@@ -364,16 +356,30 @@ cappedUnicodeImpl(const char* input, size_t size, int64_t maxChars) {
   // Standard UTF-8 path for the remainder or strings shorter than a block.
   // Skip continuation bytes (0x80..0xBF) without counting — they belong to
   // a character whose leading byte was already counted by the SIMD loop.
-  while (position < size && numChars < maxChars) {
-    const uint8_t c = static_cast<uint8_t>(input[position]);
-    if (c < 0x80) {
-      position++;
-      numChars++;
-    } else if ((c & 0xc0) != 0x80) {
+  // We explicitly keep two separate loops.
+  // The branchless implementation (used in the `if` block below) performs fewer
+  // branches but executes more ALU instructions per byte.
+  // The branching implementation (used in the `else` block) uses an explicit
+  // `if (c < 0x80)` check, this is cheaper than executing the additional ALU
+  // instructions required by the branchless approach.
+  if (position < size &&
+      UNLIKELY(static_cast<uint8_t>(input[position]) & 0x80)) {
+    // Non-ASCII remainder: avoid ASCII fast-path branch mispredicts.
+    while (position < size && numChars < maxChars) {
+      const uint8_t c = static_cast<uint8_t>(input[position]);
       position += getUtf8CharLength(c);
-      numChars++;
-    } else {
-      position++;
+      numChars += ((c & 0xC0) != 0x80);
+    }
+  } else {
+    while (position < size && numChars < maxChars) {
+      const uint8_t c = static_cast<uint8_t>(input[position]);
+      if (c < 0x80) {
+        position++;
+        numChars++;
+      } else {
+        position += getUtf8CharLength(c);
+        numChars += ((c & 0xC0) != 0x80);
+      }
     }
   }
 
