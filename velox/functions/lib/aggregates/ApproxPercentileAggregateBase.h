@@ -52,15 +52,13 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         hasAccuracy_(hasAccuracy),
         fixedRandomSeed_(fixedRandomSeed) {}
 
-  using AccumulatorType = KllSketchAccumulator<T>;
-
   struct Percentiles {
     std::vector<double> values;
     bool isArray;
   };
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(AccumulatorType);
+    return sizeof(KllSketchAccumulator<T>);
   }
 
   bool isFixedSize() const override {
@@ -163,7 +161,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     for (auto i = 0; i < numGroups; ++i) {
-      value<AccumulatorType>(groups[i])->flush(allocator_, fixedRandomSeed_);
+      value<KllSketchAccumulator<T>>(groups[i])->flush(
+          allocator_, fixedRandomSeed_);
     }
 
     VELOX_CHECK(result);
@@ -182,7 +181,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       vector_size_t elementsCount = 0;
       for (auto i = 0; i < numGroups; ++i) {
         char* group = groups[i];
-        auto accumulator = value<AccumulatorType>(group);
+        auto accumulator = value<KllSketchAccumulator<T>>(group);
         if (accumulator->getSketch().totalCount() > 0) {
           elementsCount += percentiles.size();
         }
@@ -224,7 +223,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     sketches.reserve(numGroups);
     for (auto i = 0; i < numGroups; ++i) {
       sketches.push_back(
-          value<AccumulatorType>(groups[i])->compact(fixedRandomSeed_));
+          value<KllSketchAccumulator<T>>(groups[i])->compact(fixedRandomSeed_));
     }
 
     VELOX_CHECK(result);
@@ -360,20 +359,21 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
-      new (group + offset_) AccumulatorType(allocator_, fixedRandomSeed_);
+      new (group + offset_)
+          KllSketchAccumulator<T>(allocator_, fixedRandomSeed_);
     }
   }
 
   void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
-        value<AccumulatorType>(group)->~AccumulatorType();
+        value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();
       }
     }
   }
 
-  AccumulatorType* initRawAccumulator(char* group) {
-    auto accumulator = value<AccumulatorType>(group);
+  KllSketchAccumulator<T>* initRawAccumulator(char* group) {
+    auto accumulator = value<KllSketchAccumulator<T>>(group);
     if constexpr (kAccuracyIsErrorBound) {
       if (accuracy_ != kMissingNormalizedValue) {
         accumulator->setPrestoAccuracy(accuracy_);
@@ -546,7 +546,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         rows.applyToSelected([&](auto row) {
           VELOX_USER_CHECK(
               !decodedAccuracy_.isNullAt(row), "Accuracy cannot be null");
-          int32_t currentAccuracy = decodedAccuracy_.valueAt<int32_t>(row);
+          const auto currentAccuracy = decodedAccuracy_.valueAt<int32_t>(row);
           if (accuracy_ == static_cast<double>(kSparkDefaultAccuracy)) {
             setValidSparkAccuracy(currentAccuracy);
           }
@@ -585,7 +585,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
     for (auto i = 0; i < numGroups; ++i) {
       char* group = groups[i];
-      auto accumulator = value<AccumulatorType>(group);
+      auto accumulator = value<KllSketchAccumulator<T>>(group);
       if (accumulator->getSketch().totalCount() == 0) {
         result->setNull(i, true);
       } else {
@@ -696,7 +696,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     auto rawItems = itemsElements->rawValues();
     auto rawLevels = levelElements->rawValues<uint32_t>();
 
-    AccumulatorType* accumulator = nullptr;
+    KllSketchAccumulator<T>* accumulator = nullptr;
     std::vector<KllView<T>> views;
     if constexpr (kSingleGroup) {
       views.reserve(rows.end());
