@@ -359,18 +359,6 @@ cappedUnicodeImpl(const char* input, size_t size, int64_t maxChars) {
         }
       }
     }
-  } else {
-    // Small-size path to avoid SIMD setup and reduce UTF-8 overhead.
-    bool allAscii = true;
-    for (size_t i = 0; i < size; ++i) {
-      if (static_cast<uint8_t>(input[i]) & 0x80) {
-        allAscii = false;
-        break;
-      }
-    }
-    if (allAscii) {
-      return std::min<int64_t>(maxChars, static_cast<int64_t>(size));
-    }
   }
 
   // Standard UTF-8 path for the remainder or strings shorter than a block.
@@ -378,7 +366,10 @@ cappedUnicodeImpl(const char* input, size_t size, int64_t maxChars) {
   // a character whose leading byte was already counted by the SIMD loop.
   while (position < size && numChars < maxChars) {
     const uint8_t c = static_cast<uint8_t>(input[position]);
-    if ((c & 0xc0) != 0x80) {
+    if (c < 0x80) {
+      position++;
+      numChars++;
+    } else if ((c & 0xc0) != 0x80) {
       position += getUtf8CharLength(c);
       numChars++;
     } else {
