@@ -217,12 +217,12 @@ class CacheTest : public ::testing::Test {
       const StringIdLease& fileId,
       const StringIdLease& groupId,
       int64_t offset,
-      bool noCacheRetention,
+      bool cacheable,
       const IoStatisticsPtr& ioStatistics,
       const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     auto data = std::make_unique<StripeData>();
     auto readOptions = io::ReaderOptions(pool_.get());
-    readOptions.setNoCacheRetention(noCacheRetention);
+    readOptions.setCacheable(cacheable);
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
         MetricsLog::voidLog(),
@@ -346,7 +346,7 @@ class CacheTest : public ::testing::Test {
       int32_t readPctModulo,
       int32_t numStripes,
       int32_t stripeWindow,
-      bool noCacheRetention,
+      bool cacheable,
       const IoStatisticsPtr& ioStatistics,
       const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     auto tracker = std::make_shared<ScanTracker>(
@@ -376,7 +376,7 @@ class CacheTest : public ::testing::Test {
             fileId,
             groupId,
             prefetchStripeIndex * streamStarts_[kMaxStreams - 1],
-            noCacheRetention,
+            cacheable,
             ioStatistics,
             ioStats));
         if (stripes.back()->input->shouldPreload()) {
@@ -418,7 +418,7 @@ class CacheTest : public ::testing::Test {
           readPctModulo,
           numStripes,
           stripeWindow,
-          /*noCacheRetention=*/false,
+          /*cacheable=*/true,
           ioStatistics_,
           ioStats_);
     }
@@ -534,7 +534,7 @@ TEST_F(CacheTest, bufferedInput) {
       10,
       20,
       4,
-      /*noCacheRetention=*/false,
+      /*cacheable=*/true,
       ioStatistics_,
       ioStats_);
   readLoop(
@@ -544,7 +544,7 @@ TEST_F(CacheTest, bufferedInput) {
       10,
       20,
       4,
-      /*noCacheRetention=*/false,
+      /*cacheable=*/true,
       ioStatistics_,
       ioStats_);
   readLoop(
@@ -554,7 +554,7 @@ TEST_F(CacheTest, bufferedInput) {
       70,
       20,
       4,
-      /*noCacheRetention=*/false,
+      /*cacheable=*/true,
       ioStatistics_,
       ioStats_);
 }
@@ -579,7 +579,7 @@ TEST_F(CacheTest, ssd) {
       1,
       1,
       1,
-      /*noCacheRetention=*/false,
+      /*cacheable=*/true,
       ioStatistics_,
       ioStats_);
   // This is a cold read, so expect no hits.
@@ -597,7 +597,7 @@ TEST_F(CacheTest, ssd) {
       10,
       10,
       1,
-      /*noCacheRetention=*/false,
+      /*cacheable=*/true,
       ioStatistics_,
       ioStats_);
   auto sparseStripeBytes = (ioStatistics_->rawBytesRead() - bytes) / 10;
@@ -658,7 +658,7 @@ TEST_F(CacheTest, singleFileThreads) {
           10,
           20,
           4,
-          /*noCacheRetention=*/false,
+          /*cacheable=*/true,
           ioStatistics_,
           ioStats_);
     }));
@@ -697,7 +697,7 @@ TEST_F(CacheTest, ssdThreads) {
                 10,
                 20,
                 2,
-                /*noCacheRetention=*/false,
+                /*cacheable=*/true,
                 threadStats,
                 ioStat);
           }
@@ -735,7 +735,7 @@ class FileWithReadAhead {
       : options_(&pool) {
     fileId_ = std::make_unique<StringIdLease>(fileIds(), name);
     file_ = std::make_shared<TestReadFile>(fileId_->id(), kFileSize, ioStats);
-    options_.setNoCacheRetention(true);
+    options_.setCacheable(false);
     bufferedInput_ = std::make_unique<CachedBufferedInput>(
         file_,
         MetricsLog::voidLog(),
@@ -749,9 +749,8 @@ class FileWithReadAhead {
         options_);
     auto sequential = StreamIdentifier::sequentialFile();
     stream_ = bufferedInput_->enqueue(Region{0, file_->size()}, &sequential);
-    VELOX_CHECK(
-        reinterpret_cast<CacheInputStream*>(stream_.get())
-            ->testingNoCacheRetention());
+    VELOX_CHECK(!reinterpret_cast<CacheInputStream*>(stream_.get())
+                     ->testingCacheable());
     // Trigger load of next 4MB after reading the first 2MB of the previous 4MB
     // quantum.
     reinterpret_cast<CacheInputStream*>(stream_.get())->setPrefetchPct(50);
@@ -867,29 +866,29 @@ TEST_F(CacheTest, readAhead) {
   LOG(INFO) << count << " prefetches with total " << bytes << " bytes";
 }
 
-TEST_F(CacheTest, noCacheRetention) {
+TEST_F(CacheTest, cacheable) {
   const int64_t cacheSize = 1LL << 30;
   struct {
-    bool noCacheRetention;
+    bool cacheable;
     bool hasSsdCache;
     int readPct;
 
     std::string debugString() const {
       return fmt::format(
-          "noCacheRetention {}, hasSsdCache {}, readPct {}",
-          noCacheRetention,
+          "cacheable {}, hasSsdCache {}, readPct {}",
+          cacheable,
           hasSsdCache,
           readPct);
     }
   } testSettings[] = {
-      {true, true, 100},
-      {true, false, 100},
-      {false, false, 100},
       {false, true, 100},
-      {true, true, 10},
-      {true, false, 100},
       {false, false, 100},
-      {false, true, 100}};
+      {true, false, 100},
+      {true, true, 100},
+      {false, true, 10},
+      {false, false, 100},
+      {true, false, 100},
+      {true, true, 100}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -901,13 +900,13 @@ TEST_F(CacheTest, noCacheRetention) {
 
     // We read one stripe with all columns,
     readLoop(
-        "noCacheRetention",
+        "cacheable",
         20,
         testData.readPct,
         1,
         5,
         1,
-        testData.noCacheRetention,
+        testData.cacheable,
         ioStatistics_,
         ioStats_);
     // This is a cold read, so expect no hits.
@@ -920,7 +919,7 @@ TEST_F(CacheTest, noCacheRetention) {
     auto* ssdCache = cache_->ssdCache();
     if (ssdCache != nullptr) {
       ssdCache->waitForWriteToFinish();
-      if (testData.noCacheRetention) {
+      if (!testData.cacheable) {
         ASSERT_EQ(ssdCache->stats().entriesCached, 0);
       } else {
         ASSERT_GT(ssdCache->stats().entriesCached, 0);
@@ -931,7 +930,7 @@ TEST_F(CacheTest, noCacheRetention) {
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
           std::make_unique<test::AsyncDataCacheEntryTestHelper>(cacheEntry);
-      if (testData.noCacheRetention) {
+      if (!testData.cacheable) {
         ASSERT_EQ(cacheEntryHelper->accessStats().numUses, 0);
         ASSERT_EQ(cacheEntryHelper->accessStats().lastUse, 0);
       } else {
