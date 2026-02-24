@@ -731,10 +731,9 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   if (options.useDecimalTypeWidth) {
     // Short decimal is zero-copy.
     return !type->isTimestamp() && !type->isTime();
-  } else {
-    // Short decimal requires conversion.
-    return !type->isShortDecimal() && !type->isTimestamp() && !type->isTime();
   }
+  // Short decimal requires conversion.
+  return !type->isShortDecimal() && !type->isTimestamp() && !type->isTime();
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
@@ -747,9 +746,8 @@ size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
   } else if (type->isTime()) {
     // TIME is exported as Arrow time32 (int32_t).
     return sizeof(int32_t);
-  } else {
-    return type->cppSizeInBytes();
   }
+  return type->cppSizeInBytes();
 }
 
 void exportValues(
