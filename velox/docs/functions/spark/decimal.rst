@@ -11,7 +11,9 @@ Second stage caps precision at 38 and either reduces the scale or not depending 
 The allow-precision-loss flag applies to both regular and checked (ANSI mode) arithmetic functions.
 In Spark, there are no separate checked expression classes. The same expression (e.g., ``Add``)
 handles both ANSI and non-ANSI behavior, controlled by an ``EvalMode`` flag. In Velox, the checked
-variants are registered as separate functions (e.g., ``checked_add``, ``checked_subtract``).
+variants are registered as separate functions (e.g., ``checked_add``, ``checked_subtract``)
+to support the TRY evaluation mode (e.g., ``try(checked_add(...))`` returns NULL on overflow).
+
 Regular functions return NULL on overflow, while checked functions throw an error.
 
 For example, addition of decimal(38, 7) and decimal(10, 0) requires precision of 39 and scale of 7.
