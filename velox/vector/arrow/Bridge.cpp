@@ -1327,7 +1327,7 @@ TypePtr parseDecimalFormat(const std::string_view format) {
         return std::make_shared<LongDecimalType>(precision, scale);
       }
       VELOX_USER_FAIL(
-          "Conversion failed for '{}'. Only 64 and 128-bit decimal types are supported.",
+          "Conversion failed for '{}'. Only 64-bit and 128-bit decimal types are supported.",
           format);
     }
     // Otherwise return type depends on precision.
@@ -2269,7 +2269,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.null_count,
         isTime32);
   } else if (type->isShortDecimal()) {
-    // Validate the format bitWidth
+    // Validate the format bitWidth.
     const auto bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
     if (bitWidth == 64) {
       return createShortDecimalVector(
@@ -2281,7 +2281,7 @@ VectorPtr importFromArrowImpl(
           arrowArray.null_count,
           wrapInBufferView);
     }
-    // otherwise convert to 128
+    // Otherwise convert to 128.
     VELOX_USER_CHECK_EQ(
         bitWidth,
         128,

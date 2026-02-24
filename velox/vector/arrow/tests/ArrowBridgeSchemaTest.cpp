@@ -438,7 +438,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   EXPECT_EQ(*DECIMAL(20, 15), *testSchemaImport("d:20,15,128"));
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,256"),
-      "Conversion failed for 'd:10,4,256'. Only 64 and 128-bit decimal types are supported.");
+      "Conversion failed for 'd:10,4,256'. Only 64-bit and 128-bit decimal types are supported.");
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,"),
       "Unable to convert 'd:10,4,' ArrowSchema decimal format to Velox decimal");
