@@ -233,6 +233,12 @@ buffer.reserve(1024);
       i)`
     * Note that the values of v1 and v2 are already included in the exception
       message by default.
+* Put runtime information (names, values, types) at the **end** of error
+  messages, after the static description.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
 
 ## Variables
 
@@ -480,3 +486,32 @@ using ContinuePromise = VeloxPromise<bool>;
   namespace) rather than a static or private method.
 * **Keep method implementations in .cpp.** Except for trivial one-liners,
   define methods in the .cpp file to keep headers small and reduce build times.
+* **Avoid default arguments** when all callers can pass values explicitly.
+
+## Tests
+
+* **Place new tests next to related existing tests**, not at the end of the
+  file. Group tests by topic (e.g., place `tryCast` next to `types`,
+  `notBetween` next to `ifClause` which uses `between`).
+* **Use gtest container matchers** (`testing::ElementsAre`, etc.) for
+  verifying collections:
+
+  ```cpp
+  // ❌ Avoid - multiple individual assertions
+  EXPECT_EQ(result.size(), 3);
+  EXPECT_EQ(result[0], "a");
+  EXPECT_EQ(result[1], "b");
+  EXPECT_EQ(result[2], "c");
+
+  // ✅ Prefer - single matcher assertion
+  EXPECT_THAT(result, testing::ElementsAre("a", "b", "c"));
+  ```
+
+  Common matchers:
+  * `ElementsAre(...)` - exact ordered match
+  * `UnorderedElementsAre(...)` - exact unordered match
+  * `Contains(...)` - at least one element matches
+  * `IsEmpty()` - collection is empty
+  * `SizeIs(n)` - collection has n elements
+
+  Requires `#include <gmock/gmock.h>`.
