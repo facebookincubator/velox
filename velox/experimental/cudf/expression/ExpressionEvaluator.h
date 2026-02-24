@@ -133,6 +133,15 @@ bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();
 
+/// Returns the scalar function signatures that the registered cuDF expression
+/// evaluators (function, AST, JIT) can evaluate, keyed by function name. Each
+/// signature is listed once per name. A name mapped to an empty list is
+/// supported, but whether a call is accepted depends on more than its argument
+/// types (e.g. cast). The pointers stay valid while the evaluators and the
+/// functions they belong to remain registered.
+std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+getCudfFunctionSignatureMap();
+
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;
@@ -165,6 +174,13 @@ class FunctionExpression : public CudfExpression {
   /// Check if this specific operation can be evaluated by FunctionExpression.
   /// Does not recursively check children.
   static bool canEvaluate(const core::TypedExprPtr& expr);
+
+  /// Returns the signatures of the registered cuDF functions, keyed by
+  /// function name. Functions registered without signatures map to an empty
+  /// list.
+  static std::
+      unordered_map<std::string, std::vector<exec::FunctionSignaturePtr>>
+      signatures();
 
  private:
   static std::unique_ptr<cudf::column> makeStructChildColumn(

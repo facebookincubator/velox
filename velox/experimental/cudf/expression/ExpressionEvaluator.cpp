@@ -3262,6 +3262,20 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
   return false;
 }
 
+std::unordered_map<std::string, std::vector<exec::FunctionSignaturePtr>>
+FunctionExpression::signatures() {
+  std::unordered_map<std::string, std::vector<exec::FunctionSignaturePtr>>
+      result;
+  for (const auto& [name, specs] : getCudfFunctionRegistry()) {
+    auto& signatures = result[name];
+    for (const auto& spec : specs) {
+      signatures.insert(
+          signatures.end(), spec.signatures.begin(), spec.signatures.end());
+    }
+  }
+  return result;
+}
+
 std::optional<std::vector<std::string>> extractFieldPath(
     const core::TypedExprPtr& expr) {
   if (expr == nullptr) {
@@ -3370,6 +3384,32 @@ std::shared_ptr<CudfExpression> createCudfExpression(
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
   return best->create(expr, inputRowSchema, pool);
+}
+
+std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+getCudfFunctionSignatureMap() {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+
+  std::unordered_map<std::string, std::vector<const exec::FunctionSignature*>>
+      result;
+  // A name can be registered several times and be supported by more than one
+  // evaluator, so the same signature can be reported more than once.
+  std::unordered_map<std::string, std::unordered_set<std::string>> listed;
+  for (const auto& [_, evaluator] : getCudfExpressionEvaluatorRegistry()) {
+    if (!evaluator.signatures) {
+      continue;
+    }
+    for (const auto& [name, signatures] : evaluator.signatures()) {
+      auto& exported = result[name];
+      auto& listedForName = listed[name];
+      for (const auto& signature : signatures) {
+        if (listedForName.insert(signature->toString()).second) {
+          exported.push_back(signature.get());
+        }
+      }
+    }
+  }
+  return result;
 }
 
 void unregisterFunctions() {

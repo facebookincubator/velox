@@ -66,6 +66,13 @@ class ASTExpression : public CudfExpression {
   /// ASTExpression.
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
+  /// Returns the signatures of the calls ASTExpression can evaluate, keyed by
+  /// function name: each AST operation over every scalar type it is probed
+  /// with that canEvaluate() accepts.
+  static std::
+      unordered_map<std::string, std::vector<exec::FunctionSignaturePtr>>
+      signatures();
+
  private:
   core::TypedExprPtr expr_;
 
