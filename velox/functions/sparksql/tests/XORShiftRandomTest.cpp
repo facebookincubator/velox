@@ -101,5 +101,43 @@ TEST_F(XORShiftRandomTest, boundParameter) {
   }
 }
 
+// Test nextDouble() returns values in [0.0, 1.0) range.
+TEST_F(XORShiftRandomTest, nextDoubleRange) {
+  XORShiftRandom rng;
+  rng.setSeed(42);
+
+  for (int i = 0; i < 1000; ++i) {
+    double val = rng.nextDouble();
+    EXPECT_GE(val, 0.0);
+    EXPECT_LT(val, 1.0);
+  }
+}
+
+// Test nextDouble() determinism: same seed produces same sequence.
+TEST_F(XORShiftRandomTest, nextDoubleDeterminism) {
+  XORShiftRandom rng1, rng2;
+  rng1.setSeed(12345);
+  rng2.setSeed(12345);
+
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_EQ(rng1.nextDouble(), rng2.nextDouble());
+  }
+}
+
+// Test nextDouble() produces different sequences for different seeds.
+TEST_F(XORShiftRandomTest, nextDoubleDifferentSeeds) {
+  XORShiftRandom rng1, rng2;
+  rng1.setSeed(1);
+  rng2.setSeed(2);
+
+  std::vector<double> seq1, seq2;
+  for (int i = 0; i < 10; ++i) {
+    seq1.push_back(rng1.nextDouble());
+    seq2.push_back(rng2.nextDouble());
+  }
+
+  EXPECT_NE(seq1, seq2);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

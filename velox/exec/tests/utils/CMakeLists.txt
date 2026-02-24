@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
-
-target_link_libraries(velox_temp_path velox_exception)
-
 add_library(
   velox_exec_test_lib
   AggregationResolver.cpp
@@ -42,7 +38,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_vector_test_lib
   velox_vector_fuzzer
-  velox_temp_path
   velox_cursor
   velox_core
   velox_exception

@@ -20,7 +20,9 @@
 #include <iostream>
 #include <utility>
 
+#include "velox/exec/HashBuild.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
@@ -318,8 +320,11 @@ class HashJoinBuildBenchmark : public VectorTestBase {
   static bool isBuildNoDupHashTableAbandon(exec::Task* task) {
     for (auto& pipelineStat : task->taskStats().pipelineStats) {
       for (auto& operatorStat : pipelineStat.operatorStats) {
-        if (operatorStat.operatorType == "HashBuild") {
-          return operatorStat.runtimeStats["abandonBuildNoDupHash"].count != 0;
+        if (operatorStat.operatorType == OperatorType::kHashBuild) {
+          return operatorStat
+                     .runtimeStats[std::string(
+                         HashBuild::kAbandonBuildNoDupHash)]
+                     .count != 0;
         }
       }
     }

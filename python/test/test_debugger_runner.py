@@ -254,3 +254,60 @@ class TestPyVeloxDebuggerRunner(unittest.TestCase):
         self.assertEqual(len(received_sizes), self._num_batches)
         # Each vector should have batch_size rows.
         self.assertTrue(all(s == self._batch_size for s in received_sizes))
+
+    def test_step_with_plan_id(self):
+        """step(plan_id) should only stop at the matching breakpoint."""
+        runner = LocalDebuggerRunner(self._plan_node)
+        runner.set_breakpoint(self._node_ids[3])
+        runner.set_breakpoint(self._node_ids[5])
+        runner.set_breakpoint(self._node_ids[8])
+
+        it = runner.execute()
+
+        # Step targeting node_ids[5] should skip node_ids[3] and stop at
+        # node_ids[5].
+        it.step(self._node_ids[5])
+        self.assertEqual(it.at(), self._node_ids[5])
+
+        # Step targeting node_ids[8] should skip node_ids[5] (remaining) and
+        # stop at node_ids[8].
+        it.step(self._node_ids[8])
+        self.assertEqual(it.at(), self._node_ids[8])
+
+        # Step with no filter (default) stops at the next breakpoint or task
+        # output.
+        it.step()
+        self.assertEqual(it.at(), "")
+
+    def test_step_with_plan_id_counts(self):
+        """step(plan_id) should only produce vectors from the matching
+        breakpoint plus task outputs."""
+        runner = LocalDebuggerRunner(self._plan_node)
+        runner.set_breakpoint(self._node_ids[3])
+        runner.set_breakpoint(self._node_ids[5])
+
+        it = runner.execute()
+        total_size = 0
+
+        # Only step to node_ids[5], skipping node_ids[3].
+        while True:
+            try:
+                vector = it.step(self._node_ids[5])
+                total_size += vector.size()
+            except StopIteration:
+                break
+
+        # We expect node_ids[5] breakpoint hits (num_batches) plus task outputs
+        # (num_batches) = 2 * num_batches vectors, each of batch_size rows.
+        self.assertEqual(total_size, self._batch_size * self._num_batches * 2)
+
+    def test_step_with_plan_id_default_behavior(self):
+        """step() with no argument should preserve original behavior."""
+        runner = LocalDebuggerRunner(self._plan_node)
+        runner.set_breakpoint(self._node_ids[3])
+        runner.set_breakpoint(self._node_ids[5])
+
+        # step() with no plan_id should hit both breakpoints + task output.
+        self.assertEqual(
+            self._count_step(runner), self._batch_size * self._num_batches * 3
+        )

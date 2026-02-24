@@ -58,6 +58,22 @@ bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintMultiRange);
 }
 
+bool isBytesValues(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBytesValues);
+}
+
+bool isBytesRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBytesRange);
+}
+
+bool isSingleValueBytesRange(const std::unique_ptr<common::Filter>& filter) {
+  if (!isBytesRange(filter)) {
+    return false;
+  }
+  const auto* bytesRange = filter->as<common::BytesRange>();
+  return bytesRange->isSingleValue();
+}
+
 template <typename T, typename U>
 std::unique_ptr<T> asUniquePtr(std::unique_ptr<U> ptr) {
   return std::unique_ptr<T>(static_cast<T*>(ptr.release()));
@@ -710,6 +726,32 @@ std::unique_ptr<common::Filter> tryMergeFloatingPointRanges(
       });
 }
 
+std::unique_ptr<common::Filter> tryMergeBytesValues(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBytesValues(filter) || isSingleValueBytesRange(filter);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  std::vector<std::string> values;
+  for (auto& filter : disjuncts) {
+    if (isBytesValues(filter)) {
+      const auto* bytesValues = filter->as<common::BytesValues>();
+      for (const auto& value : bytesValues->values()) {
+        values.push_back(value);
+      }
+    } else {
+      const auto* bytesRange = filter->as<common::BytesRange>();
+      values.push_back(bytesRange->lower());
+    }
+  }
+
+  return std::make_unique<common::BytesValues>(values, nullAllowed);
+}
+
 } // namespace
 
 // static
@@ -726,6 +768,10 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
   }
 
   if (auto merged = tryMergeFloatingPointRanges<float>(disjuncts)) {
+    return merged;
+  }
+
+  if (auto merged = tryMergeBytesValues(disjuncts)) {
     return merged;
   }
 

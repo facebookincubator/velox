@@ -32,6 +32,7 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
+using namespace facebook::velox::common::testutil;
 
 namespace {
 /// Creates a RowVector from a list of child vectors. Uses _col0, _col1,..

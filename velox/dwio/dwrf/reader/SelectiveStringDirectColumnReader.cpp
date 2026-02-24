@@ -318,11 +318,10 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
 void SelectiveStringDirectColumnReader::extractSparse(
     const int32_t* rows,
     int32_t numRows) {
-  dwio::common::rowLoop(
+  dwio::common::rowLoop<8>(
       rows,
       0,
       numRows,
-      8,
       [&](int32_t row) {
         auto start = rangeSum(rawLengths_, 0, lengthIndex_, rows[row]);
         lengthIndex_ = rows[row];

@@ -17,12 +17,14 @@
 #pragma once
 
 #include "velox/common/config/Config.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PortUtil.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include "boost/process.hpp"
 
 using namespace facebook::velox;
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 namespace {
 constexpr char const* kMinioExecutableName{"minio-2022-05-26"};
@@ -34,7 +36,7 @@ constexpr char const* kMinioSecretKey{"miniopass"};
 // Adapted from the Apache Arrow library.
 class MinioServer {
  public:
-  MinioServer() : tempPath_(::exec::test::TempDirectoryPath::create()) {
+  MinioServer() : tempPath_(TempDirectoryPath::create()) {
     constexpr auto kHostAddressTemplate = "127.0.0.1:{}";
     auto ports = facebook::velox::exec::test::getFreePorts(2);
     connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
@@ -74,7 +76,7 @@ class MinioServer {
   }
 
  private:
-  const std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
+  const std::shared_ptr<TempDirectoryPath> tempPath_;
   std::string connectionString_;
   std::string consoleAddress_;
   const std::string accessKey_ = kMinioAccessKey;
