@@ -20,6 +20,11 @@
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/encryption/Encryption.h"
 
+namespace facebook::velox::dwio::common {
+// Forward declaration for per-column timing stats.
+struct PerColumnTimingStats;
+} // namespace facebook::velox::dwio::common
+
 namespace facebook::velox::dwio::common::compression {
 
 class Compressor {
@@ -98,6 +103,8 @@ struct CompressionOptions {
  * @param options The compression options to use
  * @param useRawDecompression Specify whether to perform raw decompression
  * @param compressedLength The compressed block length for raw decompression
+ * @param columnTimingStats Optional per-column timing stats for tracking
+ * decompression time
  */
 std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     facebook::velox::common::CompressionKind kind,
@@ -108,7 +115,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     const std::string& streamDebugInfo,
     const dwio::common::encryption::Decrypter* decryptr = nullptr,
     bool useRawDecompression = false,
-    size_t compressedLength = 0);
+    size_t compressedLength = 0,
+    PerColumnTimingStats* columnTimingStats = nullptr);
 
 /**
  * Create a compressor for the given compression kind.

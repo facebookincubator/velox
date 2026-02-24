@@ -113,6 +113,61 @@ class DwrfRowReader : public StrideIndexProvider,
     stats.numStripes += stripeCeiling_ - firstStripe_;
     stats.columnReaderStatistics.flattenStringDictionaryValues +=
         columnReaderStatistics_->flattenStringDictionaryValues;
+    stats.columnReaderStatistics.pageLoadTimeNs.merge(
+        columnReaderStatistics_->pageLoadTimeNs);
+    // Merge per-column timing stats (decode and decompress times).
+    {
+      auto srcLocked = columnReaderStatistics_->perColumnTimingStats.rlock();
+      auto dstLocked =
+          stats.columnReaderStatistics.perColumnTimingStats.wlock();
+      for (const auto& [nodeId, srcStats] : *srcLocked) {
+        auto it = dstLocked->find(nodeId);
+        if (it == dstLocked->end()) {
+          // Copy the stats to destination.
+          auto dstStats = std::make_shared<dwio::common::PerColumnTimingStats>(
+              srcStats->nodeId, srcStats->columnName);
+          dstStats->decodeCpuTimeNs.store(
+              srcStats->decodeCpuTimeNs.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          dstStats->decodeWallTimeNs.store(
+              srcStats->decodeWallTimeNs.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          dstStats->decompressCpuTimeNs.store(
+              srcStats->decompressCpuTimeNs.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          dstStats->numDecompressCalls.store(
+              srcStats->numDecompressCalls.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          dstStats->numReads.store(
+              srcStats->numReads.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          dstStats->rowsRead.store(
+              srcStats->rowsRead.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          dstLocked->emplace(nodeId, std::move(dstStats));
+        } else {
+          // Accumulate into existing stats.
+          it->second->decodeCpuTimeNs.fetch_add(
+              srcStats->decodeCpuTimeNs.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          it->second->decodeWallTimeNs.fetch_add(
+              srcStats->decodeWallTimeNs.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          it->second->decompressCpuTimeNs.fetch_add(
+              srcStats->decompressCpuTimeNs.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          it->second->numDecompressCalls.fetch_add(
+              srcStats->numDecompressCalls.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          it->second->numReads.fetch_add(
+              srcStats->numReads.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+          it->second->rowsRead.fetch_add(
+              srcStats->rowsRead.load(std::memory_order_relaxed),
+              std::memory_order_relaxed);
+        }
+      }
+    }
     stats.unitLoaderStats.merge(unitLoadStats_);
   }
 

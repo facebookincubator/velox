@@ -51,12 +51,16 @@ SelectiveColumnReader::SelectiveColumnReader(
       fileType_(fileType),
       formatData_(params.toFormatData(fileType, scanSpec)),
       scanSpec_(&scanSpec),
+      columnReaderStats_(&params.runtimeStatistics()),
       outputRows_(memoryPool_),
       valueRows_(memoryPool_),
       outerNonNullRows_(memoryPool_),
       innerNonNullRows_(memoryPool_) {
   scanState_.rowsCopy = raw_vector<vector_size_t>(memoryPool_);
   scanState_.filterCache = raw_vector<uint8_t>(memoryPool_);
+  // Initialize per-column timing stats
+  columnTimingStats_ = columnReaderStats_->getOrCreateColumnTimingStats(
+      fileType_->id(), scanSpec.fieldName());
 }
 
 void SelectiveColumnReader::filterRowGroups(

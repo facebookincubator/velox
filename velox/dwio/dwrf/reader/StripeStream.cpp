@@ -343,10 +343,21 @@ std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
 
   const auto streamDebugInfo =
       fmt::format("Stripe {} Stream {}", stripeIndex_, si.toString());
+
+  // Get or create per-column timing stats for this column's nodeId.
+  dwio::common::PerColumnTimingStats* columnTimingStats = nullptr;
+  if (columnReaderStatistics_) {
+    columnTimingStats =
+        columnReaderStatistics_
+            ->getOrCreateColumnTimingStats(si.encodingKey().node())
+            .get();
+  }
+
   return readState_->readerBase->createDecompressedStream(
       std::move(streamInput),
       streamDebugInfo,
-      getDecrypter(si.encodingKey().node()));
+      getDecrypter(si.encodingKey().node()),
+      columnTimingStats);
 }
 
 uint32_t StripeStreamsImpl::visitStreamsOfNode(

@@ -16,8 +16,11 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/Hash.h>
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
+#include <atomic>
 #include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -535,6 +538,75 @@ class Statistics {
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
+// Per-column timing statistics for decode/decompress operations.
+struct PerColumnTimingStats {
+  // Column node ID in the file schema.
+  uint32_t nodeId{0};
+
+  // Column name (if available).
+  std::string columnName;
+
+  // Total CPU time spent decoding this column, in nanoseconds.
+  std::atomic<int64_t> decodeCpuTimeNs{0};
+
+  // Total wall time spent decoding this column, in nanoseconds.
+  std::atomic<int64_t> decodeWallTimeNs{0};
+
+  // Total CPU time spent decompressing this column's streams, in nanoseconds.
+  std::atomic<int64_t> decompressCpuTimeNs{0};
+
+  // Number of decompression calls for this column.
+  std::atomic<int64_t> numDecompressCalls{0};
+
+  // Number of times read() was called for this column.
+  std::atomic<int64_t> numReads{0};
+
+  // Total number of rows read for this column.
+  std::atomic<int64_t> rowsRead{0};
+
+  PerColumnTimingStats() = default;
+
+  PerColumnTimingStats(uint32_t id, const std::string& name)
+      : nodeId(id), columnName(name) {}
+
+  // Non-copyable due to atomics, but provide copy constructor for map storage
+  PerColumnTimingStats(const PerColumnTimingStats& other)
+      : nodeId(other.nodeId),
+        columnName(other.columnName),
+        decodeCpuTimeNs(other.decodeCpuTimeNs.load()),
+        decodeWallTimeNs(other.decodeWallTimeNs.load()),
+        decompressCpuTimeNs(other.decompressCpuTimeNs.load()),
+        numDecompressCalls(other.numDecompressCalls.load()),
+        numReads(other.numReads.load()),
+        rowsRead(other.rowsRead.load()) {}
+
+  PerColumnTimingStats& operator=(const PerColumnTimingStats& other) {
+    if (this != &other) {
+      nodeId = other.nodeId;
+      columnName = other.columnName;
+      decodeCpuTimeNs.store(other.decodeCpuTimeNs.load());
+      decodeWallTimeNs.store(other.decodeWallTimeNs.load());
+      decompressCpuTimeNs.store(other.decompressCpuTimeNs.load());
+      numDecompressCalls.store(other.numDecompressCalls.load());
+      numReads.store(other.numReads.load());
+      rowsRead.store(other.rowsRead.load());
+    }
+    return *this;
+  }
+
+  void addTiming(int64_t cpuNs, int64_t wallNs, int64_t rows) {
+    decodeCpuTimeNs.fetch_add(cpuNs, std::memory_order_relaxed);
+    decodeWallTimeNs.fetch_add(wallNs, std::memory_order_relaxed);
+    numReads.fetch_add(1, std::memory_order_relaxed);
+    rowsRead.fetch_add(rows, std::memory_order_relaxed);
+  }
+
+  void addDecompressTime(int64_t cpuNs) {
+    decompressCpuTimeNs.fetch_add(cpuNs, std::memory_order_relaxed);
+    numDecompressCalls.fetch_add(1, std::memory_order_relaxed);
+  }
+};
+
 struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
@@ -542,6 +614,76 @@ struct ColumnReaderStatistics {
 
   // Total time spent in loading pages, in nanoseconds.
   io::IoCounter pageLoadTimeNs;
+
+  // Whether to collect per-column timing stats. Disabled by default to
+  // avoid overhead (~100ns per operation). Set via RowReaderOptions.
+  bool collectTimingStats{false};
+
+  // Per-column timing stats. Key is nodeId.
+  folly::Synchronized<
+      folly::F14FastMap<uint32_t, std::shared_ptr<PerColumnTimingStats>>>
+      perColumnTimingStats;
+
+  // Gets or creates timing stats for a column.
+  // Returns nullptr if collectTimingStats is false.
+  std::shared_ptr<PerColumnTimingStats> getOrCreateColumnTimingStats(
+      uint32_t nodeId,
+      const std::string& columnName = "") {
+    if (!collectTimingStats) {
+      return nullptr;
+    }
+    auto locked = perColumnTimingStats.wlock();
+    auto it = locked->find(nodeId);
+    if (it != locked->end()) {
+      return it->second;
+    }
+    auto stats = std::make_shared<PerColumnTimingStats>(nodeId, columnName);
+    locked->emplace(nodeId, stats);
+    return stats;
+  }
+
+  // Merges per-column timing stats into the result map.
+  void mergePerColumnTimingStats(
+      std::unordered_map<std::string, RuntimeMetric>& result) const {
+    auto locked = perColumnTimingStats.rlock();
+    for (const auto& [nodeId, stats] : *locked) {
+      const auto decodeCpuNs =
+          stats->decodeCpuTimeNs.load(std::memory_order_relaxed);
+      const auto decodeWallNs =
+          stats->decodeWallTimeNs.load(std::memory_order_relaxed);
+      const auto decompressCpuNs =
+          stats->decompressCpuTimeNs.load(std::memory_order_relaxed);
+      const auto numDecompressCalls =
+          stats->numDecompressCalls.load(std::memory_order_relaxed);
+      const auto numReads = stats->numReads.load(std::memory_order_relaxed);
+      const auto rowsRead = stats->rowsRead.load(std::memory_order_relaxed);
+
+      const auto prefix = stats->columnName.empty()
+          ? fmt::format("column_{}", nodeId)
+          : stats->columnName;
+
+      if (decodeCpuNs > 0) {
+        result.emplace(
+            fmt::format("{}.decodeCpuTimeNs", prefix),
+            RuntimeMetric(decodeCpuNs, RuntimeCounter::Unit::kNanos));
+        result.emplace(
+            fmt::format("{}.decodeWallTimeNs", prefix),
+            RuntimeMetric(decodeWallNs, RuntimeCounter::Unit::kNanos));
+        result.emplace(
+            fmt::format("{}.numReads", prefix), RuntimeMetric(numReads));
+        result.emplace(
+            fmt::format("{}.rowsRead", prefix), RuntimeMetric(rowsRead));
+      }
+      if (decompressCpuNs > 0) {
+        result.emplace(
+            fmt::format("{}.decompressCpuTimeNs", prefix),
+            RuntimeMetric(decompressCpuNs, RuntimeCounter::Unit::kNanos));
+        result.emplace(
+            fmt::format("{}.numDecompressCalls", prefix),
+            RuntimeMetric(numDecompressCalls));
+      }
+    }
+  }
 };
 
 struct RuntimeStatistics {
@@ -612,6 +754,8 @@ struct RuntimeStatistics {
               columnReaderStatistics.pageLoadTimeNs.max(),
               RuntimeCounter::Unit::kNanos));
     }
+    // Include per-column timing stats (decode and decompress)
+    columnReaderStatistics.mergePerColumnTimingStats(result);
     return result;
   }
 };

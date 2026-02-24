@@ -19,6 +19,11 @@
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/compression/Compression.h"
 
+namespace facebook::velox::dwio::common {
+// Forward declaration for per-column timing stats.
+struct PerColumnTimingStats;
+} // namespace facebook::velox::dwio::common
+
 namespace facebook::velox::dwio::common::compression {
 
 class PagedInputStream : public dwio::common::SeekableInputStream {
@@ -30,13 +35,15 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
       const dwio::common::encryption::Decrypter* decrypter,
       const std::string& streamDebugInfo,
       bool useRawDecompression = false,
-      size_t compressedLength = 0)
+      size_t compressedLength = 0,
+      PerColumnTimingStats* columnTimingStats = nullptr)
       : input_(std::move(inStream)),
         pool_(memPool),
         inputBuffer_(pool_),
         decompressor_{std::move(decompressor)},
         decrypter_{decrypter},
-        streamDebugInfo_{streamDebugInfo} {
+        streamDebugInfo_{streamDebugInfo},
+        columnTimingStats_{columnTimingStats} {
     DWIO_ENSURE(
         decompressor_ || decrypter_,
         "one of decompressor or decryptor is required");
@@ -87,13 +94,15 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
       memory::MemoryPool& memPool,
       const std::string& streamDebugInfo,
       bool useRawDecompression = false,
-      size_t compressedLength = 0)
+      size_t compressedLength = 0,
+      PerColumnTimingStats* columnTimingStats = nullptr)
       : input_(std::move(inStream)),
         pool_(memPool),
         inputBuffer_(pool_),
         decompressor_{nullptr},
         decrypter_{nullptr},
-        streamDebugInfo_{streamDebugInfo} {
+        streamDebugInfo_{streamDebugInfo},
+        columnTimingStats_{columnTimingStats} {
     DWIO_ENSURE(
         !useRawDecompression || compressedLength > 0,
         "For raw decompression, compressedLength should be greater than zero");
@@ -182,6 +191,11 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
 
   // Stream Debug Info
   const std::string streamDebugInfo_;
+
+ protected:
+  // Per-column timing stats for tracking decompression time. May be null.
+  // In the protected section to allow access by derived classes.
+  PerColumnTimingStats* columnTimingStats_{nullptr};
 };
 
 } // namespace facebook::velox::dwio::common::compression

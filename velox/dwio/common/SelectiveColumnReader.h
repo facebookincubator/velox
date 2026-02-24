@@ -180,6 +180,19 @@ class SelectiveColumnReader {
   /// last 'read().
   virtual void getValues(const RowSet& rows, VectorPtr* result) = 0;
 
+  /// Records decode/decompress timing for this column reader.
+  /// Should be called after read() completes.
+  void recordDecodeTiming(int64_t cpuNanos, int64_t wallNanos, int64_t rows) {
+    if (columnTimingStats_) {
+      columnTimingStats_->addTiming(cpuNanos, wallNanos, rows);
+    }
+  }
+
+  /// Returns the per-column timing stats for this reader.
+  std::shared_ptr<PerColumnTimingStats> columnTimingStats() const {
+    return columnTimingStats_;
+  }
+
   // Returns the rows that were selected/visited by the last
   // read(). If 'this' has no filter, returns 'rows' passed to last
   // read().
@@ -644,6 +657,13 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* const scanSpec_;
+
+  // Statistics for column reader operations. Owned by caller (via
+  // FormatParams).
+  ColumnReaderStatistics* const columnReaderStats_{nullptr};
+
+  // Per-column timing stats for this reader.
+  std::shared_ptr<PerColumnTimingStats> columnTimingStats_;
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.

@@ -17,6 +17,7 @@
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
 #include "velox/common/process/TraceContext.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
@@ -461,7 +462,15 @@ void SelectiveStructColumnReaderBase::read(
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
         reader->resetInitTimeClocks();
-        reader->read(offset, activeRows, structNulls);
+        {
+          CpuWallTiming timing;
+          {
+            CpuWallTimer cpuWallTimer(timing);
+            reader->read(offset, activeRows, structNulls);
+          }
+          reader->recordDecodeTiming(
+              timing.cpuNanos, timing.wallNanos, activeRows.size());
+        }
 
         // Exclude initialization time.
         timer.subtract(reader->initTimeClocks());
@@ -473,7 +482,13 @@ void SelectiveStructColumnReaderBase::read(
         break;
       }
     } else {
-      reader->read(offset, activeRows, structNulls);
+      CpuWallTiming timing;
+      {
+        CpuWallTimer cpuWallTimer(timing);
+        reader->read(offset, activeRows, structNulls);
+      }
+      reader->recordDecodeTiming(
+          timing.cpuNanos, timing.wallNanos, activeRows.size());
     }
   }
 

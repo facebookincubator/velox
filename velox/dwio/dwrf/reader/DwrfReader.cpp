@@ -166,7 +166,8 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.offset(),
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
-      stripeIndex_);
+      stripeIndex_,
+      columnReaderStatistics_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -268,6 +269,9 @@ DwrfRowReader::DwrfRowReader(
       columnReaderStatistics_{
           std::make_shared<dwio::common::ColumnReaderStatistics>()},
       currentUnit_{nullptr} {
+  // Set the flag to control per-column timing stats collection.
+  columnReaderStatistics_->collectTimingStats =
+      options_.collectColumnTimingStats();
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;

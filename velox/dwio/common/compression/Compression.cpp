@@ -17,6 +17,7 @@
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/common/compression/LzoDecompressor.h"
 #include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/PagedInputStream.h"
 
 #include <folly/logging/xlog.h>
@@ -25,8 +26,18 @@
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
+#include <ctime>
 
 namespace facebook::velox::dwio::common::compression {
+
+namespace {
+// Helper to get current CPU time in nanoseconds.
+inline int64_t getCompressionCpuTimeNs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
+}
+} // namespace
 
 using dwio::common::encryption::Decrypter;
 using dwio::common::encryption::Encrypter;
@@ -513,8 +524,9 @@ class ZlibDecompressionStream : public PagedInputStream,
       const std::string& streamDebugInfo,
       bool isGzip = false,
       bool useRawDecompression = false,
-      size_t compressedLength = 0)
-      : PagedInputStream{std::move(inStream), pool, streamDebugInfo, useRawDecompression, compressedLength},
+      size_t compressedLength = 0,
+      PerColumnTimingStats* columnTimingStats = nullptr)
+      : PagedInputStream{std::move(inStream), pool, streamDebugInfo, useRawDecompression, compressedLength, columnTimingStats},
         ZlibDecompressor{blockSize, windowBits, streamDebugInfo, isGzip} {}
   ~ZlibDecompressionStream() override = default;
 
@@ -568,6 +580,11 @@ bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
     prepareOutputBuffer(
         getDecompressedLength(inputBufferPtr_, availSize).first);
 
+    int64_t startTimeNs = 0;
+    if (columnTimingStats_) {
+      startTimeNs = getCompressionCpuTimeNs();
+    }
+
     reset();
     int32_t result;
     *size = 0;
@@ -611,6 +628,11 @@ bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
         }
       } while (zstream_.avail_out == 0);
     } while (result != Z_STREAM_END);
+
+    if (columnTimingStats_) {
+      const auto elapsedNs = getCompressionCpuTimeNs() - startTimeNs;
+      columnTimingStats_->addDecompressTime(elapsedNs);
+    }
 
     if (data) {
       *data = outputBufferPtr_;
@@ -675,7 +697,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     const std::string& streamDebugInfo,
     const Decrypter* decrypter,
     bool useRawDecompression,
-    size_t compressedLength) {
+    size_t compressedLength,
+    PerColumnTimingStats* columnTimingStats) {
   std::unique_ptr<Decompressor> decompressor;
   switch (static_cast<int64_t>(kind)) {
     case CompressionKind::CompressionKind_NONE:
@@ -696,7 +719,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
             streamDebugInfo,
             false,
             useRawDecompression,
-            compressedLength);
+            compressedLength,
+            columnTimingStats);
       }
       decompressor = std::make_unique<ZlibDecompressor>(
           blockSize, options.format.zlib.windowBits, streamDebugInfo, false);
@@ -713,7 +737,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
             streamDebugInfo,
             true,
             useRawDecompression,
-            compressedLength);
+            compressedLength,
+            columnTimingStats);
       }
       decompressor = std::make_unique<ZlibDecompressor>(
           blockSize, options.format.zlib.windowBits, streamDebugInfo, true);
@@ -748,7 +773,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
       decrypter,
       streamDebugInfo,
       useRawDecompression,
-      compressedLength);
+      compressedLength,
+      columnTimingStats);
 }
 
 } // namespace facebook::velox::dwio::common::compression

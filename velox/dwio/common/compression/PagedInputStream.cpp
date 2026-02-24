@@ -16,7 +16,20 @@
 
 #include "velox/dwio/common/compression/PagedInputStream.h"
 
+#include <ctime>
+
+#include "velox/dwio/common/Statistics.h"
+
 namespace facebook::velox::dwio::common::compression {
+
+namespace {
+// Helper to get current CPU time in nanoseconds.
+inline int64_t getCpuTimeNs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
+}
+} // namespace
 
 void PagedInputStream::prepareOutputBuffer(uint64_t uncompressedLength) {
   if (!outputBuffer_ || uncompressedLength > outputBuffer_->capacity()) {
@@ -186,11 +199,19 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
       outputBufferPtr_ = nullptr;
     } else {
       prepareOutputBuffer(decompressedLength);
+      int64_t startTimeNs = 0;
+      if (columnTimingStats_) {
+        startTimeNs = getCpuTimeNs();
+      }
       outputBufferLength_ = decompressor_->decompress(
           input,
           remainingLength_,
           outputBuffer_->data(),
           outputBuffer_->capacity());
+      if (columnTimingStats_) {
+        const auto elapsedNs = getCpuTimeNs() - startTimeNs;
+        columnTimingStats_->addDecompressTime(elapsedNs);
+      }
       if (data) {
         *data = outputBuffer_->data();
       }

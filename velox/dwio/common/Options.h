@@ -475,6 +475,19 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
+  /// Returns whether per-column timing stats collection is enabled.
+  /// When enabled, CPU time for decode and decompress operations will be
+  /// tracked per column. This adds some overhead (~100ns per operation).
+  bool collectColumnTimingStats() const {
+    return collectColumnTimingStats_;
+  }
+
+  /// Enable or disable per-column timing stats collection.
+  /// Disabled by default to avoid overhead in production.
+  void setCollectColumnTimingStats(bool collect) {
+    collectColumnTimingStats_ = collect;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -539,6 +552,9 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
+  // When true, collect per-column timing stats for decode/decompress.
+  // Disabled by default to avoid overhead (~100ns per operation).
+  bool collectColumnTimingStats_{false};
 };
 
 /// Options for creating a Reader.
