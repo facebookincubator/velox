@@ -206,8 +206,13 @@ class NonNumericArbitrary : public exec::Aggregate {
           result->get()->copyRanges(currentSource->get(), copyRanges_);
         } else {
           if (copyRanges_.size() == 1 && copyRanges_[0].count == numGroups) {
-            *result = currentSource->get()->slice(
-                copyRanges_[0].sourceIndex, copyRanges_[0].count);
+            if (copyRanges_[0].sourceIndex == 0 &&
+                currentSource->get()->size() == numGroups) {
+              *result = *currentSource;
+            } else {
+              *result = currentSource->get()->slice(
+                  copyRanges_[0].sourceIndex, copyRanges_[0].count);
+            }
           } else {
             prepareGroupIndices(numGroups, result->get()->pool());
             applyToEachRange(
