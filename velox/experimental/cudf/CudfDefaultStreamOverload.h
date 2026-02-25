@@ -32,6 +32,6 @@ namespace cudf {
 struct allow_default_stream_t {};
 constexpr allow_default_stream_t allow_default_stream{};
 
-rmm::cuda_stream_view get_default_stream(allow_default_stream_t);
+rmm::cuda_stream_view const get_default_stream(allow_default_stream_t);
 
 } // namespace cudf

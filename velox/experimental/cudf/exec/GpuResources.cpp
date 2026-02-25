@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <cudf/detail/utilities/stream_pool.hpp>
@@ -156,7 +157,7 @@ rmm::device_async_resource_ref get_output_mr() {
 // __attribute__((error)). The overload below calls the real function.
 namespace cudf {
 
-rmm::cuda_stream_view get_default_stream(allow_default_stream_t) {
+rmm::cuda_stream_view const get_default_stream(allow_default_stream_t) {
   return cudf::get_default_stream();
 }
 
