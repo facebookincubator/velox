@@ -98,6 +98,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   arrow::Encoding::type encoding = arrow::Encoding::kPlain;
 
   std::shared_ptr<CodecOptions> codecOptions;
+  std::optional<int32_t> compressionLevel;
   std::unordered_map<std::string, common::CompressionKind>
       columnCompressionsMap;
 
@@ -153,6 +154,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch-size";
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
+  static constexpr const char* kParquetSessionCompressionLevel =
+      "parquet.writer.compression_level";
+  static constexpr const char* kParquetHiveConnectorCompressionLevel =
+      "parquet.writer.compression-level";
 
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
