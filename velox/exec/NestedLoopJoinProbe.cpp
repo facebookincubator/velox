@@ -15,6 +15,7 @@
  */
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/DriverStats.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -56,7 +57,7 @@ NestedLoopJoinProbe::NestedLoopJoinProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "NestedLoopJoinProbe"),
+          OperatorType::kNestedLoopJoinProbe),
       joinType_(joinNode->joinType()),
       outputBatchSize_{outputBatchRows()},
       joinNode_(joinNode) {

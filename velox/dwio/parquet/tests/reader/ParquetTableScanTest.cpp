@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h" // @manual
@@ -24,7 +25,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -37,6 +37,7 @@ using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
 using namespace facebook::velox::test;
+using namespace facebook::velox::common::testutil;
 
 class ParquetTableScanTest : public HiveConnectorTestBase {
  protected:
@@ -873,6 +874,10 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       .split(makeSplit(filePath->getPath()))
       .assertResults("SELECT A FROM tmp");
 
+  // Wait for all tasks to be deleted to avoid race condition between async IO
+  // preloading and TempFilePath destruction.
+  waitForAllTasksToBeDeleted();
+
   // Test reading table with non-ascii names.
   auto vectorsNonAsciiNames = {makeRowVector(
       {"Товары", "国Ⅵ", "\uFF21", "\uFF22"},
@@ -882,8 +887,9 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
           makeFlatVector<float>(20, [](auto row) { return row + 1; }),
           makeFlatVector<int32_t>(20, [](auto row) { return row + 1; }),
       })};
-  filePath = TempFilePath::create();
-  writeToParquetFile(filePath->getPath(), vectorsNonAsciiNames, options);
+
+  auto filePath2 = TempFilePath::create();
+  writeToParquetFile(filePath2->getPath(), vectorsNonAsciiNames, options);
   createDuckDbTable(vectorsNonAsciiNames);
 
   plan = PlanBuilder()
@@ -897,8 +903,10 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
           kHiveConnectorId,
           connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
           "true")
-      .split(makeSplit(filePath->getPath()))
+      .split(makeSplit(filePath2->getPath()))
       .assertResults("SELECT * FROM tmp");
+
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(ParquetTableScanTest, rowIndex) {
@@ -1225,8 +1233,8 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
       {"p", "m", "a"},
       {primitiveVector, mapVector, arrayVector}); // columns in data file
 
-  const std::shared_ptr<exec::test::TempDirectoryPath> dataFileFolder =
-      exec::test::TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> dataFileFolder =
+      TempDirectoryPath::create();
   auto filePath = dataFileFolder->getPath() + "/" + "nested_data.parquet";
   WriterOptions options;
   options.writeInt96AsTimestamp = false;
@@ -1301,8 +1309,8 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
       {makeFlatVector<int64_t>(kSize, [](auto row) { return row; }),
        makeFlatVector<int64_t>(kSize, [](auto row) { return row * 4; })});
 
-  const std::shared_ptr<exec::test::TempDirectoryPath> dataFileFolder =
-      exec::test::TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> dataFileFolder =
+      TempDirectoryPath::create();
   auto filePath = dataFileFolder->getPath() + "/" + "data.parquet";
   WriterOptions options;
   options.writeInt96AsTimestamp = false;
@@ -1505,8 +1513,8 @@ TEST_F(ParquetTableScanTest, intToBigintRead) {
   RowVectorPtr bigintDataFileVectors = makeRowVector(
       {"c1"}, {makeFlatVector<int64_t>(kSize, [](auto row) { return row; })});
 
-  const std::shared_ptr<exec::test::TempDirectoryPath> dataFileFolder =
-      exec::test::TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> dataFileFolder =
+      TempDirectoryPath::create();
   auto filePath = dataFileFolder->getPath() + "/" + "data.parquet";
   WriterOptions options;
   options.writeInt96AsTimestamp = false;
@@ -1553,8 +1561,8 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
       {makeFlatVector<int64_t>(unscaledShortValues, DECIMAL(8, 2)),
        makeFlatVector<int128_t>(longDecimalValues, DECIMAL(22, 5))});
 
-  const std::shared_ptr<exec::test::TempDirectoryPath> dataFileFolder =
-      exec::test::TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> dataFileFolder =
+      TempDirectoryPath::create();
   auto filePath = getExampleFilePath("decimal.parquet");
 
   auto rowType = ROW({"c1", "c2"}, {DECIMAL(8, 2), DECIMAL(22, 5)});

@@ -27,6 +27,7 @@ BUILD_GEOS="${BUILD_GEOS:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
+EXTRA_ARROW_PATCH=${EXTRA_ARROW_PATCH:-""}
 SIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION:-"OFF"}
 
 USE_CLANG="${USE_CLANG:-false}"
@@ -189,6 +190,10 @@ function install_arrow {
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
     git apply "$VELOX_ARROW_CMAKE_PATCH"
+    # Presto needs this for Arrow Flight
+    if [[ -n $EXTRA_ARROW_PATCH ]]; then
+      git apply "$EXTRA_ARROW_PATCH"
+    fi
   ) || exit 1
 
   cmake_install_dir arrow/cpp \

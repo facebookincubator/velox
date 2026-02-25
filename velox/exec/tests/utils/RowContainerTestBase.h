@@ -16,15 +16,17 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/RowContainer.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::exec::test {
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 class RowContainerTestBase : public testing::Test,
                              public velox::test::VectorTestBase {

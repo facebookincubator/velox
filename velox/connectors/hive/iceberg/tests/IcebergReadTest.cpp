@@ -36,6 +36,7 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::test;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::connector::hive::iceberg {
 

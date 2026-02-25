@@ -1062,6 +1062,22 @@ TEST_P(MemoryPoolTest, allocatorOverflow) {
   EXPECT_THROW(alloc.deallocate(nullptr, 1ULL << 62), VeloxException);
 }
 
+TEST_P(MemoryPoolTest, allocatorSwap) {
+  MemoryManager& manager = *getMemoryManager();
+  auto root = manager.addRootPool("swapRoot");
+  auto leaf1 = root->addLeafChild("leaf1");
+  auto leaf2 = root->addLeafChild("leaf2");
+
+  StlAllocator<int64_t> alloc1(*leaf1);
+  StlAllocator<int64_t> alloc2(*leaf2);
+  ASSERT_EQ(alloc1.pool, leaf1.get());
+  ASSERT_EQ(alloc2.pool, leaf2.get());
+
+  std::swap(alloc1, alloc2);
+  EXPECT_EQ(alloc1.pool, leaf2.get());
+  EXPECT_EQ(alloc2.pool, leaf1.get());
+}
+
 TEST_P(MemoryPoolTest, contiguousAllocate) {
   auto manager = getMemoryManager();
   auto pool = manager->addLeafPool("contiguousAllocate");

@@ -148,12 +148,18 @@ TEST_P(RawVectorTest, copyAndMove) {
 }
 
 TEST_P(RawVectorTest, iota) {
+  constexpr int kSizeThreshold = 1'000'000;
   raw_vector<int32_t> storage =
       makeRawVector(0, GetParam().useMemoryPool ? pool_.get() : nullptr);
   // Small sizes are preallocated.
   EXPECT_EQ(11, iota(12, storage)[11]);
+  EXPECT_EQ(6, iota(12, storage, 5)[1]);
+  EXPECT_EQ(
+      kSizeThreshold - 1, iota(kSizeThreshold, storage)[kSizeThreshold - 1]);
   EXPECT_TRUE(storage.empty());
-  EXPECT_EQ(110000, iota(110001, storage)[110000]);
+  EXPECT_EQ(
+      2 * kSizeThreshold - 1,
+      iota(2 * kSizeThreshold, storage)[2 * kSizeThreshold - 1]);
   // Larger sizes are allocated in 'storage'.
   EXPECT_FALSE(storage.empty());
 }

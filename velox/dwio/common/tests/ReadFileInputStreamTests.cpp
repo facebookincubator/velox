@@ -15,8 +15,8 @@
  */
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/common/InputStream.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 #include <string_view>
 #include "folly/io/Cursor.h"
@@ -24,6 +24,7 @@
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio::common;
 using facebook::velox::common::Region;
 
@@ -35,7 +36,7 @@ class ReadFileInputStreamTest : public testing::Test {
 };
 
 TEST_F(ReadFileInputStreamTest, LocalReadFile) {
-  auto tempFile = exec::test::TempFilePath::create();
+  auto tempFile = TempFilePath::create();
   const auto& filename = tempFile->getPath();
   remove(filename.c_str());
   {

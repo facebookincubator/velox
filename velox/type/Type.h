@@ -1622,6 +1622,32 @@ class TimeType final : public BigintType {
     return true;
   }
 
+  /// Converts microseconds since midnight to a compact ISO-8601 time string by
+  /// following rules:
+  /// - Base format is HH:MM.
+  /// - Seconds are included only if seconds > 0 or fractional seconds > 0.
+  /// - Fractional seconds are included only if microseconds > 0.
+  /// - Fractional precision is 3 digits (milliseconds) if microseconds are
+  ///   divisible by 1000, otherwise 6 digits (microseconds).
+  /// The output will be one of the following ISO-8601 formats:
+  /// - HH:mm
+  /// - HH:mm:ss
+  /// - HH:mm:ss.SSS
+  /// - HH:mm:ss.SSSSSS
+  /// Examples (microseconds -> string):
+  /// - 0 -> "00:00"
+  /// - 1 -> "00:00:00.000001"
+  /// - 100'000 -> "00:00:00.100"
+  /// - 1'000'000 -> "00:00:01"
+  /// - 1'000 -> "00:00:00.001"
+  /// - 38'000 -> "00:00:00.038"
+  /// - 38'001 -> "00:00:00.038001"
+  /// - 38'100 -> "00:00:00.038100"
+  /// - 29'288'000'000 -> "08:08:08"
+  /// - 36'775'038'000 -> "10:12:55.038"
+  /// - 86'399'999'999 -> "23:59:59.999999"
+  static std::string toCompactIso8601(int64_t microseconds);
+
   // When casting from TIME to varchar , the resultant varchar will always
   // be 12 bytes long (HH:MM:SS.mmm).
   static const size_t kTimeToVarcharRowSize = 12;
