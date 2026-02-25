@@ -22,11 +22,6 @@ namespace facebook::velox::cudf_velox {
 struct CudfQueryConfig {
   // Query config key for the TopN batch size in the cuDF TopN operator.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
-
-  // Query config key to enable concat optimization insertion (default: false).
-  static constexpr const char* kCudfConcatOptimizationEnabled{
-      "cudf.concat_optimization_enabled"};
-  static constexpr bool isConcatOptimizationEnabledDefault{false};
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -44,6 +44,8 @@ struct CudfConfig {
       "cudf.batch_size_min_threshold"};
   static constexpr const char* kCudfBatchSizeMaxThreshold{
       "cudf.batch_size_max_threshold"};
+  static constexpr const char* kCudfConcatOptimizationEnabled{
+      "cudf.concat_optimization_enabled"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -93,6 +95,15 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  /// Whether to insert CudfBatchConcat operators before supported Cudf
+  /// operators.
+  /// This can improve performance by reducing the number of cuda kernel
+  /// launches on addInput of certain operators by collecting a minimum number
+  /// of rows before concatenating and passing on to the next operator.
+  /// This batch size is determined by batchSizeMinThreshold and
+  /// batchSizeMaxThreshold
+  bool concatOptimizationEnabled{false};
 
   /// Minimum rows to accumulate before GPU-side concatenation in
   /// `CudfBatchConcat` (default 100k).

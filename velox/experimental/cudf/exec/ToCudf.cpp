@@ -15,20 +15,10 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/CudfQueryConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
-#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
-#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfLimit.h"
-#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
-#include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -37,20 +27,8 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
-#include "velox/exec/AssignUniqueId.h"
-#include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
-#include "velox/exec/FilterProject.h"
-#include "velox/exec/HashAggregation.h"
-#include "velox/exec/HashBuild.h"
-#include "velox/exec/HashProbe.h"
-#include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/OrderBy.h"
-#include "velox/exec/StreamingAggregation.h"
-#include "velox/exec/TableScan.h"
-#include "velox/exec/Task.h"
-#include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
@@ -142,37 +120,6 @@ bool CompileState::compile(bool allowCpuFallback) {
       opProps.begin(),
       getOperatorProperties);
 
-  // Operators which break batch continuity and need concat before next operator
-  // LocalPartition is not included since it is meant to break batches.
-  auto breaksBatchContinuity = [](const exec::Operator* op) {
-    return isAnyOf<
-        exec::HashProbe,
-        exec::HashBuild,
-        exec::HashAggregation,
-        exec::StreamingAggregation,
-        exec::Limit,
-        exec::OrderBy,
-        exec::TopN>(op);
-  };
-
-  // Operators which are stateless and thus concat can safely be inserted before
-  auto NoOperatorBuffering = [](const exec::Operator* op) {
-    return isAnyOf<
-        exec::FilterProject,
-        exec::HashProbe,
-        exec::HashAggregation,
-        exec::StreamingAggregation>(op);
-  };
-
-  // Determines if concat is needed before an operator
-  auto needsConcat = [breaksBatchContinuity, NoOperatorBuffering](
-                         const exec::Operator* currentOp,
-                         const exec::Operator* nextOp) {
-    // Add concat if current breaks batch and next is stateless
-    return currentOp != nullptr && nextOp != nullptr &&
-        breaksBatchContinuity(currentOp) && NoOperatorBuffering(nextOp);
-  };
-
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
@@ -251,21 +198,7 @@ bool CompileState::compile(bool allowCpuFallback) {
         isPureCpuOperator = true;
       }
     }
-    
-    // Check if batch concat needs to be added before the next operator
-    exec::Operator* nextOper = nullptr;
-    if (operatorIndex < operators.size() - 1) {
-      nextOper = operators[operatorIndex + 1];
-    }
-    if (needsConcat(oper, nextOper) && !nextOperatorIsNotGpu &&
-        ctx->queryConfig().get<bool>(
-            CudfQueryConfig::kCudfConcatOptimizationEnabled,
-            CudfQueryConfig::isConcatOptimizationEnabledDefault)) {
-      auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(
-          std::make_unique<CudfBatchConcat>(oper->operatorId(), ctx, planNode));
-    }
-    
+
     if (thisOpProps.producesGpuOutput and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
