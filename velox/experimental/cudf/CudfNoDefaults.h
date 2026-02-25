@@ -34,7 +34,8 @@
 // resource, use get_temp_mr(). It calls the underlying RMM
 // function directly, bypassing the error-attributed cudf wrapper.
 
-#include <rmm/cuda_stream_view.hpp>
+#include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
+
 #include <rmm/mr/per_device_resource.hpp>
 #include <rmm/resource_ref.hpp>
 
@@ -50,11 +51,6 @@ __attribute__((
     error("cudf default memory resource argument used. Pass mr explicitly."),
     noinline)) rmm::device_async_resource_ref
 get_current_device_resource_ref();
-
-struct allow_default_stream_t {};
-constexpr allow_default_stream_t allow_default_stream{};
-
-rmm::cuda_stream_view get_default_stream(allow_default_stream_t);
 
 #endif
 

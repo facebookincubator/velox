@@ -156,10 +156,8 @@ rmm::device_async_resource_ref get_output_mr() {
 // __attribute__((error)). The overload below calls the real function.
 namespace cudf {
 
-struct allow_default_stream_t {};
-constexpr allow_default_stream_t allow_default_stream{};
-
 rmm::cuda_stream_view get_default_stream(allow_default_stream_t) {
   return cudf::get_default_stream();
 }
+
 } // namespace cudf
