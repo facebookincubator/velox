@@ -524,6 +524,27 @@ TEST_F(AggregationTest, countStarGlobalPartialIntermediateFinalZeroColumns) {
   assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 0");
 }
 
+TEST_F(AggregationTest, countStarGlobalPartialFinalZeroColumnsLocalPartition) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("c0 > 0")
+                  .project({})
+                  .partialAggregation({}, {"count(*)"})
+                  .localPartitionRoundRobin()
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2")
+      .plan(plan)
+      .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
+}
+
 TEST_F(AggregationTest, countStarVsCountColumnSingleGlobalNulls) {
   auto data = makeRowVector({
       makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt}),
