@@ -20,11 +20,19 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <deque>
 #include <functional>
+#include <memory>
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
+// #ifdef PRESTO_ENABLE_CUDF
+#include "velox/experimental/cudf/common/CudfConfig.h"
+// #endif
+
+namespace facebook::velox::cudf_velox {
+class CudfQueryConfig;
+}
 
 namespace facebook::velox::exec::trace {
 class TraceCtx;
@@ -114,7 +122,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
       std::string queryId = "",
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
+      cudf_velox::CudfQueryConfig&& cudfConfig = cudf_velox::CudfQueryConfig());
 
   /// Builder pattern for constructing QueryCtx instances.
   ///
@@ -187,6 +196,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    Builder& cudfConfig(cudf_velox::CudfQueryConfig cudfConfig) {
+      cudfConfig_ = std::move(cudfConfig);
+      return *this;
+    }
+
     /// Constructs and returns a QueryCtx with the configured parameters.
     ///
     /// @return Shared pointer to the newly created QueryCtx instance
@@ -204,6 +218,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
+    cudf_velox::CudfQueryConfig cudfConfig_{cudf_velox::CudfQueryConfig()};
   };
 
   /// Generates a unique memory pool name for a query.
@@ -236,6 +251,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   const QueryConfig& queryConfig() const {
     return queryConfig_;
+  }
+
+  const cudf_velox::CudfQueryConfig& cudfConfig() const {
+    return cudfQueryConfig_;
   }
 
   config::ConfigBase* connectorSessionProperties(
@@ -346,7 +365,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       folly::Executor* spillExecutor = nullptr,
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
-      TraceCtxProvider traceCtxProvider = nullptr);
+      TraceCtxProvider traceCtxProvider = nullptr,
+      cudf_velox::CudfQueryConfig&& cudfConfig = cudf_velox::CudfQueryConfig());
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -414,6 +434,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
   QueryConfig queryConfig_;
+  cudf_velox::CudfQueryConfig cudfQueryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
   std::atomic<uint64_t> numTracedBytes_{0};
 

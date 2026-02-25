@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
@@ -97,12 +97,15 @@ void CudfTpchBenchmark::initialize() {
     connector::registerConnector(cudfHiveConnector);
   }
 
-  cudf_velox::CudfConfig::getInstance().memoryResource =
-      FLAGS_cudf_memory_resource;
-  cudf_velox::CudfConfig::getInstance().memoryPercent =
-      FLAGS_cudf_memory_percent;
-
-  cudf_velox::CudfConfig::getInstance().debugEnabled = FLAGS_cudf_debug_enabled;
+  cudf_velox::CudfSystemConfig::getInstance().set(
+      cudf_velox::CudfSystemConfig::kCudfMemoryResource,
+      FLAGS_cudf_memory_resource);
+  cudf_velox::CudfSystemConfig::getInstance().set(
+      cudf_velox::CudfSystemConfig::kCudfMemoryPercent,
+      folly::to<std::string>(FLAGS_cudf_memory_percent));
+  cudf_velox::CudfSystemConfig::getInstance().set(
+      cudf_velox::CudfQueryConfig::kCudfDebugEnabledEntry.name,
+      FLAGS_cudf_debug_enabled ? "true" : "false");
   // Enable cuDF operators
   cudf_velox::registerCudf();
 

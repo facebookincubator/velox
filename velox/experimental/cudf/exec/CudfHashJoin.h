@@ -72,12 +72,16 @@ class CudfHashJoinBridge : public exec::JoinBridge {
 
   std::optional<rmm::cuda_stream_view> getBuildStream();
 
+  void setDebugEnabled(bool debugEnabled);
+
  private:
   /** @brief Hash tables and join objects transferred from build to probe
    * operators */
   std::optional<hash_type> hashObject_;
   /** @brief CUDA stream used by build operator for proper synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+
+  bool debugEnabled_{false};
 };
 
 /**

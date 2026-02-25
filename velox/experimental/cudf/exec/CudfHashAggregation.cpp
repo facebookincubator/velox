@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -682,8 +682,9 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     uint32_t inputIndex,
     VectorPtr constant,
     bool isGlobal,
-    const TypePtr& resultType) {
-  auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+    const TypePtr& resultType,
+    const cudf_velox::CudfQueryConfig& cudfConfig) {
+  auto prefix = cudfConfig.functionNamePrefix();
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);
@@ -810,8 +811,15 @@ auto toAggregators(
         ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
         : outputType->childAt(numKeys + i);
 
+    auto cudfConfig = operatorCtx.execCtx()->queryCtx()->cudfConfig();
     aggregators.push_back(createAggregator(
-        companionStep, kind, inputIndex, constant, isGlobal, resultType));
+        companionStep,
+        kind,
+        inputIndex,
+        constant,
+        isGlobal,
+        resultType,
+        *cudfConfig));
   }
   return aggregators;
 }
@@ -837,8 +845,9 @@ auto toIntermediateAggregators(
     if (exec::isPartialOutput(companionStep)) {
       const auto resultType =
           exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
+      auto cudfConfig = operatorCtx.execCtx()->queryCtx()->cudfConfig();
       aggregators.push_back(createAggregator(
-          step, kind, inputIndex, constant, isGlobal, resultType));
+          step, kind, inputIndex, constant, isGlobal, resultType, *cudfConfig));
     } else {
       // Final step aggregator will not use the intermediate aggregator.
       aggregators.push_back(nullptr);

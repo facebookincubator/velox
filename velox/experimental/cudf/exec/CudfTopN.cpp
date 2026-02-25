@@ -13,19 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
-#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
-
-#include <algorithm>
 
 namespace facebook::velox::cudf_velox {
 CudfTopN::CudfTopN(
@@ -44,8 +40,9 @@ CudfTopN::CudfTopN(
           fmt::format("[{}]", topNNode->id())),
       count_(topNNode->count()),
       topNNode_(topNNode),
-      kBatchSize_(CudfConfig::getInstance().topNBatchSize),
-      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
+      kBatchSize_(0) {
+  kBatchSize_ =
+      operatorCtx_->execCtx()->queryCtx()->cudfConfig().topNBatchSize();
   const auto numColumns{outputType_->children().size()};
   const auto numSortingKeys{topNNode->sortingKeys().size()};
   std::vector<bool> isSortingKey(numColumns);
@@ -78,21 +75,11 @@ CudfVectorPtr CudfTopN::mergeTopK(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   std::vector<cudf::table_view> tableViews;
-  std::vector<rmm::cuda_stream_view> inputStreams;
-  tableViews.reserve(topNBatches.size());
-  inputStreams.reserve(topNBatches.size());
   for (const auto& batch : topNBatches) {
-    if (!batch) {
-      continue;
-    }
     tableViews.push_back(batch->getTableView());
-    inputStreams.push_back(batch->stream());
   }
-  cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
-  // Ensure input-stream deallocations don't race with merge stream.
-  streamsWaitForStream(*cudaEvent_, inputStreams, stream);
   // slice it
   auto topk =
       cudf::split(

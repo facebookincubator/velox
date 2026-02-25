@@ -19,6 +19,10 @@
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/config/Config.h"
 
+#ifdef VELOX_ENABLE_CUDF
+#include "velox/experimental/cudf/common/CudfConfig.h"
+#endif
+
 namespace facebook::velox::core {
 
 // static
@@ -31,7 +35,8 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
     std::string queryId,
-    std::shared_ptr<filesystems::TokenProvider> tokenProvider) {
+    std::shared_ptr<filesystems::TokenProvider> tokenProvider,
+    cudf_velox::CudfQueryConfig&& cudfConfig) {
   return QueryCtx::Builder()
       .executor(executor)
       .queryConfig(std::move(queryConfig))
@@ -41,6 +46,7 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
       .spillExecutor(spillExecutor)
       .queryId(std::move(queryId))
       .tokenProvider(std::move(tokenProvider))
+      .cudfConfig(std::move(cudfConfig))
       .build();
 }
 
@@ -72,7 +78,8 @@ QueryCtx::QueryCtx(
     folly::Executor* spillExecutor,
     const std::string& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider,
-    TraceCtxProvider traceCtxProvider)
+    TraceCtxProvider traceCtxProvider,
+    cudf_velox::CudfQueryConfig&& cudfConfig)
     : queryId_(queryId),
       executor_(executor),
       spillExecutor_(spillExecutor),
@@ -80,6 +87,7 @@ QueryCtx::QueryCtx(
       connectorSessionProperties_(connectorSessionProperties),
       pool_(std::move(pool)),
       queryConfig_{std::move(queryConfig)},
+      cudfQueryConfig_(std::move(cudfConfig)),
       fsTokenProvider_(std::move(tokenProvider)),
       traceCtxProvider_(std::move(traceCtxProvider)) {
   initPool(queryId);
