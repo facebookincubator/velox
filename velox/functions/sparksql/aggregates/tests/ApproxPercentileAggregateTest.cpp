@@ -113,8 +113,9 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
       expected = "SELECT NULL";
       expectedArray = "SELECT NULL";
     } else if (
-        (std::is_same<T, float>::value && isnan(expectedResult.value())) ||
-        (std::is_same<T, double>::value && isnan(expectedResult.value()))) {
+        (std::is_same<T, float>::value && std::isnan(expectedResult.value())) ||
+        (std::is_same<T, double>::value &&
+         std::isnan(expectedResult.value()))) {
       expected = "SELECT 'NaN'";
       expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'NaN'");
     } else if (
@@ -159,7 +160,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     disableTestStreaming();
     testAggregationsWithCompanion(
         {rows},
-        [](auto& /*builder*/) {},
+        [](PlanBuilder& /*builder*/) {},
         {},
         {functionCall(false, percentile, accuracy, -1)},
         {getArgTypes(values->type(), accuracy, -1)},
@@ -214,7 +215,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     disableTestStreaming();
     testAggregationsWithCompanion(
         {rows},
-        [](auto& /*builder*/) {},
+        [](PlanBuilder& /*builder*/) {},
         {"c0"},
         {functionCall(true, percentile, accuracy, -1)},
         {getArgTypes(values->type(), accuracy, -1)},
