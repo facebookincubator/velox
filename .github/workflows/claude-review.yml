@@ -274,10 +274,39 @@ jobs:
               const executionLog = JSON.parse(fileContent);
 
               // Log structure for debugging
-              console.log('Execution log keys:', Object.keys(executionLog));
+              console.log('Execution log type:', Array.isArray(executionLog) ? 'array' : typeof executionLog);
+              if (!Array.isArray(executionLog)) {
+                console.log('Execution log keys:', Object.keys(executionLog));
+              }
+
+              // Helper function to extract text from assistant messages
+              const extractFromMessages = (messages) => {
+                const assistantMessages = messages.filter(m => m.role === 'assistant');
+                if (assistantMessages.length > 0) {
+                  const lastMessage = assistantMessages[assistantMessages.length - 1];
+                  if (typeof lastMessage.content === 'string') {
+                    return lastMessage.content;
+                  } else if (Array.isArray(lastMessage.content)) {
+                    return lastMessage.content
+                      .filter(block => block.type === 'text')
+                      .map(block => block.text)
+                      .join('\n\n');
+                  }
+                }
+                return null;
+              };
 
               // Try different possible structures from claude-code-base-action
-              if (executionLog.result) {
+              if (Array.isArray(executionLog)) {
+                // claude-code-base-action writes messages array directly to file
+                const extracted = extractFromMessages(executionLog);
+                if (extracted) {
+                  reviewBody = extracted;
+                } else {
+                  console.log('No assistant messages found in array');
+                  reviewBody = '⚠️ No assistant response found in execution log.';
+                }
+              } else if (executionLog.result) {
                 // Direct result field
                 reviewBody = executionLog.result;
               } else if (executionLog.output) {
@@ -287,18 +316,12 @@ jobs:
                 // Response field
                 reviewBody = executionLog.response;
               } else if (executionLog.messages && Array.isArray(executionLog.messages)) {
-                // Messages array format
-                const assistantMessages = executionLog.messages.filter(m => m.role === 'assistant');
-                if (assistantMessages.length > 0) {
-                  const lastMessage = assistantMessages[assistantMessages.length - 1];
-                  if (typeof lastMessage.content === 'string') {
-                    reviewBody = lastMessage.content;
-                  } else if (Array.isArray(lastMessage.content)) {
-                    reviewBody = lastMessage.content
-                      .filter(block => block.type === 'text')
-                      .map(block => block.text)
-                      .join('\n\n');
-                  }
+                // Messages array inside object
+                const extracted = extractFromMessages(executionLog.messages);
+                if (extracted) {
+                  reviewBody = extracted;
+                } else {
+                  reviewBody = '⚠️ No assistant response found in messages.';
                 }
               } else if (typeof executionLog === 'string') {
                 // Plain string
@@ -355,11 +378,22 @@ jobs:
           echo "=== DRY RUN - Review would be posted as comment ==="
           echo ""
           echo "=== Execution file structure ==="
-          jq 'keys' "$EXECUTION_FILE" 2>/dev/null || echo "Not valid JSON or file not found"
+          # Check if it's an array (claude-code-base-action format) or object
+          if jq -e 'type == "array"' "$EXECUTION_FILE" >/dev/null 2>&1; then
+            echo "Format: array of messages (length: $(jq 'length' "$EXECUTION_FILE"))"
+          else
+            jq 'keys' "$EXECUTION_FILE" 2>/dev/null || echo "Not valid JSON or file not found"
+          fi
           echo ""
           echo "=== Attempting to extract review ==="
-          # Try different possible paths
-          jq -r '.result // .output // .response // .messages[-1].content // "Could not extract"' "$EXECUTION_FILE" 2>/dev/null || cat "$EXECUTION_FILE"
+          # Try array format first (claude-code-base-action), then object formats
+          if jq -e 'type == "array"' "$EXECUTION_FILE" >/dev/null 2>&1; then
+            # Array format: extract last assistant message content
+            jq -r '[.[] | select(.role == "assistant")] | last | if .content | type == "string" then .content elif .content | type == "array" then [.content[] | select(.type == "text") | .text] | join("\n\n") else "Could not extract" end' "$EXECUTION_FILE" 2>/dev/null || cat "$EXECUTION_FILE"
+          else
+            # Object format: try different possible paths
+            jq -r '.result // .output // .response // .messages[-1].content // "Could not extract"' "$EXECUTION_FILE" 2>/dev/null || cat "$EXECUTION_FILE"
+          fi
           echo ""
           echo "=== End of review ==="
 
