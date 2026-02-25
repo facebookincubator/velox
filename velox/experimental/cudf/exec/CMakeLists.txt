@@ -38,6 +38,7 @@ target_link_libraries(
     velox_arrow_bridge
     velox_exception
     velox_common_base
+    velox_cudf_config
     velox_cudf_vector
     velox_exec
     velox_cudf_hive_connector

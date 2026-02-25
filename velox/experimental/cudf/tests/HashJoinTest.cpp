@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "folly/experimental/EventCount.h"
@@ -56,7 +56,8 @@ class HashJoinTest : public HashJoinTestBase {
 
   void SetUp() override {
     HashJoinTestBase::SetUp();
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::CudfConfig::getInstance().set(
+        CudfConfig::kCudfAllowCpuFallbackEntry.name, "false");
     cudf_velox::registerCudf();
   }
 

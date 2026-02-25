@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -643,7 +643,8 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     VectorPtr constant,
     bool isGlobal,
     const TypePtr& resultType) {
-  auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+  auto prefix = cudf_velox::CudfConfig::getInstance().get<std::string>(
+      cudf_velox::CudfConfig::kCudfFunctionNamePrefixEntry.name);
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<SumAggregator>(
         step, inputIndex, constant, isGlobal, resultType);

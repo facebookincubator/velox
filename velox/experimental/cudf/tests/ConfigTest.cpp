@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 
 #include <gtest/gtest.h>
 
@@ -22,15 +22,15 @@ namespace facebook::velox::cudf_velox::test {
 
 TEST(ConfigTest, CudfConfig) {
   std::unordered_map<std::string, std::string> options = {
-      {CudfConfig::kCudfEnabled, "false"},
-      {CudfConfig::kCudfDebugEnabled, "true"},
-      {CudfConfig::kCudfMemoryResource, "arena"},
-      {CudfConfig::kCudfMemoryPercent, "25"},
-      {CudfConfig::kCudfFunctionNamePrefix, "presto"},
-      {CudfConfig::kCudfAllowCpuFallback, "false"}};
+      {CudfConfig::kCudfEnabledEntry.name, "false"},
+      {CudfConfig::kCudfDebugEnabledEntry.name, "true"},
+      {CudfConfig::kCudfMemoryResourceEntry.name, "arena"},
+      {CudfConfig::kCudfMemoryPercentEntry.name, "25"},
+      {CudfConfig::kCudfFunctionNamePrefixEntry.name, "presto"},
+      {CudfConfig::kCudfAllowCpuFallbackEntry.name, "false"}};
 
   CudfConfig config;
-  config.initialize(std::move(options));
+  config.updateConfigs(std::move(options));
   ASSERT_EQ(config.enabled, false);
   ASSERT_EQ(config.debugEnabled, true);
   ASSERT_EQ(config.memoryResource, "arena");

@@ -24,6 +24,7 @@
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/IConfig.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::config {
 
@@ -117,6 +118,12 @@ class ConfigBase : public IConfig {
   bool valueExists(const std::string& key) const;
 
   const std::unordered_map<std::string, std::string>& rawConfigs() const;
+
+  /// Get the TypePtr for a config key. Subclasses can override to provide type
+  /// info.
+  virtual velox::TypePtr getType(const std::string& key) const {
+    VELOX_FAIL("getType not implemented for key: {}", key);
+  }
 
   std::unordered_map<std::string, std::string> rawConfigsCopy() const final;
 
