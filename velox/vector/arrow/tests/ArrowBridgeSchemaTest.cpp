@@ -240,6 +240,13 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(DECIMAL(10, 4), "d:10,4");
   testScalarType(DECIMAL(20, 15), "d:20,15");
 
+#if ARROW_VERSION_MAJOR >= 18
+  testScalarType(DECIMAL(10, 4), "d:10,4,64", {.useDecimalTypeWidth = true});
+#else
+  testScalarType(DECIMAL(10, 4), "d:10,4,128", {.useDecimalTypeWidth = true});
+#endif
+  testScalarType(DECIMAL(20, 15), "d:20,15,128", {.useDecimalTypeWidth = true});
+
   testScalarType(UNKNOWN(), "n");
 }
 
@@ -431,7 +438,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   EXPECT_EQ(*DECIMAL(20, 15), *testSchemaImport("d:20,15,128"));
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,256"),
-      "Conversion failed for 'd:10,4,256'. Only 64 and 128-bit decimals are supported.");
+      "Conversion failed for 'd:10,4,256'. Only 64-bit and 128-bit decimal types are supported.");
   VELOX_ASSERT_THROW(
       *testSchemaImport("d:10,4,"),
       "Unable to convert 'd:10,4,' ArrowSchema decimal format to Velox decimal");
