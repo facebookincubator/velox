@@ -14,23 +14,80 @@
  * limitations under the License.
  */
 
-#include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
-using velox::aggregate::ApproxPercentileAggregateBase;
-using velox::aggregate::kMinValue;
+using Idx = ApproxPercentileIntermediateTypeChildIndex;
 
 namespace {
+
+/// Spark accuracy policy: accuracy is an int32 representing the reciprocal
+/// of epsilon (e.g., 10000 means epsilon = 1/10000).
+struct SparkAccuracyPolicy {
+  static constexpr double kDefaultAccuracy = 10000;
+
+  static bool isDefaultAccuracy(double /*accuracy*/) {
+    // Spark always has a valid accuracy (defaults to 10000), never "missing".
+    return false;
+  }
+
+  template <typename T>
+  static void setOnAccumulator(
+      KllSketchAccumulator<T>* accumulator,
+      double accuracy) {
+    accumulator->setSparkAccuracy(static_cast<int32_t>(accuracy));
+  }
+
+  static void checkSetAccuracy(
+      DecodedVector& decodedAccuracy,
+      const SelectivityVector& rows,
+      double& accuracy) {
+    if (decodedAccuracy.isConstantMapping()) {
+      VELOX_USER_CHECK(!decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
+      checkAndSet(accuracy, decodedAccuracy.valueAt<int32_t>(0));
+    } else {
+      rows.applyToSelected([&](auto row) {
+        VELOX_USER_CHECK(
+            !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
+        const auto currentAccuracy = decodedAccuracy.valueAt<int32_t>(row);
+        if (accuracy == kDefaultAccuracy) {
+          checkAndSet(accuracy, currentAccuracy);
+        }
+        VELOX_USER_CHECK_EQ(
+            currentAccuracy,
+            static_cast<int32_t>(accuracy),
+            "Accuracy argument must be constant");
+      });
+    }
+  }
+
+  static void checkAndSetFromIntermediate(
+      double& accuracy,
+      double inputAccuracy) {
+    checkAndSet(accuracy, static_cast<int32_t>(inputAccuracy));
+  }
+
+ private:
+  static void checkAndSet(double& accuracy, int32_t inputAccuracy) {
+    VELOX_USER_CHECK(
+        inputAccuracy > 0 &&
+            inputAccuracy <= std::numeric_limits<int32_t>::max(),
+        "Accuracy must be greater than 0 and less than or equal to "
+        "Int32.MaxValue, got {}",
+        inputAccuracy);
+    accuracy = static_cast<double>(inputAccuracy);
+  }
+};
 
 template <typename T>
 using SparkApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/false,
-    /*kAccuracyIsErrorBound=*/false>;
+    /*kAccuracyIsErrorBound=*/false,
+    SparkAccuracyPolicy>;
 
 void addSignatures(
     const std::string& inputType,
@@ -41,7 +98,7 @@ void addSignatures(
       inputType);
 
   // Signature 1: approx_percentile(T, double) -> T (single percentile, default
-  // accuracy)
+  // accuracy).
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
           .returnType(inputType)
@@ -50,7 +107,7 @@ void addSignatures(
           .argumentType("double")
           .build());
   // Signature 2: approx_percentile(T, double, integer) -> T (single percentile,
-  // explicit accuracy)
+  // explicit accuracy).
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
           .returnType(inputType)
@@ -68,7 +125,7 @@ void addSignatures(
           .argumentType("bigint")
           .build());
   // Signature 3: approx_percentile(T, array(double)) -> array(T) (percentile
-  // array, default accuracy)
+  // array, default accuracy).
   std::string arrayReturnType = fmt::format("array({})", inputType);
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
@@ -78,7 +135,7 @@ void addSignatures(
           .argumentType("array(double)")
           .build());
   // Signature 4: approx_percentile(T, array(double), integer) -> array(T)
-  // (percentile array, explicit accuracy)
+  // (percentile array, explicit accuracy).
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
           .returnType(arrayReturnType)
@@ -126,7 +183,7 @@ exec::AggregateRegistrationResult registerApproxPercentileAggregate(
 
         TypePtr type;
         if (!isRawInput && exec::isPartialOutput(step)) {
-          type = argTypes[0]->asRow().childAt(kMinValue);
+          type = argTypes[0]->asRow().childAt(static_cast<int>(Idx::kMinValue));
         } else if (isRawInput) {
           type = argTypes[0];
         } else if (resultType->isArray()) {

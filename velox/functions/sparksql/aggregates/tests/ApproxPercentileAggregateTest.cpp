@@ -87,10 +87,10 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    // Register Spark aggregate functions with "spark_" prefix
+    // Register Spark aggregate functions with "spark_" prefix.
     registerAggregateFunctions("spark_");
     random::setSeed(0);
-    // Set fixed random seed for reproducible test results
+    // Set fixed random seed for reproducible test results.
     queryConfig_
         [core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed] =
             "0";

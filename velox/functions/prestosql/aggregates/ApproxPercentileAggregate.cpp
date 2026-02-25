@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/aggregates/ApproxPercentileAggregate.h"
-#include "velox/common/base/Macros.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 namespace facebook::velox::aggregate::prestosql {
+
+using functions::aggregate::ApproxPercentileAggregateBase;
+using Idx = functions::aggregate::ApproxPercentileIntermediateTypeChildIndex;
 
 namespace {
 
@@ -158,7 +159,7 @@ void registerApproxPercentileAggregate(
 
         TypePtr type;
         if (!isRawInput && exec::isPartialOutput(step)) {
-          type = argTypes[0]->asRow().childAt(kMinValue);
+          type = argTypes[0]->asRow().childAt(static_cast<int>(Idx::kMinValue));
         } else if (isRawInput) {
           type = argTypes[0];
         } else if (resultType->isArray()) {

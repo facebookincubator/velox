@@ -23,7 +23,7 @@
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/functions/lib/KllSketch.h"
 
-namespace facebook::velox::aggregate {
+namespace facebook::velox::functions::aggregate {
 
 /// Type traits: selects NaN-aware comparator for floating-point types,
 /// and std::less for other types.
@@ -188,4 +188,4 @@ struct KllSketchAccumulator {
       largeCountValues_;
 };
 
-} // namespace facebook::velox::aggregate
+} // namespace facebook::velox::functions::aggregate

@@ -18,9 +18,7 @@
 
 #include <string>
 
-namespace facebook::velox::exec {
-struct AggregateRegistrationResult;
-}
+#include "velox/exec/AggregateUtil.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 

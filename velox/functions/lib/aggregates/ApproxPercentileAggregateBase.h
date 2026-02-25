@@ -25,9 +25,9 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::aggregate {
+namespace facebook::velox::functions::aggregate {
 
-enum ApproxPercentileIntermediateTypeChildIndex {
+enum class ApproxPercentileIntermediateTypeChildIndex {
   kPercentiles = 0,
   kPercentilesIsArray = 1,
   kAccuracy = 2,
@@ -39,7 +39,123 @@ enum ApproxPercentileIntermediateTypeChildIndex {
   kLevels = 8,
 };
 
-template <typename T, bool kHasWeight, bool kAccuracyIsErrorBound>
+/// Default accuracy policy that uses kAccuracyIsErrorBound to dispatch
+/// between Presto (error-bound) and Spark (integer accuracy) behavior.
+template <bool kAccuracyIsErrorBound>
+struct DefaultAccuracyPolicy {
+  static constexpr double kMissingNormalizedValue = -1;
+  static constexpr int32_t kSparkDefaultAccuracy = 10000;
+  static constexpr double kDefaultAccuracy = kAccuracyIsErrorBound
+      ? kMissingNormalizedValue
+      : static_cast<double>(kSparkDefaultAccuracy);
+
+  static bool isDefaultAccuracy(double accuracy) {
+    if constexpr (kAccuracyIsErrorBound) {
+      return accuracy == kMissingNormalizedValue;
+    } else {
+      return false;
+    }
+  }
+
+  template <typename T>
+  static void setOnAccumulator(
+      KllSketchAccumulator<T>* accumulator,
+      double accuracy) {
+    if constexpr (kAccuracyIsErrorBound) {
+      if (accuracy != kMissingNormalizedValue) {
+        accumulator->setPrestoAccuracy(accuracy);
+      }
+    } else {
+      accumulator->setSparkAccuracy(static_cast<int32_t>(accuracy));
+    }
+  }
+
+  static void checkSetAccuracy(
+      DecodedVector& decodedAccuracy,
+      const SelectivityVector& rows,
+      double& accuracy) {
+    if constexpr (kAccuracyIsErrorBound) {
+      if (decodedAccuracy.isConstantMapping()) {
+        VELOX_USER_CHECK(
+            !decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
+        checkSetPrestoAccuracy(accuracy, decodedAccuracy.valueAt<double>(0));
+      } else {
+        rows.applyToSelected([&](auto row) {
+          VELOX_USER_CHECK(
+              !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
+          const auto value = decodedAccuracy.valueAt<double>(row);
+          if (accuracy == kMissingNormalizedValue) {
+            checkSetPrestoAccuracy(accuracy, value);
+          }
+          VELOX_USER_CHECK_EQ(
+              value,
+              accuracy,
+              "Accuracy argument must be constant for all input rows");
+        });
+      }
+    } else {
+      if (decodedAccuracy.isConstantMapping()) {
+        VELOX_USER_CHECK(
+            !decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
+        setValidSparkAccuracy(accuracy, decodedAccuracy.valueAt<int32_t>(0));
+      } else {
+        rows.applyToSelected([&](auto row) {
+          VELOX_USER_CHECK(
+              !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
+          const auto currentAccuracy = decodedAccuracy.valueAt<int32_t>(row);
+          if (accuracy == static_cast<double>(kSparkDefaultAccuracy)) {
+            setValidSparkAccuracy(accuracy, currentAccuracy);
+          }
+          VELOX_USER_CHECK_EQ(
+              currentAccuracy,
+              static_cast<int32_t>(accuracy),
+              "Accuracy argument must be constant");
+        });
+      }
+    }
+  }
+
+  static void checkAndSetFromIntermediate(
+      double& accuracy,
+      double inputAccuracy) {
+    if constexpr (kAccuracyIsErrorBound) {
+      checkSetPrestoAccuracy(accuracy, inputAccuracy);
+    } else {
+      setValidSparkAccuracy(accuracy, static_cast<int32_t>(inputAccuracy));
+    }
+  }
+
+ private:
+  static void checkSetPrestoAccuracy(double& accuracy, double inputAccuracy) {
+    VELOX_USER_CHECK(
+        0 < inputAccuracy && inputAccuracy <= 1,
+        "Accuracy must be between 0 and 1");
+    if (accuracy == kMissingNormalizedValue) {
+      accuracy = inputAccuracy;
+    } else {
+      VELOX_USER_CHECK_EQ(
+          inputAccuracy,
+          accuracy,
+          "Accuracy argument must be constant for all input rows");
+    }
+  }
+
+  static void setValidSparkAccuracy(double& accuracy, int32_t inputAccuracy) {
+    VELOX_USER_CHECK(
+        inputAccuracy > 0 &&
+            inputAccuracy <= std::numeric_limits<int32_t>::max(),
+        "Accuracy must be greater than 0 and less than or equal to "
+        "Int32.MaxValue, got {}",
+        inputAccuracy);
+    accuracy = static_cast<double>(inputAccuracy);
+  }
+};
+
+template <
+    typename T,
+    bool kHasWeight,
+    bool kAccuracyIsErrorBound,
+    typename AccuracyPolicy = DefaultAccuracyPolicy<kAccuracyIsErrorBound>>
 class ApproxPercentileAggregateBase : public exec::Aggregate {
  public:
   ApproxPercentileAggregateBase(
@@ -234,15 +350,16 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     // percentiles_ can be uninitialized during an intermediate aggregation step
     // when all input intermediate states are nulls. Result should be nulls in
     // this case.
+    using Idx = ApproxPercentileIntermediateTypeChildIndex;
     if (!percentiles_) {
       rowResult->ensureWritable(SelectivityVector{numGroups});
       // rowResult->childAt(i) for i = kPercentiles, kPercentilesIsArray, and
       // kAccuracy are expected to be constant in addIntermediateResults.
-      rowResult->childAt(kPercentiles) =
+      rowResult->childAt(static_cast<int>(Idx::kPercentiles)) =
           BaseVector::createNullConstant(ARRAY(DOUBLE()), numGroups, pool);
-      rowResult->childAt(kPercentilesIsArray) =
+      rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
           BaseVector::createNullConstant(BOOLEAN(), numGroups, pool);
-      rowResult->childAt(kAccuracy) =
+      rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
           BaseVector::createNullConstant(DOUBLE(), numGroups, pool);
 
       // Set nulls for all rows.
@@ -263,9 +380,9 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
         AlignedBuffer::allocate<vector_size_t>(1, pool, size),
         std::move(elements));
-    rowResult->childAt(kPercentiles) =
+    rowResult->childAt(static_cast<int>(Idx::kPercentiles)) =
         BaseVector::wrapInConstant(numGroups, 0, std::move(array));
-    rowResult->childAt(kPercentilesIsArray) =
+    rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
         std::make_shared<ConstantVector<bool>>(
             pool,
             numGroups,
@@ -273,22 +390,26 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
             BOOLEAN(),
             static_cast<bool&&>(percentiles_->isArray));
 
-    bool isDefaultAccuracy = false;
-    if constexpr (kAccuracyIsErrorBound) {
-      isDefaultAccuracy = (accuracy_ == kMissingNormalizedValue);
-    }
-    rowResult->childAt(kAccuracy) = std::make_shared<ConstantVector<double>>(
-        pool,
-        numGroups,
-        isDefaultAccuracy,
-        DOUBLE(),
-        static_cast<double&&>(accuracy_));
-    auto k = rowResult->childAt(kK)->asFlatVector<int32_t>();
-    auto n = rowResult->childAt(kN)->asFlatVector<int64_t>();
-    auto minValue = rowResult->childAt(kMinValue)->asFlatVector<T>();
-    auto maxValue = rowResult->childAt(kMaxValue)->asFlatVector<T>();
-    auto items = rowResult->childAt(kItems)->as<ArrayVector>();
-    auto levels = rowResult->childAt(kLevels)->as<ArrayVector>();
+    bool isDefaultAccuracy = AccuracyPolicy::isDefaultAccuracy(accuracy_);
+    rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
+        std::make_shared<ConstantVector<double>>(
+            pool,
+            numGroups,
+            isDefaultAccuracy,
+            DOUBLE(),
+            static_cast<double&&>(accuracy_));
+    auto k =
+        rowResult->childAt(static_cast<int>(Idx::kK))->asFlatVector<int32_t>();
+    auto n =
+        rowResult->childAt(static_cast<int>(Idx::kN))->asFlatVector<int64_t>();
+    auto minValue =
+        rowResult->childAt(static_cast<int>(Idx::kMinValue))->asFlatVector<T>();
+    auto maxValue =
+        rowResult->childAt(static_cast<int>(Idx::kMaxValue))->asFlatVector<T>();
+    auto items =
+        rowResult->childAt(static_cast<int>(Idx::kItems))->as<ArrayVector>();
+    auto levels =
+        rowResult->childAt(static_cast<int>(Idx::kLevels))->as<ArrayVector>();
 
     rowResult->resize(numGroups);
     k->resize(numGroups);
@@ -342,11 +463,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   const bool hasAccuracy_;
   const std::optional<uint32_t> fixedRandomSeed_;
 
-  static constexpr double kMissingNormalizedValue = -1;
-  static constexpr int32_t kSparkDefaultAccuracy = 10000;
-  double accuracy_{
-      kAccuracyIsErrorBound ? kMissingNormalizedValue
-                            : static_cast<double>(kSparkDefaultAccuracy)};
+  double accuracy_{AccuracyPolicy::kDefaultAccuracy};
 
   std::optional<Percentiles> percentiles_;
   DecodedVector decodedValue_;
@@ -374,13 +491,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
   KllSketchAccumulator<T>* initRawAccumulator(char* group) {
     auto accumulator = value<KllSketchAccumulator<T>>(group);
-    if constexpr (kAccuracyIsErrorBound) {
-      if (accuracy_ != kMissingNormalizedValue) {
-        accumulator->setPrestoAccuracy(accuracy_);
-      }
-    } else {
-      accumulator->setSparkAccuracy(static_cast<int32_t>(accuracy_));
-    }
+    AccuracyPolicy::setOnAccumulator(accumulator, accuracy_);
     return accumulator;
   }
 
@@ -517,46 +628,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     if (!hasAccuracy_) {
       return;
     }
-
-    if constexpr (kAccuracyIsErrorBound) {
-      if (decodedAccuracy_.isConstantMapping()) {
-        VELOX_USER_CHECK(
-            !decodedAccuracy_.isNullAt(0), "Accuracy cannot be null");
-        checkSetPrestoAccuracy(decodedAccuracy_.valueAt<double>(0));
-      } else {
-        rows.applyToSelected([&](auto row) {
-          VELOX_USER_CHECK(
-              !decodedAccuracy_.isNullAt(row), "Accuracy cannot be null");
-          const auto accuracy = decodedAccuracy_.valueAt<double>(row);
-          if (accuracy_ == kMissingNormalizedValue) {
-            checkSetPrestoAccuracy(accuracy);
-          }
-          VELOX_USER_CHECK_EQ(
-              accuracy,
-              accuracy_,
-              "Accuracy argument must be constant for all input rows");
-        });
-      }
-    } else {
-      if (decodedAccuracy_.isConstantMapping()) {
-        VELOX_USER_CHECK(
-            !decodedAccuracy_.isNullAt(0), "Accuracy cannot be null");
-        setValidSparkAccuracy(decodedAccuracy_.valueAt<int32_t>(0));
-      } else {
-        rows.applyToSelected([&](auto row) {
-          VELOX_USER_CHECK(
-              !decodedAccuracy_.isNullAt(row), "Accuracy cannot be null");
-          const auto currentAccuracy = decodedAccuracy_.valueAt<int32_t>(row);
-          if (accuracy_ == static_cast<double>(kSparkDefaultAccuracy)) {
-            setValidSparkAccuracy(currentAccuracy);
-          }
-          VELOX_USER_CHECK_EQ(
-              currentAccuracy,
-              static_cast<int32_t>(accuracy_),
-              "Accuracy argument must be constant");
-        });
-      }
-    }
+    AccuracyPolicy::checkSetAccuracy(decodedAccuracy_, rows, accuracy_);
   }
 
   static void checkWeight(int64_t weight) {
@@ -598,29 +670,6 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   }
 
  private:
-  void checkSetPrestoAccuracy(double accuracy) {
-    VELOX_USER_CHECK(
-        0 < accuracy && accuracy <= 1, "Accuracy must be between 0 and 1");
-    if (accuracy_ == kMissingNormalizedValue) {
-      accuracy_ = accuracy;
-    } else {
-      VELOX_USER_CHECK_EQ(
-          accuracy,
-          accuracy_,
-          "Accuracy argument must be constant for all input rows");
-    }
-  }
-
-  void setValidSparkAccuracy(int32_t inputAccuracy) {
-    VELOX_USER_CHECK(
-        inputAccuracy > 0 &&
-            inputAccuracy <= std::numeric_limits<int32_t>::max(),
-        "Accuracy must be greater than 0 and less than or equal to "
-        "Int32.MaxValue, got {}",
-        inputAccuracy);
-    accuracy_ = static_cast<double>(inputAccuracy);
-  }
-
   template <bool kSingleGroup>
   void addIntermediate(
       std::conditional_t<kSingleGroup, char*, char**> group,
@@ -638,20 +687,27 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       std::conditional_t<kSingleGroup, char*, char**> group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
+    using Idx = ApproxPercentileIntermediateTypeChildIndex;
     VELOX_CHECK_EQ(args.size(), 1);
     DecodedVector decoded(*args[0], rows);
     auto rowVec = decoded.base()->as<RowVector>();
     if constexpr (checkIntermediateInputs) {
       VELOX_USER_CHECK(rowVec);
       if constexpr (kHasWeight) {
-        for (int i = kPercentiles; i <= kAccuracy; ++i) {
+        for (int i = static_cast<int>(Idx::kPercentiles);
+             i <= static_cast<int>(Idx::kAccuracy);
+             ++i) {
           VELOX_USER_CHECK(rowVec->childAt(i)->isConstantEncoding());
         }
       }
-      for (int i = kK; i <= kMaxValue; ++i) {
+      for (int i = static_cast<int>(Idx::kK);
+           i <= static_cast<int>(Idx::kMaxValue);
+           ++i) {
         VELOX_USER_CHECK(rowVec->childAt(i)->isFlatEncoding());
       }
-      for (int i = kItems; i <= kLevels; ++i) {
+      for (int i = static_cast<int>(Idx::kItems);
+           i <= static_cast<int>(Idx::kLevels);
+           ++i) {
         VELOX_USER_CHECK(
             rowVec->childAt(i)->encoding() == VectorEncoding::Simple::ARRAY);
       }
@@ -672,17 +728,25 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       baseRows = &innerRows;
     }
 
-    DecodedVector percentiles(*rowVec->childAt(kPercentiles), *baseRows);
+    DecodedVector percentiles(
+        *rowVec->childAt(static_cast<int>(Idx::kPercentiles)), *baseRows);
     auto percentileIsArray =
-        rowVec->childAt(kPercentilesIsArray)->asUnchecked<SimpleVector<bool>>();
-    auto accuracy =
-        rowVec->childAt(kAccuracy)->asUnchecked<SimpleVector<double>>();
-    auto k = rowVec->childAt(kK)->asUnchecked<SimpleVector<int32_t>>();
-    auto n = rowVec->childAt(kN)->asUnchecked<SimpleVector<int64_t>>();
-    auto minValue = rowVec->childAt(kMinValue)->asUnchecked<SimpleVector<T>>();
-    auto maxValue = rowVec->childAt(kMaxValue)->asUnchecked<SimpleVector<T>>();
-    auto items = rowVec->childAt(kItems)->asUnchecked<ArrayVector>();
-    auto levels = rowVec->childAt(kLevels)->asUnchecked<ArrayVector>();
+        rowVec->childAt(static_cast<int>(Idx::kPercentilesIsArray))
+            ->asUnchecked<SimpleVector<bool>>();
+    auto accuracy = rowVec->childAt(static_cast<int>(Idx::kAccuracy))
+                        ->asUnchecked<SimpleVector<double>>();
+    auto k = rowVec->childAt(static_cast<int>(Idx::kK))
+                 ->asUnchecked<SimpleVector<int32_t>>();
+    auto n = rowVec->childAt(static_cast<int>(Idx::kN))
+                 ->asUnchecked<SimpleVector<int64_t>>();
+    auto minValue = rowVec->childAt(static_cast<int>(Idx::kMinValue))
+                        ->asUnchecked<SimpleVector<T>>();
+    auto maxValue = rowVec->childAt(static_cast<int>(Idx::kMaxValue))
+                        ->asUnchecked<SimpleVector<T>>();
+    auto items = rowVec->childAt(static_cast<int>(Idx::kItems))
+                     ->asUnchecked<ArrayVector>();
+    auto levels = rowVec->childAt(static_cast<int>(Idx::kLevels))
+                      ->asUnchecked<ArrayVector>();
 
     auto itemsElements = items->elements()->asFlatVector<T>();
     auto levelElements = levels->elements()->asFlatVector<int32_t>();
@@ -742,11 +806,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         }
 
         if (!accuracy->isNullAt(i)) {
-          if constexpr (kAccuracyIsErrorBound) {
-            checkSetPrestoAccuracy(accuracy->valueAt(i));
-          } else {
-            setValidSparkAccuracy(static_cast<int32_t>(accuracy->valueAt(i)));
-          }
+          AccuracyPolicy::checkAndSetFromIntermediate(
+              accuracy_, accuracy->valueAt(i));
         }
       }
       if constexpr (kSingleGroup) {
@@ -791,4 +852,4 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   }
 };
 
-} // namespace facebook::velox::aggregate
+} // namespace facebook::velox::functions::aggregate
