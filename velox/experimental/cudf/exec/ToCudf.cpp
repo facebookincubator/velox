@@ -45,6 +45,7 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
@@ -66,6 +67,106 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
+std::string formatBytes(int64_t bytes) {
+  const double kKB = 1024.0;
+  const double kMB = kKB * 1024;
+  const double kGB = kMB * 1024;
+  double absBytes = std::abs(static_cast<double>(bytes));
+  if (absBytes >= kGB) {
+    return fmt::format("{:.2f} GB", bytes / kGB);
+  } else if (absBytes >= kMB) {
+    return fmt::format("{:.2f} MB", bytes / kMB);
+  } else if (absBytes >= kKB) {
+    return fmt::format("{:.2f} KB", bytes / kKB);
+  }
+  return fmt::format("{} B", bytes);
+}
+
+class CudfTaskListener : public exec::TaskListener {
+ public:
+  void onTaskCompletion(
+      const std::string& /*taskUuid*/,
+      const std::string& taskId,
+      exec::TaskState state,
+      std::exception_ptr /*error*/,
+      exec::TaskStats stats) override {
+    logGpuMemoryStats(taskId, state, stats);
+  }
+
+  void onTaskCompletion(
+      const std::string& /*taskUuid*/,
+      const std::string& taskId,
+      exec::TaskState state,
+      std::exception_ptr /*error*/,
+      const exec::TaskStats& stats,
+      const core::PlanFragment& fragment,
+      const std::unordered_map<
+          core::PlanNodeId,
+          std::shared_ptr<exec::ExchangeClient>>& /*exchangeClientMap*/)
+      override {
+    logGpuMemoryStats(taskId, state, stats);
+    if (fragment.planNode) {
+      std::cout << "  Plan with stats:\n"
+                << exec::printPlanWithStats(*fragment.planNode, stats, true);
+    }
+  }
+
+ private:
+  void logGpuMemoryStats(
+      const std::string& taskId,
+      exec::TaskState state,
+      const exec::TaskStats& stats) {
+    auto* statsMr = getStatsMr();
+    auto* outputStatsMr = getOutputStatsMr();
+
+    LOG(INFO) << "CudfTaskListener: Task " << taskId << " completed with state "
+              << exec::taskStateString(state);
+
+    if (statsMr) {
+      auto bytes = statsMr->get_bytes_counter();
+      auto allocs = statsMr->get_allocations_counter();
+      LOG(INFO) << "  GPU Memory (main MR): "
+                << "current=" << formatBytes(bytes.value)
+                << ", peak=" << formatBytes(bytes.peak)
+                << ", total_allocated=" << formatBytes(bytes.total)
+                << ", current_allocs=" << allocs.value
+                << ", peak_allocs=" << allocs.peak
+                << ", total_allocs=" << allocs.total;
+    }
+
+    if (outputStatsMr && outputStatsMr != statsMr) {
+      auto bytes = outputStatsMr->get_bytes_counter();
+      auto allocs = outputStatsMr->get_allocations_counter();
+      LOG(INFO) << "  GPU Memory (output MR): "
+                << "current=" << formatBytes(bytes.value)
+                << ", peak=" << formatBytes(bytes.peak)
+                << ", total_allocated=" << formatBytes(bytes.total)
+                << ", current_allocs=" << allocs.value
+                << ", peak_allocs=" << allocs.peak
+                << ", total_allocs=" << allocs.total;
+    }
+
+    auto* trackingMr = getStatsTrackingMr();
+    if (trackingMr) {
+      auto orphan = trackingMr->getOrphanStats();
+      if (orphan.allocCount > 0 || orphan.freeCount > 0) {
+        LOG(INFO) << "  GPU Orphan stats (no active operator): "
+                  << "alloc_bytes=" << formatBytes(orphan.allocBytes)
+                  << ", alloc_count=" << orphan.allocCount
+                  << ", free_bytes=" << formatBytes(orphan.freeBytes)
+                  << ", free_count=" << orphan.freeCount;
+      }
+    }
+
+    if (stats.executionEndTimeMs > stats.executionStartTimeMs) {
+      LOG(INFO) << "  Execution time: "
+                << (stats.executionEndTimeMs - stats.executionStartTimeMs)
+                << " ms";
+    }
+  }
+};
+
+std::shared_ptr<exec::TaskListener> cudfTaskListener_;
 std::shared_ptr<StatsTrackingMemoryResource> statsTrackingMr_;
 
 template <class... Deriveds, class Base>
@@ -377,10 +478,18 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+  cudfTaskListener_ = std::make_shared<CudfTaskListener>();
+  exec::registerTaskListener(cudfTaskListener_);
+
   isCudfRegistered = true;
 }
 
 void unregisterCudf() {
+  if (cudfTaskListener_) {
+    exec::unregisterTaskListener(cudfTaskListener_);
+    cudfTaskListener_.reset();
+  }
+
   setStatsTrackingMr(nullptr);
   statsTrackingMr_.reset();
   setStatsMr(nullptr);
