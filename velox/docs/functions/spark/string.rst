@@ -420,12 +420,14 @@ String Functions
 
     Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
     each entry into key/value with ``keyValueDelimiter``.
-    ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
-    character. Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
+    ``entryDelimiter`` and ``keyValueDelimiter`` must be non-empty constant strings.
+    Delimiters are matched as literal strings, not as regular expressions.
+    Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
     when duplicate map keys are found for single row's result, consistent with Spark's default
     behavior. ::
 
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
+        SELECT str_to_map('a::1,,b::2,,c::3', ',,', '::'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
         SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
