@@ -270,21 +270,43 @@ jobs:
 
             try {
               // Read the execution log
-              const executionLog = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
+              const fileContent = fs.readFileSync(process.env.EXECUTION_FILE, 'utf8');
+              const executionLog = JSON.parse(fileContent);
 
-              // Extract Claude's final response
-              const assistantMessages = executionLog.messages.filter(m => m.role === 'assistant');
-              if (assistantMessages.length > 0) {
-                const lastMessage = assistantMessages[assistantMessages.length - 1];
-                // Handle both string content and array content
-                if (typeof lastMessage.content === 'string') {
-                  reviewBody = lastMessage.content;
-                } else if (Array.isArray(lastMessage.content)) {
-                  reviewBody = lastMessage.content
-                    .filter(block => block.type === 'text')
-                    .map(block => block.text)
-                    .join('\n\n');
+              // Log structure for debugging
+              console.log('Execution log keys:', Object.keys(executionLog));
+
+              // Try different possible structures from claude-code-base-action
+              if (executionLog.result) {
+                // Direct result field
+                reviewBody = executionLog.result;
+              } else if (executionLog.output) {
+                // Output field
+                reviewBody = executionLog.output;
+              } else if (executionLog.response) {
+                // Response field
+                reviewBody = executionLog.response;
+              } else if (executionLog.messages && Array.isArray(executionLog.messages)) {
+                // Messages array format
+                const assistantMessages = executionLog.messages.filter(m => m.role === 'assistant');
+                if (assistantMessages.length > 0) {
+                  const lastMessage = assistantMessages[assistantMessages.length - 1];
+                  if (typeof lastMessage.content === 'string') {
+                    reviewBody = lastMessage.content;
+                  } else if (Array.isArray(lastMessage.content)) {
+                    reviewBody = lastMessage.content
+                      .filter(block => block.type === 'text')
+                      .map(block => block.text)
+                      .join('\n\n');
+                  }
                 }
+              } else if (typeof executionLog === 'string') {
+                // Plain string
+                reviewBody = executionLog;
+              } else {
+                // Fallback: stringify the whole thing
+                console.log('Unknown format, raw content:', JSON.stringify(executionLog).substring(0, 500));
+                reviewBody = '⚠️ Could not parse Claude response format. Check workflow logs for details.';
               }
             } catch (error) {
               console.error('Error parsing execution log:', error);
@@ -332,7 +354,12 @@ jobs:
         run: |
           echo "=== DRY RUN - Review would be posted as comment ==="
           echo ""
-          cat "$EXECUTION_FILE" | jq -r '.messages | map(select(.role == "assistant")) | last | .content' 2>/dev/null || cat "$EXECUTION_FILE"
+          echo "=== Execution file structure ==="
+          jq 'keys' "$EXECUTION_FILE" 2>/dev/null || echo "Not valid JSON or file not found"
+          echo ""
+          echo "=== Attempting to extract review ==="
+          # Try different possible paths
+          jq -r '.result // .output // .response // .messages[-1].content // "Could not extract"' "$EXECUTION_FILE" 2>/dev/null || cat "$EXECUTION_FILE"
           echo ""
           echo "=== End of review ==="
 
