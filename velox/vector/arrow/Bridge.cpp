@@ -1315,7 +1315,7 @@ TypePtr parseDecimalFormat(const std::string_view format) {
     // Parse "d:".
     int precision = std::stoi(&format[2], &sz);
     int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
-    if (secondCommaIdx != std::string::npos) {
+    if (secondCommaIdx != std::string_view::npos) {
       // BitWidth is provided. We only support 64 or 128.
       int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
       // Return type depends on bitWidth.
