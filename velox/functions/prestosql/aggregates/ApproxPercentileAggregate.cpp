@@ -21,15 +21,80 @@
 namespace facebook::velox::aggregate::prestosql {
 
 using functions::aggregate::ApproxPercentileAggregateBase;
+using functions::aggregate::KllSketchAccumulator;
 using Idx = functions::aggregate::ApproxPercentileIntermediateTypeChildIndex;
 
 namespace {
+
+/// Presto accuracy policy: accuracy is a double in (0, 1] representing
+/// the error bound for the approximation.
+struct PrestoAccuracyPolicy {
+  static constexpr double kMissingNormalizedValue = -1;
+  static constexpr double kDefaultAccuracy = kMissingNormalizedValue;
+
+  static bool isDefaultAccuracy(double accuracy) {
+    return accuracy == kMissingNormalizedValue;
+  }
+
+  template <typename T>
+  static void setOnAccumulator(
+      KllSketchAccumulator<T>* accumulator,
+      double accuracy) {
+    if (accuracy != kMissingNormalizedValue) {
+      accumulator->setPrestoAccuracy(accuracy);
+    }
+  }
+
+  static void checkSetAccuracy(
+      DecodedVector& decodedAccuracy,
+      const SelectivityVector& rows,
+      double& accuracy) {
+    if (decodedAccuracy.isConstantMapping()) {
+      VELOX_USER_CHECK(!decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
+      checkSetPrestoAccuracy(accuracy, decodedAccuracy.valueAt<double>(0));
+    } else {
+      rows.applyToSelected([&](auto row) {
+        VELOX_USER_CHECK(
+            !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
+        const auto value = decodedAccuracy.valueAt<double>(row);
+        if (accuracy == kMissingNormalizedValue) {
+          checkSetPrestoAccuracy(accuracy, value);
+        }
+        VELOX_USER_CHECK_EQ(
+            value,
+            accuracy,
+            "Accuracy argument must be constant for all input rows");
+      });
+    }
+  }
+
+  static void checkAndSetFromIntermediate(
+      double& accuracy,
+      double inputAccuracy) {
+    checkSetPrestoAccuracy(accuracy, inputAccuracy);
+  }
+
+ private:
+  static void checkSetPrestoAccuracy(double& accuracy, double inputAccuracy) {
+    VELOX_USER_CHECK(
+        0 < inputAccuracy && inputAccuracy <= 1,
+        "Accuracy must be between 0 and 1");
+    if (accuracy == kMissingNormalizedValue) {
+      accuracy = inputAccuracy;
+    } else {
+      VELOX_USER_CHECK_EQ(
+          inputAccuracy,
+          accuracy,
+          "Accuracy argument must be constant for all input rows");
+    }
+  }
+};
 
 template <typename T>
 using PrestoApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/true,
-    /*kAccuracyIsErrorBound=*/true>;
+    PrestoAccuracyPolicy>;
 
 bool validPercentileType(const Type& type) {
   if (type.kind() == TypeKind::DOUBLE) {

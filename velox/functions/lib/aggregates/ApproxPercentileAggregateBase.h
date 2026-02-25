@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -39,123 +40,10 @@ enum class ApproxPercentileIntermediateTypeChildIndex {
   kLevels = 8,
 };
 
-/// Default accuracy policy that uses kAccuracyIsErrorBound to dispatch
-/// between Presto (error-bound) and Spark (integer accuracy) behavior.
-template <bool kAccuracyIsErrorBound>
-struct DefaultAccuracyPolicy {
-  static constexpr double kMissingNormalizedValue = -1;
-  static constexpr int32_t kSparkDefaultAccuracy = 10000;
-  static constexpr double kDefaultAccuracy = kAccuracyIsErrorBound
-      ? kMissingNormalizedValue
-      : static_cast<double>(kSparkDefaultAccuracy);
-
-  static bool isDefaultAccuracy(double accuracy) {
-    if constexpr (kAccuracyIsErrorBound) {
-      return accuracy == kMissingNormalizedValue;
-    } else {
-      return false;
-    }
-  }
-
-  template <typename T>
-  static void setOnAccumulator(
-      KllSketchAccumulator<T>* accumulator,
-      double accuracy) {
-    if constexpr (kAccuracyIsErrorBound) {
-      if (accuracy != kMissingNormalizedValue) {
-        accumulator->setPrestoAccuracy(accuracy);
-      }
-    } else {
-      accumulator->setSparkAccuracy(static_cast<int32_t>(accuracy));
-    }
-  }
-
-  static void checkSetAccuracy(
-      DecodedVector& decodedAccuracy,
-      const SelectivityVector& rows,
-      double& accuracy) {
-    if constexpr (kAccuracyIsErrorBound) {
-      if (decodedAccuracy.isConstantMapping()) {
-        VELOX_USER_CHECK(
-            !decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
-        checkSetPrestoAccuracy(accuracy, decodedAccuracy.valueAt<double>(0));
-      } else {
-        rows.applyToSelected([&](auto row) {
-          VELOX_USER_CHECK(
-              !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
-          const auto value = decodedAccuracy.valueAt<double>(row);
-          if (accuracy == kMissingNormalizedValue) {
-            checkSetPrestoAccuracy(accuracy, value);
-          }
-          VELOX_USER_CHECK_EQ(
-              value,
-              accuracy,
-              "Accuracy argument must be constant for all input rows");
-        });
-      }
-    } else {
-      if (decodedAccuracy.isConstantMapping()) {
-        VELOX_USER_CHECK(
-            !decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
-        setValidSparkAccuracy(accuracy, decodedAccuracy.valueAt<int32_t>(0));
-      } else {
-        rows.applyToSelected([&](auto row) {
-          VELOX_USER_CHECK(
-              !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
-          const auto currentAccuracy = decodedAccuracy.valueAt<int32_t>(row);
-          if (accuracy == static_cast<double>(kSparkDefaultAccuracy)) {
-            setValidSparkAccuracy(accuracy, currentAccuracy);
-          }
-          VELOX_USER_CHECK_EQ(
-              currentAccuracy,
-              static_cast<int32_t>(accuracy),
-              "Accuracy argument must be constant");
-        });
-      }
-    }
-  }
-
-  static void checkAndSetFromIntermediate(
-      double& accuracy,
-      double inputAccuracy) {
-    if constexpr (kAccuracyIsErrorBound) {
-      checkSetPrestoAccuracy(accuracy, inputAccuracy);
-    } else {
-      setValidSparkAccuracy(accuracy, static_cast<int32_t>(inputAccuracy));
-    }
-  }
-
- private:
-  static void checkSetPrestoAccuracy(double& accuracy, double inputAccuracy) {
-    VELOX_USER_CHECK(
-        0 < inputAccuracy && inputAccuracy <= 1,
-        "Accuracy must be between 0 and 1");
-    if (accuracy == kMissingNormalizedValue) {
-      accuracy = inputAccuracy;
-    } else {
-      VELOX_USER_CHECK_EQ(
-          inputAccuracy,
-          accuracy,
-          "Accuracy argument must be constant for all input rows");
-    }
-  }
-
-  static void setValidSparkAccuracy(double& accuracy, int32_t inputAccuracy) {
-    VELOX_USER_CHECK(
-        inputAccuracy > 0 &&
-            inputAccuracy <= std::numeric_limits<int32_t>::max(),
-        "Accuracy must be greater than 0 and less than or equal to "
-        "Int32.MaxValue, got {}",
-        inputAccuracy);
-    accuracy = static_cast<double>(inputAccuracy);
-  }
-};
-
 template <
     typename T,
     bool kHasWeight,
-    bool kAccuracyIsErrorBound,
-    typename AccuracyPolicy = DefaultAccuracyPolicy<kAccuracyIsErrorBound>>
+    typename AccuracyPolicy>
 class ApproxPercentileAggregateBase : public exec::Aggregate {
  public:
   ApproxPercentileAggregateBase(

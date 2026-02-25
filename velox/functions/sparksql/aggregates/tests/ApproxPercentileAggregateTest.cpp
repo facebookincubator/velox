@@ -62,7 +62,7 @@ std::string functionCall(
   // Use fixed notation with enough precision to ensure double values
   // are correctly parsed (e.g., 0.5 instead of 5e-1)
   buf << std::fixed << std::setprecision(6);
-  int columnIndex = keyed;
+  int columnIndex = keyed ? 1 : 0;
   buf << "spark_approx_percentile(c" << columnIndex++;
   buf << ", ";
   if (percentileCount == -1) {

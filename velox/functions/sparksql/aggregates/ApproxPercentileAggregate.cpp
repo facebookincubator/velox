@@ -86,7 +86,6 @@ template <typename T>
 using SparkApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/false,
-    /*kAccuracyIsErrorBound=*/false,
     SparkAccuracyPolicy>;
 
 void addSignatures(
