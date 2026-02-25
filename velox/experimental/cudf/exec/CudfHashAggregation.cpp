@@ -59,39 +59,8 @@ bool isCountAllAggregate(const core::AggregationNode::Aggregate& aggregate) {
     return false;
   }
   for (const auto& arg : aggregate.call->inputs()) {
-    if (dynamic_cast<const core::ConstantTypedExpr*>(arg.get()) == nullptr) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool isCountNullAggregate(const core::AggregationNode::Aggregate& aggregate) {
-  if (!isCountFunctionName(aggregate.call->name())) {
-    return false;
-  }
-  for (const auto& arg : aggregate.call->inputs()) {
     auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
-    if (!constant) {
-      return false;
-    }
-    if (constant->isNull()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool isCountNullCall(const core::CallTypedExpr& call) {
-  if (!isCountFunctionName(call.name())) {
-    return false;
-  }
-  if (call.inputs().empty()) {
-    return false;
-  }
-  for (const auto& arg : call.inputs()) {
-    auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
-    if (!constant || !constant->isNull()) {
+    if (!constant || constant->isNull()) {
       return false;
     }
   }
@@ -181,12 +150,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     auto& request = requests.emplace_back();
     outputIdx_ = requests.size() - 1;
     const bool countAll = isCountAll();
-    if (isConstantNull()) {
-      // Use any existing input column; output will be forced to zero later.
-      request.values = tbl.column(0);
-    } else {
-      request.values = tbl.column(countAll ? 0 : inputIndex);
-    }
+    request.values = tbl.column(countAll ? 0 : inputIndex);
     std::unique_ptr<cudf::groupby_aggregation> aggRequest =
         exec::isRawInput(step)
         ? cudf::make_count_aggregation<cudf::groupby_aggregation>(
@@ -203,9 +167,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
     if (exec::isRawInput(step)) {
       // For raw input, implement count using size + null count
       int64_t count = 0;
-      if (isConstantNull()) {
-        count = 0;
-      } else if (isCountAll()) {
+      if (isCountAll()) {
         count = input.num_rows();
       } else {
         auto inputCol = input.column(inputIndex);
@@ -231,19 +193,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
-    if (isConstantNull()) {
-      const auto size =
-          results[outputIdx_].results[0] ? results[outputIdx_].results[0]->size()
-                                         : 0;
-      auto resultScalar = cudf::numeric_scalar<int64_t>(0);
-      auto col = cudf::make_column_from_scalar(resultScalar, size, stream);
-      const auto cudfOutputType =
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));
-      if (col->type() != cudfOutputType) {
-        col = cudf::cast(*col, cudfOutputType, stream);
-      }
-      return col;
-    }
     // cudf produces int32 for count(0) but velox expects int64
     auto col = std::move(results[outputIdx_].results[0]);
     const auto cudfOutputType =
@@ -255,13 +204,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   }
 
  private:
-  bool isConstantNull() const {
-    return constant != nullptr && constant->isNullAt(0);
-  }
-
   bool isCountAll() const {
-    return !isConstantNull() &&
-        (constant != nullptr || inputIndex == kConstantChannel);
+    return constant != nullptr || inputIndex == kConstantChannel;
   }
 
   uint32_t outputIdx_;
@@ -947,13 +891,6 @@ void CudfHashAggregation::initialize() {
           aggregationNode_->aggregates().begin(),
           aggregationNode_->aggregates().end(),
           [](const auto& aggregate) { return isCountAllAggregate(aggregate); });
-  if (countAllGlobalNoInput_) {
-    countConstantNulls_.clear();
-    countConstantNulls_.reserve(numAggregates_);
-    for (const auto& aggregate : aggregationNode_->aggregates()) {
-      countConstantNulls_.push_back(isCountNullAggregate(aggregate));
-    }
-  }
   aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
   intermediateAggregators_ =
       toIntermediateAggregators(*aggregationNode_, *operatorCtx_);
@@ -1270,10 +1207,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     std::vector<std::unique_ptr<cudf::column>> resultColumns;
     resultColumns.reserve(numAggregates_);
     for (size_t i = 0; i < numAggregates_; ++i) {
-      const bool isNullCount =
-          i < countConstantNulls_.size() && countConstantNulls_[i];
-      auto resultScalar = cudf::numeric_scalar<int64_t>(
-          isNullCount ? 0 : countAllRows_);
+      auto resultScalar = cudf::numeric_scalar<int64_t>(countAllRows_);
       auto col = cudf::make_column_from_scalar(resultScalar, 1, stream);
       const auto cudfOutputType =
           cudf::data_type(veloxToCudfTypeId(outputType_->childAt(i)));
@@ -1785,7 +1719,7 @@ bool matchTypedCallAgainstSignatures(
 bool canAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,
     core::AggregationNode::Step step,
-    const std::vector<TypePtr>& rawInputTypes,
+    const std::vector<TypePtr>& /*rawInputTypes*/,
     core::QueryCtx* queryCtx) {
   // Check against step-aware aggregation registry
   auto& stepAwareRegistry = getStepAwareAggregationRegistry();
@@ -1799,8 +1733,13 @@ bool canAggregationBeEvaluatedByCudf(
     return false;
   }
 
-  if (isCountNullCall(call)) {
-    return true;
+  if (isCountFunctionName(call.name())) {
+    for (const auto& arg : call.inputs()) {
+      auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
+      if (constant && constant->isNull()) {
+        return false;
+      }
+    }
   }
 
   // Validate against step-specific signatures from registry
@@ -1835,10 +1774,6 @@ bool canBeEvaluatedByCudf(
     // return incorrect results )
     if (aggregate.mask) {
       return false;
-    }
-
-    if (isCountNullCall(*aggregate.call)) {
-      continue;
     }
 
     // Check input expressions can be evaluated by CUDF, expand the input first

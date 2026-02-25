@@ -354,6 +354,30 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationInputExpressionsFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
+// Test count(NULL) should fall back to CPU.
+TEST_F(ToCudfSelectionTest, countNullAggregationFallsBack) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {},
+                      {"count(null)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT count(NULL) FROM tmp");
+
+  ASSERT_FALSE(wasCudfAggregationUsed(task));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
 // Test CUDF disabled should always use regular aggregation
 TEST_F(ToCudfSelectionTest, cudfDisabledUsesRegularAggregation) {
   auto vectors = makeVectors(rowType_, 10, 100);

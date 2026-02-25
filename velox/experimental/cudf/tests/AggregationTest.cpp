@@ -571,54 +571,6 @@ TEST_F(
   assertQuery(op, "SELECT count(*), count(c0) FROM tmp");
 }
 
-TEST_F(AggregationTest, countNullSingleGlobalZeroColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .project({})
-                .singleAggregation({}, {"count(null)"})
-                .planNode();
-
-  assertQuery(op, "SELECT count(NULL) FROM tmp");
-}
-
-TEST_F(AggregationTest, countNullPartialFinalGlobalZeroColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .project({})
-                .partialAggregation({}, {"count(null)"})
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(NULL) FROM tmp");
-}
-
-TEST_F(AggregationTest, countNullPartialIntermediateFinalGlobalZeroColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4}),
-  });
-  createDuckDbTable({data});
-
-  auto op = PlanBuilder()
-                .values({data})
-                .project({})
-                .partialAggregation({}, {"count(null)"})
-                .intermediateAggregation()
-                .finalAggregation()
-                .planNode();
-
-  assertQuery(op, "SELECT count(NULL) FROM tmp");
-}
-
 TEST_F(AggregationTest, countSingleGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);

@@ -243,8 +243,9 @@ class AggregationAdapter : public OperatorAdapter {
               return false;
             }
             for (const auto& input : aggregate.call->inputs()) {
-              if (dynamic_cast<const core::ConstantTypedExpr*>(input.get()) ==
-                  nullptr) {
+              auto constant =
+                  dynamic_cast<const core::ConstantTypedExpr*>(input.get());
+              if (!constant || constant->isNull()) {
                 return false;
               }
             }
