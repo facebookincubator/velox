@@ -36,7 +36,7 @@ struct SparkAccuracyPolicy {
 
   template <typename T>
   static void setOnAccumulator(
-      KllSketchAccumulator<T>* accumulator,
+      detail::KllSketchAccumulator<T>* accumulator,
       double accuracy) {
     // Spark accuracy is the reciprocal of epsilon.
     double epsilon = 1.0 / static_cast<double>(static_cast<int32_t>(accuracy));

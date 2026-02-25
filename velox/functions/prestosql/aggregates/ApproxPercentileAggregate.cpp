@@ -20,7 +20,6 @@
 namespace facebook::velox::aggregate::prestosql {
 
 using functions::aggregate::ApproxPercentileAggregateBase;
-using functions::aggregate::KllSketchAccumulator;
 using Idx = functions::aggregate::ApproxPercentileIntermediateTypeChildIndex;
 
 namespace {
@@ -37,7 +36,7 @@ struct PrestoAccuracyPolicy {
 
   template <typename T>
   static void setOnAccumulator(
-      KllSketchAccumulator<T>* accumulator,
+      functions::aggregate::detail::KllSketchAccumulator<T>* accumulator,
       double accuracy) {
     if (accuracy != kMissingNormalizedValue) {
       accumulator->setAccuracy(accuracy);

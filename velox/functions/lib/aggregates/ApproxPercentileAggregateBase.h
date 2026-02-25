@@ -190,12 +190,6 @@ struct KllSketchAccumulator {
 
 } // namespace detail
 
-using detail::KllSketchAccumulator;
-template <typename T, typename Allocator = StlAllocator<T>>
-using KllSketch = detail::KllSketch<T, Allocator>;
-template <typename T>
-using KllView = detail::KllView<T>;
-
 enum class ApproxPercentileIntermediateTypeChildIndex {
   kPercentiles = 0,
   kPercentilesIsArray = 1,
@@ -227,7 +221,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   };
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(KllSketchAccumulator<T>);
+    return sizeof(detail::KllSketchAccumulator<T>);
   }
 
   bool isFixedSize() const override {
@@ -330,7 +324,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     for (auto i = 0; i < numGroups; ++i) {
-      value<KllSketchAccumulator<T>>(groups[i])->flush(
+      value<detail::KllSketchAccumulator<T>>(groups[i])->flush(
           allocator_, fixedRandomSeed_);
     }
 
@@ -350,7 +344,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       vector_size_t elementsCount = 0;
       for (auto i = 0; i < numGroups; ++i) {
         char* group = groups[i];
-        auto accumulator = value<KllSketchAccumulator<T>>(group);
+        auto accumulator = value<detail::KllSketchAccumulator<T>>(group);
         if (accumulator->getSketch().totalCount() > 0) {
           elementsCount += percentiles.size();
         }
@@ -363,7 +357,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
           groups,
           numGroups,
           arrayResult,
-          [&](const KllSketch<T>& digest,
+          [&](const detail::KllSketch<T>& digest,
               ArrayVector* result,
               vector_size_t index) {
             digest.estimateQuantiles(percentiles, rawValues + elementsCount);
@@ -376,7 +370,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
           groups,
           numGroups,
           (*result)->asFlatVector<T>(),
-          [&](const KllSketch<T>& digest,
+          [&](const detail::KllSketch<T>& digest,
               FlatVector<T>* result,
               vector_size_t index) {
             VELOX_DCHECK_EQ(percentiles_->values.size(), 1);
@@ -388,11 +382,12 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    std::vector<KllSketch<T, std::allocator<T>>> sketches;
+    std::vector<detail::KllSketch<T, std::allocator<T>>> sketches;
     sketches.reserve(numGroups);
     for (auto i = 0; i < numGroups; ++i) {
       sketches.push_back(
-          value<KllSketchAccumulator<T>>(groups[i])->compact(fixedRandomSeed_));
+          value<detail::KllSketchAccumulator<T>>(groups[i])->compact(
+              fixedRandomSeed_));
     }
 
     VELOX_CHECK(result);
@@ -530,20 +525,21 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     for (auto i : indices) {
       auto group = groups[i];
       new (group + offset_)
-          KllSketchAccumulator<T>(allocator_, fixedRandomSeed_);
+          detail::KllSketchAccumulator<T>(allocator_, fixedRandomSeed_);
     }
   }
 
   void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
-        value<KllSketchAccumulator<T>>(group)->~KllSketchAccumulator<T>();
+        value<detail::KllSketchAccumulator<T>>(group)
+            ->~KllSketchAccumulator();
       }
     }
   }
 
-  KllSketchAccumulator<T>* initRawAccumulator(char* group) {
-    auto accumulator = value<KllSketchAccumulator<T>>(group);
+  detail::KllSketchAccumulator<T>* initRawAccumulator(char* group) {
+    auto accumulator = value<detail::KllSketchAccumulator<T>>(group);
     AccuracyPolicy::setOnAccumulator(accumulator, accuracy_);
     return accumulator;
   }
@@ -710,7 +706,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
     for (auto i = 0; i < numGroups; ++i) {
       char* group = groups[i];
-      auto accumulator = value<KllSketchAccumulator<T>>(group);
+      auto accumulator = value<detail::KllSketchAccumulator<T>>(group);
       if (accumulator->getSketch().totalCount() == 0) {
         result->setNull(i, true);
       } else {
@@ -813,8 +809,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     auto rawItems = itemsElements->rawValues();
     auto rawLevels = levelElements->rawValues<uint32_t>();
 
-    KllSketchAccumulator<T>* accumulator = nullptr;
-    std::vector<KllView<T>> views;
+    detail::KllSketchAccumulator<T>* accumulator = nullptr;
+    std::vector<detail::KllView<T>> views;
     if constexpr (kSingleGroup) {
       views.reserve(rows.end());
     }
@@ -877,7 +873,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
               maxValue->isNullAt(i) || items->isNullAt(i) ||
               levels->isNullAt(i)));
       }
-      KllView<T> v{
+      detail::KllView<T> v{
           .k = static_cast<uint32_t>(k->valueAt(i)),
           .n = static_cast<size_t>(n->valueAt(i)),
           .minValue = minValue->valueAt(i),
