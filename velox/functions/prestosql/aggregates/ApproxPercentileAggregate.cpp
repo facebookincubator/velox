@@ -16,7 +16,6 @@
 #include "velox/functions/prestosql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -91,7 +90,7 @@ struct PrestoAccuracyPolicy {
 };
 
 template <typename T>
-using PrestoApproxPercentileAggregate = ApproxPercentileAggregateBase<
+using ApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/true,
     PrestoAccuracyPolicy>;
@@ -235,22 +234,22 @@ void registerApproxPercentileAggregate(
 
         switch (type->kind()) {
           case TypeKind::TINYINT:
-            return std::make_unique<PrestoApproxPercentileAggregate<int8_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int8_t>>(
                 hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::SMALLINT:
-            return std::make_unique<PrestoApproxPercentileAggregate<int16_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int16_t>>(
                 hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::INTEGER:
-            return std::make_unique<PrestoApproxPercentileAggregate<int32_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int32_t>>(
                 hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::BIGINT:
-            return std::make_unique<PrestoApproxPercentileAggregate<int64_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int64_t>>(
                 hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::REAL:
-            return std::make_unique<PrestoApproxPercentileAggregate<float>>(
+            return std::make_unique<ApproxPercentileAggregate<float>>(
                 hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::DOUBLE:
-            return std::make_unique<PrestoApproxPercentileAggregate<double>>(
+            return std::make_unique<ApproxPercentileAggregate<double>>(
                 hasWeight, hasAccuracy, resultType, fixedRandomSeed);
           default:
             VELOX_USER_FAIL(

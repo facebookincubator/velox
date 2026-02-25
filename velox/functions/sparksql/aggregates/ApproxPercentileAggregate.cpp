@@ -83,7 +83,7 @@ struct SparkAccuracyPolicy {
 };
 
 template <typename T>
-using SparkApproxPercentileAggregate = ApproxPercentileAggregateBase<
+using ApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/false,
     SparkAccuracyPolicy>;
@@ -193,22 +193,22 @@ exec::AggregateRegistrationResult registerApproxPercentileAggregate(
 
         switch (type->kind()) {
           case TypeKind::TINYINT:
-            return std::make_unique<SparkApproxPercentileAggregate<int8_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int8_t>>(
                 /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::SMALLINT:
-            return std::make_unique<SparkApproxPercentileAggregate<int16_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int16_t>>(
                 /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::INTEGER:
-            return std::make_unique<SparkApproxPercentileAggregate<int32_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int32_t>>(
                 /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::BIGINT:
-            return std::make_unique<SparkApproxPercentileAggregate<int64_t>>(
+            return std::make_unique<ApproxPercentileAggregate<int64_t>>(
                 /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::REAL:
-            return std::make_unique<SparkApproxPercentileAggregate<float>>(
+            return std::make_unique<ApproxPercentileAggregate<float>>(
                 /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
           case TypeKind::DOUBLE:
-            return std::make_unique<SparkApproxPercentileAggregate<double>>(
+            return std::make_unique<ApproxPercentileAggregate<double>>(
                 /*hasWeight=*/false, hasAccuracy, resultType, fixedRandomSeed);
           default:
             VELOX_USER_FAIL(
