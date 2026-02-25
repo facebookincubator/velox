@@ -16,8 +16,13 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/Hash.h>
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
+#include <atomic>
+#include <type_traits>
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -535,6 +540,59 @@ class Statistics {
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
+struct PerColumnStats {
+  uint32_t nodeId{0};
+  std::string columnName;
+  std::atomic<int64_t> decompressCpuTimeNs{0};
+  std::atomic<int64_t> numDecompressCalls{0};
+
+  PerColumnStats() = default;
+
+  PerColumnStats(uint32_t id, const std::string& name)
+      : nodeId(id), columnName(name) {}
+
+  void addDecompressTime(int64_t cpuNs) {
+    decompressCpuTimeNs.fetch_add(cpuNs, std::memory_order_relaxed);
+    numDecompressCalls.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  // Accumulates counters from another PerColumnStats.
+  void merge(const PerColumnStats& other) {
+    decompressCpuTimeNs.fetch_add(
+        other.decompressCpuTimeNs.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    numDecompressCalls.fetch_add(
+        other.numDecompressCalls.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+  }
+};
+
+/// Runs 'func' and records decompression stats if 'stats' is non-null.
+template <typename F>
+auto withDecompressStats(PerColumnStats* stats, F&& func)
+    -> std::enable_if_t<!std::is_void_v<decltype(func())>, decltype(func())> {
+  if (stats) {
+    DeltaCpuWallTimer timer([stats](const CpuWallTiming& timing) {
+      stats->addDecompressTime(timing.cpuNanos);
+    });
+    return func();
+  }
+  return func();
+}
+
+template <typename F>
+auto withDecompressStats(PerColumnStats* stats, F&& func)
+    -> std::enable_if_t<std::is_void_v<decltype(func())>> {
+  if (stats) {
+    DeltaCpuWallTimer timer([stats](const CpuWallTiming& timing) {
+      stats->addDecompressTime(timing.cpuNanos);
+    });
+    func();
+    return;
+  }
+  func();
+}
+
 struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
@@ -542,6 +600,93 @@ struct ColumnReaderStatistics {
 
   // Total time spent in loading pages, in nanoseconds.
   io::IoCounter pageLoadTimeNs;
+
+  // Whether to collect per-column stats
+  bool collectColumnStats{false};
+
+  // Decompression stats keyed by nodeId. Includes per-column data streams,
+  // stripe footer (nodeId UINT32_MAX, name "stripeFooter"), and file footer
+  // (nodeId UINT32_MAX - 1, name "fileFooter").
+  folly::Synchronized<
+      folly::F14FastMap<uint32_t, std::shared_ptr<PerColumnStats>>>
+      perColumnStats;
+
+  // Gets or creates stats for a column.
+  // Returns nullptr if collectColumnStats is false.
+  std::shared_ptr<PerColumnStats> getOrCreateColumnStats(
+      uint32_t nodeId,
+      const std::string& columnName = "") {
+    if (!collectColumnStats) {
+      return nullptr;
+    }
+    auto locked = perColumnStats.wlock();
+    auto it = locked->find(nodeId);
+    if (it != locked->end()) {
+      return it->second;
+    }
+    auto stats = std::make_shared<PerColumnStats>(nodeId, columnName);
+    locked->emplace(nodeId, stats);
+    return stats;
+  }
+
+  // Merges all stats from another ColumnReaderStatistics instance.
+  void mergeFrom(const ColumnReaderStatistics& other) {
+    flattenStringDictionaryValues += other.flattenStringDictionaryValues;
+    pageLoadTimeNs.merge(other.pageLoadTimeNs);
+    auto srcLocked = other.perColumnStats.rlock();
+    auto dstLocked = perColumnStats.wlock();
+    for (const auto& [nodeId, srcStats] : *srcLocked) {
+      auto it = dstLocked->find(nodeId);
+      if (it == dstLocked->end()) {
+        it = dstLocked
+                 ->emplace(
+                     nodeId,
+                     std::make_shared<PerColumnStats>(
+                         srcStats->nodeId, srcStats->columnName))
+                 .first;
+      }
+      it->second->merge(*srcStats);
+    }
+  }
+
+  // Merges a single PerColumnStats entry into the map.
+  void mergeStats(const PerColumnStats& src) {
+    auto locked = perColumnStats.wlock();
+    auto it = locked->find(src.nodeId);
+    if (it == locked->end()) {
+      it = locked
+               ->emplace(
+                   src.nodeId,
+                   std::make_shared<PerColumnStats>(src.nodeId, src.columnName))
+               .first;
+    }
+    it->second->merge(src);
+  }
+
+  // Formats per-column stats into the runtime metrics result map.
+  void mergePerColumnStats(
+      std::unordered_map<std::string, RuntimeMetric>& result) const {
+    auto locked = perColumnStats.rlock();
+    for (const auto& [nodeId, stats] : *locked) {
+      const auto decompressCpuNs =
+          stats->decompressCpuTimeNs.load(std::memory_order_relaxed);
+      const auto numDecompressCalls =
+          stats->numDecompressCalls.load(std::memory_order_relaxed);
+
+      const auto prefix = stats->columnName.empty()
+          ? fmt::format("column_{}", nodeId)
+          : stats->columnName;
+
+      if (decompressCpuNs > 0) {
+        result.emplace(
+            fmt::format("{}.decompressCpuTimeNs", prefix),
+            RuntimeMetric(decompressCpuNs, RuntimeCounter::Unit::kNanos));
+        result.emplace(
+            fmt::format("{}.numDecompressCalls", prefix),
+            RuntimeMetric(numDecompressCalls));
+      }
+    }
+  }
 };
 
 struct RuntimeStatistics {
@@ -612,6 +757,8 @@ struct RuntimeStatistics {
               columnReaderStatistics.pageLoadTimeNs.max(),
               RuntimeCounter::Unit::kNanos));
     }
+    // Include per-column stats
+    columnReaderStatistics.mergePerColumnStats(result);
     return result;
   }
 };

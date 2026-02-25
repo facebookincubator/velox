@@ -199,7 +199,9 @@ ReaderBase::ReaderBase(
   auto decompressed = createDecompressedStream(
       std::make_unique<dwio::common::SeekableArrayInputStream>(
           footerStart, footerSize),
-      "File Footer");
+      "File Footer",
+      /*decrypter=*/nullptr,
+      &fileFooterDecompressStats_);
   if (fileFormat() == FileFormat::DWRF) {
     footer_ = parseFooter<proto::Footer>(decompressed.get(), arena_.get());
   } else {

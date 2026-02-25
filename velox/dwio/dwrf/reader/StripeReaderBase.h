@@ -21,6 +21,10 @@
 #include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 
+namespace facebook::velox::dwio::common {
+struct PerColumnStats;
+} // namespace facebook::velox::dwio::common
+
 namespace facebook::velox::dwrf {
 
 struct StripeMetadata {
@@ -114,7 +118,8 @@ class StripeReaderBase {
 
   std::unique_ptr<const StripeMetadata> fetchStripe(
       uint32_t index,
-      bool& preload) const;
+      bool& preload,
+      dwio::common::PerColumnStats* columnStats = nullptr) const;
 
  private:
   // stripeFooter default null arg should only be used for testing.

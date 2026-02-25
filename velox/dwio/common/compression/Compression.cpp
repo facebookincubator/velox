@@ -16,7 +16,9 @@
 
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/common/compression/LzoDecompressor.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/PagedInputStream.h"
 
 #include <folly/logging/xlog.h>
@@ -513,8 +515,9 @@ class ZlibDecompressionStream : public PagedInputStream,
       const std::string& streamDebugInfo,
       bool isGzip = false,
       bool useRawDecompression = false,
-      size_t compressedLength = 0)
-      : PagedInputStream{std::move(inStream), pool, streamDebugInfo, useRawDecompression, compressedLength},
+      size_t compressedLength = 0,
+      PerColumnStats* columnStats = nullptr)
+      : PagedInputStream{std::move(inStream), pool, streamDebugInfo, useRawDecompression, compressedLength, columnStats},
         ZlibDecompressor{blockSize, windowBits, streamDebugInfo, isGzip} {}
   ~ZlibDecompressionStream() override = default;
 
@@ -568,49 +571,53 @@ bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
     prepareOutputBuffer(
         getDecompressedLength(inputBufferPtr_, availSize).first);
 
-    reset();
-    int32_t result;
-    *size = 0;
-    do {
-      if (inputBufferPtr_ == inputBufferPtrEnd_) {
-        readBuffer(true);
-      }
-      zstream_.next_in =
-          reinterpret_cast<Bytef*>(const_cast<char*>(inputBufferPtr_));
-      zstream_.avail_in =
-          static_cast<size_t>(inputBufferPtrEnd_ - inputBufferPtr_);
-
+    auto doDecompress = [&]() {
+      reset();
+      int32_t result;
+      *size = 0;
       do {
-        // size_ of outputBuffer_ is not updated in inflate, so *size is used
-        // here to ensure enough capacity for the output data.
-        outputBuffer_->extend(*size);
-        outputBufferPtr_ = outputBuffer_->data();
-        zstream_.next_out = reinterpret_cast<Bytef*>(
-            const_cast<char*>(outputBufferPtr_ + *size));
-        zstream_.avail_out = folly::to<uInt>(blockSize_);
-        result = inflate(&zstream_, Z_SYNC_FLUSH);
-        // Result handling adapted from https://zlib.net/zlib_how.html
-        switch (result) {
-          case Z_NEED_DICT:
-            result = Z_DATA_ERROR;
-            [[fallthrough]];
-          case Z_DATA_ERROR:
-            [[fallthrough]];
-          case Z_MEM_ERROR:
-            [[fallthrough]];
-          case Z_STREAM_ERROR:
-            DWIO_RAISE("Failed to inflate input data. error: ", result);
-          default:
-            *size += static_cast<int32_t>(
-                blockSize_ - static_cast<int64_t>(zstream_.avail_out));
-            const size_t inputConsumed =
-                reinterpret_cast<const char*>(zstream_.next_in) -
-                inputBufferPtr_;
-            remainingLength_ -= inputConsumed;
-            inputBufferPtr_ += inputConsumed;
+        if (inputBufferPtr_ == inputBufferPtrEnd_) {
+          readBuffer(true);
         }
-      } while (zstream_.avail_out == 0);
-    } while (result != Z_STREAM_END);
+        zstream_.next_in =
+            reinterpret_cast<Bytef*>(const_cast<char*>(inputBufferPtr_));
+        zstream_.avail_in =
+            static_cast<size_t>(inputBufferPtrEnd_ - inputBufferPtr_);
+
+        do {
+          // size_ of outputBuffer_ is not updated in inflate, so *size is used
+          // here to ensure enough capacity for the output data.
+          outputBuffer_->extend(*size);
+          outputBufferPtr_ = outputBuffer_->data();
+          zstream_.next_out = reinterpret_cast<Bytef*>(
+              const_cast<char*>(outputBufferPtr_ + *size));
+          zstream_.avail_out = folly::to<uInt>(blockSize_);
+          result = inflate(&zstream_, Z_SYNC_FLUSH);
+          // Result handling adapted from https://zlib.net/zlib_how.html
+          switch (result) {
+            case Z_NEED_DICT:
+              result = Z_DATA_ERROR;
+              [[fallthrough]];
+            case Z_DATA_ERROR:
+              [[fallthrough]];
+            case Z_MEM_ERROR:
+              [[fallthrough]];
+            case Z_STREAM_ERROR:
+              DWIO_RAISE("Failed to inflate input data. error: ", result);
+            default:
+              *size += static_cast<int32_t>(
+                  blockSize_ - static_cast<int64_t>(zstream_.avail_out));
+              const size_t inputConsumed =
+                  reinterpret_cast<const char*>(zstream_.next_in) -
+                  inputBufferPtr_;
+              remainingLength_ -= inputConsumed;
+              inputBufferPtr_ += inputConsumed;
+          }
+        } while (zstream_.avail_out == 0);
+      } while (result != Z_STREAM_END);
+    };
+
+    withDecompressStats(columnStats_, [&] { doDecompress(); });
 
     if (data) {
       *data = outputBufferPtr_;
@@ -675,7 +682,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     const std::string& streamDebugInfo,
     const Decrypter* decrypter,
     bool useRawDecompression,
-    size_t compressedLength) {
+    size_t compressedLength,
+    PerColumnStats* columnStats) {
   std::unique_ptr<Decompressor> decompressor;
   switch (static_cast<int64_t>(kind)) {
     case CompressionKind::CompressionKind_NONE:
@@ -696,7 +704,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
             streamDebugInfo,
             false,
             useRawDecompression,
-            compressedLength);
+            compressedLength,
+            columnStats);
       }
       decompressor = std::make_unique<ZlibDecompressor>(
           blockSize, options.format.zlib.windowBits, streamDebugInfo, false);
@@ -713,7 +722,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
             streamDebugInfo,
             true,
             useRawDecompression,
-            compressedLength);
+            compressedLength,
+            columnStats);
       }
       decompressor = std::make_unique<ZlibDecompressor>(
           blockSize, options.format.zlib.windowBits, streamDebugInfo, true);
@@ -748,7 +758,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
       decrypter,
       streamDebugInfo,
       useRawDecompression,
-      compressedLength);
+      compressedLength,
+      columnStats);
 }
 
 } // namespace facebook::velox::dwio::common::compression

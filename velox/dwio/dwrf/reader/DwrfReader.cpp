@@ -154,9 +154,12 @@ void DwrfUnit::ensureDecoders() {
 
   preloaded_ = options_.preloadStripe();
 
+  auto stripeFooterStats = columnReaderStatistics_->getOrCreateColumnStats(
+      UINT32_MAX, "stripeFooter");
   stripeReadState_ = std::make_shared<StripeReadState>(
       stripeReaderBase_.readerBaseShared(),
-      stripeReaderBase_.fetchStripe(stripeIndex_, preloaded_));
+      stripeReaderBase_.fetchStripe(
+          stripeIndex_, preloaded_, stripeFooterStats.get()));
 
   stripeStreams_ = std::make_unique<StripeStreamsImpl>(
       stripeReadState_,
@@ -166,7 +169,8 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.offset(),
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
-      stripeIndex_);
+      stripeIndex_,
+      columnReaderStatistics_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -268,6 +272,9 @@ DwrfRowReader::DwrfRowReader(
       columnReaderStatistics_{
           std::make_shared<dwio::common::ColumnReaderStatistics>()},
       currentUnit_{nullptr} {
+  // Pass the flag for per-column stats collection.
+  columnReaderStatistics_->collectColumnStats =
+      options_.collectColumnTimingStats();
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;

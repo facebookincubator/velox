@@ -475,6 +475,14 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
+  bool collectColumnTimingStats() const {
+    return collectColumnTimingStats_;
+  }
+
+  void setCollectColumnTimingStats(bool collect) {
+    collectColumnTimingStats_ = collect;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -539,6 +547,9 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
+  // When true, collect per-column stats for decode/decompress.
+  // Disabled by default to avoid overhead.
+  bool collectColumnTimingStats_{false};
 };
 
 /// Options for creating a Reader.

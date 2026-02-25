@@ -28,7 +28,8 @@ using dwio::common::LogType;
 // true) will reuse the result without considering the new preload directive
 std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
     uint32_t index,
-    bool& preload) const {
+    bool& preload,
+    dwio::common::PerColumnStats* columnStats) const {
   auto& fileFooter = reader_->footer();
   VELOX_CHECK_LT(index, fileFooter.stripesSize(), "invalid stripe index");
   auto stripe = fileFooter.stripes(index);
@@ -101,7 +102,10 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
     auto* rawFooter = ArenaCreate<proto::StripeFooter>(arena.get());
     ProtoUtils::readProtoInto(
         reader_->createDecompressedStream(
-            std::move(footerStream), streamDebugInfo),
+            std::move(footerStream),
+            streamDebugInfo,
+            /*decrypter=*/nullptr,
+            columnStats),
         rawFooter);
     std::shared_ptr<proto::StripeFooter> stripeFooter(
         rawFooter, [arena = std::move(arena)](auto*) { arena->Reset(); });
@@ -114,7 +118,10 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
     auto* rawFooter = ArenaCreate<proto::orc::StripeFooter>(arena.get());
     ProtoUtils::readProtoInto(
         reader_->createDecompressedStream(
-            std::move(footerStream), streamDebugInfo),
+            std::move(footerStream),
+            streamDebugInfo,
+            /*decrypter=*/nullptr,
+            columnStats),
         rawFooter);
     std::shared_ptr<proto::orc::StripeFooter> stripeFooter(
         rawFooter, [arena = std::move(arena)](auto*) { arena->Reset(); });

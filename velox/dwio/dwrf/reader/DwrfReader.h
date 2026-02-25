@@ -111,8 +111,9 @@ class DwrfRowReader : public StrideIndexProvider,
     stats.processedStrides += processedStrides_;
     stats.footerBufferOverread += getReader().footerBufferOverread();
     stats.numStripes += stripeCeiling_ - firstStripe_;
-    stats.columnReaderStatistics.flattenStringDictionaryValues +=
-        columnReaderStatistics_->flattenStringDictionaryValues;
+    stats.columnReaderStatistics.mergeFrom(*columnReaderStatistics_);
+    stats.columnReaderStatistics.mergeStats(
+        getReader().fileFooterDecompressStats());
     stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
