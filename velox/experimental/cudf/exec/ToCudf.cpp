@@ -405,6 +405,10 @@ void CudfConfig::initialize(
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }
+  if (config.find(kCudfJitFilterJoinIndicesEnabled) != config.end()) {
+    jitFilterJoinIndicesEnabled =
+        folly::to<bool>(config[kCudfJitFilterJoinIndicesEnabled]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

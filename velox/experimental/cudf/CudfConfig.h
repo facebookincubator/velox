@@ -39,6 +39,8 @@ struct CudfConfig {
       "cudf.jit_expression_priority"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+  static constexpr const char* kCudfJitFilterJoinIndicesEnabled{
+      "cudf.jit_filter_join_indices_enabled"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -88,6 +90,9 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  /// Enable JIT-based filtering of join indices.
+  bool jitFilterJoinIndicesEnabled{false};
 };
 
 } // namespace facebook::velox::cudf_velox

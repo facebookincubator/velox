@@ -53,15 +53,10 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit e6ba1fe from 2026-02-11
+# cudf from shrshi fork, branch join-indices-jit-filter
 set(VELOX_cudf_VERSION 26.04 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT e6ba1feee8f056ce2e245f771403cfa5f598d813)
-set(
-  VELOX_cudf_BUILD_SHA256_CHECKSUM
-  19137d306db0ddbf4eebb4333e0257de4815563039b1e805829ce2dcc525c3f5
-)
-set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
-velox_resolve_dependency_url(cudf)
+set(VELOX_cudf_GIT_REPO "https://github.com/shrshi/cudf.git")
+set(VELOX_cudf_GIT_TAG "join-indices-jit-filter")
 
 # Use block so we don't leak variables
 block(SCOPE_FOR VARIABLES)
@@ -97,8 +92,8 @@ block(SCOPE_FOR VARIABLES)
 
   FetchContent_Declare(
     cudf
-    URL ${VELOX_cudf_SOURCE_URL}
-    URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
+    GIT_REPOSITORY ${VELOX_cudf_GIT_REPO}
+    GIT_TAG ${VELOX_cudf_GIT_TAG}
     SOURCE_SUBDIR
     cpp
     UPDATE_DISCONNECTED 1

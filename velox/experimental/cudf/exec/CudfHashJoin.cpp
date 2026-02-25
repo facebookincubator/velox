@@ -689,14 +689,23 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     rmm::cuda_stream_view stream) {
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
-      cudf::filter_join_indices(
-          extendedLeftView,
-          extendedRightView,
-          leftIndicesCol,
-          rightIndicesCol,
-          tree_.back(),
-          joinKind,
-          stream);
+      CudfConfig::getInstance().jitFilterJoinIndicesEnabled
+      ? cudf::jit_filter_join_indices(
+            extendedLeftView,
+            extendedRightView,
+            leftIndicesCol,
+            rightIndicesCol,
+            tree_.back(),
+            joinKind,
+            stream)
+      : cudf::filter_join_indices(
+            extendedLeftView,
+            extendedRightView,
+            leftIndicesCol,
+            rightIndicesCol,
+            tree_.back(),
+            joinKind,
+            stream);
 
   auto filteredLeftIndicesSpan =
       cudf::device_span<cudf::size_type const>{*filteredLeftJoinIndices};
@@ -1057,14 +1066,23 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
       // semantics: all probe rows are kept, build columns are NULL when filter
       // fails or no match.
       auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
-          cudf::filter_join_indices(
-              leftTableView,
-              rightTableView,
-              leftIndicesCol,
-              rightIndicesCol,
-              tree_.back(),
-              cudf::join_kind::LEFT_JOIN,
-              stream);
+          CudfConfig::getInstance().jitFilterJoinIndicesEnabled
+          ? cudf::jit_filter_join_indices(
+                leftTableView,
+                rightTableView,
+                leftIndicesCol,
+                rightIndicesCol,
+                tree_.back(),
+                cudf::join_kind::LEFT_JOIN,
+                stream)
+          : cudf::filter_join_indices(
+                leftTableView,
+                rightTableView,
+                leftIndicesCol,
+                rightIndicesCol,
+                tree_.back(),
+                cudf::join_kind::LEFT_JOIN,
+                stream);
 
       // Track matched build rows for unmatched row emission at end.
       // Use contains to check which build row indices passed the filter.
