@@ -28,6 +28,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/FilterProject.h"
@@ -42,7 +43,6 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
-#include "velox/core/Expressions.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -224,7 +224,8 @@ class AggregationAdapter : public OperatorAdapter {
     }
 
     if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
-      // Zero-column input is only supported for global count(*)/count(constant).
+      // Zero-column input is only supported for global
+      // count(*)/count(constant).
       if (!aggregationPlanNode->groupingKeys().empty()) {
         return false;
       }
