@@ -16,15 +16,15 @@
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Spill.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
-using facebook::velox::exec::test::TempDirectoryPath;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class HashJoinBridgeTestHelper {
  public:
@@ -71,7 +71,7 @@ class HashJoinBridgeTest : public testing::Test,
 
   void SetUp() override {
     rng_.seed(1245);
-    tempDir_ = exec::test::TempDirectoryPath::create();
+    tempDir_ = TempDirectoryPath::create();
   }
 
   void TearDown() override {}

@@ -76,19 +76,19 @@ inline bool isDense(const T* values, int32_t size) {
   return (values[size - 1] - values[0] == size - 1);
 }
 
-template <typename Dense, typename Sparse, typename SparseN>
+template <int kStep, typename Dense, typename Sparse, typename SparseN>
 void rowLoop(
     const int32_t* rows,
     int32_t begin,
     int32_t end,
-    int32_t step,
     Dense dense,
     Sparse sparse,
     SparseN sparseN) {
+  static_assert(bits::isPowerOfTwo(kStep));
   int32_t i = begin;
-  auto firstPartial = (end - begin) & ~(step - 1);
-  for (; i < firstPartial; i += step) {
-    if (isDense(&rows[i], step)) {
+  const auto firstPartial = (end - begin) & ~(kStep - 1);
+  for (; i < begin + firstPartial; i += kStep) {
+    if (isDense(&rows[i], kStep)) {
       dense(i);
     } else {
       sparse(i);
@@ -159,15 +159,15 @@ inline void loopOverBuffers(
   int32_t rowOffset = initialRow;
   int32_t rowIndex = 0;
   while (rowIndex < rows.size()) {
-    auto available = (bufferEnd - bufferStart) / sizeof(T);
-    auto numRowsInBuffer = rows.back() - rowOffset < available
+    const auto available = (bufferEnd - bufferStart) / sizeof(T);
+    const auto numRowsInBuffer = rows.back() - rowOffset < available
         ? rows.size() - rowIndex
         : numBelow(
               folly::Range<const int32_t*>(
                   &rows[rowIndex], rows.size() - rowIndex),
               rowOffset + available);
 
-    if (!numRowsInBuffer) {
+    if (numRowsInBuffer == 0) {
       skipBytes(
           (rows[rowIndex] - rowOffset) * sizeof(T),
           &input,

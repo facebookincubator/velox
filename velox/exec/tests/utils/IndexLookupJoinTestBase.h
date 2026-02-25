@@ -25,6 +25,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 class IndexLookupJoinTestBase : public HiveConnectorTestBase {
  protected:
@@ -35,10 +36,10 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
     rng_.seed(123);
   }
 
-  struct SequenceTableData {
-    RowVectorPtr keyData;
-    RowVectorPtr valueData;
-    RowVectorPtr tableData;
+  struct IndexTableData {
+    RowVectorPtr keyVectors;
+    RowVectorPtr valueVectors;
+    RowVectorPtr tableVectors;
     std::vector<int64_t> minKeys;
     std::vector<int64_t> maxKeys;
   };
@@ -70,7 +71,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       size_t numBatches,
       size_t batchSize,
       size_t numDuplicateProbeRows,
-      SequenceTableData& tableData,
+      IndexTableData& tableData,
       std::shared_ptr<memory::MemoryPool>& pool,
       const std::vector<std::string>& probeJoinKeys,
       bool hasNullKeys = false,
@@ -150,7 +151,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
   /// each index column.
   void generateIndexTableData(
       const std::vector<int>& keyCardinalities,
-      SequenceTableData& tableData,
+      IndexTableData& tableData,
       std::shared_ptr<memory::MemoryPool>& pool);
 
   /// Write 'probeVectors' to a number of files with one per each file.
@@ -173,6 +174,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       bool barrierExecution,
       int maxBatchRows,
       int numPrefetchBatches,
+      bool needsIndexSplit,
       const std::string& duckDbVefifySql);
 
   /// Verifies the results of the index lookup join query with and without match
@@ -182,7 +184,8 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       const PlanNodeId& probeScanNodeIdWithoutMatchColumn,
       const PlanNodePtr& planWithMatchColumn,
       const PlanNodeId& probeScanNodeIdWithMatchColumn,
-      const std::vector<std::shared_ptr<TempFilePath>>& probeFiles);
+      const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
+      bool needsIndexSplit);
 
   RowTypePtr keyType_;
   std::optional<RowTypePtr> partitionType_;

@@ -560,8 +560,8 @@ void copyWords(
     const T* values,
     Conv&& conv = {}) {
   for (auto i = 0; i < numIndices; ++i) {
-    folly::storeUnaligned(
-        destination + i * sizeof(T), conv(values[indices[i]]));
+    folly::storeUnaligned<T>(
+        destination + i * sizeof(T), static_cast<T>(conv(values[indices[i]])));
   }
 }
 
@@ -578,8 +578,9 @@ void copyWordsWithRows(
     return;
   }
   for (auto i = 0; i < numIndices; ++i) {
-    folly::storeUnaligned(
-        destination + i * sizeof(T), conv(values[rows[indices[i]]]));
+    folly::storeUnaligned<T>(
+        destination + i * sizeof(T),
+        static_cast<T>(conv(values[rows[indices[i]]])));
   }
 }
 
@@ -763,7 +764,7 @@ void serializeFlatVector<TypeKind::BOOLEAN>(
     uint64_t word = bitsToBytes(reinterpret_cast<uint8_t*>(valueBits)[i]);
     auto* target = output + i * 8;
     if (i < numBytes - 1) {
-      folly::storeUnaligned(target, word);
+      folly::storeUnaligned<uint64_t>(target, word);
     } else {
       memcpy(target, &word, numValueBits - i * 8);
     }

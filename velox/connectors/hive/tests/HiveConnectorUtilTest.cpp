@@ -107,6 +107,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         common::SubfieldFilters{},
         nullptr,
         nullptr,
+        /*indexColumns=*/std::vector<std::string>{},
         tableParameters);
   };
 
@@ -292,15 +293,15 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
 TEST_F(HiveConnectorUtilTest, cacheRetention) {
   struct {
     bool splitCacheable;
-    bool expectedNoCacheRetention;
+    bool expectedCacheable;
 
     std::string debugString() const {
       return fmt::format(
-          "splitCacheable {}, expectedNoCacheRetention {}",
+          "splitCacheable {}, expectedCacheable {}",
           splitCacheable,
-          expectedNoCacheRetention);
+          expectedCacheable);
     }
-  } testSettings[] = {{false, true}, {true, false}};
+  } testSettings[] = {{false, false}, {true, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -333,6 +334,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         common::SubfieldFilters{},
         nullptr,
         nullptr,
+        /*indexColumns=*/std::vector<std::string>{},
         std::unordered_map<std::string, std::string>{});
 
     auto hiveSplit = std::make_shared<hive::HiveConnectorSplit>(
@@ -356,8 +358,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         hiveSplit,
         readerOptions);
 
-    ASSERT_EQ(
-        readerOptions.noCacheRetention(), testData.expectedNoCacheRetention);
+    ASSERT_EQ(readerOptions.cacheable(), testData.expectedCacheable);
   }
 }
 

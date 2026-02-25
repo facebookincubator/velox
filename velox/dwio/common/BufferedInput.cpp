@@ -44,6 +44,14 @@ uint64_t BufferedInput::nextFetchSize() const {
       });
 }
 
+void BufferedInput::reset() {
+  regions_.clear();
+  offsets_.clear();
+  buffers_.clear();
+  enqueuedToBufferOffset_.clear();
+  allocPool_->clear();
+}
+
 void BufferedInput::load(const LogType logType) {
   // no regions to load
   if (regions_.size() == 0) {
@@ -82,14 +90,15 @@ void BufferedInput::readToBuffer(
     uint64_t offset,
     folly::Range<char*> allocated,
     const LogType logType) {
-  uint64_t usec = 0;
+  uint64_t storageReadTimeUs = 0;
   {
-    MicrosecondTimer timer(&usec);
+    MicrosecondTimer timer(&storageReadTimeUs);
     input_->read(allocated.data(), allocated.size(), offset, logType);
   }
   if (auto* stats = input_->getStats()) {
     stats->read().increment(allocated.size());
-    stats->queryThreadIoLatency().increment(usec);
+    stats->queryThreadIoLatencyUs().increment(storageReadTimeUs);
+    stats->storageReadLatencyUs().increment(storageReadTimeUs);
   }
 }
 

@@ -39,8 +39,8 @@ class PositionalDeleteFileReader {
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
-      const std::shared_ptr<io::IoStatistics>& ioStats,
-      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+      const std::shared_ptr<io::IoStatistics>& ioStatistics,
+      const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStatistics& runtimeStats,
       uint64_t splitOffset,
       const std::string& connectorId);
@@ -67,9 +67,8 @@ class PositionalDeleteFileReader {
   folly::Executor* const executor_;
   const ConnectorQueryCtx* connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
-  const std::shared_ptr<io::IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats;
+  const std::shared_ptr<io::IoStatistics> ioStatistics_;
+  const std::shared_ptr<IoStats> ioStats_;
   memory::MemoryPool* const pool_;
 
   std::shared_ptr<IcebergMetadataColumn> filePathColumn_;

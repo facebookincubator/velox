@@ -330,10 +330,9 @@ ExprPtr SwitchCallToSpecialForm::constructSpecialForm(
 }
 
 TypePtr IfCallToSpecialForm::resolveType(const std::vector<TypePtr>& argTypes) {
-  VELOX_CHECK_EQ(
-      argTypes.size(),
-      3,
-      "An IF statement must have 3 clauses: 'if', 'then', and 'else'.");
+  VELOX_CHECK(
+      argTypes.size() == 2 || argTypes.size() == 3,
+      "An IF statement must have 2 or 3 clauses: 'if', 'then', and optional 'else'.");
 
   return resolveTypeInt(argTypes);
 }

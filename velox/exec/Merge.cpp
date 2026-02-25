@@ -18,6 +18,7 @@
 #include <folly/Traits.h>
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
@@ -33,7 +34,7 @@ Merge::Merge(
         sortingKeys,
     const std::vector<core::SortOrder>& sortingOrders,
     const std::string& planNodeId,
-    const std::string& operatorType,
+    std::string_view operatorType,
     const std::optional<common::SpillConfig>& spillConfig)
     : SourceOperator(
           driverCtx,
@@ -385,10 +386,7 @@ RowVectorPtr SourceMerger::getOutput(
   VELOX_CHECK_GT(outputBatchRows_, 0);
 
   if (!output_) {
-    output_ = BaseVector::create<RowVector>(type_, outputBatchRows_, pool_);
-    for (auto& child : output_->children()) {
-      child->resize(outputBatchRows_);
-    }
+    output_ = createOutputVector();
   }
 
   for (;;) {
@@ -432,6 +430,23 @@ RowVectorPtr SourceMerger::getOutput(
       return nullptr;
     }
   }
+}
+
+RowVectorPtr SourceMerger::createOutputVector() {
+  // Attempt to generate output vector using stream data to preserve encodings.
+  // First, find the first stream with non-null data to determine column
+  // encodings.
+  const RowVector* source = nullptr;
+  for (const auto* stream : streams_) {
+    if (stream->hasData() && (source = stream->data())) {
+      return std::static_pointer_cast<RowVector>(
+          BaseVector::createEmptyLike(source, outputBatchRows_, pool_));
+    }
+  }
+
+  // If a non-null stream cannot be found, default to generating row vector by
+  // type.
+  return BaseVector::create<RowVector>(type_, outputBatchRows_, pool_);
 }
 
 bool SourceStream::operator<(const MergeStream& other) const {
@@ -491,7 +506,8 @@ void SourceStream::copyToOutput(RowVectorPtr& output) {
 
 bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
   ContinueFuture future;
-  auto reason = source_->next(data_, &future);
+  bool drained{false};
+  auto reason = source_->next(data_, &future, drained);
   if (reason != BlockingReason::kNotBlocked) {
     needData_ = true;
     futures.emplace_back(std::move(future));
@@ -523,7 +539,7 @@ SpillMerger::SpillMerger(
     uint64_t maxOutputBatchBytes,
     int mergeSourceQueueSize,
     const common::SpillConfig* spillConfig,
-    const std::shared_ptr<folly::Synchronized<common::SpillStats>>& spillStats,
+    const std::shared_ptr<exec::SpillStats>& spillStats,
     velox::memory::MemoryPool* pool)
     : executor_(spillConfig->executor),
       spillStats_(spillStats),
@@ -724,9 +740,11 @@ LocalMerge::LocalMerge(
           localMergeNode->sortingKeys(),
           localMergeNode->sortingOrders(),
           localMergeNode->id(),
-          "LocalMerge",
+          OperatorType::kLocalMerge,
           localMergeNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    OperatorType::kLocalMerge)
               : std::nullopt) {
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,
@@ -761,7 +779,7 @@ MergeExchange::MergeExchange(
           mergeExchangeNode->sortingKeys(),
           mergeExchangeNode->sortingOrders(),
           mergeExchangeNode->id(),
-          "MergeExchange"),
+          OperatorType::kMergeExchange),
       serde_(getNamedVectorSerde(mergeExchangeNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
           common::stringToCompressionKind(
@@ -781,7 +799,14 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   for (;;) {
     exec::Split split;
     auto reason = operatorCtx_->task()->getSplitOrFuture(
-        operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
+
+        operatorCtx_->driverCtx()->driverId,
+        operatorCtx_->driverCtx()->splitGroupId,
+        planNodeId(),
+        /*maxPreloadSplits=*/0,
+        /*preload=*/nullptr,
+        split,
+        *future);
     if (reason != BlockingReason::kNotBlocked) {
       return reason;
     }

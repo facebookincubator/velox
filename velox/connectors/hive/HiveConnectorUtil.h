@@ -92,6 +92,25 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
         outputSubfields,
     const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<const HiveColumnHandle>>& partitionKeys,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<const HiveColumnHandle>>& infoColumns,
+    const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
+    memory::MemoryPool* pool);
+
+/// @deprecated Use the overload without indexColumns parameter instead.
+/// This overload is kept for backward compatibility and will be removed in a
+/// future release.
+std::shared_ptr<common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
+        outputSubfields,
+    const common::SubfieldFilters& subfieldFilters,
     const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
     const std::unordered_map<
@@ -145,8 +164,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
-    std::shared_ptr<io::IoStatistics> ioStats,
-    std::shared_ptr<filesystems::File::IoStats> fsStats,
+    std::shared_ptr<io::IoStatistics> ioStatistics,
+    std::shared_ptr<IoStats> ioStats,
     folly::Executor* executor,
     const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 

@@ -1942,6 +1942,20 @@ TEST_F(MergeJoinTest, barrier) {
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
+  struct {
+    bool hasBarrier;
+    bool serialExecution;
+
+    std::string toString() const {
+      return fmt::format(
+          "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+    }
+  } testSettings[] = {
+      {false, false},
+      {false, true},
+      {true, false},
+      {true, true},
+  };
 
   {
     // Inner join.
@@ -1968,10 +1982,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kInner)
             .planNode();
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -1980,8 +1996,10 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t INNER JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
-      ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
+      ASSERT_EQ(
+          task->taskStats().numFinishedSplits,
+          (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
 
@@ -2010,10 +2028,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kFull)
             .planNode();
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2022,7 +2042,7 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
       ASSERT_EQ(task->taskStats().numFinishedSplits, 2);
     }
   }
@@ -2052,10 +2072,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kRight)
             .planNode();
-    for (const auto hasBarrier : {false, true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2064,7 +2086,7 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t RIGHT JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
       ASSERT_EQ(task->taskStats().numFinishedSplits, 2);
     }
   }
@@ -2094,10 +2116,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1", "u0", "u1"},
                 core::JoinType::kLeft)
             .planNode();
-    for (const auto hasBarrier : {true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2106,8 +2130,10 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1, u0, u1 FROM t LEFT JOIN u ON t.t0 = u.u0");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
-      ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
+      ASSERT_EQ(
+          task->taskStats().numFinishedSplits,
+          (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
 
@@ -2136,10 +2162,12 @@ TEST_F(MergeJoinTest, barrier) {
                 {"t0", "t1"},
                 core::JoinType::kAnti)
             .planNode();
-    for (const auto hasBarrier : {true}) {
-      SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
-      queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+      queryBuilder.barrierExecution(testData.hasBarrier)
+          .serialExecution(testData.serialExecution)
+          .maxDrivers(testData.serialExecution ? 1 : 3);
       queryBuilder.split(
           leftNodeId, makeHiveConnectorSplit(leftFile->getPath()));
       queryBuilder.split(
@@ -2148,10 +2176,13 @@ TEST_F(MergeJoinTest, barrier) {
 
       const auto task = queryBuilder.assertResults(
           "SELECT t0, t1 FROM t WHERE NOT exists (select u0, u1 from u where t0 = u0)");
-      ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? 1 : 0);
-      ASSERT_EQ(task->taskStats().numFinishedSplits, hasBarrier ? 2 : 1);
+      ASSERT_EQ(task->taskStats().numBarriers, testData.hasBarrier ? 1 : 0);
+      ASSERT_EQ(
+          task->taskStats().numFinishedSplits,
+          (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {
@@ -2234,4 +2265,269 @@ TEST_F(MergeJoinTest, testJoinWithTwoKeysAndSecondColumnHasNulls) {
        makeNullableFlatVector<StringView>({"1", std::nullopt, "2", "3"})});
 
   testJoinTwoKeysWithNulls(left, right);
+}
+
+// Test that the dynamic output batch sizing follows the expected growth pattern
+// Verifies that when dynamic batch sizing is enabled
+// (mergeJoinOutputBatchStartSize > 0), MergeJoin adjusts output batch size
+// based on average row size and preferred bytes.
+TEST_F(MergeJoinTest, dynamicOutputBatchSizing) {
+  // Create simple two-column BIGINT data for both left and right sides.
+  // Each row is approximately 16 bytes (2 x 8 bytes for BIGINT).
+  // We create enough rows to see multiple output batches.
+  const vector_size_t numRows = 1000;
+
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 10; }),
+      });
+
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 100; }),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t_c0"},
+              {"u_c0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t_c0", "t_c1", "u_c1"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  // Set a very high preferred row count (10000) but a relatively small byte
+  // limit. The dynamic sizing should compute batch size based on
+  // preferredBytes / avgRowSize, rather than immediately producing 10000 rows.
+  const uint32_t highPreferredRows = 10000;
+  // Set preferred bytes to allow roughly 64 rows per batch (each output row is
+  // ~24 bytes: 3 x 8 bytes for 3 BIGINT columns).
+  const uint64_t preferredBytes = 24 * 64;
+
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kPreferredOutputBatchRows,
+       std::to_string(highPreferredRows)},
+      {core::QueryConfig::kPreferredOutputBatchBytes,
+       std::to_string(preferredBytes)},
+      // Enable dynamic batch sizing by setting a non-zero start size.
+      {core::QueryConfig::kMergeJoinOutputBatchStartSize, "1"},
+  });
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = queryCtx;
+
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+
+  std::vector<vector_size_t> outputBatchSizes;
+  while (cursor->moveNext()) {
+    auto result = cursor->current();
+    if (result && result->size() > 0) {
+      outputBatchSizes.push_back(result->size());
+    }
+  }
+
+  // Verify that we got multiple output batches.
+  ASSERT_GT(outputBatchSizes.size(), 1);
+
+  // Verify the first batch starts small (should be 1 row due to initial
+  // outputBatchSize_ = 1).
+  EXPECT_EQ(outputBatchSizes[0], 1);
+
+  // After the first batch, the batch size should immediately jump to the
+  // computed size based on preferredBytes / avgRowSize (roughly 64 rows).
+  // All subsequent batches (except the last which may have fewer remaining
+  // rows) should be approximately this computed size.
+  for (size_t i = 1; i < outputBatchSizes.size() - 1; ++i) {
+    EXPECT_GT(outputBatchSizes[i], 8)
+        << "Batch " << i
+        << " should be computed based on preferredBytes / avgRowSize";
+  }
+
+  // Verify we never exceed the preferred row count.
+  for (size_t i = 0; i < outputBatchSizes.size(); ++i) {
+    EXPECT_LE(outputBatchSizes[i], highPreferredRows);
+  }
+}
+
+// Test that filterInput_ properly handles the case where outputBatchSize_
+// increases after initial creation.
+//
+// This test uses variable-length string data where:
+// - First batch of rows have LARGE strings (causing small batch size when
+//   filterInput_ is created)
+// - Later batches have SMALL strings (causing batch size to increase)
+//
+// CRITICAL: The filter expression references columns that are NOT in the
+// output projection. This creates non-shared child vectors in filterInput_
+// that are allocated with the initial outputBatchSize_. When outputBatchSize_
+// increases, copyRow() would write beyond the buffer capacity if not handled
+// correctly.
+TEST_F(MergeJoinTest, dynamicOutputBatchSizingWithFilter) {
+  const vector_size_t numRows = 1000;
+
+  // Left side has 4 columns: t_c0 (join key), t_c1 (in output), t_c2 (in
+  // output), t_c3 (ONLY in filter, NOT in output).
+  auto left = makeRowVector(
+      {"t_c0", "t_c1", "t_c2", "t_c3"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 10; }),
+          makeFlatVector<std::string>(
+              numRows,
+              [](auto row) {
+                if (row < 100) {
+                  return std::string(1000, 'A' + (row % 26));
+                } else {
+                  return std::to_string(row);
+                }
+              }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row % 10; }),
+      });
+
+  auto right = makeRowVector(
+      {"u_c0", "u_c1", "u_c2", "u_c3"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 100; }),
+          makeFlatVector<std::string>(
+              numRows,
+              [](auto row) {
+                if (row < 100) {
+                  return std::string(1000, 'X' + (row % 3));
+                } else {
+                  return std::to_string(row * 2);
+                }
+              }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row % 5; }),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+
+  // The filter references t_c3 and u_c3 which are NOT in the output projection.
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t_c0"},
+              {"u_c0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "(t_c3 + u_c3) % 3 = 0",
+              {"t_c0", "t_c1", "t_c2", "u_c1", "u_c2"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  const uint32_t highPreferredRows = 10000;
+  const uint64_t preferredBytes = 10000;
+
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kPreferredOutputBatchRows,
+       std::to_string(highPreferredRows)},
+      {core::QueryConfig::kPreferredOutputBatchBytes,
+       std::to_string(preferredBytes)},
+      {core::QueryConfig::kMergeJoinOutputBatchStartSize, "1"},
+  });
+
+  // If filterInput_ buffer overflow occurs, ASAN will catch it.
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .queryCtx(queryCtx)
+      .assertResults(
+          "SELECT t_c0, t_c1, t_c2, u_c1, u_c2 FROM t, u "
+          "WHERE t_c0 = u_c0 AND (t.t_c3 + u.u_c3) % 3 = 0");
+}
+
+// Verifies that when mergeJoinOutputBatchStartSize is 0 (default), dynamic
+// batch sizing is disabled and the batch size is fixed at
+// preferredOutputBatchRows.
+TEST_F(MergeJoinTest, dynamicOutputBatchSizingDisabledByDefault) {
+  const vector_size_t numRows = 1000;
+
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 10; }),
+      });
+
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(numRows, [](auto row) { return row * 100; }),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t_c0"},
+              {"u_c0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t_c0", "t_c1", "u_c1"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  // Use the default config (mergeJoinOutputBatchStartSize = 0), which disables
+  // dynamic batch sizing. The batch size should be fixed at
+  // preferredOutputBatchRows.
+  const uint32_t preferredRows = 100;
+
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kPreferredOutputBatchRows,
+       std::to_string(preferredRows)},
+  });
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = queryCtx;
+
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+
+  std::vector<vector_size_t> outputBatchSizes;
+  while (cursor->moveNext()) {
+    auto result = cursor->current();
+    if (result && result->size() > 0) {
+      outputBatchSizes.push_back(result->size());
+    }
+  }
+
+  // Verify that we got multiple output batches.
+  ASSERT_GT(outputBatchSizes.size(), 1);
+
+  // Since dynamic batch sizing is disabled, all batches (except possibly the
+  // last one) should be exactly preferredRows in size.
+  for (size_t i = 0; i < outputBatchSizes.size() - 1; ++i) {
+    EXPECT_EQ(outputBatchSizes[i], preferredRows)
+        << "Batch " << i << " should be exactly " << preferredRows
+        << " rows when dynamic batch sizing is disabled";
+  }
+
+  // The last batch should be <= preferredRows (may have fewer remaining rows).
+  EXPECT_LE(outputBatchSizes.back(), preferredRows);
 }

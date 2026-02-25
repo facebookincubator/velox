@@ -89,7 +89,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
-      CUDA_VERSION: '12.8'
+      CUDA_VERSION: '12.9'
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
@@ -156,7 +156,6 @@ jobs:
             "-DVELOX_ENABLE_ABFS=ON"
             "-DVELOX_ENABLE_WAVE=ON"
             "-DVELOX_MONO_LIBRARY=ON"
-            "-DVELOX_BUILD_SHARED=ON"
           )
           if [[ "${USE_CLANG}" = "true" ]]; then
              scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";
@@ -204,7 +203,7 @@ jobs:
       # need to run clang-tidy for that.
       # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
       - name: Install and run clang-tidy
-        if: ${{ ! inputs.use-clang }}
+        if: ${{ ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
         env:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
           RANGE: ${{ needs.get-changes.outputs.diff-range }}
@@ -223,7 +222,7 @@ jobs:
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
 
   ubuntu-debug:
-    runs-on: 8-core-ubuntu-22.04
+    runs-on: 16-core-ubuntu
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     name: Ubuntu debug with resolve_dependency
@@ -264,17 +263,26 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           ICU_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
-          EXTRA_CMAKE_FLAGS: >-
-            -DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY
-            -DVELOX_ENABLE_PARQUET=ON
-            -DVELOX_ENABLE_EXAMPLES=ON
+          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
         run: |
-          # Faiss (link issue when using Clang) is excluded for Clang compilation and needs to be added back when using GCC.
+          EXTRA_CMAKE_FLAGS=(
+            "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
+            "-DVELOX_ENABLE_BENCHMARKS=ON"
+            "-DVELOX_ENABLE_EXAMPLES=ON"
+            "-DVELOX_ENABLE_ARROW=ON"
+            "-DVELOX_ENABLE_GEO=ON"
+            "-DVELOX_ENABLE_PARQUET=ON"
+            "-DVELOX_MONO_LIBRARY=ON"
+            "-DVELOX_BUILD_SHARED=ON"
+          )
           if [[ "${USE_CLANG}" = "true" ]]; then
-            export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
+             export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
           else
-            export EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_FAISS=ON"
+            # Faiss (link issue when using Clang) is excluded for Clang compilation
+            # and need to be added back when using GCC.
+            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
+            # Investigate issues with remote function service: Issue #13897
+            EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           make debug
 

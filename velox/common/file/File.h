@@ -36,22 +36,40 @@
 
 #include <folly/Executor.h>
 #include <folly/Range.h>
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <folly/futures/Future.h>
 #include <folly/io/IOBuf.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileIoTracer.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/Region.h"
 #include "velox/common/io/IoStatistics.h"
 
-#include <folly/container/F14Map.h>
-
 namespace facebook::velox {
+
+/// Free form statistics for file I/O operations. The keys are arbitrary
+/// strings, and values are RuntimeMetric. This class can be used to record
+/// observability about filesystem operations.
+class IoStats {
+ public:
+  IoStats() = default;
+
+  void addCounter(const std::string& name, RuntimeCounter counter);
+
+  void merge(const IoStats& other);
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+
+ private:
+  folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
+};
 
 struct FileIoContext {
   /// Stats for IO operations.
-  filesystems::File::IoStats* ioStats{nullptr};
+  IoStats* ioStats{nullptr};
 
   /// Options for file read operations.
   folly::F14FastMap<std::string, std::string> fileOpts;
@@ -59,15 +77,22 @@ struct FileIoContext {
   /// Tracer for IO operations, providing call stack context.
   std::shared_ptr<FileIoTracer> ioTracer;
 
+  /// When false, hints to the storage layer that this read should not be cached
+  /// or should be evicted soon after reading. This is useful for one-time reads
+  /// where caching would waste resources.
+  bool cacheable{true};
+
   FileIoContext() = default;
 
   explicit FileIoContext(
-      filesystems::File::IoStats* stats,
+      IoStats* stats,
       folly::F14FastMap<std::string, std::string> fileOpts = {},
-      std::shared_ptr<FileIoTracer> tracer = nullptr)
+      std::shared_ptr<FileIoTracer> tracer = nullptr,
+      bool cacheable = true)
       : ioStats(stats),
         fileOpts(std::move(fileOpts)),
-        ioTracer(std::move(tracer)) {}
+        ioTracer(std::move(tracer)),
+        cacheable(cacheable) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.
@@ -268,6 +293,7 @@ class InMemoryReadFile : public ReadFile {
   void setShouldCoalesce(bool shouldCoalesce) {
     shouldCoalesce_ = shouldCoalesce;
   }
+
   bool shouldCoalesce() const final {
     return shouldCoalesce_;
   }

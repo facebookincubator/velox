@@ -21,12 +21,12 @@
 #include "folly/dynamic.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
@@ -36,6 +36,7 @@ using namespace facebook::velox::core;
 using namespace facebook::velox::common;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::tool::trace::test {
 class PartitionedOutputReplayerTest
@@ -163,7 +164,7 @@ TEST_P(PartitionedOutputReplayerTest, defaultConsumer) {
                       "",
                       0,
                       executor_.get())
-                      .run(false));
+                      .run(false, false));
 }
 
 TEST_P(PartitionedOutputReplayerTest, basic) {
@@ -260,7 +261,7 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
           [&](auto partition, auto page) {
             replayedPartitionedResults[partition].push_back(std::move(page));
           })
-          .run(false);
+          .run(false, false);
 
       ASSERT_EQ(replayedPartitionedResults.size(), testParam.numPartitions);
       for (uint32_t partition = 0; partition < testParam.numPartitions;

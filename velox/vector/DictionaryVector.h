@@ -95,13 +95,13 @@ class DictionaryVector : public SimpleVector<T> {
     }
   }
 
-  const T valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
   /**
    * @return the value at the given index value for a dictionary entry, i.e.
    * gets the dictionary value by its indexed value.
    */
-  const T valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     VELOX_DCHECK(initialized_);
     VELOX_DCHECK(!isNullAt(idx), "found null value at: {}", idx);
     auto innerIndex = getDictionaryIndex(idx);

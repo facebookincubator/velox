@@ -15,15 +15,17 @@
  */
 #pragma once
 
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 namespace facebook::velox::exec::test {
+
+using TempFilePath = common::testutil::TempFilePath;
 
 static const std::string kHiveConnectorId = "test-hive";
 
@@ -35,7 +37,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
   void TearDown() override;
 
   void resetHiveConnector(
-      const std::shared_ptr<const config::ConfigBase>& config);
+      const std::shared_ptr<const config::ConfigBase>& config =
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
 
   void writeToFiles(
       const std::vector<std::string>& filePaths,
@@ -130,6 +134,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
+      const std::vector<std::string>& indexColumns = {},
       bool filterPushdownEnabled = true,
       const std::unordered_map<std::string, std::string>& tableParameters =
           {}) {
@@ -140,6 +145,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
         std::move(subfieldFilters),
         remainingFilter,
         dataColumns,
+        indexColumns,
         tableParameters);
   }
 

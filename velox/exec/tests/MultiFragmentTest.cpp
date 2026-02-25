@@ -15,6 +15,7 @@
  */
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -30,7 +31,6 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -38,6 +38,7 @@ using facebook::velox::common::testutil::TestValue;
 using facebook::velox::test::BatchMaker;
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 struct TestParam {
@@ -3208,29 +3209,32 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
     if (testData.scaleEnabled) {
       ASSERT_EQ(
           planStats.at(scanNodeId)
-              .customStats.count(TableScan::kNumRunningScaleThreads),
+              .customStats.count(
+                  std::string(TableScan::kNumRunningScaleThreads)),
           1);
       if (testData.expectScaleUp) {
         ASSERT_GE(
             planStats.at(scanNodeId)
-                .customStats[TableScan::kNumRunningScaleThreads]
+                .customStats[std::string(TableScan::kNumRunningScaleThreads)]
                 .sum,
             1);
         ASSERT_LE(
             planStats.at(scanNodeId)
-                .customStats[TableScan::kNumRunningScaleThreads]
+                .customStats[std::string(TableScan::kNumRunningScaleThreads)]
                 .sum,
             numLeafDrivers);
       } else {
         ASSERT_EQ(
             planStats.at(scanNodeId)
-                .customStats.count(TableScan::kNumRunningScaleThreads),
+                .customStats.count(
+                    std::string(TableScan::kNumRunningScaleThreads)),
             1);
       }
     } else {
       ASSERT_EQ(
           planStats.at(scanNodeId)
-              .customStats.count(TableScan::kNumRunningScaleThreads),
+              .customStats.count(
+                  std::string(TableScan::kNumRunningScaleThreads)),
           0);
     }
   }

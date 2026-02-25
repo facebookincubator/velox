@@ -618,7 +618,7 @@ target_link_libraries(
   velox_dwio_cache_test
   velox_common_io
   velox_link_libs
-  velox_temp_path
+  velox_test_util
   Folly::folly
   fmt::fmt
   lz4::lz4

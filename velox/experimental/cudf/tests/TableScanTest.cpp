@@ -21,10 +21,12 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -36,7 +38,6 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -44,6 +45,7 @@
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
@@ -221,8 +223,7 @@ TEST_F(TableScanTest, allColumns) {
   {
     // Lambda to create HiveConnectorSplits from file paths
     auto makeHiveConnectorSplits =
-        [&](const std::vector<std::shared_ptr<
-                facebook::velox::exec::test::TempFilePath>>& filePaths) {
+        [&](const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
           std::vector<
               std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
               splits;
@@ -321,7 +322,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Reset the CudfHiveConnector config to use the experimental reader
+  // Reset the CudfHiveConnector config to use the experimental cudf reader
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseExperimentalCudfReader,
@@ -525,24 +526,40 @@ TEST_F(TableScanTest, filterPushdown) {
 #endif
 }
 
-TEST_F(TableScanTest, splitOffset) {
-  auto vectors = makeVectors(1, 10);
+TEST_F(TableScanTest, splitOffsetAndLength) {
+  auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
 
-  auto plan = tableScanNode();
+  // Note that the number of row groups selected within `halfFileSize` may
+  // change in the future and this test may start failing. In such a case,
+  // just adjust the duckdb sql string accordingly.
+  const auto halfFileSize = fs::file_size(filePath->getPath()) / 2;
 
-  auto split = facebook::velox::connector::hive::HiveConnectorSplitBuilder(
-                   filePath->getPath())
-                   .connectorId(kCudfHiveConnectorId)
-                   .start(1)
-                   .fileFormat(dwio::common::FileFormat::PARQUET)
-                   .build();
+  // First half of file - OFFSET 0 LIMIT 6000
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, halfFileSize),
+      "SELECT * FROM tmp OFFSET 0 LIMIT 6000");
 
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .splits({split})
-          .assertEmptyResults(),
-      "CudfHiveDataSource cannot process splits with non-zero offset");
+  // Second half of file - OFFSET 6000 LIMIT 4000
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), halfFileSize),
+      "SELECT * FROM tmp OFFSET 6000 LIMIT 4000");
+
+  const auto fileSize = fs::file_size(filePath->getPath());
+
+  // All row groups
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, fileSize),
+      "SELECT * FROM tmp");
+
+  // No row groups
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
+      "SELECT * FROM tmp LIMIT 0");
 }

@@ -24,6 +24,7 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -33,7 +34,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -287,6 +287,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
 
       FLAGS_task_id = task->taskId();
       FLAGS_driver_ids = "";
@@ -296,6 +297,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
     }
   }
 }
@@ -354,6 +356,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
 
       FLAGS_task_id = task->taskId();
       FLAGS_driver_ids = "";
@@ -363,6 +366,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
     }
   }
 }

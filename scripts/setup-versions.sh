@@ -19,10 +19,16 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-FB_OS_VERSION="v2025.04.28.00"
+# Note: When updating FB_OS_VERSION, ensure that
+# CMake/third-party/FBThriftCppLibrary.cmake is updated
+# with the matching version from fbthrift:
+# <fbthrift_github>/build/fbcode_builder/CMake/FBThriftCppLibrary.cmake
+# The new FB_OS version of fbthrift might require changes such that thrift
+# files are generated properly on all platforms.
+FB_OS_VERSION="v2026.01.05.00"
 FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
-ARROW_VERSION="15.0.0"
+ARROW_VERSION="18.0.0"
 DUCKDB_VERSION="v0.8.1"
 PROTOBUF_VERSION="21.8"
 XSIMD_VERSION="10.0.0"

@@ -456,6 +456,10 @@ class CoalescedLoad {
     return "<CoalescedLoad>";
   }
 
+  /// Returns true if this is a load from SSD cache, false if from remote
+  /// storage.
+  virtual bool isSsdLoad() const = 0;
+
  protected:
   // Makes entries for 'keys_' and loads their content. Elements of 'keys_' that
   // are already loaded or loading are expected to be left out. The returned
@@ -710,11 +714,13 @@ class AsyncDataCache : public memory::Cache {
         double _maxWriteRatio = 0.7,
         double _ssdSavableRatio = 0.125,
         int32_t _minSsdSavableBytes = 1 << 24,
-        int32_t _numShards = kDefaultNumShards)
+        int32_t _numShards = kDefaultNumShards,
+        uint64_t _ssdFlushThresholdBytes = 0)
         : maxWriteRatio(_maxWriteRatio),
           ssdSavableRatio(_ssdSavableRatio),
           minSsdSavableBytes(_minSsdSavableBytes),
-          numShards(_numShards) {}
+          numShards(_numShards),
+          ssdFlushThresholdBytes(_ssdFlushThresholdBytes) {}
 
     /// The max ratio of the number of in-memory cache entries being written to
     /// SSD cache over the total number of cache entries. This is to control SSD
@@ -738,6 +744,11 @@ class AsyncDataCache : public memory::Cache {
     /// shards to decrease contention on the mutex for the key to entry mapping
     /// and other housekeeping. Must be a power of 2.
     int32_t numShards;
+
+    /// The maximum threshold in bytes for triggering SSD flush. When the
+    /// accumulated SSD-savable bytes exceed this value, a flush to SSD is
+    /// triggered. Set to 0 to disable this threshold (default).
+    uint64_t ssdFlushThresholdBytes;
   };
 
   AsyncDataCache(

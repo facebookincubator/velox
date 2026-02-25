@@ -21,7 +21,7 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -32,6 +32,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::serializer;
+using namespace facebook::velox::common::testutil;
 
 enum class SerdeType { kPresto, kCompactRow, kUnsafeRow };
 
@@ -57,7 +58,7 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
 
     setupSerde(params.serdeType);
     filesystems::registerLocalFileSystem();
-    tempDirPath_ = exec::test::TempDirectoryPath::create();
+    tempDirPath_ = TempDirectoryPath::create();
     compressionKind_ = params.compressionKind;
   }
 
@@ -122,7 +123,7 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
   }
 
   VectorSerde* serde_{nullptr};
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirPath_;
+  std::shared_ptr<TempDirectoryPath> tempDirPath_;
   common::CompressionKind compressionKind_;
 };
 
@@ -130,7 +131,8 @@ TEST_P(SerializedPageFileTest, serializedPageFileBasic) {
   const std::string pathPrefix = getTestFilePath();
   const uint32_t kFileId = 123;
 
-  auto pageFile = SerializedPageFile::create(kFileId, pathPrefix, "");
+  auto pageFile =
+      SerializedPageFile::create(kFileId, pathPrefix, "", /*ioStats=*/nullptr);
 
   EXPECT_EQ(pageFile->id(), kFileId);
   EXPECT_TRUE(pageFile->path().find(pathPrefix) == 0);
@@ -159,7 +161,8 @@ TEST_P(SerializedPageFileTest, serializedPageFileMultipleWrites) {
   const uint32_t kNumWrites = 10;
 
   const std::string pathPrefix = getTestFilePath();
-  auto pageFile = SerializedPageFile::create(kFileId, pathPrefix, "");
+  auto pageFile =
+      SerializedPageFile::create(kFileId, pathPrefix, "", /*ioStats=*/nullptr);
 
   uint64_t totalSize = 0;
   for (int i = 0; i < kNumWrites; ++i) {
@@ -315,7 +318,8 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
       asRowType(originalVector->type()),
       serde_,
       createSerdeOptions(),
-      pool());
+      pool(),
+      /*ioStats=*/nullptr);
 
   RowVectorPtr readVector;
   bool hasData = reader.nextBatch(readVector);
@@ -368,7 +372,8 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripMultipleBatches) {
         asRowType(originalVectors[0]->type()),
         serde_,
         createSerdeOptions(),
-        pool());
+        pool(),
+        /*ioStats=*/nullptr);
 
     RowVectorPtr readVector;
     while (reader.nextBatch(readVector)) {
@@ -436,7 +441,8 @@ TEST_P(SerializedPageFileTest, roundTripWithComplexTypes) {
         asRowType(originalVectors[0]->type()),
         serde_,
         createSerdeOptions(),
-        pool());
+        pool(),
+        /*ioStats=*/nullptr);
 
     RowVectorPtr readVector;
     while (reader.nextBatch(readVector)) {

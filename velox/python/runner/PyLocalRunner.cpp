@@ -77,6 +77,19 @@ PyVector PyTaskIterator::next() {
   return PyVector{vector_, outputPool_};
 }
 
+PyVector PyTaskIterator::step(const std::string& planId) {
+  if (!cursor_->moveStep(planId)) {
+    vector_ = nullptr;
+    throw py::stop_iteration(); // Raise StopIteration when done.
+  }
+  vector_ = cursor_->current();
+  return PyVector{vector_, outputPool_};
+}
+
+std::string PyTaskIterator::at() const {
+  return cursor_->at();
+}
+
 PyLocalRunner::PyLocalRunner(
     const PyPlanNode& pyPlanNode,
     const std::shared_ptr<memory::MemoryPool>& pool,
@@ -103,9 +116,9 @@ void PyLocalRunner::addQueryConfig(
   queryConfigs_[configName] = configValue;
 }
 
-PyTaskIterator PyLocalRunner::execute(int32_t maxDrivers) {
-  // Initialize task cursor and task.
-  cursor_ = exec::TaskCursor::create({
+exec::CursorParameters PyLocalRunner::createCursorParameters(
+    int32_t maxDrivers) {
+  return exec::CursorParameters{
       .planNode = planNode_,
       .maxDrivers = maxDrivers,
       .queryCtx = core::QueryCtx::Builder()
@@ -114,7 +127,12 @@ PyTaskIterator PyLocalRunner::execute(int32_t maxDrivers) {
                       .pool(rootPool_)
                       .build(),
       .outputPool = outputPool_,
-  });
+  };
+}
+
+PyTaskIterator PyLocalRunner::execute(int32_t maxDrivers) {
+  // Initialize task cursor and task.
+  cursor_ = exec::TaskCursor::create(createCursorParameters(maxDrivers));
 
   // Add any files passed by the client during plan building.
   for (auto& [scanId, splits] : scanFiles_) {

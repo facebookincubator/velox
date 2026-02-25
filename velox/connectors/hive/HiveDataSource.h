@@ -34,6 +34,18 @@ class HiveConfig;
 
 class HiveDataSource : public DataSource {
  public:
+  /// Runtime stat keys for Hive data source.
+  static constexpr std::string_view kNumPrefetch{"numPrefetch"};
+  static constexpr std::string_view kPrefetchBytes{"prefetchBytes"};
+  static constexpr std::string_view kTotalScanTime{"totalScanTime"};
+  static constexpr std::string_view kOverreadBytes{"overreadBytes"};
+  static constexpr std::string_view kStorageReadBytes{"storageReadBytes"};
+  static constexpr std::string_view kNumLocalRead{"numLocalRead"};
+  static constexpr std::string_view kLocalReadBytes{"localReadBytes"};
+  static constexpr std::string_view kNumRamRead{"numRamRead"};
+  static constexpr std::string_view kRamReadBytes{"ramReadBytes"};
+  static constexpr std::string_view kNumBucketConversion{"numBucketConversion"};
+
   HiveDataSource(
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,
@@ -53,7 +65,7 @@ class HiveDataSource : public DataSource {
       const std::shared_ptr<common::Filter>& filter) override;
 
   uint64_t getCompletedBytes() override {
-    return ioStats_->rawBytesRead();
+    return ioStatistics_->rawBytesRead();
   }
 
   uint64_t getCompletedRows() override {
@@ -86,7 +98,7 @@ class HiveDataSource : public DataSource {
           folly::Executor* executor,
           const ConnectorQueryCtx* connectorQueryCtx,
           const std::shared_ptr<HiveConfig>& hiveConfig,
-          const std::shared_ptr<io::IoStatistics>& ioStats,
+          const std::shared_ptr<io::IoStatistics>& ioStatistics,
           const exec::ExprSet* remainingFilter,
           std::shared_ptr<common::MetadataFilter> metadataFilter)>;
 
@@ -122,8 +134,8 @@ class HiveDataSource : public DataSource {
   // name.
   std::unordered_map<std::string, HiveColumnHandlePtr> partitionKeys_;
 
-  std::shared_ptr<io::IoStatistics> ioStats_;
-  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<IoStats> ioStats_;
 
  private:
   std::vector<column_index_t> setupBucketConversion();

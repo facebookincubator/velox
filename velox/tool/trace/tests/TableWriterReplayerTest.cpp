@@ -23,6 +23,7 @@
 #include "folly/dynamic.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
@@ -30,7 +31,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
@@ -315,6 +315,7 @@ TEST_F(TableWriterReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  resetHiveConnector();
 
   const auto traceOutputDir = TempDirectoryPath::create();
   FLAGS_task_id = task->taskId();
@@ -326,6 +327,7 @@ TEST_F(TableWriterReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  resetHiveConnector();
 }
 
 TEST_F(TableWriterReplayerTest, basic) {

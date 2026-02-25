@@ -30,6 +30,36 @@
 
 namespace facebook::velox {
 
+void IoStats::addCounter(const std::string& name, RuntimeCounter counter) {
+  auto locked = stats_.wlock();
+  auto it = locked->find(name);
+  if (it == locked->end()) {
+    auto [ptr, inserted] = locked->emplace(name, RuntimeMetric(counter.unit));
+    VELOX_CHECK(inserted);
+    ptr->second.addValue(counter.value);
+  } else {
+    VELOX_CHECK_EQ(it->second.unit, counter.unit);
+    it->second.addValue(counter.value);
+  }
+}
+
+void IoStats::merge(const IoStats& other) {
+  auto otherStats = other.stats();
+  auto locked = stats_.wlock();
+  for (const auto& [name, metric] : otherStats) {
+    auto it = locked->find(name);
+    if (it == locked->end()) {
+      locked->emplace(name, metric);
+    } else {
+      it->second.merge(metric);
+    }
+  }
+}
+
+folly::F14FastMap<std::string, RuntimeMetric> IoStats::stats() const {
+  return stats_.copy();
+}
+
 #define RETURN_IF_ERROR(func, result) \
   result = func;                      \
   if (result < 0) {                   \

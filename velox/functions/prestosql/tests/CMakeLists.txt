@@ -45,6 +45,7 @@ add_executable(
   ArrayShuffleTest.cpp
   ArraySortTest.cpp
   ArraySubsetTest.cpp
+  L2NormTest.cpp
   ArrayTopNTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
@@ -87,6 +88,7 @@ add_executable(
   MapIntersectTest.cpp
   MapKeysOverlapTest.cpp
   MapNormalizeTest.cpp
+  MapValuesInRangeTest.cpp
   RemapKeysTest.cpp
   MapTopNTest.cpp
   MapTopNKeysTest.cpp
@@ -95,6 +97,7 @@ add_executable(
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
   MapAppendTest.cpp
+  MapUpdateTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
   MapExceptTest.cpp

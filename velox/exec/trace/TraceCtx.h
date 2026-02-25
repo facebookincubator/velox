@@ -33,16 +33,28 @@ class TraceCtx {
 
   virtual ~TraceCtx() = default;
 
+  /// Overwrite the methods below to provide a concrete trace writer
+  /// implementation for input, split, and task metadata.
   virtual std::unique_ptr<trace::TraceInputWriter> createInputTracer(
-      Operator& op) const = 0;
+      Operator&) const {
+    return nullptr;
+  }
 
   virtual std::unique_ptr<trace::TraceSplitWriter> createSplitTracer(
-      Operator& op) const = 0;
+      Operator&) const {
+    return nullptr;
+  }
 
   virtual std::unique_ptr<trace::TraceMetadataWriter> createMetadataTracer()
-      const = 0;
+      const {
+    return nullptr;
+  }
 
-  virtual bool shouldTrace(const Operator& op) const = 0;
+  /// Whether a particular operator should be traced. Called before the task
+  /// starts execution, when operators are instantiated.
+  virtual bool shouldTrace(const Operator&) const {
+    return false;
+  }
 
   bool dryRun() const {
     return dryRun_;

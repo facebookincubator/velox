@@ -25,8 +25,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/ScopedTestTime.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
@@ -144,7 +144,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       // second creation of cache must find the checkpoint of the
       // previous one.
       if (tempDirectory_ == nullptr || eraseCheckpoint) {
-        tempDirectory_ = exec::test::TempDirectoryPath::create();
+        tempDirectory_ = TempDirectoryPath::create();
       }
       SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
@@ -158,7 +158,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       ssdCache = std::make_unique<SsdCache>(config);
       if (ssdCache != nullptr) {
         ssdCacheHelper_ =
-            std::make_unique<test::SsdCacheTestHelper>(ssdCache.get());
+            std::make_unique<cache::test::SsdCacheTestHelper>(ssdCache.get());
         ASSERT_EQ(ssdCacheHelper_->numShards(), kNumSsdShards);
       }
     }
@@ -173,7 +173,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     cache_ =
         AsyncDataCache::create(allocator_, std::move(ssdCache), cacheOptions);
     asyncDataCacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     if (filenames_.empty()) {
       for (auto i = 0; i < kNumFiles; ++i) {
         auto name = fmt::format("testing_file_{}", i);
@@ -313,12 +313,12 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     }
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
   std::unique_ptr<memory::MemoryManager> manager_;
   memory::MemoryAllocator* allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
-  std::unique_ptr<test::SsdCacheTestHelper> ssdCacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
+  std::unique_ptr<cache::test::SsdCacheTestHelper> ssdCacheHelper_;
   std::vector<StringIdLease> filenames_;
   std::unique_ptr<folly::IOThreadPoolExecutor> loadExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ssdExecutor_;
@@ -360,6 +360,10 @@ class TestingCoalescedLoad : public CoalescedLoad {
       sum += request.size;
     }
     return sum;
+  }
+
+  bool isSsdLoad() const override {
+    return false;
   }
 
  protected:
@@ -413,6 +417,10 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       throw;
     }
     return pins;
+  }
+
+  bool isSsdLoad() const override {
+    return true;
   }
 
  private:
@@ -1415,7 +1423,7 @@ TEST_P(AsyncDataCacheTest, makeEvictable) {
     const auto cacheEntries = asyncDataCacheHelper_->cacheEntries();
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
-          test::AsyncDataCacheEntryTestHelper(cacheEntry);
+          cache::test::AsyncDataCacheEntryTestHelper(cacheEntry);
       ASSERT_EQ(cacheEntry->ssdSaveable(), !evictable);
       ASSERT_EQ(cacheEntryHelper.accessStats().numUses, 0);
       if (evictable) {
@@ -1492,6 +1500,65 @@ TEST_P(AsyncDataCacheTest, ssdWriteOptions) {
       // SSD cache write stops right after the first entry in each shard.
       // Only a few entries can be written.
       EXPECT_LE(stats.ssdStats->entriesWritten, 20);
+    }
+  }
+}
+
+TEST_P(AsyncDataCacheTest, ssdFlushThresholdBytes) {
+  constexpr uint64_t kRamBytes = 16UL << 20; // 16 MB
+  constexpr uint64_t kSsdBytes = 64UL << 20; // 64 MB
+
+  struct {
+    double maxWriteRatio;
+    double ssdSavableRatio;
+    int32_t minSsdSavableBytes;
+    uint64_t ssdFlushThresholdBytes;
+    bool expectedSaveToSsd;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxWriteRatio {}, ssdSavableRatio {}, minSsdSavableBytes {}, ssdFlushThresholdBytes {}, expectedSaveToSsd {}",
+          maxWriteRatio,
+          ssdSavableRatio,
+          minSsdSavableBytes,
+          ssdFlushThresholdBytes,
+          expectedSaveToSsd);
+    }
+  } testSettings[] = {
+      // Ratio-based threshold not met, ssdFlushThresholdBytes disabled (0).
+      // No flush expected.
+      {0.8, 0.95, 32 << 20, 0, false},
+      // Ratio-based threshold not met, but ssdFlushThresholdBytes is small
+      // (1MB).
+      // Flush expected due to absolute threshold.
+      {0.8, 0.95, 32 << 20, 1UL << 20, true},
+      // Ratio-based threshold met. ssdFlushThresholdBytes disabled.
+      // Flush expected due to ratio.
+      {0.8, 0.3, 4 << 20, 0, true},
+      // Both thresholds could trigger. Flush expected.
+      {0.8, 0.3, 4 << 20, 1UL << 20, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    initializeCache(
+        kRamBytes,
+        kSsdBytes,
+        0,
+        true,
+        AsyncDataCache::Options(
+            testData.maxWriteRatio,
+            testData.ssdSavableRatio,
+            testData.minSsdSavableBytes,
+            AsyncDataCache::kDefaultNumShards,
+            testData.ssdFlushThresholdBytes));
+    // Load data half of the in-memory capacity.
+    loadLoop(0, kRamBytes / 2);
+    waitForPendingLoads();
+    auto stats = cache_->refreshStats();
+    if (testData.expectedSaveToSsd) {
+      EXPECT_GT(stats.ssdStats->entriesWritten, 0);
+    } else {
+      EXPECT_EQ(stats.ssdStats->entriesWritten, 0);
     }
   }
 }

@@ -22,10 +22,10 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/HashAggregation.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
@@ -33,13 +33,15 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec::test {
+
+using TempDirectoryPath = facebook::velox::common::testutil::TempDirectoryPath;
+
 namespace {
 // A test join node whose build is skewed in terms of process time. The driver
 // id 0 processes slower than other drivers if paralelism greater than 1
@@ -1617,8 +1619,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     VELOX_ASSERT_THROW(task->next(), "Inconsistent task execution mode.");
     getOutputWaitFlag = true;
     getOutputWait.notify();
-    while (cursor->hasNext()) {
-      cursor->moveNext();
+    while (cursor->moveNext()) {
     }
     waitForTaskCompletion(task);
   }
@@ -1884,7 +1885,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
   pauseDriverRunInternal.lock();
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal",
-      std::function<void(Driver*)>([&](Driver*) {
+      std::function<void(Driver*)>([&](Driver* /*unused*/) {
         pauseDriverRunInternal.lock_shared();
         pauseDriverRunInternal.unlock_shared();
       }));
@@ -2017,7 +2018,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kAggregationSpillEnabled, "true"}});
   params.maxDrivers = 1;
-  auto spillRootDir = exec::test::TempDirectoryPath::create();
+  auto spillRootDir = TempDirectoryPath::create();
   auto spillParentDir = fmt::format(
       "{}{}/parent_spill/",
       tests::utils::FaultyFileSystem::scheme(),
@@ -2113,7 +2114,7 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kAggregationSpillEnabled, "true"}});
   params.maxDrivers = 1;
-  const auto rootTempDir = exec::test::TempDirectoryPath::create();
+  const auto rootTempDir = TempDirectoryPath::create();
   const auto tmpDirectoryPath =
       rootTempDir->getPath() + "/spillDirectoryLifecycleManagement";
   params.spillDirectory = tmpDirectoryPath;
@@ -2173,7 +2174,7 @@ TEST_F(TaskTest, spillDirNotCreated) {
 
   auto cursor = TaskCursor::create(params);
   auto* task = cursor->task().get();
-  auto rootTempDir = exec::test::TempDirectoryPath::create();
+  auto rootTempDir = TempDirectoryPath::create();
   auto tmpDirectoryPath = rootTempDir->getPath() + "/spillDirNotCreated";
 
   while (cursor->moveNext()) {
@@ -2211,7 +2212,7 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Values::getOutput",
       std::function<void(const velox::exec::Values*)>(
-          ([&](const velox::exec::Values* values) {
+          ([&](const velox::exec::Values* /*unused*/) {
             valuesWait.await([&]() { return !valuesWaitFlag.load(); });
           })));
 
@@ -2442,6 +2443,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
   opts.vectorSize = 32;
   VectorFuzzer fuzzer(opts, pool_.get());
   std::vector<RowVectorPtr> valueInputs;
+  valueInputs.reserve(4);
   for (int32_t i = 0; i < 4; ++i) {
     valueInputs.push_back(fuzzer.fuzzRow(rowType));
   }
@@ -2456,13 +2458,15 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
   folly::EventCount taskPauseWait;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Values::getOutput",
-      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
-        if (taskPauseWaitFlag.exchange(false)) {
-          taskPauseWait.notifyAll();
-        }
-        // Inject some delay for task pause stats verification.
-        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
-      }));
+      std::function<void(const exec::Values*)>(
+          [&](const exec::Values* /*unused*/) {
+            if (taskPauseWaitFlag.exchange(false)) {
+              taskPauseWait.notifyAll();
+            }
+            // Inject some delay for task pause stats verification.
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(10)); // NOLINT
+          }));
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "taskPauseTime", 1UL << 30, exec::MemoryReclaimer::create());
@@ -2501,11 +2505,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
   ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 1);
   const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
   const auto& totalPauseTime =
-      driverStats.runtimeStats.at(DriverStats::kTotalPauseTime);
+      driverStats.runtimeStats.at(std::string(DriverStats::kTotalPauseTime));
   ASSERT_EQ(totalPauseTime.count, 1);
   ASSERT_GE(totalPauseTime.sum, 0);
-  const auto& totalOffThreadTime =
-      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  const auto& totalOffThreadTime = driverStats.runtimeStats.at(
+      std::string(DriverStats::kTotalOffThreadTime));
   ASSERT_EQ(totalOffThreadTime.count, 1);
   ASSERT_GE(totalOffThreadTime.sum, 0);
 
@@ -2542,9 +2546,11 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   ASSERT_EQ(taskStats.pipelineStats.size(), 1);
   ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 4);
   const auto& driverStats = taskStats.pipelineStats[0].driverStats[0];
-  ASSERT_EQ(driverStats.runtimeStats.count(DriverStats::kTotalPauseTime), 0);
-  const auto& totalOffThreadTime =
-      driverStats.runtimeStats.at(DriverStats::kTotalOffThreadTime);
+  ASSERT_EQ(
+      driverStats.runtimeStats.count(std::string(DriverStats::kTotalPauseTime)),
+      0);
+  const auto& totalOffThreadTime = driverStats.runtimeStats.at(
+      std::string(DriverStats::kTotalOffThreadTime));
   ASSERT_EQ(totalOffThreadTime.count, 1);
   ASSERT_GE(totalOffThreadTime.sum, 0);
 }
@@ -2564,8 +2570,8 @@ DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
   folly::EventCount driverWait;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::enter",
-      std::function<void(const velox::exec::ThreadState*)>(
-          ([&](const velox::exec::ThreadState* /*unused*/) {
+      std::function<void(const velox::exec::Task*)>(
+          ([&](const velox::exec::Task* /*unused*/) {
             driverWait.await([&]() { return !driverWaitFlag.load(); });
           })));
 
@@ -2611,7 +2617,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
           [&](SpillerBase* /*unused*/) { VELOX_FAIL(spillTableError); }));
 
   TestScopedSpillInjection injection(100);
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(duckDbQueryRunner_)
           .spillDirectory(spillDirectory->getPath())
@@ -2687,8 +2693,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
   folly::EventCount driverWait;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::enter",
-      std::function<void(const velox::exec::ThreadState*)>(
-          ([&](const velox::exec::ThreadState* /*unused*/) {
+      std::function<void(const velox::exec::Task*)>(
+          ([&](const velox::exec::Task* /*unused*/) {
             driverWait.await([&]() { return !driverWaitFlag.load(); });
           })));
 
@@ -2762,20 +2768,42 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
                         .project({"c0 + 5"})
                         .planFragment();
   ASSERT_TRUE(plan.firstNodeNotSupportingBarrier());
-
-  const auto task = Task::create(
-      "invalidPlanNodeForBarrier",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(
-      task->requestBarrier(),
-      "Name of the first node that doesn't support barriered execution:");
-  while (auto next = task->next()) {
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Name of the first node that doesn't support barriered execution:");
+    while (auto next = task->next()) {
+    }
+    ASSERT_TRUE(task->isFinished());
   }
-  ASSERT_TRUE(task->isFinished());
+
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    ASSERT_TRUE(!task->underBarrier());
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Name of the first node that doesn't support barriered execution:");
+    task->taskCompletionFuture().wait();
+    ASSERT_TRUE(task->isFinished());
+  }
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2793,53 +2821,54 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
                         .planFragment();
+  {
+    const auto task = Task::create(
+        "barrierAfterNoMoreSplits",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
 
-  const auto task = Task::create(
-      "barrierAfterNoMoreSplits",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    task->noMoreSplits(scanId);
+    ASSERT_TRUE(!task->underBarrier());
 
-  task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  task->noMoreSplits(scanId);
-  ASSERT_TRUE(!task->underBarrier());
-
-  VELOX_ASSERT_THROW(
-      task->requestBarrier(),
-      "Can't start barrier on task which has already received no more splits");
-  while (auto next = task->next()) {
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Can't start barrier on task which has already received no more splits");
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
   }
-  ASSERT_TRUE(task->isFinished());
-}
 
-TEST_F(TaskTest, invalidTaskModeForBarrier) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
 
-  // Filter + Project.
-  core::PlanNodeId scanId;
-  const auto plan = PlanBuilder()
-                        .tableScan(asRowType(data->type()))
-                        .capturePlanNodeId(scanId)
-                        .filter("c0 < 100")
-                        .project({"c0 + 5"})
-                        .planFragment();
-  ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
+    ASSERT_TRUE(!task->underBarrier());
+    task->start(2);
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    task->noMoreSplits(scanId);
+    ASSERT_TRUE(!task->underBarrier());
 
-  const auto task = Task::create(
-      "invalidTaskModeForBarrier",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kParallel);
-  ASSERT_TRUE(!task->underBarrier());
-  VELOX_ASSERT_THROW(
-      task->requestBarrier(),
-      "(Parallel vs. Serial) Task doesn't support barriered execution.");
+    VELOX_ASSERT_THROW(
+        task->requestBarrier(),
+        "Can't start barrier on task which has already received no more splits");
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
+  }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
@@ -2858,30 +2887,56 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
                         .project({"c0 + 5"})
                         .planFragment();
   ASSERT_TRUE(plan.firstNodeNotSupportingBarrier() == nullptr);
+  {
+    const auto task = Task::create(
+        "barrierAfterNoMoreSplits",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
 
-  const auto task = Task::create(
-      "barrierAfterNoMoreSplits",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto future = task->requestBarrier();
+    ASSERT_TRUE(task->underBarrier());
+    VELOX_ASSERT_THROW(
+        task->addSplit(
+            scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath()))),
+        "Can't add new split under barrier processing");
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
+    ASSERT_TRUE(task->isRunning());
+    ASSERT_FALSE(future.isReady());
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
+    ASSERT_TRUE(future.isReady());
+    future.wait();
+  }
 
-  task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  auto future = task->requestBarrier();
-  ASSERT_TRUE(task->underBarrier());
-  VELOX_ASSERT_THROW(
-      task->addSplit(
-          scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath()))),
-      "Can't add new split under barrier processing");
-  std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
-  ASSERT_TRUE(task->isRunning());
-  ASSERT_FALSE(future.isReady());
-  task->requestAbort().wait();
-  ASSERT_TRUE(!task->isRunning());
-  ASSERT_TRUE(future.isReady());
-  future.wait();
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto future = task->requestBarrier();
+    future.wait();
+    ASSERT_FALSE(task->underBarrier());
+    ASSERT_TRUE(task->isRunning());
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
+  }
+  waitForAllTasksToBeDeleted();
 }
 
 TEST_F(TaskTest, testTerminateDuringBarrier) {
@@ -2898,36 +2953,60 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
                   .capturePlanNodeId(scanId)
                   .project({"c0"})
                   .planFragment();
-
-  auto queryCtx = core::QueryCtx::create();
-  queryCtx->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kMaxOutputBatchRows, "1"}});
-  const auto task = Task::create(
-      "testTerminateDuringBarrier",
-      plan,
-      0,
-      std::move(queryCtx),
-      Task::ExecutionMode::kSerial);
-  ASSERT_TRUE(!task->underBarrier());
-  task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  auto barrierFuture = task->requestBarrier();
-  ASSERT_TRUE(task->underBarrier());
-  for (int i = 0; i < numRows / 2; ++i) {
-    ContinueFuture future{ContinueFuture::makeEmpty()};
-    auto result = task->next(&future);
-    ASSERT_TRUE(result != nullptr);
-    ASSERT_FALSE(future.valid());
+  {
+    auto queryCtx = core::QueryCtx::create();
+    queryCtx->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kMaxOutputBatchRows, "1"}});
+    const auto task = Task::create(
+        "testTerminateDuringBarrier",
+        plan,
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kSerial);
+    ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+    ASSERT_TRUE(task->underBarrier());
+    for (int i = 0; i < numRows / 2; ++i) {
+      ContinueFuture future{ContinueFuture::makeEmpty()};
+      auto result = task->next(&future);
+      ASSERT_TRUE(result != nullptr);
+      ASSERT_FALSE(future.valid());
+    }
+    task->requestAbort();
+    ASSERT_FALSE(task->isRunning());
+    VELOX_ASSERT_THROW(
+        task->next(nullptr), "Task has already finished processing");
+    ASSERT_TRUE(barrierFuture.isReady());
+    barrierFuture.wait();
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numFinishedSplits, 0);
+    ASSERT_EQ(taskStats.numBarriers, 1);
   }
-  task->requestAbort();
-  ASSERT_FALSE(task->isRunning());
-  VELOX_ASSERT_THROW(
-      task->next(nullptr), "Task has already finished processing");
-  ASSERT_TRUE(barrierFuture.isReady());
-  barrierFuture.wait();
-  const auto taskStats = task->taskStats();
-  ASSERT_EQ(taskStats.numFinishedSplits, 0);
-  ASSERT_EQ(taskStats.numBarriers, 1);
+
+  {
+    const auto task = Task::create(
+        "invalidPlanNodeForBarrier",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& vector,
+           bool drained,
+           velox::ContinueFuture* future) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    ASSERT_TRUE(!task->underBarrier());
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+    task->requestAbort().wait();
+    ASSERT_FALSE(task->isRunning());
+    ASSERT_TRUE(barrierFuture.isReady());
+    ASSERT_EQ(task->taskStats().numBarriers, 1);
+  }
 }
 
 namespace {

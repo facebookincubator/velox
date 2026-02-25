@@ -30,6 +30,7 @@
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -45,7 +46,6 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TableScanTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/type/Timestamp.h"
@@ -63,6 +63,7 @@ using namespace facebook::velox::tests::utils;
 DECLARE_int32(cache_prefetch_min_pct);
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 void verifyCacheStats(
     const FileHandleCacheStats& cacheStats,
@@ -3067,6 +3068,81 @@ TEST_F(TableScanTest, fileSizeAndModifiedTime) {
   filterTest(fmt::format("\"{}\" = {}", kModifiedTime, fileTimeValue));
 }
 
+// Test that synthesized column filter validation throws an error when the
+// filter doesn't match the split's value.
+TEST_F(TableScanTest, synthesizedColumnFilterValidation) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto filePath = makeFilePaths(1)[0];
+  auto vector = makeVectors(1, 10, rowType)[0];
+  writeToFile(filePath->getPath(), vector);
+
+  static const char* kPath = "$path";
+  auto assignments = allRegularColumns(rowType);
+  assignments[kPath] = synthesizedColumn(kPath, VARCHAR());
+
+  auto typeWithPath = ROW({kPath, "a"}, {VARCHAR(), BIGINT()});
+
+  // Create a filter that doesn't match the actual $path value.
+  auto tableHandle = makeTableHandle(
+      common::SubfieldFilters{},
+      parseExpr(
+          fmt::format("\"{}\" = '/nonexistent/path'", kPath), typeWithPath));
+
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(typeWithPath)
+                .tableHandle(tableHandle)
+                .assignments(assignments)
+                .endTableScan()
+                .planNode();
+
+  auto split =
+      exec::test::HiveConnectorSplitBuilder(filePath->getPath()).build();
+
+  // The query should throw an exception because the filter doesn't match.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(op).splits({split}).copyResults(pool()),
+      "Synthesized column '$path' failed filter validation");
+}
+
+// Test that synthesized column filter validation throws an error for
+// $file_modified_time when the filter doesn't match the split's value.
+TEST_F(TableScanTest, synthesizedColumnFilterValidationModifiedTime) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto filePath = makeFilePaths(1)[0];
+  auto vector = makeVectors(1, 10, rowType)[0];
+  writeToFile(filePath->getPath(), vector);
+
+  static const char* kModifiedTime = "$file_modified_time";
+  auto assignments = allRegularColumns(rowType);
+  assignments[kModifiedTime] = synthesizedColumn(kModifiedTime, BIGINT());
+
+  auto typeWithModifiedTime = ROW({kModifiedTime, "a"}, {BIGINT(), BIGINT()});
+
+  // Create a filter that doesn't match the actual $file_modified_time value.
+  // Use 0 which won't match any real file's modification time.
+  auto tableHandle = makeTableHandle(
+      common::SubfieldFilters{},
+      parseExpr(
+          fmt::format("\"{}\" = 0", kModifiedTime), typeWithModifiedTime));
+
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(typeWithModifiedTime)
+                .tableHandle(tableHandle)
+                .assignments(assignments)
+                .endTableScan()
+                .planNode();
+
+  // Use makeHiveConnectorSplits to ensure infoColumns are set properly.
+  auto splits = makeHiveConnectorSplits({filePath});
+
+  // The query should throw an exception because the filter doesn't match.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(op).splits(splits).copyResults(pool()),
+      "Synthesized column '$file_modified_time' failed filter validation");
+}
+
 TEST_F(TableScanTest, bucket) {
   vector_size_t size = 1'000;
   int numBatches = 5;
@@ -5585,7 +5661,7 @@ TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
           .planNode();
 
   std::thread queryThread([&]() {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto task = assertQuery(
         op,
         filePaths,

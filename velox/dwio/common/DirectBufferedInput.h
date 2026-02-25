@@ -57,15 +57,15 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
  public:
   DirectCoalescedLoad(
       std::shared_ptr<ReadFileInputStream> input,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       uint64_t /* groupId */,
       const std::vector<LoadRequest*>& requests,
       memory::MemoryPool* pool,
       int32_t loadQuantum)
       : CoalescedLoad({}, {}),
+        ioStatistics_(ioStatistics),
         ioStats_(ioStats),
-        fsStats_(fsStats),
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
         pool_(pool) {
@@ -85,6 +85,12 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   /// data is retrieved with getData().
   std::vector<cache::CachePin> loadData(bool prefetch) override;
 
+  /// Returns false since DirectCoalescedLoad reads from remote storage, not
+  /// SSD.
+  bool isSsdLoad() const override {
+    return false;
+  }
+
   /// Returns the buffer for 'region' in either 'data' or 'tinyData'. 'region'
   /// must match a region given to DirectBufferedInput::enqueue().
   int32_t
@@ -103,8 +109,8 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   }
 
  private:
-  const std::shared_ptr<IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
   memory::MemoryPool* const pool_;
@@ -121,8 +127,8 @@ class DirectBufferedInput : public BufferedInput {
       StringIdLease fileNum,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
       folly::F14FastMap<std::string, std::string> fileReadOps = {})
@@ -130,16 +136,16 @@ class DirectBufferedInput : public BufferedInput {
             std::move(readFile),
             readerOptions.memoryPool(),
             metricsLog,
+            ioStatistics.get(),
             ioStats.get(),
-            fsStats.get(),
             kMaxMergeDistance,
             std::nullopt,
             std::move(fileReadOps)),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -181,8 +187,8 @@ class DirectBufferedInput : public BufferedInput {
         fileNum_,
         tracker_,
         groupId_,
+        ioStatistics_,
         ioStats_,
-        fsStats_,
         executor_,
         options_));
   }
@@ -205,11 +211,24 @@ class DirectBufferedInput : public BufferedInput {
     return executor_;
   }
 
+  const std::vector<std::shared_ptr<cache::CoalescedLoad>>&
+  testingCoalescedLoads() const {
+    return coalescedLoads_;
+  }
+
+  size_t testingStreamToCoalescedLoadSize() const {
+    return streamToCoalescedLoad_.rlock()->size();
+  }
+
   uint64_t nextFetchSize() const override {
     VELOX_NYI();
   }
 
+  /// Resets the buffered input for reuse across different operations.
+  void reset() override;
+
  protected:
+  // Some members are protected to allow custom extended buffered inputs.
   // Regions that are candidates for loading.
   std::vector<LoadRequest> requests_;
 
@@ -217,22 +236,22 @@ class DirectBufferedInput : public BufferedInput {
   std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
 
  private:
-  /// Constructor used by clone().
+  // Constructor used by clone().
   DirectBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       StringIdLease fileNum,
       std::shared_ptr<cache::ScanTracker> tracker,
       StringIdLease groupId,
-      std::shared_ptr<IoStatistics> ioStats,
-      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      std::shared_ptr<IoStatistics> ioStatistics,
+      std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.memoryPool()),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),
+        ioStatistics_(std::move(ioStatistics)),
         ioStats_(std::move(ioStats)),
-        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -276,18 +295,17 @@ class DirectBufferedInput : public BufferedInput {
   const StringIdLease fileNum_;
   const std::shared_ptr<cache::ScanTracker> tracker_;
   const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStats_;
-  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
+  const io::ReaderOptions options_;
 
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
-
-  io::ReaderOptions options_;
 };
 
 } // namespace facebook::velox::dwio::common

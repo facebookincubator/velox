@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -30,6 +31,25 @@ class MapKeysOverlapTest : public test::FunctionBaseTest {
       const VectorPtr& expected) {
     auto result = evaluate(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
+  }
+
+  // Helper to compare map_keys_overlap against equivalent expression.
+  // The equivalent expression is:
+  // cardinality(array_intersect(map_keys(c0), filter(c1, x -> x IS NOT NULL)))
+  // > 0
+  void testMapKeysOverlapAgainstEquivalent(const RowVectorPtr& data) {
+    auto udfResult = evaluate("map_keys_overlap(c0, c1)", data);
+
+    // Equivalent expression using existing UDFs:
+    // 1. Extract map keys: map_keys(c0)
+    // 2. Filter out nulls from the array: filter(c1, x -> x IS NOT NULL)
+    // 3. Find intersection: array_intersect(...)
+    // 4. Check if non-empty: cardinality(...) > 0
+    auto equivalentResult = evaluate(
+        "cardinality(array_intersect(map_keys(c0), filter(c1, x -> x IS NOT NULL))) > 0",
+        data);
+
+    assertEqualVectors(equivalentResult, udfResult);
   }
 };
 
@@ -445,6 +465,319 @@ TEST_F(MapKeysOverlapTest, int64Keys) {
   auto expected = makeFlatVector<bool>({true});
 
   testMapKeysOverlap("map_keys_overlap(c0, c1)", {inputMap, keys}, expected);
+}
+
+// ============================================================================
+// Custom Fuzzer Tests
+// These tests compare map_keys_overlap against an equivalent expression:
+// cardinality(array_intersect(map_keys(c0), filter(c1, x -> x IS NOT NULL))) >
+// 0
+// ============================================================================
+
+TEST_F(MapKeysOverlapTest, fuzzIntegerKeys) {
+  // Create base data with representative edge cases
+  auto baseMap = makeMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}, {3, 30}},
+      {{4, 40}, {5, 50}},
+      {{6, 60}, {7, 70}, {8, 80}},
+      {}, // empty map
+      {{100, 1000}},
+  });
+
+  auto baseKeys = makeArrayVector<int64_t>({
+      {1, 5, 10},
+      {4, 6},
+      {9, 10, 11},
+      {1, 2, 3},
+      {100},
+  });
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 1024;
+  options.nullRatio = 0.0; // Start without nulls
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+
+    // Also test with flattened data
+    auto flatData = flatten<RowVector>(data);
+    testMapKeysOverlapAgainstEquivalent(flatData);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzIntegerKeysWithNulls) {
+  // Create base data including null elements in the array
+  auto baseMap = makeMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}, {3, 30}},
+      {{4, 40}, {5, 50}},
+      {}, // empty map
+      {{100, 1000}, {200, 2000}},
+  });
+
+  std::vector<std::vector<std::optional<int64_t>>> keyData = {
+      {1, std::nullopt, 5},
+      {std::nullopt, 4},
+      {std::nullopt, std::nullopt},
+      {50, 100, std::nullopt},
+  };
+  auto baseKeys = makeNullableArrayVector<int64_t>(keyData);
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 1024;
+  options.nullRatio = 0.1;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzVarcharKeys) {
+  // Create base data with string keys
+  auto baseMap = makeMapVector<StringView, int64_t>({
+      {{"apple", 1}, {"banana", 2}, {"cherry", 3}},
+      {{"dog", 10}, {"elephant", 20}},
+      {}, // empty map
+      {{"xyz", 100}},
+      {{"a", 1}, {"b", 2}, {"c", 3}, {"d", 4}, {"e", 5}},
+  });
+
+  auto baseKeys = makeArrayVector<StringView>({
+      {"apple", "date"},
+      {"cat", "dog"},
+      {"foo", "bar"},
+      {"xyz"},
+      {"c", "f", "g"},
+  });
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 1024;
+  options.nullRatio = 0.0;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+
+    // Also test with flattened data
+    auto flatData = flatten<RowVector>(data);
+    testMapKeysOverlapAgainstEquivalent(flatData);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzVarcharKeysWithNulls) {
+  // Create base data with string keys and nullable arrays
+  auto baseMap = makeMapVector<StringView, int64_t>({
+      {{"apple", 1}, {"banana", 2}},
+      {{"cat", 10}},
+      {},
+      {{"xyz", 100}, {"abc", 200}},
+  });
+
+  std::vector<std::vector<std::optional<StringView>>> keyData = {
+      {StringView("apple"), std::nullopt, StringView("date")},
+      {std::nullopt, StringView("cat")},
+      {std::nullopt},
+      {StringView("abc"), std::nullopt},
+  };
+  auto baseKeys = makeNullableArrayVector<StringView>(keyData);
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 1024;
+  options.nullRatio = 0.1;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzRandomGeneratedData) {
+  // Use VectorFuzzer to generate completely random data
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.containerLength = 5;
+  options.containerVariableLength = true;
+  options.nullRatio = 0.1;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 20; ++i) {
+    // Generate random map and array with int64 keys.
+    // Map keys must be non-null when normalizeMapKeys is true (default).
+    auto randomMap = fuzzer.fuzzMap(
+        fuzzer.fuzzFlatNotNull(BIGINT()),
+        fuzzer.fuzzFlat(BIGINT()),
+        options.vectorSize);
+    auto randomArray =
+        fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT()), options.vectorSize);
+
+    auto data = makeRowVector({randomMap, randomArray});
+
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzMixedScenarios) {
+  // Test with various combinations of empty/non-empty maps and arrays
+  auto baseMap = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}, {3, 30}, {4, 40}, {5, 50}},
+      {{10, 100}, {20, 200}},
+      {}, // empty
+      {{1, 1}},
+      {{100, 1000}, {200, 2000}, {300, 3000}},
+  });
+
+  auto baseKeys = makeArrayVector<int32_t>({
+      {1, 2, 3, 100}, // partial match
+      {30, 40, 50}, // no match
+      {1, 2, 3}, // search in empty map
+      {1}, // exact match
+      {}, // empty search array
+  });
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 500;
+  options.nullRatio = 0.0;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+
+    // Test with lazy vector generation
+    data = fuzzer.fuzzRowChildrenToLazy(data);
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzLargeMapAndArray) {
+  // Create larger maps and arrays to stress test the implementation
+  // Use explicit initialization compatible with makeMapVector
+  auto baseMap = makeMapVector<int64_t, int64_t>({
+      {{0, 0},    {1, 10},   {2, 20},   {3, 30},   {4, 40},   {5, 50},
+       {6, 60},   {7, 70},   {8, 80},   {9, 90},   {10, 100}, {11, 110},
+       {12, 120}, {13, 130}, {14, 140}, {15, 150}, {16, 160}, {17, 170},
+       {18, 180}, {19, 190}, {20, 200}},
+      {}, // empty
+      {{1000, 10000}},
+      {{100, 1000}, {200, 2000}, {300, 3000}},
+  });
+
+  auto baseKeys = makeArrayVector<int64_t>({
+      {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20}, // match some keys
+      {100, 101, 102, 103, 104}, // no match in first map
+      {1000, 2000}, // match in third map
+      {100, 200, 400}, // partial match in fourth map
+  });
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 500;
+  options.nullRatio = 0.0;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 5; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzBooleanKeys) {
+  // Test with boolean keys
+  auto baseMap = makeMapVector<bool, int32_t>({
+      {{true, 10}, {false, 20}},
+      {{true, 30}},
+      {{false, 40}},
+      {},
+  });
+
+  auto baseKeys = makeArrayVector<bool>({
+      {true, false},
+      {false},
+      {true},
+      {true, false},
+  });
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 256;
+  options.nullRatio = 0.0;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 5; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
+}
+
+TEST_F(MapKeysOverlapTest, fuzzAllNullsInArray) {
+  // Specific test case where all elements in array are null
+  // map_keys_overlap should return false in this case
+  auto baseMap = makeMapVector<int32_t, int32_t>({
+      {{1, 10}, {2, 20}, {3, 30}},
+      {{4, 40}},
+      {},
+  });
+
+  std::vector<std::vector<std::optional<int32_t>>> keyData = {
+      {std::nullopt, std::nullopt, std::nullopt},
+      {std::nullopt},
+      {std::nullopt, std::nullopt},
+  };
+  auto baseKeys = makeNullableArrayVector<int32_t>(keyData);
+
+  VectorFuzzer::Options options;
+  options.vectorSize = 256;
+  options.nullRatio = 0.0;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 5; ++i) {
+    auto data = makeRowVector({
+        fuzzer.fuzzDictionary(baseMap, options.vectorSize),
+        fuzzer.fuzzDictionary(baseKeys, options.vectorSize),
+    });
+
+    testMapKeysOverlapAgainstEquivalent(data);
+  }
 }
 
 } // namespace

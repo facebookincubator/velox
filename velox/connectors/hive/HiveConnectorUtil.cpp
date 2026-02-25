@@ -108,16 +108,13 @@ void addSubfields(
     }
   }
   subfields.resize(newSize);
+
   switch (type.kind()) {
     case TypeKind::ROW: {
       folly::F14FastMap<std::string, std::vector<SubfieldSpec>> required;
       for (auto& subfield : subfields) {
         auto* element = subfield.subfield->path()[level].get();
-        auto* nestedField = element->as<common::Subfield::NestedField>();
-        VELOX_CHECK(
-            nestedField,
-            "Unsupported for row subfields pruning: {}",
-            element->toString());
+        auto* nestedField = element->asChecked<common::Subfield::NestedField>();
         required[nestedField->name()].push_back(subfield);
       }
       const auto& rowType = type.asRow();
@@ -256,9 +253,8 @@ bool isSpecialColumn(
 
 const std::string& getColumnName(const common::Subfield& subfield) {
   VELOX_CHECK_GT(subfield.path().size(), 0);
-  auto* field = dynamic_cast<const common::Subfield::NestedField*>(
+  auto* field = checkedPointerCast<const common::Subfield::NestedField>(
       subfield.path()[0].get());
-  VELOX_CHECK_NOT_NULL(field);
   return field->name();
 }
 
@@ -377,6 +373,30 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
         outputSubfields,
     const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, HiveColumnHandlePtr>& infoColumns,
+    const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
+    memory::MemoryPool* pool) {
+  return makeScanSpec(
+      rowType,
+      outputSubfields,
+      subfieldFilters,
+      /*indexColumns=*/{},
+      dataColumns,
+      partitionKeys,
+      infoColumns,
+      specialColumns,
+      disableStatsBasedFilterReorder,
+      pool);
+}
+
+std::shared_ptr<common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
+        outputSubfields,
+    const common::SubfieldFilters& subfieldFilters,
     const std::vector<std::string>& indexColumns,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, HiveColumnHandlePtr>& partitionKeys,
@@ -468,14 +488,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
 
   for (auto& pair : subfieldFilters) {
     const auto name = pair.first.toString();
-    // SelectiveColumnReader doesn't support constant columns with filters,
-    // hence, we can't have a filter for a $path or $bucket column.
-    //
-    // Unfortunately, Presto happens to specify a filter for $path, $file_size,
-    // $file_modified_time or $bucket column. This filter is redundant and needs
-    // to be removed.
-    // TODO Remove this check when Presto is fixed to not specify a filter
-    // on $path and $bucket column.
     if (isSynthesizedColumn(name, infoColumns)) {
       continue;
     }
@@ -616,7 +628,7 @@ void configureReaderOptions(
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
-  readerOptions.setNoCacheRetention(!hiveSplit->cacheable);
+  readerOptions.setCacheable(hiveSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {
     const auto timezone = tz::locateZone(sessionTzName);
@@ -672,6 +684,8 @@ void configureRowReaderOptions(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
+    rowReaderOptions.setIndexEnabled(
+        hiveConfig->indexEnabled(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
@@ -796,8 +810,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
-    std::shared_ptr<io::IoStatistics> ioStats,
-    std::shared_ptr<filesystems::File::IoStats> fsStats,
+    std::shared_ptr<io::IoStatistics> ioStatistics,
+    std::shared_ptr<IoStats> ioStats,
     folly::Executor* executor,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   if (connectorQueryCtx->cache()) {
@@ -809,8 +823,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         Connector::getTracker(
             connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
         fileHandle.groupId,
-        ioStats,
-        std::move(fsStats),
+        ioStatistics,
+        std::move(ioStats),
         executor,
         readerOpts,
         fileReadOps);
@@ -824,8 +838,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         fileHandle.file,
         readerOpts.memoryPool(),
         dwio::common::MetricsLog::voidLog(),
+        ioStatistics.get(),
         ioStats.get(),
-        fsStats.get(),
         dwio::common::BufferedInput::kMaxMergeDistance,
         std::nullopt,
         fileReadOps);
@@ -837,8 +851,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
       Connector::getTracker(
           connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
       fileHandle.groupId,
+      std::move(ioStatistics),
       std::move(ioStats),
-      std::move(fsStats),
       executor,
       readerOpts,
       fileReadOps);

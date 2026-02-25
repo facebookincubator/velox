@@ -20,6 +20,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
@@ -29,7 +30,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <re2/re2.h>
@@ -41,6 +41,8 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 
 namespace velox::exec::test {
+using namespace facebook::velox::common::testutil;
+
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
 
 class BasicTableWriterTestBase : public HiveConnectorTestBase {};
@@ -2943,7 +2945,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
                           .build();
       ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
-      const auto spillStats = common::globalSpillStats();
+      const auto spillStats = globalSpillStats();
       std::atomic<int> numInputs{0};
       SCOPED_TESTVALUE_SET(
           "facebook::velox::exec::Driver::runInternal::addInput",
@@ -3011,7 +3013,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           numPrevNonReclaimableAttempts);
 
       waitForAllTasksToBeDeleted(3'000'000);
-      const auto updatedSpillStats = common::globalSpillStats();
+      const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
         ASSERT_GT(
@@ -3399,7 +3401,7 @@ DEBUG_ONLY_TEST_F(
               {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
-  const auto spillStats = common::globalSpillStats();
+  const auto spillStats = globalSpillStats();
   const auto spillDirectory = TempDirectoryPath::create();
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
@@ -3425,7 +3427,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  const auto updatedSpillStats = common::globalSpillStats();
+  const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();
 }

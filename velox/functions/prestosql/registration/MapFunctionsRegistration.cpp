@@ -17,6 +17,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/MapConcat.h"
+#include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/prestosql/Map.h"
 #include "velox/functions/prestosql/MapAppend.h"
 #include "velox/functions/prestosql/MapExcept.h"
@@ -29,6 +30,8 @@
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
+#include "velox/functions/prestosql/MapUpdate.h"
+#include "velox/functions/prestosql/MapValuesInRange.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
 #include "velox/functions/prestosql/RemapKeys.h"
 
@@ -96,12 +99,6 @@ void registerMapIntersect(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_intersect"});
-
-  registerFunction<
-      MapIntersectFunction,
-      Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_intersect"});
 }
 
 template <typename T>
@@ -129,12 +126,6 @@ void registerMapExcept(const std::string& prefix) {
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
       Array<Varchar>>({prefix + "map_except"});
-
-  registerFunction<
-      MapExceptFunction,
-      Map<Generic<T1>, Generic<T2>>,
-      Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({prefix + "map_except"});
 }
 
 template <typename T>
@@ -206,6 +197,42 @@ void registerMapAppend(const std::string& prefix) {
       Array<Generic<T2>>>({prefix + "map_append"});
 }
 
+template <typename Key>
+void registerMapUpdatePrimitive(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<MapUpdatePrimitiveFunction, Key>,
+      Map<Key, Generic<T1>>,
+      Map<Key, Generic<T1>>,
+      Array<Key>,
+      Array<Generic<T1>>>({prefix + "map_update"});
+}
+
+void registerMapUpdate(const std::string& prefix) {
+  registerMapUpdatePrimitive<bool>(prefix);
+  registerMapUpdatePrimitive<int8_t>(prefix);
+  registerMapUpdatePrimitive<int16_t>(prefix);
+  registerMapUpdatePrimitive<int32_t>(prefix);
+  registerMapUpdatePrimitive<int64_t>(prefix);
+  registerMapUpdatePrimitive<float>(prefix);
+  registerMapUpdatePrimitive<double>(prefix);
+  registerMapUpdatePrimitive<Timestamp>(prefix);
+  registerMapUpdatePrimitive<Date>(prefix);
+
+  registerFunction<
+      MapUpdateVarcharFunction,
+      Map<Varchar, Generic<T1>>,
+      Map<Varchar, Generic<T1>>,
+      Array<Varchar>,
+      Array<Generic<T1>>>({prefix + "map_update"});
+
+  registerFunction<
+      MapUpdateFunction,
+      Map<Generic<T1>, Generic<T2>>,
+      Map<Generic<T1>, Generic<T2>>,
+      Array<Generic<T1>>,
+      Array<Generic<T2>>>({prefix + "map_update"});
+}
+
 void registerMapRemoveNullValues(const std::string& prefix) {
   registerFunction<
       MapRemoveNullValues,
@@ -230,8 +257,9 @@ void registerMapFunctions(const std::string& prefix) {
       udf_transform_values, prefix + "transform_values");
   registerMapFunction(prefix + "map", false /*allowDuplicateKeys*/);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_from_entries, prefix + "map_from_entries");
+  registerMapFromEntriesFunction(
+      prefix + "map_from_entries", /*throwForNull=*/true);
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, prefix + "map_zip_with");
@@ -288,6 +316,8 @@ void registerMapFunctions(const std::string& prefix) {
 
   registerMapAppend(prefix);
 
+  registerMapUpdate(prefix);
+
   registerMapRemoveNullValues(prefix);
 
   registerMapKeyExists(prefix);
@@ -296,6 +326,35 @@ void registerMapFunctions(const std::string& prefix) {
       MapNormalizeFunction,
       Map<Varchar, double>,
       Map<Varchar, double>>({prefix + "map_normalize"});
+
+  // Register map_values_in_range for various key/value type combinations
+  // Helper lambda to reduce registration boilerplate
+  auto registerMapValuesInRange = [&prefix]<typename K, typename V>() {
+    registerFunction<
+        ParameterBinder<MapValuesInRangeFunction, K, V>,
+        Map<K, V>,
+        Map<K, V>,
+        V,
+        V>({prefix + "map_values_in_range"});
+  };
+
+  registerMapValuesInRange.template operator()<int64_t, int64_t>();
+  registerMapValuesInRange.template operator()<int64_t, double>();
+  registerMapValuesInRange.template operator()<int64_t, float>();
+  registerMapValuesInRange.template operator()<int32_t, int32_t>();
+  registerMapValuesInRange.template operator()<int32_t, double>();
+  registerMapValuesInRange.template operator()<int32_t, float>();
+  registerMapValuesInRange.template operator()<Varchar, int64_t>();
+  registerMapValuesInRange.template operator()<Varchar, double>();
+  registerMapValuesInRange.template operator()<Varchar, float>();
+
+  // Generic fallback for complex key types
+  registerFunction<
+      MapValuesInRangeGenericFunction,
+      Map<Generic<T1>, double>,
+      Map<Generic<T1>, double>,
+      double,
+      double>({prefix + "map_values_in_range"});
 }
 
 void registerMapAllowingDuplicates(

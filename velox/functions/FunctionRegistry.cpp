@@ -109,6 +109,25 @@ std::optional<bool> isDeterministic(const std::string& functionName) {
   return true;
 }
 
+std::optional<bool> isDefaultNullBehavior(const std::string& functionName) {
+  const auto simpleFunctions =
+      exec::simpleFunctions().getFunctionSignaturesAndMetadata(functionName);
+  const auto metadata = exec::getVectorFunctionMetadata(functionName);
+  if (simpleFunctions.empty() && !metadata.has_value()) {
+    return std::nullopt;
+  }
+
+  for (const auto& [funcMetadata, _] : simpleFunctions) {
+    if (!funcMetadata.defaultNullBehavior) {
+      return false;
+    }
+  }
+  if (metadata.has_value() && !metadata.value().defaultNullBehavior) {
+    return false;
+  }
+  return true;
+}
+
 TypePtr resolveFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
@@ -229,6 +248,15 @@ resolveVectorFunctionWithMetadata(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   return exec::resolveVectorFunctionWithMetadata(functionName, argTypes);
+}
+
+std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadataWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  return exec::resolveVectorFunctionWithMetadataWithCoercions(
+      functionName, argTypes, coercions);
 }
 
 void removeFunction(const std::string& functionName) {

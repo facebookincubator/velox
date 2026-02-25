@@ -31,7 +31,6 @@ add_executable(
   SimdUtilTest.cpp
   SkewedPartitionBalancerTest.cpp
   SpillConfigTest.cpp
-  SpillStatsTest.cpp
   SplitBlockBloomFilterTest.cpp
   StatsReporterTest.cpp
   StatusTest.cpp
@@ -49,7 +48,7 @@ target_link_libraries(
     velox_time
     velox_status
     velox_exception
-    velox_temp_path
+    velox_test_util
     Boost::filesystem
     Boost::headers
     Folly::folly

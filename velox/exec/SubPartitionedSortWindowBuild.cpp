@@ -27,7 +27,7 @@ SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
     folly::Synchronized<OperatorStats>* opStats,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numSubPartitions_(numSubPartitions),
       numPartitionKeys_{node->partitionKeys().size()},
@@ -128,12 +128,12 @@ void SubPartitionedSortWindowBuild::spill() {
   spilled_ = true;
 }
 
-std::optional<common::SpillStats> SubPartitionedSortWindowBuild::spilledStats()
+std::optional<exec::SpillStats> SubPartitionedSortWindowBuild::spilledStats()
     const {
   if (!spilled_) {
     return std::nullopt;
   }
-  return {spillStats_->copy()};
+  return {*spillStats_};
 }
 
 void SubPartitionedSortWindowBuild::noMoreInput() {

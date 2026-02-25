@@ -16,11 +16,13 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include <string_view>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorStats.h"
+#include "velox/exec/SpillStats.h"
 #include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
@@ -43,7 +45,7 @@ class OperatorCtx {
       DriverCtx* driverCtx,
       const core::PlanNodeId& planNodeId,
       int32_t operatorId,
-      const std::string& operatorType = "");
+      std::string_view operatorType = "");
 
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
@@ -208,7 +210,7 @@ class Operator : public BaseRuntimeStatWriter {
       RowTypePtr outputType,
       int32_t operatorId,
       std::string planNodeId,
-      std::string operatorType,
+      std::string_view operatorType,
       std::optional<common::SpillConfig> spillConfig = std::nullopt);
 
   virtual ~Operator() = default;
@@ -295,7 +297,7 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Traces input batch of the operator.
-  virtual void traceInput(const RowVectorPtr&);
+  virtual bool traceInput(const RowVectorPtr& input, ContinueFuture* future);
 
   /// Finishes tracing of the operator.
   virtual void finishTrace();
@@ -521,6 +523,12 @@ class Operator : public BaseRuntimeStatWriter {
     return input_ != nullptr;
   }
 
+  /// Returns the spill config for this operator. This method is only used for
+  /// test.
+  const common::SpillConfig* testingSpillConfig() const {
+    return spillConfig();
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
   friend class NonReclaimableSection;
@@ -633,8 +641,8 @@ class Operator : public BaseRuntimeStatWriter {
   bool initialized_{false};
 
   folly::Synchronized<OperatorStats> stats_;
-  std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
-      std::make_shared<folly::Synchronized<common::SpillStats>>();
+  std::shared_ptr<exec::SpillStats> spillStats_ =
+      std::make_shared<exec::SpillStats>();
 
   /// NOTE: only one of the two could be set for an operator for tracing .
   /// 'splitTracer_' is only set for table scan to record the processed split
@@ -697,7 +705,7 @@ class SourceOperator : public Operator {
       RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
-      const std::string& operatorType,
+      std::string_view operatorType,
       const std::optional<common::SpillConfig>& spillConfig = std::nullopt)
       : Operator(
             driverCtx,

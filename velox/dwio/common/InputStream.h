@@ -44,11 +44,11 @@ class InputStream {
       const std::string& path,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
-      filesystems::File::IoStats* fsStats = nullptr)
+      velox::IoStats* ioStats = nullptr)
       : path_{path},
         metricsLog_{metricsLog},
         stats_(stats),
-        fsStats_(fsStats) {}
+        ioStats_(ioStats) {}
 
   virtual ~InputStream() = default;
 
@@ -133,7 +133,7 @@ class InputStream {
   std::string path_;
   MetricsLogPtr metricsLog_;
   IoStatistics* stats_;
-  filesystems::File::IoStats* fsStats_;
+  velox::IoStats* ioStats_;
 };
 
 /// An input stream that reads from an already opened ReadFile.
@@ -144,8 +144,9 @@ class ReadFileInputStream final : public InputStream {
       std::shared_ptr<velox::ReadFile>,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
-      filesystems::File::IoStats* fsStats = nullptr,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {});
+      velox::IoStats* ioStats = nullptr,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      bool cacheable = true);
 
   ~ReadFileInputStream() override = default;
 

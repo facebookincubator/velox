@@ -14,9 +14,11 @@
 
 velox_add_library(
   velox_hive_iceberg_splitreader
+  IcebergConfig.cpp
   IcebergColumnHandle.cpp
   IcebergConnector.cpp
   IcebergDataSink.cpp
+  IcebergDataSource.cpp
   IcebergPartitionName.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
@@ -29,10 +31,13 @@ velox_add_library(
 velox_link_libraries(
   velox_hive_iceberg_splitreader
   velox_connector
-  velox_dwio_parquet_field_id
   velox_functions_iceberg
   Folly::folly
 )
+
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_parquet_field_id)
+endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

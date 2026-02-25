@@ -278,6 +278,8 @@ bool CoalescedLoad::loadOrFuture(
     folly::SemiFuture<bool>* wait,
     bool ssdSavable) {
   {
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cache::CoalescedLoad::loadOrFuture", this);
     std::lock_guard<std::mutex> l(mutex_);
     if (state_ == State::kCancelled || state_ == State::kLoaded) {
       return true;
@@ -298,6 +300,8 @@ bool CoalescedLoad::loadOrFuture(
   }
 
   // Outside of 'mutex_'.
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cache::CoalescedLoad::loadOrFuture::loading", this);
   try {
     const auto pins = loadData(/*prefetch=*/wait == nullptr);
     for (const auto& pin : pins) {
@@ -931,11 +935,15 @@ void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
 
   ssdSaveable_ += bytes;
   if (memory::AllocationTraits::numPages(ssdSaveable_) >
-      std::max<int32_t>(
-          static_cast<int32_t>(
-              memory::AllocationTraits::numPages(opts_.minSsdSavableBytes)),
-          static_cast<int32_t>(
-              static_cast<double>(cachedPages_) * opts_.ssdSavableRatio))) {
+          std::max<int32_t>(
+              static_cast<int32_t>(
+                  memory::AllocationTraits::numPages(opts_.minSsdSavableBytes)),
+              static_cast<int32_t>(
+                  static_cast<double>(cachedPages_) * opts_.ssdSavableRatio)) ||
+      (opts_.ssdFlushThresholdBytes > 0 &&
+       memory::AllocationTraits::numPages(ssdSaveable_) >
+           static_cast<int32_t>(memory::AllocationTraits::numPages(
+               opts_.ssdFlushThresholdBytes)))) {
     // Do not start a new save if another one is in progress.
     if (!ssdCache_->startWrite()) {
       return;
@@ -947,7 +955,7 @@ void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
 void AsyncDataCache::saveToSsd(bool saveAll) {
   std::vector<CachePin> pins;
   VELOX_CHECK(ssdCache_->writeInProgress());
-  ssdSaveable_ = 0;
+  ssdSaveable_ = false;
   for (auto& shard : shards_) {
     shard->appendSsdSaveable(saveAll, pins);
   }
