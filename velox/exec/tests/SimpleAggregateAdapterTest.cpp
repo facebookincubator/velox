@@ -608,7 +608,7 @@ class SimpleVariadicSumAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    registerSimpleVariadicSumAggregate(kSimpleVariadicSum);
+    registerSimpleVariadicSumAggregateDefaultNull(kSimpleVariadicSum);
   }
 };
 

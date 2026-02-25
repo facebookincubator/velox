@@ -24,25 +24,31 @@ namespace facebook::velox::aggregate {
 
 namespace {
 
-// An aggregate function that demonstrates variadic argument support in
-// SimpleAggregateAdapter. This function takes a dummy integer argument followed
-// by a variadic list of integers. It returns an array where the i-th element is
-// the sum of all i-th variadic arguments across all rows.
+// A variant of VariadicSumAggregate that ignores nulls but processes all rows.
+// Unlike the original which skips entire rows when ANY argument is null
+// (default null behavior), this version uses non-default null behavior to
+// process all rows and simply ignores null values when summing.
+//
+// This function takes a dummy integer argument followed by a variadic list of
+// integers. It returns an array where the i-th element is the sum of all i-th
+// variadic arguments across all rows (ignoring nulls).
 //
 // Example:
-//   SELECT variadic_sum_agg(3, a, b, c) FROM (
-//     VALUES (1, 2, 3), (4, 5, 6)
+//   SELECT variadic_sum_agg_ignore_nulls(3, a, b, c) FROM (
+//     VALUES (1, NULL, 3), (4, 5, 6)
 //   ) AS t(a, b, c)
-//   => [5, 7, 9]  (i.e., [1+4, 2+5, 3+6])
-class VariadicSumAggregate {
+//   => [5, 5, 9]  (i.e., [1+4, 0+5, 3+6])
+class VariadicSumAggregateNonDefaultNull {
  public:
-  // Force the function to take a dummy integer before the variadic arguments to
-  // test variadic list not starting from the beginning.
   using InputType = AggregateInputType<int64_t, Variadic<int64_t>>;
 
   using IntermediateType = Array<int64_t>;
 
   using OutputType = Array<int64_t>;
+
+  // Disable default null behavior so we process all rows, not just those
+  // where all arguments are non-null.
+  static constexpr bool default_null_behavior_ = false;
 
   struct AccumulatorType {
     std::vector<int64_t> sums_;
@@ -51,63 +57,73 @@ class VariadicSumAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        VariadicSumAggregate* /*fn*/)
+        VariadicSumAggregateNonDefaultNull* /*fn*/)
         : sums_{} {}
 
     static constexpr bool is_fixed_size_ = false;
     static constexpr bool use_external_memory_ = true;
 
-    void addInput(
+    bool addInput(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<int64_t> /*dummy*/,
-        exec::arg_type<Variadic<int64_t>> variadicArgs) {
-      // Initialize sums_ based on the actual number of variadic arguments.
-      if (sums_.empty()) {
-        sums_.resize(variadicArgs.size(), 0);
+        exec::optional_arg_type<int64_t> /*dummy*/,
+        exec::optional_arg_type<Variadic<int64_t>> variadicArgs) {
+      if (!variadicArgs.has_value()) {
+        return false;
       }
 
-      size_t idx = 0;
-      for (const auto& arg : variadicArgs) {
-        if (idx >= sums_.size()) {
-          VELOX_USER_FAIL("Different number of elements.");
-        }
-        if (arg.has_value()) {
-          sums_[idx] += arg.value();
-        }
-        ++idx;
+      const auto& args = variadicArgs.value();
+
+      if (sums_.empty()) {
+        sums_.resize(args.size(), 0);
       }
+
+      for (auto i = 0; i < args.size(); ++i) {
+        if (args.at(i).has_value()) {
+          sums_[i] += args.at(i).value();
+        }
+      }
+      return true;
     }
 
-    void combine(
+    bool combine(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<Array<int64_t>> other) {
-      // Initialize sums_ based on the incoming array size if not yet
-      // initialized.
-      if (sums_.empty()) {
-        sums_.resize(other.size(), 0);
+        exec::optional_arg_type<Array<int64_t>> other) {
+      if (!other.has_value()) {
+        return false;
       }
 
-      // Add element-wise.
-      size_t idx = 0;
-      for (const auto& element : other) {
-        if (idx >= sums_.size()) {
-          VELOX_USER_FAIL("Different number of elements.");
-        }
-        if (element.has_value()) {
-          sums_[idx] += element.value();
-        }
-        ++idx;
+      const auto& otherArray = other.value();
+
+      if (sums_.empty()) {
+        sums_.resize(otherArray.size(), 0);
       }
+
+      for (auto i = 0; i < otherArray.size(); ++i) {
+        if (otherArray.at(i).has_value()) {
+          sums_[i] += otherArray.at(i).value();
+        }
+      }
+      return true;
     }
 
-    bool writeFinalResult(exec::out_type<Array<int64_t>>& out) {
+    bool writeFinalResult(
+        bool nonNullGroup,
+        exec::out_type<Array<int64_t>>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
       for (const auto& sum : sums_) {
         out.add_item() = sum;
       }
       return true;
     }
 
-    bool writeIntermediateResult(exec::out_type<Array<int64_t>>& out) {
+    bool writeIntermediateResult(
+        bool nonNullGroup,
+        exec::out_type<Array<int64_t>>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
       for (const auto& sum : sums_) {
         out.add_item() = sum;
       }
@@ -118,8 +134,8 @@ class VariadicSumAggregate {
 
 } // namespace
 
-exec::AggregateRegistrationResult registerSimpleVariadicSumAggregate(
-    const std::string& name) {
+exec::AggregateRegistrationResult
+registerSimpleVariadicSumAggregateNonDefaultNull(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("array(bigint)")
@@ -140,7 +156,8 @@ exec::AggregateRegistrationResult registerSimpleVariadicSumAggregate(
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_GE(
             argTypes.size(), 1, "{} requires at least 1 argument", name);
-        return std::make_unique<SimpleAggregateAdapter<VariadicSumAggregate>>(
+        return std::make_unique<
+            SimpleAggregateAdapter<VariadicSumAggregateNonDefaultNull>>(
             step, argTypes, resultType);
       },
       true /*registerCompanionFunctions*/,
