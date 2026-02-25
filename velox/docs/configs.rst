@@ -1259,3 +1259,7 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.
+   * - cudf.function_engine
+     - string
+     - presto
+     - Register the function for a specific engine. The optional values are presto or spark.
