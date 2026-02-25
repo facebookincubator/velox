@@ -39,12 +39,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
-  // Legacy helper retained for compatibility. Note: returning cudf::type_id
-  // discards decimal scale; prefer veloxToCudfDataType when scale matters.
-  return veloxToCudfDataType(type).id();
-}
-
 cudf::data_type veloxToCudfDataType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::BOOLEAN:

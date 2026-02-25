@@ -13,51 +13,44 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include "velox/common/memory/Memory.h"
-#include "velox/vector/ComplexVector.h"
-
-#include <cudf/table/table.hpp>
-#include <cudf/types.hpp>
+#include <cudf/column/column.hpp>
+#include <cudf/column/column_view.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
+#include <memory>
+
 namespace facebook::velox::cudf_velox {
 
-cudf::data_type veloxToCudfDataType(const TypePtr& type);
+struct DecimalSumStateColumns {
+  std::unique_ptr<cudf::column> sum;
+  std::unique_ptr<cudf::column> count;
+};
 
-namespace with_arrow {
-
-std::unique_ptr<cudf::table> toCudfTable(
-    const facebook::velox::RowVectorPtr& veloxTable,
-    facebook::velox::memory::MemoryPool* pool,
+DecimalSumStateColumns deserializeDecimalSumStateWithCount(
+    const cudf::column_view& stateCol,
+    int32_t scale,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-facebook::velox::RowVectorPtr toVeloxColumn(
-    const cudf::table_view& table,
-    facebook::velox::memory::MemoryPool* pool,
-    std::string namePrefix,
+std::unique_ptr<cudf::column> deserializeDecimalSumState(
+    const cudf::column_view& stateCol,
+    int32_t scale,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-facebook::velox::RowVectorPtr toVeloxColumn(
-    const cudf::table_view& table,
-    facebook::velox::memory::MemoryPool* pool,
-    const facebook::velox::RowTypePtr& outputType,
-    std::string namePrefix,
+std::unique_ptr<cudf::column> serializeDecimalSumState(
+    const cudf::column_view& sumCol,
+    const cudf::column_view& countCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-facebook::velox::RowVectorPtr toVeloxColumn(
-    const cudf::table_view& table,
-    facebook::velox::memory::MemoryPool* pool,
-    const std::vector<std::string>& columnNames,
+std::unique_ptr<cudf::column> computeDecimalAverage(
+    const cudf::column_view& sumCol,
+    const cudf::column_view& countCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
-
-} // namespace with_arrow
 
 } // namespace facebook::velox::cudf_velox
