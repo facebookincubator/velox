@@ -39,6 +39,10 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
     uint32_t inputIndex;
     VectorPtr constant;
     TypePtr resultType;
+    // Total number of input rows, set by CudfHashAggregation before doReduce.
+    // Used by CountAggregator for count(*) on 0-column tables where the cudf
+    // table_view cannot report the row count.
+    vector_size_t totalInputRows = 0;
 
     virtual void addGroupbyRequest(
         cudf::table_view const& tbl,

@@ -164,6 +164,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     core::PlanNodePtr planNode = nullptr;
     if (isValidPlanNodeId(oper->planNodeId())) {
       planNode = getPlanNode(oper->planNodeId());
+      std::cout << "planNode: " << planNode->toString(true, true) << std::endl;
     }
 
     if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
@@ -226,24 +227,34 @@ bool CompileState::compile(bool allowCpuFallback) {
     }
 
     if (debugEnabled) {
-      VLOG(1) << "Operator: ID " << oper->operatorId() << ": "
-              << oper->toString() << ", keepOperator = " << keepOperator
-              << ", isPureCpuOperator = " << isPureCpuOperator
-              << ", replaceOp.size() = " << replaceOp.size()
-              << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
-              << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
-              << ", isLastOperatorOfTask = " << isLastOperatorOfTask
-              << ", canRunOnGPU[" << operatorIndex
-              << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
-              << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
-              << ", producesGpuOutput[" << operatorIndex
-              << "] = " << thisOpProps.producesGpuOutput
-              << ", planNode = " << bool(planNode);
+      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
+                << oper->toString() << ", keepOperator = " << keepOperator
+                << ", isPureCpuOperator = " << isPureCpuOperator
+                << ", replaceOp.size() = " << replaceOp.size()
+                << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
+                << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
+                << ", isLastOperatorOfTask = " << isLastOperatorOfTask
+                << ", canRunOnGPU[" << operatorIndex
+                << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
+                << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
+                << ", producesGpuOutput[" << operatorIndex
+                << "] = " << thisOpProps.producesGpuOutput
+                << ", planNode = " << bool(planNode);
     }
     if (!allowCpuFallback) {
       // condition is if GPU replacement success or if CPU operators itself is
       // GPU compatible. or if specific CPU operator is allowed even when
       // fallback is disabled.
+
+      if (debugEnabled) {
+        // Print before/after together for easy comparison.
+        LOG(INFO) << "Operators " << "before adapting for cuDF"
+                  << ": count [" << beforeOperators.size() << "]";
+        for (const auto& [id, desc] : beforeOperators) {
+          LOG(INFO) << "  Operator: ID " << id << ": " << desc;
+        }
+        LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
+      }
       VELOX_CHECK(!isPureCpuOperator, "Replacement with cuDF operator failed");
     } else if (isPureCpuOperator) {
       LOG(WARNING)
