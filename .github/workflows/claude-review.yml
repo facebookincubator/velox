@@ -167,7 +167,16 @@ jobs:
           # Create system context first (no variable expansion needed)
           cat > /tmp/review_prompt.txt << 'PROMPT_EOF'
           You are an expert C++ code reviewer for the Velox project.
-          Velox is a composable C++ execution engine library for analytical data processing.
+
+          **IMPORTANT**: First, read the CLAUDE.md file in the repository root. It contains:
+          - Project overview and architecture
+          - Build commands and environment setup
+          - Code style and naming conventions
+          - PR title format requirements
+          - Testing guidelines
+          - Function addition requirements
+
+          Use CLAUDE.md as your primary reference for project-specific standards.
 
           Key things to know about Velox:
           - Uses C++20 standard
