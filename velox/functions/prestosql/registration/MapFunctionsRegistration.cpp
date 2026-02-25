@@ -31,6 +31,7 @@
 #include "velox/functions/prestosql/MapTopNKeys.h"
 #include "velox/functions/prestosql/MapTopNValues.h"
 #include "velox/functions/prestosql/MapUpdate.h"
+#include "velox/functions/prestosql/MapValuesInRange.h"
 #include "velox/functions/prestosql/MultimapFromEntries.h"
 #include "velox/functions/prestosql/RemapKeys.h"
 
@@ -325,6 +326,35 @@ void registerMapFunctions(const std::string& prefix) {
       MapNormalizeFunction,
       Map<Varchar, double>,
       Map<Varchar, double>>({prefix + "map_normalize"});
+
+  // Register map_values_in_range for various key/value type combinations
+  // Helper lambda to reduce registration boilerplate
+  auto registerMapValuesInRange = [&prefix]<typename K, typename V>() {
+    registerFunction<
+        ParameterBinder<MapValuesInRangeFunction, K, V>,
+        Map<K, V>,
+        Map<K, V>,
+        V,
+        V>({prefix + "map_values_in_range"});
+  };
+
+  registerMapValuesInRange.template operator()<int64_t, int64_t>();
+  registerMapValuesInRange.template operator()<int64_t, double>();
+  registerMapValuesInRange.template operator()<int64_t, float>();
+  registerMapValuesInRange.template operator()<int32_t, int32_t>();
+  registerMapValuesInRange.template operator()<int32_t, double>();
+  registerMapValuesInRange.template operator()<int32_t, float>();
+  registerMapValuesInRange.template operator()<Varchar, int64_t>();
+  registerMapValuesInRange.template operator()<Varchar, double>();
+  registerMapValuesInRange.template operator()<Varchar, float>();
+
+  // Generic fallback for complex key types
+  registerFunction<
+      MapValuesInRangeGenericFunction,
+      Map<Generic<T1>, double>,
+      Map<Generic<T1>, double>,
+      double,
+      double>({prefix + "map_values_in_range"});
 }
 
 void registerMapAllowingDuplicates(

@@ -71,7 +71,7 @@ add_library(velox_aggregation_fuzzer_base AggregationFuzzerBase.cpp)
 target_link_libraries(
   velox_aggregation_fuzzer_base
   velox_exec_test_lib
-  velox_temp_path
+  velox_test_util
   velox_common_base
   velox_file
   velox_hive_connector
@@ -107,7 +107,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_test_utility
   velox_aggregation_fuzzer_base
-  velox_temp_path
+  velox_test_util
 )
 
 add_library(velox_row_number_fuzzer_base_lib RowNumberFuzzerBase.cpp)
@@ -182,7 +182,7 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_exec_test_lib
   velox_expression_test_utility
-  velox_temp_path
+  velox_test_util
   velox_vector_test_lib
   velox_dwio_faulty_file_sink
   velox_file_test_utils
@@ -217,7 +217,7 @@ target_link_libraries(velox_cache_fuzzer velox_cache_fuzzer_lib velox_fuzzer_uti
 target_link_libraries(
   velox_cache_fuzzer_lib
   velox_dwio_common
-  velox_temp_path
+  velox_test_util
   velox_vector_test_lib
 )
 

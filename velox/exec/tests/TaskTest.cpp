@@ -22,6 +22,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
@@ -32,13 +33,15 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec::test {
+
+using TempDirectoryPath = facebook::velox::common::testutil::TempDirectoryPath;
+
 namespace {
 // A test join node whose build is skewed in terms of process time. The driver
 // id 0 processes slower than other drivers if paralelism greater than 1
@@ -2015,7 +2018,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kAggregationSpillEnabled, "true"}});
   params.maxDrivers = 1;
-  auto spillRootDir = exec::test::TempDirectoryPath::create();
+  auto spillRootDir = TempDirectoryPath::create();
   auto spillParentDir = fmt::format(
       "{}{}/parent_spill/",
       tests::utils::FaultyFileSystem::scheme(),
@@ -2111,7 +2114,7 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
       {{core::QueryConfig::kSpillEnabled, "true"},
        {core::QueryConfig::kAggregationSpillEnabled, "true"}});
   params.maxDrivers = 1;
-  const auto rootTempDir = exec::test::TempDirectoryPath::create();
+  const auto rootTempDir = TempDirectoryPath::create();
   const auto tmpDirectoryPath =
       rootTempDir->getPath() + "/spillDirectoryLifecycleManagement";
   params.spillDirectory = tmpDirectoryPath;
@@ -2171,7 +2174,7 @@ TEST_F(TaskTest, spillDirNotCreated) {
 
   auto cursor = TaskCursor::create(params);
   auto* task = cursor->task().get();
-  auto rootTempDir = exec::test::TempDirectoryPath::create();
+  auto rootTempDir = TempDirectoryPath::create();
   auto tmpDirectoryPath = rootTempDir->getPath() + "/spillDirNotCreated";
 
   while (cursor->moveNext()) {
@@ -2614,7 +2617,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
           [&](SpillerBase* /*unused*/) { VELOX_FAIL(spillTableError); }));
 
   TestScopedSpillInjection injection(100);
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(duckDbQueryRunner_)
           .spillDirectory(spillDirectory->getPath())

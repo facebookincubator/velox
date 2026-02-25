@@ -22,6 +22,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 namespace {
 class LimitTest : public HiveConnectorTestBase {};
