@@ -111,7 +111,9 @@ ReaderBase::ReaderBase(
     : options_{options},
       input_(std::move(input)),
       fileLength_(input_->getReadFile()->size()),
-      arena_(std::make_unique<google::protobuf::Arena>()) {
+      arena_(std::make_unique<google::protobuf::Arena>()),
+      columnReaderStatistics_(
+          std::make_shared<dwio::common::ColumnReaderStatistics>()) {
   process::TraceContext trace("ReaderBase::ReaderBase");
   // TODO: make a config
   DWIO_ENSURE(fileLength_ > 0, "ORC file is empty");
@@ -199,7 +201,11 @@ ReaderBase::ReaderBase(
   auto decompressed = createDecompressedStream(
       std::make_unique<dwio::common::SeekableArrayInputStream>(
           footerStart, footerSize),
-      "File Footer");
+      "File Footer",
+      /*decrypter=*/nullptr,
+      columnReaderStatistics_
+          ->getOrCreateColumnStats(UINT32_MAX - 1, "fileFooter")
+          .get());
   if (fileFormat() == FileFormat::DWRF) {
     footer_ = parseFooter<proto::Footer>(decompressed.get(), arena_.get());
   } else {

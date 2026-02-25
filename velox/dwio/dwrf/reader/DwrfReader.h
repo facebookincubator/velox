@@ -111,8 +111,8 @@ class DwrfRowReader : public StrideIndexProvider,
     stats.processedStrides += processedStrides_;
     stats.footerBufferOverread += getReader().footerBufferOverread();
     stats.numStripes += stripeCeiling_ - firstStripe_;
-    stats.columnReaderStatistics.flattenStringDictionaryValues +=
-        columnReaderStatistics_->flattenStringDictionaryValues;
+    stats.columnReaderStatistics.mergeFrom(
+        *getReader().columnReaderStatistics());
     stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
@@ -220,8 +220,6 @@ class DwrfRowReader : public StrideIndexProvider,
   // Causes filters to be re-evaluated against stride stats on next stride
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
-
-  std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStatistics_;
 
   std::optional<int64_t> nextRowNumber_;
 

@@ -105,6 +105,8 @@ inline CompressionOptions getDwrfOrcDecompressionOptions(
  * @param input The input stream that is the underlying source
  * @param bufferSize The maximum size of the buffer
  * @param pool The memory pool
+ * @param columnStats Optional per-column stats for tracking
+ * decompression time
  */
 inline std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     facebook::velox::common::CompressionKind kind,
@@ -112,16 +114,20 @@ inline std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     uint64_t bufferSize,
     memory::MemoryPool& pool,
     const std::string& streamDebugInfo,
-    const dwio::common::encryption::Decrypter* decryptr = nullptr) {
+    const dwio::common::encryption::Decrypter* decryptr = nullptr,
+    dwio::common::ColumnStats* columnStats = nullptr) {
   const CompressionOptions& options = getDwrfOrcDecompressionOptions(kind);
-  return createDecompressor(
+  return dwio::common::compression::createDecompressor(
       kind,
       std::move(input),
       bufferSize,
       pool,
       options,
       streamDebugInfo,
-      decryptr);
+      decryptr,
+      false,
+      0,
+      columnStats);
 }
 
 } // namespace facebook::velox::dwrf
