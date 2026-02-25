@@ -142,13 +142,20 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       TypePtr const& outputType,
       rmm::cuda_stream_view stream) override {
     if (exec::isRawInput(step)) {
-      // For raw input, implement count using size + null count
-      auto inputCol = input.column(constant == nullptr ? inputIndex : 0);
-
-      // count_valid: size - null_count, count_all: just the size
-      int64_t count = constant == nullptr
-          ? inputCol.size() - inputCol.null_count()
-          : inputCol.size();
+      int64_t count;
+      if (input.num_columns() == 0) {
+        // count(*) on a 0-column table (e.g. after project({})).
+        // cudf table_view reports 0 rows when there are no columns, so use
+        // totalInputRows which was tracked from the RowVector sizes.
+        count = totalInputRows;
+      } else if (constant != nullptr) {
+        // count(*) or count(literal) — count all rows including nulls.
+        count = input.column(0).size();
+      } else {
+        // count(column) — exclude nulls.
+        auto inputCol = input.column(inputIndex);
+        count = inputCol.size() - inputCol.null_count();
+      }
 
       auto resultScalar = cudf::numeric_scalar<int64_t>(count);
 
@@ -755,7 +762,16 @@ auto toAggregators(
     // supported aggregation functions in cudf_velox don't use it.
     VELOX_CHECK(aggInputs.size() <= 1);
     if (aggInputs.empty()) {
-      aggInputs.push_back(0);
+      // No inputs means count(*). Use kConstantChannel with a synthetic
+      // constant so CountAggregator treats this as count-all (including nulls)
+      // rather than count on a specific column (excluding nulls).
+      aggInputs.push_back(kConstantChannel);
+      aggConstants.push_back(
+          BaseVector::createConstant(
+              INTEGER(),
+              Variant(static_cast<int32_t>(0)),
+              1,
+              operatorCtx.pool()));
     }
 
     if (aggregate.distinct) {
@@ -1069,6 +1085,7 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
+    aggregators_[i]->totalInputRows = numInputRows_;
     resultColumns.push_back(
         aggregators_[i]->doReduce(tableView, outputType_->childAt(i), stream));
   }
@@ -1640,6 +1657,9 @@ bool canAggregationBeEvaluatedByCudf(
     const std::vector<TypePtr>& rawInputTypes,
     core::QueryCtx* queryCtx) {
   // Check against step-aware aggregation registry
+  std::cout << "canAggregationBeEvaluatedByCudf: " << call.name() << " " << step
+            << std::endl;
+  std::cout << "call: " << call.toString() << std::endl;
   auto& stepAwareRegistry = getStepAwareAggregationRegistry();
   auto funcIt = stepAwareRegistry.find(call.name());
   if (funcIt == stepAwareRegistry.end()) {
