@@ -15,19 +15,15 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/CudfQueryConfig.h"
-#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
-#include "velox/core/PlanNode.h"
-#include "velox/core/QueryConfig.h"
-#include "velox/exec/Cursor.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::cudf_velox;
 
@@ -35,13 +31,12 @@ class CudfBatchConcatTest : public OperatorTestBase {
  protected:
   void SetUp() override {
     OperatorTestBase::SetUp();
-    // Enable cuDF debug logs to help trace operator adaptation and runtime
-    // behavior during tests.
-    facebook::velox::cudf_velox::CudfConfig::getInstance().debugEnabled = true;
+    CudfConfig::getInstance().debugEnabled = true;
     cudf_velox::registerCudf();
   }
 
   void TearDown() override {
+    CudfConfig::getInstance().concatOptimizationEnabled = false;
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }
@@ -57,122 +52,193 @@ class CudfBatchConcatTest : public OperatorTestBase {
     return makeFlatVector<T>(size, [start](auto row) { return start + row; });
   }
 
-  // Forces fragmented input that Values won't coalesce
-  core::PlanNodePtr createFragmentedPlan(
+  // Builds fragmented input via localPartitionRoundRobin to prevent Values
+  // from coalescing small batches.
+  core::PlanNodePtr createFragmentedSource(
       const std::vector<RowVectorPtr>& vectors,
       std::shared_ptr<core::PlanNodeIdGenerator> generator) {
     std::vector<core::PlanNodePtr> sources;
     for (const auto& vec : vectors) {
       sources.push_back(PlanBuilder(generator).values({vec}).planNode());
     }
-    return PlanBuilder(generator).localPartition({}, sources).planNode();
+    return PlanBuilder(generator)
+        .localPartitionRoundRobin(sources)
+        .planNode();
+  }
+
+  // Returns the per-operator-type stats for CudfBatchConcat within the given
+  // plan node, or nullptr if CudfBatchConcat wasn't inserted for that node.
+  const PlanNodeStats* getConcatStats(
+      const std::shared_ptr<Task>& task,
+      const core::PlanNodeId& aggNodeId) {
+    auto planStats = toPlanStats(task->taskStats());
+    auto nodeIt = planStats.find(aggNodeId);
+    if (nodeIt == planStats.end()) {
+      return nullptr;
+    }
+    auto opIt = nodeIt->second.operatorStats.find("CudfBatchConcat");
+    if (opIt == nodeIt->second.operatorStats.end()) {
+      return nullptr;
+    }
+    return opIt->second.get();
   }
 };
 
-TEST_F(CudfBatchConcatTest, fragmentedInputGetsConcatenated) {
-  updateCudfConfig(/*min=*/30, /*max=*/20);
+// Verifies that CudfBatchConcat is inserted before aggregation and reduces
+// the number of batches reaching the aggregation operator.
+TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
+  // 6 batches of 10 rows each = 60 rows total.
+  // With min threshold 30, concat should accumulate ~3 batches before flushing,
+  // producing fewer output batches than the 6 it received.
+  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
     vectors.push_back(makeRowVector({makeFlatSequence<int64_t>(i * 10, 10)}));
   }
+  createDuckDbTable(vectors);
 
   auto generator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  std::vector<core::PlanNodePtr> sources;
-  for (const auto& vec : vectors) {
-    sources.push_back(PlanBuilder(generator).values({vec}).planNode());
-  }
+  core::PlanNodeId aggNodeId;
 
   auto plan = PlanBuilder(generator)
-                  .localPartitionRoundRobin(sources)
-                  .limit(0, 100, false)
-                  .filter("c0 >= 0") // forces FilterProject
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(vectors, generator);
+                  })
+                  .singleAggregation({}, {"sum(c0)"})
+                  .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  exec::CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = 1;
-  // Enable concat optimization for this query so CudfBatchConcat can be
-  // inserted by the adapter.
-  params.queryConfigs
-      [cudf_velox::CudfQueryConfig::kCudfConcatOptimizationEnabled] = "true";
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .maxDrivers(1)
+          .assertResults("SELECT sum(c0) FROM tmp");
 
-  auto [cursor, batches] = exec::test::readCursor(
-      params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(aggNodeId);
+  auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
+  ASSERT_NE(concatIt, nodeStats.operatorStats.end())
+      << "CudfBatchConcat should be present in operator stats";
 
-  // correctness
-  ASSERT_EQ(batches.size(), 3);
-
-  ASSERT_EQ(batches[0]->size(), 20);
-  ASSERT_EQ(batches[1]->size(), 20);
-  ASSERT_EQ(batches[2]->size(), 20);
+  auto& concatStats = *concatIt->second;
+  EXPECT_EQ(concatStats.inputVectors, 6)
+      << "CudfBatchConcat should have received all 6 input batches";
+  EXPECT_LT(concatStats.outputVectors, concatStats.inputVectors)
+      << "CudfBatchConcat should produce fewer output batches than input";
 }
 
-// To test if the optimization is not performed after certain operators.
-TEST_F(CudfBatchConcatTest, fragmentedInputDoesNotGetConcatenated) {
-  updateCudfConfig(/*min=*/1e5, 1e7);
+// Verifies that CudfBatchConcat is not inserted when the optimization is
+// disabled, even when aggregation is present.
+TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
+  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = false;
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
     vectors.push_back(makeRowVector({makeFlatSequence<int64_t>(i * 10, 10)}));
   }
+  createDuckDbTable(vectors);
 
   auto generator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  std::vector<core::PlanNodePtr> sources;
-  for (const auto& vec : vectors) {
-    sources.push_back(PlanBuilder(generator).values({vec}).planNode());
-  }
+  core::PlanNodeId aggNodeId;
 
   auto plan = PlanBuilder(generator)
-                  .localPartitionRoundRobin(sources)
-                  .filter("c0 >= 0") // forces FilterProject
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(vectors, generator);
+                  })
+                  .singleAggregation({}, {"sum(c0)"})
+                  .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  exec::CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = 1;
-  params.queryConfigs
-      [cudf_velox::CudfQueryConfig::kCudfConcatOptimizationEnabled] = "true";
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .maxDrivers(1)
+          .assertResults("SELECT sum(c0) FROM tmp");
 
-  auto [cursor, batches] = exec::test::readCursor(
-      params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
-
-  // correctness
-  ASSERT_EQ(batches.size(), 6);
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(aggNodeId);
+  EXPECT_EQ(nodeStats.operatorStats.count("CudfBatchConcat"), 0)
+      << "CudfBatchConcat should not be present when optimization is disabled";
 }
 
-TEST_F(CudfBatchConcatTest, concatDisabledWithQueryConfig) {
-  updateCudfConfig(/*min=*/30, /*max=*/20);
+// When the threshold exceeds total input rows, concat accumulates all batches
+// and flushes them as a single merged batch on noMoreInput.
+TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
+  updateCudfConfig(/*min=*/100000, /*max=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < 6; ++i) {
     vectors.push_back(makeRowVector({makeFlatSequence<int64_t>(i * 10, 10)}));
   }
+  createDuckDbTable(vectors);
 
   auto generator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  std::vector<core::PlanNodePtr> sources;
-  for (const auto& vec : vectors) {
-    sources.push_back(PlanBuilder(generator).values({vec}).planNode());
-  }
+  core::PlanNodeId aggNodeId;
 
   auto plan = PlanBuilder(generator)
-                  .localPartitionRoundRobin(sources)
-                  .limit(0, 100, false)
-                  .filter("c0 >= 0") // forces FilterProject
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(vectors, generator);
+                  })
+                  .singleAggregation({}, {"sum(c0)"})
+                  .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  exec::CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = 1;
-  params.queryConfigs
-      [cudf_velox::CudfQueryConfig::kCudfConcatOptimizationEnabled] = "false";
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .maxDrivers(1)
+          .assertResults("SELECT sum(c0) FROM tmp");
 
-  auto [cursor, batches] = exec::test::readCursor(
-      params, [](auto* c) { c->setNoMoreSplits(); }, 3000);
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(aggNodeId);
+  auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
+  ASSERT_NE(concatIt, nodeStats.operatorStats.end())
+      << "CudfBatchConcat should still be inserted even with high threshold";
 
-  // correctness
-  ASSERT_EQ(batches.size(), 6);
+  auto& concatStats = *concatIt->second;
+  EXPECT_EQ(concatStats.inputVectors, 6);
+  EXPECT_EQ(concatStats.outputVectors, 1)
+      << "All batches should be merged into one on noMoreInput flush";
+}
+
+// Verifies correctness with grouped aggregation (non-global) and concat.
+TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
+  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 6; ++i) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(10, [](auto row) { return row % 3; }),
+         makeFlatSequence<int64_t>(i * 10, 10)}));
+  }
+  createDuckDbTable(vectors);
+
+  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggNodeId;
+
+  auto plan = PlanBuilder(generator)
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(vectors, generator);
+                  })
+                  .singleAggregation({"c0"}, {"sum(c1)"})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .maxDrivers(1)
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(aggNodeId);
+  auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
+  ASSERT_NE(concatIt, nodeStats.operatorStats.end());
+  EXPECT_EQ(concatIt->second->inputVectors, 6);
+  EXPECT_LT(concatIt->second->outputVectors, 6);
 }
