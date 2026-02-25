@@ -533,7 +533,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     for (auto group : groups) {
       if (isInitialized(group)) {
         value<detail::KllSketchAccumulator<T>>(group)
-            ->~KllSketchAccumulator();
+            ->~KllSketchAccumulator<T>();
       }
     }
   }
