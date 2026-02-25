@@ -783,7 +783,7 @@ std::shared_ptr<CudfFunction> createCudfFunction(
   return nullptr;
 }
 
-bool registerSparkFunctions(const std::string& prefix) {
+void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
   registerCudfFunction(
@@ -820,7 +820,7 @@ bool registerSparkFunctions(const std::string& prefix) {
            .build()});
 }
 
-bool registerPrestoFunctions(const std::string& prefix) {}
+void registerPrestoFunctions(const std::string& prefix) {}
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
