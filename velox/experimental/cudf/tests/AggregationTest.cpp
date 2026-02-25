@@ -602,6 +602,23 @@ TEST_F(AggregationTest, countPartialFinalGroupBy) {
       op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
 }
 
+TEST_F(AggregationTest, countPartialIntermediateFinalGroupBy) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::string keyName = "c0";
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({keyName}, aggregates)
+                .intermediateAggregation()
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(
+      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+}
+
 TEST_F(AggregationTest, countSingleGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -623,6 +640,21 @@ TEST_F(AggregationTest, countPartialFinalGlobal) {
   auto op = PlanBuilder()
                 .values(vectors)
                 .partialAggregation({}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp");
+}
+
+TEST_F(AggregationTest, countPartialIntermediateFinalGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, aggregates)
+                .intermediateAggregation()
                 .finalAggregation()
                 .planNode();
 
