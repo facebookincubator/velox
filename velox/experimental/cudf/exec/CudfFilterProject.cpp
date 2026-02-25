@@ -103,30 +103,6 @@ std::vector<exec::OperatorStats> splitStats(
 
 } // namespace
 
-bool canBeEvaluatedByCudf(
-    const std::vector<core::TypedExprPtr>& exprs,
-    core::QueryCtx* queryCtx) {
-  if (exprs.empty()) {
-    return true;
-  }
-
-  auto precompilePool =
-      memory::memoryManager()->addLeafPool("", /*threadSafe*/ false);
-  core::ExecCtx precompileCtx(precompilePool.get(), queryCtx);
-
-  bool lazyDereference = false;
-  std::vector<core::TypedExprPtr> exprsCopy = exprs;
-  std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
-      std::move(exprsCopy), &precompileCtx, lazyDereference);
-
-  for (const auto& e : exprSet->exprs()) {
-    if (!canBeEvaluatedByCudf(e)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,
     velox::exec::DriverCtx* driverCtx,

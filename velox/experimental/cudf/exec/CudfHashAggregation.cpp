@@ -19,6 +19,8 @@
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/plan/CudfExpressionChecker.h"
+#include "velox/experimental/cudf/plan/CudfPlanNodeChecker.h"
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -1605,141 +1607,6 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       prefix + "approx_distinct",
       core::AggregationNode::Step::kFinal,
       approxDistinctFinalSignatures);
-
-  return true;
-}
-
-bool matchTypedCallAgainstSignatures(
-    const core::CallTypedExpr& call,
-    const std::vector<exec::FunctionSignaturePtr>& sigs) {
-  const auto n = call.inputs().size();
-  std::vector<TypePtr> argTypes;
-  argTypes.reserve(n);
-  for (const auto& input : call.inputs()) {
-    argTypes.push_back(input->type());
-  }
-  for (const auto& sig : sigs) {
-    std::vector<Coercion> coercions(n);
-    exec::SignatureBinder binder(*sig, argTypes);
-    if (!binder.tryBindWithCoercions(coercions)) {
-      continue;
-    }
-
-    // For simplicity we skip checking for constant agruments, this may be added
-    // in the future
-
-    return true;
-  }
-  return false;
-}
-
-// Step-aware aggregation validation function
-bool canAggregationBeEvaluatedByCudf(
-    const core::CallTypedExpr& call,
-    core::AggregationNode::Step step,
-    const std::vector<TypePtr>& rawInputTypes,
-    core::QueryCtx* queryCtx) {
-  // Check against step-aware aggregation registry
-  auto& stepAwareRegistry = getStepAwareAggregationRegistry();
-  auto funcIt = stepAwareRegistry.find(call.name());
-  if (funcIt == stepAwareRegistry.end()) {
-    return false;
-  }
-
-  auto stepIt = funcIt->second.find(step);
-  if (stepIt == funcIt->second.end()) {
-    return false;
-  }
-
-  // Validate against step-specific signatures from registry
-  return matchTypedCallAgainstSignatures(call, stepIt->second);
-}
-
-bool canBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx) {
-  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-      ? nullptr
-      : aggregationNode.sources()[0].get();
-
-  // Get the aggregation step from the node
-  auto step = aggregationNode.step();
-
-  // Check supported aggregation functions using step-aware aggregation registry
-  for (const auto& aggregate : aggregationNode.aggregates()) {
-    // Use step-aware validation that handles partial/final/intermediate steps
-    if (!canAggregationBeEvaluatedByCudf(
-            *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {
-      return false;
-    }
-
-    // `distinct` aggregations are not supported, in testing fails with "De-dup
-    // before aggregation is not yet supported"
-    if (aggregate.distinct) {
-      return false;
-    }
-
-    // `mask` is NOT supported (in testing do not appear to be be applied and
-    // return incorrect results )
-    if (aggregate.mask) {
-      return false;
-    }
-
-    // Check input expressions can be evaluated by CUDF, expand the input first
-    for (const auto& input : aggregate.call->inputs()) {
-      auto expandedInput = expandFieldReference(input, sourceNode);
-      std::vector<core::TypedExprPtr> exprs = {expandedInput};
-      if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
-        return false;
-      }
-    }
-  }
-
-  // Check grouping key expressions
-  if (!canGroupingKeysBeEvaluatedByCudf(
-          aggregationNode.groupingKeys(), sourceNode, queryCtx)) {
-    return false;
-  }
-
-  return true;
-}
-
-core::TypedExprPtr expandFieldReference(
-    const core::TypedExprPtr& expr,
-    const core::PlanNode* sourceNode) {
-  // If this is a field reference and we have a source projection, expand it
-  if (expr->kind() == core::ExprKind::kFieldAccess && sourceNode) {
-    auto projectNode = dynamic_cast<const core::ProjectNode*>(sourceNode);
-    if (projectNode) {
-      auto fieldExpr =
-          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr);
-      if (fieldExpr) {
-        // Find the corresponding projection expression
-        const auto& projections = projectNode->projections();
-        const auto& names = projectNode->names();
-        for (size_t i = 0; i < names.size(); ++i) {
-          if (names[i] == fieldExpr->name()) {
-            return projections[i];
-          }
-        }
-      }
-    }
-  }
-  return expr;
-}
-
-bool canGroupingKeysBeEvaluatedByCudf(
-    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
-    const core::PlanNode* sourceNode,
-    core::QueryCtx* queryCtx) {
-  // Check grouping key expressions (with expansion)
-  for (const auto& groupingKey : groupingKeys) {
-    auto expandedKey = expandFieldReference(groupingKey, sourceNode);
-    std::vector<core::TypedExprPtr> exprs = {expandedKey};
-    if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
-      return false;
-    }
-  }
 
   return true;
 }

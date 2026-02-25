@@ -20,7 +20,10 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/ComplexVector.h"
@@ -200,6 +203,123 @@ bool isOpAndInputsSupported(
   } catch (...) {
     // no matching cuDF implementation
   }
+  return false;
+}
+
+// Lightweight version of isAstExprSupported(exec::Expr&) that
+// uses a core::TypedExpr instead to check if the expression
+// (name + input types) is supported in AST.
+bool isAstExprSupported(const velox::core::TypedExprPtr& expr) {
+  using velox::core::FieldAccessTypedExpr;
+  using Op = cudf::ast::ast_operator;
+
+  // Literals and field references are always supported
+  auto isSupportedLiteral = [&](const TypePtr& type) {
+    try {
+      auto cudfType = cudf::data_type(veloxToCudfTypeId(type));
+      return cudf::is_fixed_width(cudfType) ||
+          cudfType.id() == cudf::type_id::STRING;
+    } catch (...) {
+      LOG(WARNING) << "Unsupported type for literal: " << type->toString();
+      return false;
+    }
+  };
+  if (expr->isConstantKind()) {
+    auto type = expr->type();
+    return isSupportedLiteral(type);
+  }
+
+  if (expr->isFieldAccessKind()) {
+    const auto* fieldExpr = expr->asUnchecked<core::FieldAccessTypedExpr>();
+    auto fieldName = fieldExpr->inputs().empty() ? fieldExpr->name() : "";
+    const auto input = fieldExpr->inputs()[0];
+    if (input->isFieldAccessKind()) {
+      const auto* fieldInput =
+          fieldExpr->inputs()[0]->asUnchecked<core::FieldAccessTypedExpr>();
+      fieldName = fieldInput->name();
+    }
+    if (fieldExpr->name() == fieldName) {
+      return true;
+    }
+    LOG(WARNING) << "Field " << fieldName << "not found, in expression "
+                 << expr->toString();
+    return false;
+  }
+
+  // Convert input types to CUDF types once
+  std::vector<cudf::data_type> inputCudfDataTypes;
+  const auto len = expr->inputs().size();
+  inputCudfDataTypes.reserve(len);
+  for (const auto& input : expr->inputs()) {
+    try {
+      inputCudfDataTypes.push_back(
+          cudf::data_type(veloxToCudfTypeId(input->type())));
+    } catch (...) {
+      return false;
+    }
+  }
+
+  if (expr->isCallKind()) {
+    const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+    const auto name =
+        stripPrefix(call->name(), CudfConfig::getInstance().functionNamePrefix);
+
+    // Binary operations
+    if (binaryOps.find(name) != binaryOps.end()) {
+      // AND/OR can handle multiple inputs by chaining
+      if ((name == "and" || name == "or") && len > 2) {
+        for (size_t i = 1; i < len; i++) {
+          if (!isOpAndInputsSupported(
+                  binaryOps.at(name),
+                  {inputCudfDataTypes[0], inputCudfDataTypes[i]})) {
+            return false;
+          }
+        }
+        return true;
+      }
+      return len == 2 &&
+          isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+    }
+
+    // Unary operations (includes both unaryOps and "isnotnull")
+    if (unaryOps.find(name) != unaryOps.end()) {
+      return isOpAndInputsSupported(unaryOps.at(name), inputCudfDataTypes);
+    }
+    if (name == "isnotnull" && len == 1) {
+      return isOpAndInputsSupported(Op::IS_NULL, inputCudfDataTypes);
+    }
+
+    // Between: value >= lower AND value <= upper
+    if (name == "between" && len == 3) {
+      return isOpAndInputsSupported(
+                 Op::GREATER_EQUAL,
+                 {inputCudfDataTypes[0], inputCudfDataTypes[1]}) &&
+          isOpAndInputsSupported(
+                 Op::LESS_EQUAL,
+                 {inputCudfDataTypes[0], inputCudfDataTypes[2]});
+    }
+
+    // In: chain of EQUAL operations
+    if (name == "in") {
+      return len == 2 && isSupportedLiteral(call->inputs()[0]->type()) &&
+          isOpAndInputsSupported(
+                 Op::EQUAL, {inputCudfDataTypes[0], inputCudfDataTypes[0]});
+    }
+  }
+
+  if (expr->isCastKind()) {
+    // Cast operations: only INTEGER, BIGINT, DOUBLE supported in pure AST
+    const auto outputKind = expr->type()->kind();
+    if (outputKind == TypeKind::INTEGER || outputKind == TypeKind::BIGINT) {
+      return isOpAndInputsSupported(Op::CAST_TO_INT64, inputCudfDataTypes);
+    }
+    if (outputKind == TypeKind::DOUBLE) {
+      return isOpAndInputsSupported(Op::CAST_TO_FLOAT64, inputCudfDataTypes);
+    }
+    return false;
+  }
+
+  LOG(WARNING) << "Unsupported expression by AST: " << expr->toString();
   return false;
 }
 
