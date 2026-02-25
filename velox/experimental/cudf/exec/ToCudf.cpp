@@ -53,6 +53,9 @@
 
 #include <cudf/detail/nvtx/ranges.hpp>
 
+#include <rmm/mr/owning_wrapper.hpp>
+#include <rmm/mr/statistics_resource_adaptor.hpp>
+
 #include <cuda.h>
 
 #include <iostream>
@@ -62,6 +65,8 @@ static const std::string kCudfAdapterName = "cuDF";
 namespace facebook::velox::cudf_velox {
 
 namespace {
+
+std::shared_ptr<StatsTrackingMemoryResource> statsTrackingMr_;
 
 template <class... Deriveds, class Base>
 bool isAnyOf(const Base* p) {
@@ -329,17 +334,33 @@ void registerCudf() {
   cudaFree(nullptr); // Initialize CUDA context at startup
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
+  auto baseMr = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr.get());
-  mr_ = mr;
+  auto statsMr =
+      rmm::mr::make_owning_wrapper<rmm::mr::statistics_resource_adaptor>(
+          baseMr);
+  setStatsMr(&statsMr->wrapped());
+
+  auto statsTrackingMr =
+      std::make_shared<StatsTrackingMemoryResource>(statsMr.get());
+  statsTrackingMr_ = statsTrackingMr;
+  setStatsTrackingMr(statsTrackingMr.get());
+
+  mr_ = statsMr;
+  cudf::set_current_device_resource(statsTrackingMr.get());
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
+    auto baseOutputMr = cudf_velox::createMemoryResource(
         outputMrMode, CudfConfig::getInstance().memoryPercent);
+    auto outputStatsMr =
+        rmm::mr::make_owning_wrapper<rmm::mr::statistics_resource_adaptor>(
+            baseOutputMr);
+    setOutputStatsMr(&outputStatsMr->wrapped());
+    output_mr_ = outputStatsMr;
   } else {
     output_mr_ = mr_;
+    setOutputStatsMr(getStatsMr());
   }
 
   exec::Operator::registerOperator(
@@ -360,6 +381,10 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  setStatsTrackingMr(nullptr);
+  statsTrackingMr_.reset();
+  setStatsMr(nullptr);
+  setOutputStatsMr(nullptr);
   output_mr_ = nullptr;
   mr_ = nullptr;
   exec::DriverFactory::adapters.erase(

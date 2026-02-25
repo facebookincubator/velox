@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
+
 #include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -63,9 +65,20 @@ CudfOrderBy::CudfOrderBy(
 void CudfOrderBy::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
+    addRuntimeStat(
+        "gpuInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(input->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
     inputs_.push_back(std::move(cudfInput));
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -86,6 +99,9 @@ void CudfOrderBy::noMoreInput() {
   // Release input data after synchronizing
   stream.synchronize();
   inputs_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
 
   VELOX_CHECK_NOT_NULL(tbl);
 
@@ -103,10 +119,18 @@ RowVectorPtr CudfOrderBy::getOutput() {
     return nullptr;
   }
   finished_ = noMoreInput_;
+  if (outputTable_) {
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(outputTable_->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
+  }
   return outputTable_;
 }
 
 void CudfOrderBy::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
   exec::Operator::close();
   // Release stored inputs
   // Release cudf memory resources

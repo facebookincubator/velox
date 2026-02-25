@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -59,6 +60,8 @@ class CudfAssignUniqueId : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
+  void close() override;
+
  private:
   std::unique_ptr<cudf::column> generateIdColumn(
       vector_size_t size,
@@ -76,5 +79,6 @@ class CudfAssignUniqueId : public exec::Operator, public NvtxHelper {
   int64_t maxRowIdCounterValue_;
 
   std::shared_ptr<std::atomic_int64_t> rowIdPool_;
+  uint64_t queuedInputBytes_{0};
 };
 } // namespace facebook::velox::cudf_velox

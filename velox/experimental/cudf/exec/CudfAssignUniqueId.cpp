@@ -17,6 +17,8 @@
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
+
 #include <cudf/lists/filling.hpp>
 
 #include <utility>
@@ -55,7 +57,18 @@ void CudfAssignUniqueId::addInput(RowVectorPtr input) {
   auto numInput = input->size();
   VELOX_CHECK_NE(
       numInput, 0, "CudfAssignUniqueId::addInput received empty set of rows");
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(input->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   input_ = std::move(input);
+  queuedInputBytes_ = input_->estimateFlatSize();
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfAssignUniqueId::getOutput() {
@@ -80,6 +93,14 @@ RowVectorPtr CudfAssignUniqueId::getOutput() {
       std::make_unique<cudf::table>(std::move(columns)),
       stream);
   input_ = nullptr;
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
+  addRuntimeStat(
+      "gpuOutputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   return output;
 }
 
@@ -148,5 +169,10 @@ void CudfAssignUniqueId::requestRowIds() {
   rowIdCounter_ = rowIdPool_->fetch_add(kRowIdsPerRequest);
   maxRowIdCounterValue_ =
       std::min(rowIdCounter_ + kRowIdsPerRequest, kMaxRowId);
+}
+
+void CudfAssignUniqueId::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  Operator::close();
 }
 } // namespace facebook::velox::cudf_velox

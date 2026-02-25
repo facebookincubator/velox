@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/exec/Operator.h"
 
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/utilities/default_stream.hpp>
@@ -28,6 +32,7 @@
 #include <rmm/mr/device_memory_resource.hpp>
 #include <rmm/mr/managed_memory_resource.hpp>
 #include <rmm/mr/owning_wrapper.hpp>
+#include <rmm/mr/per_device_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 #include <rmm/mr/prefetch_resource_adaptor.hpp>
 
@@ -36,6 +41,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string_view>
+#include <thread>
 
 namespace facebook::velox::cudf_velox {
 
@@ -145,8 +151,97 @@ cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
 std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
 
+namespace {
+StatisticsResourceAdaptor* stats_mr_ptr_{nullptr};
+StatisticsResourceAdaptor* output_stats_mr_ptr_{nullptr};
+} // namespace
+
 rmm::device_async_resource_ref get_output_mr() {
   return output_mr_.get();
+}
+
+StatisticsResourceAdaptor* getStatsMr() {
+  return stats_mr_ptr_;
+}
+
+StatisticsResourceAdaptor* getOutputStatsMr() {
+  return output_stats_mr_ptr_;
+}
+
+void setStatsMr(StatisticsResourceAdaptor* ptr) {
+  stats_mr_ptr_ = ptr;
+}
+
+void setOutputStatsMr(StatisticsResourceAdaptor* ptr) {
+  output_stats_mr_ptr_ = ptr;
+}
+
+namespace {
+StatsTrackingMemoryResource* statsTrackingMrPtr_{nullptr};
+} // namespace
+
+StatsTrackingMemoryResource* getStatsTrackingMr() {
+  return statsTrackingMrPtr_;
+}
+
+void setStatsTrackingMr(StatsTrackingMemoryResource* ptr) {
+  statsTrackingMrPtr_ = ptr;
+}
+
+void* StatsTrackingMemoryResource::do_allocate(
+    std::size_t bytes,
+    rmm::cuda_stream_view stream) {
+  auto* writer = getThreadLocalRunTimeStatWriter();
+  if (writer) {
+    writer->addRuntimeStat(
+        "gpuAllocBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(bytes), RuntimeCounter::Unit::kBytes));
+  } else {
+    orphanAllocBytes_.fetch_add(
+        static_cast<int64_t>(bytes), std::memory_order_relaxed);
+    orphanAllocCount_.fetch_add(1, std::memory_order_relaxed);
+    VLOG_EVERY_N(1, 100) << "GPU allocation of " << bytes
+                         << " bytes with no active operator on thread "
+                         << std::this_thread::get_id();
+  }
+  return upstream_->allocate(stream, bytes);
+}
+
+void StatsTrackingMemoryResource::do_deallocate(
+    void* ptr,
+    std::size_t bytes,
+    rmm::cuda_stream_view stream) noexcept {
+  auto* writer = getThreadLocalRunTimeStatWriter();
+  if (writer) {
+    writer->addRuntimeStat(
+        "gpuFreeBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(bytes), RuntimeCounter::Unit::kBytes));
+  } else {
+    orphanFreeBytes_.fetch_add(
+        static_cast<int64_t>(bytes), std::memory_order_relaxed);
+    orphanFreeCount_.fetch_add(1, std::memory_order_relaxed);
+  }
+  upstream_->deallocate(stream, ptr, bytes);
+}
+
+bool StatsTrackingMemoryResource::do_is_equal(
+    device_memory_resource const& other) const noexcept {
+  if (auto const* o =
+          dynamic_cast<StatsTrackingMemoryResource const*>(&other)) {
+    return upstream_->is_equal(*o->upstream_);
+  }
+  return upstream_->is_equal(other);
+}
+
+StatsTrackingMemoryResource::OrphanStats
+StatsTrackingMemoryResource::getOrphanStats() const {
+  return {
+      orphanAllocBytes_.load(std::memory_order_relaxed),
+      orphanAllocCount_.load(std::memory_order_relaxed),
+      orphanFreeBytes_.load(std::memory_order_relaxed),
+      orphanFreeCount_.load(std::memory_order_relaxed)};
 }
 
 } // namespace facebook::velox::cudf_velox

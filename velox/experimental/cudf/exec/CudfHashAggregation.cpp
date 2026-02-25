@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/HashAggregation.h"
@@ -878,6 +879,7 @@ CudfHashAggregation::CudfHashAggregation(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
 
 void CudfHashAggregation::initialize() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
   Operator::initialize();
 
   inputType_ = aggregationNode_->sources()[0]->outputType();
@@ -1030,6 +1032,11 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(input->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   numInputRows_ += input->size();
 
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
@@ -1048,6 +1055,12 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 
   // Handle final aggregation or global cases.
   inputs_.push_back(std::move(cudfInput));
+  queuedInputBytes_ += input->estimateFlatSize();
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
@@ -1177,7 +1190,15 @@ RowVectorPtr CudfHashAggregation::getOutput() {
         partialOutput_->estimateFlatSize() >
             maxPartialAggregationMemoryUsage_) {
       // This is basically a flush of the partial output.
-      return releaseAndResetPartialOutput();
+      auto output = releaseAndResetPartialOutput();
+      if (output) {
+        addRuntimeStat(
+            "gpuOutputBytes",
+            RuntimeCounter(
+                static_cast<int64_t>(output->estimateFlatSize()),
+                RuntimeCounter::Unit::kBytes));
+      }
+      return output;
     }
     if (not noMoreInput_) {
       // Don't produce output if the partial output hasn't reached memory limit
@@ -1187,7 +1208,15 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     if (!partialOutput_ && finished_) {
       return nullptr;
     }
-    return releaseAndResetPartialOutput();
+    auto output = releaseAndResetPartialOutput();
+    if (output) {
+      addRuntimeStat(
+          "gpuOutputBytes",
+          RuntimeCounter(
+              static_cast<int64_t>(output->estimateFlatSize()),
+              RuntimeCounter::Unit::kBytes));
+    }
+    return output;
   }
 
   if (finished_) {
@@ -1211,6 +1240,9 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   // Release input data after synchronizing.
   stream.synchronize();
   inputs_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
 
   if (noMoreInput_) {
     finished_ = true;
@@ -1220,14 +1252,23 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   // Use tbl->view() instead of moving the table.
   // tbl stays alive until the end of this function, keeping the view valid.
+  RowVectorPtr output;
   if (isDistinct_) {
-    return getDistinctKeys(tbl->view(), groupingKeyInputChannels_, stream);
+    output = getDistinctKeys(tbl->view(), groupingKeyInputChannels_, stream);
   } else if (isGlobal_) {
-    return doGlobalAggregation(tbl->view(), stream);
+    output = doGlobalAggregation(tbl->view(), stream);
   } else {
-    return doGroupByAggregation(
+    output = doGroupByAggregation(
         tbl->view(), groupingKeyInputChannels_, aggregators_, stream);
   }
+  if (output) {
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(output->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
+  }
+  return output;
 }
 
 void CudfHashAggregation::noMoreInput() {
@@ -1239,6 +1280,11 @@ void CudfHashAggregation::noMoreInput() {
 
 bool CudfHashAggregation::isFinished() {
   return finished_;
+}
+
+void CudfHashAggregation::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  Operator::close();
 }
 
 // Step-aware aggregation registry implementation

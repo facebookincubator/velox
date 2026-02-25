@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
@@ -158,6 +159,7 @@ CudfFilterProject::CudfFilterProject(
 }
 
 void CudfFilterProject::initialize() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
   Operator::initialize();
 
   std::vector<core::TypedExprPtr> allExprs;
@@ -228,7 +230,18 @@ void CudfFilterProject::initialize() {
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
+  auto inputBytes = input->estimateFlatSize();
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(inputBytes), RuntimeCounter::Unit::kBytes));
   input_ = std::move(input);
+  queuedInputBytes_ = inputBytes;
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfFilterProject::getOutput() {
@@ -239,6 +252,9 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
   if (input_->size() == 0) {
     input_.reset();
+    queuedInputBytes_ = 0;
+    addRuntimeStat(
+        "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
     return nullptr;
   }
 
@@ -264,9 +280,17 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto cudfOutput = std::make_shared<CudfVector>(
       input_->pool(), outputType_, size, std::move(outputTable), stream);
   input_.reset();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   if (numColumns == 0 or size == 0) {
     return nullptr;
   }
+  addRuntimeStat(
+      "gpuOutputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(cudfOutput->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   return cudfOutput;
 }
 

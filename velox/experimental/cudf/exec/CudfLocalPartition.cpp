@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -173,6 +174,11 @@ void CudfLocalPartition::enqueuePartition(
   ContinueFuture future;
   auto blockingReason =
       queues_[partitionIndex]->enqueue(cudfVector, cudfVector->size(), &future);
+  addRuntimeStat(
+      "gpuBridgeEnqueuedBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(cudfVector->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   if (blockingReason != exec::BlockingReason::kNotBlocked) {
     blockingReasons_.push_back(blockingReason);
     futures_.push_back(std::move(future));
@@ -182,6 +188,11 @@ void CudfLocalPartition::enqueuePartition(
 void CudfLocalPartition::addInput(RowVectorPtr input) {
   flushVectorPool();
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(input->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   recordOutputStats(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
@@ -291,6 +302,11 @@ bool CudfLocalPartition::isFinished() {
   flushVectorPool();
 
   return true;
+}
+
+void CudfLocalPartition::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  Operator::close();
 }
 
 } // namespace facebook::velox::cudf_velox
