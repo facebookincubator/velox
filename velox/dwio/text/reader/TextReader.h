@@ -126,7 +126,7 @@ class TextRowReader : public dwio::common::RowReader {
  private:
   const RowReaderOptions& getDefaultOpts();
 
-  const std::shared_ptr<const RowType>& getType() const;
+  const std::shared_ptr<const RowType>& getFileType() const;
 
   bool isSelectedField(const std::shared_ptr<const TypeWithId>& t);
 
@@ -191,15 +191,13 @@ class TextRowReader : public dwio::common::RowReader {
 
   void readElement(
       const std::shared_ptr<const Type>& t,
-      const std::shared_ptr<const Type>& reqT,
       BaseVector* FOLLY_NULLABLE data,
       vector_size_t insertionRow,
       DelimType& delim);
 
-  template <class T, class reqT>
+  template <class T, class reqT, class F>
   void putValue(
-      const std::function<T(TextRowReader& th, bool& isNull, DelimType& delim)>&
-          f,
+      const F& f,
       BaseVector* FOLLY_NULLABLE data,
       vector_size_t insertionRow,
       DelimType& delim);
@@ -217,6 +215,9 @@ class TextRowReader : public dwio::common::RowReader {
 
   mutable std::shared_ptr<const TypeWithId> selectedSchema_;
 
+  static constexpr int64_t kNotProjected = -1;
+  std::vector<int64_t> fileToInputTypeIdx_;
+
   RowReaderOptions options_;
   ColumnSelector columnSelector_;
   uint64_t currentRow_;
@@ -233,6 +234,104 @@ class TextRowReader : public dwio::common::RowReader {
   uint64_t fileLength_;
   std::string ownedString_;
   std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;
+  bool rowHasError_ = false;
+  std::string_view errorValue_;
+
+  using ColumnReaderFunc = void (TextRowReader::*)(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  std::vector<ColumnReaderFunc> columnReaders_;
+
+  void initializeColumnReaders();
+
+  // Specialized readers for each type
+  void readInteger(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readDate(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readBigInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readBigIntDecimal(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readSmallInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readTinyInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readBoolean(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readVarChar(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readVarBinary(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readReal(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readDouble(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readTimestamp(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readHugeInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readHugeIntDecimal(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readArray(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readMap(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
+  void readRow(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim);
 };
 
 } // namespace facebook::velox::text
