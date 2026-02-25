@@ -787,18 +787,18 @@ bool registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
   registerCudfFunction(
-    prefix + "hash_with_seed",
-    [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-      return std::make_shared<HashFunction>(expr);
-    },
-    {FunctionSignatureBuilder()
-          .returnType("bigint")
-          .constantArgumentType("integer")
-          .argumentType("any")
-          .variableArity()
-          .build()});
+      prefix + "hash_with_seed",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<HashFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("integer")
+           .argumentType("any")
+           .variableArity()
+           .build()});
 
-    registerCudfFunction(
+  registerCudfFunction(
       prefix + "date_add",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<DateAddFunction>(expr);
@@ -818,12 +818,9 @@ bool registerSparkFunctions(const std::string& prefix) {
            .argumentType("date")
            .constantArgumentType("integer")
            .build()});
-  
 }
 
-bool registerPrestoFunctions(const std::string& prefix) {
-
-}
+bool registerPrestoFunctions(const std::string& prefix) {}
 
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;

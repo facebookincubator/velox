@@ -97,7 +97,8 @@ struct CudfConfig {
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
 
-  // Register the Spark or Presto functions, the value could be either spark or presto.
+  // Register the Spark or Presto functions, the value could be either spark or
+  // presto.
   std::string functionEngine{"presto"};
 };
 
