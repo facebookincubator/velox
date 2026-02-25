@@ -40,7 +40,7 @@ struct PrestoAccuracyPolicy {
       KllSketchAccumulator<T>* accumulator,
       double accuracy) {
     if (accuracy != kMissingNormalizedValue) {
-      accumulator->setPrestoAccuracy(accuracy);
+      accumulator->setAccuracy(accuracy);
     }
   }
 
