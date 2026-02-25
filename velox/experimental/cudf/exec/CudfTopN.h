@@ -70,8 +70,8 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   // As the inputs are added to TopN operator, we use topNBatches_
   // (a vector of CudfVectorPtrs) to keep track of the topN rows of each input.
   // We only update the topNBatches_ if number of batches >= kBatchSize_
-  // and number of rows in topNBatches_ >= count_. Once all inputs are available,
-  // we concat the topNBatches_ and get the topN rows.
+  // and number of rows in topNBatches_ >= count_. Once all inputs are
+  // available, we concat the topNBatches_ and get the topN rows.
   std::vector<CudfVectorPtr> topNBatches_;
   int32_t kBatchSize_;
   bool finished_ = false;
