@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include <functional>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <folly/Executor.h>
@@ -37,6 +39,10 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
+
+namespace facebook::velox {
+class Type;
+} // namespace facebook::velox
 
 namespace facebook::velox::dwio::common {
 
@@ -153,6 +159,15 @@ class FormatSpecificOptions {
  public:
   virtual ~FormatSpecificOptions() = default;
 };
+
+struct RejectedRow {
+  uint64_t rowNumber;
+  std::string_view columnName;
+  const velox::Type& columnType;
+  std::string_view value;
+};
+
+using OnRowReject = std::function<void(const RejectedRow&)>;
 
 /// Options for creating a RowReader.
 class RowReaderOptions {
@@ -731,6 +746,14 @@ class ReaderOptions : public io::ReaderOptions {
     allowEmptyFile_ = value;
   }
 
+  const OnRowReject& onRowReject() const {
+    return onRowReject_;
+  }
+
+  void setOnRowReject(OnRowReject callback) {
+    onRowReject_ = std::move(callback);
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -749,6 +772,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool allowEmptyFile_{false};
+  OnRowReject onRowReject_;
 };
 
 struct WriterOptions {
