@@ -126,6 +126,7 @@ add_executable(
   TransformKeysTest.cpp
   TransformTest.cpp
   TransformValuesTest.cpp
+  TransformWithIndexTest.cpp
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   TDigestCastTest.cpp
