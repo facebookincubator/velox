@@ -40,10 +40,7 @@ enum class ApproxPercentileIntermediateTypeChildIndex {
   kLevels = 8,
 };
 
-template <
-    typename T,
-    bool kHasWeight,
-    typename AccuracyPolicy>
+template <typename T, bool kHasWeight, typename AccuracyPolicy>
 class ApproxPercentileAggregateBase : public exec::Aggregate {
  public:
   ApproxPercentileAggregateBase(
