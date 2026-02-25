@@ -18,8 +18,6 @@
 
 #include <cstdint>
 #include <vector>
-#include <cmath>
-#include <algorithm>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
@@ -116,7 +114,8 @@ class BloomFilter {
   /// for the specified expected insertions, the required false positive
   /// probability.
   ///
-  /// See http://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives
+  /// See
+  /// http://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives
   /// for the formula.
   ///
   /// @param n expected insertions (must be positive).
