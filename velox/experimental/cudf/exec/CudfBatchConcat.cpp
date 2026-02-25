@@ -30,7 +30,10 @@ CudfBatchConcat::CudfBatchConcat(
           operatorId,
           planNode->id(),
           "CudfBatchConcat"),
-      CudfOperator(operatorId, planNode->id()),
+      CudfOperator(
+          operatorId,
+          planNode->id(),
+          nvtx3::rgb{211, 211, 211} /* LightGrey */),
       driverCtx_(driverCtx),
       targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
 
