@@ -560,7 +560,11 @@ TEST_F(TableScanTest, filterPushdown) {
 #endif
 }
 
-TEST_F(TableScanTest, decimalFilterPushdown) {
+// Disable this test and the one below for now, pending a CUDF fix.
+// simoneves 2/25/26
+// @TODO simoneves/mattgara re-enable once fixed.
+
+TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
   auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
 
   auto vector = makeRowVector(
@@ -621,7 +625,7 @@ TEST_F(TableScanTest, decimalFilterPushdown) {
       "CAST('7.00' AS DECIMAL(20, 2)))");
 }
 
-TEST_F(TableScanTest, decimalStatsFilterIoPruning) {
+TEST_F(TableScanTest, DISABLED_decimalStatsFilterIoPruning) {
   auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
   auto vec0 = makeRowVector(
       {"c0", "c1"},
