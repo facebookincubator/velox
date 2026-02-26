@@ -31,12 +31,13 @@ GroupId::GroupId(
           OperatorType::kGroupId) {
   const auto& inputType = groupIdNode->sources()[0]->outputType();
 
-  std::unordered_map<column_index_t, column_index_t>
-      outputToInputGroupingKeyMapping;
-  for (const auto& groupingKeyInfo : groupIdNode->groupingKeyInfos()) {
-    outputToInputGroupingKeyMapping[outputType_->getChildIdx(
-        groupingKeyInfo.output)] =
-        inputType->getChildIdx(groupingKeyInfo.input->name());
+  // Build mapping from output index to input index for each grouping key.
+  std::vector<column_index_t> outputToInputGroupingKeyMapping(
+      groupIdNode->numGroupingKeys(), kMissingGroupingKey);
+  for (column_index_t i = 0; i < groupIdNode->groupingKeyInfos().size(); ++i) {
+    const auto& info = groupIdNode->groupingKeyInfos()[i];
+    outputToInputGroupingKeyMapping[i] =
+        inputType->getChildIdx(info.input->name());
   }
 
   auto numGroupingKeys = groupIdNode->numGroupingKeys();
@@ -44,15 +45,14 @@ GroupId::GroupId(
   groupingKeyMappings_.reserve(groupIdNode->groupingSets().size());
   for (const auto& groupingSet : groupIdNode->groupingSets()) {
     std::vector<column_index_t> mappings(numGroupingKeys, kMissingGroupingKey);
-    for (const auto& groupingKey : groupingSet) {
-      auto outputChannel = outputType_->getChildIdx(groupingKey);
-      VELOX_USER_CHECK_NE(
-          outputToInputGroupingKeyMapping.count(outputChannel),
-          0,
-          "GroupIdNode didn't map grouping key {} to input channel",
-          groupingKey);
-      auto inputChannel = outputToInputGroupingKeyMapping.at(outputChannel);
-      mappings[outputChannel] = inputChannel;
+    for (auto keyIndex : groupingSet) {
+      VELOX_USER_CHECK_LT(
+          keyIndex,
+          numGroupingKeys,
+          "GroupIdNode grouping set index out of bounds: {}",
+          keyIndex);
+      VELOX_DCHECK_LT(keyIndex, outputToInputGroupingKeyMapping.size());
+      mappings[keyIndex] = outputToInputGroupingKeyMapping[keyIndex];
     }
 
     groupingKeyMappings_.emplace_back(std::move(mappings));

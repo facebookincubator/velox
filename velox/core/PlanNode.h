@@ -1938,7 +1938,19 @@ class GroupIdNode : public PlanNode {
   /// @param source Input plan node.
   GroupIdNode(
       PlanNodeId id,
-      std::vector<std::vector<std::string>> groupingSets,
+      const std::vector<std::vector<std::string>>& groupingSets,
+      std::vector<GroupingKeyInfo> groupingKeyInfos,
+      std::vector<FieldAccessTypedExprPtr> aggregationInputs,
+      std::string groupIdName,
+      PlanNodePtr source);
+
+  /// @param groupingSets A list of grouping key sets. Each set contains
+  /// indices into groupingKeyInfos identifying which keys are active for that
+  /// set. Indices within a set must be unique, but indices across sets may
+  /// repeat. See the string-based constructor for other parameters.
+  GroupIdNode(
+      PlanNodeId id,
+      std::vector<std::vector<int32_t>> groupingSets,
       std::vector<GroupingKeyInfo> groupingKeyInfos,
       std::vector<FieldAccessTypedExprPtr> aggregationInputs,
       std::string groupIdName,
@@ -1964,6 +1976,11 @@ class GroupIdNode : public PlanNode {
     }
 
     Builder& groupingSets(std::vector<std::vector<std::string>> groupingSets) {
+      stringGroupingSets_ = std::move(groupingSets);
+      return *this;
+    }
+
+    Builder& groupingSets(std::vector<std::vector<int32_t>> groupingSets) {
       groupingSets_ = std::move(groupingSets);
       return *this;
     }
@@ -1992,7 +2009,8 @@ class GroupIdNode : public PlanNode {
     std::shared_ptr<GroupIdNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "GroupIdNode id is not set");
       VELOX_USER_CHECK(
-          groupingSets_.has_value(), "GroupIdNode groupingSets is not set");
+          groupingSets_.has_value() || stringGroupingSets_.has_value(),
+          "GroupIdNode groupingSets is not set");
       VELOX_USER_CHECK(
           groupingKeyInfos_.has_value(),
           "GroupIdNode groupingKeyInfos is not set");
@@ -2003,9 +2021,18 @@ class GroupIdNode : public PlanNode {
           groupIdName_.has_value(), "GroupIdNode groupIdName is not set");
       VELOX_USER_CHECK(source_.has_value(), "GroupIdNode source is not set");
 
+      if (groupingSets_.has_value()) {
+        return std::make_shared<GroupIdNode>(
+            id_.value(),
+            groupingSets_.value(),
+            groupingKeyInfos_.value(),
+            aggregationInputs_.value(),
+            groupIdName_.value(),
+            source_.value());
+      }
       return std::make_shared<GroupIdNode>(
           id_.value(),
-          groupingSets_.value(),
+          stringGroupingSets_.value(),
           groupingKeyInfos_.value(),
           aggregationInputs_.value(),
           groupIdName_.value(),
@@ -2014,7 +2041,8 @@ class GroupIdNode : public PlanNode {
 
    private:
     std::optional<PlanNodeId> id_;
-    std::optional<std::vector<std::vector<std::string>>> groupingSets_;
+    std::optional<std::vector<std::vector<int32_t>>> groupingSets_;
+    std::optional<std::vector<std::vector<std::string>>> stringGroupingSets_;
     std::optional<std::vector<GroupingKeyInfo>> groupingKeyInfos_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> aggregationInputs_;
     std::optional<std::string> groupIdName_;
@@ -2032,7 +2060,7 @@ class GroupIdNode : public PlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
-  const std::vector<std::vector<std::string>>& groupingSets() const {
+  const std::vector<std::vector<int32_t>>& groupingSets() const {
     return groupingSets_;
   }
 
@@ -2066,10 +2094,9 @@ class GroupIdNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
 
-  // Specifies groupingSets with output column names.
-  // This allows for the case when a single input column could map
-  // to multiple output columns which are used in separate grouping sets.
-  const std::vector<std::vector<std::string>> groupingSets_;
+  // Indices into groupingKeyInfos_ identifying which keys are active for each
+  // grouping set.
+  const std::vector<std::vector<int32_t>> groupingSets_;
 
   const std::vector<GroupingKeyInfo> groupingKeyInfos_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
