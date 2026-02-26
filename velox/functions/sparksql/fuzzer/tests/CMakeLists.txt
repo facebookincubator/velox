@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_spark_query_runner_test SparkQueryRunnerTest.cpp)
+add_executable(velox_spark_query_runner_test SparkQueryRunnerTest.cpp SparkSqlTest.cpp)
 
 add_test(
   NAME velox_spark_query_runner_test
