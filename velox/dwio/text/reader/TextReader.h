@@ -173,7 +173,7 @@ class TextRowReader : public dwio::common::RowReader {
       vector_size_t insertionRow,
       DelimType& delim);
 
-  template <typename T, typename Filter, typename F>
+  template <typename T, typename Kal, typename Filter, typename F>
   bool putValue(
       const F& f,
       BaseVector* FOLLY_NULLABLE data,

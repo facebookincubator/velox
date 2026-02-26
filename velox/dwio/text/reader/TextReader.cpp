@@ -1138,7 +1138,7 @@ void TextRowReader::readElement(
   }
 }
 
-template <typename T, typename Filter, typename F>
+template <typename T, typename Kal, typename Filter, typename F>
 bool TextRowReader::putValue(
     const F& f,
     BaseVector* FOLLY_NULLABLE data,
