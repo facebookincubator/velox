@@ -443,4 +443,290 @@ TEST_F(ArrayTopNTest, verifyValidInput) {
       "Scalar function signature is not supported: array_top_n(ARRAY<INTEGER>, BIGINT).");
 }
 
+// Tests for array_top_n with transform lambda.
+TEST_F(ArrayTopNTest, transformBasic) {
+  // Test basic usage with identity transform (should give same results as
+  // array_top_n without lambda).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[4, 5, 6]",
+      "[7, 8, 9]",
+  });
+
+  // Identity transform: x -> x
+  auto expected =
+      makeArrayVectorFromJson<int32_t>({"[3, 2]", "[6, 5]", "[9, 8]"});
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformAbsoluteValue) {
+  // Test with transform that computes absolute value (sorting by |x|
+  // descending).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[-5, 2, -3, 4, 1]",
+      "[10, -20, 15]",
+  });
+
+  // Sort by absolute value descending.
+  auto expected =
+      makeArrayVectorFromJson<int32_t>({"[-5, 4, -3]", "[-20, 15, 10]"});
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '3', x -> abs(x))", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformNegation) {
+  // Test with negation transform to get ascending order (smallest first).
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[4, 5, 6]",
+      "[7, 8, 9]",
+  });
+
+  // Negation gives us ascending order (smallest elements first).
+  // Use (0 - x) since unary negation is not supported for integers.
+  auto expected =
+      makeArrayVectorFromJson<int32_t>({"[1, 2]", "[4, 5]", "[7, 8]"});
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', x -> 0 - x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformWithNulls) {
+  // Test transform with null elements in array.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, null, 3, null, 5]",
+      "[null, 2, null]",
+  });
+
+  // Nulls should be placed at the end.
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[5, 3, 1]",
+      "[2, null, null]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '3', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformEmptyAndSingleElement) {
+  // Test with empty array and single element.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[]",
+      "[42]",
+      "[1, 2]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[]",
+      "[42]",
+      "[2, 1]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformNZero) {
+  // Test with n = 0.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '0', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformNLargerThanArray) {
+  // Test when n is larger than array size.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2]",
+      "[3]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[2, 1]",
+      "[3]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '10', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformStrings) {
+  // Test with string arrays using identity transform.
+  auto input = makeArrayVectorFromJson<std::string>({
+      "[\"apple\", \"banana\", \"cherry\"]",
+      "[\"zebra\", \"ant\", \"monkey\"]",
+  });
+
+  // Default string comparison (descending).
+  auto expected = makeArrayVectorFromJson<std::string>({
+      "[\"cherry\", \"banana\"]",
+      "[\"zebra\", \"monkey\"]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformStringsByLength) {
+  // Test sorting strings by length (longest first).
+  auto input = makeArrayVectorFromJson<std::string>({
+      "[\"a\", \"bbb\", \"cc\", \"dddd\"]",
+  });
+
+  auto expected = makeArrayVectorFromJson<std::string>({
+      "[\"dddd\", \"bbb\"]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '2', x -> length(x))", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformNegativeN) {
+  // Test with negative n - should fail.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("array_top_n(c0, INTEGER '-1', x -> x)", makeRowVector({input})),
+      "Parameter n: -1 to ARRAY_TOP_N is negative");
+}
+
+TEST_F(ArrayTopNTest, transformAllNulls) {
+  // Test with array containing only nulls.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[null, null, null]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[null, null]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformDuplicateElements) {
+  // Test with duplicate elements.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[3, 1, 3, 2, 1, 3]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[3, 3, 3]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '3', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformReturnsNull) {
+  // Test with transform that can return null.
+  // Elements with null transform results should be treated as nulls
+  // and placed at the end.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3, 4]",
+  });
+
+  // Transform that returns null for even numbers.
+  // Expected: odd numbers sorted descending, then nulls (evens).
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[3, 1, 2]",
+  });
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '3', x -> if(x % 2 = 0, cast(null as integer), x))",
+      makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformComplexExpression) {
+  // Test with more complex transform expression.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 5, 3, 4, 2]",
+  });
+
+  // Sort by distance from 3 (ascending via negation).
+  // |1-3|=2, |5-3|=2, |3-3|=0, |4-3|=1, |2-3|=1
+  // Descending by (0 - abs(x-3)): 3 is closest (key=0), then 4,2 (key=-1), then
+  // 1,5 (key=-2)
+  // Use (0 - x) since unary negation is not supported for integers.
+  // Note: order among equal keys is not guaranteed (std::sort is not stable).
+  auto result = evaluate(
+      "array_top_n(c0, INTEGER '3', x -> 0 - abs(x - 3))",
+      makeRowVector({input}));
+
+  // Both orderings are valid since 2 and 4 have equal keys (-1).
+  auto expected1 = makeArrayVectorFromJson<int32_t>({"[3, 2, 4]"});
+  auto expected2 = makeArrayVectorFromJson<int32_t>({"[3, 4, 2]"});
+  EXPECT_TRUE(
+      expected1->equalValueAt(result.get(), 0, 0) ||
+      expected2->equalValueAt(result.get(), 0, 0))
+      << "Result should be either [3, 2, 4] or [3, 4, 2]";
+}
+
+TEST_F(ArrayTopNTest, transformBigintArray) {
+  // Test with bigint arrays.
+  auto input = makeArrayVectorFromJson<int64_t>({
+      "[100000000000, 200000000000, 50000000000]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int64_t>({
+      "[200000000000, 100000000000]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformDoubleArray) {
+  // Test with double arrays.
+  auto input = makeArrayVectorFromJson<double>({
+      "[1.5, 2.7, 0.3, 4.1]",
+  });
+
+  auto expected = makeArrayVectorFromJson<double>({
+      "[4.1, 2.7, 1.5]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '3', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayTopNTest, transformNestedNulls) {
+  // Test with transform returning arrays that contain nested nulls.
+  // This triggers the "Ordering nulls is not supported" error during
+  // comparison. The function should handle this gracefully using try().
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[4, 5]",
+  });
+
+  // Transform returns an array with nested nulls - this causes comparison
+  // to fail because arrays with nested nulls can't be compared.
+  // The error should be caught and the row should produce an error/null.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_top_n(c0, INTEGER '2', x -> array[null, 1])",
+          makeRowVector({input})),
+      "Ordering nulls is not supported");
+
+  // When wrapped in try(), it should return null for rows that fail.
+  auto result = evaluate(
+      "try(array_top_n(c0, INTEGER '2', x -> array[null, 1]))",
+      makeRowVector({input}));
+
+  // Both rows should be null because the comparison fails due to nested nulls.
+  ASSERT_TRUE(result->isNullAt(0));
+  ASSERT_TRUE(result->isNullAt(1));
+}
+
 } // namespace
