@@ -202,6 +202,15 @@ struct VariantTypeTraits<TypeKind::OPAQUE, usesCustomComparison> {
       TypeStorage<OpaqueCapsule, TypeKind::OPAQUE, usesCustomComparison>;
   using value_type = OpaqueCapsule;
 };
+
+// Forward declaration for ToVariantValue, defined after Variant class.
+template <typename T, typename Enable = void>
+struct ToVariantValue;
+
+// Forward declaration for FromVariantValue, defined after Variant class.
+template <typename T, typename Enable = void>
+struct FromVariantValue;
+
 } // namespace detail
 
 class Variant {
@@ -389,6 +398,40 @@ class Variant {
       const typename detail::VariantTypeTraits<CppToType<T>::typeKind, false>::
           value_type& v) {
     return create<CppToType<T>::typeKind>(v);
+  }
+
+  /// Creates a non-null Variant from a C++ container type (std::map or
+  /// std::vector) by recursively converting all elements to Variants.
+  ///
+  /// This overload handles container types that need recursive conversion:
+  /// - std::vector<T> becomes an ARRAY Variant with each element converted
+  /// - std::map<K, V> becomes a MAP Variant with keys and values converted
+  ///
+  /// The conversion is recursive, so nested containers like
+  /// std::map<std::string, std::vector<int>> are fully supported.
+  ///
+  /// @tparam T A container type (std::map<K,V> or std::vector<E>)
+  /// @param v The container value to convert
+  ///
+  /// @return A new non-null Variant containing the converted container
+  ///
+  /// Example usage:
+  ///   // Create a map variant from std::map<std::string, int>
+  ///   std::map<std::string, int> m = {{"one", 1}, {"two", 2}};
+  ///   auto mapVar = Variant::create<std::map<std::string, int>>(m);
+  ///
+  ///   // Create an array variant from std::vector<double>
+  ///   std::vector<double> v = {1.1, 2.2, 3.3};
+  ///   auto arrVar = Variant::create<std::vector<double>>(v);
+  ///
+  ///   // Nested containers work too
+  ///   std::map<std::string, std::vector<int>> nested = {{"evens", {2, 4, 6}}};
+  ///   auto nestedVar = Variant::create<std::map<std::string,
+  ///   std::vector<int>>>(nested);
+  template <typename T, std::enable_if_t<is_std_container_v<T>, int> = 0>
+  static Variant create(T v) {
+    return create<CppToType<T>::typeKind>(
+        detail::ToVariantValue<T>::convert(std::move(v)));
   }
 
   /// Deserializes a Variant from a folly::dynamic object.
@@ -715,9 +758,16 @@ class Variant {
     }
   }
 
-  template <typename T>
+  template <typename T, std::enable_if_t<!is_std_container_v<T>, int> = 0>
   const auto& value() const {
     return value<CppToType<T>::typeKind>();
+  }
+
+  /// Returns a container (std::map or std::vector) with recursively converted
+  /// elements. For primitive types, use the non-container overload above.
+  template <typename T, std::enable_if_t<is_std_container_v<T>, int> = 0>
+  T value() const {
+    return detail::FromVariantValue<T>::convert(*this);
   }
 
   bool isNull() const {
@@ -1019,6 +1069,119 @@ struct VariantConverter {
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(convert, toKind, value);
   }
 };
+
+namespace detail {
+
+template <typename T, typename Enable>
+struct ToVariantValue {
+  static T convert(T value) {
+    return value;
+  }
+};
+
+// Helper to create a Variant from a converted value.
+// For primitives, use constructor; for containers, use create<TypeKind>.
+template <typename T, typename = void>
+struct MakeVariant {
+  static Variant make(T value) {
+    return Variant{value};
+  }
+};
+
+template <typename T>
+struct MakeVariant<
+    T,
+    std::enable_if_t<is_std_map_v<T> || is_std_unordered_map_v<T>>> {
+  static Variant make(std::map<Variant, Variant> value) {
+    return Variant::create<TypeKind::MAP>(std::move(value));
+  }
+};
+
+template <typename T>
+struct MakeVariant<T, std::enable_if_t<is_std_vector_v<T>>> {
+  static Variant make(std::vector<Variant> value) {
+    return Variant::create<TypeKind::ARRAY>(std::move(value));
+  }
+};
+
+template <typename T>
+struct ToVariantValue<
+    T,
+    std::enable_if_t<is_std_map_v<T> || is_std_unordered_map_v<T>>> {
+  static std::map<Variant, Variant> convert(T mapValue) {
+    using K = typename T::key_type;
+    using V = typename T::mapped_type;
+
+    std::map<Variant, Variant> variantMap;
+    for (auto& [key, value] : mapValue) {
+      variantMap.emplace(
+          detail::MakeVariant<K>::make(
+              ToVariantValue<K>::convert(std::move(key))),
+          detail::MakeVariant<V>::make(
+              ToVariantValue<V>::convert(std::move(value))));
+    }
+    return variantMap;
+  }
+};
+
+template <typename T>
+struct ToVariantValue<T, std::enable_if_t<is_std_vector_v<T>>> {
+  static std::vector<Variant> convert(T vecValue) {
+    using E = typename T::value_type;
+
+    std::vector<Variant> variantVec;
+    variantVec.reserve(vecValue.size());
+    for (auto elem : vecValue) {
+      variantVec.push_back(
+          detail::MakeVariant<E>::make(
+              ToVariantValue<E>::convert(std::move(elem))));
+    }
+    return variantVec;
+  }
+};
+
+template <typename T, typename Enable>
+struct FromVariantValue {
+  static T convert(const Variant& v) {
+    return v.value<T>();
+  }
+};
+
+template <typename T>
+struct FromVariantValue<
+    T,
+    std::enable_if_t<is_std_map_v<T> || is_std_unordered_map_v<T>>> {
+  static T convert(const Variant& v) {
+    using K = typename T::key_type;
+    using V = typename T::mapped_type;
+
+    const auto& variantMap = v.map();
+    T result;
+    for (const auto& [key, value] : variantMap) {
+      result.emplace(
+          FromVariantValue<K>::convert(key),
+          FromVariantValue<V>::convert(value));
+    }
+    return result;
+  }
+};
+
+template <typename T>
+struct FromVariantValue<T, std::enable_if_t<is_std_vector_v<T>>> {
+  static T convert(const Variant& v) {
+    using E = typename T::value_type;
+
+    const auto& variantVec = v.array();
+    T result;
+    result.reserve(variantVec.size());
+    for (const auto& elem : variantVec) {
+      result.push_back(FromVariantValue<E>::convert(elem));
+    }
+    return result;
+  }
+};
+
+} // namespace detail
 
 // For backward compatibility.
 using variant = Variant;
