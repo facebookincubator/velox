@@ -2503,6 +2503,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     exchangeClients.swap(exchangeClients_);
 
     barrierPromises.swap(barrierFinishPromises_);
+    // Clear the barrier flag to ensure underBarrier() returns false after task
+    // termination.
+    barrierRequested_ = false;
   }
 
   taskCompletionNotifier.notify();
