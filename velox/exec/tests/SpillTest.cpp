@@ -21,10 +21,10 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -33,7 +33,7 @@ using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::filesystems;
-using facebook::velox::exec::test::TempDirectoryPath;
+using namespace facebook::velox::common::testutil;
 
 namespace {
 static const int64_t kGB = 1'000'000'000;
@@ -137,7 +137,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
 
   void SetUp() override {
     allocator_ = memory::memoryManager()->allocator();
-    tempDir_ = exec::test::TempDirectoryPath::create();
+    tempDir_ = TempDirectoryPath::create();
     filesystems::registerLocalFileSystem();
     rng_.seed(1);
     compressionKind_ = TestParam{GetParam()}.compressionKind;
@@ -704,7 +704,7 @@ TEST_P(SpillTest, spillState) {
 TEST_P(SpillTest, spillTimestamp) {
   // Verify that timestamp type retains it nanosecond precision when spilled and
   // read back.
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto tempDirectory = TempDirectoryPath::create();
   std::vector<CompareFlags> emptyCompareFlags;
   const std::string spillPath = tempDirectory->getPath() + "/test";
   std::vector<Timestamp> timeValues = {
@@ -1509,7 +1509,7 @@ TEST_P(SpillTest, validatePerSpillWriteSize) {
     }
   };
 
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto tempDirectory = TempDirectoryPath::create();
   SpillState state(
       [&]() -> const std::string& { return tempDirectory->getPath(); },
       updateSpilledBytesCb_,
@@ -1533,7 +1533,7 @@ TEST_P(SpillTest, validatePerSpillWriteSize) {
 
 namespace {
 SpillFiles makeFakeSpillFiles(int32_t numFiles) {
-  auto tempDir = exec::test::TempDirectoryPath::create();
+  auto tempDir = TempDirectoryPath::create();
   static uint32_t fakeFileId{0};
   SpillFiles files;
   files.reserve(numFiles);

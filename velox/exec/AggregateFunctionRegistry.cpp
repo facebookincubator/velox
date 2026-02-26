@@ -48,22 +48,10 @@ TypePtr resolveResultType(
 
     VELOX_USER_FAIL(
         makeSignatureNotSupportedError(name, argTypes, signatures.value()));
-  } else {
-    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
-  }
-}
-
-namespace {
-bool hasCoercion(const std::vector<Coercion>& coercions) {
-  for (const auto& coercion : coercions) {
-    if (coercion.type != nullptr) {
-      return true;
-    }
   }
 
-  return false;
+  VELOX_USER_FAIL("Aggregate function not registered: {}", name);
 }
-} // namespace
 
 TypePtr resolveResultTypeWithCoercions(
     const std::string& name,
@@ -71,37 +59,19 @@ TypePtr resolveResultTypeWithCoercions(
     std::vector<TypePtr>& coercions) {
   coercions.clear();
 
-  std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
   if (auto signatures = getAggregateFunctionSignatures(name)) {
-    for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, argTypes);
-      std::vector<Coercion> requiredCoercions;
-      if (binder.tryBindWithCoercions(requiredCoercions)) {
-        auto type = binder.tryResolveReturnType();
-        if (!hasCoercion(requiredCoercions)) {
-          coercions.resize(argTypes.size(), nullptr);
-          return type;
-        }
-
-        candidates.emplace_back(requiredCoercions, type);
-      }
-    }
-
-    if (auto index = Coercion::pickLowestCost(candidates)) {
-      const auto& requiredCoercions = candidates[index.value()].first;
-      coercions.reserve(requiredCoercions.size());
-      for (const auto& coercion : requiredCoercions) {
-        coercions.push_back(coercion.type);
-      }
-
-      return candidates[index.value()].second;
+    std::vector<FunctionSignaturePtr> baseSignatures(
+        signatures.value().begin(), signatures.value().end());
+    if (auto type = tryResolveReturnTypeWithCoercions(
+            baseSignatures, argTypes, coercions)) {
+      return type;
     }
 
     VELOX_USER_FAIL(
         makeSignatureNotSupportedError(name, argTypes, signatures.value()));
-  } else {
-    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
   }
+
+  VELOX_USER_FAIL("Aggregate function not registered: {}", name);
 }
 
 TypePtr resolveIntermediateType(

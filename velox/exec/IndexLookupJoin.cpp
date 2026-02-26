@@ -1044,6 +1044,24 @@ RowVectorPtr IndexLookupJoin::produceOutputForLeftJoin(
   VELOX_CHECK_NOT_NULL(rawLookupOutputNulls_);
   size_t numOutputRows{0};
   size_t totalMissedInputRows{0};
+
+  // Outputs up to 'numMisses' missed (unmatched) input rows into the current
+  // output batch, capped by the remaining output capacity. Updates
+  // numOutputRows, lastProcessedInputRow, and totalMissedInputRows.
+  const auto outputMissedRows = [&](vector_size_t numMisses) INLINE_LAMBDA {
+    const auto numToOutput =
+        std::min<vector_size_t>(numMisses, maxOutputRows - numOutputRows);
+    if (totalMissedInputRows == 0) {
+      ensureMatchColumn(maxOutputRows);
+      fillOutputMatchRows(0, maxOutputRows, true);
+    }
+    fillOutputMatchRows(numOutputRows, numToOutput, false);
+    for (vector_size_t i = 0; i < numToOutput; ++i) {
+      rawProbeOutputRowIndices_[numOutputRows++] = ++lastProcessedInputRow;
+    }
+    totalMissedInputRows += numToOutput;
+  };
+
   for (; numOutputRows < maxOutputRows &&
        nextOutputResultRow_ < batch.lookupResult->size();) {
     VELOX_CHECK_GE(
@@ -1057,17 +1075,7 @@ RowVectorPtr IndexLookupJoin::produceOutputForLeftJoin(
         lastProcessedInputRow - 1;
     VELOX_CHECK_GE(numMissedInputRows, -1);
     if (numMissedInputRows > 0) {
-      if (totalMissedInputRows == 0) {
-        ensureMatchColumn(maxOutputRows);
-        fillOutputMatchRows(0, maxOutputRows, true);
-      }
-      const auto numOutputMissedInputRows = std::min<vector_size_t>(
-          numMissedInputRows, maxOutputRows - numOutputRows);
-      fillOutputMatchRows(numOutputRows, numOutputMissedInputRows, false);
-      for (auto i = 0; i < numOutputMissedInputRows; ++i) {
-        rawProbeOutputRowIndices_[numOutputRows++] = ++lastProcessedInputRow;
-      }
-      totalMissedInputRows += numOutputMissedInputRows;
+      outputMissedRows(numMissedInputRows);
       continue;
     }
 
@@ -1078,6 +1086,17 @@ RowVectorPtr IndexLookupJoin::produceOutputForLeftJoin(
     ++nextOutputResultRow_;
     ++numOutputRows;
   }
+
+  // If splitOutput_ is false, include any trailing missed input rows.
+  if (!splitOutput_ && nextOutputResultRow_ == batch.lookupResult->size() &&
+      numOutputRows < maxOutputRows) {
+    const vector_size_t numRemainingInputRows =
+        batch.input->size() - lastProcessedInputRow - 1;
+    if (numRemainingInputRows > 0) {
+      outputMissedRows(numRemainingInputRows);
+    }
+  }
+
   VELOX_CHECK(
       numOutputRows == maxOutputRows ||
       nextOutputResultRow_ == batch.lookupResult->size());

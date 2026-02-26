@@ -386,10 +386,7 @@ RowVectorPtr SourceMerger::getOutput(
   VELOX_CHECK_GT(outputBatchRows_, 0);
 
   if (!output_) {
-    output_ = BaseVector::create<RowVector>(type_, outputBatchRows_, pool_);
-    for (auto& child : output_->children()) {
-      child->resize(outputBatchRows_);
-    }
+    output_ = createOutputVector();
   }
 
   for (;;) {
@@ -433,6 +430,23 @@ RowVectorPtr SourceMerger::getOutput(
       return nullptr;
     }
   }
+}
+
+RowVectorPtr SourceMerger::createOutputVector() {
+  // Attempt to generate output vector using stream data to preserve encodings.
+  // First, find the first stream with non-null data to determine column
+  // encodings.
+  const RowVector* source = nullptr;
+  for (const auto* stream : streams_) {
+    if (stream->hasData() && (source = stream->data())) {
+      return std::static_pointer_cast<RowVector>(
+          BaseVector::createEmptyLike(source, outputBatchRows_, pool_));
+    }
+  }
+
+  // If a non-null stream cannot be found, default to generating row vector by
+  // type.
+  return BaseVector::create<RowVector>(type_, outputBatchRows_, pool_);
 }
 
 bool SourceStream::operator<(const MergeStream& other) const {
@@ -492,7 +506,8 @@ void SourceStream::copyToOutput(RowVectorPtr& output) {
 
 bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
   ContinueFuture future;
-  auto reason = source_->next(data_, &future);
+  bool drained{false};
+  auto reason = source_->next(data_, &future, drained);
   if (reason != BlockingReason::kNotBlocked) {
     needData_ = true;
     futures.emplace_back(std::move(future));

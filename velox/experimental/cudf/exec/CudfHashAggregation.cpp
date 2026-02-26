@@ -23,6 +23,7 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -1380,10 +1381,14 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
       numOutputRows == 0 ? 0 : (numOutputRows * 1.0) / numInputRows_ * 100;
   {
     auto lockedStats = stats_.wlock();
-    lockedStats->addRuntimeStat("flushRowCount", RuntimeCounter(numOutputRows));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(exec::HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows));
+    lockedStats->addRuntimeStat(
+        std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(exec::HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(aggregationPct));
   }
 
   numInputRows_ = 0;
@@ -2014,13 +2019,15 @@ bool canAggregationBeEvaluatedByCudf(
     const std::vector<TypePtr>& rawInputTypes,
     core::QueryCtx* queryCtx) {
   // Check against step-aware aggregation registry
+  const auto companionStep = getCompanionStep(call.name(), step);
+  const auto originalName = getOriginalName(call.name());
   auto& stepAwareRegistry = getStepAwareAggregationRegistry();
-  auto funcIt = stepAwareRegistry.find(call.name());
+  auto funcIt = stepAwareRegistry.find(originalName);
   if (funcIt == stepAwareRegistry.end()) {
     return false;
   }
 
-  auto stepIt = funcIt->second.find(step);
+  auto stepIt = funcIt->second.find(companionStep);
   if (stepIt == funcIt->second.end()) {
     return false;
   }

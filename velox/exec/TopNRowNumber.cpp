@@ -255,7 +255,8 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     // the processing.
     if (abandonPartialEarly()) {
       abandonedPartial_ = true;
-      addRuntimeStat("abandonedPartial", RuntimeCounter(1));
+      addRuntimeStat(
+          std::string(TopNRowNumber::kAbandonedPartial), RuntimeCounter(1));
 
       updateEstimatedOutputRowSize();
       outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);

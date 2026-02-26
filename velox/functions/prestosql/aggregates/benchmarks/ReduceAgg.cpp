@@ -32,6 +32,7 @@ static constexpr int32_t kNumVectors = 10;
 static constexpr int32_t kRowsPerVector = 10'000;
 
 namespace {
+using namespace facebook::velox::common::testutil;
 
 // Compare performance of sum(x) with equivalent reduce_agg(x,..).
 class ReduceAggBenchmark : public HiveConnectorTestBase {
