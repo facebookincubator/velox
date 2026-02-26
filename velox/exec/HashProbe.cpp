@@ -1140,23 +1140,61 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   // Left semi and anti joins are always cardinality reducing, e.g. for a
   // given row of input they produce zero or 1 row of output. Therefore, if
   // there is no extra filter we can process each batch of input in one go.
-  auto outputBatchSize = (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide)
+  auto maxOutputBatchRows = (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide)
       ? inputSize
       : outputBatchSize_;
-  outputTableRowsCapacity_ = outputBatchSize;
-  if (filter_ &&
-      (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-       isAntiJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
-       isLeftSemiProjectJoin(joinType_))) {
-    // If we need non-matching probe side row, there is a possibility that such
-    // row exists at end of an input batch and being carried over in the next
-    // output batch, so we need to make extra room of one row in output.
-    ++outputTableRowsCapacity_;
+  outputTableRowsCapacity_ = maxOutputBatchRows;
+  if (filter_) {
+    if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
+        isAntiJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
+        isLeftSemiProjectJoin(joinType_)) {
+      // If we need non-matching probe side row, there is a possibility that
+      // such row exists at end of an input batch and being carried over in the
+      // next output batch, so we need to make extra room of one row in output.
+      ++outputTableRowsCapacity_;
+    }
+
+    // Initialize 'leftSemiProjectIsNull_' for a null-aware left semi join.
+    if (isLeftSemiProjectJoin(joinType_) && nullAware_) {
+      leftSemiProjectIsNull_.resize(outputTableRowsCapacity_);
+      leftSemiProjectIsNull_.clearAll();
+    }
   }
+
   auto mapping = initializeRowNumberMapping(
       outputRowMapping_, outputTableRowsCapacity_, pool());
   auto* outputTableRows =
       initBuffer<char*>(outputTableRows_, outputTableRowsCapacity_, pool());
+
+  int32_t numOutputRows = 0;
+  uint64_t maxOutputBatchBytes =
+      operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes();
+  // Initialize accumulation buffers for combining low-selectivity filter
+  // results across multiple iterations. Use +1 capacity for the potential
+  // extra row from noMatchDetector in the last iteration.
+  vector_size_t* accumulatedMappingData = nullptr;
+  char** accumulatedTableRowsData = nullptr;
+  if (filter_) {
+    auto accumulatedCapacity = outputTableRowsCapacity_ + 1;
+    auto accumulatedMapping = initializeRowNumberMapping(
+        accumulatedRowMapping_, accumulatedCapacity, pool());
+    accumulatedMappingData = accumulatedMapping.data();
+    accumulatedTableRowsData =
+        initBuffer<char*>(accumulatedTableRows_, accumulatedCapacity, pool());
+  }
+
+  // Copies accumulated results back into the working buffers so that
+  // fillOutput can produce the final output batch.
+  auto flushAccumulatedResults = [&]() {
+    ::memcpy(
+        mapping.data(),
+        accumulatedMappingData,
+        numOutputRows * sizeof(vector_size_t));
+    ::memcpy(
+        outputTableRows,
+        accumulatedTableRowsData,
+        numOutputRows * sizeof(char*));
+  };
 
   for (;;) {
     // If the task owning this operator has been cancelled, there is no point
@@ -1166,14 +1204,14 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     if (operatorCtx_->task()->isCancelled()) {
       return nullptr;
     }
-    int numOut = 0;
+    int numJoinedRows = 0;
 
     if (emptyBuildSide) {
       // When build side is empty, anti and left joins return all probe side
       // rows, including ones with null join keys.
       std::iota(mapping.begin(), mapping.begin() + inputSize, 0);
       std::fill(outputTableRows, outputTableRows + inputSize, nullptr);
-      numOut = inputSize;
+      numJoinedRows = inputSize;
     } else if (isAntiJoin(joinType_) && !filter_) {
       if (nullAware_) {
         // When build side is not empty, anti join without a filter returns
@@ -1182,45 +1220,58 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
         for (auto i = 0; i < inputSize; ++i) {
           if (nonNullInputRows_.isValid(i) &&
               (!activeRows_.isValid(i) || !lookup_->hits[i])) {
-            mapping[numOut] = i;
-            ++numOut;
+            mapping[numJoinedRows++] = i;
           }
         }
       } else {
         for (auto i = 0; i < inputSize; ++i) {
           if (!nonNullInputRows_.isValid(i) ||
               (!activeRows_.isValid(i) || !lookup_->hits[i])) {
-            mapping[numOut] = i;
-            ++numOut;
+            mapping[numJoinedRows++] = i;
           }
         }
       }
     } else {
-      numOut = table_->listJoinResults(
+      // When accumulating filtered results, limit output to remaining
+      // capacity to prevent buffer overflow. Use maxOutputBatchRows (not
+      // outputTableRowsCapacity_) to leave room for the +1 extra row that
+      // evalFilter's noMatchDetector may add for left/full joins.
+      auto remainingCapacity = maxOutputBatchRows - numOutputRows;
+      numJoinedRows = table_->listJoinResults(
           *resultIter_,
           joinIncludesMissesFromLeft(joinType_),
-          folly::Range(mapping.data(), outputBatchSize),
-          folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          folly::Range(mapping.data(), remainingCapacity),
+          folly::Range(outputTableRows, remainingCapacity),
+          maxOutputBatchBytes);
     }
 
     // We are done processing the input batch if there are no more joined rows
     // to process and the NoMatchDetector isn't carrying forward a row that
     // still needs to be written to the output.
-    if (!numOut && !noMatchDetector_.hasLastMissedRow()) {
+    if (!numJoinedRows && !noMatchDetector_.hasLastMissedRow()) {
+      if (numOutputRows > 0) {
+        flushAccumulatedResults();
+        fillOutput(numOutputRows);
+        input_ = nullptr;
+        return output_;
+      }
       input_ = nullptr;
       return nullptr;
     }
-    VELOX_CHECK_LE(numOut, outputBatchSize);
 
-    numOut = evalFilter(numOut);
+    auto numJoinedRowsAfterFilter = evalFilter(numJoinedRows);
 
-    if (numOut == 0) {
+    if (numJoinedRowsAfterFilter == 0) {
       // The hash probe might get stuck in the output loop if the filter is
       // highly selective. This does not apply if the call is made during
       // spilling, because we cannot break out and resume when the operator is
       // undergoing spilling.
       if (!toSpillOutput && shouldYield()) {
+        if (numOutputRows > 0) {
+          flushAccumulatedResults();
+          fillOutput(numOutputRows);
+          return output_;
+        }
         return nullptr;
       }
       continue;
@@ -1228,7 +1279,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
     if (needLastProbe()) {
       // Mark build-side rows that have a match on the join condition.
-      table_->rows()->setProbedFlag(outputTableRows, numOut);
+      table_->rows()->setProbedFlag(outputTableRows, numJoinedRowsAfterFilter);
     }
 
     // Right semi join only returns the build side output when the probe side
@@ -1240,12 +1291,41 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       return nullptr;
     }
 
-    fillOutput(numOut);
-
-    if (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide) {
-      input_ = nullptr;
+    if (!filter_) {
+      // Without filter, output immediately (no accumulation needed).
+      fillOutput(numJoinedRowsAfterFilter);
+      if (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide) {
+        input_ = nullptr;
+      }
+      return output_;
     }
-    return output_;
+
+    // With filter: accumulate results. evalFilter has compacted passing rows
+    // to [0, numJoinedRowsAfterFilter) in the working buffers. Copy them to
+    // the accumulation buffers at the current offset.
+    auto* rawMapping = outputRowMapping_->as<vector_size_t>();
+    auto* rawTableRows = outputTableRows_->as<char*>();
+    ::memcpy(
+        accumulatedMappingData + numOutputRows,
+        rawMapping,
+        numJoinedRowsAfterFilter * sizeof(vector_size_t));
+    ::memcpy(
+        accumulatedTableRowsData + numOutputRows,
+        rawTableRows,
+        numJoinedRowsAfterFilter * sizeof(char*));
+    numOutputRows += numJoinedRowsAfterFilter;
+
+    // Check if accumulated output is large enough or input is exhausted.
+    bool inputExhausted =
+        resultIter_->atEnd() && !noMatchDetector_.hasLastMissedRow();
+    if (numOutputRows >= maxOutputBatchRows || inputExhausted) {
+      flushAccumulatedResults();
+      fillOutput(numOutputRows);
+      if (inputExhausted) {
+        input_ = nullptr;
+      }
+      return output_;
+    }
   }
 }
 

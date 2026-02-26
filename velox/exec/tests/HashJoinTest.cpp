@@ -9009,5 +9009,228 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashJoinSpillFileCreateConfig) {
   ASSERT_TRUE(defaultConfigVerified.load());
 }
 
+/// Verifies that HashProbe combines low-selectivity filter results across
+/// multiple listJoinResults iterations into fewer output batches instead of
+/// emitting many small vectors.
+TEST_P(HashJoinTest, outputBatchCombine) {
+  // Build data: 5000 rows with integer keys 0..4999 and values.
+  auto buildVectors = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int32_t>(5'000, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              5'000,
+              [](auto row) { return -1000 + (row / 5) * 10; },
+              nullEvery(300)),
+      });
+
+  // Probe data: 10000 rows with keys 0..9999 and values.
+  auto probeVectors = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int32_t>(10'000, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              10'000,
+              [](auto row) { return -1000 + (row / 5) * 10; },
+              nullEvery(300)),
+      });
+
+  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), {probeVectors});
+
+  std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
+  writeToFile(buildFile->getPath(), {buildVectors});
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId buildScanId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto verifyJoinResult = [&](core::JoinType joinType,
+                              const std::string& refQuery,
+                              bool nullAware = false,
+                              bool flipJoinSide = false) {
+    std::vector<std::string> output = {"t0", "t1"};
+    if (joinType == core::JoinType::kLeftSemiProject) {
+      output.emplace_back("match");
+    }
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(asRowType(probeVectors->type()))
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(asRowType(buildVectors->type()))
+                            .capturePlanNodeId(buildScanId)
+                            .planNode(),
+                        "(t1 + u1) % 3 = 0",
+                        output,
+                        joinType,
+                        nullAware)
+                    .planNode();
+
+    SplitPath splitPaths = {
+        {probeScanId, {probeFile->getPath()}},
+        {buildScanId, {buildFile->getPath()}},
+    };
+    if (flipJoinSide) {
+      plan = flipJoinSides(plan);
+    }
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .inputSplits(splitPaths)
+        .checkSpillStats(false)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "1000")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, "6000")
+        .referenceQuery(refQuery)
+        .run();
+  };
+  {
+    SCOPED_TRACE("inner join");
+    verifyJoinResult(
+        core::JoinType::kInner,
+        "SELECT t0, t1 FROM t, u WHERE t0 = u0 AND (t1 + u1) % 3 = 0");
+  }
+  {
+    SCOPED_TRACE("full join");
+    verifyJoinResult(
+        core::JoinType::kFull,
+        "SELECT t0, t1 FROM t FULL OUTER JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
+  }
+  {
+    SCOPED_TRACE("left join");
+    verifyJoinResult(
+        core::JoinType::kLeft,
+        "SELECT t0, t1 FROM t LEFT JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
+  }
+  {
+    SCOPED_TRACE("semi project join");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiProject,
+        "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiProject,
+        "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t",
+        true);
+    verifyJoinResult(
+        core::JoinType::kLeftSemiProject,
+        "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t",
+        false,
+        true);
+  }
+  {
+    SCOPED_TRACE("semi filter join");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiFilter,
+        "SELECT t0, t1 FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiFilter,
+        "SELECT t0, t1 FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)",
+        false,
+        true);
+  }
+  {
+    SCOPED_TRACE("anti join");
+    verifyJoinResult(
+        core::JoinType::kAnti,
+        "SELECT t0, t1 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
+    verifyJoinResult(
+        core::JoinType::kAnti,
+        "SELECT t0, t1 FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)",
+        true);
+  }
+}
+
+/// Regression test for the dictionary vector corruption bug that caused
+/// PR #12711 to revert the original batch-combine implementation. The original
+/// approach modified evalFilter to accept a buffer offset, which corrupted
+/// dictionary-encoded output vectors when accumulating across multiple
+/// listJoinResults iterations. This test exercises: RIGHT JOIN + filter +
+/// VARCHAR columns (dictionary-encoded) + small output batch to force multiple
+/// iterations + high selectivity filter to trigger buffer reuse conflicts.
+TEST_P(HashJoinTest, outputBatchCombineWithDictionary) {
+  // Build side: string keys with duplicates to create multi-row chains.
+  std::vector<RowVectorPtr> buildVectors = makeBatches(1, [&](auto) {
+    return makeRowVector(
+        {"u0", "u1", "u2"},
+        {
+            makeFlatVector<int32_t>(2'000, [](auto row) { return row % 500; }),
+            makeFlatVector<StringView>(
+                2'000,
+                [](auto row) {
+                  return StringView::makeInline(fmt::format("bv{}", row % 100));
+                }),
+            makeFlatVector<int64_t>(
+                2'000, [](auto row) { return row * 10; }, nullEvery(50)),
+        });
+  });
+
+  // Probe side: string keys with partial overlap to trigger filter path.
+  std::vector<RowVectorPtr> probeVectors = makeBatches(1, [&](auto) {
+    return makeRowVector(
+        {"t0", "t1", "t2"},
+        {
+            makeFlatVector<int32_t>(3'000, [](auto row) { return row % 700; }),
+            makeFlatVector<StringView>(
+                3'000,
+                [](auto row) {
+                  return StringView::makeInline(fmt::format("pv{}", row % 200));
+                }),
+            makeFlatVector<int64_t>(
+                3'000, [](auto row) { return row * 7; }, nullEvery(30)),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // RIGHT JOIN with filter — this is the scenario from PR #12711.
+  // Small batch size forces multiple iterations, stressing buffer management.
+  // The filter is selective enough to trigger accumulation.
+  auto runTest = [&](core::JoinType joinType, const std::string& refQuery) {
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+        .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+        .probeKeys({"t0"})
+        .buildKeys({"u0"})
+        .joinType(joinType)
+        .joinFilter("(t2 + u2) % 7 = 0")
+        .joinOutputLayout({"t0", "t1", "u1"})
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "100")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .referenceQuery(refQuery)
+        .checkSpillStats(false)
+        .run();
+  };
+
+  {
+    SCOPED_TRACE("right join with filter and string columns");
+    runTest(
+        core::JoinType::kRight,
+        "SELECT t0, t1, u1 FROM t RIGHT JOIN u ON t0 = u0 AND (t2 + u2) % 7 = 0");
+  }
+  {
+    SCOPED_TRACE("left join with filter and string columns");
+    runTest(
+        core::JoinType::kLeft,
+        "SELECT t0, t1, u1 FROM t LEFT JOIN u ON t0 = u0 AND (t2 + u2) % 7 = 0");
+  }
+  {
+    SCOPED_TRACE("full join with filter and string columns");
+    runTest(
+        core::JoinType::kFull,
+        "SELECT t0, t1, u1 FROM t FULL OUTER JOIN u ON t0 = u0 AND (t2 + u2) % 7 = 0");
+  }
+  {
+    SCOPED_TRACE("inner join with filter and string columns");
+    runTest(
+        core::JoinType::kInner,
+        "SELECT t0, t1, u1 FROM t, u WHERE t0 = u0 AND (t2 + u2) % 7 = 0");
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec

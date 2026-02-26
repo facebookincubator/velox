@@ -516,6 +516,11 @@ class HashProbe : public Operator {
   BufferPtr outputTableRows_;
   vector_size_t outputTableRowsCapacity_;
 
+  // Accumulation buffers used to combine low-selectivity filter results across
+  // multiple listJoinResults iterations into a single dense output batch.
+  BufferPtr accumulatedRowMapping_;
+  BufferPtr accumulatedTableRows_;
+
   // For left join with filter, we could overwrite the row which we have not
   // checked if there is a carryover.  Use a temporary buffer in this case.
   BufferPtr tempOutputTableRows_;
