@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
@@ -46,7 +47,9 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MarkDistinct.h"
+#include "velox/exec/Merge.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
@@ -823,9 +826,45 @@ class CallbackSinkAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    LOG_FALLBACK(
-        "CallbackSink operator not supported on cuDF, PlanNode id: {}",
-        planNode->id());
+    return planNode &&
+        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
+        nullptr;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    return {}; // Keep original operator
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+/// PartitionedOutputAdapter - Keeps original operator (CPU sink for shuffle)
+class PartitionedOutputAdapter : public OperatorAdapter {
+ public:
+  PartitionedOutputAdapter() : OperatorAdapter("PartitionedOutput") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::PartitionedOutput*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
     return false;
   }
 
@@ -868,11 +907,13 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<LimitAdapter>());
   registry.registerAdapter(std::make_unique<LocalPartitionAdapter>());
   registry.registerAdapter(std::make_unique<LocalExchangeAdapter>());
+  registry.registerAdapter(std::make_unique<LocalMergeAdapter>());
   registry.registerAdapter(std::make_unique<AssignUniqueIdAdapter>());
   registry.registerAdapter(std::make_unique<MarkDistinctAdapter>());
   registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
+  registry.registerAdapter(std::make_unique<PartitionedOutputAdapter>());
 }
 
 } // namespace facebook::velox::cudf_velox
