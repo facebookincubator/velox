@@ -179,6 +179,7 @@ SpillPartitionSet spillHashJoinTable(
     return {};
   }
 
+  table->freePointerTable();
   std::vector<std::unique_ptr<HashBuildSpiller>> spillersHolder;
   std::vector<HashBuildSpiller*> spillers;
   const auto rowContainers = table->allRows();

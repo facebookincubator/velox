@@ -36,6 +36,8 @@ class AllocationPool {
 
   void clear();
 
+  void releaseAllocation(int32_t index);
+
   // Allocate a buffer from this pool, optionally aligned.  The alignment can
   // only be power of 2.
   char* allocateFixed(uint64_t bytes, int32_t alignment = 1);

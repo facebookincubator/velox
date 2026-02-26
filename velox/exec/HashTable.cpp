@@ -2361,6 +2361,28 @@ void HashTable<ignoreNullKeys>::erase(folly::Range<char**> rows) {
 }
 
 template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::freePointerTable() {
+  if (table_) {
+    // todo: remove the logging.
+    VLOG(1) << "freePointerTable size " << tableAllocation_.size();
+    rows_->pool()->freeContiguous(tableAllocation_);
+    table_ = nullptr;
+    capacity_ = 0;
+    for (auto& otherTable : otherTables_) {
+      HashTable* otherHashTable = static_cast<HashTable*>(otherTable.get());
+      if (otherHashTable != nullptr && otherHashTable->table_) {
+        // todo: remove the logging.
+        VLOG(1) << "freePointerTable otherTable size "
+                << otherHashTable->tableAllocation_.size();
+        otherHashTable->rows_->pool()->freeContiguous(tableAllocation_);
+        otherHashTable->table_ = nullptr;
+        otherHashTable->capacity_ = 0;
+      }
+    }
+  }
+}
+
+template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::eraseWithHashes(
     folly::Range<char**> rows,
     uint64_t* hashes) {
