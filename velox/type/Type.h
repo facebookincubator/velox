@@ -41,6 +41,7 @@
 #include "velox/common/base/Macros.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
+#include "velox/type/NameToIndex.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
@@ -1093,34 +1094,6 @@ class MapType : public TypeBase<TypeKind::MAP> {
 using MapTypePtr = std::shared_ptr<const MapType>;
 
 class RowType : public TypeBase<TypeKind::ROW> {
-  // This Set<NameIndex> written only to decrease memory footprint.
-  // In general it can be replaced with Map<string_view, size_t>
-  struct NameIndex {
-    explicit NameIndex(std::string_view name, uint32_t index)
-        : data{name.data()},
-          size{static_cast<uint32_t>(name.size())},
-          index{index} {}
-
-    const char* data = nullptr;
-    uint32_t size = 0;
-
-    bool operator==(const NameIndex& other) const {
-      return size == other.size && std::memcmp(data, other.data, size) == 0;
-    }
-
-    uint32_t index = 0;
-  };
-
-  struct NameIndexHasher {
-    size_t operator()(const NameIndex& nameIndex) const {
-      folly::f14::DefaultHasher<std::string_view> hasher;
-      return hasher(std::string_view{nameIndex.data, nameIndex.size});
-    }
-  };
-
-  // TODO: Consider using absl::flat_hash_set instead.
-  using NameToIndex = folly::F14ValueSet<NameIndex, NameIndexHasher>;
-
  public:
   /// @param names Child names. Case sensitive. Can be empty. May contain
   /// duplicates.
