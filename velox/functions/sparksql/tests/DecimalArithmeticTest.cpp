@@ -107,7 +107,6 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     return evaluateOnce<int128_t>(
         "checked_subtract(c0, c1)", {tType, uType}, t, u);
   }
-
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -861,12 +860,10 @@ TEST_F(DecimalArithmeticTest, checkedAdd) {
       (checkedAdd<int64_t, int64_t>(DECIMAL(18, 2), DECIMAL(18, 2), 100, 200)),
       300);
   EXPECT_EQ(
-      (checkedAdd<int64_t, int128_t>(
-          DECIMAL(18, 2), DECIMAL(20, 2), 100, 200)),
+      (checkedAdd<int64_t, int128_t>(DECIMAL(18, 2), DECIMAL(20, 2), 100, 200)),
       300);
   EXPECT_EQ(
-      (checkedAdd<int128_t, int64_t>(
-          DECIMAL(20, 2), DECIMAL(18, 2), 100, 200)),
+      (checkedAdd<int128_t, int64_t>(DECIMAL(20, 2), DECIMAL(18, 2), 100, 200)),
       300);
   EXPECT_EQ(
       (checkedAdd<int128_t, int128_t>(
@@ -1039,23 +1036,19 @@ TEST_F(DecimalArithmeticTest, checkedAddDenyPrecisionLoss) {
   VELOX_ASSERT_USER_THROW(
       testArithmeticFunction(
           "checked_add" + denyPrecisionLoss,
-          makeFlatVector(
-              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          makeFlatVector(std::vector<int128_t>{0}, DECIMAL(38, 7)),
           {makeNullableLongDecimalVector(
                {"-99999999999999999999999999999999990000"}, DECIMAL(38, 3)),
-           makeFlatVector(
-               std::vector<int128_t>{-100}, DECIMAL(38, 7))}),
+           makeFlatVector(std::vector<int128_t>{-100}, DECIMAL(38, 7))}),
       "Decimal overflow in add");
 
   VELOX_ASSERT_USER_THROW(
       testArithmeticFunction(
           "checked_add" + denyPrecisionLoss,
-          makeFlatVector(
-              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          makeFlatVector(std::vector<int128_t>{0}, DECIMAL(38, 7)),
           {makeNullableLongDecimalVector(
                {"99999999999999999999999999999999999000"}, DECIMAL(38, 3)),
-           makeFlatVector(
-               std::vector<int128_t>{9999999}, DECIMAL(38, 7))}),
+           makeFlatVector(std::vector<int128_t>{9999999}, DECIMAL(38, 7))}),
       "Decimal overflow in add");
 }
 
@@ -1079,23 +1072,19 @@ TEST_F(DecimalArithmeticTest, checkedSubtractDenyPrecisionLoss) {
   VELOX_ASSERT_USER_THROW(
       testArithmeticFunction(
           "checked_subtract" + denyPrecisionLoss,
-          makeFlatVector(
-              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          makeFlatVector(std::vector<int128_t>{0}, DECIMAL(38, 7)),
           {makeNullableLongDecimalVector(
                {"-99999999999999999999999999999999990000"}, DECIMAL(38, 3)),
-           makeFlatVector(
-               std::vector<int128_t>{100}, DECIMAL(38, 7))}),
+           makeFlatVector(std::vector<int128_t>{100}, DECIMAL(38, 7))}),
       "Decimal overflow in subtract");
 
   VELOX_ASSERT_USER_THROW(
       testArithmeticFunction(
           "checked_subtract" + denyPrecisionLoss,
-          makeFlatVector(
-              std::vector<int128_t>{0}, DECIMAL(38, 7)),
+          makeFlatVector(std::vector<int128_t>{0}, DECIMAL(38, 7)),
           {makeNullableLongDecimalVector(
                {"99999999999999999999999999999999999000"}, DECIMAL(38, 3)),
-           makeFlatVector(
-               std::vector<int128_t>{-9999999}, DECIMAL(38, 7))}),
+           makeFlatVector(std::vector<int128_t>{-9999999}, DECIMAL(38, 7))}),
       "Decimal overflow in subtract");
 }
 } // namespace
