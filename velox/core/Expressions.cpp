@@ -161,13 +161,15 @@ std::string ConstantTypedExpr::toString() const {
 
 namespace {
 
-bool equalsImpl(
+std::optional<bool> equalsImpl(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value);
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode =
+        CompareFlags::NullHandlingMode::kNullAsValue);
 
 template <TypeKind Kind>
-bool equalsNoNulls(
+std::optional<bool> equalsNoNulls(
     const VectorPtr& vector,
     vector_size_t index,
     const Variant& value) {
@@ -186,7 +188,7 @@ bool equalsNoNulls(
 }
 
 template <>
-bool equalsNoNulls<TypeKind::OPAQUE>(
+std::optional<bool> equalsNoNulls<TypeKind::OPAQUE>(
     const VectorPtr& vector,
     vector_size_t index,
     const Variant& value) {
@@ -204,7 +206,7 @@ bool equalsNoNulls<TypeKind::OPAQUE>(
 }
 
 template <>
-bool equalsNoNulls<TypeKind::ARRAY>(
+std::optional<bool> equalsNoNulls<TypeKind::ARRAY>(
     const VectorPtr& vector,
     vector_size_t index,
     const Variant& value) {
@@ -233,7 +235,7 @@ bool equalsNoNulls<TypeKind::ARRAY>(
 }
 
 template <>
-bool equalsNoNulls<TypeKind::MAP>(
+std::optional<bool> equalsNoNulls<TypeKind::MAP>(
     const VectorPtr& vector,
     vector_size_t index,
     const Variant& value) {
@@ -270,7 +272,7 @@ bool equalsNoNulls<TypeKind::MAP>(
 }
 
 template <>
-bool equalsNoNulls<TypeKind::ROW>(
+std::optional<bool> equalsNoNulls<TypeKind::ROW>(
     const VectorPtr& vector,
     vector_size_t index,
     const Variant& value) {
@@ -301,27 +303,35 @@ bool equalsNoNulls<TypeKind::ROW>(
   return true;
 }
 
-bool equalsImpl(
+std::optional<bool> equalsImpl(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
-  static constexpr CompareFlags kEqualValueAtFlags =
-      CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
-
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode) {
   bool thisNull = vector->isNullAt(index);
   bool otherNull = value.isNull();
 
   if (otherNull || thisNull) {
-    return BaseVector::compareNulls(thisNull, otherNull, kEqualValueAtFlags)
-               .value() == 0;
+    auto compareResult = BaseVector::compareNulls(
+        thisNull, otherNull, CompareFlags::equality(nullHandlingMode));
+    if (compareResult.has_value()) {
+      return compareResult.value() == 0;
+    }
+    return std::nullopt;
   }
 
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+  auto noNullsCompareResult = VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       equalsNoNulls, vector->typeKind(), vector, index, value);
+  VELOX_CHECK(
+      noNullsCompareResult.has_value(),
+      "Comparison of non-null variants should return a boolean.");
+  return noNullsCompareResult.value();
 }
 } // namespace
 
-bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
+std::optional<bool> ConstantTypedExpr::equals(
+    const ITypedExpr& other,
+    CompareFlags::NullHandlingMode nullHandlingMode) const {
   const auto* casted = dynamic_cast<const ConstantTypedExpr*>(&other);
   if (!casted) {
     return false;
@@ -333,15 +343,16 @@ bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
 
   if (this->hasValueVector() != casted->hasValueVector()) {
     return this->hasValueVector()
-        ? equalsImpl(this->valueVector_, 0, casted->value_)
-        : equalsImpl(casted->valueVector_, 0, this->value_);
+        ? equalsImpl(this->valueVector_, 0, casted->value_, nullHandlingMode)
+        : equalsImpl(casted->valueVector_, 0, this->value_, nullHandlingMode);
   }
 
   if (this->hasValueVector()) {
-    return this->valueVector_->equalValueAt(casted->valueVector_.get(), 0, 0);
+    return this->valueVector_->equalValueAt(
+        casted->valueVector_.get(), 0, 0, nullHandlingMode);
   }
 
-  return this->value_ == casted->value_;
+  return this->value_.equals(casted->value_, nullHandlingMode);
 }
 
 namespace {
