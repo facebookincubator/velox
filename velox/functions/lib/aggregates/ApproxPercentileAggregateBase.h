@@ -202,7 +202,11 @@ enum class ApproxPercentileIntermediateTypeChildIndex {
   kLevels = 8,
 };
 
-template <typename T, bool kHasWeight, typename AccuracyPolicy>
+template <
+    typename T,
+    bool kHasWeight,
+    typename AccuracyPolicy,
+    typename AccuracyIntermediateType = double>
 class ApproxPercentileAggregateBase : public exec::Aggregate {
  public:
   ApproxPercentileAggregateBase(
@@ -408,7 +412,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       rowResult->childAt(static_cast<int>(Idx::kPercentilesIsArray)) =
           BaseVector::createNullConstant(BOOLEAN(), numGroups, pool);
       rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
-          BaseVector::createNullConstant(DOUBLE(), numGroups, pool);
+          BaseVector::createNullConstant(
+              CppToType<AccuracyIntermediateType>::create(), numGroups, pool);
 
       // Set nulls for all rows.
       auto rawNulls = rowResult->mutableRawNulls();
@@ -439,13 +444,15 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
             static_cast<bool&&>(percentiles_->isArray));
 
     bool isDefaultAccuracy = AccuracyPolicy::isDefaultAccuracy(accuracy_);
+    auto accuracyIntermediateValue =
+        static_cast<AccuracyIntermediateType>(accuracy_);
     rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
-        std::make_shared<ConstantVector<double>>(
+        std::make_shared<ConstantVector<AccuracyIntermediateType>>(
             pool,
             numGroups,
             isDefaultAccuracy,
-            DOUBLE(),
-            static_cast<double&&>(accuracy_));
+            CppToType<AccuracyIntermediateType>::create(),
+            std::move(accuracyIntermediateValue));
     auto k =
         rowResult->childAt(static_cast<int>(Idx::kK))->asFlatVector<int32_t>();
     auto n =
@@ -530,10 +537,10 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   }
 
   void destroyInternal(folly::Range<char**> groups) override {
+    using Accumulator = detail::KllSketchAccumulator<T>;
     for (auto group : groups) {
       if (isInitialized(group)) {
-        value<detail::KllSketchAccumulator<T>>(group)
-            ->~KllSketchAccumulator<T>();
+        value<Accumulator>(group)->~Accumulator();
       }
     }
   }
@@ -783,7 +790,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         rowVec->childAt(static_cast<int>(Idx::kPercentilesIsArray))
             ->asUnchecked<SimpleVector<bool>>();
     auto accuracy = rowVec->childAt(static_cast<int>(Idx::kAccuracy))
-                        ->asUnchecked<SimpleVector<double>>();
+                        ->asUnchecked<SimpleVector<AccuracyIntermediateType>>();
     auto k = rowVec->childAt(static_cast<int>(Idx::kK))
                  ->asUnchecked<SimpleVector<int32_t>>();
     auto n = rowVec->childAt(static_cast<int>(Idx::kN))
@@ -856,7 +863,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
         if (!accuracy->isNullAt(i)) {
           AccuracyPolicy::checkAndSetFromIntermediate(
-              accuracy_, accuracy->valueAt(i));
+              accuracy_, static_cast<double>(accuracy->valueAt(i)));
         }
       }
       if constexpr (kSingleGroup) {

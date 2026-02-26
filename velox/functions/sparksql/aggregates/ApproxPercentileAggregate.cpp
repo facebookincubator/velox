@@ -88,71 +88,66 @@ template <typename T>
 using ApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/false,
-    SparkAccuracyPolicy>;
+    SparkAccuracyPolicy,
+    /*AccuracyIntermediateType=*/int32_t>;
 
 void addSignatures(
     const std::string& inputType,
     std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
         signatures) {
   std::string intermediateType = fmt::format(
-      "row(array(double), boolean, double, integer, bigint, {0}, {0}, array({0}), array(integer))",
+      "row(array(double), boolean, integer, integer, bigint, {0}, {0}, array({0}), array(integer))",
       inputType);
 
   // Signature 1: approx_percentile(T, double) -> T (single percentile, default
   // accuracy).
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType(inputType)
-          .intermediateType(intermediateType)
-          .argumentType(inputType)
-          .argumentType("double")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType(inputType)
+                           .intermediateType(intermediateType)
+                           .argumentType(inputType)
+                           .argumentType("double")
+                           .build());
   // Signature 2: approx_percentile(T, double, integer) -> T (single percentile,
   // explicit accuracy).
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType(inputType)
-          .intermediateType(intermediateType)
-          .argumentType(inputType)
-          .argumentType("double")
-          .argumentType("integer")
-          .build());
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType(inputType)
-          .intermediateType(intermediateType)
-          .argumentType(inputType)
-          .argumentType("double")
-          .argumentType("bigint")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType(inputType)
+                           .intermediateType(intermediateType)
+                           .argumentType(inputType)
+                           .argumentType("double")
+                           .argumentType("integer")
+                           .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType(inputType)
+                           .intermediateType(intermediateType)
+                           .argumentType(inputType)
+                           .argumentType("double")
+                           .argumentType("bigint")
+                           .build());
   // Signature 3: approx_percentile(T, array(double)) -> array(T) (percentile
   // array, default accuracy).
   std::string arrayReturnType = fmt::format("array({})", inputType);
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType(arrayReturnType)
-          .intermediateType(intermediateType)
-          .argumentType(inputType)
-          .argumentType("array(double)")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType(arrayReturnType)
+                           .intermediateType(intermediateType)
+                           .argumentType(inputType)
+                           .argumentType("array(double)")
+                           .build());
   // Signature 4: approx_percentile(T, array(double), integer) -> array(T)
   // (percentile array, explicit accuracy).
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType(arrayReturnType)
-          .intermediateType(intermediateType)
-          .argumentType(inputType)
-          .argumentType("array(double)")
-          .argumentType("integer")
-          .build());
-  signatures.push_back(
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType(arrayReturnType)
-          .intermediateType(intermediateType)
-          .argumentType(inputType)
-          .argumentType("array(double)")
-          .argumentType("bigint")
-          .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType(arrayReturnType)
+                           .intermediateType(intermediateType)
+                           .argumentType(inputType)
+                           .argumentType("array(double)")
+                           .argumentType("integer")
+                           .build());
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType(arrayReturnType)
+                           .intermediateType(intermediateType)
+                           .argumentType(inputType)
+                           .argumentType("array(double)")
+                           .argumentType("bigint")
+                           .build());
 }
 
 } // namespace
