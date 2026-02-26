@@ -19,6 +19,8 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+using namespace facebook::velox::common::testutil;
+
 namespace facebook::velox::exec::test {
 
 void TableScanTestBase::verifyCacheStats(

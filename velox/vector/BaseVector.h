@@ -827,6 +827,16 @@ class BaseVector {
   /// hasn't been loaded yet.
   virtual uint64_t estimateFlatSize() const;
 
+  /// Recursively checks if a vector and all its children are reusable.
+  /// A vector is reusable only if:
+  /// 1. It has use_count == 1 (singly-referenced)
+  /// 2. It has a reusable encoding (FLAT, ARRAY, MAP, ROW)
+  /// 3. All its children are also reusable (recursively)
+  ///
+  /// This prevents bugs where reusing a vector with shared nested children
+  /// would cause corruption when prepareForReuse resets those shared children.
+  static bool recursivelyReusable(const VectorPtr& vector);
+
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
   /// (for buffers); (2) clear append-only string buffers and child vectors

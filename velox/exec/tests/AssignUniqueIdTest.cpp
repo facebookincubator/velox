@@ -21,7 +21,7 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec {
-
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec::test;
 

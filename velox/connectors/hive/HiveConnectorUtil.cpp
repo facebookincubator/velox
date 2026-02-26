@@ -628,7 +628,7 @@ void configureReaderOptions(
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
-  readerOptions.setNoCacheRetention(!hiveSplit->cacheable);
+  readerOptions.setCacheable(hiveSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {
     const auto timezone = tz::locateZone(sessionTzName);

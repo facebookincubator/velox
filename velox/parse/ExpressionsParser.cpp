@@ -43,12 +43,21 @@ std::vector<core::ExprPtr> DuckSqlExpressionsParser::parseExprs(
 
 OrderByClause DuckSqlExpressionsParser::parseOrderByExpr(
     const std::string& expr) {
-  auto orderBy = facebook::velox::duckdb::parseOrderByExpr(expr);
+  return facebook::velox::duckdb::parseOrderByExpr(expr);
+}
 
-  return {
-      .expr = std::move(orderBy.expr),
-      .ascending = orderBy.ascending,
-      .nullsFirst = orderBy.nullsFirst};
+AggregateExpr DuckSqlExpressionsParser::parseAggregateExpr(
+    const std::string& expr) {
+  return facebook::velox::duckdb::parseAggregateExpr(expr, options_);
+}
+
+WindowExpr DuckSqlExpressionsParser::parseWindowExpr(const std::string& expr) {
+  return facebook::velox::duckdb::parseWindowExpr(expr, options_);
+}
+
+std::variant<core::ExprPtr, WindowExpr>
+DuckSqlExpressionsParser::parseScalarOrWindowExpr(const std::string& expr) {
+  return facebook::velox::duckdb::parseScalarOrWindowExpr(expr, options_);
 }
 
 } // namespace facebook::velox::parse

@@ -17,13 +17,13 @@
 #include "velox/exec/fuzzer/RowNumberFuzzerBase.h"
 
 #include <utility>
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -66,6 +66,8 @@ DEFINE_bool(
     "enabled. Note that this option only works in debug builds.");
 
 namespace facebook::velox::exec {
+
+using namespace facebook::velox::common::testutil;
 
 RowNumberFuzzerBase::RowNumberFuzzerBase(
     size_t initialSeed,
@@ -193,8 +195,8 @@ RowVectorPtr RowNumberFuzzerBase::execute(
         "Spill config not set for execute with spilling");
     VELOX_CHECK_GE(
         maxSpillLevel, 0, "Max spill should be set for execute with spilling");
-    std::shared_ptr<test::TempDirectoryPath> spillDirectory;
-    spillDirectory = exec::test::TempDirectoryPath::create();
+    std::shared_ptr<TempDirectoryPath> spillDirectory;
+    spillDirectory = TempDirectoryPath::create();
     builder.config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kMaxSpillLevel, maxSpillLevel)
         .config(spillConfig.value(), true)

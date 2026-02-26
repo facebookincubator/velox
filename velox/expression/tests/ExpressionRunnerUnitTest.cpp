@@ -15,8 +15,8 @@
  */
 
 #include <gtest/gtest.h>
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
@@ -27,6 +27,7 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
+using namespace facebook::velox::common::testutil;
 
 class ExpressionRunnerUnitTest : public testing::Test, public VectorTestBase {
  public:
@@ -46,9 +47,9 @@ class ExpressionRunnerUnitTest : public testing::Test, public VectorTestBase {
 };
 
 TEST_F(ExpressionRunnerUnitTest, run) {
-  auto inputFile = exec::test::TempFilePath::create();
-  auto selectivityVectorFile = exec::test::TempFilePath::create();
-  auto resultFile = exec::test::TempFilePath::create();
+  auto inputFile = TempFilePath::create();
+  auto selectivityVectorFile = TempFilePath::create();
+  auto resultFile = TempFilePath::create();
   const auto inputPathStr = inputFile->getPath();
   const auto resultPathStr = resultFile->getPath();
   const auto selectivityVectorPathStr = selectivityVectorFile->getPath();
@@ -113,8 +114,8 @@ TEST_F(ExpressionRunnerUnitTest, persistAndReproComplexSql) {
   auto rowVector = makeRowVector(complexConstants);
 
   // Emulate a reproduce from complex constant SQL
-  auto sqlFile = exec::test::TempFilePath::create();
-  auto complexConstantsFile = exec::test::TempFilePath::create();
+  auto sqlFile = TempFilePath::create();
+  auto complexConstantsFile = TempFilePath::create();
   const auto complexConstantsFilePathStr = complexConstantsFile->getPath();
   auto sqlPathStr = sqlFile->getPath();
   auto sqlPath = sqlPathStr.c_str();

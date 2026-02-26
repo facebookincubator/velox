@@ -16,10 +16,10 @@
 
 #include <folly/system/HardwareConcurrency.h>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/SortBuffer.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -31,6 +31,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::memory;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
  protected:
@@ -208,7 +209,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
   const std::vector<SpillSortKey> sortingKeys_ =
       SpillState::makeSortingKeys(sortColumnIndices_, sortCompareFlags_);
   const std::shared_ptr<TempDirectoryPath> spillDirectory_ =
-      exec::test::TempDirectoryPath::create();
+      TempDirectoryPath::create();
   const common::SpillConfig spillConfig_{
       [&]() -> const std::string& { return spillDirectory_->getPath(); },
       [&](uint64_t) {},
