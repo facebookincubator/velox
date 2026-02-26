@@ -16,6 +16,24 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
+namespace {
+
+bool isIntegralType(const facebook::velox::TypePtr& type) {
+  return type == facebook::velox::TINYINT() ||
+      type == facebook::velox::SMALLINT() ||
+      type == facebook::velox::INTEGER() || type == facebook::velox::BIGINT();
+}
+
+bool isFloatingPointType(const facebook::velox::TypePtr& type) {
+  return type == facebook::velox::REAL() || type == facebook::velox::DOUBLE();
+}
+
+bool isNumericType(const facebook::velox::TypePtr& type) {
+  return isIntegralType(type) || isFloatingPointType(type);
+}
+
+} // namespace
+
 namespace facebook::velox::functions::sparksql {
 namespace {
 
@@ -39,6 +57,16 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+  }
+
+  // Numeric types to integral types cast supports ANSI mode (overflow check).
+  if (isNumericType(fromType) && isIntegralType(toType)) {
+    return true;
+  }
+
+  // Timestamp to integral types cast supports ANSI mode (overflow check).
+  if (fromType->isTimestamp() && isIntegralType(toType)) {
+    return true;
   }
 
   return false;
