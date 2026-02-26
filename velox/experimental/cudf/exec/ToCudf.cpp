@@ -68,6 +68,18 @@ bool isAnyOf(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
 }
 
+bool detectGpuAvailable() {
+  int deviceCount = 0;
+  auto error = cudaGetDeviceCount(&deviceCount);
+
+  if (error != cudaSuccess || deviceCount == 0) {
+    cudaGetLastError();
+    return false;
+  }
+
+  return true;
+}
+
 } // namespace
 
 core::PlanNodePtr CompileState::getPlanNode(const core::PlanNodeId& id) const {
@@ -295,8 +307,8 @@ struct CudfDriverAdapter {
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    if (!driver.driverCtx()->queryConfig().get<bool>(
-            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
+    if (driver.driverCtx()->queryConfig().get<bool>(
+            CudfConfig::kCudfDisabled, CudfConfig::getInstance().disabled) &&
         allowCpuFallback_) {
       return false;
     }
@@ -374,8 +386,21 @@ CudfConfig& CudfConfig::getInstance() {
 
 void CudfConfig::initialize(
     std::unordered_map<std::string, std::string>&& config) {
-  if (config.find(kCudfEnabled) != config.end()) {
-    enabled = folly::to<bool>(config[kCudfEnabled]);
+  if (config.find(kCudfDisabled) != config.end()) {
+    std::string value = config[kCudfDisabled];
+    disabled = folly::to<bool>(value);
+
+    // When explicitly set to false (cuDF required), verify GPU is available
+    if (!disabled && !detectGpuAvailable()) {
+      VELOX_FAIL(
+          "cuDF explicitly required (cudf.disabled=false) but no GPU detected. "
+          "Remove cudf.disabled config for automatic detection or ensure GPU is available.");
+    }
+  } else {
+    // Default: auto-detect GPU availability
+    disabled = !detectGpuAvailable();
+    LOG(INFO) << "cuDF auto-detection: GPU "
+              << (!disabled ? "detected, enabling" : "not detected, disabling");
   }
   if (config.find(kCudfDebugEnabled) != config.end()) {
     debugEnabled = folly::to<bool>(config[kCudfDebugEnabled]);

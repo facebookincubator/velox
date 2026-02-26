@@ -23,7 +23,7 @@ namespace facebook::velox::cudf_velox {
 
 struct CudfConfig {
   /// Keys used by the initialize() method.
-  static constexpr const char* kCudfEnabled{"cudf.enabled"};
+  static constexpr const char* kCudfDisabled{"cudf.disabled"};
   static constexpr const char* kCudfDebugEnabled{"cudf.debug_enabled"};
   static constexpr const char* kCudfMemoryResource{"cudf.memory_resource"};
   static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
@@ -47,9 +47,12 @@ struct CudfConfig {
   /// Initialize from a map with the above keys.
   void initialize(std::unordered_map<std::string, std::string>&&);
 
-  /// Enable cudf by default.
-  /// Clients can disable here and enable it via the QueryConfig as well.
-  bool enabled{true};
+  /// Controls cuDF usage. When unset (default), auto-detects GPU availability.
+  /// Set to "false" to require cuDF enabled (fails if no GPU detected).
+  /// Set to "true" to force disable cuDF.
+  /// This field defaults to false and is set by initialize() based on config.
+  /// Clients can control this via QueryConfig.
+  bool disabled{false};
 
   /// Enable debug printing.
   bool debugEnabled{false};

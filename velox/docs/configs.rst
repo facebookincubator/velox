@@ -1214,10 +1214,10 @@ Note: These configurations are experimental and subject to change.
      - Type
      - Default Value
      - Description
-   * - cudf.enabled
-     - bool
-     - true
-     - If true, enable cuDF. By default, it is enabled if compiled with cuDF.
+   * - cudf.disabled
+     - string
+     - unset
+     - Controls cuDF usage. When unset (default), auto-detects GPU availability. Set to "false" to require cuDF enabled (fails if no GPU detected), or "true" to force disable cuDF.
    * - cudf.memory_resource
      - string
      - async
