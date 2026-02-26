@@ -682,6 +682,150 @@ TEST_F(KeyEncoderTest, indexBoundsType) {
   }
 }
 
+TEST_F(KeyEncoderTest, indexBoundsType) {
+  struct TestCase {
+    std::string name;
+    std::vector<std::string> indexColumns;
+    std::optional<RowVectorPtr> lowerBoundRow;
+    std::optional<RowVectorPtr> upperBoundRow;
+    bool lowerInclusive;
+    bool upperInclusive;
+    // Expected type is always the type from lowerBoundRow if present,
+    // otherwise from upperBoundRow
+  };
+
+  std::vector<TestCase> testCases = {
+      // Lower bound only - single column
+      {
+          .name = "lower_bound_only_single_column",
+          .indexColumns = {"key"},
+          .lowerBoundRow =
+              makeRowVector({"key"}, {makeNullableFlatVector<int32_t>({42})}),
+          .upperBoundRow = std::nullopt,
+          .lowerInclusive = true,
+          .upperInclusive = false,
+      },
+      // Upper bound only - single column
+      {
+          .name = "upper_bound_only_single_column",
+          .indexColumns = {"key"},
+          .lowerBoundRow = std::nullopt,
+          .upperBoundRow =
+              makeRowVector({"key"}, {makeNullableFlatVector<int64_t>({100})}),
+          .lowerInclusive = false,
+          .upperInclusive = true,
+      },
+      // Both bounds - single column
+      {
+          .name = "both_bounds_single_column",
+          .indexColumns = {"col"},
+          .lowerBoundRow =
+              makeRowVector({"col"}, {makeNullableFlatVector<double>({1.5})}),
+          .upperBoundRow =
+              makeRowVector({"col"}, {makeNullableFlatVector<double>({10.5})}),
+          .lowerInclusive = true,
+          .upperInclusive = false,
+      },
+      // Lower bound only - multi column
+      {
+          .name = "lower_bound_only_multi_column",
+          .indexColumns = {"col1", "col2"},
+          .lowerBoundRow = makeRowVector(
+              {"col1", "col2"},
+              {makeNullableFlatVector<int64_t>({100}),
+               makeNullableFlatVector<std::string>({"test"})}),
+          .upperBoundRow = std::nullopt,
+          .lowerInclusive = true,
+          .upperInclusive = false,
+      },
+      // Upper bound only - multi column
+      {
+          .name = "upper_bound_only_multi_column",
+          .indexColumns = {"a", "b", "c"},
+          .lowerBoundRow = std::nullopt,
+          .upperBoundRow = makeRowVector(
+              {"a", "b", "c"},
+              {makeNullableFlatVector<int32_t>({1}),
+               makeNullableFlatVector<int32_t>({2}),
+               makeNullableFlatVector<int32_t>({3})}),
+          .lowerInclusive = false,
+          .upperInclusive = true,
+      },
+      // Both bounds - multi column
+      {
+          .name = "both_bounds_multi_column",
+          .indexColumns = {"x", "y"},
+          .lowerBoundRow = makeRowVector(
+              {"x", "y"},
+              {makeNullableFlatVector<bool>({true}),
+               makeNullableFlatVector<float>({1.0f})}),
+          .upperBoundRow = makeRowVector(
+              {"x", "y"},
+              {makeNullableFlatVector<bool>({false}),
+               makeNullableFlatVector<float>({9.0f})}),
+          .lowerInclusive = false,
+          .upperInclusive = false,
+      },
+      // Timestamp type
+      {
+          .name = "timestamp_type",
+          .indexColumns = {"ts"},
+          .lowerBoundRow = makeRowVector(
+              {"ts"},
+              {makeNullableFlatVector<Timestamp>({Timestamp(1000, 500)})}),
+          .upperBoundRow = std::nullopt,
+          .lowerInclusive = true,
+          .upperInclusive = false,
+      },
+      // VARCHAR type
+      {
+          .name = "varchar_type",
+          .indexColumns = {"name"},
+          .lowerBoundRow = std::nullopt,
+          .upperBoundRow = makeRowVector(
+              {"name"}, {makeNullableFlatVector<std::string>({"hello"})}),
+          .lowerInclusive = false,
+          .upperInclusive = true,
+      },
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+
+    IndexBounds bounds;
+    bounds.indexColumns = testCase.indexColumns;
+    if (testCase.lowerBoundRow.has_value()) {
+      bounds.lowerBound =
+          IndexBound{testCase.lowerBoundRow.value(), testCase.lowerInclusive};
+    }
+    if (testCase.upperBoundRow.has_value()) {
+      bounds.upperBound =
+          IndexBound{testCase.upperBoundRow.value(), testCase.upperInclusive};
+    }
+
+    ASSERT_TRUE(bounds.validate());
+
+    const auto type = bounds.type();
+    ASSERT_NE(type, nullptr);
+    EXPECT_EQ(type->kind(), TypeKind::ROW);
+
+    // type() should return lowerBound's type when present, otherwise
+    // upperBound's type
+    const auto& expectedRow = testCase.lowerBoundRow.has_value()
+        ? testCase.lowerBoundRow.value()
+        : testCase.upperBoundRow.value();
+    EXPECT_TRUE(type->equivalent(*expectedRow->type()));
+
+    const auto rowType = asRowType(type);
+    EXPECT_EQ(rowType->size(), testCase.indexColumns.size());
+    for (size_t i = 0; i < testCase.indexColumns.size(); ++i) {
+      EXPECT_EQ(rowType->nameOf(i), testCase.indexColumns[i]);
+      EXPECT_EQ(
+          rowType->childAt(i)->kind(), expectedRow->childAt(i)->type()->kind());
+    }
+  }
+}
+
 TEST_F(KeyEncoderTest, longTypeWithoutNulls) {
   struct {
     std::vector<std::vector<int64_t>> columnValues;
