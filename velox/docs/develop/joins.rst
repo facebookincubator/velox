@@ -8,9 +8,20 @@ either partitioned or broadcast distribution strategies. Semi project and
 anti joins support additional null-aware flag to distinguish between IN
 (null aware) and EXISTS (regular) semantics. Velox also supports cross joins.
 
-Velox also supports inner and left merge join for the case where join inputs are
+Velox supports inner and left merge join for the case where join inputs are
 sorted on the join keys. Right, full, left semi, right semi, and anti merge joins
 are not supported yet.
+
+Velox supports inner and left spatial joins when the join filter contains one of
+`ST_Contains`, `ST_Crosses`, `ST_Equals`, `ST_Intersects`, `ST_Overlaps`,
+`ST_Touches`, or `ST_Within` and the arguments are from different join sides.
+It also supports inner and left spatial joins when the join predicate contains
+`ST_Distance(g1, g2) < r` (or `<=`), where the function arguments are from
+different join sides and `r` is either a constant or only a function of the
+build (right) side.  In each case, the predicate must be in an AND clause within
+the join filter, so `ST_Contains(g1, g2) AND f(...)` supports a spatial join
+while `ST_Contains(g1, g2) OR f(...)` does not. Right, full, left semi, right
+semi, and anti spatial joins are not supported yet.
 
 Hash Join Implementation
 ------------------------
@@ -378,6 +389,28 @@ pipeline. CallbackSink is installed at the end of the right-side pipeline.
 .. image:: images/merge-join-pipelines.png
     :width: 800
     :align: center
+
+Spatial Join Implementation
+---------------------------
+
+Use SpatialJoinNode plan node to insert a spatial join into a query plan. Make
+sure both left and right sides of the join have geometry columns that are used
+in the spatial predicate (`ST_Intersects` or similar, see the list at the top of
+this page), and optionally a radius column if using a "distance-within"
+predicate (`ST_Distance(g1, g2) < r`) . Specify the join type, probe- and
+build-side geometry columns, optionally a build-side or constant radius column,
+and an optional filter to apply to join results.
+
+To execute a plan with a spatial join, Velox creates two separate pipelines. One
+pipeline processes the right side data and puts it into a SpatialJoinBuild
+operator. This creates a SpatialIndex of the build-side geometries, as well as
+accumulates all build-side rows.  The other pipeline processes the data on the
+left side with a SpatialJoinProbe operator, checking the envelope (i.e.
+`axis-aligned minimal bounding box
+<https://en.wikipedia.org/wiki/Minimum_bounding_box>`_) against the SpatialIndex
+of the build side. For each match of the index, it checks the spatial filter and
+if that passes (or a NULL match is produced for a left join) execution continues
+as specified by downstream plan nodes.
 
 Usage Examples
 --------------
