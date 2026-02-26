@@ -67,7 +67,7 @@ jobs:
       (
         github.event.issue.pull_request &&
         contains(github.event.comment.body, '/claude-review') &&
-        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
+        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev", "jainxrohit"]'), github.event.comment.user.login)
       )
 
     steps:
@@ -424,7 +424,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '/claude-review') &&
-      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
+      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev", "jainxrohit"]'), github.event.comment.user.login)
 
     steps:
       - name: Post unauthorized notice
