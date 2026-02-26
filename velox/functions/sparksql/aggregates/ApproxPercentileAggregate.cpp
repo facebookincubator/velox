@@ -27,9 +27,9 @@ namespace {
 /// Spark accuracy policy: accuracy is an int32 representing the reciprocal
 /// of epsilon (e.g., 10000 means epsilon = 1/10000).
 struct SparkAccuracyPolicy {
-  static constexpr double kDefaultAccuracy = 10000;
+  static constexpr int32_t kDefaultAccuracy = 10000;
 
-  static bool isDefaultAccuracy(double /*accuracy*/) {
+  static bool isDefaultAccuracy(int32_t /*accuracy*/) {
     // Spark always has a valid accuracy (defaults to 10000), never "missing".
     return false;
   }
@@ -37,16 +37,16 @@ struct SparkAccuracyPolicy {
   template <typename T>
   static void setOnAccumulator(
       detail::KllSketchAccumulator<T>* accumulator,
-      double accuracy) {
+      int32_t accuracy) {
     // Spark accuracy is the reciprocal of epsilon.
-    double epsilon = 1.0 / static_cast<double>(static_cast<int32_t>(accuracy));
+    double epsilon = 1.0 / static_cast<double>(accuracy);
     accumulator->setAccuracy(epsilon);
   }
 
   static void checkSetAccuracy(
       DecodedVector& decodedAccuracy,
       const SelectivityVector& rows,
-      double& accuracy) {
+      int32_t& accuracy) {
     if (decodedAccuracy.isConstantMapping()) {
       VELOX_USER_CHECK(!decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
       checkAndSet(accuracy, decodedAccuracy.valueAt<int32_t>(0));
@@ -59,28 +59,26 @@ struct SparkAccuracyPolicy {
           checkAndSet(accuracy, currentAccuracy);
         }
         VELOX_USER_CHECK_EQ(
-            currentAccuracy,
-            static_cast<int32_t>(accuracy),
-            "Accuracy argument must be constant");
+            currentAccuracy, accuracy, "Accuracy argument must be constant");
       });
     }
   }
 
   static void checkAndSetFromIntermediate(
-      double& accuracy,
-      double inputAccuracy) {
-    checkAndSet(accuracy, static_cast<int32_t>(inputAccuracy));
+      int32_t& accuracy,
+      int32_t inputAccuracy) {
+    checkAndSet(accuracy, inputAccuracy);
   }
 
  private:
-  static void checkAndSet(double& accuracy, int32_t inputAccuracy) {
+  static void checkAndSet(int32_t& accuracy, int32_t inputAccuracy) {
     VELOX_USER_CHECK(
         inputAccuracy > 0 &&
             inputAccuracy <= std::numeric_limits<int32_t>::max(),
         "Accuracy must be greater than 0 and less than or equal to "
         "Int32.MaxValue, got {}",
         inputAccuracy);
-    accuracy = static_cast<double>(inputAccuracy);
+    accuracy = inputAccuracy;
   }
 };
 
