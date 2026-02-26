@@ -20,7 +20,7 @@
 # a review by commenting "/claude-review" on the PR.
 #
 # Security Model:
-# - Only CODEOWNERS can trigger reviews (verified before any code access)
+# - Only authorized users can trigger reviews (verified before any code access)
 # - Code is fetched as text only (never executed)
 # - Claude uses read-only tools (no Bash, no file writes)
 # - All operations run in the context of the base repository
@@ -67,7 +67,7 @@ jobs:
       (
         github.event.issue.pull_request &&
         contains(github.event.comment.body, '/claude-review') &&
-        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.author.login)
+        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
       )
 
     steps:
@@ -286,7 +286,7 @@ jobs:
         env:
           EXECUTION_FILE: ${{ steps.claude_review.outputs.execution_file }}
           CONCLUSION: ${{ steps.claude_review.outputs.conclusion }}
-          REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.author.login }}
+          REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
           PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
         with:
           script: |
@@ -418,12 +418,13 @@ jobs:
     # Job-level permissions
     permissions:
       issues: write
+      pull-requests: write
 
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '/claude-review') &&
-      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.author.login)
+      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
 
     steps:
       - name: Post unauthorized notice
@@ -434,7 +435,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `👋 @${context.payload.comment.user.login}, the \`/claude-review\` command is currently restricted to [CODEOWNERS](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/.github/CODEOWNERS) only.
+              body: `👋 @${context.payload.comment.user.login}, the \`/claude-review\` command is currently restricted to a small group of users during this initial rollout.
 
             If you'd like a Claude review, please ask a maintainer to run this command.`
             });
