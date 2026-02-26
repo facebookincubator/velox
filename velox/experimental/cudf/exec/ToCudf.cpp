@@ -375,6 +375,10 @@ void CudfConfig::initialize(
     batchSizeMaxThreshold =
         folly::to<int32_t>(config[kCudfBatchSizeMaxThreshold]);
   }
+  if (config.find(kCudfConcatOptimizationEnabled) != config.end()) {
+    concatOptimizationEnabled =
+        folly::to<bool>(config[kCudfConcatOptimizationEnabled]);
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }
