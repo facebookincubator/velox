@@ -20,6 +20,7 @@ if(VELOX_ENABLE_GEO)
   target_link_libraries(
     velox_common_geospatial_serde_test
     velox_common_geospatial_serde
+    velox_vector_test_lib
     GTest::gtest
     GTest::gtest_main
     GTest::gmock

@@ -18,6 +18,7 @@
 #include <geos/geom/GeometryFactory.h>
 #include <geos/geom/LineString.h>
 #include <geos/geom/Point.h>
+#include <geos/geom/Polygon.h>
 
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/geospatial/GeometrySerde.h"
@@ -27,6 +28,304 @@ using facebook::velox::common::geospatial::EsriShapeType;
 using facebook::velox::common::geospatial::GeometrySerializationType;
 
 namespace facebook::velox::common::geospatial {
+
+void GeometrySerializer::serializeEnvelope(
+    double xMin,
+    double yMin,
+    double xMax,
+    double yMax,
+    exec::StringWriter& writer) {
+  appendBytes(
+      writer, static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
+  appendBytes(writer, xMin);
+  appendBytes(writer, yMin);
+  appendBytes(writer, xMax);
+  appendBytes(writer, yMax);
+}
+
+void GeometrySerializer::serializeEnvelope(
+    geos::geom::Envelope& envelope,
+    exec::StringWriter& writer) {
+  if (FOLLY_UNLIKELY(envelope.isNull())) {
+    serializeEnvelope(
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        writer);
+  } else {
+    serializeEnvelope(
+        envelope.getMinX(),
+        envelope.getMinY(),
+        envelope.getMaxX(),
+        envelope.getMaxY(),
+        writer);
+  }
+}
+
+bool GeometrySerializer::isClockwise(
+    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+    size_t start,
+    size_t end) {
+  double sum = 0.0;
+  for (size_t i = start; i < end - 1; i++) {
+    const auto& p1 = coordinates->getAt(i);
+    const auto& p2 = coordinates->getAt(i + 1);
+    sum += (p2.x - p1.x) * (p2.y + p1.y);
+  }
+  return sum > 0.0;
+}
+
+void GeometrySerializer::reverse(
+    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+    size_t start,
+    size_t end) {
+  for (size_t i = 0; i < (end - start) / 2; ++i) {
+    auto temp = coordinates->getAt(start + i);
+    coordinates->setAt(coordinates->getAt(end - 1 - i), start + i);
+    coordinates->setAt(temp, end - 1 - i);
+  }
+}
+
+void GeometrySerializer::canonicalizePolygonCoordinates(
+    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+    size_t start,
+    size_t end,
+    bool isShell) {
+  bool isClockwiseFlag = isClockwise(coordinates, start, end);
+
+  if ((isShell && !isClockwiseFlag) || (!isShell && isClockwiseFlag)) {
+    reverse(coordinates, start, end);
+  }
+}
+
+void GeometrySerializer::canonicalizePolygonCoordinates(
+    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
+    const std::vector<size_t>& partIndexes,
+    const std::vector<bool>& shellPart) {
+  for (size_t part = 0; part < partIndexes.size() - 1; part++) {
+    canonicalizePolygonCoordinates(
+        coordinates, partIndexes[part], partIndexes[part + 1], shellPart[part]);
+  }
+  if (!partIndexes.empty()) {
+    canonicalizePolygonCoordinates(
+        coordinates, partIndexes.back(), coordinates->size(), shellPart.back());
+  }
+}
+
+void GeometrySerializer::writeGeometry(
+    const geos::geom::Geometry& geometry,
+    exec::StringWriter& writer) {
+  auto geometryType = geometry.getGeometryTypeId();
+  switch (geometryType) {
+    case geos::geom::GEOS_POINT:
+      writePoint(geometry, writer);
+      break;
+    case geos::geom::GEOS_MULTIPOINT:
+      writeMultiPoint(geometry, writer);
+      break;
+    case geos::geom::GEOS_LINESTRING:
+    case geos::geom::GEOS_LINEARRING:
+      writePolyline(geometry, writer, false);
+      break;
+    case geos::geom::GEOS_MULTILINESTRING:
+      writePolyline(geometry, writer, true);
+      break;
+    case geos::geom::GEOS_POLYGON:
+      writePolygon(geometry, writer, false);
+      break;
+    case geos::geom::GEOS_MULTIPOLYGON:
+      writePolygon(geometry, writer, true);
+      break;
+    case geos::geom::GEOS_GEOMETRYCOLLECTION:
+      writeGeometryCollection(geometry, writer);
+      break;
+    default:
+      VELOX_FAIL(
+          "Unrecognized geometry type: {}",
+          static_cast<uint32_t>(geometryType));
+      break;
+  }
+}
+
+void GeometrySerializer::writeEnvelope(
+    const geos::geom::Geometry& geometry,
+    exec::StringWriter& writer) {
+  if (geometry.isEmpty()) {
+    appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+    appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+    appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+    appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+    return;
+  }
+
+  auto envelope = geometry.getEnvelopeInternal();
+  appendBytes(writer, envelope->getMinX());
+  appendBytes(writer, envelope->getMinY());
+  appendBytes(writer, envelope->getMaxX());
+  appendBytes(writer, envelope->getMaxY());
+}
+
+void GeometrySerializer::writeCoordinates(
+    const std::unique_ptr<geos::geom::CoordinateSequence>& coords,
+    exec::StringWriter& writer) {
+  for (size_t i = 0; i < coords->size(); ++i) {
+    appendBytes(writer, coords->getX(i));
+    appendBytes(writer, coords->getY(i));
+  }
+}
+
+void GeometrySerializer::writePoint(
+    const geos::geom::Geometry& point,
+    exec::StringWriter& writer) {
+  appendBytes(writer, static_cast<uint8_t>(GeometrySerializationType::POINT));
+  if (!point.isEmpty()) {
+    writeCoordinates(point.getCoordinates(), writer);
+  } else {
+    appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+    appendBytes(writer, std::numeric_limits<double>::quiet_NaN());
+  }
+}
+
+void GeometrySerializer::writeMultiPoint(
+    const geos::geom::Geometry& geometry,
+    exec::StringWriter& writer) {
+  appendBytes(
+      writer, static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
+  appendBytes(writer, static_cast<int32_t>(EsriShapeType::MULTI_POINT));
+  writeEnvelope(geometry, writer);
+  appendBytes(writer, static_cast<int32_t>(geometry.getNumPoints()));
+  writeCoordinates(geometry.getCoordinates(), writer);
+}
+
+void GeometrySerializer::writePolyline(
+    const geos::geom::Geometry& geometry,
+    exec::StringWriter& writer,
+    bool multiType) {
+  size_t numParts;
+  size_t numPoints = geometry.getNumPoints();
+
+  if (multiType) {
+    numParts = geometry.getNumGeometries();
+    appendBytes(
+        writer,
+        static_cast<uint8_t>(GeometrySerializationType::MULTI_LINE_STRING));
+  } else {
+    numParts = (numPoints > 0) ? 1 : 0;
+    appendBytes(
+        writer, static_cast<uint8_t>(GeometrySerializationType::LINE_STRING));
+  }
+
+  appendBytes(writer, static_cast<int32_t>(EsriShapeType::POLYLINE));
+
+  writeEnvelope(geometry, writer);
+
+  appendBytes(writer, static_cast<int32_t>(numParts));
+  appendBytes(writer, static_cast<int32_t>(numPoints));
+
+  size_t partIndex = 0;
+  for (size_t geomIdx = 0; geomIdx < numParts; ++geomIdx) {
+    appendBytes(writer, static_cast<int32_t>(partIndex));
+    partIndex += geometry.getGeometryN(geomIdx)->getNumPoints();
+  }
+
+  if (multiType) {
+    for (size_t partIdx = 0; partIdx < numParts; ++partIdx) {
+      const auto* part = geometry.getGeometryN(partIdx);
+      writeCoordinates(part->getCoordinates(), writer);
+    }
+  } else {
+    writeCoordinates(geometry.getCoordinates(), writer);
+  }
+}
+
+void GeometrySerializer::writePolygon(
+    const geos::geom::Geometry& geometry,
+    exec::StringWriter& writer,
+    bool multiType) {
+  size_t numGeometries = geometry.getNumGeometries();
+  size_t numParts = 0;
+  size_t numPoints = geometry.getNumPoints();
+
+  for (size_t geomIdx = 0; geomIdx < numGeometries; geomIdx++) {
+    auto polygon = dynamic_cast<const geos::geom::Polygon*>(
+        geometry.getGeometryN(geomIdx));
+    if (polygon && polygon->getNumPoints() > 0) {
+      numParts += polygon->getNumInteriorRing() + 1;
+    }
+  }
+
+  if (multiType) {
+    appendBytes(
+        writer, static_cast<uint8_t>(GeometrySerializationType::MULTI_POLYGON));
+  } else {
+    appendBytes(
+        writer, static_cast<uint8_t>(GeometrySerializationType::POLYGON));
+  }
+
+  appendBytes(writer, static_cast<int32_t>(EsriShapeType::POLYGON));
+  writeEnvelope(geometry, writer);
+
+  appendBytes(writer, static_cast<int32_t>(numParts));
+  appendBytes(writer, static_cast<int32_t>(numPoints));
+
+  if (numParts == 0) {
+    return;
+  }
+
+  std::vector<size_t> partIndexes(numParts);
+  std::vector<bool> shellPart(numParts);
+
+  size_t currentPart = 0;
+  size_t currentPoint = 0;
+  for (size_t geomIdx = 0; geomIdx < numGeometries; geomIdx++) {
+    const geos::geom::Polygon* polygon =
+        dynamic_cast<const geos::geom::Polygon*>(
+            geometry.getGeometryN(geomIdx));
+
+    partIndexes[currentPart] = currentPoint;
+    shellPart[currentPart] = true;
+    currentPart++;
+    currentPoint += polygon->getExteriorRing()->getNumPoints();
+
+    size_t holesCount = polygon->getNumInteriorRing();
+    for (size_t holeIndex = 0; holeIndex < holesCount; holeIndex++) {
+      partIndexes[currentPart] = currentPoint;
+      shellPart[currentPart] = false;
+      currentPart++;
+      currentPoint += polygon->getInteriorRingN(holeIndex)->getNumPoints();
+    }
+  }
+
+  for (size_t partIndex : partIndexes) {
+    appendBytes(writer, static_cast<int32_t>(partIndex));
+  }
+
+  auto coordinates = geometry.getCoordinates();
+  canonicalizePolygonCoordinates(coordinates, partIndexes, shellPart);
+  writeCoordinates(coordinates, writer);
+}
+
+void GeometrySerializer::writeGeometryCollection(
+    const geos::geom::Geometry& collection,
+    exec::StringWriter& writer) {
+  appendBytes(
+      writer,
+      static_cast<uint8_t>(GeometrySerializationType::GEOMETRY_COLLECTION));
+  for (size_t geometryIndex = 0; geometryIndex < collection.getNumGeometries();
+       ++geometryIndex) {
+    const auto* geometry = collection.getGeometryN(geometryIndex);
+    size_t lengthOffset = writer.size();
+    // Placeholder for the length of the collection
+    appendBytes(writer, int32_t{0});
+    writeGeometry(*geometry, writer);
+    int32_t length =
+        static_cast<int32_t>(writer.size() - lengthOffset - sizeof(int32_t));
+    writer.writeAt(length, lengthOffset);
+  }
+}
+
+// GeometryDeserializer implementations
 
 geos::geom::GeometryFactory* GeometryDeserializer::getGeometryFactory() {
   thread_local static geos::geom::GeometryFactory::Ptr geometryFactory =
