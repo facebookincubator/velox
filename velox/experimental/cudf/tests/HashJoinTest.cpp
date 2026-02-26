@@ -57,6 +57,8 @@ class HashJoinTest : public HashJoinTestBase {
   void SetUp() override {
     HashJoinTestBase::SetUp();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::CudfConfig::getInstance().jitFilterJoinIndicesEnabled =
+        jitEnabled_;
     cudf_velox::registerCudf();
   }
 
@@ -64,13 +66,18 @@ class HashJoinTest : public HashJoinTestBase {
     cudf_velox::unregisterCudf();
     HashJoinTestBase::TearDown();
   }
+
+ protected:
+  bool jitEnabled_{true};
 };
 
 class MultiThreadedHashJoinTest
     : public HashJoinTest,
-      public testing::WithParamInterface<TestParam> {
+      public testing::WithParamInterface<std::tuple<TestParam, bool>> {
  public:
-  MultiThreadedHashJoinTest() : HashJoinTest(GetParam()) {}
+  MultiThreadedHashJoinTest() : HashJoinTest(std::get<0>(GetParam())) {
+    jitEnabled_ = std::get<1>(GetParam());
+  }
 
   static std::vector<TestParam> getTestParams() {
     return std::vector<TestParam>({TestParam{1}, TestParam{3}});
@@ -1623,8 +1630,10 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
             }
           }
         }
-        ASSERT_EQ(nullJoinBuildKeyCount, 33 * GetParam().numDrivers);
-        ASSERT_EQ(nullJoinProbeKeyCount, 34 * GetParam().numDrivers);
+        ASSERT_EQ(
+            nullJoinBuildKeyCount, 33 * std::get<0>(GetParam()).numDrivers);
+        ASSERT_EQ(
+            nullJoinProbeKeyCount, 34 * std::get<0>(GetParam()).numDrivers);
       })
       .run();
 }
@@ -1682,8 +1691,10 @@ TEST_P(MultiThreadedHashJoinTest, nullStatsWithEmptyBuild) {
         // we will report 0 null keys on probe side.
         // CudfHashJoinProbe will reports correct null keys
         // since early exit is not implemented.
-        ASSERT_EQ(nullJoinProbeKeyCount, 6 * GetParam().numDrivers);
-        ASSERT_EQ(nullJoinBuildKeyCount, 1 * GetParam().numDrivers);
+        ASSERT_EQ(
+            nullJoinProbeKeyCount, 6 * std::get<0>(GetParam()).numDrivers);
+        ASSERT_EQ(
+            nullJoinBuildKeyCount, 1 * std::get<0>(GetParam()).numDrivers);
       })
       .checkSpillStats(false)
       .run();
@@ -2531,7 +2542,7 @@ TEST_P(MultiThreadedHashJoinTest, noSpillLevelLimit) {
 
 // Verify that dynamic filter pushed down is turned off for null-aware right
 // semi project join.
-TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
+TEST_P(MultiThreadedHashJoinTest, nullAwareRightSemiProjectOverScan) {
   std::vector<RowVectorPtr> probes;
   std::vector<RowVectorPtr> builds;
   // Matches present:
@@ -2606,7 +2617,7 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
   }
 }
 
-TEST_F(HashJoinTest, duplicateJoinKeys) {
+TEST_P(MultiThreadedHashJoinTest, duplicateJoinKeys) {
   auto leftVectors = makeBatches(3, [&](int32_t /*unused*/) {
     return makeRowVector({
         makeNullableFlatVector<int64_t>(
@@ -2704,7 +2715,7 @@ TEST_F(HashJoinTest, duplicateJoinKeys) {
   }
 }
 
-TEST_F(HashJoinTest, semiProject) {
+TEST_P(MultiThreadedHashJoinTest, semiProject) {
   // Some keys have multiple rows: 2, 3, 5.
   auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
     return makeRowVector({
@@ -2849,7 +2860,7 @@ TEST_F(HashJoinTest, semiProject) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(HashJoinTest, semiProjectWithNullKeys) {
+TEST_P(MultiThreadedHashJoinTest, semiProjectWithNullKeys) {
   // Some keys have multiple rows: 2, 3, 5.
   auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
     return makeRowVector(
@@ -3144,7 +3155,7 @@ TEST_F(HashJoinTest, semiProjectWithNullKeys) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(HashJoinTest, semiProjectWithFilter) {
+TEST_P(MultiThreadedHashJoinTest, semiProjectWithFilter) {
   auto probeVectors = makeBatches(3, [&](auto /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
@@ -3221,7 +3232,9 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
   }
 }
 
-TEST_F(HashJoinTest, nullAwareRightSemiProjectWithFilterNotAllowed) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    nullAwareRightSemiProjectWithFilterNotAllowed) {
   auto probe = makeRowVector(ROW({"t0", "t1"}, {INTEGER(), BIGINT()}), 10);
   auto build = makeRowVector(ROW({"u0", "u1"}, {INTEGER(), BIGINT()}), 10);
 
@@ -3240,7 +3253,7 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectWithFilterNotAllowed) {
       "Null-aware right semi project join doesn't support extra filter");
 }
 
-TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
+TEST_P(MultiThreadedHashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
   std::vector<RowVectorPtr> probeVectors;
   std::vector<RowVectorPtr> buildVectors;
   probeVectors.push_back(makeRowVector(
@@ -3329,7 +3342,7 @@ TEST_F(HashJoinTest, leftSemiJoinWithExtraOutputCapacity) {
   }
 }
 
-TEST_F(HashJoinTest, nullAwareMultiKeyNotAllowed) {
+TEST_P(MultiThreadedHashJoinTest, nullAwareMultiKeyNotAllowed) {
   auto probe = makeRowVector(
       ROW({"t0", "t1", "t2"}, {INTEGER(), BIGINT(), VARCHAR()}), 10);
   auto build = makeRowVector(
@@ -3379,7 +3392,7 @@ TEST_F(HashJoinTest, nullAwareMultiKeyNotAllowed) {
       "Null-aware joins allow only one join key");
 }
 
-TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
+TEST_P(MultiThreadedHashJoinTest, semiProjectOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
@@ -3581,10 +3594,16 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithStringFunctionFilter) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashJoinTest,
     MultiThreadedHashJoinTest,
-    testing::ValuesIn(MultiThreadedHashJoinTest::getTestParams()));
+    testing::Combine(
+        testing::ValuesIn(MultiThreadedHashJoinTest::getTestParams()),
+        testing::Bool()),
+    [](const auto& info) {
+      return TestParamToName(std::get<0>(info.param)) +
+          (std::get<1>(info.param) ? "_jit" : "_nojit");
+    });
 
 // TODO: try to parallelize the following test cases if possible.
-TEST_F(HashJoinTest, memory) {
+TEST_P(MultiThreadedHashJoinTest, memory) {
   // Measures memory allocation in a 1:n hash join followed by
   // projection and aggregation. We expect vectors to be mostly
   // reused, except for t_k0 + 1, which is a dictionary after the
@@ -3623,7 +3642,7 @@ TEST_F(HashJoinTest, memory) {
   EXPECT_GT(40'000'000, params.queryCtx->pool()->stats().cumulativeBytes);
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectors) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_lazyVectors) {
   // a dataset of multiple row groups with multiple columns. We create
   // different dictionary wrappings for different columns and load the
   // rows in scope at different times.
@@ -3742,7 +3761,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectors) {
   }
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorNotLoadedInFilter) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_lazyVectorNotLoadedInFilter) {
   // Ensure that if lazy vectors are temporarily wrapped during a filter's
   // execution and remain unloaded, the temporary wrap is promptly
   // discarded. This precaution prevents the generation of the probe's output
@@ -3760,7 +3779,9 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorNotLoadedInFilter) {
       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftJoin) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_lazyVectorPartiallyLoadedInFilterLeftJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3771,7 +3792,9 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftJoin) {
       "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterFullJoin) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_lazyVectorPartiallyLoadedInFilterFullJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
   testLazyVectorsWithFilter(
@@ -3797,7 +3820,9 @@ TEST_F(
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterAntiJoin) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_lazyVectorPartiallyLoadedInFilterAntiJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3808,7 +3833,9 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterAntiJoin) {
       "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0))");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterInnerJoin) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_lazyVectorPartiallyLoadedInFilterInnerJoin) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3819,7 +3846,9 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterInnerJoin) {
       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2 >= 0)");
 }
 
-TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
 
@@ -3831,7 +3860,7 @@ TEST_F(HashJoinTest, DISABLED_lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
 }
 
 // Disabled because dynamic filters are not supported yet in velox-cudf.
-TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_dynamicFilters) {
   const int32_t numSplits = 10;
   const int32_t numRowsProbe = 333;
   const int32_t numRowsBuild = 100;
@@ -4522,7 +4551,9 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilters) {
   }
 }
 
-TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_dynamicFiltersStatsWithChainedJoins) {
   const int32_t numSplits = 10;
   const int32_t numProbeRows = 333;
   const int32_t numBuildRows = 100;
@@ -4619,7 +4650,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersStatsWithChainedJoins) {
       .run();
 }
 
-TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
   const int32_t numSplits = 20;
   const int32_t numNonSkippedSplits = 10;
   const int32_t numRowsProbe = 333;
@@ -4841,7 +4872,9 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersWithSkippedSplits) {
   }
 }
 
-TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
   vector_size_t size = 1000;
   const int32_t numSplits = 5;
 
@@ -4937,7 +4970,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
       .run();
 }
 
-TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
   const int32_t numRowsProbe = 300;
   const int32_t numRowsBuild = 100;
 
@@ -5005,7 +5038,9 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
       .run();
 }
 
-TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> innerBuild = {makeRowVector(
       {"a"},
       {
@@ -5052,7 +5087,7 @@ TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
 
 // Verify the size of the join output vectors when projecting build-side
 // variable-width column.
-TEST_F(HashJoinTest, memoryUsage) {
+TEST_P(MultiThreadedHashJoinTest, memoryUsage) {
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(10, [&](int32_t /*unused*/) {
         return makeRowVector(
@@ -5108,7 +5143,7 @@ TEST_F(HashJoinTest, memoryUsage) {
 /// Test an edge case in producing small output batches where the logic to
 /// calculate the set of probe-side rows to load lazy vectors for was
 /// triggering a crash.
-TEST_F(HashJoinTest, smallOutputBatchSize) {
+TEST_P(MultiThreadedHashJoinTest, smallOutputBatchSize) {
   // Setup probe data with 50 non-null matching keys followed by 50 null
   // keys: 1, 2, 1, 2,...null, null.
   auto probeVectors = makeRowVector({
@@ -5154,7 +5189,7 @@ TEST_F(HashJoinTest, smallOutputBatchSize) {
       .run();
 }
 
-TEST_F(HashJoinTest, DISABLED_spillFileSize) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_spillFileSize) {
   const std::vector<uint64_t> maxSpillFileSizes({0, 1, 1'000'000'000});
   for (const auto spillFileSize : maxSpillFileSizes) {
     SCOPED_TRACE(fmt::format("spillFileSize: {}", spillFileSize));
@@ -5191,7 +5226,7 @@ TEST_F(HashJoinTest, DISABLED_spillFileSize) {
 }
 
 // Spilling is not supported for cudfHashJoin.
-TEST_F(HashJoinTest, DISABLED_spillPartitionBitsOverlap) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_spillPartitionBitsOverlap) {
   auto builder =
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
@@ -5209,7 +5244,7 @@ TEST_F(HashJoinTest, DISABLED_spillPartitionBitsOverlap) {
 
 // The test is to verify if the hash build reservation has been released on
 // task error.
-DEBUG_ONLY_TEST_F(HashJoinTest, buildReservationReleaseCheck) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, buildReservationReleaseCheck) {
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(1, [&](int32_t /*unused*/) {
         return std::dynamic_pointer_cast<RowVector>(
@@ -5261,7 +5296,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, buildReservationReleaseCheck) {
   ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
 }
 
-TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
   vector_size_t size = 10;
   auto filePaths = makeFilePaths(1);
   auto rowVector = makeRowVector(
@@ -5314,7 +5349,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
       .run();
 }
 
-TEST_F(HashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {
   const uint64_t numBuildRows = 20;
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(10, [&](int32_t /*unused*/) {
@@ -5419,7 +5454,7 @@ TEST_F(HashJoinTest, DISABLED_probeMemoryLimitOnBuildProjection) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, reclaimDuringInputProcessing) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 10;
@@ -5585,7 +5620,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
   ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, reclaimDuringReserve) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   const int32_t numBuildVectors = 3;
   std::vector<RowVectorPtr> buildVectors;
@@ -5718,7 +5753,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
   taskThread.join();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, reclaimDuringAllocation) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 10;
@@ -5849,7 +5884,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
   ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{0});
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, reclaimDuringOutputProcessing) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 10;
@@ -5982,7 +6017,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
   ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 1);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, reclaimDuringWaitForProbe) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 10;
@@ -6120,7 +6155,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
   ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 1);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashBuildAbortDuringOutputProcessing) {
   const auto buildVectors = makeVectors(buildType_, 10, 128);
   const auto probeVectors = makeVectors(probeType_, 5, 128);
 
@@ -6196,7 +6233,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashBuildAbortDuringInputProcessing) {
   const auto buildVectors = makeVectors(buildType_, 10, 128);
   const auto probeVectors = makeVectors(probeType_, 5, 128);
 
@@ -6273,7 +6312,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, hashBuildAbortDuringAllocation) {
   const auto buildVectors = makeVectors(buildType_, 10, 128);
   const auto probeVectors = makeVectors(probeType_, 5, 128);
 
@@ -6351,7 +6390,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashProbeAbortDuringInputProcessing) {
   const auto buildVectors = makeVectors(buildType_, 10, 128);
   const auto probeVectors = makeVectors(probeType_, 5, 128);
 
@@ -6423,7 +6464,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
   }
 }
 
-TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
+TEST_P(MultiThreadedHashJoinTest, leftJoinWithMissAtEndOfBatch) {
   // Tests some cases where the row at the end of an output batch fails the
   // filter.
   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
@@ -6475,7 +6516,9 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
   test("t_k2 > 9");
 }
 
-TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
   // Tests some cases where the row at the end of an output batch fails the
   // filter and there are multiple matches with the build side..
   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
@@ -6525,7 +6568,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
   test("t_k2 != 4 and t_k2 != 8");
 }
 
-TEST_F(HashJoinTest, DISABLED_leftJoinPreserveProbeOrder) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_leftJoinPreserveProbeOrder) {
   const std::vector<RowVectorPtr> probeVectors = {
       makeRowVector(
           {"k1", "v1"},
@@ -6567,7 +6610,7 @@ TEST_F(HashJoinTest, DISABLED_leftJoinPreserveProbeOrder) {
   ASSERT_EQ(v1->valueAt(2), 0);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, minSpillableMemoryReservation) {
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 10;
   std::vector<RowVectorPtr> buildVectors;
@@ -6626,7 +6669,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, minSpillableMemoryReservation) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, exceededMaxSpillLevel) {
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 10;
   std::vector<RowVectorPtr> buildVectors;
@@ -6717,7 +6760,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
 }
 
 // disable because spilling is not supported for velox-cudf hash join
-TEST_F(HashJoinTest, DISABLED_maxSpillBytes) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto probeVectors = createVectors(rowType, 1024, 10 << 20);
@@ -6775,7 +6818,7 @@ TEST_F(HashJoinTest, DISABLED_maxSpillBytes) {
 }
 
 // disable because spilling is not supported for velox-cudf hash join
-TEST_F(HashJoinTest, DISABLED_onlyHashBuildMaxSpillBytes) {
+TEST_P(MultiThreadedHashJoinTest, DISABLED_onlyHashBuildMaxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto probeVectors = createVectors(rowType, 32, 128);
@@ -6832,7 +6875,9 @@ TEST_F(HashJoinTest, DISABLED_onlyHashBuildMaxSpillBytes) {
 }
 
 // disable because spilling is not supported for velox-cudf hash join
-TEST_F(HashJoinTest, DISABLED_reclaimFromJoinBuilderWithMultiDrivers) {
+TEST_P(
+    MultiThreadedHashJoinTest,
+    DISABLED_reclaimFromJoinBuilderWithMultiDrivers) {
   auto rowType = ROW({
       {"c0", INTEGER()},
       {"c1", INTEGER()},
@@ -6881,8 +6926,8 @@ TEST_F(HashJoinTest, DISABLED_reclaimFromJoinBuilderWithMultiDrivers) {
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
 }
 
-DEBUG_ONLY_TEST_F(
-    HashJoinTest,
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
     failedToReclaimFromHashJoinBuildersInNonReclaimableSection) {
   auto rowType = ROW({
       {"c0", INTEGER()},
@@ -6974,7 +7019,7 @@ DEBUG_ONLY_TEST_F(
       2);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, reclaimDuringTableBuild) {
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBuildVectors = 5;
   std::vector<RowVectorPtr> buildVectors;
@@ -7034,7 +7079,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
       .run();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, exceptionDuringFinishJoinBuild) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, exceptionDuringFinishJoinBuild) {
   // This test is to make sure there is no memory leak when exceptions are
   // thrown while parallelly preparing join table.
   auto memoryManager = memory::memoryManager();
@@ -7118,7 +7163,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceptionDuringFinishJoinBuild) {
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, expectedFreeCapacityBytes);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    arbitrationTriggeredDuringParallelJoinBuild) {
   std::unique_ptr<memory::MemoryManager> memoryManager = createMemoryManager();
   const uint64_t numDrivers = 2;
 
@@ -7233,7 +7280,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
   waitForAllTasksToBeDeleted();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    arbitrationTriggeredByEnsureJoinTableFit) {
   // Use manual spill injection other than spill injection framework. This is
   // because spill injection framework does not allow fine grain spill within a
   // single operator (We do not want to spill during addInput() but only during
@@ -7261,7 +7310,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
       .run();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, joinBuildSpillError) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, joinBuildSpillError) {
   const int kMemoryCapacity = 32 << 20;
   // Set a small memory capacity to trigger spill.
   std::unique_ptr<memory::MemoryManager> memoryManager =
@@ -7324,7 +7373,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, joinBuildSpillError) {
   waitForAllTasksToBeDeleted();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, probeSpillOnWaitForPeers) {
   // This test creates a scenario when tester probe thread finishes processing
   // input, entering kWaitForPeers state, and the other thread is still
   // processing, spill is triggered properly performed.
@@ -7431,7 +7480,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
   waitForAllTasksToBeDeleted();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, taskWaitTimeout) {
   const int queryMemoryCapacity = 128 << 20;
   // Creates a large number of vectors based on the query capacity to trigger
   // memory arbitration.
@@ -7521,7 +7570,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpill) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, hashProbeSpill) {
   struct {
     bool triggerBuildSpill;
     // Triggers after no more input or not.
@@ -7626,7 +7675,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpill) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfLastOutputProcessing) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashProbeSpillInMiddeOfLastOutputProcessing) {
   std::atomic_int outputCountAfterNoMoreInout{0};
   std::atomic_bool injectOnce{true};
   ::facebook::velox::common::testutil::ScopedTestValue abc(
@@ -7679,7 +7730,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfLastOutputProcessing) {
 // Inject probe-side spilling in the middle of output processing. If
 // 'recursiveSpill' is true, we trigger probe-spilling when probe the hash table
 // built from spilled data.
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfOutputProcessing) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashProbeSpillInMiddeOfOutputProcessing) {
   for (bool recursiveSpill : {false, true}) {
     std::atomic_int buildInputCount{0};
     SCOPED_TESTVALUE_SET(
@@ -7749,7 +7802,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfOutputProcessing) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillWhenOneOfProbeFinish) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashProbeSpillWhenOneOfProbeFinish) {
   const int numDrivers{3};
 
   std::atomic_bool probeWaitFlag{true};
@@ -7806,7 +7861,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillWhenOneOfProbeFinish) {
   queryThread.join();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, hashProbeSpillExceedLimit) {
   // If 'buildTriggerSpill' is true, then spilling is triggered by hash build.
   for (const bool buildTriggerSpill : {false, true}) {
     SCOPED_TRACE(fmt::format("buildTriggerSpill {}", buildTriggerSpill));
@@ -7878,7 +7933,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillUnderNonReclaimableSection) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    hashProbeSpillUnderNonReclaimableSection) {
   std::atomic_bool injectOnce{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
@@ -7922,7 +7979,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillUnderNonReclaimableSection) {
 // This test case is to cover the case that hash probe trigger spill for right
 // semi join types and the pending input needs to be processed in multiple
 // steps.
-DEBUG_ONLY_TEST_F(HashJoinTest, spillOutputWithRightSemiJoins) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, spillOutputWithRightSemiJoins) {
   for (const auto joinType :
        {core::JoinType::kRightSemiFilter, core::JoinType::kRightSemiProject}) {
     std::atomic_bool injectOnce{true};
@@ -7978,7 +8035,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillOutputWithRightSemiJoins) {
   }
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
+    spillCheckOnLeftSemiFilterWithDynamicFilters) {
   const int32_t numSplits = 10;
   const int32_t numRowsProbe = 333;
   const int32_t numRowsBuild = 100;
@@ -8094,8 +8153,8 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
 // start processing. This can cause unnecessary spill and query OOM under some
 // real workload with many stages as each hash probe might reserve non-trivial
 // amount of memory.
-DEBUG_ONLY_TEST_F(
-    HashJoinTest,
+DEBUG_ONLY_TEST_P(
+    MultiThreadedHashJoinTest,
     hashProbeMemoryReservationCheckBeforeProbeStartWithSpillEnabled) {
   fuzzerOpts_.vectorSize = 128;
   auto probeVectors = createVectors(10, probeType_, fuzzerOpts_);
@@ -8140,7 +8199,7 @@ DEBUG_ONLY_TEST_F(
       .run();
 }
 
-TEST_F(HashJoinTest, nanKeys) {
+TEST_P(MultiThreadedHashJoinTest, nanKeys) {
   // Verify the NaN values with different binary representations are considered
   // equal.
   static const double kNan = std::numeric_limits<double>::quiet_NaN();
@@ -8174,7 +8233,7 @@ TEST_F(HashJoinTest, nanKeys) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, spillOnBlockedProbe) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, spillOnBlockedProbe) {
   auto blockedOperatorFactoryUniquePtr =
       std::make_unique<BlockedOperatorFactory>();
   auto blockedOperatorFactory = blockedOperatorFactoryUniquePtr.get();
@@ -8250,7 +8309,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillOnBlockedProbe) {
   waitForAllTasksToBeDeleted(30'000'000);
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, buildReclaimedMemoryReport) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, buildReclaimedMemoryReport) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   const int32_t numBuildVectors = 3;
   std::vector<RowVectorPtr> buildVectors;
@@ -8377,7 +8436,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, buildReclaimedMemoryReport) {
   taskThread.join();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, probeReclaimedMemoryReport) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   const int32_t numBuildVectors = 3;
   std::vector<RowVectorPtr> buildVectors;
@@ -8482,7 +8541,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
   taskThread.join();
 }
 
-DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
+DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, hashTableCleanupAfterProbeFinish) {
   auto buildVectors = makeVectors(buildType_, 5, 100);
   auto probeVectors = makeVectors(probeType_, 5, 100);
 

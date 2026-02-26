@@ -56,7 +56,7 @@ velox_resolve_dependency_url(kvikio)
 # cudf from shrshi fork, branch join-indices-jit-filter
 set(VELOX_cudf_VERSION 26.04 CACHE STRING "cudf version")
 set(VELOX_cudf_GIT_REPO "https://github.com/shrshi/cudf.git")
-set(VELOX_cudf_GIT_TAG "join-indices-jit-filter")
+set(VELOX_cudf_GIT_TAG "jit-null-handling")
 
 # Use block so we don't leak variables
 block(SCOPE_FOR VARIABLES)
