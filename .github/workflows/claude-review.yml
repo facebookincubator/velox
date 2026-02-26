@@ -269,7 +269,17 @@ jobs:
             --allowedTools View,GlobTool,GrepTool
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      # Step 7: Post review as PR comment (skip if dry_run)
+      # Step 7: Save execution log as artifact for debugging
+      - name: Upload execution log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-execution-log-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
+          path: ${{ steps.claude_review.outputs.execution_file }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Step 8: Post review as PR comment (skip if dry_run)
       - name: Post review comment
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
@@ -285,67 +295,27 @@ jobs:
             let reviewBody = '';
 
             try {
-              // Read the execution log
-              const fileContent = fs.readFileSync(process.env.EXECUTION_FILE, 'utf8');
-              const executionLog = JSON.parse(fileContent);
+              // Read the execution log (array of messages from claude-code-base-action)
+              const executionLog = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
 
-              // Log structure for debugging
-              console.log('Execution log type:', Array.isArray(executionLog) ? 'array' : typeof executionLog);
               if (!Array.isArray(executionLog)) {
-                console.log('Execution log keys:', Object.keys(executionLog));
+                throw new Error('Expected array format from claude-code-base-action');
               }
 
-              // Helper function to extract text from assistant messages
-              const extractFromMessages = (messages) => {
-                const assistantMessages = messages.filter(m => m.role === 'assistant');
-                if (assistantMessages.length > 0) {
-                  const lastMessage = assistantMessages[assistantMessages.length - 1];
-                  if (typeof lastMessage.content === 'string') {
-                    return lastMessage.content;
-                  } else if (Array.isArray(lastMessage.content)) {
-                    return lastMessage.content
-                      .filter(block => block.type === 'text')
-                      .map(block => block.text)
-                      .join('\n\n');
-                  }
-                }
-                return null;
-              };
+              // Find the "result" message which contains the final review
+              const resultMessage = executionLog.find(m => m.type === 'result');
 
-              // Try different possible structures from claude-code-base-action
-              if (Array.isArray(executionLog)) {
-                // claude-code-base-action writes messages array directly to file
-                const extracted = extractFromMessages(executionLog);
-                if (extracted) {
-                  reviewBody = extracted;
-                } else {
-                  console.log('No assistant messages found in array');
-                  reviewBody = '⚠️ No assistant response found in execution log.';
-                }
-              } else if (executionLog.result) {
-                // Direct result field
-                reviewBody = executionLog.result;
-              } else if (executionLog.output) {
-                // Output field
-                reviewBody = executionLog.output;
-              } else if (executionLog.response) {
-                // Response field
-                reviewBody = executionLog.response;
-              } else if (executionLog.messages && Array.isArray(executionLog.messages)) {
-                // Messages array inside object
-                const extracted = extractFromMessages(executionLog.messages);
-                if (extracted) {
-                  reviewBody = extracted;
-                } else {
-                  reviewBody = '⚠️ No assistant response found in messages.';
-                }
-              } else if (typeof executionLog === 'string') {
-                // Plain string
-                reviewBody = executionLog;
+              if (!resultMessage) {
+                reviewBody = '⚠️ No result message found in execution log.';
+              } else if (resultMessage.subtype === 'success' && resultMessage.result) {
+                reviewBody = resultMessage.result;
+              } else if (resultMessage.is_error || resultMessage.subtype === 'error') {
+                const errorInfo = resultMessage.result || resultMessage.error || 'Unknown error';
+                reviewBody = `❌ **Claude Code encountered an error:**\n\n${errorInfo}`;
+              } else if (resultMessage.result) {
+                reviewBody = `⚠️ **Review completed with status: ${resultMessage.subtype}**\n\n${resultMessage.result}`;
               } else {
-                // Fallback: stringify the whole thing
-                console.log('Unknown format, raw content:', JSON.stringify(executionLog).substring(0, 500));
-                reviewBody = '⚠️ Could not parse Claude response format. Check workflow logs for details.';
+                reviewBody = '⚠️ Claude completed but produced no review output.';
               }
             } catch (error) {
               console.error('Error parsing execution log:', error);
@@ -385,7 +355,7 @@ jobs:
               body: fullComment
             });
 
-      # Step 7b: Print review to logs if dry_run
+      # Step 8b: Print review to logs if dry_run
       - name: Print review to logs (dry run)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         env:
@@ -393,27 +363,29 @@ jobs:
         run: |
           echo "=== DRY RUN - Review would be posted as comment ==="
           echo ""
-          echo "=== Execution file structure ==="
-          # Check if it's an array (claude-code-base-action format) or object
-          if jq -e 'type == "array"' "$EXECUTION_FILE" >/dev/null 2>&1; then
-            echo "Format: array of messages (length: $(jq 'length' "$EXECUTION_FILE"))"
+          echo "=== Extracting review from result message ==="
+          # Find the "result" message and extract based on subtype
+          RESULT_MSG=$(jq '[.[] | select(.type == "result")] | .[0]' "$EXECUTION_FILE" 2>/dev/null)
+          if [ "$RESULT_MSG" = "null" ] || [ -z "$RESULT_MSG" ]; then
+            echo "⚠️ No result message found"
           else
-            jq 'keys' "$EXECUTION_FILE" 2>/dev/null || echo "Not valid JSON or file not found"
-          fi
-          echo ""
-          echo "=== Attempting to extract review ==="
-          # Try array format first (claude-code-base-action), then object formats
-          if jq -e 'type == "array"' "$EXECUTION_FILE" >/dev/null 2>&1; then
-            # Array format: extract last assistant message content
-            jq -r '[.[] | select(.role == "assistant")] | last | if .content | type == "string" then .content elif .content | type == "array" then [.content[] | select(.type == "text") | .text] | join("\n\n") else "Could not extract" end' "$EXECUTION_FILE" 2>/dev/null || cat "$EXECUTION_FILE"
-          else
-            # Object format: try different possible paths
-            jq -r '.result // .output // .response // .messages[-1].content // "Could not extract"' "$EXECUTION_FILE" 2>/dev/null || cat "$EXECUTION_FILE"
+            SUBTYPE=$(echo "$RESULT_MSG" | jq -r '.subtype // "unknown"')
+            echo "Status: $SUBTYPE"
+            echo ""
+            if [ "$SUBTYPE" = "success" ]; then
+              echo "$RESULT_MSG" | jq -r '.result // "No result field"'
+            elif [ "$SUBTYPE" = "error" ]; then
+              echo "❌ Error:"
+              echo "$RESULT_MSG" | jq -r '.result // .error // "Unknown error"'
+            else
+              echo "⚠️ Status: $SUBTYPE"
+              echo "$RESULT_MSG" | jq -r '.result // "No result"'
+            fi
           fi
           echo ""
           echo "=== End of review ==="
 
-      # Step 8: Update reaction on completion (only for issue_comment trigger)
+      # Step 9: Update reaction on completion (only for issue_comment trigger)
       - name: Update reaction on success
         if: success() && github.event_name == 'issue_comment'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
