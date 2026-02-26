@@ -23,6 +23,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class LocalPartitionTest : public HiveConnectorTestBase {

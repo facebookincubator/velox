@@ -16,11 +16,12 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::text {
+using namespace facebook::velox::common::testutil;
 
 class BufferedWriterSinkTest : public testing::Test,
                                public velox::test::VectorTestBase {
@@ -30,7 +31,7 @@ class BufferedWriterSinkTest : public testing::Test,
     dwio::common::LocalFileSink::registerFactory();
     rootPool_ = memory::memoryManager()->addRootPool("BufferedWriterSinkTest");
     leafPool_ = rootPool_->addLeafChild("BufferedWriterSinkTest");
-    tempPath_ = exec::test::TempDirectoryPath::create();
+    tempPath_ = TempDirectoryPath::create();
   }
 
  protected:
@@ -40,7 +41,7 @@ class BufferedWriterSinkTest : public testing::Test,
 
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
-  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
+  std::shared_ptr<TempDirectoryPath> tempPath_;
 };
 
 TEST_F(BufferedWriterSinkTest, write) {
