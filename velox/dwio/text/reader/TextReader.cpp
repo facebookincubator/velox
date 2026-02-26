@@ -22,6 +22,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/type/Filter.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::text {
@@ -31,7 +32,25 @@ using common::CompressionKind;
 
 using dwio::common::EOFError;
 using dwio::common::RowReader;
-using dwio::common::verify;
+
+template <typename Filter, typename T>
+inline bool testFilter(const velox::common::Filter* filter, T value) {
+  if constexpr (std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+    return true;
+  } else {
+    return velox::common::applyFilter(
+        const_cast<Filter&>(static_cast<const Filter&>(*filter)), value);
+  }
+}
+
+template <typename Filter>
+inline bool testFilterNull(const velox::common::Filter* filter) {
+  if constexpr (std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+    return true;
+  } else {
+    return filter->testNull();
+  }
+}
 
 static constexpr std::string_view kTextfileCompressionExtensionGzip{".gz"};
 static constexpr std::string_view kTextfileCompressionExtensionDeflate{
@@ -60,7 +79,7 @@ void resizeVector(
       auto newSize = dataSize * 2;
       data->resize(newSize);
 
-      auto arrayVector = data->asChecked<ArrayVector>();
+      auto arrayVector = data->asUnchecked<ArrayVector>();
       auto rawOffsets = arrayVector->offsets()->asMutable<vector_size_t>();
       auto rawSizes = arrayVector->sizes()->asMutable<vector_size_t>();
 
@@ -77,7 +96,7 @@ void resizeVector(
       auto newSize = dataSize * 2;
       data->resize(newSize);
 
-      auto mapVector = data->asChecked<MapVector>();
+      auto mapVector = data->asUnchecked<MapVector>();
       auto rawOffsets = mapVector->offsets()->asMutable<vector_size_t>();
       auto rawSizes = mapVector->sizes()->asMutable<vector_size_t>();
 
@@ -129,23 +148,15 @@ FileContents::FileContents(
       pool{pool},
       fileLength{0},
       compression{CompressionKind::CompressionKind_NONE},
-      compressionOptions{},
-      needsEscape{} {
-  needsEscape.fill(false);
-  needsEscape.at(0) = true;
-}
+      compressionOptions{} {}
 
 TextRowReader::TextRowReader(
     std::shared_ptr<FileContents> fileContents,
     const RowReaderOptions& opts)
     : RowReader(),
       contents_{fileContents},
-      schemaWithId_{TypeWithId::create(fileContents->schema)},
       scanSpec_{opts.scanSpec()},
-      selectedSchema_{nullptr},
       options_{opts},
-      columnSelector_{
-          ColumnSelector::apply(opts.selector(), contents_->schema)},
       currentRow_{0},
       pos_{opts.offset()},
       atEOL_{false},
@@ -181,10 +192,10 @@ TextRowReader::TextRowReader(
 
     if (pos_ != 0) {
       unreadData_.clear();
-      (void)skipLine();
+      skipLine();
     }
     if (opts.skipRows() > 0) {
-      (void)seekToRow(opts.skipRows());
+      seekToRow(opts.skipRows());
     }
   } else {
     // compressed text files, the first split reads the whole file, rest read 0
@@ -210,80 +221,242 @@ TextRowReader::TextRowReader(
         contents_->fileLength);
 
     if (opts.skipRows() > 0) {
-      (void)seekToRow(opts.skipRows());
+      seekToRow(opts.skipRows());
     }
   }
 }
 
+#define TEXT_DISPATCH_FILTER(readerFunc, filterPtr)                           \
+  do {                                                                        \
+    const auto _fKind = (filterPtr) ? (filterPtr)->kind()                     \
+                                    : velox::common::FilterKind::kAlwaysTrue; \
+    switch (_fKind) {                                                         \
+      case velox::common::FilterKind::kAlwaysFalse:                           \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::AlwaysFalse>;           \
+        break;                                                                \
+      case velox::common::FilterKind::kAlwaysTrue:                            \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::AlwaysTrue>;            \
+        break;                                                                \
+      case velox::common::FilterKind::kIsNull:                                \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::IsNull>;                \
+        break;                                                                \
+      case velox::common::FilterKind::kIsNotNull:                             \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::IsNotNull>;             \
+        break;                                                                \
+      case velox::common::FilterKind::kBoolValue:                             \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::BoolValue>;             \
+        break;                                                                \
+      case velox::common::FilterKind::kBigintRange:                           \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::BigintRange>;           \
+        break;                                                                \
+      case velox::common::FilterKind::kNegatedBigintRange:                    \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::NegatedBigintRange>;    \
+        break;                                                                \
+      case velox::common::FilterKind::kBigintValuesUsingHashTable:            \
+        fileColumns_[i].reader = &TextRowReader::readerFunc<                  \
+            velox::common::BigintValuesUsingHashTable>;                       \
+        break;                                                                \
+      case velox::common::FilterKind::kBigintValuesUsingBitmask:              \
+        fileColumns_[i].reader = &TextRowReader::readerFunc<                  \
+            velox::common::BigintValuesUsingBitmask>;                         \
+        break;                                                                \
+      case velox::common::FilterKind::kNegatedBigintValuesUsingHashTable:     \
+        fileColumns_[i].reader = &TextRowReader::readerFunc<                  \
+            velox::common::NegatedBigintValuesUsingHashTable>;                \
+        break;                                                                \
+      case velox::common::FilterKind::kNegatedBigintValuesUsingBitmask:       \
+        fileColumns_[i].reader = &TextRowReader::readerFunc<                  \
+            velox::common::NegatedBigintValuesUsingBitmask>;                  \
+        break;                                                                \
+      case velox::common::FilterKind::kBigintValuesUsingBloomFilter:          \
+        fileColumns_[i].reader = &TextRowReader::readerFunc<                  \
+            velox::common::BigintValuesUsingBloomFilter>;                     \
+        break;                                                                \
+      case velox::common::FilterKind::kDoubleRange:                           \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::DoubleRange>;           \
+        break;                                                                \
+      case velox::common::FilterKind::kFloatRange:                            \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::FloatRange>;            \
+        break;                                                                \
+      case velox::common::FilterKind::kBytesRange:                            \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::BytesRange>;            \
+        break;                                                                \
+      case velox::common::FilterKind::kNegatedBytesRange:                     \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::NegatedBytesRange>;     \
+        break;                                                                \
+      case velox::common::FilterKind::kBytesValues:                           \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::BytesValues>;           \
+        break;                                                                \
+      case velox::common::FilterKind::kNegatedBytesValues:                    \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::NegatedBytesValues>;    \
+        break;                                                                \
+      case velox::common::FilterKind::kBigintMultiRange:                      \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::BigintMultiRange>;      \
+        break;                                                                \
+      case velox::common::FilterKind::kMultiRange:                            \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::MultiRange>;            \
+        break;                                                                \
+      case velox::common::FilterKind::kHugeintRange:                          \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::HugeintRange>;          \
+        break;                                                                \
+      case velox::common::FilterKind::kTimestampRange:                        \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::TimestampRange>;        \
+        break;                                                                \
+      case velox::common::FilterKind::kHugeintValuesUsingHashTable:           \
+        fileColumns_[i].reader = &TextRowReader::readerFunc<                  \
+            velox::common::HugeintValuesUsingHashTable>;                      \
+        break;                                                                \
+      default:                                                                \
+        fileColumns_[i].reader =                                              \
+            &TextRowReader::readerFunc<velox::common::Filter>;                \
+        break;                                                                \
+    }                                                                         \
+  } while (0)
+
 void TextRowReader::initializeColumnReaders() {
-  auto childCount = schemaWithId_->size();
-  columnReaders_.reserve(childCount);
+  const auto& fileType = getFileType();
+  const size_t fileColumnCount = fileType.size();
+  fileColumns_.resize(fileColumnCount);
+  const auto& scanSpecs = scanSpec_->children();
+  for (const auto& scanSpec : scanSpecs) {
+    if (scanSpec->channel() == ScanSpec::kNoChannel ||
+        !scanSpec->projectOut()) {
+      continue;
+    }
 
-  for (vector_size_t i = 0; i < childCount; i++) {
-    const auto& ct = schemaWithId_->childAt(i);
-    const auto& type = ct->type();
-    auto kind = type->kind();
+    const auto& fileName = scanSpec->fieldName();
+    auto fileTypeIdx = fileType.getChildIdx(fileName);
+    fileColumns_[fileTypeIdx].resultVectorIdx = scanSpec->channel();
+  }
 
+  const auto& types = fileType.children();
+  const auto& names = fileType.names();
+  for (vector_size_t i = 0; i < fileColumnCount; ++i) {
+    const velox::common::Filter* filter = nullptr;
+    auto* childSpec = scanSpec_->childByName(names[i]);
+    if (childSpec) {
+      filter = childSpec->filter();
+    }
+
+    const auto& type = *types[i];
+    auto kind = type.kind();
     switch (kind) {
       case TypeKind::INTEGER:
-        if (type->isDate()) {
-          columnReaders_.push_back(&TextRowReader::readDate);
+        if (type.isDate()) {
+          TEXT_DISPATCH_FILTER(readDate, filter);
         } else {
-          columnReaders_.push_back(&TextRowReader::readInteger);
+          TEXT_DISPATCH_FILTER(readInteger, filter);
         }
         break;
       case TypeKind::BIGINT:
-        if (type->isShortDecimal()) {
-          columnReaders_.push_back(&TextRowReader::readBigIntDecimal);
+        if (type.isShortDecimal()) {
+          TEXT_DISPATCH_FILTER(readBigIntDecimal, filter);
         } else {
-          columnReaders_.push_back(&TextRowReader::readBigInt);
+          TEXT_DISPATCH_FILTER(readBigInt, filter);
         }
         break;
       case TypeKind::HUGEINT:
-        if (type->isLongDecimal()) {
-          columnReaders_.push_back(&TextRowReader::readHugeIntDecimal);
+        if (type.isLongDecimal()) {
+          TEXT_DISPATCH_FILTER(readHugeIntDecimal, filter);
         } else {
-          columnReaders_.push_back(&TextRowReader::readHugeInt);
+          TEXT_DISPATCH_FILTER(readHugeInt, filter);
         }
         break;
       case TypeKind::SMALLINT:
-        columnReaders_.push_back(&TextRowReader::readSmallInt);
+        TEXT_DISPATCH_FILTER(readSmallInt, filter);
         break;
       case TypeKind::TINYINT:
-        columnReaders_.push_back(&TextRowReader::readTinyInt);
+        TEXT_DISPATCH_FILTER(readTinyInt, filter);
         break;
       case TypeKind::BOOLEAN:
-        columnReaders_.push_back(&TextRowReader::readBoolean);
+        TEXT_DISPATCH_FILTER(readBoolean, filter);
         break;
       case TypeKind::VARCHAR:
-        columnReaders_.push_back(&TextRowReader::readVarChar);
+        TEXT_DISPATCH_FILTER(readVarChar, filter);
         break;
       case TypeKind::VARBINARY:
-        columnReaders_.push_back(&TextRowReader::readVarBinary);
+        TEXT_DISPATCH_FILTER(readVarBinary, filter);
         break;
       case TypeKind::REAL:
-        columnReaders_.push_back(&TextRowReader::readReal);
+        TEXT_DISPATCH_FILTER(readReal, filter);
         break;
       case TypeKind::DOUBLE:
-        columnReaders_.push_back(&TextRowReader::readDouble);
+        TEXT_DISPATCH_FILTER(readDouble, filter);
         break;
       case TypeKind::TIMESTAMP:
-        columnReaders_.push_back(&TextRowReader::readTimestamp);
+        TEXT_DISPATCH_FILTER(readTimestamp, filter);
         break;
       case TypeKind::ARRAY:
-        columnReaders_.push_back(&TextRowReader::readArray);
+        TEXT_DISPATCH_FILTER(readArray, filter);
         break;
       case TypeKind::MAP:
-        columnReaders_.push_back(&TextRowReader::readMap);
+        TEXT_DISPATCH_FILTER(readMap, filter);
         break;
       case TypeKind::ROW:
-        columnReaders_.push_back(&TextRowReader::readRow);
+        TEXT_DISPATCH_FILTER(readRow, filter);
         break;
       default:
         VELOX_NYI("Unsupported type in column reader (kind code {})", kind);
     }
+    fileColumns_[i].filter = filter;
   }
 }
+
+namespace {
+void processMutation(RowVectorPtr& rowVecPtr, const Mutation* mutation) {
+  if (!mutation) {
+    return;
+  }
+  const auto rowsRead = rowVecPtr->size();
+  std::vector<uint64_t> passed(bits::nwords(rowsRead), -1);
+  if (mutation->deletedRows) {
+    bits::andWithNegatedBits(passed.data(), mutation->deletedRows, 0, rowsRead);
+  }
+  if (mutation->randomSkip) {
+    bits::forEachSetBit(passed.data(), 0, rowsRead, [&](auto i) {
+      if (!mutation->randomSkip->testOne()) {
+        bits::clearBit(passed.data(), i);
+      }
+    });
+  }
+  auto numPassed = bits::countBits(passed.data(), 0, rowsRead);
+  if (numPassed == 0) {
+    rowVecPtr->resize(0);
+  } else if (numPassed < rowsRead) {
+    auto indices = allocateIndices(numPassed, rowVecPtr->pool());
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+    vector_size_t j = 0;
+    bits::forEachSetBit(
+        passed.data(), 0, rowsRead, [&](auto i) { rawIndices[j++] = i; });
+    for (auto& child : rowVecPtr->children()) {
+      if (!child) {
+        continue;
+      }
+      child->disableMemo();
+      child = BaseVector::wrapInDictionary(
+          nullptr, indices, numPassed, std::move(child));
+    }
+    rowVecPtr->resize(numPassed);
+  }
+}
+} // namespace
 
 uint64_t TextRowReader::next(
     uint64_t rows,
@@ -294,64 +467,55 @@ uint64_t TextRowReader::next(
   }
 
   RowVectorPtr rowVecPtr = std::dynamic_pointer_cast<RowVector>(result);
-  rowVecPtr->resize((vector_size_t)rows);
+  rowVecPtr->resize(static_cast<vector_size_t>(rows));
+  auto& children = rowVecPtr->children();
 
-  const auto& inputType = result->type()->asRow();
-  for (vector_size_t i = 0; i < inputType.size(); i++) {
-    auto* child = rowVecPtr->childAt(i).get();
-    child->resize(static_cast<vector_size_t>(rows));
-  }
-
-  const auto& fileType = getFileType()->asRow();
+  const auto& fileType = getFileType();
+  const auto& fileTypes = fileType.children();
+  const auto& fileNames = fileType.names();
   const size_t fileColumnCount = fileType.size();
-  if (fileToInputTypeIdx_.empty()) { // filled only once
-    fileToInputTypeIdx_.resize(fileColumnCount, kNotProjected);
-
-    const auto& scanSpecs = scanSpec_->children();
-    const size_t size = scanSpecs.size();
-    for (const auto& scanSpec : scanSpecs) {
-      VELOX_CHECK(
-          !scanSpec->hasFilter(),
-          "Filter pushdown isn't supported for TextReader");
-      if (scanSpec->channel() == ScanSpec::kNoChannel ||
-          !scanSpec->projectOut()) {
-        continue;
-      }
-
-      const auto& fileName = scanSpec->fieldName();
-      auto fileTypeIdx = fileType.getChildIdx(fileName);
-      fileToInputTypeIdx_[fileTypeIdx] = scanSpec->channel();
-    }
-  }
 
   vector_size_t rowsRead = 0;
   const auto initialPos = pos_;
   while (!atEOF_ && rowsRead < rows) {
     resetLine();
     rowHasError_ = false;
-    for (vector_size_t i = 0; i < fileColumnCount; i++) {
-      auto inputTypeIdx = fileToInputTypeIdx_[i];
-      if (inputTypeIdx == kNotProjected) {
-        // skip this column by reading it and ignoring res
+    bool skipRows = false;
+    for (size_t i = 0; i < fileColumnCount; i++) {
+      const auto& col = fileColumns_[i];
+      DelimType delim = DelimTypeNone;
+      if (skipRows) {
         bool isNull = false;
-        DelimType delim = DelimTypeNone;
         getString(*this, isNull, delim);
         continue;
       }
 
-      DelimType delim = DelimTypeNone;
-      auto childVector = rowVecPtr->childAt(inputTypeIdx).get();
-
-      bool hadErrorBefore = rowHasError_;
-      (this->*columnReaders_[i])(
-          *fileType.childAt(i), childVector, rowsRead, delim);
-      if (rowHasError_ && !hadErrorBefore && contents_->onRowReject) {
-        std::string_view errorColumnName = fileType.nameOf(i);
-        const Type* errorColumnType = fileType.childAt(i).get();
-        RejectedRow err{
-            currentRow_, errorColumnName, *errorColumnType, errorValue_};
-        contents_->onRowReject(err);
+      BaseVector* childVector;
+      if (col.resultVectorIdx == kNotProjected) {
+        if (!col.filter) {
+          bool isNull = false;
+          getString(*this, isNull, delim);
+          continue;
+        }
+        // else ->
+        // column not projected but has a filter we just
+        // parse it and test the filter.
+        childVector = nullptr;
+      } else {
+        VELOX_DCHECK_LT(col.resultVectorIdx, children.size());
+        childVector = children[col.resultVectorIdx].get();
       }
+
+      const auto& type = *fileTypes[i];
+      // columnReader returns true -> filterOk, else filterFailed
+      skipRows =
+          !(this->*col.reader)(type, childVector, rowsRead, delim, col.filter);
+      if (rowHasError_ && contents_->onRowReject) {
+        RejectedRow err{currentRow_, fileNames[i], type, errorValue_};
+        contents_->onRowReject(err);
+        skipRows = true;
+      }
+      ownedString_.clear();
     }
 
     if (atEOF_ && getLength() == std::numeric_limits<uint64_t>::max()) {
@@ -362,7 +526,7 @@ uint64_t TextRowReader::next(
     (void)skipLine();
     ++currentRow_;
 
-    if (rowHasError_ && contents_->onRowReject) {
+    if (skipRows) {
       // we reject that error so we don't increment the size
       // (incrementing size means that we append null on error)
     } else {
@@ -390,79 +554,9 @@ uint64_t TextRowReader::next(
   // Resize the row vector to the actual number of rows read.
   // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(rowsRead);
-
-  if (mutation) {
-    std::vector<uint64_t> passed(bits::nwords(rowsRead), -1);
-    if (mutation->deletedRows) {
-      bits::andWithNegatedBits(
-          passed.data(), mutation->deletedRows, 0, rowsRead);
-    }
-    if (mutation->randomSkip) {
-      bits::forEachSetBit(passed.data(), 0, rowsRead, [&](auto i) {
-        if (!mutation->randomSkip->testOne()) {
-          bits::clearBit(passed.data(), i);
-        }
-      });
-    }
-    auto numPassed = bits::countBits(passed.data(), 0, rowsRead);
-    if (numPassed == 0) {
-      rowVecPtr->resize(0);
-    } else if (numPassed < rowsRead) {
-      auto indices = allocateIndices(numPassed, rowVecPtr->pool());
-      auto* rawIndices = indices->asMutable<vector_size_t>();
-      vector_size_t j = 0;
-      bits::forEachSetBit(
-          passed.data(), 0, rowsRead, [&](auto i) { rawIndices[j++] = i; });
-      for (auto& child : rowVecPtr->children()) {
-        if (!child) {
-          continue;
-        }
-        child->disableMemo();
-        child = BaseVector::wrapInDictionary(
-            nullptr, indices, numPassed, std::move(child));
-      }
-      rowVecPtr->resize(numPassed);
-    }
-  }
-
+  processMutation(rowVecPtr, mutation);
   result = std::move(rowVecPtr);
   return result->size();
-}
-
-int64_t TextRowReader::nextRowNumber() {
-  return atEOF_ ? -1 : static_cast<int64_t>(currentRow_) + 1;
-}
-
-int64_t TextRowReader::nextReadSize(uint64_t size) {
-  return static_cast<int64_t>(std::min(fileLength_ - currentRow_, size));
-}
-
-void TextRowReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& /*stats*/) const {
-  // No-op for non-selective reader.
-}
-
-void TextRowReader::resetFilterCaches() {
-  // No-op for non-selective reader.
-}
-
-std::optional<size_t> TextRowReader::estimatedRowSize() const {
-  return std::nullopt;
-}
-
-const ColumnSelector& TextRowReader::getColumnSelector() const {
-  return columnSelector_;
-}
-
-std::shared_ptr<const TypeWithId> TextRowReader::getSelectedType() const {
-  if (!selectedSchema_) {
-    selectedSchema_ = columnSelector_.buildSelected();
-  }
-  return selectedSchema_;
-}
-
-uint64_t TextRowReader::getRowNumber() const {
-  return currentRow_;
 }
 
 uint64_t TextRowReader::seekToRow(uint64_t rowNumber) {
@@ -475,21 +569,6 @@ uint64_t TextRowReader::seekToRow(uint64_t rowNumber) {
   }
 
   return currentRow_;
-}
-
-const RowReaderOptions& TextRowReader::getDefaultOpts() {
-  static RowReaderOptions defaultOpts;
-  return defaultOpts;
-}
-
-bool TextRowReader::isSelectedField(
-    const std::shared_ptr<const TypeWithId>& type) {
-  auto ci = type->id();
-  return columnSelector_.shouldReadNode(ci);
-}
-
-const char* TextRowReader::getStreamNameData() const {
-  return contents_->input->getName().data();
 }
 
 uint64_t TextRowReader::getLength() {
@@ -544,11 +623,6 @@ void TextRowReader::resetEOE(DelimType& delim) {
   if (delim >= d) {
     setNone(delim);
   }
-}
-
-bool TextRowReader::isEOE(DelimType delim) {
-  // Test if delim is the EOE at the current depth.
-  return (delim == (depth_ + DelimTypeEOE));
 }
 
 void TextRowReader::setEOR(DelimType& delim) {
@@ -654,22 +728,44 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
   return th.ownedStringView();
 }
 
-template <class T>
-void TextRowReader::setValueFromString(
+template <typename T, typename Filter>
+bool TextRowReader::setValueFromString(
     std::string_view str,
     BaseVector* data,
     vector_size_t insertionRow,
-    std::function<std::optional<T>(std::string_view)> convert) {
-  if ((atEOF_ && atSOL_) || data == nullptr) {
-    return;
+    std::function<std::optional<T>(std::string_view)> convert,
+    const velox::common::Filter* filter) {
+  if (atEOF_ && atSOL_) {
+    return true;
   }
-  auto flatVector = data->asChecked<FlatVector<T>>();
+
   auto result = str.empty() ? std::nullopt : convert(str);
+
+  if (data == nullptr) {
+    // No output vector — still evaluate filter for non-projected columns.
+    if (result) {
+      return testFilter<Filter>(filter, *result);
+    }
+    return testFilterNull<Filter>(filter);
+  }
+
+  auto flatVector = data->asUnchecked<FlatVector<T>>();
   if (result) {
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!testFilter<Filter>(filter, *result)) {
+        return false;
+      }
+    }
     flatVector->set(insertionRow, *result);
   } else {
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!filter->testNull()) {
+        return false;
+      }
+    }
     flatVector->setNull(insertionRow, true);
   }
+  return true;
 }
 
 uint8_t TextRowReader::getByteOptimized(DelimType& delim) {
@@ -932,6 +1028,7 @@ bool TextRowReader::getBoolean(
           (static_cast<unsigned char>(str[2]) | 0x20U) == 'f') {
         return false;
       }
+      break;
     case 4:
       if ((static_cast<unsigned char>(str[0]) | 0x20U) == 't' &&
           (static_cast<unsigned char>(str[1]) | 0x20U) == 'r' &&
@@ -964,110 +1061,90 @@ void TextRowReader::readElement(
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
     DelimType& delim) {
-  bool isNull = false;
+  // readElement is used for nested type elements (arrays, maps, rows)
+  // where no filter applies, so we use AlwaysTrue with nullptr filter.
+  using NoFilter = velox::common::AlwaysTrue;
   switch (t->kind()) {
     case TypeKind::INTEGER:
       if (t->isDate()) {
-        readDate(*t, data, insertionRow, delim);
+        readDate<NoFilter>(*t, data, insertionRow, delim, nullptr);
       } else {
-        readInteger(*t, data, insertionRow, delim);
+        readInteger<NoFilter>(*t, data, insertionRow, delim, nullptr);
       }
       break;
 
     case TypeKind::BIGINT:
       if (t->isShortDecimal()) {
-        readBigIntDecimal(*t, data, insertionRow, delim);
+        readBigIntDecimal<NoFilter>(*t, data, insertionRow, delim, nullptr);
       } else {
-        readBigInt(*t, data, insertionRow, delim);
+        readBigInt<NoFilter>(*t, data, insertionRow, delim, nullptr);
       }
       break;
 
     case TypeKind::HUGEINT:
       if (t->isLongDecimal()) {
-        readHugeIntDecimal(*t, data, insertionRow, delim);
+        readHugeIntDecimal<NoFilter>(*t, data, insertionRow, delim, nullptr);
       } else {
-        readHugeInt(*t, data, insertionRow, delim);
+        readHugeInt<NoFilter>(*t, data, insertionRow, delim, nullptr);
       }
       break;
 
     case TypeKind::SMALLINT:
-      readSmallInt(*t, data, insertionRow, delim);
+      readSmallInt<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::VARBINARY:
-      readVarBinary(*t, data, insertionRow, delim);
+      readVarBinary<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::VARCHAR:
-      readVarChar(*t, data, insertionRow, delim);
+      readVarChar<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::BOOLEAN:
-      readBoolean(*t, data, insertionRow, delim);
+      readBoolean<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::TINYINT:
-      readTinyInt(*t, data, insertionRow, delim);
+      readTinyInt<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::ARRAY:
-      readArray(*t, data, insertionRow, delim);
+      readArray<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::ROW:
-      readRow(*t, data, insertionRow, delim);
+      readRow<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::MAP:
-      readMap(*t, data, insertionRow, delim);
+      readMap<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::REAL:
-      readReal(*t, data, insertionRow, delim);
+      readReal<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::DOUBLE:
-      readDouble(*t, data, insertionRow, delim);
+      readDouble<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     case TypeKind::TIMESTAMP:
-      readTimestamp(*t, data, insertionRow, delim);
+      readTimestamp<NoFilter>(*t, data, insertionRow, delim, nullptr);
       break;
 
     default:
       VELOX_NYI("readElement unhandled type (kind code {})", t->kind());
   }
-
-  ownedString_.clear();
 }
 
-uint64_t maxStreamsForType(const std::shared_ptr<const Type>& type) {
-  switch (type->kind()) {
-    case TypeKind::ROW:
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE:
-    case TypeKind::BOOLEAN:
-    case TypeKind::TINYINT:
-    case TypeKind::ARRAY:
-    case TypeKind::MAP:
-    case TypeKind::VARBINARY:
-    case TypeKind::TIMESTAMP:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::VARCHAR:
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-template <class T, class reqT, class F>
-void TextRowReader::putValue(
+template <typename T, typename Filter, typename F>
+bool TextRowReader::putValue(
     const F& f,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   T v;
   if (isEOR(delim)) {
@@ -1077,79 +1154,99 @@ void TextRowReader::putValue(
     v = f(*this, isNull, delim);
   }
 
-  // Early return if no data vector or at EOF
-  if ((atEOF_ && atSOL_) || (data == nullptr)) {
-    return;
+  if (atEOF_ && atSOL_) {
+    return true;
   }
 
-  // Cast to FlatVector<reqT>
-  auto flatVector = data ? data->asChecked<FlatVector<reqT>>() : nullptr;
-  if (!flatVector) {
-    VELOX_FAIL("Vector for column type does not match");
-    return;
+  if (data == nullptr) {
+    // No output vector — still evaluate filter for non-projected columns.
+    if (isNull) {
+      return testFilterNull<Filter>(filter);
+    }
+    return testFilter<Filter>(filter, v);
   }
 
-  // Handle null property.
+  auto flatVector = data->asUnchecked<FlatVector<T>>();
   if (isNull) {
-    flatVector->setNull(insertionRow, isNull);
-    return;
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!filter->testNull()) {
+        return false;
+      }
+    }
+    flatVector->setNull(insertionRow, true);
+    return true;
+  }
+
+  if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+    if (!testFilter<Filter>(filter, v)) {
+      return false;
+    }
   }
 
   flatVector->set(insertionRow, v);
+  return true;
 }
 
-const std::shared_ptr<const RowType>& TextRowReader::getFileType() const {
-  return contents_->schema;
+const RowType& TextRowReader::getFileType() const {
+  return *contents_->schema;
 }
 
 // Specialized column readers implementation
 
-void TextRowReader::readInteger(
+template <typename Filter>
+bool TextRowReader::readInteger(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<int32_t, int32_t>(getNumeric<int32_t>, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<int32_t, int32_t, Filter>(
+      getNumeric<int32_t>, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readDate(
+template <typename Filter>
+bool TextRowReader::readDate(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
-  setValueFromString<int32_t>(
+  return setValueFromString<int32_t, Filter>(
       str,
       data,
       insertionRow,
       [](std::string_view s) -> std::optional<int32_t> {
         return DATE()->toDays(s);
-      });
-  ownedString_.clear();
+      },
+      filter);
 }
 
-void TextRowReader::readBigInt(
+template <typename Filter>
+bool TextRowReader::readBigInt(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<int64_t, int64_t>(getNumeric<int64_t>, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<int64_t, int64_t, Filter>(
+      getNumeric<int64_t>, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readBigIntDecimal(
+template <typename Filter>
+bool TextRowReader::readBigIntDecimal(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
   auto decimalParams = getDecimalPrecisionScale(type);
   const auto precision = decimalParams.first;
   const auto scale = decimalParams.second;
-  setValueFromString<int64_t>(
+  return setValueFromString<int64_t, Filter>(
       str,
       data,
       insertionRow,
@@ -1161,86 +1258,129 @@ void TextRowReader::readBigIntDecimal(
             scale,
             v);
         return status.ok() ? std::optional<int64_t>(v) : std::nullopt;
-      });
-  ownedString_.clear();
+      },
+      filter);
 }
 
-void TextRowReader::readSmallInt(
+template <typename Filter>
+bool TextRowReader::readSmallInt(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<int16_t, int16_t>(getNumeric<int16_t>, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<int16_t, int16_t, Filter>(
+      getNumeric<int16_t>, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readTinyInt(
+template <typename Filter>
+bool TextRowReader::readTinyInt(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<int8_t, int8_t>(getNumeric<int8_t>, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<int8_t, int8_t, Filter>(
+      getNumeric<int8_t>, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readBoolean(
+template <typename Filter>
+bool TextRowReader::readBoolean(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<bool, bool>(getBoolean, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<bool, bool, Filter>(
+      getBoolean, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readVarChar(
+template <typename Filter>
+bool TextRowReader::readVarChar(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
 
-  if ((atEOF_ && atSOL_) || (data == nullptr)) {
-    return;
+  if (atEOF_ && atSOL_) {
+    return true;
   }
 
-  const auto& flatVector = data->asChecked<FlatVector<StringView>>();
-  if (!flatVector) {
-    VELOX_FAIL(
-        "Vector for column type does not match: expected FlatVector<StringView>, got {}",
-        data ? data->type()->toString() : "null");
-    return;
+  if (data == nullptr) {
+    // No output vector — still evaluate filter for non-projected columns.
+    if (isNull) {
+      return testFilterNull<Filter>(filter);
+    }
+    return testFilter<Filter>(filter, str);
   }
 
+  if (isNull) {
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!filter->testNull()) {
+        return false;
+      }
+    }
+    const auto& flatVector = data->asUnchecked<FlatVector<StringView>>();
+    flatVector->setNull(insertionRow, true);
+    return true;
+  }
+
+  if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+    if (!testFilter<Filter>(filter, str)) {
+      return false;
+    }
+  }
+
+  const auto& flatVector = data->asUnchecked<FlatVector<StringView>>();
   flatVector->set(
       insertionRow, StringView(str.data(), static_cast<int32_t>(str.size())));
 
-  if (isNull) {
-    flatVector->setNull(insertionRow, true);
-  }
-
-  ownedString_.clear();
+  return true;
 }
 
-void TextRowReader::readVarBinary(
+template <typename Filter>
+bool TextRowReader::readVarBinary(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
 
-  if ((atEOF_ && atSOL_) || (data == nullptr)) {
-    return;
+  if (atEOF_ && atSOL_) {
+    return true;
   }
 
-  const auto& flatVector = data->asChecked<FlatVector<StringView>>();
-  if (!flatVector) {
-    VELOX_FAIL(
-        "Vector for column type does not match: expected FlatVector<StringView>, got {}",
-        data ? data->type()->toString() : "null");
-    return;
+  if (data == nullptr) {
+    // No output vector — still evaluate filter for non-projected columns.
+    if (isNull) {
+      return testFilterNull<Filter>(filter);
+    }
+    return testFilter<Filter>(filter, str);
   }
+
+  if (isNull) {
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!filter->testNull()) {
+        return false;
+      }
+    }
+    const auto& flatVector = data->asUnchecked<FlatVector<StringView>>();
+    flatVector->setNull(insertionRow, true);
+    return true;
+  }
+
+  if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+    if (!testFilter<Filter>(filter, str)) {
+      return false;
+    }
+  }
+
+  const auto& flatVector = data->asUnchecked<FlatVector<StringView>>();
 
   size_t len = str.size();
   const auto blen = encoding::Base64::calculateDecodedSize(str.data(), len);
@@ -1256,99 +1396,120 @@ void TextRowReader::readVarBinary(
   } else {
     varBinBuf_->resize(str.size());
     VELOX_CHECK_NOT_NULL(str.data());
-    len = str.size();
     memcpy(varBinBuf_->data(), str.data(), str.size());
     flatVector->set(
         insertionRow,
         StringView(varBinBuf_->data(), static_cast<int32_t>(str.size())));
   }
 
-  if (isNull) {
-    flatVector->setNull(insertionRow, true);
-  }
-
-  ownedString_.clear();
+  return true;
 }
 
-void TextRowReader::readReal(
+template <typename Filter>
+bool TextRowReader::readReal(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<float, float>(getNumeric<float>, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<float, float, Filter>(
+      getNumeric<float>, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readDouble(
+template <typename Filter>
+bool TextRowReader::readDouble(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
-  putValue<double, double>(getNumeric<double>, data, insertionRow, delim);
-  ownedString_.clear();
+    DelimType& delim,
+    const velox::common::Filter* filter) {
+  return putValue<double, double, Filter>(
+      getNumeric<double>, data, insertionRow, delim, filter);
 }
 
-void TextRowReader::readTimestamp(
+template <typename Filter>
+bool TextRowReader::readTimestamp(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
 
-  if ((atEOF_ && atSOL_) || (data == nullptr)) {
-    return;
+  if (atEOF_ && atSOL_) {
+    return true;
   }
 
-  auto flatVector = data->asChecked<FlatVector<Timestamp>>();
-  if (!flatVector) {
-    VELOX_FAIL(
-        "Vector for column type does not match: expected FlatVector<Timestamp>, got {}",
-        data ? data->type()->toString() : "null");
-    return;
+  if (data == nullptr) {
+    // No output vector — still evaluate filter for non-projected columns.
+    if (str.empty()) {
+      return testFilterNull<Filter>(filter);
+    }
+    auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(str).thenOrThrow(
+        folly::identity,
+        [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
+    auto value = Timestamp{ts.getSeconds(), ts.getNanos()};
+    return testFilter<Filter>(filter, value);
   }
+
+  auto flatVector = data->asUnchecked<FlatVector<Timestamp>>();
 
   if (str.empty()) {
-    isNull = true;
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!filter->testNull()) {
+        return false;
+      }
+    }
     flatVector->setNull(insertionRow, true);
   } else {
     auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(str).thenOrThrow(
         folly::identity,
         [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
-    flatVector->set(insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
+    auto value = Timestamp{ts.getSeconds(), ts.getNanos()};
+    if constexpr (!std::is_same_v<Filter, velox::common::AlwaysTrue>) {
+      if (!testFilter<Filter>(filter, value)) {
+        return false;
+      }
+    }
+    flatVector->set(insertionRow, value);
   }
 
-  ownedString_.clear();
+  return true;
 }
 
-void TextRowReader::readHugeInt(
+template <typename Filter>
+bool TextRowReader::readHugeInt(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
-  setValueFromString<int128_t>(
+  return setValueFromString<int128_t, Filter>(
       str,
       data,
       insertionRow,
       [](std::string_view s) -> std::optional<int128_t> {
-        return HugeInt::parse(std::string(s));
-      });
-  ownedString_.clear();
+        return HugeInt::parse(s);
+      },
+      filter);
 }
 
-void TextRowReader::readHugeIntDecimal(
+template <typename Filter>
+bool TextRowReader::readHugeIntDecimal(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto str = getString(*this, isNull, delim);
   auto decimalParams = getDecimalPrecisionScale(type);
   const auto precision = decimalParams.first;
   const auto scale = decimalParams.second;
-  setValueFromString<int128_t>(
+  return setValueFromString<int128_t, Filter>(
       str,
       data,
       insertionRow,
@@ -1360,18 +1521,20 @@ void TextRowReader::readHugeIntDecimal(
             scale,
             v);
         return status.ok() ? std::optional<int128_t>(v) : std::nullopt;
-      });
-  ownedString_.clear();
+      },
+      filter);
 }
 
-void TextRowReader::readArray(
+template <typename Filter>
+bool TextRowReader::readArray(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto& ct = type.childAt(0);
-  const auto& arrayVector = data ? data->asChecked<ArrayVector>() : nullptr;
+  const auto& arrayVector = data ? data->asUnchecked<ArrayVector>() : nullptr;
 
   incrementDepth();
   (void)getEOR(delim, isNull);
@@ -1401,7 +1564,7 @@ void TextRowReader::readArray(
 
         if (atEOF_ && atSOL_) {
           decrementDepth(delim);
-          return;
+          return true;
         }
       }
     }
@@ -1413,19 +1576,21 @@ void TextRowReader::readArray(
     }
   }
   decrementDepth(delim);
-  ownedString_.clear();
+  return true;
 }
 
-void TextRowReader::readMap(
+template <typename Filter>
+bool TextRowReader::readMap(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto& mapt = type.asMap();
   const auto& key = mapt.keyType();
   const auto& value = mapt.valueType();
-  const auto& mapVector = data ? data->asChecked<MapVector>() : nullptr;
+  const auto& mapVector = data ? data->asUnchecked<MapVector>() : nullptr;
   incrementDepth();
   (void)getEOR(delim, isNull);
 
@@ -1457,7 +1622,7 @@ void TextRowReader::readMap(
           rawOffsets[insertionRow + 1] = startElementIdx + elementCount;
           decrementDepth(delim);
           decrementDepth(delim);
-          return;
+          return true;
         }
         resetEOE(delim);
 
@@ -1483,17 +1648,19 @@ void TextRowReader::readMap(
     }
   }
   decrementDepth(delim);
-  ownedString_.clear();
+  return true;
 }
 
-void TextRowReader::readRow(
+template <typename Filter>
+bool TextRowReader::readRow(
     const Type& type,
     BaseVector* FOLLY_NULLABLE data,
     vector_size_t insertionRow,
-    DelimType& delim) {
+    DelimType& delim,
+    const velox::common::Filter* filter) {
   bool isNull = false;
   const auto& childCount = type.size();
-  const auto& rowVector = data ? data->asChecked<RowVector>() : nullptr;
+  const auto& rowVector = data ? data->asUnchecked<RowVector>() : nullptr;
   incrementDepth();
 
   if (rowVector != nullptr) {
@@ -1515,7 +1682,7 @@ void TextRowReader::readRow(
 
         if (atEOF_ && atSOL_) {
           decrementDepth(delim);
-          return;
+          return true;
         }
       }
     }
@@ -1531,29 +1698,20 @@ void TextRowReader::readRow(
 
   decrementDepth(delim);
   setEOE(delim);
-  ownedString_.clear();
+  return true;
 }
 
 TextReader::TextReader(
-    const ReaderOptions& options,
+    ReaderOptions options,
     std::unique_ptr<BufferedInput> input)
-    : options_{options} {
+    : options_{std::move(options)} {
   auto schema = options_.fileSchema();
   VELOX_USER_CHECK_NOT_NULL(schema, "File schema for TEXT must be set.");
 
-  if (!schema) {
-    // Create dummy for testing.
-    internalSchema_ = std::dynamic_pointer_cast<const RowType>(
-        type::fbhive::HiveTypeParser().parse("struct<col0:string>"));
-    DWIO_ENSURE_NOT_NULL(internalSchema_.get());
-    schema = internalSchema_;
-  }
-  schemaWithId_ = TypeWithId::create(schema);
   contents_ = std::make_shared<FileContents>(options_.memoryPool(), schema);
 
-  if (!contents_->schema->isRow()) {
-    throw std::invalid_argument("file schema must be a ROW type");
-  }
+  VELOX_USER_CHECK(
+      contents_->schema->isRow(), "File schema must be a ROW type");
 
   contents_->input = std::move(input);
 
@@ -1582,17 +1740,8 @@ TextReader::TextReader(
    * ambiguity
    */
 
-  // Set the SerDe options.
   contents_->serDeOptions = options_.serDeOptions();
   contents_->onRowReject = options_.onRowReject();
-  if (contents_->serDeOptions.isEscaped) {
-    for (auto delim : contents_->serDeOptions.separators) {
-      contents_->needsEscape.at(delim) = true;
-    }
-    contents_->needsEscape.at(contents_->serDeOptions.escapeChar) = true;
-  }
-
-  // Validate SerDe options.
   VELOX_CHECK(
       contents_->serDeOptions.nullString != "\r",
       "\'\\r\' is not allowed to be nullString");
@@ -1619,10 +1768,6 @@ const std::shared_ptr<const RowType>& TextReader::rowType() const {
   return contents_->schema;
 }
 
-CompressionKind TextReader::getCompression() const {
-  return contents_->compression;
-}
-
 const std::shared_ptr<const TypeWithId>& TextReader::typeWithId() const {
   if (!typeWithId_) {
     typeWithId_ = TypeWithId::create(rowType());
@@ -1633,10 +1778,6 @@ const std::shared_ptr<const TypeWithId>& TextReader::typeWithId() const {
 std::unique_ptr<RowReader> TextReader::createRowReader(
     const RowReaderOptions& opts) const {
   return std::make_unique<TextRowReader>(contents_, opts);
-}
-
-uint64_t TextReader::getFileLength() const {
-  return contents_->fileLength;
 }
 
 } // namespace facebook::velox::text
