@@ -206,7 +206,8 @@ template <
     typename T,
     bool kHasWeight,
     typename AccuracyPolicy,
-    typename AccuracyIntermediateType = double>
+    typename AccuracyIntermediateType = double,
+    bool kBinaryIntermediate = false>
 class ApproxPercentileAggregateBase : public exec::Aggregate {
  public:
   ApproxPercentileAggregateBase(
@@ -276,7 +277,11 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    addIntermediate<false>(groups, rows, args);
+    if constexpr (kBinaryIntermediate) {
+      addBinaryIntermediate<false>(groups, rows, args);
+    } else {
+      addIntermediate<false>(groups, rows, args);
+    }
   }
 
   void addSingleGroupRawInput(
@@ -322,7 +327,11 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    addIntermediate<true>(group, rows, args);
+    if constexpr (kBinaryIntermediate) {
+      addBinaryIntermediate<true>(group, rows, args);
+    } else {
+      addIntermediate<true>(group, rows, args);
+    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -386,6 +395,10 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
+    if constexpr (kBinaryIntermediate) {
+      extractBinaryAccumulators(groups, numGroups, result);
+      return;
+    }
     std::vector<detail::KllSketch<T, std::allocator<T>>> sketches;
     sketches.reserve(numGroups);
     for (auto i = 0; i < numGroups; ++i) {
@@ -895,6 +908,151 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       if constexpr (kSingleGroup) {
         views.push_back(v);
       } else {
+        auto tracker = trackRowSize(group[row]);
+        accumulator->append(v);
+      }
+    });
+
+    if constexpr (kSingleGroup) {
+      if (!views.empty()) {
+        auto tracker = trackRowSize(group);
+        accumulator->append(views);
+      }
+    }
+  }
+
+  void extractBinaryAccumulators(
+      char** groups,
+      int32_t numGroups,
+      VectorPtr* result) {
+    std::vector<detail::KllSketch<T, std::allocator<T>>> sketches;
+    sketches.reserve(numGroups);
+    for (auto i = 0; i < numGroups; ++i) {
+      sketches.push_back(
+          value<detail::KllSketchAccumulator<T>>(groups[i])->compact(
+              fixedRandomSeed_));
+    }
+
+    VELOX_CHECK(result);
+    auto flatResult = (*result)->asFlatVector<StringView>();
+    VELOX_CHECK(flatResult);
+    flatResult->resize(numGroups);
+
+    for (int i = 0; i < numGroups; ++i) {
+      if (!percentiles_ || sketches[i].totalCount() == 0) {
+        flatResult->setNull(i, true);
+        continue;
+      }
+      flatResult->setNull(i, false);
+
+      // Calculate total size needed.
+      size_t headerSize = sizeof(int32_t); // percentiles_count
+      headerSize +=
+          sizeof(double) * percentiles_->values.size(); // percentile_values
+      headerSize += sizeof(uint8_t); // is_array
+      headerSize += sizeof(AccuracyIntermediateType); // accuracy
+      size_t sketchSize = sketches[i].serializedByteSize();
+      size_t totalSize = headerSize + sketchSize;
+
+      // Allocate and write.
+      auto buf = AlignedBuffer::allocate<char>(totalSize, flatResult->pool());
+      auto rawBuf = buf->asMutable<char>();
+      size_t offset = 0;
+
+      // Write percentiles.
+      auto percCount = static_cast<int32_t>(percentiles_->values.size());
+      memcpy(rawBuf + offset, &percCount, sizeof(int32_t));
+      offset += sizeof(int32_t);
+      memcpy(
+          rawBuf + offset,
+          percentiles_->values.data(),
+          sizeof(double) * percCount);
+      offset += sizeof(double) * percCount;
+
+      // Write isArray.
+      uint8_t isArray = percentiles_->isArray ? 1 : 0;
+      memcpy(rawBuf + offset, &isArray, sizeof(uint8_t));
+      offset += sizeof(uint8_t);
+
+      // Write accuracy.
+      auto accuracyVal = static_cast<AccuracyIntermediateType>(accuracy_);
+      memcpy(rawBuf + offset, &accuracyVal, sizeof(AccuracyIntermediateType));
+      offset += sizeof(AccuracyIntermediateType);
+
+      // Write KLL sketch.
+      sketches[i].serialize(rawBuf + offset);
+      offset += sketchSize;
+
+      flatResult->setNoCopy(i, StringView(rawBuf, totalSize));
+      // Keep the buffer alive by adding it to the FlatVector.
+      flatResult->addStringBuffer(buf);
+    }
+  }
+
+  template <bool kSingleGroup>
+  void addBinaryIntermediate(
+      std::conditional_t<kSingleGroup, char*, char**> group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) {
+    VELOX_CHECK_EQ(args.size(), 1);
+    DecodedVector decoded(*args[0], rows);
+
+    detail::KllSketchAccumulator<T>* accumulator = nullptr;
+    std::vector<detail::KllView<T>> views;
+    if constexpr (kSingleGroup) {
+      views.reserve(rows.end());
+    }
+
+    rows.applyToSelected([&](auto row) {
+      if (decoded.isNullAt(row)) {
+        return;
+      }
+      auto data = decoded.valueAt<StringView>(row);
+      const char* rawData = data.data();
+      size_t offset = 0;
+
+      // Read percentiles.
+      int32_t percCount;
+      memcpy(&percCount, rawData + offset, sizeof(int32_t));
+      offset += sizeof(int32_t);
+
+      if (!accumulator) {
+        std::vector<double> percValues(percCount);
+        memcpy(percValues.data(), rawData + offset, sizeof(double) * percCount);
+        offset += sizeof(double) * percCount;
+
+        // Read isArray.
+        uint8_t isArrayByte;
+        memcpy(&isArrayByte, rawData + offset, sizeof(uint8_t));
+        offset += sizeof(uint8_t);
+        bool isArray = isArrayByte != 0;
+
+        checkSetPercentileValuesFromVector(isArray, percValues);
+
+        // Read accuracy.
+        AccuracyIntermediateType accuracyVal;
+        memcpy(
+            &accuracyVal, rawData + offset, sizeof(AccuracyIntermediateType));
+        offset += sizeof(AccuracyIntermediateType);
+
+        AccuracyPolicy::checkAndSetFromIntermediate(
+            accuracy_, static_cast<double>(accuracyVal));
+      } else {
+        offset += sizeof(double) * percCount;
+        offset += sizeof(uint8_t);
+        offset += sizeof(AccuracyIntermediateType);
+      }
+
+      detail::KllView<T> v;
+      v.deserialize(rawData + offset);
+
+      if constexpr (kSingleGroup) {
+        if (!accumulator) {
+          accumulator = initRawAccumulator(group);
+        }
+        views.push_back(v);
+      } else {
+        accumulator = initRawAccumulator(group[row]);
         auto tracker = trackRowSize(group[row]);
         accumulator->append(v);
       }

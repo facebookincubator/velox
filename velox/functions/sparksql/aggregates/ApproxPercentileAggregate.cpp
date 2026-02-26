@@ -89,15 +89,16 @@ using ApproxPercentileAggregate = ApproxPercentileAggregateBase<
     T,
     /*kHasWeight=*/false,
     SparkAccuracyPolicy,
-    /*AccuracyIntermediateType=*/int32_t>;
+    /*AccuracyIntermediateType=*/int32_t,
+    /*kBinaryIntermediate=*/true>;
 
 void addSignatures(
     const std::string& inputType,
     std::vector<std::shared_ptr<exec::AggregateFunctionSignature>>&
         signatures) {
-  std::string intermediateType = fmt::format(
-      "row(array(double), boolean, integer, integer, bigint, {0}, {0}, array({0}), array(integer))",
-      inputType);
+  // Use VARBINARY intermediate type to match vanilla Spark's
+  // TypedImperativeAggregate which serializes the buffer as binary.
+  std::string intermediateType = "varbinary";
 
   // Signature 1: approx_percentile(T, double) -> T (single percentile, default
   // accuracy).
@@ -179,7 +180,23 @@ exec::AggregateRegistrationResult registerApproxPercentileAggregate(
 
         TypePtr type;
         if (!isRawInput && exec::isPartialOutput(step)) {
-          type = argTypes[0]->asRow().childAt(static_cast<int>(Idx::kMinValue));
+          // For intermediate-to-intermediate step, infer the value type from
+          // the result type (which is also VARBINARY). We cannot extract it
+          // from intermediate type since it's opaque binary. Use resultType.
+          if (resultType->isVarbinary()) {
+            // Intermediate -> Intermediate: cannot determine T from binary.
+            // This case should not happen in practice for Spark because Spark
+            // only has Partial and Final steps.
+            VELOX_USER_FAIL(
+                "Cannot determine value type for intermediate-to-intermediate "
+                "step of {}",
+                functionName);
+          }
+          if (resultType->isArray()) {
+            type = resultType->as<TypeKind::ARRAY>().elementType();
+          } else {
+            type = resultType;
+          }
         } else if (isRawInput) {
           type = argTypes[0];
         } else if (resultType->isArray()) {
