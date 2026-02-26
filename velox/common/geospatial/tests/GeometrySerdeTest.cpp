@@ -19,31 +19,40 @@
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
 #include <gtest/gtest.h>
+#include "velox/common/memory/Memory.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/type/StringView.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace ::testing;
 
-using namespace facebook::velox::common::geospatial;
+namespace facebook::velox::common::geospatial {
+namespace {
 
-void assertRoundtrip(const std::string& wkt) {
-  geos::io::WKTReader reader;
-  geos::io::WKTWriter writer;
-  std::unique_ptr<geos::geom::Geometry> geometry = reader.read(wkt);
+class GeometrySerdeTest : public ::testing::Test,
+                          public facebook::velox::test::VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
 
-  std::string buffer;
-  GeometrySerializer::serialize(*geometry, buffer);
-  facebook::velox::StringView readBuffer(buffer);
-  auto deserialized = GeometryDeserializer::deserialize(readBuffer);
+  void assertRoundtrip(const std::string& wkt) {
+    const geos::io::WKTReader reader;
+    std::unique_ptr<geos::geom::Geometry> geometry = reader.read(wkt);
 
-  EXPECT_TRUE(geometry->equals(deserialized.get()))
-      << std::endl
-      << "Input:" << std::endl
-      << wkt << std::endl
-      << "Output:" << std::endl
-      << writer.write(deserialized.get());
-}
+    auto vector = makeFlatVector<StringView>(1);
+    exec::StringWriter stringWriter(vector.get(), 0);
+    GeometrySerializer::serialize(*geometry, stringWriter);
+    stringWriter.finalize();
 
-TEST(GeometrySerdeTest, testBasicSerde) {
+    const StringView readBuffer = vector->valueAt(0);
+    auto deserialized = GeometryDeserializer::deserialize(readBuffer);
+
+    EXPECT_TRUE(geometry->equals(deserialized.get()));
+  }
+};
+
+TEST_F(GeometrySerdeTest, testBasicSerde) {
   assertRoundtrip("POINT EMPTY");
   assertRoundtrip("POINT (1 2)");
   assertRoundtrip("MULTIPOINT EMPTY");
@@ -67,7 +76,7 @@ TEST(GeometrySerdeTest, testBasicSerde) {
       "MULTIPOLYGON ( ((10 0, 20 0, 20 10, 10 10, 10 0)),  ((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1)) )");
 }
 
-TEST(GeometrySerdeTest, testGeometryCollectionSerde) {
+TEST_F(GeometrySerdeTest, testGeometryCollectionSerde) {
   assertRoundtrip("GEOMETRYCOLLECTION EMPTY");
   assertRoundtrip("GEOMETRYCOLLECTION (POINT EMPTY)");
   assertRoundtrip("GEOMETRYCOLLECTION (POINT (0 0))");
@@ -92,7 +101,7 @@ TEST(GeometrySerdeTest, testGeometryCollectionSerde) {
       "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION ( MULTIPOINT (1 2) ))");
 }
 
-TEST(GeometrySerdeTest, testComplexSerde) {
+TEST_F(GeometrySerdeTest, testComplexSerde) {
   assertRoundtrip("GEOMETRYCOLLECTION ( MULTIPOINT EMPTY, MULTIPOINT (1 1) )");
   assertRoundtrip("GEOMETRYCOLLECTION (POLYGON EMPTY, POINT (1 2))");
   assertRoundtrip(
@@ -101,7 +110,10 @@ TEST(GeometrySerdeTest, testComplexSerde) {
       "GEOMETRYCOLLECTION (POLYGON EMPTY, GEOMETRYCOLLECTION ( POINT (1 2), POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1)), GEOMETRYCOLLECTION EMPTY, MULTIPOLYGON ( ((10 10, 14 10, 14 14, 10 14, 10 10), (11 11, 12 11, 12 12, 11 12, 11 11)), ((-1 -1, -2 -2, -1 -2, -1 -1)) ) ))");
 }
 
-TEST(GeometrySerdeTest, testSmallAreaRing) {
+TEST_F(GeometrySerdeTest, testSmallAreaRing) {
   assertRoundtrip(
       "MULTIPOLYGON (((18.6317421 49.9605785, 18.6318832 49.9607979, 18.6324683 49.9607312, 18.6332842 49.9605658, 18.6332003 49.9603557, 18.6339711 49.9602283, 18.6341994 49.9601905, 18.6343455 49.96016, 18.6344167 49.9601452, 18.6346696 49.9600919, 18.6349643 49.9600567, 18.6352271 49.9601455, 18.6354493 49.9600501, 18.6358024 49.9601071, 18.6358911 49.9600263, 18.6336542 49.9592453, 18.6334794 49.9591838, 18.6337483 49.9581339, 18.6335303 49.9580562, 18.6331284 49.9579122, 18.6324931 49.9576885, 18.6322503 49.9575998, 18.6321381 49.9581593, 18.6321172 49.9582692, 18.6324683 49.9583852, 18.6325255 49.9584004, 18.6327588 49.958489, 18.6324792 49.9588351, 18.6323941 49.9588049, 18.6323261 49.9587807, 18.6320354 49.9586789, 18.6319443 49.9592903, 18.6326731 49.9595648, 18.6331388 49.9594836, 18.6335981 49.959673, 18.6333065 49.9597934, 18.6328096 49.9600844, 18.6330209 49.9601348, 18.633424 49.9602597, 18.6332263 49.960317, 18.6315633 49.9597642, 18.6309331 49.9600741, 18.6317421 49.9605785)), ((18.6298591 49.9606201, 18.6298592 49.96062, 18.6298589 49.9606193, 18.6298591 49.9606201)))");
 }
+
+} // namespace
+} // namespace facebook::velox::common::geospatial
