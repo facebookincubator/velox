@@ -31,12 +31,12 @@ class URLFunctionsTest : public functions::test::FunctionBaseTest {
       const std::optional<int32_t> expectedPort) {
     const auto extractFn = [&](const std::string& fn,
                                const std::optional<std::string>& a) {
-      return evaluateOnce<std::string>(
+      return evaluateOnceWithVarcharArgs<std::string>(
           fmt::format("url_extract_{}(c0)", fn), a);
     };
 
     const auto extractPort = [&](const std::optional<std::string>& a) {
-      return evaluateOnce<int64_t>("url_extract_port(c0)", a);
+      return evaluateOnceWithVarcharArgs<int64_t>("url_extract_port(c0)", a);
     };
 
     EXPECT_EQ(extractFn("protocol", url), expectedProtocol);
@@ -186,7 +186,8 @@ TEST_F(URLFunctionsTest, validateURL) {
 
 TEST_F(URLFunctionsTest, extractProtocol) {
   const auto extractProtocol = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_protocol(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_protocol(c0)", url);
   };
 
   // Test minimal protocol.
@@ -205,7 +206,8 @@ TEST_F(URLFunctionsTest, extractProtocol) {
 
 TEST_F(URLFunctionsTest, extractHostIPv4) {
   const auto extractHost = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_host(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_host(c0)", url);
   };
 
   // Upper bounds of the ranges of the rules for IPv4 dec-octets.
@@ -226,7 +228,8 @@ TEST_F(URLFunctionsTest, extractHostIPv4) {
 
 TEST_F(URLFunctionsTest, extractHostIPv6) {
   const auto extractHost = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_host(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_host(c0)", url);
   };
 
   // 8 hex blocks.
@@ -317,7 +320,8 @@ TEST_F(URLFunctionsTest, extractHostIPv6) {
 
 TEST_F(URLFunctionsTest, extractHostIPvFuture) {
   const auto extractHost = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_host(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_host(c0)", url);
   };
 
   // Test minimal.
@@ -346,7 +350,8 @@ TEST_F(URLFunctionsTest, extractHostIPvFuture) {
 
 TEST_F(URLFunctionsTest, extractHostRegName) {
   const auto extractHost = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_host(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_host(c0)", url);
   };
 
   // Test minimal.
@@ -390,7 +395,8 @@ TEST_F(URLFunctionsTest, extractHostRegName) {
 
 TEST_F(URLFunctionsTest, extractPath) {
   const auto extractPath = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_path(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_path(c0)", url);
   };
 
   EXPECT_EQ(
@@ -425,7 +431,7 @@ TEST_F(URLFunctionsTest, extractPath) {
 
 TEST_F(URLFunctionsTest, extractPort) {
   const auto extractPort = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<int64_t>("url_extract_port(c0)", url);
+    return evaluateOnceWithVarcharArgs<int64_t>("url_extract_port(c0)", url);
   };
 
   // 0-4 valid.
@@ -441,7 +447,8 @@ TEST_F(URLFunctionsTest, extractPort) {
 
 TEST_F(URLFunctionsTest, extractHostWithUserInfo) {
   const auto extractHost = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_host(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_host(c0)", url);
   };
 
   // Test extracting a host when user info is present.
@@ -459,7 +466,8 @@ TEST_F(URLFunctionsTest, extractHostWithUserInfo) {
 
 TEST_F(URLFunctionsTest, extractQuery) {
   const auto extractQuery = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_query(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_query(c0)", url);
   };
 
   // Test empty query.
@@ -485,7 +493,8 @@ TEST_F(URLFunctionsTest, extractQuery) {
 
 TEST_F(URLFunctionsTest, extractFragment) {
   const auto extractFragment = [&](const std::optional<std::string>& url) {
-    return evaluateOnce<std::string>("url_extract_fragment(c0)", url);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_fragment(c0)", url);
   };
 
   // Test empty fragment.
@@ -512,7 +521,8 @@ TEST_F(URLFunctionsTest, extractFragment) {
 TEST_F(URLFunctionsTest, extractParameter) {
   const auto extractParam = [&](const std::optional<std::string>& a,
                                 const std::optional<std::string>& b) {
-    return evaluateOnce<std::string>("url_extract_parameter(c0, c1)", a, b);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "url_extract_parameter(c0, c1)", a, b);
   };
 
   EXPECT_EQ(
@@ -571,7 +581,7 @@ TEST_F(URLFunctionsTest, extractParameter) {
 
 TEST_F(URLFunctionsTest, urlEncode) {
   const auto urlEncode = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("url_encode(c0)", value);
+    return evaluateOnceWithVarcharArgs<std::string>("url_encode(c0)", value);
   };
 
   EXPECT_EQ(std::nullopt, urlEncode(std::nullopt));
@@ -617,7 +627,7 @@ TEST_F(URLFunctionsTest, urlEncode) {
 
 TEST_F(URLFunctionsTest, urlDecode) {
   const auto urlDecode = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("url_decode(c0)", value);
+    return evaluateOnceWithVarcharArgs<std::string>("url_decode(c0)", value);
   };
 
   EXPECT_EQ(std::nullopt, urlDecode(std::nullopt));

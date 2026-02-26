@@ -60,6 +60,8 @@ allowedCoercions() {
        DOUBLE(),
        VARCHAR(),
        VARBINARY()});
+  // add(VARCHAR(),
+  //     {VARCHAR()}); // Allow coercion between different VARCHAR lengths.
 
   return coercions;
 }
@@ -70,7 +72,14 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const std::string& toTypeName) {
   static const auto kAllowedCoercions = allowedCoercions();
+  // Allow name coercion on name alone for primitive types without parameters
+  // and non-primitive types.
   if (fromType->name() == toTypeName) {
+    //&&
+    //((fromType->isPrimitiveType() && fromType->parameters().empty()) ||
+    // !fromType->isPrimitiveType())) {
+    VLOG(0) << "Allow from " << fromType->toString() << " to type name "
+            << toTypeName;
     return Coercion{.type = fromType, .cost = 0};
   }
 
@@ -119,6 +128,36 @@ std::optional<int32_t> TypeCoercer::coercible(
 }
 
 namespace {
+
+bool isSameStringOrBinaryType(const TypePtr& fromType, const TypePtr& toType) {
+  return (fromType->kind() == toType->kind()) &&
+      (fromType->kind() == TypeKind::VARCHAR ||
+       fromType->kind() == TypeKind::VARBINARY);
+}
+
+bool isDecimalTypeOnlyCoercion(const TypePtr& fromType, const TypePtr& toType) {
+  if (!((fromType->isShortDecimal() || fromType->isLongDecimal()) &&
+        (toType->isShortDecimal() || toType->isLongDecimal()))) {
+    return false;
+  }
+
+  const auto [fromPrecision, fromScale] = getDecimalPrecisionScale(*fromType);
+  const auto [toPrecision, toScale] = getDecimalPrecisionScale(*toType);
+
+  // Type-only coercion for decimals requires:
+  // 1. Same decimal subtype (both short or both long)
+  // 2. Same scale
+  // 3. Source precision <= result precision
+  const bool sameDecimalSubtype =
+      (fromType->isShortDecimal() && toType->isShortDecimal()) ||
+      (fromType->isLongDecimal() && toType->isLongDecimal());
+  const bool sameScale = fromScale == toScale;
+  const bool sourcePrecisionIsLessOrEqualToResultPrecision =
+      fromPrecision <= toPrecision;
+
+  return sameDecimalSubtype && sameScale &&
+      sourcePrecisionIsLessOrEqualToResultPrecision;
+}
 
 TypePtr leastCommonSuperRowType(const RowType& a, const RowType& b) {
   std::vector<std::string> childNames;
@@ -195,6 +234,47 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b) {
   }
 
   return getType(a->name(), childTypes);
+}
+
+// static
+bool TypeCoercer::isTypeOnlyCoercion(
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  // If types are equal, it's always type-only coercion
+  if (*fromType == *toType) {
+    return true;
+  }
+
+  // Handle VARCHAR/VARBINARY type coercion (bounded <-> unbounded)
+  if (isSameStringOrBinaryType(fromType, toType)) {
+    return true;
+  }
+
+  // Handle DECIMAL type coercion
+  if (isDecimalTypeOnlyCoercion(fromType, toType)) {
+    return true;
+  }
+
+  // Handle covariant parametrized types (ARRAY, MAP, ROW)
+  if (fromType->name() == toType->name() && fromType->size() > 0) {
+    const auto fromTypeParams = fromType->parameters();
+    const auto toTypeParams = toType->parameters();
+
+    if (fromTypeParams.size() != toTypeParams.size()) {
+      return false;
+    }
+
+    // Recursively check all type parameters
+    return std::all_of(
+        fromTypeParams.begin(),
+        fromTypeParams.end(),
+        [&toTypeParams, i = size_t{0}](const TypeParameter& fromParam) mutable {
+          return isTypeOnlyCoercion(fromParam.type, toTypeParams[i++].type);
+        });
+  }
+
+  // For all other cases, not a type-only coercion
+  return false;
 }
 
 } // namespace facebook::velox

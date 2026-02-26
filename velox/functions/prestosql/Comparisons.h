@@ -60,10 +60,11 @@ template <typename TExec>
 struct DistinctFromFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  void callNullable(
+  template <typename T>
+  void callNullableImpl(
       bool& result,
-      const arg_type<Generic<T1>>* lhs,
-      const arg_type<Generic<T1>>* rhs) {
+      const arg_type<T>* lhs,
+      const arg_type<T>* rhs) {
     if (!lhs and !rhs) {
       // Both nulls -> not distinct.
       result = false;
@@ -71,11 +72,30 @@ struct DistinctFromFunction {
       // Only one is null -> distinct.
       result = true;
     } else { // Both not nulls - use usual comparison.
-      static constexpr CompareFlags kCompareFlags =
-          CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+      if constexpr (std::is_same_v<T, StringView>) {
+        result = (lhs->compare(*rhs) != 0);
+      } else {
+        // For the Generic<T1> type.
+        static constexpr CompareFlags kCompareFlags = CompareFlags::equality(
+            CompareFlags::NullHandlingMode::kNullAsValue);
 
-      result = lhs->compare(*rhs, kCompareFlags).value();
+        result = lhs->compare(*rhs, kCompareFlags).value();
+      }
     }
+  }
+
+  void callNullable(
+      bool& result,
+      const arg_type<Generic<T1>>* lhs,
+      const arg_type<Generic<T1>>* rhs) {
+    return callNullableImpl<Generic<T1>>(result, lhs, rhs);
+  }
+
+  void callNullable(
+      bool& result,
+      const arg_type<StringView>* lhs,
+      const arg_type<StringView>* rhs) {
+    return callNullableImpl<StringView>(result, lhs, rhs);
   }
 };
 

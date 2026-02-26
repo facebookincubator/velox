@@ -251,14 +251,25 @@ class FunctionBaseTest : public testing::Test,
   template <typename TReturn, typename... TArgs>
   std::optional<TReturn> evaluateOnce(
       const std::string& expr,
-      const std::initializer_list<TypePtr>& types,
+      const std::vector<TypePtr>& types,
       std::optional<TArgs>... args) {
     return evaluateOnce<TReturn>(
         expr,
         makeRowVector(
             unpackEvaluateParams<std::optional<TArgs>...>(
-                std::vector<TypePtr>{types},
+                types,
                 std::forward<std::optional<TArgs>>(std::move(args))...)));
+  }
+
+  template <typename TReturn, typename... TArgs>
+  std::optional<TReturn> evaluateOnce(
+      const std::string& expr,
+      const std::initializer_list<TypePtr>& types,
+      std::optional<TArgs>... args) {
+    return evaluateOnce<TReturn>(
+        expr,
+        std::vector<TypePtr>{types},
+        std::forward<std::optional<TArgs>>(std::move(args))...);
   }
 
   template <typename TReturn, typename... TArgs>
@@ -308,6 +319,89 @@ class FunctionBaseTest : public testing::Test,
             expr, rowVectorPtr, rows, resultType);
     return result->isNullAt(0) ? std::optional<TReturn>{}
                                : TReturn(result->valueAt(0));
+  }
+
+  template <typename... TArgs>
+  std::vector<TypePtr> createTypeVectorFromArguments(
+      std::optional<const std::vector<TypePtr>> types,
+      std::optional<TArgs>... args) {
+    using arg_types = std::tuple<TArgs...>;
+    constexpr int kNumArgs = std::tuple_size<arg_types>::value;
+    constexpr int32_t kMaxStringLength =
+        kVaryingLengthScalarTypeUnboundedLength - 1;
+    VELOX_CHECK_EQ(
+        kNumArgs, types.has_value() ? types.value().size() : kNumArgs);
+
+    std::vector<TypePtr> resultTypes{};
+    int32_t position = 0;
+    (
+        [&](auto& arg) {
+          auto type = types.has_value() ? types.value()[position] : nullptr;
+          // If the argument type was a CPP type that can be mapped to a VARCHAR
+          // replace or create the VARCHAR type, if needed.
+          if constexpr (
+              std::is_same<
+                  std::optional<std::string>,
+                  std::remove_reference_t<decltype(arg)>>() ||
+              std::is_same<
+                  std::optional<StringView>,
+                  std::remove_reference_t<decltype(arg)>>()) {
+            auto typeFromArg = arg.has_value() ? VARCHAR(arg.value().size())
+                                               : VARCHAR(kMaxStringLength);
+            if (!type || (type && type->isVarchar())) {
+              resultTypes.push_back(std::move(typeFromArg));
+            } else {
+              resultTypes.push_back(std::move(type));
+            }
+          } else {
+            (type) ? resultTypes.push_back(std::move(type))
+                   : resultTypes.push_back(
+                         CppToType<typename std::remove_reference_t<
+                             decltype(arg)>::value_type>::create());
+          }
+          ++position;
+        }(args),
+        ...);
+    return resultTypes;
+  }
+
+  /// This function is a wrapper for evaluateOnce to run with arguments of type
+  /// VARCHAR and VARCHARN. when applicable. This is a helper to test both
+  /// VARCHAR and VARCHARN function signatures at the same time. A type list is
+  /// constructed from the CPP types of the arguments with std::string and
+  /// StringView mapping to VARCHAR/VARCHARN.
+  template <typename T, typename... TArgs>
+  std::optional<T> evaluateOnceWithVarcharArgs(
+      const std::string& expression,
+      std::optional<TArgs>... args) {
+    auto types = createTypeVectorFromArguments(std::nullopt, args...);
+    auto resultWithVarchar = evaluateOnce<T>(expression, types, args...);
+    auto result = evaluateOnce<T>(
+        expression, std::forward<std::optional<TArgs>>(args)...);
+    EXPECT_EQ(result, resultWithVarchar);
+    return result;
+  }
+
+  /// This function is a wrapper evaluateOnce to run with arguments of type
+  /// VARCHAR and VARCHARN that also takes a list of type vectors defining types
+  /// for the arguments. It replaces a VARCHAR type with VARCHARN type for the
+  /// argument and executed the eval for both the original type list and the
+  /// updated type list. This function is used when argument types do not map
+  /// from their CPP types to logical Velox types, for example int32_t to DATE
+  /// (instead of INTEGER).
+  template <typename T, typename... TArgs>
+  std::optional<T> evaluateOnceWithVarcharArgs(
+      const std::string& expression,
+      const std::vector<TypePtr>& types,
+      std::optional<TArgs>... args) {
+    auto typesWithVarcharN =
+        createTypeVectorFromArguments(std::make_optional(types), args...);
+    auto resultWithVarchar =
+        evaluateOnce<T>(expression, typesWithVarcharN, args...);
+    auto result = evaluateOnce<T>(
+        expression, types, std::forward<std::optional<TArgs>>(args)...);
+    EXPECT_EQ(result, resultWithVarchar);
+    return result;
   }
 
   std::unique_ptr<exec::ExprSet> compileExpression(

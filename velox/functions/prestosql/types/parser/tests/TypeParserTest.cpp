@@ -98,7 +98,8 @@ TEST_F(TypeParserTest, integerType) {
 
 TEST_F(TypeParserTest, varcharType) {
   ASSERT_EQ(*parseType("varchar"), *VARCHAR());
-  ASSERT_EQ(*parseType("varchar(4)"), *VARCHAR());
+  ASSERT_EQ(*parseType("varchar(4)"), *VARCHAR(4));
+  ASSERT_EQ(*parseType("varchar(2147483647)"), *VARCHAR(2147483647));
 }
 
 TEST_F(TypeParserTest, charType) {
@@ -229,7 +230,7 @@ TEST_F(TypeParserTest, rowType) {
 
   ASSERT_EQ(
       *parseType("row(a varchar(10),b row(a bigint))"),
-      *ROW({"a", "b"}, {VARCHAR(), ROW({"a"}, {BIGINT()})}));
+      *ROW({"a", "b"}, {VARCHAR(10), ROW({"a"}, {BIGINT()})}));
 
   ASSERT_EQ(
       *parseType("array(row(col0 bigint,col1 double))"),
@@ -247,7 +248,7 @@ TEST_F(TypeParserTest, rowType) {
 
   ASSERT_EQ(
       *parseType("row(varchar(10),b row(bigint))"),
-      *ROW({"", "b"}, {VARCHAR(), ROW({BIGINT()})}));
+      *ROW({"", "b"}, {VARCHAR(10), ROW({BIGINT()})}));
 
   ASSERT_EQ(
       *parseType("array(row(col0 bigint,double))"),

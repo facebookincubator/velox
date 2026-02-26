@@ -29,7 +29,7 @@ bool isAny(const TypeSignature& typeSignature) {
 }
 
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -113,6 +113,29 @@ bool checkNamedRowField(
     return false;
   }
   return true;
+}
+
+// Determine if an actual parameterized type can logically match an
+// unparameterized function signature parameter.
+//
+// Handles the VARCHAR and VARBINARY case where the type signature has no
+// parameters but the actualType does (e.g., VARCHAR(50) matching varchar).
+// This allows binding a parameterized actualType to an unparameterized
+// function signature argument. This is not true coercion because the
+// physical types match and we can logically match them.
+bool isLogicallyCompatible(
+    const TypeSignature& signature,
+    const TypePtr& actualType) {
+  // Only match if signature has no parameters (unparameterized).
+  if (!signature.parameters().empty()) {
+    return false;
+  }
+
+  // Compare base names case-insensitively and verify actualType kinds match.
+  return (boost::algorithm::iequals(signature.baseName(), "varchar") &&
+          actualType->kind() == TypeKind::VARCHAR) ||
+      (boost::algorithm::iequals(signature.baseName(), "varbinary") &&
+       actualType->kind() == TypeKind::VARBINARY);
 }
 
 } // namespace
@@ -405,7 +428,14 @@ bool SignatureBinderBase::tryBind(
   // Type is not a variable.
   const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
-  if (!boost::algorithm::iequals(typeName, actualType->name())) {
+  auto actualTypeName =
+      boost::algorithm::to_upper_copy(std::string(actualType->name()));
+
+  // const auto& params = typeSignature.parameters();
+
+  if (!boost::algorithm::iequals(typeName, actualType->name())) { // ||
+    //(actualType->isPrimitiveType() &&
+    // params.size() != actualType->parameters().size())) {
     if (allowCoercion) {
       if (auto availableCoercion =
               TypeCoercer::coerceTypeBase(actualType, typeName)) {
@@ -452,7 +482,8 @@ bool SignatureBinderBase::tryBind(
   }
 
   // Type Parameters can recurse.
-  if (params.size() != actualType->parameters().size()) {
+  if (params.size() != actualType->parameters().size() &&
+      !isLogicallyCompatible(typeSignature, actualType)) {
     return false;
   }
 
