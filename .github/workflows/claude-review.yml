@@ -164,8 +164,37 @@ jobs:
           DIFF_STATS: ${{ steps.generate_diff.outputs.diff_stats }}
           IS_TRUNCATED: ${{ steps.generate_diff.outputs.is_truncated }}
         run: |
+          # Create system context first (no variable expansion needed)
+          cat > /tmp/review_prompt.txt << 'PROMPT_EOF'
+          You are an expert C++ code reviewer for the Velox project.
+
+          **IMPORTANT**: First, read the CLAUDE.md file in the repository root. It contains:
+          - Project overview and architecture
+          - Build commands and environment setup
+          - Code style and naming conventions
+          - PR title format requirements
+          - Testing guidelines
+          - Function addition requirements
+
+          Use CLAUDE.md as your primary reference for project-specific standards.
+
+          Key things to know about Velox:
+          - Uses C++20 standard
+          - Heavy use of templates and SFINAE
+          - Custom memory management with MemoryPool
+          - Vectorized execution with custom Vector types
+          - Follows Google C++ style with some modifications
+
+          Provide actionable, specific feedback. Reference exact file paths and line numbers.
+          Be constructive and educational in your feedback.
+          If the diff looks good, say so - don't invent problems.
+
+          ---
+
+          PROMPT_EOF
+
           # Note: Using unquoted PROMPT_EOF to enable variable expansion
-          cat > /tmp/review_prompt.txt << PROMPT_EOF
+          cat >> /tmp/review_prompt.txt << PROMPT_EOF
           Please review the following pull request for the Velox project.
 
           ## Pull Request Information
@@ -233,27 +262,24 @@ jobs:
         uses: anthropics/claude-code-base-action@e8132bc5e637a42c27763fc757faa37e1ee43b34 # beta
         with:
           prompt_file: /tmp/review_prompt.txt
-          system_prompt: |
-            You are an expert C++ code reviewer for the Velox project.
-            Velox is a composable C++ execution engine library for analytical data processing.
-
-            Key things to know about Velox:
-            - Uses C++20 standard
-            - Heavy use of templates and SFINAE
-            - Custom memory management with MemoryPool
-            - Vectorized execution with custom Vector types
-            - Follows Google C++ style with some modifications
-
-            Provide actionable, specific feedback. Reference exact file paths and line numbers.
-            Be constructive and educational in your feedback.
-            If the diff looks good, say so - don't invent problems.
-
-          # Read-only tools only - no Bash, no Edit, no Write
-          allowed_tools: View,GlobTool,GrepTool
-          max_turns: "15"
+          # Use Sonnet 4.6 for code review, with read-only tools and limited turns
+          claude_args: >-
+            --model claude-sonnet-4-6-20250514
+            --max-turns 15
+            --allowedTools View,GlobTool,GrepTool
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      # Step 7: Post review as PR comment (skip if dry_run)
+      # Step 7: Save execution log as artifact for debugging
+      - name: Upload execution log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-execution-log-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
+          path: ${{ steps.claude_review.outputs.execution_file }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Step 8: Post review as PR comment (skip if dry_run)
       - name: Post review comment
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
@@ -269,22 +295,27 @@ jobs:
             let reviewBody = '';
 
             try {
-              // Read the execution log
+              // Read the execution log (array of messages from claude-code-base-action)
               const executionLog = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
 
-              // Extract Claude's final response
-              const assistantMessages = executionLog.messages.filter(m => m.role === 'assistant');
-              if (assistantMessages.length > 0) {
-                const lastMessage = assistantMessages[assistantMessages.length - 1];
-                // Handle both string content and array content
-                if (typeof lastMessage.content === 'string') {
-                  reviewBody = lastMessage.content;
-                } else if (Array.isArray(lastMessage.content)) {
-                  reviewBody = lastMessage.content
-                    .filter(block => block.type === 'text')
-                    .map(block => block.text)
-                    .join('\n\n');
-                }
+              if (!Array.isArray(executionLog)) {
+                throw new Error('Expected array format from claude-code-base-action');
+              }
+
+              // Find the "result" message which contains the final review
+              const resultMessage = executionLog.find(m => m.type === 'result');
+
+              if (!resultMessage) {
+                reviewBody = '⚠️ No result message found in execution log.';
+              } else if (resultMessage.subtype === 'success' && resultMessage.result) {
+                reviewBody = resultMessage.result;
+              } else if (resultMessage.is_error || resultMessage.subtype === 'error') {
+                const errorInfo = resultMessage.result || resultMessage.error || 'Unknown error';
+                reviewBody = `❌ **Claude Code encountered an error:**\n\n${errorInfo}`;
+              } else if (resultMessage.result) {
+                reviewBody = `⚠️ **Review completed with status: ${resultMessage.subtype}**\n\n${resultMessage.result}`;
+              } else {
+                reviewBody = '⚠️ Claude completed but produced no review output.';
               }
             } catch (error) {
               console.error('Error parsing execution log:', error);
@@ -324,7 +355,7 @@ jobs:
               body: fullComment
             });
 
-      # Step 7b: Print review to logs if dry_run
+      # Step 8b: Print review to logs if dry_run
       - name: Print review to logs (dry run)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         env:
@@ -332,11 +363,29 @@ jobs:
         run: |
           echo "=== DRY RUN - Review would be posted as comment ==="
           echo ""
-          cat "$EXECUTION_FILE" | jq -r '.messages | map(select(.role == "assistant")) | last | .content' 2>/dev/null || cat "$EXECUTION_FILE"
+          echo "=== Extracting review from result message ==="
+          # Find the "result" message and extract based on subtype
+          RESULT_MSG=$(jq '[.[] | select(.type == "result")] | .[0]' "$EXECUTION_FILE" 2>/dev/null)
+          if [ "$RESULT_MSG" = "null" ] || [ -z "$RESULT_MSG" ]; then
+            echo "⚠️ No result message found"
+          else
+            SUBTYPE=$(echo "$RESULT_MSG" | jq -r '.subtype // "unknown"')
+            echo "Status: $SUBTYPE"
+            echo ""
+            if [ "$SUBTYPE" = "success" ]; then
+              echo "$RESULT_MSG" | jq -r '.result // "No result field"'
+            elif [ "$SUBTYPE" = "error" ]; then
+              echo "❌ Error:"
+              echo "$RESULT_MSG" | jq -r '.result // .error // "Unknown error"'
+            else
+              echo "⚠️ Status: $SUBTYPE"
+              echo "$RESULT_MSG" | jq -r '.result // "No result"'
+            fi
+          fi
           echo ""
           echo "=== End of review ==="
 
-      # Step 8: Update reaction on completion (only for issue_comment trigger)
+      # Step 9: Update reaction on completion (only for issue_comment trigger)
       - name: Update reaction on success
         if: success() && github.event_name == 'issue_comment'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1

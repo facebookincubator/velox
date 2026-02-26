@@ -1428,6 +1428,208 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
   }
 }
 
+TEST_P(
+    MultiThreadedHashJoinTest,
+    nullAwareAntiJoinWithFilterBatchedEvaluation) {
+  // Use >1024 build rows to trigger multiple batches in
+  // applyFilterOnTableRowsForNullAwareJoin (kBatchSize is 1024), exercising the
+  // per-batch deselect of filterPassedRows from rows. Include null probe keys
+  // so that crossJoinProbeRows is non-empty and the cross-join path iterates
+  // all 2048 build rows across 2 batches.
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>(
+                256,
+                [](auto row) { return row % 50; },
+                [](auto row) { return row < 4; }),
+            makeFlatVector<int32_t>(256, [](auto row) { return row; }),
+        });
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(2048, [](auto row) { return row % 25; }),
+            makeFlatVector<int32_t>(2048, [](auto row) { return row * 2; }),
+        });
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .nullAware(true)
+      .joinFilter("t1 <> u1")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 <> u1)")
+      .checkSpillStats(false)
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterEarlyTermination) {
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>(100, [](auto row) { return row % 10; }),
+            makeFlatVector<int32_t>(100, [](auto row) { return row; }),
+        });
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(500, [](auto row) { return row % 10; }),
+            makeFlatVector<int32_t>(500, [](auto row) { return row; }),
+        });
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .nullAware(true)
+      .joinFilter("t1 < u1")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 < u1)")
+      .checkSpillStats(false)
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterMixedNulls) {
+  auto probeVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeNullableFlatVector<int32_t>(
+                {std::nullopt,
+                 1,
+                 2,
+                 std::nullopt,
+                 4,
+                 5,
+                 6,
+                 std::nullopt,
+                 8,
+                 9}),
+            makeFlatVector<int32_t>(
+                10, [batch](auto row) { return batch * 10 + row; }),
+        });
+  });
+  auto buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeNullableFlatVector<int32_t>(
+                {1,
+                 std::nullopt,
+                 3,
+                 4,
+                 std::nullopt,
+                 6,
+                 7,
+                 8,
+                 std::nullopt,
+                 10}),
+            makeFlatVector<int32_t>(
+                10, [batch](auto row) { return batch * 5 + row; }),
+        });
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .nullAware(true)
+      .joinFilter("t1 + u1 < 50")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 + u1 < 50)")
+      .checkSpillStats(false)
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterAllNullProbeKeys) {
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeNullConstant(TypeKind::INTEGER, 64),
+            makeFlatVector<int32_t>(64, [](auto row) { return row; }),
+        });
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(32, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(32, [](auto row) { return row * 3; }),
+        });
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .nullAware(true)
+      .joinFilter("t1 <> u1")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 <> u1)")
+      .checkSpillStats(false)
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterEmptyBatch) {
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>(32, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(32, [](auto row) { return row; }),
+        });
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(32, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(32, [](auto row) { return 1000 + row; }),
+        });
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .nullAware(true)
+      .joinFilter("t1 > u1")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 > u1)")
+      .checkSpillStats(false)
+      .run();
+}
+
 TEST_P(MultiThreadedHashJoinTest, antiJoin) {
   auto probeVectors = makeBatches(64, [&](int32_t /*unused*/) {
     return makeRowVector(
