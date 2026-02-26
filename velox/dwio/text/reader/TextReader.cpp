@@ -16,7 +16,7 @@
 
 #include "velox/dwio/text/reader/TextReader.h"
 
-#include <boost/algorithm/string/predicate.hpp>
+#include <fast_float/fast_float.h>
 #include <string>
 
 #include "velox/common/encode/Base64.h"
@@ -40,8 +40,6 @@ static constexpr std::string_view kTextfileCompressionExtensionLz4{".lz4"};
 static constexpr std::string_view kTextfileCompressionExtensionLzo{".lzo"};
 static constexpr std::string_view kTextfileCompressionExtensionSnappy{
     ".snappy"};
-
-static std::string emptyString = std::string();
 
 constexpr const int32_t kDecompressionBufferFactor = 3;
 
@@ -466,7 +464,7 @@ bool TextRowReader::isNone(DelimType delim) {
   return (delim == DelimTypeNone);
 }
 
-std::string&
+std::string_view
 TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
   if (th.atEOL_) {
     delim = DelimTypeEOR; // top-level EOR
@@ -474,7 +472,7 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
 
   if (th.isEOEorEOR(delim)) {
     isNull = true;
-    return emptyString;
+    return {};
   }
 
   bool wasEscaped = false;
@@ -492,27 +490,27 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
     if (th.contents_->serDeOptions.isEscaped &&
         v == th.contents_->serDeOptions.escapeChar) {
       wasEscaped = true;
-      th.ownedString_.append(1, static_cast<char>(v));
+      th.ownedString_.push_back(static_cast<char>(v));
       v = th.getByteUncheckedOptimized(delim);
       if (!th.isNone(delim)) {
         break;
       }
     }
-    th.ownedString_.append(1, static_cast<char>(v));
+    th.ownedString_.push_back(static_cast<char>(v));
   }
 
-  if (th.ownedString_ == th.contents_->serDeOptions.nullString) {
+  if (th.ownedStringView() == th.contents_->serDeOptions.nullString) {
     isNull = true;
-    return emptyString;
+    return {};
   }
 
   if (wasEscaped) {
     // We need to copy the data byte by byte only if there is at least one
     // escaped byte.
     uint64_t j = 0;
-    for (uint64_t i = 0; i < th.ownedString_.length(); i++) {
+    for (uint64_t i = 0; i < th.ownedString_.size(); i++) {
       if (th.ownedString_[i] == th.contents_->serDeOptions.escapeChar &&
-          i < th.ownedString_.length() - 1) {
+          i < th.ownedString_.size() - 1) {
         // Check if it's '\r' or '\n'.
         i++;
         if (th.ownedString_[i] == 'r') {
@@ -530,15 +528,15 @@ TextRowReader::getString(TextRowReader& th, bool& isNull, DelimType& delim) {
     th.ownedString_.resize(j);
   }
 
-  return th.ownedString_;
+  return th.ownedStringView();
 }
 
 template <class T>
 void TextRowReader::setValueFromString(
-    const std::string& str,
+    std::string_view str,
     BaseVector* data,
     vector_size_t insertionRow,
-    std::function<std::optional<T>(const std::string&)> convert) {
+    std::function<std::optional<T>(std::string_view)> convert) {
   if ((atEOF_ && atSOL_) || data == nullptr) {
     return;
   }
@@ -692,7 +690,7 @@ bool TextRowReader::getEOR(DelimType& delim, bool& isNull) {
     }
 
     if (isEOR(delim) || atEOL_) {
-      if (ownedString_ == ns) {
+      if (ownedStringView() == ns) {
         isNull = true;
       } else if (!ownedString_.empty()) {
         break;
@@ -710,7 +708,7 @@ bool TextRowReader::getEOR(DelimType& delim, bool& isNull) {
   unreadData_.insert(0, 1, static_cast<char>(v));
   pos_--;
   if (!ownedString_.empty()) {
-    unreadData_.insert(0, ownedString_);
+    unreadData_.insert(0, ownedStringView());
     pos_ -= ownedString_.size();
   }
   atEOL_ = false;
@@ -741,8 +739,8 @@ void TextRowReader::resetLine() {
 }
 
 template <typename T>
-T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
-  const std::string& str = getString(th, isNull, delim);
+T TextRowReader::getNumeric(TextRowReader& th, bool& isNull, DelimType& delim) {
+  auto str = getString(th, isNull, delim);
 
   if (str.empty()) {
     isNull = true;
@@ -751,78 +749,57 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0;
   }
 
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
-  char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+  const char* ptr = str.data();
+  const char* end = str.data() + str.size();
+
+  T v = 0;
+  fast_float::parse_options options{
+      fast_float::chars_format::general |
+      fast_float::chars_format::skip_white_space};
+  auto [parseEnd, ec] = fast_float::from_chars_advanced(ptr, end, v, options);
+  if (ec != std::errc{} || parseEnd != end) {
     isNull = true;
-    return 0;
+    return {};
   }
 
-  int64_t v = 0;
-  unsigned long long scanPos = 0;
-  errno = 0;
-  auto scanCount = sscanf(str.c_str(), "%" SCNd64 "%lln", &v, &scanPos);
-  if (scanCount != 1 || errno == ERANGE) {
-    isNull = true;
-    return 0;
-  }
-  if (scanPos < str.size()) {
-    // Check if the string is a valid decimal.
-    for (uint64_t i = scanPos; i < str.size(); i++) {
-      if (i == scanPos && str[i] == '.') {
-        continue;
-      }
-      if (str[i] >= '0' && str[i] <= '9') {
-        continue;
-      }
-      isNull = true;
-      return 0;
-    }
-  }
-
-  if (!std::is_same<T, int64_t>::value) {
-    if (static_cast<int64_t>(static_cast<T>(v)) != v) {
-      isNull = true;
-      return 0;
-    }
-  }
-  return static_cast<T>(v);
+  return v;
 }
-
-namespace {
-
-static constexpr std::string_view kTrueStringView{"TRUE"};
-static constexpr std::string_view kFalseStringView{"FALSE"};
-
-} // namespace
 
 bool TextRowReader::getBoolean(
     TextRowReader& th,
     bool& isNull,
     DelimType& delim) {
-  const std::string& str = getString(th, isNull, delim);
+  auto str = getString(th, isNull, delim);
   if (str.empty()) {
     isNull = true;
   }
   if (isNull) {
     return false;
   }
-  if (str.compare(kTrueStringView) == 0) {
-    return true;
-  }
-  if (str.compare(kFalseStringView) == 0) {
-    return false;
-  }
 
   switch (str.size()) {
+    case 1:
+      if (str[0] == '1' || str[0] == 't' || str[0] == 'T') {
+        return true;
+      }
+      if (str[0] == '0' || str[0] == 'f' || str[0] == 'F') {
+        return false;
+      }
+      break;
     case 4:
-      if (boost::algorithm::iequals(str, kTrueStringView)) {
+      if ((static_cast<unsigned char>(str[0]) | 0x20U) == 't' &&
+          (static_cast<unsigned char>(str[1]) | 0x20U) == 'r' &&
+          (static_cast<unsigned char>(str[2]) | 0x20U) == 'u' &&
+          (static_cast<unsigned char>(str[3]) | 0x20U) == 'e') {
         return true;
       }
       break;
     case 5:
-      if (boost::algorithm::iequals(str, kFalseStringView)) {
+      if ((static_cast<unsigned char>(str[0]) | 0x20U) == 'f' &&
+          (static_cast<unsigned char>(str[1]) | 0x20U) == 'a' &&
+          (static_cast<unsigned char>(str[2]) | 0x20U) == 'l' &&
+          (static_cast<unsigned char>(str[3]) | 0x20U) == 's' &&
+          (static_cast<unsigned char>(str[4]) | 0x20U) == 'e') {
         return false;
       }
       break;
@@ -834,143 +811,6 @@ bool TextRowReader::getBoolean(
   return false;
 }
 
-namespace {
-
-static constexpr std::string_view kNaNStringView{"NaN"};
-static constexpr std::string_view kInfinityStringView{"Infinity"};
-static constexpr std::string_view kShortInfinityStringView{"Inf"};
-static constexpr std::string_view kNegInfinityStringView{"-Infinity"};
-static constexpr std::string_view kShortNegInfinityStringView{"-Inf"};
-
-bool unacceptableFloatingPoint(std::string& s) {
-  for (int i = 0; i < s.size(); ++i) {
-    char c = s.data()[i];
-    if (!(std::isalpha(c) || c == '-')) {
-      return false;
-    }
-  }
-
-  bool isNaN = boost::algorithm::iequals(s, kNaNStringView);
-
-  bool isInf = boost::algorithm::iequals(s, kInfinityStringView);
-  bool isShortInf = boost::algorithm::iequals(s, kShortInfinityStringView);
-
-  bool isNegInf = boost::algorithm::iequals(s, kNegInfinityStringView);
-  bool isShortNegInf =
-      boost::algorithm::iequals(s, kShortNegInfinityStringView);
-
-  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
-}
-
-void trimStringInPlace(std::string& s) {
-  const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
-  size_t start = 0;
-  size_t end = s.size();
-
-  // Find first non-whitespace character
-  while (start < end && !isNotSpace(s[start])) {
-    ++start;
-  }
-
-  // If the string is all whitespace
-  if (start == end) {
-    s.clear();
-    return;
-  }
-
-  // Find last non-whitespace character
-  size_t last = end - 1;
-  while (last > start && !isNotSpace(s[last])) {
-    --last;
-  }
-
-  // Erase leading and trailing whitespace
-  s = s.substr(start, last - start + 1);
-}
-
-} // namespace
-
-float TextRowReader::getFloat(
-    TextRowReader& th,
-    bool& isNull,
-    DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
-  if (isNull) {
-    return 0;
-  }
-
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  if (unacceptableFloatingPoint(str)) {
-    isNull = true;
-    return 0.0;
-  }
-
-  float v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized floats and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
-}
-
-double
-TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
-
-  if (isNull) {
-    return 0.0;
-  }
-
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  // Filter out values from non-warehouse sources which
-  // other readers translate to null. Warehouse
-  // readers require upper-case values.
-  if (unacceptableFloatingPoint(str)) {
-    isNull = true;
-    return 0.0;
-  }
-
-  double v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized doubles and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
-}
-
-/// TODO: Reconsider error handling strategy for malformed data
-/// Currently, all read functions convert invalid/malformed data to NULL values.
-/// This approach may produce incorrect query results, particularly for
-/// aggregate operations where a high volume of NULLs can significantly skew
-/// calculations (e.g., COUNT, AVG, SUM). Consider alternative strategies such
-/// as throwing exceptions, logging warnings, or providing configurable error
-/// handling modes.
 void TextRowReader::readElement(
     const std::shared_ptr<const Type>& t,
     const std::shared_ptr<const Type>& reqT,
@@ -983,21 +823,21 @@ void TextRowReader::readElement(
       switch (reqT->kind()) {
         case TypeKind::BIGINT:
           putValue<int32_t, int64_t>(
-              getInteger<int32_t>, data, insertionRow, delim);
+              getNumeric<int32_t>, data, insertionRow, delim);
           break;
         case TypeKind::INTEGER:
           if (reqT->isDate()) {
-            const std::string& str = getString(*this, isNull, delim);
+            auto str = getString(*this, isNull, delim);
             setValueFromString<int32_t>(
                 str,
                 data,
                 insertionRow,
-                [](const std::string& s) -> std::optional<int32_t> {
+                [](std::string_view s) -> std::optional<int32_t> {
                   return DATE()->toDays(s);
                 });
           } else {
             putValue<int32_t, int32_t>(
-                getInteger<int32_t>, data, insertionRow, delim);
+                getNumeric<int32_t>, data, insertionRow, delim);
           }
           break;
         default:
@@ -1011,7 +851,7 @@ void TextRowReader::readElement(
 
     case TypeKind::BIGINT:
       if (reqT->isShortDecimal()) {
-        const std::string& str = getString(*this, isNull, delim);
+        auto str = getString(*this, isNull, delim);
         auto decimalParams = getDecimalPrecisionScale(*reqT);
         const auto precision = decimalParams.first;
         const auto scale = decimalParams.second;
@@ -1019,7 +859,7 @@ void TextRowReader::readElement(
             str,
             data,
             insertionRow,
-            [precision, scale](const std::string& s) -> std::optional<int64_t> {
+            [precision, scale](std::string_view s) -> std::optional<int64_t> {
               int64_t v = 0;
               const auto status = DecimalUtil::castFromString(
                   StringView(s.data(), static_cast<int32_t>(s.size())),
@@ -1030,12 +870,12 @@ void TextRowReader::readElement(
             });
       } else {
         putValue<int64_t, int64_t>(
-            getInteger<int64_t>, data, insertionRow, delim);
+            getNumeric<int64_t>, data, insertionRow, delim);
       }
       break;
 
     case TypeKind::HUGEINT: {
-      const std::string& str = getString(*this, isNull, delim);
+      auto str = getString(*this, isNull, delim);
       if (reqT->isLongDecimal()) {
         auto decimalParams = getDecimalPrecisionScale(*reqT);
         const auto precision = decimalParams.first;
@@ -1044,8 +884,7 @@ void TextRowReader::readElement(
             str,
             data,
             insertionRow,
-            [precision,
-             scale](const std::string& s) -> std::optional<int128_t> {
+            [precision, scale](std::string_view s) -> std::optional<int128_t> {
               int128_t v = 0;
               const auto status = DecimalUtil::castFromString(
                   StringView(s.data(), static_cast<int32_t>(s.size())),
@@ -1059,7 +898,7 @@ void TextRowReader::readElement(
             str,
             data,
             insertionRow,
-            [](const std::string& s) -> std::optional<int128_t> {
+            [](std::string_view s) -> std::optional<int128_t> {
               return HugeInt::parse(s);
             });
       }
@@ -1069,15 +908,15 @@ void TextRowReader::readElement(
       switch (reqT->kind()) {
         case TypeKind::BIGINT:
           putValue<int16_t, int64_t>(
-              getInteger<int16_t>, data, insertionRow, delim);
+              getNumeric<int16_t>, data, insertionRow, delim);
           break;
         case TypeKind::INTEGER:
           putValue<int16_t, int32_t>(
-              getInteger<int16_t>, data, insertionRow, delim);
+              getNumeric<int16_t>, data, insertionRow, delim);
           break;
         case TypeKind::SMALLINT:
           putValue<int16_t, int16_t>(
-              getInteger<int16_t>, data, insertionRow, delim);
+              getNumeric<int16_t>, data, insertionRow, delim);
           break;
         default:
           VELOX_FAIL(
@@ -1089,7 +928,7 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::VARBINARY: {
-      const std::string& str = getString(*this, isNull, delim);
+      auto str = getString(*this, isNull, delim);
 
       // Early return if no data vector or at EOF
       if ((atEOF_ && atSOL_) || (data == nullptr)) {
@@ -1147,7 +986,7 @@ void TextRowReader::readElement(
       break;
     }
     case TypeKind::VARCHAR: {
-      const std::string& str = getString(*this, isNull, delim);
+      auto str = getString(*this, isNull, delim);
 
       // Early return if no data vector or at EOF
       if ((atEOF_ && atSOL_) || (data == nullptr)) {
@@ -1203,19 +1042,19 @@ void TextRowReader::readElement(
       switch (reqT->kind()) {
         case TypeKind::BIGINT:
           putValue<int8_t, int64_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
+              getNumeric<int8_t>, data, insertionRow, delim);
           break;
         case TypeKind::INTEGER:
           putValue<int8_t, int32_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
+              getNumeric<int8_t>, data, insertionRow, delim);
           break;
         case TypeKind::SMALLINT:
           putValue<int8_t, int16_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
+              getNumeric<int8_t>, data, insertionRow, delim);
           break;
         case TypeKind::TINYINT:
           putValue<int8_t, int8_t>(
-              getInteger<int8_t>, data, insertionRow, delim);
+              getNumeric<int8_t>, data, insertionRow, delim);
           break;
         default:
           VELOX_FAIL(
@@ -1413,10 +1252,11 @@ void TextRowReader::readElement(
     case TypeKind::REAL:
       switch (reqT->kind()) {
         case TypeKind::REAL:
-          putValue<float, float>(getFloat, data, insertionRow, delim);
+          putValue<float, float>(getNumeric<float>, data, insertionRow, delim);
           break;
         case TypeKind::DOUBLE:
-          putValue<float, double>(getDouble, data, insertionRow, delim);
+          putValue<float, double>(
+              getNumeric<double>, data, insertionRow, delim);
           break;
         default:
           VELOX_FAIL(
@@ -1428,11 +1268,11 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::DOUBLE:
-      putValue<double, double>(getDouble, data, insertionRow, delim);
+      putValue<double, double>(getNumeric<double>, data, insertionRow, delim);
       break;
 
     case TypeKind::TIMESTAMP: {
-      const std::string& s = getString(*this, isNull, delim);
+      auto str = getString(*this, isNull, delim);
 
       // Early return if no data vector or at EOF
       if ((atEOF_ && atSOL_) || (data == nullptr)) {
@@ -1447,13 +1287,15 @@ void TextRowReader::readElement(
         return;
       }
 
-      if (s.empty()) {
+      if (str.empty()) {
         isNull = true;
         flatVector->setNull(insertionRow, true);
       } else {
-        auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            folly::identity,
-            [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
+        auto ts =
+            util::Converter<TypeKind::TIMESTAMP>::tryCast(str).thenOrThrow(
+                folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL(status.message());
+                });
         ts.toGMT(Timestamp::defaultTimezone());
         flatVector->set(
             insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
@@ -1590,11 +1432,11 @@ TextReader::TextReader(
 
   // Validate SerDe options.
   VELOX_CHECK(
-      contents_->serDeOptions.nullString.compare("\r") != 0,
+      contents_->serDeOptions.nullString != "\r",
       "\'\\r\' is not allowed to be nullString");
   VELOX_CHECK(
-      contents_->serDeOptions.nullString.compare("\n") != 0,
-      "\'\\n\n is not allowed to be nullString");
+      contents_->serDeOptions.nullString != "\n",
+      "\'\\n\' is not allowed to be nullString");
 
   setCompressionSettings(
       contents_->input->getName(),
