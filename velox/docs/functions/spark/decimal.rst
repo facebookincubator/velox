@@ -143,6 +143,23 @@ Arithmetic Functions
     Division by zero or overflow results in an error.
     Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
+.. spark:function:: divide(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of dividing ``x`` by ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows or ``y`` is zero.
+    Corresponds to Spark's operator ``/`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1.0 as DECIMAL(3, 1)) / CAST(2.0 as DECIMAL(3, 1)); -- 0.500000
+        SELECT CAST(1.0 as DECIMAL(3, 1)) / CAST(0.0 as DECIMAL(3, 1)); -- NULL
+
+.. spark:function:: checked_divide(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of dividing ``x`` by ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Throws an error when the result overflows or ``y`` is zero.
+    Corresponds to Spark's operator ``/`` with ``spark.sql.ansi.enabled`` set to true.
+
 Decimal Functions
 -----------------
 .. spark:function:: ceil(x: decimal(p, s)) -> r: decimal(pr, 0)

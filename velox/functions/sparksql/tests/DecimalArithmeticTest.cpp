@@ -88,6 +88,16 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       std::optional<U> u) {
     return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
   }
+
+  template <typename T, typename U>
+  std::optional<int128_t> checked_divide(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int128_t>(
+        "checked_divide(c0, c1)", {tType, uType}, t, u);
+  }
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -832,6 +842,64 @@ TEST_F(DecimalArithmeticTest, checkedDiv) {
           HugeInt::parse("99999999999999999999999999999999999999"),
           1)),
       "Overflow in integral divide");
+}
+TEST_F(DecimalArithmeticTest, checkedDivide) {
+  // Normal cases should work — matching existing divide test expected values.
+  // short / short -> long: DECIMAL(17,3) / DECIMAL(17,3) → DECIMAL(38,21)
+  // 500/1000 = 0.5 → unscaled 0.5 * 10^21 = 500000000000000000000
+  EXPECT_EQ(
+      (checked_divide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 500, 1000)),
+      HugeInt::parse("500000000000000000000"));
+
+  // long / long -> long: DECIMAL(20,2) / DECIMAL(20,2) → DECIMAL(38,18)
+  // 2500/500 = 5.0 → unscaled 5 * 10^18 = 5000000000000000000
+  EXPECT_EQ(
+      (checked_divide<int128_t, int128_t>(
+          DECIMAL(20, 2), DECIMAL(20, 2), 2500, 500)),
+      HugeInt::parse("5" + std::string(18, '0')));
+
+  // short / long -> long: DECIMAL(17,3) / DECIMAL(20,2) → DECIMAL(38,22)
+  // aRescale = 22 - 3 + 2 = 21, so 500 * 10^21 / 1000 = 5 * 10^20
+  EXPECT_EQ(
+      (checked_divide<int64_t, int128_t>(
+          DECIMAL(17, 3), DECIMAL(20, 2), 500, 1000)),
+      HugeInt::parse("500000000000000000000"));
+
+  // long / short -> long: DECIMAL(20,2) / DECIMAL(17,3) → DECIMAL(38,17)
+  // aRescale = 17 - 2 + 3 = 18, so 500 * 10^18 / 1000 = 5 * 10^17
+  EXPECT_EQ(
+      (checked_divide<int128_t, int64_t>(
+          DECIMAL(20, 2), DECIMAL(17, 3), 500, 1000)),
+      HugeInt::parse("500000000000000000"));
+
+  // Division by zero should throw for all input type combinations.
+  VELOX_ASSERT_USER_THROW(
+      (checked_divide<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 500, 0)),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      (checked_divide<int128_t, int128_t>(
+          DECIMAL(20, 2), DECIMAL(20, 2), 500, 0)),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      (checked_divide<int64_t, int128_t>(
+          DECIMAL(17, 3), DECIMAL(20, 2), 500, 0)),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      (checked_divide<int128_t, int64_t>(
+          DECIMAL(20, 2), DECIMAL(17, 3), 500, 0)),
+      "Division by zero");
+
+  // Overflow should throw.
+  // Dividing a large value by a very small value can overflow.
+  VELOX_ASSERT_USER_THROW(
+      (checked_divide<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 6),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          1)),
+      "Decimal overflow in divide");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
