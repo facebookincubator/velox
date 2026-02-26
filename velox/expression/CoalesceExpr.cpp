@@ -40,7 +40,8 @@ TypePtr resolveTypeInt(
   auto resultType = argTypes[0];
 
   for (auto i = 1; i < numArgs; i++) {
-    if (*resultType == *argTypes[i]) {
+    if (*resultType == *argTypes[i] ||
+        TypeCoercer::isTypeOnlyCoercion(resultType, argTypes[i])) {
       continue;
     }
 
@@ -58,7 +59,8 @@ TypePtr resolveTypeInt(
     }
 
     VELOX_USER_CHECK(
-        *argTypes[0] == *argTypes[i],
+        (*argTypes[0] == *argTypes[i] ||
+         TypeCoercer::isTypeOnlyCoercion(resultType, argTypes[i])),
         "Inputs to coalesce must have the same type. Expected {}, but got {}.",
         argTypes[0]->toString(),
         argTypes[i]->toString());
@@ -95,7 +97,8 @@ CoalesceExpr::CoalesceExpr(
   // Apply type checks.
   auto expectedType = resolveTypeInt(inputTypes);
   VELOX_CHECK(
-      *expectedType == *this->type(),
+      (*expectedType == *this->type() ||
+       TypeCoercer::isTypeOnlyCoercion(expectedType, this->type())),
       "Coalesce expression type different than its inputs. Expected {}, but got {}.",
       expectedType->toString(),
       this->type()->toString());

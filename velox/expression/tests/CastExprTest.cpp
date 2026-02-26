@@ -4063,6 +4063,26 @@ TEST_F(CastExprTest, timestampToTimeCast) {
   testCast(TIMESTAMP(), TIME(), realTimestamps, expectedRealTime);
 }
 
+TEST_F(CastExprTest, varcharToVarchar) {
+  std::vector<std::optional<StringView>> expected = {
+      "foobar123",
+      "truncated",
+      std::nullopt,
+  };
+
+  std::vector<std::optional<StringView>> input = {
+      "foobar123",
+      "truncatedfoobar123",
+      std::nullopt,
+  };
+
+  testCast(VARCHAR(), VARCHAR(9), input, expected);
+  testCast(VARCHAR(20), VARCHAR(9), input, expected);
+
+  input = expected;
+  testCast(VARCHAR(9), VARCHAR(), input, expected);
+}
+
 TEST_F(CastExprTest, numericUpcast) {
   auto testNumericUpcast =
       [&](std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {

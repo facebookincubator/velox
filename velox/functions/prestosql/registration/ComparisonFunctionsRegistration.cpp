@@ -78,6 +78,8 @@ void registerComparisonFunctions(const std::string& prefix) {
   registerFunction<GteFunction, bool, Orderable<T1>, Orderable<T1>>(
       {prefix + "gte"});
 
+  registerFunction<DistinctFromFunction, bool, Varchar, Varchar>(
+      {prefix + "distinct_from"});
   registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
       {prefix + "distinct_from"});
 

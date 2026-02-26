@@ -182,49 +182,57 @@ TEST_F(ArrayCombinationsTest, inlineVarcharArrays) {
 
 TEST_F(ArrayCombinationsTest, varcharArrays) {
   using S = StringView;
-  auto arrayVector = makeNullableArrayVector<S>({
-      {},
-      {""},
-      {std::nullopt},
-      {"red shiny car ahead", std::nullopt, "blue clear sky above"},
-      {"blue clear sky above",
-       "red shiny car ahead",
-       "yellow rose flowers",
-       "red shiny car ahead",
-       "purple is an elegant color"},
-      {"red shiny car ahead", std::nullopt, "blue clear sky above"},
-  });
-  auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 1, 2, 4, 5});
+  TypePtr inputType = ARRAY(VARCHAR());
+  for (int loop = 0; loop < 2; ++loop) {
+    auto arrayVector = makeNullableArrayVector<S>(
+        {
+            {},
+            {""},
+            {std::nullopt},
+            {"red shiny car ahead", std::nullopt, "blue clear sky above"},
+            {"blue clear sky above",
+             "red shiny car ahead",
+             "yellow rose flowers",
+             "red shiny car ahead",
+             "purple is an elegant color"},
+            {"red shiny car ahead", std::nullopt, "blue clear sky above"},
+        },
+        inputType);
+    auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 1, 2, 4, 5});
 
-  auto expected = makeNullableNestedArrayVector<S>(
-      {{{{std::vector<std::optional<S>>()}}},
-       {{{{""}}}},
-       {{{{std::optional<S>(std::nullopt)}}}},
-       {{{{"red shiny car ahead", std::nullopt}},
-         {{"red shiny car ahead", "blue clear sky above"}},
-         {{std::nullopt, "blue clear sky above"}}}},
-       {{{{"blue clear sky above",
-           "red shiny car ahead",
-           "yellow rose flowers",
-           "red shiny car ahead"}},
-         {{"blue clear sky above",
-           "red shiny car ahead",
-           "yellow rose flowers",
-           "purple is an elegant color"}},
-         {{"blue clear sky above",
-           "red shiny car ahead",
-           "red shiny car ahead",
-           "purple is an elegant color"}},
-         {{"blue clear sky above",
-           "yellow rose flowers",
-           "red shiny car ahead",
-           "purple is an elegant color"}},
-         {{"red shiny car ahead",
-           "yellow rose flowers",
-           "red shiny car ahead",
-           "purple is an elegant color"}}}},
-       common::testutil::optionalEmpty});
-  testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
+    auto expected = makeNullableNestedArrayVector<S>(
+        {{{{std::vector<std::optional<S>>()}}},
+         {{{{""}}}},
+         {{{{std::optional<S>(std::nullopt)}}}},
+         {{{{"red shiny car ahead", std::nullopt}},
+           {{"red shiny car ahead", "blue clear sky above"}},
+           {{std::nullopt, "blue clear sky above"}}}},
+         {{{{"blue clear sky above",
+             "red shiny car ahead",
+             "yellow rose flowers",
+             "red shiny car ahead"}},
+           {{"blue clear sky above",
+             "red shiny car ahead",
+             "yellow rose flowers",
+             "purple is an elegant color"}},
+           {{"blue clear sky above",
+             "red shiny car ahead",
+             "red shiny car ahead",
+             "purple is an elegant color"}},
+           {{"blue clear sky above",
+             "yellow rose flowers",
+             "red shiny car ahead",
+             "purple is an elegant color"}},
+           {{"red shiny car ahead",
+             "yellow rose flowers",
+             "red shiny car ahead",
+             "purple is an elegant color"}}}},
+         common::testutil::optionalEmpty},
+        ARRAY(VARCHAR()));
+    testExpr(
+        expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
+    inputType = ARRAY(VARCHAR(50));
+  }
 }
 
 TEST_F(ArrayCombinationsTest, boolNullableArrays) {
