@@ -97,10 +97,14 @@ StringView randString(
     FuzzerGenerator& rng,
     const VectorFuzzer::Options& opts,
     std::string& buf,
-    std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t>& converter) {
+    std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t>& converter,
+    const TypePtr& type) {
+  const size_t maxTypeStringLength = getVaryingLengthScalarTypeLength(*type);
+  const size_t maxAllowedStringLength =
+      std::min(opts.stringLength, maxTypeStringLength);
   const size_t stringLength = opts.stringVariableLength
-      ? rand<uint32_t>(rng) % opts.stringLength
-      : opts.stringLength;
+      ? rand<uint32_t>(rng) % maxAllowedStringLength
+      : maxAllowedStringLength;
 
   randString(rng, stringLength, opts.charEncodings, buf, converter);
   return StringView(buf);
@@ -123,7 +127,7 @@ VectorPtr fuzzConstantPrimitiveImpl(
   if constexpr (std::is_same_v<TCpp, StringView>) {
     std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
     std::string buf;
-    auto stringView = randString(rng, opts, buf, converter);
+    auto stringView = randString(rng, opts, buf, converter, type);
 
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, std::move(stringView));
@@ -163,7 +167,8 @@ void fuzzFlatPrimitiveImpl(
   std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
   for (size_t i = 0; i < vector->size(); ++i) {
     if constexpr (std::is_same_v<TCpp, StringView>) {
-      flatVector->set(i, randString(rng, opts, strBuf, converter));
+      flatVector->set(
+          i, randString(rng, opts, strBuf, converter, vector->type()));
     } else if constexpr (std::is_same_v<TCpp, Timestamp>) {
       flatVector->set(i, randTimestamp(rng, opts.timestampPrecision));
     } else if constexpr (std::is_same_v<TCpp, int64_t>) {

@@ -97,13 +97,13 @@ bool containsUnsupportedTypes(const TypePtr& type);
 /// typeName should be in lower case.
 bool usesInputTypeName(
     const exec::FunctionSignature& signature,
-    const std::string& typeName);
+    std::string_view typeName);
 
 /// Determines whether the signature has an argument or return type that
 /// contains typeName. typeName should be in lower case.
 bool usesTypeName(
     const exec::FunctionSignature& signature,
-    const std::string& typeName);
+    std::string_view typeName);
 
 // First resolves typeSignature. Then, the resolved type is a RowType or
 // contains RowTypes with empty field names, adds default names to these fields
