@@ -23,6 +23,10 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
+#include <algorithm>
+#include <numeric>
+#include <random>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
@@ -2769,5 +2773,345 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     RowContainerTest,
     RowContainerTest,
     testing::ValuesIn({false, true}));
+
+// Tests for the new batch extractColumns API.
+TEST_F(RowContainerTest, extractColumnsTiledBasic) {
+  // Test that batch extractColumns produces the same results as per-column
+  // extractColumn for a large batch that exercises the tiled path.
+  constexpr int32_t kNumRows = 2000;
+  auto rowType = ROW(
+      {{"k1", BIGINT()},
+       {"k2", INTEGER()},
+       {"v1", DOUBLE()},
+       {"v2", BIGINT()},
+       {"v3", SMALLINT()}});
+  auto batch = makeDataset(rowType, kNumRows, nullptr);
+
+  // Store data into RowContainer.
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  // Extract per-column (baseline).
+  std::vector<VectorPtr> separateResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    separateResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(rows.data(), kNumRows, c, separateResults[c]);
+  }
+
+  // Extract batch.
+  std::vector<column_index_t> indices(rowType->size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::vector<VectorPtr> batchResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    batchResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(rows.data(), kNumRows, indices, 0, batchResults);
+
+  // Compare.
+  for (int c = 0; c < rowType->size(); ++c) {
+    assertEqualVectors(separateResults[c], batchResults[c]);
+  }
+}
+
+TEST_F(RowContainerTest, extractColumnsSmallBatch) {
+  // Small batch should use fallback (single-tile) path.
+  // extraction and produce the same results.
+  constexpr int32_t kNumRows = 100;
+  auto rowType = ROW({{"k1", BIGINT()}, {"k2", INTEGER()}, {"v1", DOUBLE()}});
+  auto batch = makeDataset(rowType, kNumRows, nullptr);
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  std::vector<column_index_t> indices = {0, 1, 2};
+  std::vector<VectorPtr> results(3);
+  for (int c = 0; c < 3; ++c) {
+    results[c] = BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(rows.data(), kNumRows, indices, 0, results);
+
+  // Verify against per-column extraction.
+  for (int c = 0; c < 3; ++c) {
+    auto expected =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(rows.data(), kNumRows, c, expected);
+    assertEqualVectors(expected, results[c]);
+  }
+}
+
+TEST_F(RowContainerTest, extractColumnsWithNulls) {
+  // Test with nullable columns — some rows have nulls.
+  constexpr int32_t kNumRows = 1000;
+  auto rowType = ROW({{"k1", BIGINT()}, {"v1", VARCHAR()}, {"v2", INTEGER()}});
+  auto batch = makeDataset(rowType, kNumRows, [](RowVectorPtr rows) {
+    // Set every 3rd row to null in column 0.
+    auto* k1 = rows->childAt(0)->asFlatVector<int64_t>();
+    for (int i = 0; i < rows->size(); i += 3) {
+      k1->setNull(i, true);
+    }
+    // Set every 5th row to null in column 1.
+    auto* v1 = rows->childAt(1)->asFlatVector<StringView>();
+    for (int i = 0; i < rows->size(); i += 5) {
+      v1->setNull(i, true);
+    }
+  });
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  // Extract per-column.
+  std::vector<VectorPtr> separateResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    separateResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(rows.data(), kNumRows, c, separateResults[c]);
+  }
+
+  // Extract batch.
+  std::vector<column_index_t> indices = {0, 1, 2};
+  std::vector<VectorPtr> batchResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    batchResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(rows.data(), kNumRows, indices, 0, batchResults);
+
+  for (int c = 0; c < rowType->size(); ++c) {
+    assertEqualVectors(separateResults[c], batchResults[c]);
+  }
+}
+
+TEST_F(RowContainerTest, extractColumnsWithOffset) {
+  // Test with resultOffset — append to existing data in result vectors.
+  constexpr int32_t kNumRows = 800;
+  constexpr int32_t kOffset = 200;
+  auto rowType = ROW({{"k1", BIGINT()}, {"v1", INTEGER()}});
+  auto batch = makeDataset(rowType, kNumRows, nullptr);
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  // Extract with offset using per-column API.
+  const int32_t extractRows = kNumRows - kOffset;
+  std::vector<VectorPtr> separateResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    separateResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(
+        rows.data(), extractRows, c, kOffset, separateResults[c]);
+  }
+
+  // Extract with offset using batch API.
+  std::vector<column_index_t> indices = {0, 1};
+  std::vector<VectorPtr> batchResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    batchResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(
+      rows.data(), extractRows, indices, kOffset, batchResults);
+
+  for (int c = 0; c < rowType->size(); ++c) {
+    for (int i = kOffset; i < kNumRows; ++i) {
+      EXPECT_TRUE(separateResults[c]->equalValueAt(batchResults[c].get(), i, i))
+          << "Mismatch at column " << c << ", row " << i;
+    }
+  }
+}
+
+TEST_F(RowContainerTest, extractColumnsSingleColumn) {
+  // Single column should fall back to per-column path.
+  constexpr int32_t kNumRows = 1000;
+  auto rowType = ROW({{"k1", BIGINT()}, {"v1", INTEGER()}});
+  auto batch = makeDataset(rowType, kNumRows, nullptr);
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  // Extract only column 1.
+  std::vector<column_index_t> indices = {1};
+  std::vector<VectorPtr> results(1);
+  results[0] = BaseVector::create(rowType->childAt(1), kNumRows, pool_.get());
+  container->extractColumns(rows.data(), kNumRows, indices, 0, results);
+
+  auto expected =
+      BaseVector::create(rowType->childAt(1), kNumRows, pool_.get());
+  container->extractColumn(rows.data(), kNumRows, 1, expected);
+  assertEqualVectors(expected, results[0]);
+}
+
+TEST_F(RowContainerTest, extractColumnsStringType) {
+  // Test VARCHAR columns which use StringView extraction.
+  constexpr int32_t kNumRows = 1500;
+  auto rowType = ROW({{"k1", BIGINT()}, {"s1", VARCHAR()}, {"s2", VARCHAR()}});
+  auto batch = makeDataset(rowType, kNumRows, [](RowVectorPtr rows) {
+    auto* s1 = rows->childAt(1)->asFlatVector<StringView>();
+    for (int i = 0; i < rows->size(); ++i) {
+      // Mix short and long strings.
+      std::string val = (i % 2 == 0)
+          ? "short"
+          : "a_very_long_string_that_exceeds_inline_" + std::to_string(i);
+      s1->set(i, StringView(val));
+    }
+  });
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  std::vector<VectorPtr> separateResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    separateResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(rows.data(), kNumRows, c, separateResults[c]);
+  }
+
+  std::vector<column_index_t> indices = {0, 1, 2};
+  std::vector<VectorPtr> batchResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    batchResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(rows.data(), kNumRows, indices, 0, batchResults);
+
+  for (int c = 0; c < rowType->size(); ++c) {
+    assertEqualVectors(separateResults[c], batchResults[c]);
+  }
+}
+
+TEST_F(RowContainerTest, extractColumnsComplexType) {
+  // Test with ARRAY and MAP complex types.
+  constexpr int32_t kNumRows = 1000;
+  auto rowType = ROW(
+      {{"k1", BIGINT()},
+       {"a1", ARRAY(INTEGER())},
+       {"m1", MAP(VARCHAR(), BIGINT())}});
+  auto batch = makeDataset(rowType, kNumRows, nullptr);
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  std::vector<VectorPtr> separateResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    separateResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(rows.data(), kNumRows, c, separateResults[c]);
+  }
+
+  std::vector<column_index_t> indices = {0, 1, 2};
+  std::vector<VectorPtr> batchResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    batchResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(rows.data(), kNumRows, indices, 0, batchResults);
+
+  for (int c = 0; c < rowType->size(); ++c) {
+    assertEqualVectors(separateResults[c], batchResults[c]);
+  }
+}
+
+TEST_F(RowContainerTest, extractColumnsShuffledRows) {
+  // Test with shuffled row pointers to simulate out-of-order access.
+  constexpr int32_t kNumRows = 1500;
+  auto rowType = ROW({{"k1", BIGINT()}, {"v1", INTEGER()}, {"v2", DOUBLE()}});
+  auto batch = makeDataset(rowType, kNumRows, nullptr);
+
+  auto container =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  std::vector<char*> rows(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = container->newRow();
+    for (int c = 0; c < rowType->size(); ++c) {
+      DecodedVector decoded(*batch->childAt(c));
+      container->store(decoded, i, rows[i], c);
+    }
+  }
+
+  // Shuffle row pointers.
+  std::vector<char*> shuffledRows = rows;
+  std::mt19937 rng(42);
+  std::shuffle(shuffledRows.begin(), shuffledRows.end(), rng);
+
+  // Extract per-column with shuffled rows.
+  std::vector<VectorPtr> separateResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    separateResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+    container->extractColumn(
+        shuffledRows.data(), kNumRows, c, separateResults[c]);
+  }
+
+  // Extract batch with shuffled rows.
+  std::vector<column_index_t> indices = {0, 1, 2};
+  std::vector<VectorPtr> batchResults(rowType->size());
+  for (int c = 0; c < rowType->size(); ++c) {
+    batchResults[c] =
+        BaseVector::create(rowType->childAt(c), kNumRows, pool_.get());
+  }
+  container->extractColumns(
+      shuffledRows.data(), kNumRows, indices, 0, batchResults);
+
+  for (int c = 0; c < rowType->size(); ++c) {
+    assertEqualVectors(separateResults[c], batchResults[c]);
+  }
+}
 
 } // namespace facebook::velox::exec::test
