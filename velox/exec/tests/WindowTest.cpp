@@ -70,7 +70,7 @@ class WindowTest : public OperatorTestBase {
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
 
   tsan_atomic<bool> nonReclaimableSection_{false};
 };

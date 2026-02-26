@@ -297,7 +297,7 @@ SharedArbitrator::SharedArbitrator(const Config& config)
       "memoryReclaimThreadsHwMultiplier_ needs to be positive");
 
   const uint64_t numReclaimThreads = std::max<size_t>(
-      1, folly::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
+      1, folly::available_concurrency() * memoryReclaimThreadsHwMultiplier_);
   memoryReclaimExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
       numReclaimThreads,
       std::make_shared<folly::NamedThreadFactory>("MemoryReclaim"));

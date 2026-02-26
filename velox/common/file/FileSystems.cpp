@@ -91,7 +91,7 @@ class LocalFileSystem : public FileSystem {
                       std::max(
                           1,
                           static_cast<int32_t>(
-                              folly::hardware_concurrency() / 2)),
+                              folly::available_concurrency() / 2)),
                       std::make_shared<folly::NamedThreadFactory>(
                           "LocalReadahead"))
                 : nullptr) {}

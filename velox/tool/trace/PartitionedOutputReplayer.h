@@ -67,7 +67,7 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
       exec::OutputBufferManager::getInstanceRef()};
   const std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency(),
+          folly::available_concurrency(),
           std::make_shared<folly::NamedThreadFactory>("Driver"))};
   const ConsumerCallBack consumerCb_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> consumerExecutor_;

@@ -57,7 +57,7 @@ DEFINE_uint32(
     "The number of key columns");
 DEFINE_uint32(
     spiller_benchmark_spill_executor_size,
-    folly::hardware_concurrency(),
+    folly::available_concurrency(),
     "The spiller executor size in number of threads");
 DEFINE_uint32(
     spiller_benchmark_spill_vector_size,
