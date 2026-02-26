@@ -48,6 +48,11 @@ TEST(TypeCoercerTest, basic) {
 
   testBaseCoercion(ARRAY(TINYINT()));
   testNoCoercion(ARRAY(TINYINT()), MAP(INTEGER(), REAL()));
+
+  // UNKNOWN coerces to any primitive type.
+  testCoercion(UNKNOWN(), VARCHAR());
+  testCoercion(UNKNOWN(), BIGINT());
+  testCoercion(UNKNOWN(), BOOLEAN());
 }
 
 TEST(TypeCoercerTest, date) {
