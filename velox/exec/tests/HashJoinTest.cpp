@@ -6878,26 +6878,19 @@ TEST_P(HashJoinTest, antiJoinAbandonBuildNoDupHashEarly) {
 
 TEST_P(HashJoinTest, semiJoinDeduplicateResetCapacity) {
   const int32_t vectorSize = 10;
-  const int32_t batches = 210;
-  auto probeVectors = makeBatches(batches, [&](int32_t /*unused*/) {
-    return makeRowVector({
-        // Join Key is double -> VectorHasher::typeKindSupportsValueIds will
-        // return false -> HashMode is kHash
-        makeFlatVector<double>(
-            vectorSize, [&](vector_size_t /*row*/) { return rand(); }),
-        makeFlatVector<int64_t>(
-            vectorSize, [&](vector_size_t /*row*/) { return rand(); }),
-    });
-  });
+  const int32_t numBatches = 210;
+  VectorFuzzer fuzzer({.vectorSize = vectorSize}, pool());
 
-  auto buildVectors = makeBatches(batches, [&](int32_t batch) {
-    return makeRowVector({
-        makeFlatVector<double>(
-            vectorSize, [&](vector_size_t /*row*/) { return rand(); }),
-        makeFlatVector<int64_t>(
-            vectorSize, [&](vector_size_t /*row*/) { return rand(); }),
-    });
-  });
+  // Row type with double and int64_t columns
+  // Join Key is double -> VectorHasher::typeKindSupportsValueIds will
+  // return false -> HashMode is kHash
+  auto rowType = ROW({"c0", "c1"}, {DOUBLE(), BIGINT()});
+
+  auto probeVectors = makeBatches(
+      numBatches, [&](int32_t /*unused*/) { return fuzzer.fuzzRow(rowType); });
+
+  auto buildVectors = makeBatches(
+      numBatches, [&](int32_t /*unused*/) { return fuzzer.fuzzRow(rowType); });
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
