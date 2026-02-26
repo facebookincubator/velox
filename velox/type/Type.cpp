@@ -25,6 +25,7 @@
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
@@ -1151,7 +1152,19 @@ bool registerCustomType(
     const std::string& name,
     std::unique_ptr<const CustomTypeFactory> factory) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().emplace(uppercaseName, std::move(factory)).second;
+
+  // Get cast rules before moving factory.
+  auto castRules = factory->getCastRules();
+
+  bool registered =
+      typeFactories().emplace(uppercaseName, std::move(factory)).second;
+
+  // If the type was registered and has cast rules, register them.
+  if (registered && !castRules.empty()) {
+    CastRegistry::instance().registerCastRules(uppercaseName, castRules);
+  }
+
+  return registered;
 }
 
 bool customTypeExists(const std::string& name) {
@@ -1169,7 +1182,11 @@ std::unordered_set<std::string> getCustomTypeNames() {
 
 bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().erase(uppercaseName) == 1;
+  bool removed = typeFactories().erase(uppercaseName) == 1;
+  if (removed) {
+    CastRegistry::instance().unregisterCastRules(uppercaseName);
+  }
+  return removed;
 }
 
 const CustomTypeFactory* FOLLY_NULLABLE
@@ -1205,6 +1222,10 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
 }
 
 CustomTypeFactory::~CustomTypeFactory() = default;
+
+std::vector<CastRule> CustomTypeFactory::getCastRules() const {
+  return {};
+}
 
 AbstractInputGenerator::~AbstractInputGenerator() = default;
 
