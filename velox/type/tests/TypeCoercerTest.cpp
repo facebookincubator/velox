@@ -42,6 +42,7 @@ TEST(TypeCoercerTest, basic) {
   testCoercion(TINYINT(), TINYINT());
   testCoercion(TINYINT(), BIGINT());
   testCoercion(TINYINT(), REAL());
+  // testCoercion(VARCHAR(10), VARCHAR());
 
   testNoCoercion(TINYINT(), VARCHAR());
   testNoCoercion(TINYINT(), DATE());
@@ -61,6 +62,7 @@ TEST(TypeCoercerTest, unknown) {
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BOOLEAN()));
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), BIGINT()));
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), VARCHAR()));
+  // ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), VARCHAR(10)));
   ASSERT_TRUE(TypeCoercer::coercible(UNKNOWN(), ARRAY(INTEGER())));
 }
 
@@ -218,5 +220,53 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
           MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
 }
 
+TEST(TypeCoercerTest, isTypeOnlyCoercion) {
+  // VARCHAR type-only coercions
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARCHAR(10), VARCHAR(10)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARCHAR(10), VARCHAR(20)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARCHAR(10), VARCHAR()));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARCHAR(), VARCHAR(10)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARCHAR(), VARCHAR()));
+
+  // VARBINARY type-only coercions
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARBINARY(10), VARBINARY(10)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARBINARY(10), VARBINARY(20)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARBINARY(10), VARBINARY()));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARBINARY(), VARBINARY(10)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(VARBINARY(), VARBINARY()));
+
+  // DECIMAL type-only coercions (same scale, different precision)
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(DECIMAL(4, 2), DECIMAL(4, 2)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(DECIMAL(4, 2), DECIMAL(10, 2)));
+  EXPECT_TRUE(TypeCoercer::isTypeOnlyCoercion(DECIMAL(10, 2), DECIMAL(15, 2)));
+
+  // DECIMAL - same scale, source precision > result precision (not type-only)
+  EXPECT_FALSE(TypeCoercer::isTypeOnlyCoercion(DECIMAL(10, 2), DECIMAL(4, 2)));
+
+  // DECIMAL - different scale (not type-only)
+  EXPECT_FALSE(TypeCoercer::isTypeOnlyCoercion(DECIMAL(10, 2), DECIMAL(10, 3)));
+
+  // DECIMAL - different subtype (short vs long, not type-only)
+  EXPECT_FALSE(TypeCoercer::isTypeOnlyCoercion(DECIMAL(10, 2), DECIMAL(20, 2)));
+
+  // Complex types with VARCHAR
+  EXPECT_TRUE(
+      TypeCoercer::isTypeOnlyCoercion(ARRAY(VARCHAR(10)), ARRAY(VARCHAR(20))));
+  EXPECT_TRUE(
+      TypeCoercer::isTypeOnlyCoercion(ARRAY(VARCHAR(10)), ARRAY(VARCHAR())));
+  EXPECT_TRUE(
+      TypeCoercer::isTypeOnlyCoercion(
+          MAP(VARCHAR(10), INTEGER()), MAP(VARCHAR(20), INTEGER())));
+  EXPECT_TRUE(
+      TypeCoercer::isTypeOnlyCoercion(
+          MAP(INTEGER(), VARCHAR(10)), MAP(INTEGER(), VARCHAR())));
+
+  // Not type-only coercions
+  EXPECT_FALSE(TypeCoercer::isTypeOnlyCoercion(INTEGER(), BIGINT()));
+  EXPECT_FALSE(TypeCoercer::isTypeOnlyCoercion(REAL(), DOUBLE()));
+  EXPECT_FALSE(TypeCoercer::isTypeOnlyCoercion(VARCHAR(), INTEGER()));
+  EXPECT_FALSE(
+      TypeCoercer::isTypeOnlyCoercion(ARRAY(INTEGER()), ARRAY(BIGINT())));
+}
 } // namespace
 } // namespace facebook::velox
