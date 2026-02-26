@@ -33,6 +33,7 @@ add_executable(
   EntropyAggregationTest.cpp
   GeometricMeanTest.cpp
   HistogramTest.cpp
+  InternalVariadicVectorSumTest.cpp
   KHyperLogLogAggregateTest.cpp
   Main.cpp
   MapAccumulatorTest.cpp
