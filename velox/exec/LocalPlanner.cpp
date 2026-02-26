@@ -39,6 +39,7 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/ParallelProject.h"
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/ProjectSequence.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/RowNumber.h"
 #include "velox/exec/ScaleWriterLocalPartition.h"
@@ -71,6 +72,42 @@ bool eagerFlush(const core::PlanNode& node) {
   }
   // Follow the first source, which is driving the output.
   return eagerFlush(*node.sources()[0]);
+}
+
+// Check if a plan node is a ProjectNode or ParallelProjectNode.
+bool isProjectOrParallelProject(
+    const std::shared_ptr<const core::PlanNode>& planNode) {
+  return std::dynamic_pointer_cast<const core::ProjectNode>(planNode) !=
+             nullptr ||
+         std::dynamic_pointer_cast<const core::ParallelProjectNode>(planNode) !=
+             nullptr;
+}
+
+// Detect a sequence of consecutive ProjectNode or ParallelProjectNode starting
+// at position i. Returns the length of the sequence and whether it contains at
+// least one ParallelProjectNode.
+std::pair<int32_t, bool> detectProjectSequence(
+    const std::vector<std::shared_ptr<const core::PlanNode>>& planNodes,
+    int32_t startIdx) {
+  int32_t length = 0;
+  bool hasParallelProject = false;
+
+  for (int32_t i = startIdx; i < planNodes.size(); ++i) {
+    if (auto parallelProject =
+            std::dynamic_pointer_cast<const core::ParallelProjectNode>(
+                planNodes[i])) {
+      hasParallelProject = true;
+      length++;
+    } else if (
+        auto project =
+            std::dynamic_pointer_cast<const core::ProjectNode>(planNodes[i])) {
+      length++;
+    } else {
+      break;
+    }
+  }
+
+  return {length, hasParallelProject};
 }
 
 } // namespace
@@ -538,30 +575,57 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     auto planNode = planNodes[i];
     if (auto filterNode =
             std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {
+      // Check if there are multiple ProjectNodes or ParallelProjectNodes after
+      // the FilterNode.
       if (i < planNodes.size() - 1) {
-        auto next = planNodes[i + 1];
-        if (auto projectNode =
-                std::dynamic_pointer_cast<const core::ProjectNode>(next)) {
-          operators.push_back(
-              std::make_unique<FilterProject>(
-                  id, ctx.get(), filterNode, projectNode));
-          i++;
+        auto [seqLength, hasParallelProject] =
+            detectProjectSequence(planNodes, i + 1);
+        if (ctx->queryConfig().useProjectSequence() &&
+            (seqLength > 1 || (seqLength == 1 && hasParallelProject))) {
+          // Create FilterProject with just the filter, then let the following
+          // ProjectNodes/ParallelProjectNodes be combined into ProjectSequence.
+          operators.push_back(std::make_unique<FilterProject>(
+              id, ctx.get(), filterNode, nullptr));
           continue;
+        } else if (seqLength == 1) {
+          // Single ProjectNode after filter - use traditional FilterProject
+          // fusion.
+          auto next = planNodes[i + 1];
+          if (auto projectNode =
+                  std::dynamic_pointer_cast<const core::ProjectNode>(next)) {
+            operators.push_back(std::make_unique<FilterProject>(
+                id, ctx.get(), filterNode, projectNode));
+            i++;
+            continue;
+          }
         }
       }
       operators.push_back(
           std::make_unique<FilterProject>(id, ctx.get(), filterNode, nullptr));
-    } else if (
-        auto projectNode =
-            std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
-      operators.push_back(
-          std::make_unique<FilterProject>(id, ctx.get(), nullptr, projectNode));
-    } else if (
-        auto projectNode =
-            std::dynamic_pointer_cast<const core::ParallelProjectNode>(
-                planNode)) {
-      operators.push_back(
-          std::make_unique<ParallelProject>(id, ctx.get(), projectNode));
+    } else if (isProjectOrParallelProject(planNode)) {
+      // Detect a sequence of consecutive ProjectNode or ParallelProjectNode.
+      auto [seqLength, hasParallelProject] = detectProjectSequence(planNodes, i);
+
+      // Generate ProjectSequence if there are at least 2 nodes in the sequence
+      // OR if there is at least one ParallelProjectNode.
+      if (ctx->queryConfig().useProjectSequence() &&
+          (seqLength >= 2 || hasParallelProject)) {
+        ProjectVector projects;
+        for (int32_t j = 0; j < seqLength; ++j) {
+          projects.push_back(std::static_pointer_cast<
+                             const core::AbstractProjectNode>(planNodes[i + j]));
+        }
+        operators.push_back(
+            std::make_unique<ProjectSequence>(id, ctx.get(), projects));
+        i += seqLength - 1;  // Skip the nodes we just consumed
+      } else {
+        // Single ProjectNode, use traditional FilterProject
+        if (auto projectNode =
+                std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
+          operators.push_back(std::make_unique<FilterProject>(
+              id, ctx.get(), nullptr, projectNode));
+        }
+      }
     } else if (
         auto valuesNode =
             std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {

@@ -249,6 +249,14 @@ class BaseVector {
     return rawNulls_;
   }
 
+  bool isMutable() const {
+    return mutable_;
+  }
+
+  void setMutable(bool isMutable) {
+    mutable_ = isMutable;
+  }
+  
   /// Ensures that nulls are writable (mutable and single referenced for
   /// BaseVector::length_).
   uint64_t* mutableRawNulls() {
@@ -1058,6 +1066,11 @@ class BaseVector {
   // of rows.
   std::atomic_bool containsLazyAndIsWrapped_{false};
 
+  // Flag indicating that a multiply referenced vector is writable for
+  // ensureWritable(). For example a vector that is kept for reuse by
+  // a reader is multiply referenced but mutable.
+  bool mutable_{false};
+  
   // Whether we should use Expr::evalWithMemo to cache the result of evaluation
   // on dictionary values (this vector).  Set to false when the dictionary
   // values are not going to be reused (e.g. result of filtering), so that we

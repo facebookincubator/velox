@@ -308,6 +308,10 @@ class QueryConfig {
   static constexpr const char* kAdaptiveFilterReorderingEnabled =
       "adaptive_filter_reordering_enabled";
 
+  /// If true, combine consecutive ProjectNodes and ParallelProjectNodes into a
+  /// single ProjectSequence operator.
+  static constexpr const char* kUseProjectSequence = "use_project_sequence";
+
   /// If true, allow hash probe drivers to generate build-side rows in parallel.
   static constexpr const char* kParallelOutputJoinBuildRowsEnabled =
       "parallel_output_join_build_rows_enabled";
@@ -1102,6 +1106,10 @@ class QueryConfig {
 
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool useProjectSequence() const {
+    return get<bool>(kUseProjectSequence, false);
   }
 
   bool parallelOutputJoinBuildRowsEnabled() const {
