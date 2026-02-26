@@ -147,6 +147,15 @@ cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
   return cudf::detail::global_cuda_stream_pool();
 };
 
+void streamsWaitForStream(
+    CudaEvent& event,
+    cudf::host_span<rmm::cuda_stream_view const> streams,
+    rmm::cuda_stream_view stream) {
+  event.recordFrom(stream);
+  std::for_each(
+      streams.begin(), streams.end(), [&](auto& strm) { event.waitOn(strm); });
+}
+
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream) {
