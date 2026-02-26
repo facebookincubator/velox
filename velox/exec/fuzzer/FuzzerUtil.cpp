@@ -281,7 +281,7 @@ bool containsIPAddress(const TypePtr& type) {
 // case.
 bool containTypeName(
     const exec::TypeSignature& type,
-    const std::string& typeName) {
+    std::string_view typeName) {
   auto sanitizedTypeName = exec::sanitizeName(type.baseName());
   if (sanitizedTypeName == typeName) {
     return true;
@@ -296,7 +296,7 @@ bool containTypeName(
 
 bool usesInputTypeName(
     const exec::FunctionSignature& signature,
-    const std::string& typeName) {
+    std::string_view typeName) {
   for (const auto& argument : signature.argumentTypes()) {
     if (containTypeName(argument, typeName)) {
       return true;
@@ -307,7 +307,7 @@ bool usesInputTypeName(
 
 bool usesTypeName(
     const exec::FunctionSignature& signature,
-    const std::string& typeName) {
+    std::string_view typeName) {
   if (containTypeName(signature.returnType(), typeName)) {
     return true;
   }

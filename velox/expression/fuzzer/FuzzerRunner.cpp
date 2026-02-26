@@ -162,6 +162,15 @@ DEFINE_string(
     "of functions at every instance. Number of tickets must be a positive "
     "integer. Example: eq=3,floor=5");
 
+DEFINE_int32(
+    max_varchar_type_length,
+    100,
+    "The maximum varying type length for a VARCHAR type. "
+    "The value defines also the maximum string length for a "
+    "string value. However, the fuzzed string value length does "
+    "not exceed the concrete fuzzed type length when generating "
+    "a constant for the VARCHAR typed column.");
+
 namespace facebook::velox::fuzzer {
 
 namespace {
@@ -169,7 +178,7 @@ VectorFuzzer::Options getVectorFuzzerOptions() {
   VectorFuzzer::Options opts;
   opts.vectorSize = FLAGS_batch_size;
   opts.stringVariableLength = true;
-  opts.stringLength = 100;
+  opts.stringLength = FLAGS_max_varchar_type_length;
   opts.nullRatio = FLAGS_null_ratio;
   opts.useRandomNullPattern = true;
   opts.timestampPrecision =
@@ -198,6 +207,7 @@ ExpressionFuzzer::Options getExpressionFuzzerOptions(
   opts.skipFunctions = skipFunctions;
   opts.referenceQueryRunner = referenceQueryRunner;
   opts.exprTransformers = exprTransformers;
+  opts.maxVarcharTypeLength = FLAGS_max_varchar_type_length;
   return opts;
 }
 
