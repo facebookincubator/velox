@@ -30,16 +30,47 @@ namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_ABFS
 
-folly::once_flag abfsInitiationFlag;
+using FileSystemMap = folly::Synchronized<
+    std::unordered_map<std::string, std::shared_ptr<FileSystem>>>;
+
+FileSystemMap& fileSystems() {
+  static FileSystemMap instances;
+  return instances;
+}
 
 std::shared_ptr<FileSystem> abfsFileSystemGenerator(
     std::shared_ptr<const config::ConfigBase> properties,
     std::string_view filePath) {
-  static std::shared_ptr<FileSystem> filesystem;
-  folly::call_once(abfsInitiationFlag, [&properties]() {
-    filesystem = std::make_shared<AbfsFileSystem>(properties);
-  });
-  return filesystem;
+  auto cacheKeys = extractCacheKeyFromConfig(*properties);
+  // If the authType is not provided, use the accountName as cacheKey.
+  std::string cacheKey = cacheKeys.empty()
+      ? AbfsPath(filePath).accountName()
+      : cacheKeys[0].accountName + cacheKeys[0].authType;
+
+  // Check if an instance exists with a read lock (shared).
+  auto fs = fileSystems().withRLock(
+      [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
+        auto iterator = instanceMap.find(cacheKey);
+        if (iterator != instanceMap.end()) {
+          return iterator->second;
+        }
+        return nullptr;
+      });
+  if (fs != nullptr) {
+    return fs;
+  }
+
+  return fileSystems().withWLock(
+      [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
+        // Repeat the checks with a write lock.
+        auto iterator = instanceMap.find(cacheKey);
+        if (iterator != instanceMap.end()) {
+          return iterator->second;
+        }
+        auto fs = std::make_shared<AbfsFileSystem>(properties);
+        instanceMap.insert({cacheKey, fs});
+        return fs;
+      });
 }
 
 std::unique_ptr<velox::dwio::common::FileSink> abfsWriteFileSinkGenerator(
