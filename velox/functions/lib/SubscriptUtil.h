@@ -143,7 +143,9 @@ class LookupTable : public LookupTableBase {
 
 class MapSubscript {
  public:
-  explicit MapSubscript(bool allowCaching) : allowCaching_(allowCaching) {}
+  explicit MapSubscript(bool allowCaching, bool throwOnMissingKey = false)
+      : allowCaching_(allowCaching),
+        throwOnMissingKey_(throwOnMissingKey) {}
 
   VectorPtr applyMap(
       const SelectivityVector& rows,
@@ -152,6 +154,10 @@ class MapSubscript {
 
   bool cachingEnabled() const {
     return allowCaching_;
+  }
+
+  bool throwOnMissingKey() const {
+    return throwOnMissingKey_;
   }
 
   auto& lookupTable() const {
@@ -194,6 +200,10 @@ class MapSubscript {
   // processed map.
   mutable bool allowCaching_;
 
+  // When true, sets a user error if a map key is not found instead of
+  // returning null. Used for Spark ANSI mode (checked_element_at).
+  bool throwOnMissingKey_;
+
   // This is used to check if the same base map is being passed over and over
   // in the function. A shared_ptr is used to guarantee that if the map is
   // seen again then it was not modified.
@@ -220,11 +230,13 @@ template <
     bool allowNegativeIndices,
     bool nullOnNegativeIndices,
     bool allowOutOfBound,
-    bool indexStartsAtOne>
+    bool indexStartsAtOne,
+    bool throwOnMissingMapKey = false>
 class SubscriptImpl : public exec::Subscript {
  public:
   explicit SubscriptImpl(bool allowCaching)
-      : mapSubscript_(detail::MapSubscript(allowCaching)) {}
+      : mapSubscript_(
+            detail::MapSubscript(allowCaching, throwOnMissingMapKey)) {}
 
   void apply(
       const SelectivityVector& rows,

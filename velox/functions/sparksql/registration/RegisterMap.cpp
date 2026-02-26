@@ -22,6 +22,9 @@ namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
     bool enableCaching);
+extern void registerCheckedElementAtFunction(
+    const std::string& name,
+    bool enableCaching);
 
 void registerSparkMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
@@ -45,6 +48,8 @@ void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
+  // This is the semantics of spark.sql.ansi.enabled = true.
+  registerCheckedElementAtFunction(prefix + "checked_element_at", true);
   registerSize(prefix + "size");
 }
 } // namespace sparksql
