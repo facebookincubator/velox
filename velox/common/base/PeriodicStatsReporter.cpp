@@ -175,6 +175,14 @@ void PeriodicStatsReporter::reportCacheStats() {
   REPORT_IF_NOT_ZERO(
       kMetricMemoryCacheNumAllocClocks, deltaCacheStats.allocClocks);
   REPORT_IF_NOT_ZERO(
+      kMetricMemoryCacheNumShardMutexWaitClocks,
+      deltaCacheStats.shardMutexWaitClocks);
+  // Convert clocks to milliseconds assuming ~3GHz CPU frequency.
+  // 3GHz = 3,000,000 clocks per millisecond.
+  REPORT_IF_NOT_ZERO(
+      kMetricMemoryCacheShardMutexWaitTimeMs,
+      deltaCacheStats.shardMutexWaitClocks / 3000000);
+  REPORT_IF_NOT_ZERO(
       kMetricMemoryCacheNumAgedOutEntries, deltaCacheStats.numAgedOut);
   REPORT_IF_NOT_ZERO(
       kMetricMemoryCacheSumEvictScore, deltaCacheStats.sumEvictScore);

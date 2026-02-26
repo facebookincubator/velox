@@ -35,6 +35,21 @@
 
 namespace facebook::velox::cache {
 
+namespace {
+// Helper that uses ClockTimer to measure the lock acquisition time.
+class TimedLockGuard {
+ public:
+  TimedLockGuard(std::mutex& mutex, std::atomic<uint64_t>& waitClocks)
+      : lock_(mutex, std::defer_lock) {
+    ClockTimer timer(waitClocks);
+    lock_.lock();
+  }
+
+ private:
+  std::unique_lock<std::mutex> lock_;
+};
+} // namespace
+
 using memory::MachinePageCount;
 using memory::MemoryAllocator;
 
@@ -168,7 +183,7 @@ CachePin CacheShard::findOrCreate(
     folly::SemiFuture<bool>* wait) {
   AsyncDataCacheEntry* entryToInit = nullptr;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    TimedLockGuard l(mutex_, shardMutexWaitClocks_);
     ++eventCounter_;
     auto it = entryMap_.find(key);
     if (it != entryMap_.end()) {
@@ -235,7 +250,7 @@ CachePin CacheShard::findOrCreate(
 }
 
 void CacheShard::makeEvictable(RawFileCacheKey key) {
-  std::lock_guard<std::mutex> l(mutex_);
+  TimedLockGuard l(mutex_, shardMutexWaitClocks_);
   auto it = entryMap_.find(key);
   if (it == entryMap_.end()) {
     return;
@@ -244,7 +259,7 @@ void CacheShard::makeEvictable(RawFileCacheKey key) {
 }
 
 bool CacheShard::exists(RawFileCacheKey key) const {
-  std::lock_guard<std::mutex> l(mutex_);
+  TimedLockGuard l(mutex_, shardMutexWaitClocks_);
   auto it = entryMap_.find(key);
   if (it != entryMap_.end()) {
     it->second->touch();
@@ -336,7 +351,7 @@ void CoalescedLoad::setEndState(State endState) {
 
 std::unique_ptr<folly::SharedPromise<bool>> CacheShard::removeEntry(
     AsyncDataCacheEntry* entry) {
-  std::lock_guard<std::mutex> l(mutex_);
+  TimedLockGuard l(mutex_, shardMutexWaitClocks_);
   removeEntryLocked(entry);
   // After the entry is removed from the hash table, a promise can no longer
   // be made. It is safe to move the promise and realize it.
@@ -384,7 +399,7 @@ uint64_t CacheShard::evict(
   int64_t largeEvicted = 0;
   int32_t evictSaveableSkipped = 0;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    TimedLockGuard l(mutex_, shardMutexWaitClocks_);
     const size_t size = entries_.size();
     if (size == 0) {
       return 0;
@@ -518,7 +533,7 @@ void CacheShard::calibrateThresholdLocked() {
 }
 
 void CacheShard::updateStats(CacheStats& stats) {
-  std::lock_guard<std::mutex> l(mutex_);
+  TimedLockGuard l(mutex_, shardMutexWaitClocks_);
   for (auto& entry : entries_) {
     if (!entry) {
       ++stats.numEmptyEntries;
@@ -573,10 +588,11 @@ void CacheShard::updateStats(CacheStats& stats) {
   stats.numStales += numStales_;
   stats.sumEvictScore += sumEvictScore_;
   stats.allocClocks += allocClocks_;
+  stats.shardMutexWaitClocks += shardMutexWaitClocks_;
 }
 
 void CacheShard::appendSsdSaveable(bool saveAll, std::vector<CachePin>& pins) {
-  std::lock_guard<std::mutex> l(mutex_);
+  TimedLockGuard l(mutex_, shardMutexWaitClocks_);
   // Do not add entries to a write batch more than maxWriteRatio_. If SSD save
   // is slower than storage read, we must not have a situation where SSD save
   // pins everything and stops reading.
@@ -612,7 +628,7 @@ bool CacheShard::removeFileEntries(
   int64_t pagesRemoved = 0;
   std::vector<memory::Allocation> toFree;
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    TimedLockGuard l(mutex_, shardMutexWaitClocks_);
 
     auto entryIndex = -1;
     for (auto& cacheEntry : entries_) {
@@ -662,6 +678,8 @@ CacheStats CacheStats::operator-(const CacheStats& other) const {
   result.numStales = numStales - other.numStales;
   result.allocClocks = allocClocks - other.allocClocks;
   result.sumEvictScore = sumEvictScore - other.sumEvictScore;
+  result.shardMutexWaitClocks =
+      shardMutexWaitClocks - other.shardMutexWaitClocks;
   if (ssdStats != nullptr) {
     if (other.ssdStats != nullptr) {
       result.ssdStats =
@@ -1046,7 +1064,8 @@ std::string CacheStats::toString() const {
       << " bytes: " << succinctBytes(prefetchBytes)
       << "\n"
       // Cache timing stats.
-      << "Alloc Megaclocks " << (allocClocks >> 20);
+      << "Alloc Megaclocks " << (allocClocks >> 20)
+      << " Shard mutex wait Megaclocks: " << (shardMutexWaitClocks >> 20);
   return out.str();
 }
 
