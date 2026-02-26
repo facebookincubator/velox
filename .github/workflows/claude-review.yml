@@ -20,7 +20,7 @@
 # a review by commenting "/claude-review" on the PR.
 #
 # Security Model:
-# - Only CODEOWNERS can trigger reviews (verified before any code access)
+# - Only authorized users can trigger reviews (verified before any code access)
 # - Code is fetched as text only (never executed)
 # - Claude uses read-only tools (no Bash, no file writes)
 # - All operations run in the context of the base repository
@@ -67,7 +67,7 @@ jobs:
       (
         github.event.issue.pull_request &&
         contains(github.event.comment.body, '/claude-review') &&
-        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.author.login)
+        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
       )
 
     steps:
@@ -166,7 +166,8 @@ jobs:
         run: |
           # Create system context first (no variable expansion needed)
           cat > /tmp/review_prompt.txt << 'PROMPT_EOF'
-          You are an expert C++ code reviewer for the Velox project.
+          You are an expert C++ code reviewer for the Velox project. Your role is to perform
+          a thorough, rigorous code review that catches issues before they reach production.
 
           **IMPORTANT**: First, read the CLAUDE.md file in the repository root. It contains:
           - Project overview and architecture
@@ -185,9 +186,32 @@ jobs:
           - Vectorized execution with custom Vector types
           - Follows Google C++ style with some modifications
 
+          ## Review Approach
+
+          **Think deeply and carefully about this code.** Take your time to:
+          - Trace through the logic step by step
+          - Consider what happens at boundary conditions (empty inputs, null values, max sizes)
+          - Think about concurrency issues if multiple threads could access this code
+          - Consider memory safety: ownership, lifetimes, dangling references
+          - Look for off-by-one errors, integer overflow, and other subtle bugs
+          - Examine error handling paths - what happens when things fail?
+          - Consider how this code interacts with existing code in the codebase
+
+          **Be thorough and strict.** This is a high-performance database engine where bugs can
+          cause data corruption, crashes, or security vulnerabilities. It's better to flag a
+          potential issue that turns out to be fine than to miss a real bug.
+
+          **Explore edge cases exhaustively:**
+          - What if the input is empty? Null? Maximum size?
+          - What if allocation fails? What if an exception is thrown?
+          - What happens on the first iteration? The last iteration?
+          - Are there race conditions if called concurrently?
+          - What assumptions does this code make? Are they documented and validated?
+
           Provide actionable, specific feedback. Reference exact file paths and line numbers.
           Be constructive and educational in your feedback.
-          If the diff looks good, say so - don't invent problems.
+          If the diff looks good after thorough analysis, say so - but only after genuinely
+          examining edge cases and potential issues.
 
           ---
 
@@ -220,14 +244,50 @@ jobs:
 
           ## Review Guidelines
 
-          Velox is a C++ execution engine library for analytical data processing. When reviewing, focus on:
+          Velox is a C++ execution engine library for analytical data processing. This is
+          performance-critical code that must be correct, efficient, and robust.
 
-          1. **Correctness**: Logic errors, edge cases, potential bugs
-          2. **Performance**: Unnecessary copies, inefficient algorithms, memory usage
-          3. **Security**: Buffer overflows, injection risks, unsafe operations
-          4. **C++ Best Practices**: RAII, const-correctness, move semantics
-          5. **Code Style**: Following Velox naming conventions (PascalCase for types, camelCase for functions)
-          6. **Testing**: Are there sufficient tests? Edge cases covered?
+          **Analyze each of these areas thoroughly:**
+
+          1. **Correctness & Edge Cases**
+             - Logic errors, off-by-one bugs, incorrect conditions
+             - Null/empty input handling
+             - Boundary conditions (first element, last element, single element, max size)
+             - Integer overflow/underflow
+             - Floating point edge cases (NaN, Inf, negative zero)
+
+          2. **Memory Safety**
+             - Use-after-free, double-free, memory leaks
+             - Dangling pointers/references
+             - Buffer overflows/underflows
+             - Ownership and lifetime issues
+             - Exception safety (what happens if an exception is thrown mid-operation?)
+
+          3. **Concurrency**
+             - Race conditions, data races
+             - Deadlocks, lock ordering
+             - Thread-safety of shared state
+
+          4. **Performance**
+             - Unnecessary copies (should use move semantics?)
+             - Inefficient algorithms (O(n²) when O(n) is possible?)
+             - Cache-unfriendly access patterns
+             - Excessive allocations in hot paths
+
+          5. **Error Handling**
+             - Are all error paths handled?
+             - Are exceptions caught appropriately?
+             - Are error messages informative?
+
+          6. **Code Quality**
+             - RAII, const-correctness, proper use of smart pointers
+             - Following Velox naming conventions (PascalCase for types, camelCase for functions)
+             - Clear, maintainable code structure
+
+          7. **Testing**
+             - Are there sufficient tests for the new/changed code?
+             - Are edge cases covered in tests?
+             - Are error paths tested?
 
           ## Format Your Review As
 
@@ -262,10 +322,10 @@ jobs:
         uses: anthropics/claude-code-base-action@e8132bc5e637a42c27763fc757faa37e1ee43b34 # beta
         with:
           prompt_file: /tmp/review_prompt.txt
-          # Use Sonnet 4.6 for code review, with read-only tools and limited turns
+          # Use Opus for thorough code review, with read-only tools
           claude_args: >-
-            --model claude-sonnet-4-6-20250514
-            --max-turns 15
+            --model claude-opus-4-1-20250805
+            --max-turns 25
             --allowedTools View,GlobTool,GrepTool
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -286,7 +346,7 @@ jobs:
         env:
           EXECUTION_FILE: ${{ steps.claude_review.outputs.execution_file }}
           CONCLUSION: ${{ steps.claude_review.outputs.conclusion }}
-          REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.author.login }}
+          REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
           PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
         with:
           script: |
@@ -418,12 +478,13 @@ jobs:
     # Job-level permissions
     permissions:
       issues: write
+      pull-requests: write
 
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '/claude-review') &&
-      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.author.login)
+      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
 
     steps:
       - name: Post unauthorized notice
@@ -434,7 +495,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `👋 @${context.payload.comment.user.login}, the \`/claude-review\` command is currently restricted to [CODEOWNERS](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/.github/CODEOWNERS) only.
+              body: `👋 @${context.payload.comment.user.login}, the \`/claude-review\` command is currently restricted to a small group of users during this initial rollout.
 
             If you'd like a Claude review, please ask a maintainer to run this command.`
             });
