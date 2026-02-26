@@ -261,7 +261,10 @@ void SplitReader::applyBucketConversion(
   output = std::move(filtered);
 }
 
-uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
+uint64_t SplitReader::next(
+    uint64_t size,
+    VectorPtr& output,
+    dwio::common::RuntimeStatistics& runtimeStats) {
   uint64_t numScanned;
   if (!baseReaderOpts_.randomSkip()) {
     numScanned = baseRowReader_->next(size, output);

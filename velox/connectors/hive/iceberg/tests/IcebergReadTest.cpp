@@ -27,6 +27,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/TaskStats.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -198,7 +199,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   /// positions for data_file_1 and data_file_2. THere are 3 RowGroups in this
   /// delete file, the first two contain positions for data_file_1, and the last
   /// contain positions for data_file_2
-  void assertPositionalDeletes(
+  std::shared_ptr<exec::Task> assertPositionalDeletes(
       const std::map<std::string, std::vector<int64_t>>& rowGroupSizesForFiles,
       const std::unordered_map<
           std::string,
@@ -263,8 +264,9 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     auto planStats = toPlanStats(task->taskStats());
 
     auto it = planStats.find(plan->id());
-    ASSERT_TRUE(it != planStats.end());
-    ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+    EXPECT_TRUE(it != planStats.end());
+    EXPECT_TRUE(it->second.peakMemoryBytes > 0);
+    return task;
   }
 
   const static int rowCount = 20000;
@@ -996,4 +998,69 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
       0);
 }
 #endif
+
+TEST_F(HiveIcebergTest, icebergMetrics) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Helper function to aggregate a runtime metric across all plan nodes.
+  auto getAggregatedRuntimeMetric = [](const exec::TaskStats& taskStats, const std::string& metricName) -> int64_t {
+    int64_t total = 0;
+    auto planStats = exec::toPlanStats(taskStats);
+    for (const auto& [planNodeId, nodeStats] : planStats) {
+      auto it = nodeStats.customStats.find(metricName);
+      if (it != nodeStats.customStats.end()) {
+        total += it->second.sum;
+      }
+    }
+    return total;
+  };
+
+  // Test case 1: Single split with 3 deletes.
+  std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles = {
+      {"data_file_1", {100, 85}}};
+  std::unordered_map<
+      std::string,
+      std::multimap<std::string, std::vector<int64_t>>>
+      deleteFilesForBaseDatafiles;
+  deleteFilesForBaseDatafiles["delete_file_1"] = {{"data_file_1", {0, 1, 99}}};
+  auto task =
+      assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+  const auto& taskStats = task->taskStats();
+
+  ASSERT_EQ(getAggregatedRuntimeMetric(taskStats, "iceberg.numSplits"), 1);
+  ASSERT_EQ(getAggregatedRuntimeMetric(taskStats, "iceberg.numDeletes"), 3);
+
+  // Test case 2: Multiple data files (2 data files = 2 splits) with deletes.
+  // data_file_1 has 4 deletes
+  // data_file_2 has 3 deletes
+  // Total: 2 splits, 7 deletes
+  rowGroupSizesForFiles = {
+      {"data_file_1", {100, 85}}, {"data_file_2", {99, 1}}};
+  deleteFilesForBaseDatafiles.clear();
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", {0, 100, 102, 184}}, {"data_file_2", {1, 98, 99}}};
+  task =
+      assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+  const auto& taskStats2 = task->taskStats();
+
+  ASSERT_EQ(getAggregatedRuntimeMetric(taskStats2, "iceberg.numSplits"), 2);
+  ASSERT_EQ(getAggregatedRuntimeMetric(taskStats2, "iceberg.numDeletes"), 7);
+
+  // Test case 3: Multiple data files each split into multiple splits (splitCount=3).
+  // This tests that metrics aggregate correctly across multiple splits from multiple files.
+  // data_file_1 split into 3 splits, with 4 deletes
+  // data_file_2 split into 3 splits, with 3 deletes
+  // Total: 6 splits (2 files × 3 splits each), 7 deletes
+  rowGroupSizesForFiles = {
+      {"data_file_1", {100, 85}}, {"data_file_2", {99, 1}}};
+  deleteFilesForBaseDatafiles.clear();
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", {0, 100, 102, 184}}, {"data_file_2", {1, 98, 99}}};
+  task = assertPositionalDeletes(
+      rowGroupSizesForFiles, deleteFilesForBaseDatafiles, 0, 3);
+  const auto& taskStats3 = task->taskStats();
+
+  ASSERT_EQ(getAggregatedRuntimeMetric(taskStats3, "iceberg.numSplits"), 6);
+  ASSERT_EQ(getAggregatedRuntimeMetric(taskStats3, "iceberg.numDeletes"), 7);
+}
 } // namespace facebook::velox::connector::hive::iceberg

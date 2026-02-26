@@ -348,7 +348,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     output_ = BaseVector::create(readerOutputType_, 0, pool_);
   }
 
-  const auto rowsScanned = splitReader_->next(size, output_);
+  const auto rowsScanned = splitReader_->next(size, output_, runtimeStats_);
   completedRows_ += rowsScanned;
   if (rowsScanned == 0) {
     splitReader_->updateRuntimeStats(runtimeStats_);
