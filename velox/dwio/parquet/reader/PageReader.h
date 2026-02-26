@@ -65,11 +65,13 @@ class PageReader {
       common::CompressionKind codec,
       int64_t chunkSize,
       dwio::common::ColumnReaderStatistics& stats,
-      const tz::TimeZone* sessionTimezone = nullptr)
+      const tz::TimeZone* sessionTimezone = nullptr,
+      int32_t maxRepeat = 0,
+      int32_t maxDefine = 1)
       : pool_(pool),
         inputStream_(std::move(stream)),
-        maxRepeat_(0),
-        maxDefine_(1),
+        maxRepeat_(maxRepeat),
+        maxDefine_(maxDefine),
         isTopLevel_(maxRepeat_ == 0 && maxDefine_ <= 1),
         codec_(codec),
         chunkSize_(chunkSize),
