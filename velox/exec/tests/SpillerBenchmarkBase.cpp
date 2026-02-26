@@ -24,9 +24,9 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/tests/SpillerBenchmarkBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_string(
@@ -79,6 +79,7 @@ DEFINE_uint64(
 using namespace facebook::velox::memory;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 void SpillerBenchmarkBase::setUp() {
   rootPool_ =
@@ -109,7 +110,7 @@ void SpillerBenchmarkBase::setUp() {
   }
 
   if (FLAGS_spiller_benchmark_path.empty()) {
-    tempDir_ = exec::test::TempDirectoryPath::create();
+    tempDir_ = TempDirectoryPath::create();
     spillDir_ = tempDir_->getPath();
   } else {
     spillDir_ = FLAGS_spiller_benchmark_path;

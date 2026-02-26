@@ -21,13 +21,15 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/functions/Registerer.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::test {
 
@@ -96,7 +98,7 @@ class ExpressionVerifierUnitTest : public testing::Test, public VectorTestBase {
 
 TEST_F(ExpressionVerifierUnitTest, persistReproInfo) {
   filesystems::registerLocalFileSystem();
-  auto reproFolder = exec::test::TempDirectoryPath::create();
+  auto reproFolder = TempDirectoryPath::create();
   const auto reproPath = reproFolder->getPath();
   auto localFs = filesystems::getFileSystem(reproPath, nullptr);
 

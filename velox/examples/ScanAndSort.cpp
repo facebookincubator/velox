@@ -17,6 +17,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
@@ -24,7 +25,6 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -33,6 +33,7 @@
 #include <algorithm>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 
 // This file contains a step-by-step minimal example of a workflow that:
 //
@@ -104,7 +105,7 @@ int main(int argc, char** argv) {
   // Create a temporary dir to store the local file created. Note that this
   // directory is automatically removed when the `tempDir` object runs out of
   // scope.
-  auto tempDir = exec::test::TempDirectoryPath::create();
+  auto tempDir = TempDirectoryPath::create();
   auto absTempDirPath = tempDir->getPath();
 
   // Once we finalize setting up the Hive connector, let's define our query
