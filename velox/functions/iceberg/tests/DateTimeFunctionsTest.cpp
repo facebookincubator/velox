@@ -84,5 +84,46 @@ TEST_F(DateTimeFunctionsTest, hours) {
   EXPECT_EQ(-1, hours("1969-12-31 23:59:58.999999"));
 }
 
+TEST_F(DateTimeFunctionsTest, timestampNs) {
+  const auto timestampNs = [&](const std::string& ts) {
+    return evaluateOnce<int64_t>(
+        "timestamp_ns(c0)", std::make_optional<Timestamp>(parseTimestamp(ts)));
+  };
+
+  // 1970-01-01 00:00:00.000000000 should be 0
+  EXPECT_EQ(0, timestampNs("1970-01-01 00:00:00.000000"));
+
+  // 2017-12-01 10:12:55.038194 is 1512123175038194000 nanoseconds from
+  // 1970-01-01
+  EXPECT_EQ(1512123175038194000L, timestampNs("2017-12-01 10:12:55.038194"));
+
+  // 1970-01-01 00:00:01.000001 is 1000001000 nanoseconds from 1970-01-01
+  EXPECT_EQ(1000001000L, timestampNs("1970-01-01 00:00:01.000001"));
+
+  // Timestamp before 1970 should be negative
+  EXPECT_EQ(-1000000000L, timestampNs("1969-12-31 23:59:59.000000"));
+}
+
+TEST_F(DateTimeFunctionsTest, timestamptzNs) {
+  const auto timestamptzNs = [&](const std::string& ts) {
+    return evaluateOnce<int64_t>(
+        "timestamptz_ns(c0)",
+        std::make_optional<Timestamp>(parseTimestamp(ts)));
+  };
+
+  // 1970-01-01 00:00:00.000000000 UTC should be 0
+  EXPECT_EQ(0, timestamptzNs("1970-01-01 00:00:00.000000"));
+
+  // 2017-12-01 10:12:55.038194 is 1512123175038194000 nanoseconds from
+  // 1970-01-01 UTC
+  EXPECT_EQ(1512123175038194000L, timestamptzNs("2017-12-01 10:12:55.038194"));
+
+  // 1970-01-01 00:00:01.000001 is 1000001000 nanoseconds from 1970-01-01 UTC
+  EXPECT_EQ(1000001000L, timestamptzNs("1970-01-01 00:00:01.000001"));
+
+  // Timestamp before 1970 should be negative
+  EXPECT_EQ(-1000000000L, timestamptzNs("1969-12-31 23:59:59.000000"));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::iceberg
