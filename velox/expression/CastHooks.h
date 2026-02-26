@@ -42,7 +42,16 @@ class CastHooks {
 
   virtual Expected<Timestamp> castIntToTimestamp(int64_t seconds) const = 0;
 
-  virtual Expected<int64_t> castTimestampToInt(Timestamp timestamp) const = 0;
+  virtual Expected<std::optional<int8_t>> castTimestampToInt8(
+      Timestamp timestamp) const = 0;
+
+  virtual Expected<std::optional<int16_t>> castTimestampToInt16(
+      Timestamp timestamp) const = 0;
+
+  virtual Expected<std::optional<int32_t>> castTimestampToInt32(
+      Timestamp timestamp) const = 0;
+
+  virtual Expected<int64_t> castTimestampToInt64(Timestamp timestamp) const = 0;
 
   virtual Expected<std::optional<Timestamp>> castDoubleToTimestamp(
       double seconds) const = 0;
