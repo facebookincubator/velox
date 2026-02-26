@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/AggregateUtil.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -21,6 +22,7 @@
 #include "velox/functions/lib/aggregates/tests/SumTestBase.h"
 #include "velox/functions/sparksql/aggregates/DecimalSumAggregate.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/DecimalUtil.h"
 
 using facebook::velox::exec::test::PlanBuilder;
 using namespace facebook::velox::exec::test;
@@ -719,6 +721,69 @@ TEST_F(SumAggregationTest, dummySum) {
       std::move(child));
 
   assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");
+}
+
+// checked_sum throws on decimal overflow instead of returning null.
+TEST_F(SumAggregationTest, checkedDecimalSumOverflow) {
+  const TypePtr type = DECIMAL(38, 0);
+  // Two kLongDecimalMax values should overflow.
+  auto input = makeRowVector({makeNullableFlatVector<int128_t>(
+      {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax}, type)});
+  auto dummy = makeRowVector(
+      {makeNullableFlatVector<int128_t>({std::nullopt}, type)});
+  VELOX_ASSERT_THROW(
+      testAggregations({input}, {}, {"spark_checked_sum(c0)"}, {dummy}),
+      "Decimal overflow in sum");
+}
+
+// checked_sum returns null for all-null inputs (no overflow error).
+TEST_F(SumAggregationTest, checkedDecimalSumAllNull) {
+  const TypePtr type = DECIMAL(20, 2);
+  std::vector<std::optional<int128_t>> allNull(5, std::nullopt);
+  auto input =
+      makeRowVector({makeNullableFlatVector<int128_t>(allNull, type)});
+  std::vector<std::optional<int128_t>> result = {std::nullopt};
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int128_t>(result, DECIMAL(30, 2))});
+  testAggregations({input}, {}, {"spark_checked_sum(c0)"}, {expected});
+}
+
+// checked_sum works for normal decimal values.
+TEST_F(SumAggregationTest, checkedDecimalSumNormal) {
+  const TypePtr type = DECIMAL(10, 2);
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>({100, 200, 300}, type)});
+  auto expected = makeRowVector(
+      {makeFlatVector<int128_t>({600}, DECIMAL(20, 2))});
+  testAggregations({input}, {}, {"spark_checked_sum(c0)"}, {expected});
+}
+
+// checked_sum throws on integer overflow.
+TEST_F(SumAggregationTest, checkedIntegerSumOverflow) {
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      {std::numeric_limits<int64_t>::max(),
+       std::numeric_limits<int64_t>::max()})});
+  auto dummy =
+      makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})});
+  VELOX_ASSERT_THROW(
+      testAggregations({input}, {}, {"spark_checked_sum(c0)"}, {dummy}),
+      "integer overflow");
+}
+
+// checked_sum works for normal integer values.
+TEST_F(SumAggregationTest, checkedIntegerSumNormal) {
+  auto input = makeRowVector({makeFlatVector<int32_t>({10, 20, 30})});
+  auto expected = makeRowVector({makeFlatVector<int64_t>({60})});
+  testAggregations({input}, {}, {"spark_checked_sum(c0)"}, {expected});
+}
+
+// checked_sum returns null for all-null integer inputs.
+TEST_F(SumAggregationTest, checkedIntegerSumAllNull) {
+  std::vector<std::optional<int64_t>> allNull(5, std::nullopt);
+  auto input = makeRowVector({makeNullableFlatVector<int64_t>(allNull)});
+  auto expected =
+      makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})});
+  testAggregations({input}, {}, {"spark_checked_sum(c0)"}, {expected});
 }
 
 } // namespace

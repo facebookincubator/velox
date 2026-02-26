@@ -61,6 +61,8 @@ void registerAggregateFunctions(
       prefix + "bloom_filter_agg", withCompanionFunctions, overwrite);
   registerAverage(prefix + "avg", withCompanionFunctions, overwrite);
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
+  registerCheckedSum(
+      prefix + "checked_sum", withCompanionFunctions, overwrite);
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectListAggregate(prefix, withCompanionFunctions, overwrite);
