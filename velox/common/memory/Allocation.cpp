@@ -30,6 +30,16 @@ Allocation::~Allocation() {
   }
 }
 
+void Allocation::operator=(Allocation&& other) {
+  if (pool_ != nullptr) {
+    pool_->freeNonContiguous(*this);
+  }
+  pool_ = other.pool_;
+  runs_ = std::move(other.runs_);
+  numPages_ = other.numPages_;
+  other.clear();
+}
+
 void Allocation::append(uint8_t* address, MachinePageCount numPages) {
   VELOX_CHECK(
       runs_.empty() || address != runs_.back().data(),

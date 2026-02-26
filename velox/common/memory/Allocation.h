@@ -113,12 +113,7 @@ class Allocation {
 
   void operator=(const Allocation& other) = delete;
 
-  void operator=(Allocation&& other) {
-    pool_ = other.pool_;
-    runs_ = std::move(other.runs_);
-    numPages_ = other.numPages_;
-    other.clear();
-  }
+  void operator=(Allocation&& other);
 
   MachinePageCount numPages() const {
     return numPages_;
