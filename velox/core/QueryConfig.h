@@ -843,6 +843,12 @@ class QueryConfig {
   static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
       "join_build_vector_hasher_max_num_distinct";
 
+  /// Comma-separated list of additional error codes that TRY() should catch.
+  /// TRY() always catches user errors. When specified, also catches errors
+  /// with these codes. Example: "ARITHMETIC_ERROR,INVALID_ARGUMENT"
+  static constexpr const char* kTryCatchableErrorCodes =
+      "try_catchable_error_codes";
+
   enum class RowSizeTrackingMode {
     DISABLED = 0,
     EXCLUDE_DELTA_SPLITS = 1,
@@ -1502,6 +1508,10 @@ class QueryConfig {
 
   uint32_t joinBuildVectorHasherMaxNumDistinct() const {
     return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
+  }
+
+  std::string tryCatchableErrorCodes() const {
+    return get<std::string>(kTryCatchableErrorCodes, "");
   }
 
   template <typename T>

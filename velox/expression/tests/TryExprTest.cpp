@@ -19,6 +19,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/ConstantVector.h"
@@ -555,6 +556,136 @@ TEST_F(TryExprTest, memoryUsage) {
     ASSERT_GE(pool->peakBytes(), baseline);
     ASSERT_LE(pool->peakBytes(), baseline + expectedIncrease)
         << (pool->peakBytes() - baseline);
+  }
+}
+
+// Test that TRY with catchable error codes catches user errors plus specified
+// codes.
+TEST_F(TryExprTest, catchableErrorCodes) {
+  // Test: Empty catchable codes = catch all user errors (backward compatible)
+  {
+    auto a = makeFlatVector<int32_t>({10, 20, 30});
+    auto b = makeFlatVector<int32_t>({1, 0, 3});
+
+    auto result = evaluate("try(c0 / c1)", makeRowVector({a, b}));
+    auto expected = makeNullableFlatVector<int32_t>({10, std::nullopt, 10});
+    assertEqualVectors(expected, result);
+  }
+
+  // Test: Specific error code - user errors still caught
+  {
+    auto a = makeFlatVector<int32_t>({10, 20, 30});
+    auto b = makeFlatVector<int32_t>({1, 0, 3});
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, "ARITHMETIC_ERROR"},
+    });
+
+    auto result = evaluate("try(c0 / c1)", makeRowVector({a, b}));
+    auto expected = makeNullableFlatVector<int32_t>({10, std::nullopt, 10});
+    assertEqualVectors(expected, result);
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, ""},
+    });
+  }
+
+  // Test: Non-matching error code still catches user errors
+  {
+    auto a = makeFlatVector<int32_t>({10, 20, 30});
+    auto b = makeFlatVector<int32_t>({1, 0, 3});
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, "INVALID_ARGUMENT"},
+    });
+
+    auto result = evaluate("try(c0 / c1)", makeRowVector({a, b}));
+    auto expected = makeNullableFlatVector<int32_t>({10, std::nullopt, 10});
+    assertEqualVectors(expected, result);
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, ""},
+    });
+  }
+
+  // Test: Multiple error codes in comma-separated list
+  {
+    auto a = makeFlatVector<int32_t>({10, 20, 30});
+    auto b = makeFlatVector<int32_t>({1, 0, 3});
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes,
+         "INVALID_ARGUMENT, ARITHMETIC_ERROR"},
+    });
+
+    auto result = evaluate("try(c0 / c1)", makeRowVector({a, b}));
+    auto expected = makeNullableFlatVector<int32_t>({10, std::nullopt, 10});
+    assertEqualVectors(expected, result);
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, ""},
+    });
+  }
+
+  // Test: Whitespace handling
+  {
+    auto a = makeFlatVector<int32_t>({10, 20, 30});
+    auto b = makeFlatVector<int32_t>({1, 0, 3});
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes,
+         "  ARITHMETIC_ERROR  ,  INVALID_ARGUMENT  "},
+    });
+
+    auto result = evaluate("try(c0 / c1)", makeRowVector({a, b}));
+    auto expected = makeNullableFlatVector<int32_t>({10, std::nullopt, 10});
+    assertEqualVectors(expected, result);
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, ""},
+    });
+  }
+}
+
+// Test cast errors with catchable error codes
+TEST_F(TryExprTest, catchableErrorCodesCast) {
+  auto c = makeNullableFlatVector<StringView>({"1", "2x", "3"});
+
+  // Default: catch all user errors
+  {
+    auto result = evaluate("try(cast(c0 as integer))", makeRowVector({c}));
+    auto expected = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+    assertEqualVectors(expected, result);
+  }
+
+  // Catch INVALID_ARGUMENT (which is what cast throws)
+  {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, "INVALID_ARGUMENT"},
+    });
+
+    auto result = evaluate("try(cast(c0 as integer))", makeRowVector({c}));
+    auto expected = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+    assertEqualVectors(expected, result);
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, ""},
+    });
+  }
+
+  // Catch ARITHMETIC_ERROR - user errors (INVALID_ARGUMENT) still caught
+  {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, "ARITHMETIC_ERROR"},
+    });
+
+    auto result = evaluate("try(cast(c0 as integer))", makeRowVector({c}));
+    auto expected = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+    assertEqualVectors(expected, result);
+
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kTryCatchableErrorCodes, ""},
+    });
   }
 }
 
