@@ -88,6 +88,45 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       std::optional<U> u) {
     return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
   }
+
+  template <typename R, typename T, typename U>
+  std::optional<R> decimal_remainder(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<R>(
+        "remainder(c0, c1)", {tType, uType}, t, u);
+  }
+
+  template <typename R, typename T, typename U>
+  std::optional<R> checked_remainder(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<R>(
+        "checked_remainder(c0, c1)", {tType, uType}, t, u);
+  }
+
+  template <typename R, typename T, typename U>
+  std::optional<R> decimal_pmod(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<R>("pmod(c0, c1)", {tType, uType}, t, u);
+  }
+
+  template <typename R, typename T, typename U>
+  std::optional<R> checked_pmod(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<R>(
+        "checked_pmod(c0, c1)", {tType, uType}, t, u);
+  }
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -832,6 +871,186 @@ TEST_F(DecimalArithmeticTest, checkedDiv) {
           HugeInt::parse("99999999999999999999999999999999999999"),
           1)),
       "Overflow in integral divide");
+}
+
+TEST_F(DecimalArithmeticTest, remainder) {
+  // Short decimal: DECIMAL(17,3) % DECIMAL(17,3) -> result DECIMAL(17,3).
+  // 10.500 % 3.000 = 1.500 (unscaled: 10500 % 3000 = 1500).
+  EXPECT_EQ(
+      (decimal_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 3000)),
+      1500);
+
+  // All 4 input type combos with long decimal result.
+  // DECIMAL(17,3) % DECIMAL(20,3) -> result precision max(14,17)+3=20 (long).
+  EXPECT_EQ(
+      (decimal_remainder<int128_t, int64_t, int128_t>(
+          DECIMAL(17, 3), DECIMAL(20, 3), 10500, 3000)),
+      1500);
+  // DECIMAL(20,3) % DECIMAL(17,3) -> result precision max(17,14)+3=20 (long).
+  EXPECT_EQ(
+      (decimal_remainder<int128_t, int128_t, int64_t>(
+          DECIMAL(20, 3), DECIMAL(17, 3), 10500, 3000)),
+      1500);
+  // DECIMAL(20,3) % DECIMAL(20,3) -> result precision max(17,17)+3=20 (long).
+  EXPECT_EQ(
+      (decimal_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), 10500, 3000)),
+      1500);
+
+  // Remainder with zero dividend: 0 % b = 0.
+  EXPECT_EQ(
+      (decimal_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 0, 3000)),
+      0);
+
+  // Remainder preserves sign of dividend.
+  // -10.500 % 3.000 = -1.500.
+  EXPECT_EQ(
+      (decimal_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, 3000)),
+      -1500);
+  // 10.500 % -3.000 = 1.500.
+  EXPECT_EQ(
+      (decimal_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, -3000)),
+      1500);
+  // -10.500 % -3.000 = -1.500.
+  EXPECT_EQ(
+      (decimal_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, -3000)),
+      -1500);
+
+  // Different scales: DECIMAL(17,3) % DECIMAL(17,5).
+  // Result precision = max(14,12)+5 = 19 (long decimal).
+  // 10.500 % 3.00000 = 1.50000 (rescale a: 10500*100=1050000, b: 300000).
+  // 1050000 % 300000 = 150000.
+  EXPECT_EQ(
+      (decimal_remainder<int128_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 5), 10500, 300000)),
+      150000);
+
+  // Division by zero returns null.
+  EXPECT_EQ(
+      (decimal_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 0)),
+      std::nullopt);
+
+  // Large values: DECIMAL(38,0) % DECIMAL(38,0) -> result DECIMAL(38,0).
+  EXPECT_EQ(
+      (decimal_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(38, 0), DECIMAL(38, 0), 100, 30)),
+      10);
+
+  // Large values near boundary.
+  EXPECT_EQ(
+      (decimal_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          HugeInt::parse("10000000000000000000"))),
+      HugeInt::parse("9999999999999999999"));
+}
+
+TEST_F(DecimalArithmeticTest, checkedRemainder) {
+  // Normal case.
+  EXPECT_EQ(
+      (checked_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), 10500, 3000)),
+      1500);
+
+  // Sign preservation.
+  EXPECT_EQ(
+      (checked_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), -10500, 3000)),
+      -1500);
+
+  // Division by zero should throw.
+  VELOX_ASSERT_USER_THROW(
+      (checked_remainder<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 0)),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      (checked_remainder<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), 10500, 0)),
+      "Division by zero");
+}
+TEST_F(DecimalArithmeticTest, pmod) {
+  // Positive dividend: pmod = remainder.
+  // 10.500 pmod 3.000 = 1.500.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 3000)),
+      1500);
+
+  // Negative dividend: pmod adjusts to positive.
+  // -10.500 pmod 3.000 = 1.500 (remainder is -1.500, then -1.500 + 3.000 = 1.500).
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, 3000)),
+      1500);
+
+  // Positive dividend, negative divisor.
+  // 10.500 pmod -3.000: remainder = 1.500, positive so result = 1.500.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, -3000)),
+      1500);
+
+  // Both negative: -10.500 pmod -3.000.
+  // remainder = -1.500, negative so: (-1.500 + -3.000) % -3.000 = -4.500 % -3.000 = -1.500.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, -3000)),
+      -1500);
+
+  // Zero dividend.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 0, 3000)),
+      0);
+
+  // Division by zero returns null.
+  EXPECT_EQ(
+      (decimal_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 0)),
+      std::nullopt);
+
+  // Long decimal.
+  EXPECT_EQ(
+      (decimal_pmod<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), -10500, 3000)),
+      1500);
+}
+
+TEST_F(DecimalArithmeticTest, checkedPmod) {
+  // Normal case.
+  EXPECT_EQ(
+      (checked_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 3000)),
+      1500);
+
+  // Negative dividend adjusts to positive.
+  EXPECT_EQ(
+      (checked_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -10500, 3000)),
+      1500);
+
+  // Long decimal.
+  EXPECT_EQ(
+      (checked_pmod<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), -10500, 3000)),
+      1500);
+
+  // Division by zero throws.
+  VELOX_ASSERT_USER_THROW(
+      (checked_pmod<int64_t, int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 10500, 0)),
+      "Division by zero");
+  VELOX_ASSERT_USER_THROW(
+      (checked_pmod<int128_t, int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), 10500, 0)),
+      "Division by zero");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
