@@ -24,82 +24,99 @@
 #include <glog/logging.h>
 #include <immintrin.h>
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <iomanip>
-#include <map>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 #include "folly/chrono/Hardware.h"
+#include "folly/container/F14Map.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/base/SuccinctPrinter.h"
 
 namespace facebook::velox {
 
-// Note: this class is not thread-safe. It is intended to be used in a single
-// thread context only to do micro-benchmarks.
+/// Low-overhead cycle-counting timer for micro-benchmarks on x86-64.
+///
+/// Uses the RDTSCP instruction via folly::hardware_timestamp() to measure
+/// elapsed CPU cycles, then converts to nanoseconds using a one-time TSC
+/// frequency calibration. A single HardwareTimer instance manages multiple
+/// named code sections via an internal map. Each call to start(name)/end(name)
+/// records one timing sample for that section, accumulating results in a
+/// RuntimeMetric (sum, count, min, max).
+///
+/// On destruction (or when printStats() is called explicitly), the collected
+/// results are printed as a formatted table to stderr via glog.
+///
+/// Not thread-safe — each instance should be used on a single thread.
+///
+/// Guarded by ENABLE_HW_TIMER; compiles to nothing when the flag is absent.
+///
+/// Usage:
+///   {
+///     HardwareTimer timer("my benchmark");
+///     timer.start("section_a");
+///     // ... work ...
+///     timer.end("section_a");
+///   } // prints results table to stderr
 class HardwareTimer {
  public:
-  struct Entry {
-    uint64_t iter_count;
-    double total_ns;
-    double avg_ns;
-  };
-
-  explicit HardwareTimer(const char* context_name)
-      : context_name_(context_name) {}
+  /// Constructs a timer session with an optional name. The name is displayed
+  /// in the output table header.
+  explicit HardwareTimer(const std::string& name = "") : name_(name) {}
 
   HardwareTimer(const HardwareTimer&) = delete;
   HardwareTimer& operator=(const HardwareTimer&) = delete;
   HardwareTimer(HardwareTimer&&) = delete;
   HardwareTimer& operator=(HardwareTimer&&) = delete;
 
-  void start() {
-    start_cycles_ = folly::hardware_timestamp();
-  }
-
-  void end() {
-    const uint64_t end_cycles = folly::hardware_timestamp();
-    total_cycles_ += end_cycles - start_cycles_;
-    ++iter_count_;
-  }
-
+  /// Prints the results table if any entries were recorded.
   ~HardwareTimer() {
-    if (iter_count_ == 0) {
-      return;
-    }
-    const double total_ns =
-        static_cast<double>(total_cycles_) / estimate_tsc_freq_ghz();
-    const double avg_ns = total_ns / static_cast<double>(iter_count_);
-    std::ostringstream keyStream;
-    keyStream << context_name_ << " [tid:" << std::this_thread::get_id() << "]";
-    entries()[keyStream.str()] = {iter_count_, total_ns, avg_ns};
+    printStats();
   }
 
-  static void cleanup() {
-    auto& map = entries();
-    if (map.empty()) {
+  /// Records the current hardware timestamp as the start of a timed interval
+  /// for the given context name. Must be paired with a subsequent call to
+  /// end() with the same context name.
+  void start(const char* contextName) {
+    openContexts_[contextName] = folly::hardware_timestamp();
+  }
+
+  /// Records the end of a timed interval for the given context name. Converts
+  /// elapsed cycles to nanoseconds and accumulates the result into the
+  /// RuntimeMetric for that context. Must be preceded by a call to start()
+  /// with the same context name.
+  void end(const char* contextName) {
+    const uint64_t endCycles = folly::hardware_timestamp();
+    auto it = openContexts_.find(contextName);
+    VELOX_CHECK(
+        it != openContexts_.end(),
+        "HardwareTimer::end() called without matching start(), context: {}",
+        contextName);
+    VELOX_CHECK_GE(endCycles, it->second);
+    const auto elapsedNs = static_cast<int64_t>(
+        static_cast<double>(endCycles - it->second) / estimateTscFreqGhz());
+    auto [entryIt, inserted] =
+        entries_.try_emplace(contextName, RuntimeCounter::Unit::kNanos);
+    entryIt->second.addValue(elapsedNs);
+    openContexts_.erase(it);
+  }
+
+  /// Prints the results table and clears all accumulated entries. This allows
+  /// the timer to be reused for a new session.
+  void printStats() {
+    if (entries_.empty()) {
       return;
     }
-    printTable(map);
-    map.clear();
+    printStatsTable(entries_, name_);
+    entries_.clear();
   }
 
  private:
-  const char* context_name_{};
+  using EntriesMap = folly::F14FastMap<std::string, RuntimeMetric>;
 
-  uint64_t total_cycles_{};
-  uint64_t start_cycles_{};
-  uint64_t iter_count_{};
-
-  using EntriesMap = std::map<std::string, Entry>;
-
-  static EntriesMap& entries() {
-    static EntriesMap map;
-    return map;
-  }
-
-  static double estimate_tsc_freq_ghz(
+  static double estimateTscFreqGhz(
       std::chrono::milliseconds window = std::chrono::milliseconds(100)) {
     static const double cached = [&]() {
       using clock = std::chrono::steady_clock;
@@ -123,7 +140,7 @@ class HardwareTimer {
     return cached;
   }
 
-  static void printTable(const EntriesMap& map) {
+  static void printStatsTable(const EntriesMap& map, const std::string& name) {
     int nameWidth = static_cast<int>(std::string("Context").size());
     int runsWidth = static_cast<int>(std::string("Runs").size());
     int totalWidth = static_cast<int>(std::string("Total").size());
@@ -138,12 +155,13 @@ class HardwareTimer {
     std::vector<Row> rows;
     rows.reserve(map.size());
 
-    for (const auto& [name, entry] : map) {
+    for (const auto& [contextName, metric] : map) {
       Row row;
-      row.name = name;
-      row.runs = std::to_string(entry.iter_count);
-      row.total = formatAutoUnit(entry.total_ns);
-      row.avg = formatAutoUnit(entry.avg_ns);
+      row.name = contextName;
+      row.runs = std::to_string(metric.count);
+      row.total = succinctNanos(metric.sum);
+      row.avg =
+          succinctNanos(metric.count == 0 ? 0 : metric.sum / metric.count);
       nameWidth = std::max(nameWidth, static_cast<int>(row.name.size()));
       runsWidth = std::max(runsWidth, static_cast<int>(row.runs.size()));
       totalWidth = std::max(totalWidth, static_cast<int>(row.total.size()));
@@ -162,6 +180,14 @@ class HardwareTimer {
 
     std::ostringstream oss;
     oss << "\n\033[1;34m" << sep << "\033[0m\n";
+    if (!name.empty()) {
+      oss << "\033[1;34m| \033[0m"
+          << "\033[1;37m" << std::left
+          << std::setw(nameWidth + runsWidth + totalWidth + avgWidth + 4)
+          << name << "\033[0m"
+          << "\033[1;34m|\033[0m\n";
+      oss << "\033[1;34m" << sep << "\033[0m\n";
+    }
     oss << "\033[1;34m| \033[0m"
         << "\033[1;33m" << std::left << std::setw(nameWidth) << "Context"
         << "\033[0m"
@@ -190,57 +216,19 @@ class HardwareTimer {
           << "\033[1;34m|\033[0m\n";
     }
 
-    oss << "\033[1;34m" << sep << "\033[0m";
-    LOG(INFO) << oss.str();
+    oss << "\033[1;34m" << sep << "\033[0m\n";
+    LOG(INFO) << "\nBreakdown:\n" << oss.str();
   }
 
-  static std::string formatAutoUnit(double valueInNanoseconds) {
-    static constexpr struct {
-      double threshold_ns;
-      const char* label;
-      double divisor;
-    } kUnits[] = {
-        {1e3, " ns", 1.0},
-        {1e6, " us", 1e3},
-        {1e9, " ms", 1e6},
-        {60.0 * 1e9, " s", 1e9},
-        {std::numeric_limits<double>::infinity(), " min", 60.0 * 1e9}};
-
-    double v = valueInNanoseconds;
-    const char* label = " ns";
-    const double abs_v = std::fabs(v);
-    for (const auto& u : kUnits) {
-      label = u.label;
-      if (abs_v < u.threshold_ns) {
-        v /= u.divisor;
-        break;
-      }
-    }
-
-    std::ostringstream oss;
-    oss.setf(std::ios::fixed);
-    oss.precision(5);
-    oss << v << label;
-    return oss.str();
-  }
+  /// Optional name displayed in the output table header.
+  const std::string name_;
+  /// Aggregated stats indexed by context name.
+  EntriesMap entries_;
+  /// Pending start timestamps for contexts that have been started but not yet
+  /// ended.
+  folly::F14FastMap<std::string, uint64_t> openContexts_;
 };
 
 } // namespace facebook::velox
-
-// Convenience macros for HardwareTimer instrumentation.
-// Results are printed via LOG(INFO) when the timer goes out of scope.
-//
-// HWT(name)       - Declare a timer (for loop accumulation pattern).
-// HWT_START(name) - Start (or restart) a declared timer.
-// HWT_END(name)   - End a measurement interval.
-//
-// Single-shot: HWT(t); HWT_START(t); ... HWT_END(t);
-// Loop:        HWT(t); for (...) { HWT_START(t); ... HWT_END(t); }
-//
-// All call sites must be wrapped in #ifdef ENABLE_HW_TIMER
-// so that these macros are invisible to the IDE when the flag is off.
-#define HWT(name) facebook::velox::HardwareTimer name(#name)
-#define HWT_START(name) (name).start()
-#define HWT_END(name) (name).end()
 
 #endif // ENABLE_HW_TIMER

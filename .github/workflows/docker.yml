@@ -147,7 +147,8 @@ jobs:
           # Add the target for any images that shouldn't be build as multi-platform
           # into the skip list
           echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora"];
-            . | to_entries[] | .key | split("-")[0] |
+            . | to_entries[] | select(.value | has("image.name")) |
+            .key | split("-")[0] |
             if . as $name | skip | index($name) != null then empty else . end' | \
             while read -r image_name; do
               touch "$image_name"

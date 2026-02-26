@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class FilterProjectTest : public test::HiveConnectorTestBase {
@@ -377,11 +378,11 @@ TEST_F(FilterProjectTest, statsSplitter) {
 
 TEST_F(FilterProjectTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<test::TempFilePath>> tempFiles;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeTestVector());
-    tempFiles.push_back(test::TempFilePath::create());
+    tempFiles.push_back(TempFilePath::create());
   }
   writeToFiles(toFilePaths(tempFiles), vectors);
   createDuckDbTable(vectors);
@@ -453,7 +454,7 @@ TEST_F(FilterProjectTest, lazyDereference) {
       makeRowVector({expected[0], expected[1]}),
       makeRowVector({makeRowVector({expected[2]})}),
   });
-  auto file = test::TempFilePath::create();
+  auto file = TempFilePath::create();
   writeToFile(file->getPath(), vector);
   CursorParameters params;
   params.copyResult = false;
