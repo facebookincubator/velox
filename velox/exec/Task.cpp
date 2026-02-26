@@ -2524,15 +2524,29 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   // typically the last one.
   maybeRemoveFromOutputBufferManager();
 
-  for (auto& exchangeClient : exchangeClients) {
-    if (exchangeClient != nullptr) {
-      exchangeClient->close();
+  if (queryCtx_->queryConfig().exchangeClientAsyncCloseEnabled() &&
+      queryCtx_->executor() != nullptr) {
+    auto* executor = queryCtx_->executor();
+    executor->add([clients = std::move(exchangeClients)]() mutable {
+      for (auto& exchangeClient : clients) {
+        if (exchangeClient != nullptr) {
+          try {
+            exchangeClient->close();
+          } catch (const std::exception& e) {
+            LOG(WARNING) << "Failed to close exchange client asynchronously: "
+                         << e.what();
+          }
+        }
+      }
+    });
+  } else {
+    for (auto& exchangeClient : exchangeClients) {
+      if (exchangeClient != nullptr) {
+        exchangeClient->close();
+      }
     }
+    exchangeClients.clear();
   }
-
-  // Release reference to exchange client, so that it will close exchange
-  // sources and prevent resending requests for data.
-  exchangeClients.clear();
 
   std::vector<ContinuePromise> splitPromises;
   std::vector<std::shared_ptr<JoinBridge>> oldBridges;

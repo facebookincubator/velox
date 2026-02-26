@@ -330,4 +330,33 @@ TEST_F(QueryConfigTest, operatorSpillFileCreateConfig) {
   }
 }
 
+TEST_F(QueryConfigTest, exchangeClientAsyncCloseConfig) {
+  // Test default value (should be false)
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.exchangeClientAsyncCloseEnabled());
+  }
+
+  // Test with async close enabled
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kExchangeClientAsyncCloseEnabled, "true"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.exchangeClientAsyncCloseEnabled());
+  }
+
+  // Test with async close explicitly disabled
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kExchangeClientAsyncCloseEnabled, "false"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.exchangeClientAsyncCloseEnabled());
+  }
+}
+
 } // namespace facebook::velox::core::test

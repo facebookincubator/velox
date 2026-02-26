@@ -791,6 +791,14 @@ class QueryConfig {
   static constexpr const char* kExchangeLazyFetchingEnabled =
       "exchange_lazy_fetching_enabled";
 
+  /// If true, exchange client close during Task::terminate() is deferred to a
+  /// background thread via the executor. This avoids a deadlock when
+  /// terminate() is called from an arbitration context and the exchange
+  /// client's background coroutines are themselves waiting for arbitration.
+  /// Default is false (synchronous close).
+  static constexpr const char* kExchangeClientAsyncCloseEnabled =
+      "exchange_client_async_close_enabled";
+
   /// If this is true, then it allows you to get the struct field names
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
@@ -1465,6 +1473,10 @@ class QueryConfig {
 
   bool exchangeLazyFetchingEnabled() const {
     return get<bool>(kExchangeLazyFetchingEnabled, false);
+  }
+
+  bool exchangeClientAsyncCloseEnabled() const {
+    return get<bool>(kExchangeClientAsyncCloseEnabled, false);
   }
 
   bool isFieldNamesInJsonCastEnabled() const {
