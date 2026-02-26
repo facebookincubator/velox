@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Range.h>
+#include <folly/lang/Bits.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
@@ -99,28 +100,30 @@ class BigintIdMap {
       return ready & kLow32;
     }
     // Store the indices and the values to look up in memory.
-    auto indexVector = indices;
-    auto dataVector = x;
-    auto resultVector = ready;
-    auto indexArray = reinterpret_cast<int64_t*>(&indexVector);
-    auto dataArray = reinterpret_cast<int64_t*>(&dataVector);
-    auto resultArray = reinterpret_cast<int64_t*>(&resultVector);
+    auto indexArray = reinterpret_cast<int64_t*>(&indices);
+    auto dataArray = reinterpret_cast<int64_t*>(&x);
+    auto resultArray = reinterpret_cast<int64_t*>(&ready);
     uint16_t misses = matches ^ kAllSet;
     while (misses) {
       auto index = bits::getAndClearLastSetBit(misses);
       int64_t byteOffset = 4 * indexArray[index];
+      int64_t value;
+      uint32_t id;
       for (;;) {
-        auto value = *reinterpret_cast<int64_t*>(table_ + byteOffset);
+        value = folly::loadUnaligned<int64_t>(table_ + byteOffset);
         if (value == kEmptyMarker) {
-          *reinterpret_cast<int64_t*>(table_ + byteOffset) = dataArray[index];
-          resultArray[index] =
-              *reinterpret_cast<uint32_t*>(table_ + byteOffset + 8) = ++lastId_;
+          folly::storeUnaligned<int64_t>(table_ + byteOffset, dataArray[index]);
+          ++lastId_;
+          folly::storeUnaligned<uint32_t>(
+              table_ + byteOffset + sizeof(int64_t), lastId_);
+          resultArray[index] = lastId_;
           ++numEntries_;
           break;
         }
         if (value == dataArray[index]) {
-          resultArray[index] = *reinterpret_cast<uint32_t*>(
+          id = folly::loadUnaligned<uint32_t>(
               table_ + byteOffset + sizeof(int64_t));
+          resultArray[index] = id;
           break;
         }
         byteOffset += kEntrySize;
@@ -186,28 +189,34 @@ class BigintIdMap {
 
     // Store the indices and the values to look up in memory.
     // Look at the next 12 byte entry.
-    volatile auto indexVector = indices + 3;
-    volatile auto dataVector = x;
+    auto indexVector = indices + 3;
+    auto dataVector = x;
     auto resultVector = ready;
-    auto indexArray = reinterpret_cast<volatile int64_t*>(&indexVector);
-    auto dataArray = reinterpret_cast<volatile int64_t*>(&dataVector);
-    auto resultArray = reinterpret_cast<int64_t*>(&resultVector);
     uint16_t misses = matches ^ kAllSet;
     while (misses) {
       auto index = bits::getAndClearLastSetBit(misses);
-      int64_t byteOffset = 4 * (indexArray[index]);
+      int64_t indexValue = folly::loadUnaligned<int64_t>(
+          reinterpret_cast<char*>(&indexVector) + index * sizeof(int64_t));
+      int64_t byteOffset = 4 * indexValue;
       if (UNLIKELY(byteOffset >= limit_)) {
         byteOffset = 0;
       }
       for (;;) {
-        auto value = *reinterpret_cast<int64_t*>(table_ + byteOffset);
+        int64_t value = folly::loadUnaligned<int64_t>(table_ + byteOffset);
         if (value == kEmptyMarker) {
-          resultArray[index] = kNotFound;
+          folly::storeUnaligned<int64_t>(
+              reinterpret_cast<char*>(&resultVector) + index * sizeof(int64_t),
+              kNotFound);
           break;
         }
-        if (value == dataArray[index]) {
-          resultArray[index] = *reinterpret_cast<uint32_t*>(
+        int64_t dataValue = folly::loadUnaligned<int64_t>(
+            reinterpret_cast<char*>(&dataVector) + index * sizeof(int64_t));
+        if (value == dataValue) {
+          uint32_t id = folly::loadUnaligned<uint32_t>(
               table_ + byteOffset + sizeof(int64_t));
+          folly::storeUnaligned<int64_t>(
+              reinterpret_cast<char*>(&resultVector) + index * sizeof(int64_t),
+              static_cast<int64_t>(id));
           break;
         }
         byteOffset += kEntrySize;
@@ -239,14 +248,15 @@ class BigintIdMap {
   void makeTable(int64_t capacity);
 
   // Returns the pointer to the value of the 'i'th entry in 'table'.
-  int64_t* valuePtr(void* table, int32_t i) {
-    return reinterpret_cast<int64_t*>(
-        reinterpret_cast<char*>(table) + kEntrySize * i);
+  // Returns void* to avoid creating misaligned typed pointers (UB).
+  void* valuePtr(void* table, int32_t i) {
+    return reinterpret_cast<char*>(table) + kEntrySize * i;
   }
 
   // Returns the pointer of the int32_t id for an entry.
-  int32_t* idPtr(int64_t* valuePtr) {
-    return reinterpret_cast<int32_t*>(valuePtr + 1);
+  // Returns void* to avoid creating misaligned typed pointers (UB).
+  void* idPtr(void* valuePtr) {
+    return reinterpret_cast<char*>(valuePtr) + sizeof(int64_t);
   }
 
   // Rehashes 'this' to a size of 'newCapacity'.

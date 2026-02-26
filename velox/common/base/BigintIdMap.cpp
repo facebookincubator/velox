@@ -37,19 +37,25 @@ void BigintIdMap::resize(int64_t newCapacity) {
   auto oldTable = table_;
   auto oldByteSize = byteSize_;
   makeTable(newCapacity);
+  int64_t value, newValue;
+  int32_t id;
   for (auto i = 0; i < oldCapacity; ++i) {
     auto ptr = valuePtr(oldTable, i);
-    if (*ptr == kEmptyMarker) {
+    value = folly::loadUnaligned<int64_t>(ptr);
+    if (value == kEmptyMarker) {
       continue;
     }
-    auto newIndex = indexOfEntry(*ptr);
+    auto newIndex = indexOfEntry(value);
     auto newPtr = valuePtr(table_, newIndex);
-    while (*newPtr != kEmptyMarker) {
+    newValue = folly::loadUnaligned<int64_t>(newPtr);
+    while (newValue != kEmptyMarker) {
       newIndex = (newIndex + 1) & sizeMask_;
       newPtr = valuePtr(table_, newIndex);
+      newValue = folly::loadUnaligned<int64_t>(newPtr);
     }
-    *newPtr = *ptr;
-    *idPtr(newPtr) = *idPtr(ptr);
+    folly::storeUnaligned<int64_t>(newPtr, value);
+    id = folly::loadUnaligned<int32_t>(idPtr(ptr));
+    folly::storeUnaligned<int32_t>(idPtr(newPtr), id);
   }
   pool_.free(oldTable, oldByteSize);
 }
