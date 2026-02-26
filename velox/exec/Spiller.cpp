@@ -16,6 +16,7 @@
 
 #include "velox/exec/Spiller.h"
 #include <folly/ScopeGuard.h>
+#include <numeric>
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
@@ -297,9 +298,7 @@ void SpillerBase::extractSpill(
 
   auto* result = resultPtr.get();
   const auto& types = container_->columnTypes();
-  for (auto i = 0; i < types.size(); ++i) {
-    container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
-  }
+  container_->extractColumns(rows.data(), rows.size(), types.size(), resultPtr);
   const auto& accumulators = container_->accumulators();
   column_index_t accumulatorColumnOffset = types.size();
   for (auto i = 0; i < accumulators.size(); ++i) {

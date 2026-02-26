@@ -163,9 +163,8 @@ void StreamingAggregation::storeKeys(char* group, vector_size_t index) {
 RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
   auto output = BaseVector::create<RowVector>(outputType_, numGroups, pool());
 
-  for (auto i = 0; i < groupingKeys_.size(); ++i) {
-    rows_->extractColumn(groups_.data(), numGroups, i, output->childAt(i));
-  }
+  rows_->extractColumns(
+      groups_.data(), numGroups, groupingKeys_.size(), output);
 
   const auto numKeys = groupingKeys_.size();
   for (auto i = 0; i < aggregates_.size(); ++i) {
