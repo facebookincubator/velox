@@ -20,10 +20,10 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Decryption.h"
-#include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -216,14 +216,16 @@ class ReaderBase {
   std::unique_ptr<dwio::common::SeekableInputStream> createDecompressedStream(
       std::unique_ptr<dwio::common::SeekableInputStream> compressed,
       const std::string& streamDebugInfo,
-      const dwio::common::encryption::Decrypter* decrypter = nullptr) const {
+      const dwio::common::encryption::Decrypter* decrypter = nullptr,
+      velox::io::IoCounter* decompressCounter = nullptr) const {
     return createDecompressor(
         compressionKind(),
         std::move(compressed),
         compressionBlockSize(),
         options_.memoryPool(),
         streamDebugInfo,
-        decrypter);
+        decrypter,
+        decompressCounter);
   }
 
   template <typename T>
@@ -282,7 +284,7 @@ class ReaderBase {
   RowTypePtr schema_;
   // Lazily populated
   mutable std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
-  uint64_t psLength_;
+  uint64_t psLength_{};
 };
 
 } // namespace facebook::velox::dwrf

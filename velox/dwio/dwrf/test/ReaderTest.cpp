@@ -2657,7 +2657,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(c0->valueVector()->size(), dictionary.size());
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 0);
+  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 0);
   spec->childByName("c0")->setFilter(
       std::make_unique<common::BytesValues>(
           std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaa"}, false));
@@ -2668,7 +2668,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
   stats = {};
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 1);
+  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 1);
 }
 
 // A primitive subfield is missing in file, and result is not reused.

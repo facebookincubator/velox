@@ -20,6 +20,7 @@
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/reader/StripeDictionaryCache.h"
@@ -229,7 +230,8 @@ class StripeStreamsImpl : public StripeStreamsBase {
       uint64_t stripeStart,
       int64_t stripeNumberOfRows,
       const StrideIndexProvider& provider,
-      uint32_t stripeIndex)
+      uint32_t stripeIndex,
+      dwio::common::ColumnReaderStatistics* columnReaderStats = nullptr)
       : StripeStreamsBase{&readState->readerBase->memoryPool()},
         readState_(std::move(readState)),
         selector_{selector},
@@ -238,7 +240,8 @@ class StripeStreamsImpl : public StripeStreamsBase {
         stripeStart_{stripeStart},
         stripeNumberOfRows_{stripeNumberOfRows},
         provider_(provider),
-        stripeIndex_{stripeIndex} {
+        stripeIndex_{stripeIndex},
+        columnReaderStats_{columnReaderStats} {
     loadStreams();
   }
 
@@ -362,6 +365,14 @@ class StripeStreamsImpl : public StripeStreamsBase {
         : nullptr;
   }
 
+  io::IoCounter* getDecompressCounter(uint32_t nodeId) const {
+    if (!columnReaderStats_ || !columnReaderStats_->columnMetricsSet) {
+      return nullptr;
+    }
+    auto* metrics = columnReaderStats_->columnMetricsSet->getOrCreate(nodeId);
+    return &metrics->decompressCPUTimeNanos;
+  }
+
   void loadStreams();
 
   const std::shared_ptr<StripeReadState> readState_;
@@ -374,6 +385,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   const int64_t stripeNumberOfRows_;
   const StrideIndexProvider& provider_;
   const uint32_t stripeIndex_;
+  dwio::common::ColumnReaderStatistics* const columnReaderStats_{nullptr};
 
   bool readPlanLoaded_{false};
 
