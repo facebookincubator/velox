@@ -35,14 +35,14 @@ CacheInputStream::CacheInputStream(
     const Region& region,
     std::shared_ptr<ReadFileInputStream> input,
     uint64_t fileNum,
-    bool noCacheRetention,
+    bool cacheable,
     std::shared_ptr<ScanTracker> tracker,
     TrackingId trackingId,
     uint64_t groupId,
     int32_t loadQuantum)
     : bufferedInput_(bufferedInput),
       cache_(bufferedInput_->cache()),
-      noCacheRetention_(noCacheRetention),
+      cacheable_(cacheable),
       region_(region),
       fileNum_(fileNum),
       tracker_(std::move(tracker)),
@@ -58,7 +58,7 @@ CacheInputStream::~CacheInputStream() {
 }
 
 void CacheInputStream::makeCacheEvictable() {
-  if (!noCacheRetention_) {
+  if (cacheable_) {
     return;
   }
   // Walks through the potential prefetch or access cache space of this cache
@@ -256,7 +256,7 @@ void CacheInputStream::loadSync(const Region& region) {
     ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
     ioStats_->storageReadLatencyUs().increment(storageReadUs);
     ioStats_->incTotalScanTime(storageReadUs * 1'000);
-    entry->setExclusiveToShared(!noCacheRetention_);
+    entry->setExclusiveToShared(cacheable_);
   } while (pin_.empty());
 }
 
@@ -264,7 +264,7 @@ void CacheInputStream::clearCachePin() {
   if (pin_.empty()) {
     return;
   }
-  if (noCacheRetention_) {
+  if (!cacheable_) {
     pin_.checkedEntry()->makeEvictable();
   }
   pin_.clear();
@@ -345,7 +345,7 @@ void CacheInputStream::loadPosition() {
       {
         MicrosecondTimer timer(&loadUs);
         try {
-          if (!load->loadOrFuture(&waitFuture, !noCacheRetention_)) {
+          if (!load->loadOrFuture(&waitFuture, cacheable_)) {
             waitFuture.wait();
           }
         } catch (const std::exception& e) {

@@ -269,7 +269,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     rng_.seed(1);
     const bool asyncRead = folly::Random::oneIn(2);
     LOG(INFO) << "Async read " << asyncRead;
-    tempDirPath_ = exec::test::TempDirectoryPath::create(true);
+    tempDirPath_ = TempDirectoryPath::create(true);
     fs_ = filesystems::getFileSystem(tempDirPath_->getPath(), nullptr);
     faultyFs_ = static_cast<tests::utils::FaultyFileSystem*>(fs_.get());
     fsExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(32);

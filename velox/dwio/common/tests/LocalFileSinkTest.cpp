@@ -17,15 +17,15 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/FileSink.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
 
 using namespace ::testing;
-using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::dwio::common {
+using namespace facebook::velox::common::testutil;
 
 class LocalFileSinkTest : public testing::Test {
  protected:
