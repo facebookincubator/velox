@@ -23,6 +23,7 @@
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
+#include "velox/functions/prestosql/fuzzer/DistinctFromArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/DivideArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
@@ -78,7 +79,8 @@ std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>
         {"floor", std::make_shared<FloorAndRoundArgTypesGenerator>()},
         {"round", std::make_shared<FloorAndRoundArgTypesGenerator>()},
         {"mod", std::make_shared<ModulusArgTypesGenerator>()},
-        {"truncate", std::make_shared<TruncateArgTypesGenerator>()}};
+        {"truncate", std::make_shared<TruncateArgTypesGenerator>()},
+        {"distinct_from", std::make_shared<DistinctFromArgTypesGenerator>()}};
 
 std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
     exprTransformers = {
