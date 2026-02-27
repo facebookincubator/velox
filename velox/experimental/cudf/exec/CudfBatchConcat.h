@@ -42,10 +42,6 @@ class CudfBatchConcat : public exec::Operator, public CudfOperator {
 
   RowVectorPtr getOutput() override;
 
-  void noMoreInput() override {
-    noMoreInput_ = true;
-  }
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -56,9 +52,9 @@ class CudfBatchConcat : public exec::Operator, public CudfOperator {
   exec::DriverCtx* const driverCtx_;
   std::vector<CudfVectorPtr> buffer_;
   std::queue<std::unique_ptr<cudf::table>> outputQueue_;
+  rmm::cuda_stream_view outputQueueStream_{rmm::cuda_stream_default};
   size_t currentNumRows_{0};
   const size_t targetRows_{0};
-  bool noMoreInput_{false};
 };
 
 } // namespace facebook::velox::cudf_velox

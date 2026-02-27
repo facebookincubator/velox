@@ -53,16 +53,16 @@ RowVectorPtr CudfBatchConcat::getOutput() {
     auto table = std::move(outputQueue_.front());
     auto rowCount = table->num_rows();
     outputQueue_.pop();
-    auto stream = cudfGlobalStreamPool().get_stream();
     return std::make_shared<CudfVector>(
-        pool(), outputType_, rowCount, std::move(table), stream);
+        pool(), outputType_, rowCount, std::move(table), outputQueueStream_);
   }
 
   // Merge tables if there are enough rows
-  if (currentNumRows_ >= targetRows_ || (noMoreInput_ && !buffer_.empty())) {
+  if (!buffer_.empty() && (currentNumRows_ >= targetRows_ || noMoreInput_)) {
     // Use stream from existing buffer vectors
-    auto stream = buffer_[0]->stream();
-    auto tables = getConcatenatedTableBatched(buffer_, outputType_, stream);
+    outputQueueStream_ = buffer_[0]->stream();
+    auto tables =
+        getConcatenatedTableBatched(buffer_, outputType_, outputQueueStream_);
 
     buffer_.clear();
     currentNumRows_ = 0;
@@ -80,7 +80,11 @@ RowVectorPtr CudfBatchConcat::getOutput() {
       currentNumRows_ = rowCount;
       buffer_.push_back(
           std::make_shared<CudfVector>(
-              pool(), outputType_, rowCount, std::move(last), stream));
+              pool(),
+              outputType_,
+              rowCount,
+              std::move(last),
+              outputQueueStream_));
     } else {
       outputQueue_.push(std::move(last));
     }
@@ -88,11 +92,10 @@ RowVectorPtr CudfBatchConcat::getOutput() {
     // Return the first batch from the new queue
     if (!outputQueue_.empty()) {
       auto table = std::move(outputQueue_.front());
-      stream = cudfGlobalStreamPool().get_stream();
       auto rowCount = table->num_rows();
       outputQueue_.pop();
       return std::make_shared<CudfVector>(
-          pool(), outputType_, rowCount, std::move(table), stream);
+          pool(), outputType_, rowCount, std::move(table), outputQueueStream_);
     }
   }
 
