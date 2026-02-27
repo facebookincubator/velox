@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
@@ -105,7 +105,8 @@ ColumnOrView ASTExpression::eval(
             precomputedColumns[columnIndex - inputColumnViews.size()]);
       }
     } else {
-      if (CudfConfig::getInstance().debugEnabled) {
+      if (CudfConfig::getInstance().get<bool>(
+              CudfConfig::kCudfDebugEnabledEntry.name)) {
         LOG(INFO) << cudf::ast::expression_to_string(cudfTree_.back());
         LOG(INFO) << cudf::table_schema_to_string(astInputTableView);
       }

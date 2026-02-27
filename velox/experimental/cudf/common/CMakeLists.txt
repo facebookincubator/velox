@@ -12,16 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(common)
-add_subdirectory(exec)
-add_subdirectory(connectors)
-add_subdirectory(vector)
-add_subdirectory(expression)
+add_library(velox_cudf_config CudfConfig.cpp)
 
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
-
-if(VELOX_ENABLE_BENCHMARKS)
-  add_subdirectory(benchmarks)
-endif()
+target_link_libraries(velox_cudf_config PRIVATE velox_common_base)

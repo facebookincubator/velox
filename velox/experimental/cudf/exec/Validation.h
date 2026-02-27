@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/common/CudfConfig.h"
 
 #include "velox/common/base/ExceptionHelper.h"
 
@@ -37,7 +37,8 @@ namespace facebook::velox::cudf_velox {
 /// toType->toString());
 #define LOG_FALLBACK(...)                                                                                \
   do {                                                                                                   \
-    if (CudfConfig::getInstance().logFallback) {                                                         \
+    if (CudfConfig::getInstance().get<bool>(                                                             \
+            CudfConfig::kCudfLogFallbackEntry.name)) {                                                   \
       auto message = ::facebook::velox::errorMessage(__VA_ARGS__);                                       \
       LOG(WARNING) << fmt::format(                                                                       \
           "Validation failed at function: {}, reason: Operation is not supported in cuDF execution: {}", \
