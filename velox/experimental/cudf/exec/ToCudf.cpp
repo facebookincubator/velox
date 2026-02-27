@@ -15,18 +15,10 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
-#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfLimit.h"
-#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
-#include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -35,20 +27,8 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
-#include "velox/exec/AssignUniqueId.h"
-#include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
-#include "velox/exec/FilterProject.h"
-#include "velox/exec/HashAggregation.h"
-#include "velox/exec/HashBuild.h"
-#include "velox/exec/HashProbe.h"
-#include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/OrderBy.h"
-#include "velox/exec/StreamingAggregation.h"
-#include "velox/exec/TableScan.h"
-#include "velox/exec/Task.h"
-#include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
@@ -218,6 +198,7 @@ bool CompileState::compile(bool allowCpuFallback) {
         isPureCpuOperator = true;
       }
     }
+
     if (thisOpProps.producesGpuOutput and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
@@ -385,6 +366,18 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfMemoryPercent) != config.end()) {
     memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
+    batchSizeMinThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+  }
+  if (config.find(kCudfBatchSizeMaxThreshold) != config.end()) {
+    batchSizeMaxThreshold =
+        folly::to<int32_t>(config[kCudfBatchSizeMaxThreshold]);
+  }
+  if (config.find(kCudfConcatOptimizationEnabled) != config.end()) {
+    concatOptimizationEnabled =
+        folly::to<bool>(config[kCudfConcatOptimizationEnabled]);
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
