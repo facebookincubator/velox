@@ -405,6 +405,9 @@ void CudfConfig::initialize(
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }
+  if (config.find(kCudfTopNBatchSize) != config.end()) {
+    topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox
