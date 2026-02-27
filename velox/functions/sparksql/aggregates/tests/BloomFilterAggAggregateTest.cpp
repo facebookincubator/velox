@@ -60,7 +60,7 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 6)"}, expected1);
 
   // This capacity is kMaxNumBits / 16.
-  auto expected2 = {makeRowVector({getSerializedBloomFilter(262144)})};
+  auto expected2 = {makeRowVector({getSerializedBloomFilter(4'194'304)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
 }
 
