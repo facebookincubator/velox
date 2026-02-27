@@ -21,6 +21,7 @@ target_link_libraries(
   velox_exec
   GTest::gtest
   GTest::gtest_main
+  GTest::gmock
 )
 
 add_test(NAME velox_lance_connector_test COMMAND velox_lance_connector_test)

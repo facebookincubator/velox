@@ -108,7 +108,7 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       /*filter_ir=*/nullptr,
       /*filter_ir_len=*/0,
       /*limit=*/-1,
-      /*offset=*/-1);
+      /*offset=*/0);
   VELOX_CHECK_NOT_NULL(
       stream_,
       "Failed to create scan stream for Lance dataset '{}': {}",
