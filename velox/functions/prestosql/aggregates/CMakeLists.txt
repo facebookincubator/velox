@@ -19,6 +19,7 @@ velox_add_library(
   ApproxPercentileAggregate.cpp
   ArbitraryAggregate.cpp
   ArrayAggAggregate.cpp
+  ArrayUnionSumAggregate.cpp
   AverageAggregate.cpp
   BitwiseAggregates.cpp
   BitwiseXorAggregate.cpp
