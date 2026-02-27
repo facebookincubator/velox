@@ -2150,6 +2150,7 @@ struct CurrentTimeFunction {
         localMillis - std::chrono::floor<std::chrono::days>(localMillis);
 
     auto currentOffset = localMillis.count() - sessionStartTimeMs;
+    // Safe since timezone offsets are bounded [-840, 840] minutes
     auto currentOffsetMinutes =
         static_cast<int16_t>(currentOffset / (60 * 1000));
 

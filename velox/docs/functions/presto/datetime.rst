@@ -186,7 +186,7 @@ Date and Time Functions
 
 .. function:: current_time() -> time with time zone
 
-    Returns the current time with the session timezone.
+    Returns the current time since midnight with the session timezoneReturns the current time since midnight with the session timezone, based on the query session start time.
 
 .. function:: current_timezone() -> varchar
 
