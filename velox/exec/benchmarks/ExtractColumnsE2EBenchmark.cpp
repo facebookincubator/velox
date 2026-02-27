@@ -130,6 +130,35 @@ static std::vector<SchemaSpec> makeSchemas() {
         VARCHAR(), DOUBLE(),  BIGINT(),  INTEGER(), DOUBLE(), VARCHAR(),
         BIGINT(),  INTEGER(), DOUBLE()}});
 
+  specs.push_back(
+      {"arrayInt",
+       {BIGINT()},
+       {ARRAY(INTEGER()), ARRAY(INTEGER()), BIGINT(), INTEGER()}});
+
+  specs.push_back(
+      {"arrayStr",
+       {BIGINT()},
+       {ARRAY(VARCHAR()), BIGINT(), VARCHAR(), INTEGER()}});
+
+  specs.push_back(
+      {"mapIntInt",
+       {BIGINT()},
+       {MAP(INTEGER(), BIGINT()), BIGINT(), INTEGER(), DOUBLE()}});
+
+  specs.push_back(
+      {"mapStrInt",
+       {BIGINT()},
+       {MAP(VARCHAR(), INTEGER()), VARCHAR(), BIGINT(), DOUBLE()}});
+
+  specs.push_back(
+      {"complexMix",
+       {BIGINT(), VARCHAR()},
+       {ARRAY(BIGINT()),
+        MAP(VARCHAR(), INTEGER()),
+        DOUBLE(),
+        INTEGER(),
+        VARCHAR()}});
+
   return specs;
 }
 
