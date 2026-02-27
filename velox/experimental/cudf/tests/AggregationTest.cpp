@@ -627,6 +627,56 @@ TEST_F(AggregationTest, finalAggregationStreamsOnAddInput) {
                   .assertResults("SELECT c0, sum(c0) FROM tmp GROUP BY 1");
 
   const auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GT(planStats.at(partialAggId).customStats.at("flushRowCount").sum, 0);
+  EXPECT_GT(planStats.at(finalAggId).outputRows, 0);
+}
+
+TEST_F(AggregationTest, finalAggregationStreamingMixedAggs) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation(
+                      {"c0"},
+                      {"sum(c2)", "count(0)", "min(c3)", "max(c5)", "avg(c4)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults(
+              "SELECT c0, sum(c2), count(*), min(c3), max(c5), avg(c4) FROM tmp GROUP BY c0");
+
+  const auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GT(planStats.at(finalAggId).outputRows, 0);
+}
+
+TEST_F(AggregationTest, finalAggregationStreamingMultiKey) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation(
+                      {"c0", "c1", "c6"},
+                      {"sum(c4)", "count(0)", "avg(c5)", "max(c3)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults(
+              "SELECT c0, c1, c6, sum(c4), count(*), avg(c5), max(c3) FROM tmp GROUP BY c0, c1, c6");
+
+  const auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GT(planStats.at(finalAggId).outputRows, 0);
 }
 
 class EmptyInputAggregationTest : public AggregationTest {
@@ -880,8 +930,7 @@ TEST_F(AggregationTest, singleAggregationStreamingWithNulls) {
                 .singleAggregation({"c0"}, {"sum(c1)", "min(c1)", "max(c1)"})
                 .planNode();
 
-  assertQuery(
-      op, "SELECT c0, sum(c1), min(c1), max(c1) FROM tmp GROUP BY c0");
+  assertQuery(op, "SELECT c0, sum(c1), min(c1), max(c1) FROM tmp GROUP BY c0");
 }
 
 TEST_F(AggregationTest, singleAggregationStreamingIgnoreNullKeys) {
@@ -906,6 +955,35 @@ TEST_F(AggregationTest, singleAggregationStreamingIgnoreNullKeys) {
       makeFlatVector<int64_t>({4, 6}),
   });
   AssertQueryBuilder(op).assertResults(expected);
+}
+
+TEST_F(AggregationTest, singleAggregationStreamingIgnoreNullKeysAcrossBatches) {
+  auto batch1 = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, 2, 1}),
+      makeFlatVector<int32_t>({10, 20, 30}),
+  });
+  auto batch2 = makeRowVector({
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, std::nullopt, std::nullopt}),
+      makeFlatVector<int32_t>({7, 8, 9}),
+  });
+  std::vector<RowVectorPtr> vectors{batch1, batch2};
+
+  createDuckDbTable(vectors);
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .aggregation(
+                    {"c0"},
+                    {"sum(c1)", "count(0)"},
+                    {},
+                    core::AggregationNode::Step::kSingle,
+                    true)
+                .planNode();
+
+  assertQuery(
+      op,
+      "SELECT c0, sum(c1), count(*) FROM tmp WHERE c0 IS NOT NULL GROUP BY c0");
 }
 
 TEST_F(AggregationTest, globalApproxDistinct) {
