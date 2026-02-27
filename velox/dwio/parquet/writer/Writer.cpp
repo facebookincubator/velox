@@ -152,6 +152,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   properties = properties->encoding(options.encoding);
   properties = properties->dataPagesize(options.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));
+  if (options.dataPageRowNumberLimit.has_value()) {
+    properties = properties->dataPageRowNumberLimit(
+        options.dataPageRowNumberLimit.value());
+  }
   properties = properties->writeBatchSize(options.batchSize.value_or(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->maxRowGroupLength(
@@ -353,7 +357,7 @@ std::optional<int64_t> getParquetPageSize(
   return std::nullopt;
 }
 
-std::optional<int64_t> getParquetBatchSize(
+std::optional<int64_t> getParquetIntegerConfig(
     const config::ConfigBase& config,
     const char* configKey) {
   try {
@@ -361,7 +365,8 @@ std::optional<int64_t> getParquetBatchSize(
       return batchSize.value();
     }
   } catch (const folly::ConversionError& e) {
-    VELOX_USER_FAIL("Invalid parquet writer batch size: {}", e.what());
+    VELOX_USER_FAIL(
+        "Invalid config setting of \"{}\": {}", configKey, e.what());
   }
   return std::nullopt;
 }
@@ -691,16 +696,25 @@ void WriterOptions::processConfigs(
   }
 
   if (!batchSize) {
-    batchSize =
-        getParquetBatchSize(session, kParquetSessionWriteBatchSize).has_value()
-        ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
-        : getParquetBatchSize(
+    batchSize = getParquetIntegerConfig(session, kParquetSessionWriteBatchSize)
+                    .has_value()
+        ? getParquetIntegerConfig(session, kParquetSessionWriteBatchSize)
+        : getParquetIntegerConfig(
               connectorConfig, kParquetHiveConnectorWriteBatchSize);
   }
 
   if (!createdBy) {
     createdBy =
         getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
+  }
+
+  if (!dataPageRowNumberLimit) {
+    dataPageRowNumberLimit =
+        getParquetIntegerConfig(session, kParquetSessionDataPageRowCountLimit)
+            .has_value()
+        ? getParquetIntegerConfig(session, kParquetSessionDataPageRowCountLimit)
+        : getParquetIntegerConfig(
+              connectorConfig, kParquetConnectorDataPageRowCountLimit);
   }
 }
 
