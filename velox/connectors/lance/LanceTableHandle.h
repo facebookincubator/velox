@@ -21,6 +21,7 @@
 
 namespace facebook::velox::connector::lance {
 
+/// Represents a handle to a Lance dataset for table scan operations.
 class LanceTableHandle : public ConnectorTableHandle {
  public:
   LanceTableHandle(

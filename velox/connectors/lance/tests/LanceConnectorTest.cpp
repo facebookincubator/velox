@@ -83,8 +83,6 @@ class LanceConnectorTest : public OperatorTestBase {
   }
 };
 
-// --- Unit tests ---
-
 TEST_F(LanceConnectorTest, registrationWorks) {
   ASSERT_TRUE(connector::hasConnector(kLanceConnectorId));
 }
@@ -124,12 +122,10 @@ TEST_F(LanceConnectorTest, columnHandleName) {
   ASSERT_EQ(handle.name(), "my_column");
 }
 
-// --- Integration tests (read from real Lance dataset) ---
-
-// Mirrors Java TestLanceFragmentPageSource.testFragmentScan:
-// Read all 4 columns from test_table1, verify row count and values.
+// Reads all 4 columns from test_table1, verifies row count and values.
 // The dataset has 2 fragments with 2 rows each (4 rows total).
 // Row ordering is not guaranteed across fragments.
+// Mirrors Java TestLanceFragmentPageSource.testFragmentScan.
 TEST_F(LanceConnectorTest, fullScan) {
   auto datasetPath = getTestDatasetPath();
   auto outputType =
@@ -156,14 +152,14 @@ TEST_F(LanceConnectorTest, fullScan) {
 
   // Collect x values and verify we got all expected values (order-independent).
   std::set<int64_t> xValues;
-  for (int i = 0; i < result->size(); i++) {
+  for (vector_size_t i = 0; i < result->size(); i++) {
     xValues.insert(xVector->valueAt(i));
   }
   ASSERT_THAT(xValues, testing::UnorderedElementsAre(0, 1, 2, 3));
 }
 
-// Mirrors Java TestLanceFragmentPageSource.testColumnProjection:
-// Read only columns b and x, verify only 2 columns returned with correct values.
+// Reads only columns b and x, verifies only 2 columns returned with correct
+// values. Mirrors Java TestLanceFragmentPageSource.testColumnProjection.
 TEST_F(LanceConnectorTest, columnProjection) {
   auto datasetPath = getTestDatasetPath();
   auto outputType = ROW({"b", "x"}, {BIGINT(), BIGINT()});
@@ -181,7 +177,7 @@ TEST_F(LanceConnectorTest, columnProjection) {
   auto xVector = result->childAt(1)->asFlatVector<int64_t>();
 
   std::set<int64_t> bValues, xValues;
-  for (int i = 0; i < result->size(); i++) {
+  for (vector_size_t i = 0; i < result->size(); i++) {
     bValues.insert(bVector->valueAt(i));
     xValues.insert(xVector->valueAt(i));
   }
@@ -190,8 +186,8 @@ TEST_F(LanceConnectorTest, columnProjection) {
   ASSERT_EQ(bValues.size(), 4);
 }
 
-// Mirrors Java TestLanceFragmentPageSource.testPartialColumnProjection:
-// Read columns c and x, verify values including negative number.
+// Reads columns c and x, verifies values including negative numbers.
+// Mirrors Java TestLanceFragmentPageSource.testPartialColumnProjection.
 TEST_F(LanceConnectorTest, partialColumnProjection) {
   auto datasetPath = getTestDatasetPath();
   auto outputType = ROW({"c", "x"}, {BIGINT(), BIGINT()});
@@ -210,7 +206,7 @@ TEST_F(LanceConnectorTest, partialColumnProjection) {
 
   std::set<int64_t> xValues;
   bool hasNegativeC = false;
-  for (int i = 0; i < result->size(); i++) {
+  for (vector_size_t i = 0; i < result->size(); i++) {
     xValues.insert(xVector->valueAt(i));
     if (cVector->valueAt(i) < 0) {
       hasNegativeC = true;
@@ -221,7 +217,7 @@ TEST_F(LanceConnectorTest, partialColumnProjection) {
   ASSERT_TRUE(hasNegativeC);
 }
 
-// Read a single column to test minimal projection.
+// Reads a single column to test minimal projection.
 TEST_F(LanceConnectorTest, singleColumnProjection) {
   auto datasetPath = getTestDatasetPath();
   auto outputType = ROW({"x"}, {BIGINT()});
@@ -236,13 +232,13 @@ TEST_F(LanceConnectorTest, singleColumnProjection) {
 
   auto xVector = result->childAt(0)->asFlatVector<int64_t>();
   std::set<int64_t> xValues;
-  for (int i = 0; i < result->size(); i++) {
+  for (vector_size_t i = 0; i < result->size(); i++) {
     xValues.insert(xVector->valueAt(i));
   }
   ASSERT_THAT(xValues, testing::UnorderedElementsAre(0, 1, 2, 3));
 }
 
-// Verify that createDataSink throws NYI.
+// Verifies that createDataSink throws NYI.
 TEST_F(LanceConnectorTest, dataSinkNotSupported) {
   LanceConnectorFactory factory;
   auto connector = factory.newConnector(

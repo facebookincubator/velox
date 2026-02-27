@@ -21,6 +21,7 @@
 
 namespace facebook::velox::connector::lance {
 
+/// Split representing a Lance dataset to scan.
 struct LanceConnectorSplit : public connector::ConnectorSplit {
   const std::string datasetPath;
 

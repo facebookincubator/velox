@@ -21,6 +21,7 @@
 
 namespace facebook::velox::connector::lance {
 
+/// Column handle for a Lance dataset column.
 class LanceColumnHandle : public ColumnHandle {
  public:
   explicit LanceColumnHandle(const std::string& name) : name_(name) {}

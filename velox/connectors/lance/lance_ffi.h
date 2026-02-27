@@ -51,7 +51,7 @@ void lance_free_schema(void* schema);
 /// @param filter_ir Filter IR bytes (nullptr = no filter).
 /// @param filter_ir_len Length of filter_ir.
 /// @param limit Max rows to return (-1 = unlimited).
-/// @param offset Row offset to start from (-1 = 0).
+/// @param offset Row offset to start from (0 = beginning).
 /// @return Opaque stream handle, or nullptr on error.
 void* lance_create_dataset_stream_ir(
     void* dataset,
