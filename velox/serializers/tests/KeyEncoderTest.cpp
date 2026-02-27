@@ -11368,11 +11368,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
     IndexBounds indexBounds;
     velox::core::SortOrder sortOrder;
     bool expectThrow{false};
-    std::string expectedErrorMsg;
+    std::string expectedErrorMsg{};
     // Expected results (only used when expectThrow is false)
     size_t expectedNumResults{1};
-    std::optional<RowVectorPtr> expectedLowerBound;
-    std::optional<RowVectorPtr> expectedUpperBound;
+    std::optional<RowVectorPtr> expectedLowerBound{};
+    std::optional<RowVectorPtr> expectedUpperBound{};
 
     std::string debugString() const {
       return fmt::format(
