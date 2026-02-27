@@ -277,7 +277,7 @@ class ConcatFilesSpillMergeStream final : public SpillMergeStream {
 class SpillPartitionId {
  public:
   /// Maximum spill level supported by 'SpillPartitionId'.
-  static constexpr uint32_t kMaxSpillLevel{3};
+  static constexpr uint32_t kMaxSpillLevel{7};
 
   /// Maximum number of partition bits per spill level supported by
   /// 'SpillPartitionId'.
@@ -355,7 +355,10 @@ class SpillPartitionId {
   //   (3 ~ 5 bits): Represents the partition number at the 2nd level.
   //   (6 ~ 8 bits): Represents the partition number at the 3rd level.
   //   (9 ~ 11 bits): Represents the partition number at the 4th level.
-  //   (12 ~ 28 bits): Unused
+  //   (12 ~ 14 bits): Represents the partition number at the 5th level.
+  //   (15 ~ 17 bits): Represents the partition number at the 6th level.
+  //   (18 ~ 20 bits): Represents the partition number at the 7th level.
+  //   (21 ~ 28 bits): Unused
   //   (29 ~ 31 bits): Represents the current spill level.
   //   <MSB>
   uint32_t encodedId_{kInvalidEncodedId};
