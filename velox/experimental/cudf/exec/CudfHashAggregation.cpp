@@ -150,7 +150,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
           ? inputCol.size() - inputCol.null_count()
           : inputCol.size();
 
-      auto resultScalar = cudf::numeric_scalar<int64_t>(count);
+      auto resultScalar = cudf::numeric_scalar<int64_t>(
+          count, true, stream, cudf::get_current_device_resource_ref());
 
       return cudf::make_column_from_scalar(resultScalar, 1, stream);
     } else {
@@ -370,7 +371,10 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto countCol = cudf::make_column_from_scalar(
             cudf::numeric_scalar<int64_t>(
                 input.column(inputIndex).size() -
-                input.column(inputIndex).null_count()),
+                    input.column(inputIndex).null_count(),
+                true,
+                stream,
+                cudf::get_current_device_resource_ref()),
             1,
             stream);
 
