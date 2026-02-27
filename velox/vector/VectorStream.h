@@ -128,12 +128,12 @@ class IterativeVectorSerializer {
 
   /// Defines the exported runtime stats.
   /// The number of bytes before compression.
-  static inline const std::string kCompressionInputBytes{
+  static constexpr std::string_view kCompressionInputBytes{
       "compressionInputBytes"};
   /// The number of bytes after compression.
-  static inline const std::string kCompressedBytes{"compressedBytes"};
+  static constexpr std::string_view kCompressedBytes{"compressedBytes"};
   /// The number of bytes that skip in-efficient compression.
-  static inline const std::string kCompressionSkippedBytes{
+  static constexpr std::string_view kCompressionSkippedBytes{
       "compressionSkippedBytes"};
 
   /// Returns serializer-dependent counters, e.g. about compression, data

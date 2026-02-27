@@ -41,7 +41,7 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
       std::unordered_map<std::string, RuntimeMetric>& stats)
       : stats_{stats} {}
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     addOperatorRuntimeStats(name, value, stats_);
   }
@@ -204,16 +204,16 @@ TEST_P(SortBufferTest, singleKey) {
     }
     if (GetParam()) {
       ASSERT_EQ(
-          stats_.at(PrefixSort::kNumPrefixSortKeys).sum,
+          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(PrefixSort::kNumPrefixSortKeys).max,
+          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(PrefixSort::kNumPrefixSortKeys).min,
+          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
           sortColumnIndices_.size());
     } else {
-      ASSERT_EQ(stats_.count(PrefixSort::kNumPrefixSortKeys), 0);
+      ASSERT_EQ(stats_.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
     }
     stats_.clear();
   }
@@ -266,16 +266,16 @@ TEST_P(SortBufferTest, multipleKeys) {
   ASSERT_EQ(output->childAt(1)->asFlatVector<int32_t>()->valueAt(9), 5);
   if (GetParam()) {
     ASSERT_EQ(
-        stats_.at(PrefixSort::kNumPrefixSortKeys).sum,
+        stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
         sortColumnIndices_.size());
     ASSERT_EQ(
-        stats_.at(PrefixSort::kNumPrefixSortKeys).max,
+        stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
         sortColumnIndices_.size());
     ASSERT_EQ(
-        stats_.at(PrefixSort::kNumPrefixSortKeys).min,
+        stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
         sortColumnIndices_.size());
   } else {
-    ASSERT_EQ(stats_.count(PrefixSort::kNumPrefixSortKeys), 0);
+    ASSERT_EQ(stats_.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
   }
 }
 
@@ -550,16 +550,16 @@ TEST_P(SortBufferTest, spill) {
     }
     if (GetParam()) {
       ASSERT_GE(
-          stats_.at(PrefixSort::kNumPrefixSortKeys).sum,
+          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(PrefixSort::kNumPrefixSortKeys).max,
+          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(PrefixSort::kNumPrefixSortKeys).min,
+          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
           sortColumnIndices_.size());
     } else {
-      ASSERT_EQ(stats_.count(PrefixSort::kNumPrefixSortKeys), 0);
+      ASSERT_EQ(stats_.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
     }
     stats_.clear();
   }

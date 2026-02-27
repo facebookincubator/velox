@@ -134,14 +134,20 @@ TEST_F(HashJoinWithCacheTest, sequential) {
 
   // The last driver that finishes building reports the cache miss stat.
   ASSERT_EQ(
-      hashBuildStats1.runtimeStats.count(BaseHashTable::kHashTableCacheMiss), 1)
+      hashBuildStats1.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheMiss)),
+      1)
       << "First task should report cache miss";
   EXPECT_EQ(
-      hashBuildStats1.runtimeStats.at(BaseHashTable::kHashTableCacheMiss).count,
+      hashBuildStats1.runtimeStats
+          .at(std::string(BaseHashTable::kHashTableCacheMiss))
+          .count,
       1)
       << "Exactly one driver should report cache miss (the one that builds)";
   EXPECT_EQ(
-      hashBuildStats1.runtimeStats.count(BaseHashTable::kHashTableCacheHit), 0)
+      hashBuildStats1.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheHit)),
+      0)
       << "First task should not have any cache hits";
 
   // Second task - should reuse the cached table (cache hit).
@@ -154,14 +160,20 @@ TEST_F(HashJoinWithCacheTest, sequential) {
 
   // The last driver that finishes reports the cache hit stat.
   ASSERT_EQ(
-      hashBuildStats2.runtimeStats.count(BaseHashTable::kHashTableCacheHit), 1)
+      hashBuildStats2.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheHit)),
+      1)
       << "Second task should report cache hit";
   EXPECT_EQ(
-      hashBuildStats2.runtimeStats.at(BaseHashTable::kHashTableCacheHit).count,
+      hashBuildStats2.runtimeStats
+          .at(std::string(BaseHashTable::kHashTableCacheHit))
+          .count,
       1)
       << "Exactly one driver should report cache hit (the one after barrier)";
   EXPECT_EQ(
-      hashBuildStats2.runtimeStats.count(BaseHashTable::kHashTableCacheMiss), 0)
+      hashBuildStats2.runtimeStats.count(
+          std::string(BaseHashTable::kHashTableCacheMiss)),
+      0)
       << "Second task should not have any cache misses";
 
   // Clean up cache entry before tasks are destroyed.
@@ -300,15 +312,18 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
     ASSERT_EQ(opStats.count("HashBuild"), 1);
     auto& hashBuildStats = opStats.at("HashBuild");
 
-    if (hashBuildStats.runtimeStats.count(BaseHashTable::kHashTableCacheMiss)) {
+    if (hashBuildStats.runtimeStats.count(
+            std::string(BaseHashTable::kHashTableCacheMiss))) {
       totalCacheMisses +=
-          hashBuildStats.runtimeStats.at(BaseHashTable::kHashTableCacheMiss)
+          hashBuildStats.runtimeStats
+              .at(std::string(BaseHashTable::kHashTableCacheMiss))
               .count;
     }
-    if (hashBuildStats.runtimeStats.count(BaseHashTable::kHashTableCacheHit)) {
-      totalCacheHits +=
-          hashBuildStats.runtimeStats.at(BaseHashTable::kHashTableCacheHit)
-              .count;
+    if (hashBuildStats.runtimeStats.count(
+            std::string(BaseHashTable::kHashTableCacheHit))) {
+      totalCacheHits += hashBuildStats.runtimeStats
+                            .at(std::string(BaseHashTable::kHashTableCacheHit))
+                            .count;
     }
   }
 

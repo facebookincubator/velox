@@ -292,23 +292,30 @@ class SharedArbitrationTest : public testing::WithParamInterface<TestParam>,
     if (expectGlobalArbitration) {
       VELOX_CHECK_EQ(
           stats.customStats.count(
-              SharedArbitrator::kGlobalArbitrationWaitCount),
+              std::string(SharedArbitrator::kGlobalArbitrationWaitCount)),
           1);
       VELOX_CHECK_GE(
-          stats.customStats.at(SharedArbitrator::kGlobalArbitrationWaitCount)
+          stats.customStats
+              .at(std::string(SharedArbitrator::kGlobalArbitrationWaitCount))
               .sum,
           1);
       VELOX_CHECK_EQ(
-          stats.customStats.count(SharedArbitrator::kLocalArbitrationCount), 0);
+          stats.customStats.count(
+              std::string(SharedArbitrator::kLocalArbitrationCount)),
+          0);
     } else {
       VELOX_CHECK_EQ(
-          stats.customStats.count(SharedArbitrator::kLocalArbitrationCount), 1);
+          stats.customStats.count(
+              std::string(SharedArbitrator::kLocalArbitrationCount)),
+          1);
       VELOX_CHECK_EQ(
-          stats.customStats.at(SharedArbitrator::kLocalArbitrationCount).sum,
+          stats.customStats
+              .at(std::string(SharedArbitrator::kLocalArbitrationCount))
+              .sum,
           1);
       VELOX_CHECK_EQ(
           stats.customStats.count(
-              SharedArbitrator::kGlobalArbitrationWaitCount),
+              std::string(SharedArbitrator::kGlobalArbitrationWaitCount)),
           0);
     }
   }

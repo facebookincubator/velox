@@ -61,12 +61,12 @@ class Merge : public SourceOperator {
   /// The running wall time of the merge operator reading from the streaming
   /// source. If spilling is enabled for local merge, this also includes the
   /// time that writes to the spilled source.
-  static inline const std::string kStreamingSourceReadWallNanos{
+  static constexpr std::string_view kStreamingSourceReadWallNanos{
       "streamingSourceReadWallNanos"};
   /// The running wall time of the merge operator reading from the spilled
   /// source to produce the final output. This only applies when spilling is
   /// enabled for local merge.
-  static inline const std::string kSpilledSourceReadWallNanos{
+  static constexpr std::string_view kSpilledSourceReadWallNanos{
       "spilledSourceReadWallNanos"};
 
  protected:

@@ -49,7 +49,7 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
       std::unordered_map<std::string, RuntimeMetric>& stats)
       : stats_{stats} {}
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     addOperatorRuntimeStats(name, value, stats_);
   }
@@ -1451,12 +1451,21 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationsFromSameQuery) {
     setThreadLocalRunTimeStatWriter(statsWriter.get());
     runPool->allocate(memoryCapacity / 2);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        0);
     ++allocationCount;
   });
 
@@ -1467,13 +1476,24 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationsFromSameQuery) {
     setThreadLocalRunTimeStatWriter(statsWriter.get());
     waitPool->allocate(memoryCapacity / 2 + MB);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 1);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].sum, 1);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        1);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].sum,
+        1);
     ++allocationCount;
   });
 
@@ -1534,12 +1554,21 @@ DEBUG_ONLY_TEST_F(
     op1->allocate(MB);
     ASSERT_EQ(task1->capacity(), 8 * MB);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        1);
     ++allocationCount;
   });
 
@@ -1550,12 +1579,21 @@ DEBUG_ONLY_TEST_F(
     op2->allocate(MB);
     ASSERT_EQ(task2->capacity(), 8 * MB);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        1);
     ++allocationCount;
   });
 
@@ -1780,20 +1818,37 @@ DEBUG_ONLY_TEST_F(
     }
     // We expect global arbitration has been triggered.
     ASSERT_GE(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
-    ASSERT_GT(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 0);
-    ASSERT_GT(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].sum, 0);
-    ASSERT_GT(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].count,
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
         0);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].sum,
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        0);
+    ASSERT_GT(
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .sum,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].sum,
+        0);
+    ASSERT_GT(
+        runtimeStats[std::string(
+                         SharedArbitrator::kGlobalArbitrationWaitWallNanos)]
+            .count,
+        0);
+    ASSERT_GT(
+        runtimeStats[std::string(
+                         SharedArbitrator::kGlobalArbitrationWaitWallNanos)]
+            .sum,
         1'000'000'000);
   });
 
@@ -1863,20 +1918,38 @@ DEBUG_ONLY_TEST_F(
     }
     // We expect global arbitration has been triggered.
     ASSERT_GE(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
-    ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
-    ASSERT_GE(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
-    ASSERT_GE(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].sum, 0);
-    ASSERT_GE(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].count,
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
         1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].sum, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
+    ASSERT_GE(
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        1);
+    ASSERT_GE(
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .sum,
+        1);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        0);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].sum,
+        0);
+    ASSERT_GE(
+        runtimeStats[std::string(
+                         SharedArbitrator::kGlobalArbitrationWaitWallNanos)]
+            .count,
+        1);
+    ASSERT_GT(
+        runtimeStats[std::string(
+                         SharedArbitrator::kGlobalArbitrationWaitWallNanos)]
+            .sum,
+        1);
   });
 
   std::atomic_bool globalArbitrationStarted{false};
@@ -1912,10 +1985,19 @@ DEBUG_ONLY_TEST_F(
   globalArbitrationTriggerThread.join();
   ASSERT_EQ(localArbitrationOp->capacity(), memoryPoolReservedCapacity);
   ASSERT_EQ(
-      runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 0);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 0);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 1);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].sum, 1);
+      runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+          .count,
+      0);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].count,
+      1);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].sum,
+      1);
 
   // Global arbitration thread may still be running in the background,
   // triggerring ASAN failure. Wait until it exits.
@@ -1966,14 +2048,25 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, globalArbitrationAbortTimeRatio) {
     op1->allocate(memoryCapacity / 2);
 
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        1);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .sum,
+        1);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        0);
     ASSERT_TRUE(task1->error() == nullptr);
     ASSERT_EQ(task1->capacity(), memoryCapacity);
     ASSERT_TRUE(task2->error() != nullptr);
@@ -2019,12 +2112,24 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationWithoutSpill) {
   triggerOp->allocate(memoryCapacity / 2);
 
   ASSERT_EQ(
-      runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
-  ASSERT_GT(runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+      runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+          .count,
+      1);
+  ASSERT_GT(
+      runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+          .sum,
+      0);
   ASSERT_EQ(
-      runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+      runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+          .count,
+      1);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+          .sum,
+      1);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].count,
+      0);
 
   ASSERT_TRUE(triggerTask->error() == nullptr);
   ASSERT_EQ(triggerTask->capacity(), memoryCapacity);
@@ -2066,12 +2171,24 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationSmallParticipantLargeGrow) {
   VELOX_ASSERT_THROW(op0->allocate(kMemoryCapacity / 2), "aborted");
 
   ASSERT_EQ(
-      runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
-  ASSERT_GT(runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+      runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+          .count,
+      1);
+  ASSERT_GT(
+      runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+          .sum,
+      0);
   ASSERT_EQ(
-      runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
-  ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+      runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+          .count,
+      1);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+          .sum,
+      1);
+  ASSERT_EQ(
+      runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)].count,
+      0);
 
   ASSERT_TRUE(task1->error() == nullptr);
   ASSERT_EQ(task1->capacity(), kMemoryCapacity / 2);
@@ -2277,14 +2394,25 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, multipleGlobalRuns) {
     setThreadLocalRunTimeStatWriter(statsWriter.get());
     waitPool->allocate(memoryCapacity / 2);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        1);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .sum,
+        1);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        0);
     ++allocations;
   });
 
@@ -2294,14 +2422,25 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, multipleGlobalRuns) {
     setThreadLocalRunTimeStatWriter(statsWriter.get());
     runPool->allocate(memoryCapacity / 2);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .count,
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+        runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
+            .sum,
+        0);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .count,
+        1);
     ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
-    ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+        runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
+            .sum,
+        1);
+    ASSERT_EQ(
+        runtimeStats[std::string(SharedArbitrator::kLocalArbitrationCount)]
+            .count,
+        0);
     ++allocations;
   });
 
