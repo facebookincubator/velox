@@ -512,6 +512,30 @@ DEBUG_ONLY_TEST_F(TableScanTest, timeLimitInGetOutput) {
   EXPECT_GE(numBailed, 12);
 }
 
+TEST_F(TableScanTest, outputBatchRowsOverride) {
+  auto vectors = makeVectors(1, 500);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  constexpr uint32_t kBatchRowsOverride{100};
+  auto plan = tableScanNode();
+  auto batches = AssertQueryBuilder(duckDbQueryRunner_)
+                     .plan(plan)
+                     .splits(makeHiveConnectorSplits({filePath}))
+                     .config(
+                         QueryConfig::kTableScanOutputBatchRowsOverride,
+                         folly::to<std::string>(kBatchRowsOverride))
+                     .copyResultBatches(pool_.get());
+
+  ASSERT_FALSE(batches.empty());
+  for (auto i = 0; i + 1 < batches.size(); ++i) {
+    EXPECT_EQ(batches[i]->size(), kBatchRowsOverride);
+  }
+  EXPECT_LE(batches.back()->size(), kBatchRowsOverride);
+
+  assertEqualResults(vectors, batches);
+}
+
 TEST_F(TableScanTest, subfieldPruningRowType) {
   // rowType: ROW
   // └── "e": ROW
