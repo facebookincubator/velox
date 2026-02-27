@@ -2236,6 +2236,8 @@ void HashProbe::clearBuffers() {
   if (filter_ == nullptr) {
     return;
   }
+  accumulatedRowMapping_.reset();
+  accumulatedTableRows_.reset();
   filterResult_.clear();
   filterResult_.resize(1);
   filterTableInput_.reset();
