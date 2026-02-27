@@ -300,6 +300,8 @@ std::vector<std::string> getSortedScalarNames() {
   // Do not print "internal" functions.
   static const folly::F14FastSet<std::string_view> kBlockList{
       expression::kRowConstructor,
+      expression::kIn,
+      expression::kNot,
   };
 
   auto functions = getFunctionSignatures();
@@ -310,7 +312,7 @@ std::vector<std::string> getSortedScalarNames() {
     for (const auto& func : functions) {
       const auto& name = func.first;
       if (!isCompanionFunctionName(name, aggregateFunctions) &&
-          kBlockList.count(name) == 0) {
+          kBlockList.count(name) == 0 && !name.starts_with("$")) {
         names.emplace_back(name);
       }
     }
