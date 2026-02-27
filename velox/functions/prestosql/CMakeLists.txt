@@ -53,6 +53,7 @@ velox_add_library(
   Subscript.cpp
   ToUtf8.cpp
   Transform.cpp
+  TransformWithIndex.cpp
   TransformKeys.cpp
   TransformValues.cpp
   TypeOf.cpp

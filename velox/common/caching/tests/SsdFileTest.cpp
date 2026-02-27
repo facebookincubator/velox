@@ -20,7 +20,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include <fcntl.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -31,6 +31,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::tests::utils;
 
 using facebook::velox::memory::MemoryAllocator;
@@ -79,10 +80,9 @@ class SsdFileTest : public testing::Test {
     FLAGS_velox_ssd_odirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
     cacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     fileName_ = StringIdLease(fileIds(), "fileInStorage");
-    tempDirectory_ =
-        exec::test::TempDirectoryPath::create(enableFaultInjection);
+    tempDirectory_ = TempDirectoryPath::create(enableFaultInjection);
     initializeSsdFile(
         ssdBytes,
         checkpointIntervalBytes,
@@ -111,7 +111,7 @@ class SsdFileTest : public testing::Test {
     ssdFile_ = std::make_unique<SsdFile>(config);
     if (ssdFile_ != nullptr) {
       ssdFileHelper_ =
-          std::make_unique<test::SsdFileTestHelper>(ssdFile_.get());
+          std::make_unique<cache::test::SsdFileTestHelper>(ssdFile_.get());
     }
   }
 
@@ -319,14 +319,14 @@ class SsdFileTest : public testing::Test {
     return numFound;
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
 
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> cacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> cacheHelper_;
   StringIdLease fileName_;
 
   std::unique_ptr<SsdFile> ssdFile_;
-  std::unique_ptr<test::SsdFileTestHelper> ssdFileHelper_;
+  std::unique_ptr<cache::test::SsdFileTestHelper> ssdFileHelper_;
 };
 
 TEST_F(SsdFileTest, writeAndRead) {

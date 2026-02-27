@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/common/testutil/TempFilePath.h"
 
 #include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 using namespace Azure::Storage::Files::DataLake::Models;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::filesystems {
 
@@ -26,7 +27,7 @@ namespace facebook::velox::filesystems {
 class MockDataLakeFileClient : public AzureDataLakeFileClient {
  public:
   MockDataLakeFileClient() {
-    auto tempFile = velox::exec::test::TempFilePath::create();
+    auto tempFile = TempFilePath::create();
     filePath_ = tempFile->getPath();
   }
 

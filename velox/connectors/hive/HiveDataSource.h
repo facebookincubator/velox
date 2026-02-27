@@ -34,6 +34,18 @@ class HiveConfig;
 
 class HiveDataSource : public DataSource {
  public:
+  /// Runtime stat keys for Hive data source.
+  static constexpr std::string_view kNumPrefetch{"numPrefetch"};
+  static constexpr std::string_view kPrefetchBytes{"prefetchBytes"};
+  static constexpr std::string_view kTotalScanTime{"totalScanTime"};
+  static constexpr std::string_view kOverreadBytes{"overreadBytes"};
+  static constexpr std::string_view kStorageReadBytes{"storageReadBytes"};
+  static constexpr std::string_view kNumLocalRead{"numLocalRead"};
+  static constexpr std::string_view kLocalReadBytes{"localReadBytes"};
+  static constexpr std::string_view kNumRamRead{"numRamRead"};
+  static constexpr std::string_view kRamReadBytes{"ramReadBytes"};
+  static constexpr std::string_view kNumBucketConversion{"numBucketConversion"};
+
   HiveDataSource(
       const RowTypePtr& outputType,
       const connector::ConnectorTableHandlePtr& tableHandle,

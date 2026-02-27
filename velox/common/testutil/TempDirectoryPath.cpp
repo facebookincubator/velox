@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include "boost/filesystem.hpp"
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::common::testutil {
 
 std::shared_ptr<TempDirectoryPath> TempDirectoryPath::create(bool injectFault) {
   auto* tempDirPath = new TempDirectoryPath(injectFault);
@@ -42,4 +42,4 @@ std::string TempDirectoryPath::createTempDirectory() {
   return tempDirectoryPath;
 }
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::common::testutil

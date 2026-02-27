@@ -107,6 +107,19 @@ Map Functions
         SELECT map_normalize(map(array['a', 'b', 'c', 'd'], array[1, null, 4, 5])); -- {a=0.1, b=null, c=0.4, d=0.5}
         SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 0, -1])); -- {a=Infinity, b=NaN, c=-Infinity}
 
+.. function:: map_values_in_range(map(K,V), lower_bound, upper_bound) -> map(K,V)
+
+    Returns a map containing only the entries from the input map whose values
+    fall within the specified range [lower_bound, upper_bound] (inclusive).
+    Entries with values less than lower_bound or greater than upper_bound are removed.
+    Entries with null values are preserved in the output.
+    V must be a numeric type (integer, bigint, real, or double). ::
+
+        SELECT map_values_in_range(MAP(ARRAY[1, 2, 3, 4], ARRAY[10, 20, 30, 40]), 15, 35); -- {2 -> 20, 3 -> 30}
+        SELECT map_values_in_range(MAP(ARRAY['a', 'b', 'c'], ARRAY[1.5, 2.5, 3.5]), 2.0, 3.0); -- {b -> 2.5}
+        SELECT map_values_in_range(MAP(ARRAY[1, 2], ARRAY[null, 50]), 0, 100); -- {1 -> null, 2 -> 50}
+        SELECT map_values_in_range(MAP(ARRAY[1, 2, 3], ARRAY[5, 50, 500]), 10, 100); -- {2 -> 50}
+
 .. function:: map_remove_null_values(map(K,V)) -> map(K,V)
 
     Returns a map by removing all the keys in input map with null values. If input
@@ -178,6 +191,24 @@ Map Functions
 
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- {'b' -> 3, 'a' -> 2}
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- {'b' -> 3, 'c' -> NULL}
+
+.. function:: map_trim_values(map(K, array(V)), n) -> map(K, array(V))
+
+    Trims the value arrays in a map to a specified maximum size.
+    This function is useful for optimizing memory usage and performance for large feature maps
+    where the value arrays may grow unbounded.
+
+    Returns a map where each value array is trimmed to at most n elements.
+    If n is negative, returns the original map unchanged.
+    If n is 0, returns a map where all values are empty arrays.
+    If a value array has fewer than n elements, it is left unchanged.
+    Null elements in the arrays are preserved in the output. ::
+
+        SELECT map_trim_values(MAP(ARRAY['a', 'b'], ARRAY[ARRAY[1, 2, 3], ARRAY[4, 5, 6, 7]]), 2); -- {a -> [1, 2], b -> [4, 5]}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, 2]]), 5); -- {a -> [1, 2]}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, NULL, 3]]), 2); -- {a -> [1, NULL]}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, 2, 3]]), 0); -- {a -> []}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, 2, 3]]), -1); -- {a -> [1, 2, 3]}
 
 .. function:: map_keys_by_top_n_values(map(K,V), n) -> array(K)
 
