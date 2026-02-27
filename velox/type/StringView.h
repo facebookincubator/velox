@@ -361,6 +361,8 @@ inline size_t estimateSpaceNeeded(const StringView& value) {
 namespace std {
 template <>
 struct hash<::facebook::velox::StringView> {
+  using folly_is_avalanching = std::true_type;
+
   size_t operator()(const ::facebook::velox::StringView view) const {
     return facebook::velox::bits::hashBytes(1, view.data(), view.size());
   }
@@ -371,6 +373,8 @@ namespace folly {
 
 template <>
 struct hasher<::facebook::velox::StringView> {
+  using folly_is_avalanching = std::true_type;
+
   size_t operator()(const ::facebook::velox::StringView view) const {
     return facebook::velox::bits::hashBytes(1, view.data(), view.size());
   }
