@@ -485,27 +485,28 @@ HiveDataSource::getRuntimeStats() {
              RuntimeCounter::Unit::kNanos)});
   }
   res.insert(
-      {{"numPrefetch", RuntimeMetric(ioStatistics_->prefetch().count())},
-       {"prefetchBytes",
+      {{std::string(kNumPrefetch),
+        RuntimeMetric(ioStatistics_->prefetch().count())},
+       {std::string(kPrefetchBytes),
         RuntimeMetric(
             ioStatistics_->prefetch().sum(),
             ioStatistics_->prefetch().count(),
             ioStatistics_->prefetch().min(),
             ioStatistics_->prefetch().max(),
             RuntimeCounter::Unit::kBytes)},
-       {"totalScanTime",
+       {std::string(kTotalScanTime),
         RuntimeMetric(
             ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterTime,
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
-       {"overreadBytes",
+       {std::string(kOverreadBytes),
         RuntimeMetric(
             ioStatistics_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
   if (ioStatistics_->read().count() > 0) {
     res.insert(
-        {"storageReadBytes",
+        {std::string(kStorageReadBytes),
          RuntimeMetric(
              ioStatistics_->read().sum(),
              ioStatistics_->read().count(),
@@ -515,9 +516,10 @@ HiveDataSource::getRuntimeStats() {
   }
   if (ioStatistics_->ssdRead().count() > 0) {
     res.insert(
-        {"numLocalRead", RuntimeMetric(ioStatistics_->ssdRead().count())});
+        {std::string(kNumLocalRead),
+         RuntimeMetric(ioStatistics_->ssdRead().count())});
     res.insert(
-        {"localReadBytes",
+        {std::string(kLocalReadBytes),
          RuntimeMetric(
              ioStatistics_->ssdRead().sum(),
              ioStatistics_->ssdRead().count(),
@@ -526,9 +528,11 @@ HiveDataSource::getRuntimeStats() {
              RuntimeCounter::Unit::kBytes)});
   }
   if (ioStatistics_->ramHit().count() > 0) {
-    res.insert({"numRamRead", RuntimeMetric(ioStatistics_->ramHit().count())});
     res.insert(
-        {"ramReadBytes",
+        {std::string(kNumRamRead),
+         RuntimeMetric(ioStatistics_->ramHit().count())});
+    res.insert(
+        {std::string(kRamReadBytes),
          RuntimeMetric(
              ioStatistics_->ramHit().sum(),
              ioStatistics_->ramHit().count(),
@@ -537,7 +541,9 @@ HiveDataSource::getRuntimeStats() {
              RuntimeCounter::Unit::kBytes)});
   }
   if (numBucketConversion_ > 0) {
-    res.insert({"numBucketConversion", RuntimeMetric(numBucketConversion_)});
+    res.insert(
+        {std::string(kNumBucketConversion),
+         RuntimeMetric(numBucketConversion_)});
   }
 
   const auto ioStatsMap = ioStats_->stats();

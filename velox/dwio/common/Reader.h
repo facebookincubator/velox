@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 
+#include "velox/connectors/Connector.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/Options.h"
@@ -150,25 +151,6 @@ class RowReader {
     return std::nullopt;
   }
 
-  /// Resets the row reader for a new query. This allows reusing the same
-  /// reader instance for different queries on the same data split.
-  ///
-  /// This is primarily used for index reader use cases where the same row
-  /// reader needs to be reused for multiple index lookups with different
-  /// index bounds/filters on the same data split.
-  ///
-  /// After reset:
-  /// - The split boundaries remain the same (data range doesn't change)
-  /// - The actual read range may change based on new index bounds from the
-  ///   scan spec
-  /// - All internal state (row positions, statistics, etc.) is reset
-  /// - Index bounds are re-evaluated based on the current scan spec
-  ///
-  /// @throws if reset is not supported by the implementation
-  virtual void reset() {
-    VELOX_UNSUPPORTED("RowReader::reset() is not supported");
-  }
-
   /**
    * Helper function used by non-selective reader to project top level columns
    * according to the scan spec and mutations.
@@ -205,72 +187,88 @@ struct RowRange {
 /**
  * Abstract index reader interface for index-based lookups.
  *
- * IndexReader provides methods for encoding index bounds, looking up stripes,
- * and reading data within specific row ranges. This interface is used by
+ * IndexReader provides a batch lookup API that takes a vector of index bounds
+ * and returns results via an iterator pattern. This interface is used by
  * HiveIndexReader to perform efficient key-based lookups on indexed files.
+ *
+ * Usage pattern:
+ *   1. Call startLookup() with a vector of index bounds to start a new batch
+ * lookup
+ *   2. Call next() repeatedly to get results until it returns nullptr
+ *   3. Each next() call returns results for one or more request indices
+ *
+ * The implementation is responsible for:
+ *   - Encoding index bounds into format-specific keys
+ *   - Looking up stripes and row ranges
+ *   - Managing stripe iteration and data reading
+ *   - Returning results in the correct order
  */
 class IndexReader {
  public:
+  /// Runtime stat names for index reader.
+
+  /// Tracks the number of index lookup requests submitted in startLookup().
+  /// Each request corresponds to one set of index bounds and may match rows
+  /// across multiple stripes.
+  static inline const std::string kNumIndexLookupRequests =
+      "numIndexLookupRequests";
+
+  /// Tracks the total number of stripes that need to be read for all requests.
+  /// Multiple requests may share the same stripe, and each shared stripe is
+  /// counted once per request that needs it.
+  static inline const std::string kNumIndexLookupStripes =
+      "numIndexLookupStripes";
+
+  /// Tracks the total number of read segments across all stripes. A read
+  /// segment is a contiguous row range within a stripe that needs to be read.
+  /// When filters are present, overlapping request ranges are split at
+  /// boundaries to enable per-request output tracking. Without filters,
+  /// overlapping ranges are merged to minimize I/O.
+  static inline const std::string kNumIndexLookupReadSegments =
+      "numIndexLookupReadSegments";
+
   virtual ~IndexReader() = default;
 
-  using KeyBoundsVector = std::vector<velox::serializer::EncodedKeyBounds>;
+  /// Options for controlling index reader behavior.
+  struct Options {
+    /// Maximum number of rows to read per index lookup request.
+    /// When set to non-zero, the index reader will stop fetching or truncate
+    /// stripes once the total row range (before filtering) reaches this limit.
+    /// 0 means no limit (default).
+    vector_size_t maxRowsPerRequest{0};
+  };
 
-  /// Encodes index bounds into format-specific encoded key bounds.
-  /// Different file formats may use different key encoding schemes, so this
-  /// allows the format-specific reader to handle the encoding.
+  /// Starts a new batch lookup with the given index bounds.
+  /// Each index bound in the vector represents a separate lookup request.
+  /// After calling startLookup(), call next() repeatedly to get results.
   ///
-  /// @param indexBounds The index bounds to encode, containing column names
-  ///        and lower/upper bound values.
-  /// @return A vector of encoded key bounds, one for each row in the input
-  ///         bounds.
-  /// @throws if encoding is not supported by the implementation or if any
-  ///         index bound fails to encode.
-  virtual KeyBoundsVector encodeIndexBounds(
-      const velox::serializer::IndexBounds& indexBounds) = 0;
+  /// @param indexBounds Index bounds for the lookup request. Contains
+  ///        column names and lower/upper bound values.
+  /// @param options Options controlling index reader behavior (e.g.,
+  ///        maxRowsPerRequest). Defaults to no limit.
+  /// @throws if lookup is not supported by the implementation or if any
+  ///         index bound is invalid.
+  virtual void startLookup(
+      const velox::serializer::IndexBounds& indexBounds,
+      const Options& options) = 0;
 
-  /// Looks up stripes that contain data matching the encoded key bounds.
-  /// For each request row, returns the list of stripe indices that may contain
-  /// matching data based on the encoded lower and upper key bounds.
+  /// Returns true if there are more results to fetch from the current lookup.
+  virtual bool hasNext() const = 0;
+
+  /// Returns the next batch of results from the current lookup.
+  /// Results are returned in request order - all results for request N are
+  /// returned before any results for request N+1.
   ///
-  /// @param keyBounds The encoded key bounds for each request row.
-  /// @return Stripe indices for each request row. Each inner vector contains
-  ///         the indices of stripes that may contain matching data for that
-  ///         request.
-  /// @throws if lookup is not supported by the implementation.
-  virtual std::vector<std::vector<uint32_t>> lookupStripes(
-      const KeyBoundsVector& keyBounds) = 0;
-
-  /// Looks up row ranges within a specific stripe based on encoded key bounds.
-  /// Computes row ranges per request without setting up state for iteration.
+  /// The Result contains:
+  /// - inputHits: Buffer of request indices for each output row
+  /// - output: RowVector of matching data rows
   ///
-  /// @param stripeIndex The index of the stripe to compute row ranges for.
-  /// @param keyBounds The encoded key bounds for each request.
-  /// @return Row ranges for each request, one per input encoded key bounds.
-  ///         Empty ranges (startRow >= endRow) are included for requests with
-  ///         no matching data.
-  /// @throws if lookup is not supported by the implementation.
-  virtual std::vector<RowRange> lookupRowRanges(
-      uint32_t stripeIndex,
-      const KeyBoundsVector& keyBounds) = 0;
-
-  /// Sets row ranges for reading from a specific stripe. Must be called before
-  /// next() to set up the iteration state.
-  ///
-  /// @param stripeIndex The index of the stripe to read from.
-  /// @param rowRanges The row ranges to read within the stripe.
-  /// @throws if setting row ranges is not supported by the implementation.
-  virtual void setRowRanges(
-      uint32_t stripeIndex,
-      const std::vector<RowRange>& rowRanges) = 0;
-
-  /**
-   * Fetch the next portion of rows.
-   * @param size Max number of rows to read
-   * @param result output vector
-   * @return number of rows scanned in the file (including any rows filtered
-   * out), 0 if there are no more rows to read.
-   */
-  virtual uint64_t next(uint64_t size, velox::VectorPtr& result) = 0;
+  /// @param maxOutputRows Maximum number of output rows to return in this
+  ///        batch. The actual number may be less if fewer rows are available.
+  /// @return Result containing inputHits and output rows, or nullptr if no
+  ///         more results are available.
+  virtual std::unique_ptr<connector::IndexSource::Result> next(
+      vector_size_t maxOutputRows) = 0;
 };
 
 /**

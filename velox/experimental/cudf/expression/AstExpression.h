@@ -38,8 +38,7 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const bool allowPureAstOnly);
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
 
 // Evaluates the expression tree
 class ASTExpression : public CudfExpression {
@@ -53,7 +52,7 @@ class ASTExpression : public CudfExpression {
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(
-      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      std::vector<cudf::column_view> inputColumnViews,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr,
       bool finalize = false) override;

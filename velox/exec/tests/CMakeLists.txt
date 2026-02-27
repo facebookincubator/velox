@@ -282,7 +282,7 @@ target_link_libraries(
   velox_fuzzer_util
   velox_functions_prestosql
   velox_exec_test_lib
-  velox_temp_path
+  velox_test_util
   velox_vector_fuzzer
   GTest::gtest
   GTest::gtest_main

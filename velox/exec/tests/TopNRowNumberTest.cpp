@@ -15,15 +15,16 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 
 namespace {
 
@@ -188,7 +189,7 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
 
   createDuckDbTable(data);
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit) {
     SCOPED_TRACE(fmt::format("Limit: {}", limit));
@@ -275,7 +276,7 @@ TEST_P(MultiTopNRowNumberTest, manyPartitions) {
 
   createDuckDbTable(data);
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
     SCOPED_TRACE(fmt::format("Limit: {}", limit));
@@ -347,7 +348,7 @@ TEST_P(MultiTopNRowNumberTest, fewPartitions) {
 
   createDuckDbTable(data);
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
 
   auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
     SCOPED_TRACE(fmt::format("Limit: {}", limit));
@@ -504,7 +505,7 @@ TEST_P(MultiTopNRowNumberTest, maxSpillBytes) {
     }
   } testSettings[] = {{1 << 30, false}, {13 << 20, true}, {0, false}};
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
   auto queryCtx = core::QueryCtx::create(executor_.get());
 
   for (const auto& testData : testSettings) {
@@ -575,7 +576,7 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, memoryUsageCheckAfterReclaim) {
 
   createDuckDbTable(data);
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
 
   core::PlanNodeId topNRowNumberId;
   auto plan = PlanBuilder()

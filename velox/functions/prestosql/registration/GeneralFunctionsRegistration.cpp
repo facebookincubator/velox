@@ -91,6 +91,8 @@ void registerGeneralFunctions(const std::string& prefix) {
   registerElementAtFunction(prefix + "element_at", true);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, prefix + "transform");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_transform_with_index, prefix + "transform_with_index");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "reduce");
   registerReduceRewrites(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");

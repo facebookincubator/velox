@@ -127,9 +127,11 @@ TEST_F(StreamArenaTest, randomRange) {
   ByteRange range;
   for (int i = 0; i < numRanges; ++i) {
     if (folly::Random::oneIn(3)) {
-      const int requestSize =
-          AllocationTraits::pageBytes(pool_->largestSizeClass()) +
-          (folly::Random::rand32() % (4 << 20));
+      const int requestSize = std::min(
+          static_cast<int>(
+              AllocationTraits::pageBytes(pool_->largestSizeClass()) +
+              (folly::Random::rand32() % (4 << 20))),
+          2 << 20);
       arena->newRange(requestSize, nullptr, &range);
       ASSERT_EQ(AllocationTraits::roundUpPageBytes(requestSize), range.size);
     } else {

@@ -21,8 +21,8 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -38,6 +38,8 @@ using facebook::velox::fuzzer::CallableSignature;
 using facebook::velox::fuzzer::SignatureTemplate;
 
 namespace facebook::velox::exec::test {
+
+using namespace facebook::velox::common::testutil;
 
 class AggregationFuzzerBase;
 
@@ -730,7 +732,7 @@ bool AggregationFuzzer::verifyAggregation(
   std::vector<PlanWithSplits> plans;
   plans.push_back({firstPlan, {}});
 
-  auto directory = exec::test::TempDirectoryPath::create();
+  auto directory = TempDirectoryPath::create();
 
   // Alternate between using Values and TableScan node.
 
@@ -861,10 +863,10 @@ bool AggregationFuzzer::verifySortedAggregation(
          {}});
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> directory;
+  std::shared_ptr<TempDirectoryPath> directory;
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType)) {
-    directory = exec::test::TempDirectoryPath::create();
+    directory = TempDirectoryPath::create();
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     plans.push_back(
@@ -1159,10 +1161,10 @@ bool AggregationFuzzer::verifyDistinctAggregation(
 
   // Alternate between using Values and TableScan node.
 
-  std::shared_ptr<exec::test::TempDirectoryPath> directory;
+  std::shared_ptr<TempDirectoryPath> directory;
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType) && vectorFuzzer_.coinToss(0.5)) {
-    directory = exec::test::TempDirectoryPath::create();
+    directory = TempDirectoryPath::create();
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     plans.push_back(

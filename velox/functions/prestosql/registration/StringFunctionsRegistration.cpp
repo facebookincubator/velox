@@ -247,5 +247,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<WordStemFunction, Varchar, Varchar>({prefix + "word_stem"});
   registerFunction<WordStemFunction, Varchar, Varchar, Varchar>(
       {prefix + "word_stem"});
+
+  registerFunction<KeySamplingPercentFunction, double, Varchar>(
+      {prefix + "key_sampling_percent"});
 }
 } // namespace facebook::velox::functions

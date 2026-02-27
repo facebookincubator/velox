@@ -26,6 +26,7 @@
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -37,7 +38,6 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
@@ -45,6 +45,7 @@
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
@@ -222,8 +223,7 @@ TEST_F(TableScanTest, allColumns) {
   {
     // Lambda to create HiveConnectorSplits from file paths
     auto makeHiveConnectorSplits =
-        [&](const std::vector<std::shared_ptr<
-                facebook::velox::exec::test::TempFilePath>>& filePaths) {
+        [&](const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
           std::vector<
               std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
               splits;
@@ -322,7 +322,7 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Reset the CudfHiveConnector config to use the experimental reader
+  // Reset the CudfHiveConnector config to use the experimental cudf reader
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseExperimentalCudfReader,
@@ -532,15 +532,34 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
+  // Note that the number of row groups selected within `halfFileSize` may
+  // change in the future and this test may start failing. In such a case,
+  // just adjust the duckdb sql string accordingly.
+  const auto halfFileSize = fs::file_size(filePath->getPath()) / 2;
+
+  // First half of file - OFFSET 0 LIMIT 6000
   assertQuery(
       tableScanNode(),
-      makeCudfHiveConnectorSplit(
-          filePath->getPath(), 0, fs::file_size(filePath->getPath()) / 2),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, halfFileSize),
+      "SELECT * FROM tmp OFFSET 0 LIMIT 6000");
+
+  // Second half of file - OFFSET 6000 LIMIT 4000
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), halfFileSize),
+      "SELECT * FROM tmp OFFSET 6000 LIMIT 4000");
+
+  const auto fileSize = fs::file_size(filePath->getPath());
+
+  // All row groups
+  assertQuery(
+      tableScanNode(),
+      makeCudfHiveConnectorSplit(filePath->getPath(), 0, fileSize),
       "SELECT * FROM tmp");
 
+  // No row groups
   assertQuery(
       tableScanNode(),
-      makeCudfHiveConnectorSplit(
-          filePath->getPath(), fs::file_size(filePath->getPath()) / 2),
+      makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
 }

@@ -20,6 +20,7 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class AssertQueryBuilderTest : public HiveConnectorTestBase {};
 

@@ -607,7 +607,7 @@ bool GroupingSet::getGlobalAggregationOutput(
 
   initializeGlobalAggregation();
 
-  auto groups = lookup_->hits.data();
+  auto* groups = lookup_->hits.data();
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;

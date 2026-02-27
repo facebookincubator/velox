@@ -20,12 +20,14 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/iceberg/Murmur3Hash32.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -280,6 +282,7 @@ class TransformE2ETest : public test::IcebergTestBase {
     const auto dataSink = createDataSinkAndAppendData(
         {rowVector}, outputDirectory->getPath(), partitionTransforms);
 
+    dataSink->close();
     auto commitMessages = dataSink->commitMessage();
     VELOX_CHECK_EQ(commitMessages.size(), 1);
     auto commitData = folly::parseJson(commitMessages[0]);
@@ -287,7 +290,6 @@ class TransformE2ETest : public test::IcebergTestBase {
         folly::parseJson(commitData["partitionDataJson"].asString());
     auto partitionValues = partitionDataJson["partitionValues"];
     VELOX_CHECK_EQ(partitionValues.size(), 1);
-    dataSink->close();
     return partitionValues[0];
   }
 };

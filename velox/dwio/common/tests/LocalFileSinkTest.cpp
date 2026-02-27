@@ -17,15 +17,15 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/FileSink.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
 
 using namespace ::testing;
-using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::dwio::common {
+using namespace facebook::velox::common::testutil;
 
 class LocalFileSinkTest : public testing::Test {
  protected:
@@ -77,6 +77,76 @@ TEST_F(LocalFileSinkTest, existFileCheck) {
       FileSink::create(
           fmt::format("file:{}", filePath.string()), {.pool = pool_.get()}),
       "File exists");
+}
+
+TEST_F(LocalFileSinkTest, getIoStatisticsReturnsNullWhenNotProvided) {
+  LocalFileSink::registerFactory();
+  auto root = TempDirectoryPath::create();
+  auto filePath = fs::path(root->getPath()) / "test_stats_null.ext";
+
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()), {.pool = pool_.get()});
+
+  EXPECT_EQ(localFileSink->getIoStatistics(), nullptr);
+  localFileSink->close();
+}
+
+TEST_F(LocalFileSinkTest, getIoStatisticsReturnsProvidedStats) {
+  LocalFileSink::registerFactory();
+  auto root = TempDirectoryPath::create();
+  auto filePath = fs::path(root->getPath()) / "test_stats_provided.ext";
+
+  IoStatistics ioStats;
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()),
+      {.pool = pool_.get(), .stats = &ioStats});
+
+  EXPECT_EQ(localFileSink->getIoStatistics(), &ioStats);
+  localFileSink->close();
+}
+
+TEST_F(LocalFileSinkTest, getFileSystemStatsReturnsNullWhenNotProvided) {
+  LocalFileSink::registerFactory();
+  auto root = TempDirectoryPath::create();
+  auto filePath = fs::path(root->getPath()) / "test_fs_stats_null.ext";
+
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()), {.pool = pool_.get()});
+
+  EXPECT_EQ(localFileSink->getFileSystemStats(), nullptr);
+  localFileSink->close();
+}
+
+TEST_F(LocalFileSinkTest, getFileSystemStatsReturnsProvidedStats) {
+  LocalFileSink::registerFactory();
+  auto root = TempDirectoryPath::create();
+  auto filePath = fs::path(root->getPath()) / "test_fs_stats_provided.ext";
+
+  velox::IoStats fileSystemStats;
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()),
+      {.pool = pool_.get(), .fileSystemStats = &fileSystemStats});
+
+  EXPECT_EQ(localFileSink->getFileSystemStats(), &fileSystemStats);
+  localFileSink->close();
+}
+
+TEST_F(LocalFileSinkTest, getFileSystemStatsAndIoStatisticsBothProvided) {
+  LocalFileSink::registerFactory();
+  auto root = TempDirectoryPath::create();
+  auto filePath = fs::path(root->getPath()) / "test_both_stats.ext";
+
+  IoStatistics ioStats;
+  velox::IoStats fileSystemStats;
+  auto localFileSink = FileSink::create(
+      fmt::format("file:{}", filePath.string()),
+      {.pool = pool_.get(),
+       .stats = &ioStats,
+       .fileSystemStats = &fileSystemStats});
+
+  EXPECT_EQ(localFileSink->getIoStatistics(), &ioStats);
+  EXPECT_EQ(localFileSink->getFileSystemStats(), &fileSystemStats);
+  localFileSink->close();
 }
 
 } // namespace facebook::velox::dwio::common
