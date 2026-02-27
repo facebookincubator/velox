@@ -366,7 +366,7 @@ core::PlanNodePtr getTraceNode(
         partitionedOutputNode->isReplicateNullsAndAny(),
         partitionedOutputNode->partitionFunctionSpecPtr(),
         partitionedOutputNode->outputType(),
-        VectorSerde::Kind::kPresto,
+        "Presto",
         std::make_shared<DummySourceNode>(
             partitionedOutputNode->sources().front()->outputType()));
   }

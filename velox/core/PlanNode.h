@@ -2080,11 +2080,8 @@ using GroupIdNodePtr = std::shared_ptr<const GroupIdNode>;
 
 class ExchangeNode : public PlanNode {
  public:
-  ExchangeNode(
-      const PlanNodeId& id,
-      RowTypePtr type,
-      VectorSerde::Kind serdeKind)
-      : PlanNode(id), outputType_(type), serdeKind_(serdeKind) {}
+  ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
+      : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {}
 
   class Builder {
    public:
@@ -2106,8 +2103,8 @@ class ExchangeNode : public PlanNode {
       return *this;
     }
 
-    Builder& serdeKind(VectorSerde::Kind serdeKind) {
-      serdeKind_ = serdeKind;
+    Builder& serdeKind(std::string serdeKind) {
+      serdeKind_ = std::move(serdeKind);
       return *this;
     }
 
@@ -2125,7 +2122,7 @@ class ExchangeNode : public PlanNode {
    private:
     std::optional<PlanNodeId> id_;
     std::optional<RowTypePtr> outputType_;
-    std::optional<VectorSerde::Kind> serdeKind_;
+    std::optional<std::string> serdeKind_;
   };
 
   const RowTypePtr& outputType() const override {
@@ -2149,7 +2146,7 @@ class ExchangeNode : public PlanNode {
     return "Exchange";
   }
 
-  VectorSerde::Kind serdeKind() const {
+  const std::string& serdeKind() const {
     return serdeKind_;
   }
 
@@ -2161,7 +2158,7 @@ class ExchangeNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   const RowTypePtr outputType_;
-  const VectorSerde::Kind serdeKind_;
+  const std::string serdeKind_;
 };
 
 using ExchangeNodePtr = std::shared_ptr<const ExchangeNode>;
@@ -2173,7 +2170,7 @@ class MergeExchangeNode : public ExchangeNode {
       const RowTypePtr& type,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      VectorSerde::Kind serdeKind);
+      std::string serdeKind);
 
   class Builder {
    public:
@@ -2207,8 +2204,8 @@ class MergeExchangeNode : public ExchangeNode {
       return *this;
     }
 
-    Builder& serdeKind(VectorSerde::Kind serdeKind) {
-      serdeKind_ = serdeKind;
+    Builder& serdeKind(std::string serdeKind) {
+      serdeKind_ = std::move(serdeKind);
       return *this;
     }
 
@@ -2237,7 +2234,7 @@ class MergeExchangeNode : public ExchangeNode {
     std::optional<RowTypePtr> outputType_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
-    std::optional<VectorSerde::Kind> serdeKind_;
+    std::optional<std::string> serdeKind_;
   };
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
@@ -2617,26 +2614,26 @@ class PartitionedOutputNode : public PlanNode {
       bool replicateNullsAndAny,
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
+      std::string serdeKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
       RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
+      std::string serdeKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> arbitrary(
       const PlanNodeId& id,
       RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
+      std::string serdeKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> single(
       const PlanNodeId& id,
       RowTypePtr outputType,
-      VectorSerde::Kind VectorSerde,
+      std::string serdeKind,
       PlanNodePtr source);
 
   class Builder {
@@ -2691,8 +2688,8 @@ class PartitionedOutputNode : public PlanNode {
       return *this;
     }
 
-    Builder& serdeKind(VectorSerde::Kind serdeKind) {
-      serdeKind_ = serdeKind;
+    Builder& serdeKind(std::string serdeKind) {
+      serdeKind_ = std::move(serdeKind);
       return *this;
     }
 
@@ -2744,7 +2741,7 @@ class PartitionedOutputNode : public PlanNode {
     std::optional<bool> replicateNullsAndAny_;
     std::optional<PartitionFunctionSpecPtr> partitionFunctionSpec_;
     std::optional<RowTypePtr> outputType_;
-    std::optional<VectorSerde::Kind> serdeKind_;
+    std::optional<std::string> serdeKind_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -2787,7 +2784,7 @@ class PartitionedOutputNode : public PlanNode {
     return kind_;
   }
 
-  VectorSerde::Kind serdeKind() const {
+  const std::string& serdeKind() const {
     return serdeKind_;
   }
 
@@ -2825,7 +2822,7 @@ class PartitionedOutputNode : public PlanNode {
   const int numPartitions_;
   const bool replicateNullsAndAny_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
-  const VectorSerde::Kind serdeKind_;
+  const std::string serdeKind_;
   const RowTypePtr outputType_;
 };
 

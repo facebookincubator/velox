@@ -34,23 +34,21 @@ using facebook::velox::test::BatchMaker;
 
 struct TestParam {
   PartitionedOutputNode::Kind outputKind;
-  VectorSerde::Kind serdeKind;
+  std::string serdeKind;
 
-  TestParam(
-      PartitionedOutputNode::Kind _outputKind,
-      VectorSerde::Kind _serdeKind)
+  TestParam(PartitionedOutputNode::Kind _outputKind, std::string _serdeKind)
       : outputKind(_outputKind), serdeKind(_serdeKind) {}
 };
 
 class OutputBufferManagerTest : public testing::Test {
  protected:
-  OutputBufferManagerTest() : serdeKind_(VectorSerde::Kind::kPresto) {
+  OutputBufferManagerTest() : serdeKind_("Presto") {
     std::vector<std::string> names = {"c0", "c1"};
     std::vector<TypePtr> types = {BIGINT(), VARCHAR()};
     rowType_ = ROW(std::move(names), std::move(types));
   }
 
-  explicit OutputBufferManagerTest(VectorSerde::Kind serdeKind)
+  explicit OutputBufferManagerTest(std::string serdeKind)
       : serdeKind_(serdeKind) {
     std::vector<std::string> names = {"c0", "c1"};
     std::vector<TypePtr> types = {BIGINT(), VARCHAR()};
@@ -72,14 +70,14 @@ class OutputBufferManagerTest : public testing::Test {
             serializer::presto::PrestoOutputStreamListener>();
       });
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    if (!isRegisteredNamedVectorSerde("CompactRow")) {
       serializer::CompactRowVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
       serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
     }
   }
@@ -435,7 +433,7 @@ class OutputBufferManagerTest : public testing::Test {
     }
   }
 
-  const VectorSerde::Kind serdeKind_;
+  const std::string serdeKind_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::hardware_concurrency())};
@@ -446,13 +444,11 @@ class OutputBufferManagerTest : public testing::Test {
 
 class OutputBufferManagerWithDifferentSerdeKindsTest
     : public OutputBufferManagerTest,
-      public testing::WithParamInterface<VectorSerde::Kind> {
+      public testing::WithParamInterface<std::string> {
  public:
-  static std::vector<VectorSerde::Kind> getTestParams() {
-    static std::vector<VectorSerde::Kind> params = {
-        VectorSerde::Kind::kPresto,
-        VectorSerde::Kind::kCompactRow,
-        VectorSerde::Kind::kUnsafeRow};
+  static std::vector<std::string> getTestParams() {
+    static std::vector<std::string> params = {
+        "Presto", "CompactRow", "UnsafeRow"};
     return params;
   }
 };
@@ -463,21 +459,15 @@ class AllOutputBufferManagerTest
  public:
   static std::vector<TestParam> getTestParams() {
     static std::vector<TestParam> params = {
-        {PartitionedOutputNode::Kind::kBroadcast, VectorSerde::Kind::kPresto},
-        {PartitionedOutputNode::Kind::kBroadcast,
-         VectorSerde::Kind::kCompactRow},
-        {PartitionedOutputNode::Kind::kBroadcast,
-         VectorSerde::Kind::kUnsafeRow},
-        {PartitionedOutputNode::Kind::kPartitioned, VectorSerde::Kind::kPresto},
-        {PartitionedOutputNode::Kind::kPartitioned,
-         VectorSerde::Kind::kCompactRow},
-        {PartitionedOutputNode::Kind::kPartitioned,
-         VectorSerde::Kind::kUnsafeRow},
-        {PartitionedOutputNode::Kind::kArbitrary, VectorSerde::Kind::kPresto},
-        {PartitionedOutputNode::Kind::kArbitrary,
-         VectorSerde::Kind::kCompactRow},
-        {PartitionedOutputNode::Kind::kArbitrary,
-         VectorSerde::Kind::kUnsafeRow}};
+        {PartitionedOutputNode::Kind::kBroadcast, "Presto"},
+        {PartitionedOutputNode::Kind::kBroadcast, "CompactRow"},
+        {PartitionedOutputNode::Kind::kBroadcast, "UnsafeRow"},
+        {PartitionedOutputNode::Kind::kPartitioned, "Presto"},
+        {PartitionedOutputNode::Kind::kPartitioned, "CompactRow"},
+        {PartitionedOutputNode::Kind::kPartitioned, "UnsafeRow"},
+        {PartitionedOutputNode::Kind::kArbitrary, "Presto"},
+        {PartitionedOutputNode::Kind::kArbitrary, "CompactRow"},
+        {PartitionedOutputNode::Kind::kArbitrary, "UnsafeRow"}};
     return params;
   }
 

@@ -397,7 +397,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
   const PartitionFunctionSpecPtr partitionFunctionSpec =
       std::make_shared<GatherPartitionFunctionSpec>();
-  const VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto;
+  const std::string serdeKind = "Presto";
   PlanNodePtr source = std::make_shared<ValuesNode>("source", rowData_);
 
   {

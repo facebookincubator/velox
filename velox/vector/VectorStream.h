@@ -239,7 +239,7 @@ class VectorSerde {
     float minCompressionRatio{0.8};
   };
 
-  Kind kind() const {
+  const std::string& kind() const {
     return kind_;
   }
 
@@ -352,9 +352,9 @@ class VectorSerde {
   }
 
  protected:
-  explicit VectorSerde(Kind kind) : kind_(kind) {}
+  explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
 
-  const Kind kind_;
+  const std::string kind_;
 };
 
 std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind);
@@ -372,16 +372,36 @@ VectorSerde* getVectorSerde();
 /// Register/deregister a named vector serde. `serdeName` is a handle that
 /// allows users to register multiple serde formats.
 void registerNamedVectorSerde(
-    VectorSerde::Kind kind,
+    const std::string& kind,
     std::unique_ptr<VectorSerde> serdeToRegister);
-void deregisterNamedVectorSerde(VectorSerde::Kind kind);
+void deregisterNamedVectorSerde(const std::string& kind);
 
 /// Check if a named vector serde has been registered with `serdeName` as a
 /// handle.
-bool isRegisteredNamedVectorSerde(VectorSerde::Kind kind);
+bool isRegisteredNamedVectorSerde(const std::string& kind);
 
 /// Get the vector serde identified by `serdeName`. Throws if not found.
-VectorSerde* getNamedVectorSerde(VectorSerde::Kind kind);
+VectorSerde* getNamedVectorSerde(const std::string& kind);
+
+/// Legacy overloads accepting VectorSerde::Kind for backward compatibility.
+inline void registerNamedVectorSerde(
+    VectorSerde::Kind kind,
+    std::unique_ptr<VectorSerde> serdeToRegister) {
+  registerNamedVectorSerde(
+      VectorSerde::kindName(kind), std::move(serdeToRegister));
+}
+
+inline void deregisterNamedVectorSerde(VectorSerde::Kind kind) {
+  deregisterNamedVectorSerde(VectorSerde::kindName(kind));
+}
+
+inline bool isRegisteredNamedVectorSerde(VectorSerde::Kind kind) {
+  return isRegisteredNamedVectorSerde(VectorSerde::kindName(kind));
+}
+
+inline VectorSerde* getNamedVectorSerde(VectorSerde::Kind kind) {
+  return getNamedVectorSerde(VectorSerde::kindName(kind));
+}
 
 class VectorStreamGroup : public StreamArena {
  public:

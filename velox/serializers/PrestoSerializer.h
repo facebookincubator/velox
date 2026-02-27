@@ -88,7 +88,7 @@ class PrestoVectorSerde : public VectorSerde {
     bool preserveEncodings{false};
   };
 
-  PrestoVectorSerde() : VectorSerde(Kind::kPresto) {}
+  PrestoVectorSerde() : VectorSerde("Presto") {}
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
