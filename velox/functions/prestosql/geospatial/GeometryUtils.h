@@ -133,6 +133,18 @@ FOLLY_ALWAYS_INLINE bool isMultiType(const geos::geom::Geometry& geometry) {
   return std::count(multiTypes.begin(), multiTypes.end(), type);
 }
 
+FOLLY_ALWAYS_INLINE bool isGeometryCollection(
+    const geos::geom::Geometry& geometry) {
+  return geometry.getGeometryTypeId() ==
+      geos::geom::GeometryTypeId::GEOS_GEOMETRYCOLLECTION;
+}
+
+FOLLY_ALWAYS_INLINE bool hasGeometryCollection(
+    const geos::geom::Geometry& left,
+    const geos::geom::Geometry& right) {
+  return isGeometryCollection(left) || isGeometryCollection(right);
+}
+
 FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {
   geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
 

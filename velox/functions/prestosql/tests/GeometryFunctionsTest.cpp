@@ -466,6 +466,7 @@ TEST_F(GeometryFunctionsTest, testStContains) {
       false);
   assertRelation(
       "ST_Contains", "LINESTRING (20 20, 30 30)", "POLYGON EMPTY", false);
+  assertRelation("ST_Contains", "POLYGON EMPTY", "POINT EMPTY", false);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -531,6 +532,13 @@ TEST_F(GeometryFunctionsTest, testStCrosses) {
       "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
       "LINESTRING (0 0, 0 4, 4 4, 4 0)",
       false);
+  assertRelation("ST_Crosses", "POLYGON EMPTY", "POINT (0 0)", false);
+  assertRelation(
+      "ST_Crosses",
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      "POINT EMPTY",
+      false);
+  assertRelation("ST_Crosses", "POLYGON EMPTY", "POINT EMPTY", false);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -567,6 +575,13 @@ TEST_F(GeometryFunctionsTest, testStDisjoint) {
       "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))",
       "POLYGON ((4 4, 4 5, 5 5, 5 4, 4 4))",
       true);
+  assertRelation("ST_Disjoint", "POLYGON EMPTY", "POINT (0 0)", true);
+  assertRelation(
+      "ST_Disjoint",
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      "POINT EMPTY",
+      true);
+  assertRelation("ST_Disjoint", "POLYGON EMPTY", "POINT EMPTY", true);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -607,6 +622,13 @@ TEST_F(GeometryFunctionsTest, testStEquals) {
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 2, 2 2, 2 0, 0 0)))",
       "POLYGON ((0 1, 3 1, 3 3, 0 3, 0 1))",
       false);
+  assertRelation("ST_Equals", "POLYGON EMPTY", "POINT (0 0)", false);
+  assertRelation(
+      "ST_Equals", "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))", "POINT EMPTY", false);
+  // According to DE-9IM spec two empty geoms are not equal, but this is the
+  // current GEOS behavior
+  assertRelation("ST_Equals", "POLYGON EMPTY", "POINT EMPTY", true);
+
   // Invalid geometries.  This test might have to change when upgrading GEOS.
   assertRelation(
       "ST_Equals",
@@ -657,6 +679,13 @@ TEST_F(GeometryFunctionsTest, testStIntersects) {
       "POLYGON ((16.5 54, 16.5 54.1, 16.51 54.1, 16.8 54, 16.5 54))",
       "LINESTRING (16.6667 54.25, 16.8667 54.25)",
       false);
+  assertRelation("ST_Intersects", "POLYGON EMPTY", "POINT (0 0)", false);
+  assertRelation(
+      "ST_Intersects",
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      "POINT EMPTY",
+      false);
+  assertRelation("ST_Intersects", "POLYGON EMPTY", "POINT EMPTY", false);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -711,6 +740,13 @@ TEST_F(GeometryFunctionsTest, testStOverlaps) {
       "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))",
       "POLYGON ((4 4, 4 5, 5 5, 5 4, 4 4))",
       false);
+  assertRelation("ST_Overlaps", "POLYGON EMPTY", "POINT (0 0)", false);
+  assertRelation(
+      "ST_Overlaps",
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      "POINT EMPTY",
+      false);
+  assertRelation("ST_Overlaps", "POLYGON EMPTY", "POINT EMPTY", false);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -782,6 +818,13 @@ TEST_F(GeometryFunctionsTest, testStTouches) {
       "POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))",
       "POLYGON ((3 3, 3 5, 5 5, 5 3, 3 3))",
       true);
+  assertRelation("ST_Touches", "POLYGON EMPTY", "POINT (0 0)", false);
+  assertRelation(
+      "ST_Touches",
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      "POINT EMPTY",
+      false);
+  assertRelation("ST_Touches", "POLYGON EMPTY", "POINT EMPTY", false);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -857,6 +900,10 @@ TEST_F(GeometryFunctionsTest, testStWithin) {
       "POLYGON ((1 1, 1 5, 5 5, 5 1, 1 1))",
       "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
       false);
+  assertRelation("ST_Within", "POLYGON EMPTY", "POINT (0 0)", false);
+  assertRelation(
+      "ST_Within", "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))", "POINT EMPTY", false);
+  assertRelation("ST_Within", "POLYGON EMPTY", "POINT EMPTY", false);
 
   VELOX_ASSERT_USER_THROW(
       assertRelation(
@@ -898,6 +945,22 @@ TEST_F(GeometryFunctionsTest, testStDifference) {
       "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 1, 1 1, 1 0, 0 0)))",
       "POLYGON ((0 1, 3 1, 3 3, 0 3, 0 1))",
       "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))");
+
+  assertOverlay(
+      "ST_Difference",
+      "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))",
+      "POINT EMPTY",
+      "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))");
+  assertOverlay(
+      "ST_Difference",
+      "POLYGON EMPTY",
+      "POINT (0 0)",
+      "GEOMETRYCOLLECTION EMPTY");
+  assertOverlay(
+      "ST_Difference",
+      "POLYGON EMPTY",
+      "POINT EMPTY",
+      "GEOMETRYCOLLECTION EMPTY");
 
   ASSERT_THROW(
       assertOverlay(
@@ -947,6 +1010,21 @@ TEST_F(GeometryFunctionsTest, testStIntersection) {
       "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
       "LINESTRING (0 0, 1 -1, 1 2)",
       "GEOMETRYCOLLECTION (LINESTRING (1 1, 1 0), POINT (0 0))");
+  assertOverlay(
+      "ST_Intersection",
+      "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))",
+      "POINT EMPTY",
+      "GEOMETRYCOLLECTION EMPTY");
+  assertOverlay(
+      "ST_Intersection",
+      "POLYGON EMPTY",
+      "POINT (0 0)",
+      "GEOMETRYCOLLECTION EMPTY");
+  assertOverlay(
+      "ST_Intersection",
+      "POLYGON EMPTY",
+      "POINT EMPTY",
+      "GEOMETRYCOLLECTION EMPTY");
 
   ASSERT_THROW(
       assertOverlay(
@@ -2189,6 +2267,13 @@ TEST_F(GeometryFunctionsTest, testStConvexHull) {
   testStConvexHullFunc(
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 4 0, 4 4, 0 4, 2 2, 0 0)))",
       "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))");
+
+  // Geometries that should be bounded by a line or point
+  testStConvexHullFunc("LINESTRING (20 20, 20 20)", "POINT (20 20)");
+  testStConvexHullFunc(
+      "POLYGON ((20 20, 20 20, 20 20, 20 20))", "POINT (20 20)");
+  testStConvexHullFunc(
+      "POLYGON ((0 0, 0 20, 0 40, 0 60, 0 0))", "LINESTRING (0 0, 0 60)");
 }
 
 TEST_F(GeometryFunctionsTest, testStCoordDim) {
