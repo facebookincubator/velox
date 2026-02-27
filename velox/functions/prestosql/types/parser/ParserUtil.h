@@ -27,6 +27,12 @@ TypePtr typeFromString(
     const std::string& type,
     bool failIfNotRegistered = true);
 
+/// Process VARYING length types.
+TypePtr variableTypeFromString(
+    const std::string& type,
+    uint32_t length,
+    bool failIfNotRegistered = true);
+
 TypePtr customTypeWithChildren(
     const std::string& name,
     const std::vector<TypePtr>& children);

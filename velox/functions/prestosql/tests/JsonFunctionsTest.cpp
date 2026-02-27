@@ -81,34 +81,44 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
     velox::test::assertEqualVectors(expected, result);
   }
 
-  std::pair<VectorPtr, VectorPtr> makeVectors(std::optional<std::string> json) {
+  std::tuple<VectorPtr, VectorPtr, VectorPtr> makeVectors(
+      std::optional<std::string> json) {
     std::optional<StringView> s = json.has_value()
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
+    auto varcharNLength =
+        json.has_value() ? json.value().size() + 10 : kJson.size();
     return {
         makeNullableFlatVector<StringView>({s}, JSON()),
-        makeNullableFlatVector<StringView>({s}, VARCHAR())};
+        makeNullableFlatVector<StringView>({s}, VARCHAR()),
+        makeNullableFlatVector<StringView>({s}, VARCHAR(varcharNLength))};
   }
 
   std::optional<bool> isJsonScalar(std::optional<std::string> json) {
-    auto [jsonVector, varcharVector] = makeVectors(json);
+    auto [jsonVector, varcharVector, varcharNVector] = makeVectors(json);
     auto jsonResult =
         evaluateOnce<bool>("is_json_scalar(c0)", makeRowVector({jsonVector}));
     auto varcharResult = evaluateOnce<bool>(
         "is_json_scalar(c0)", makeRowVector({varcharVector}));
+    auto varcharNResult = evaluateOnce<bool>(
+        "is_json_scalar(c0)", makeRowVector({varcharNVector}));
 
     EXPECT_EQ(jsonResult, varcharResult);
+    EXPECT_EQ(jsonResult, varcharNResult);
     return jsonResult;
   }
 
   std::optional<int64_t> jsonArrayLength(std::optional<std::string> json) {
-    auto [jsonVector, varcharVector] = makeVectors(json);
+    auto [jsonVector, varcharVector, varcharNVector] = makeVectors(json);
     auto jsonResult = evaluateOnce<int64_t>(
         "json_array_length(c0)", makeRowVector({jsonVector}));
     auto varcharResult = evaluateOnce<int64_t>(
         "json_array_length(c0)", makeRowVector({varcharVector}));
+    auto varcharNResult = evaluateOnce<int64_t>(
+        "json_array_length(c0)", makeRowVector({varcharNVector}));
 
     EXPECT_EQ(jsonResult, varcharResult);
+    EXPECT_EQ(jsonResult, varcharNResult);
     return jsonResult;
   }
 
@@ -116,7 +126,7 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
   std::optional<bool> jsonArrayContains(
       std::optional<std::string> json,
       std::optional<T> value) {
-    auto [jsonVector, varcharVector] = makeVectors(json);
+    auto [jsonVector, varcharVector, varcharNVector] = makeVectors(json);
     auto valueVector = makeNullableFlatVector<T>({value});
 
     auto jsonResult = evaluateOnce<bool>(
@@ -127,21 +137,38 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
         makeRowVector({varcharVector, valueVector}));
 
     EXPECT_EQ(jsonResult, varcharResult);
+    if constexpr (std::is_same_v<T, std::string>) {
+      const auto kValueLength =
+          json.has_value() ? json.value().size() : kJson.size();
+      auto valueVector =
+          makeNullableFlatVector<T>({value}, VARCHAR(kValueLength + 10));
+      auto varcharNResult = evaluateOnce<bool>(
+          "json_array_contains(c0, c1)",
+          makeRowVector({varcharNVector, valueVector}));
+      EXPECT_EQ(jsonResult, varcharNResult);
+    }
+
     return jsonResult;
   }
 
   std::optional<int64_t> jsonSize(
       std::optional<std::string> json,
       const std::string& path) {
-    auto [jsonVector, varcharVector] = makeVectors(json);
+    auto [jsonVector, varcharVector, varcharNVector] = makeVectors(json);
     auto pathVector = makeFlatVector<std::string>({path});
+    auto pathVectorVarcharN =
+        makeFlatVector<std::string>({path}, VARCHAR(path.size()));
 
     auto jsonResult = evaluateOnce<int64_t>(
         "json_size(c0, c1)", makeRowVector({jsonVector, pathVector}));
     auto varcharResult = evaluateOnce<int64_t>(
         "json_size(c0, c1)", makeRowVector({varcharVector, pathVector}));
+    auto varcharNResult = evaluateOnce<int64_t>(
+        "json_size(c0, c1)",
+        makeRowVector({varcharNVector, pathVectorVarcharN}));
 
     EXPECT_EQ(jsonResult, varcharResult);
+    EXPECT_EQ(jsonResult, varcharNResult);
     return jsonResult;
   }
 
@@ -1003,7 +1030,7 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsString) {
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsMalformed) {
-  auto [jsonVector, _] = makeVectors(R"([]})");
+  auto [jsonVector, varcharVector, varcharNVector] = makeVectors(R"([]})");
   EXPECT_EQ(
       evaluateOnce<bool>(
           "json_array_contains(c0, 'a')", makeRowVector({jsonVector})),
@@ -1203,36 +1230,46 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
 TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
   auto jsonExtract = [&](std::optional<std::string> json,
                          const std::string& path,
+                         const TypePtr& type,
                          bool wrapInTry = false) {
     std::optional<StringView> s = json.has_value()
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
-    auto varcharInput = makeNullableFlatVector<StringView>({s}, VARCHAR());
-    auto pathInput = makeFlatVector<std::string>({path});
+    auto varcharInput = makeNullableFlatVector<StringView>({s}, type);
+    auto pathInput = makeFlatVector<std::string>({path}, type);
     return JsonFunctionsTest::jsonExtract(varcharInput, pathInput, wrapInTry);
   };
 
-  // Valid json
-  EXPECT_EQ(
-      R"({"x":{"a":1,"b":2}})",
-      jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$"));
-  EXPECT_EQ(
-      R"({"a":1,"b":2})", jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x"));
+  TypePtr type = VARCHAR();
+  for (int loop = 0; loop < 2; ++loop) {
+    SCOPED_TRACE(fmt::format("Using type {}", type->toString()));
+    // Valid json
+    EXPECT_EQ(
+        R"({"x":{"a":1,"b":2}})",
+        jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$", type));
+    EXPECT_EQ(
+        R"({"a":1,"b":2})",
+        jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x", type));
 
-  // Invalid JSON
-  EXPECT_EQ(std::nullopt, jsonExtract(R"({"x": {"a" : 1, "b" : "2""} })", "$"));
-  // Non-canonicalized json
-  EXPECT_EQ(
-      R"({"x":{"a":1,"b":2}})",
-      jsonExtract(R"({"x": {"b" : 2, "a" : 1} })", "$"));
-  // Input has escape characters
-  EXPECT_EQ(
-      R"({"x":{"a":"/1","b":"/2"}})",
-      jsonExtract(R"({"x": {"a" : "\/1", "b" : "\/2"} })", "$"));
-  // Invalid path
-  VELOX_ASSERT_THROW(jsonExtract(kJson, "$.book[1:2]"), "Invalid JSON path");
-  // Ensure User error is captured in try() and not thrown.
-  EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.book[1:2]", true));
+    // Invalid JSON
+    EXPECT_EQ(
+        std::nullopt,
+        jsonExtract(R"({"x": {"a" : 1, "b" : "2""} })", "$", type));
+    // Non-canonicalized json
+    EXPECT_EQ(
+        R"({"x":{"a":1,"b":2}})",
+        jsonExtract(R"({"x": {"b" : 2, "a" : 1} })", "$", type));
+    // Input has escape characters
+    EXPECT_EQ(
+        R"({"x":{"a":"/1","b":"/2"}})",
+        jsonExtract(R"({"x": {"a" : "\/1", "b" : "\/2"} })", "$", type));
+    // Invalid path
+    VELOX_ASSERT_THROW(
+        jsonExtract(kJson, "$.book[1:2]", type), "Invalid JSON path");
+    // Ensure User error is captured in try() and not thrown.
+    EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.book[1:2]", type, true));
+    type = VARCHAR(kJson.size() + 10);
+  }
 }
 
 // The following tests ensure that the internal json functions
@@ -1240,78 +1277,93 @@ TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
 // from Prestissimo. The actual functionality is tested in JsonCastTest.
 
 TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
-  // Array of strings.
-  auto data = makeRowVector({makeNullableFlatVector<StringView>({
-      R"(["red","blue"])"_sv,
-      R"([null,null,"purple"])"_sv,
-      "[]"_sv,
-      "null"_sv,
-  })});
-  auto expected = makeNullableArrayVector<StringView>(
-      {{{"red"_sv, "blue"_sv}},
-       {{std::nullopt, std::nullopt, "purple"_sv}},
-       common::testutil::optionalEmpty,
-       std::nullopt});
+  TypePtr type = VARCHAR();
+  for (auto loop = 0; loop < 2; ++loop) {
+    SCOPED_TRACE(fmt::format("Using type {}", type->toString()));
+    // Array of strings.
+    auto data = makeRowVector({makeNullableFlatVector<StringView>(
+        {R"(["red","blue"])"_sv,
+         R"([null,null,"purple"])"_sv,
+         "[]"_sv,
+         "null"_sv},
+        type)});
+    auto expected = makeNullableArrayVector<StringView>(
+        {{{"red"_sv, "blue"_sv}},
+         {{std::nullopt, std::nullopt, "purple"_sv}},
+         common::testutil::optionalEmpty,
+         std::nullopt});
 
-  checkInternalFn(
-      "$internal$json_string_to_array_cast", ARRAY(VARCHAR()), data, expected);
+    checkInternalFn(
+        "$internal$json_string_to_array_cast",
+        ARRAY(VARCHAR()),
+        data,
+        expected);
 
-  // Array of integers.
-  data = makeRowVector({makeNullableFlatVector<StringView>({
-      R"(["10212","1015353"])"_sv,
-      R"(["10322","285000"])",
-  })});
-  expected =
-      makeNullableArrayVector<int64_t>({{10212, 1015353}, {10322, 285000}});
+    // Array of integers.
+    data = makeRowVector({makeNullableFlatVector<StringView>(
+        {R"(["10212","1015353"])"_sv, R"(["10322","285000"])"})});
+    expected =
+        makeNullableArrayVector<int64_t>({{10212, 1015353}, {10322, 285000}});
 
-  checkInternalFn(
-      "$internal$json_string_to_array_cast", ARRAY(BIGINT()), data, expected);
+    checkInternalFn(
+        "$internal$json_string_to_array_cast", ARRAY(BIGINT()), data, expected);
+    type = VARCHAR(100);
+  }
 }
 
 TEST_F(JsonFunctionsTest, jsonStringToMapCast) {
-  // Map of strings.
-  auto data = makeRowVector({makeFlatVector<StringView>({
-      R"({"red":1,"blue":2})"_sv,
-      R"({"green":3,"magenta":4})"_sv,
-      R"({"violet":1,"blue":2})"_sv,
-      R"({"yellow":1,"blue":2})"_sv,
-      R"({"purple":10,"cyan":5})"_sv,
-  })});
+  TypePtr type = VARCHAR();
+  for (auto loop = 0; loop < 2; ++loop) {
+    SCOPED_TRACE(fmt::format("Using type {}", type->toString()));
+    // Map of strings.
+    auto data = makeRowVector({makeFlatVector<StringView>(
+        {R"({"red":1,"blue":2})"_sv,
+         R"({"green":3,"magenta":4})"_sv,
+         R"({"violet":1,"blue":2})"_sv,
+         R"({"yellow":1,"blue":2})"_sv,
+         R"({"purple":10,"cyan":5})"_sv},
+        type)});
 
-  auto expected = makeMapVector<StringView, int64_t>({
-      {{"red"_sv, 1}, {"blue"_sv, 2}},
-      {{"green"_sv, 3}, {"magenta"_sv, 4}},
-      {{"violet"_sv, 1}, {"blue"_sv, 2}},
-      {{"yellow"_sv, 1}, {"blue"_sv, 2}},
-      {{"purple"_sv, 10}, {"cyan"_sv, 5}},
-  });
+    auto expected = makeMapVector<StringView, int64_t>(
+        {{{"red"_sv, 1}, {"blue"_sv, 2}},
+         {{"green"_sv, 3}, {"magenta"_sv, 4}},
+         {{"violet"_sv, 1}, {"blue"_sv, 2}},
+         {{"yellow"_sv, 1}, {"blue"_sv, 2}},
+         {{"purple"_sv, 10}, {"cyan"_sv, 5}}});
 
-  checkInternalFn(
-      "$internal$json_string_to_map_cast",
-      MAP(VARCHAR(), BIGINT()),
-      data,
-      expected);
+    checkInternalFn(
+        "$internal$json_string_to_map_cast",
+        MAP(VARCHAR(), BIGINT()),
+        data,
+        expected);
+    type = VARCHAR(100);
+  }
 }
 
 TEST_F(JsonFunctionsTest, jsonStringToRowCast) {
-  // Row of strings.
-  auto data = makeRowVector({makeFlatVector<StringView>({
-      R"({"red":1,"blue":2})"_sv,
-      R"({"red":3,"blue":4})"_sv,
-      R"({"red":1,"blue":2})"_sv,
-      R"({"red":1,"blue":2})"_sv,
-      R"({"red":10,"blue":5})"_sv,
-  })});
+  TypePtr type = VARCHAR();
+  for (auto loop = 0; loop < 2; ++loop) {
+    SCOPED_TRACE(fmt::format("Using type {}", type->toString()));
+    // Row of strings.
+    auto data = makeRowVector({makeFlatVector<StringView>(
+        {R"({"red":1,"blue":2})"_sv,
+         R"({"red":3,"blue":4})"_sv,
+         R"({"red":1,"blue":2})"_sv,
+         R"({"red":1,"blue":2})"_sv,
+         R"({"red":10,"blue":5})"_sv},
+        type)});
 
-  auto expected = makeRowVector(
-      {makeFlatVector<int64_t>({1, 3, 1, 1, 10}),
-       makeFlatVector<int64_t>({2, 4, 2, 2, 5})});
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({1, 3, 1, 1, 10}),
+         makeFlatVector<int64_t>({2, 4, 2, 2, 5})});
 
-  checkInternalFn(
-      "$internal$json_string_to_row_cast",
-      ROW({{"red", BIGINT()}, {"blue", BIGINT()}}),
-      data,
-      expected);
+    checkInternalFn(
+        "$internal$json_string_to_row_cast",
+        ROW({{"red", BIGINT()}, {"blue", BIGINT()}}),
+        data,
+        expected);
+    type = VARCHAR(100);
+  }
 }
 
 } // namespace

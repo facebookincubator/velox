@@ -73,48 +73,61 @@ TEST_F(ArrayHasDuplicatesTest, bigints) {
 TEST_F(ArrayHasDuplicatesTest, inlineStrings) {
   using S = StringView;
 
-  auto array = makeNullableArrayVector<StringView>({
-      {},
-      {""_sv},
-      {std::nullopt},
-      {S("a"), S("b")},
-      {S("a"), std::nullopt, S("b")},
-      {S("a"), S("a")},
-      {S("b"), S("a"), S("b"), S("a"), S("a")},
-      {std::nullopt, std::nullopt},
-      {S("b"), std::nullopt, S("a"), S("a"), std::nullopt, S("b")},
-  });
+  TypePtr type = ARRAY(VARCHAR());
+  for (int i = 0; i < 2; i++) {
+    auto array = makeNullableArrayVector<StringView>(
+        {
+            {},
+            {""_sv},
+            {std::nullopt},
+            {S("a"), S("b")},
+            {S("a"), std::nullopt, S("b")},
+            {S("a"), S("a")},
+            {S("b"), S("a"), S("b"), S("a"), S("a")},
+            {std::nullopt, std::nullopt},
+            {S("b"), std::nullopt, S("a"), S("a"), std::nullopt, S("b")},
+        },
+        type);
 
-  auto expected = makeFlatVector<bool>(
-      {false, false, false, false, false, true, true, true, true});
+    auto expected = makeFlatVector<bool>(
+        {false, false, false, false, false, true, true, true, true});
 
-  testExpr(expected, "array_has_duplicates(C0)", {array});
+    testExpr(expected, "array_has_duplicates(C0)", {array});
+    type = ARRAY(VARCHAR(10));
+    VLOG(0) << "Repeat with VARCHAR(10)";
+  }
 }
 
 // Test non-inline (> 12 character length) strings.
 TEST_F(ArrayHasDuplicatesTest, longStrings) {
   using S = StringView;
 
-  auto array = makeNullableArrayVector<StringView>({
-      {S("red shiny car ahead"), S("blue clear sky above")},
-      {S("blue clear sky above"),
-       S("yellow rose flowers"),
-       std::nullopt,
-       S("blue clear sky above"),
-       S("orange beautiful sunset")},
-      {
-          S("red shiny car ahead"),
-          std::nullopt,
-          S("purple is an elegant color"),
-          S("red shiny car ahead"),
-          S("green plants make us happy"),
-          S("purple is an elegant color"),
-          std::nullopt,
-          S("purple is an elegant color"),
-      },
-  });
-  auto expected = makeFlatVector<bool>({false, true, true});
-  testExpr(expected, "array_has_duplicates(C0)", {array});
+  TypePtr type = ARRAY(VARCHAR());
+  for (int i = 0; i < 2; i++) {
+    auto array = makeNullableArrayVector<StringView>(
+        {
+            {S("red shiny car ahead"), S("blue clear sky above")},
+            {S("blue clear sky above"),
+             S("yellow rose flowers"),
+             std::nullopt,
+             S("blue clear sky above"),
+             S("orange beautiful sunset")},
+            {
+                S("red shiny car ahead"),
+                std::nullopt,
+                S("purple is an elegant color"),
+                S("red shiny car ahead"),
+                S("green plants make us happy"),
+                S("purple is an elegant color"),
+                std::nullopt,
+                S("purple is an elegant color"),
+            },
+        },
+        type);
+    auto expected = makeFlatVector<bool>({false, true, true});
+    testExpr(expected, "array_has_duplicates(C0)", {array});
+    type = ARRAY(VARCHAR(50));
+  }
 }
 
 TEST_F(ArrayHasDuplicatesTest, nullFreeBigints) {

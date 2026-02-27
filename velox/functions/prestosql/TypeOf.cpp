@@ -112,6 +112,11 @@ std::string typeName(const TypePtr& type) {
     return "unknown";
   }
 
+  if (type->isVarcharN()) {
+    auto length = getVarcharLength(*type);
+    return fmt::format("varchar({})", length);
+  }
+
   // Handle unsupported types
   if (type->kind() == TypeKind::OPAQUE || type->kind() == TypeKind::FUNCTION ||
       type->kind() == TypeKind::INVALID) {

@@ -391,7 +391,8 @@ TEST_F(BinaryFunctionsTest, toHex) {
       toHex("Hello World from Velox!"));
 
   const auto toHexFromBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_hex(from_base64(c0))", value);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "to_hex(from_base64(c0))", value);
   };
 
   EXPECT_EQ(
@@ -401,7 +402,7 @@ TEST_F(BinaryFunctionsTest, toHex) {
 
 TEST_F(BinaryFunctionsTest, fromHex) {
   const auto fromHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_hex(c0)", value);
+    return evaluateOnceWithVarcharArgs<std::string>("from_hex(c0)", value);
   };
 
   EXPECT_EQ(std::nullopt, fromHex(std::nullopt));
@@ -424,7 +425,8 @@ TEST_F(BinaryFunctionsTest, fromHex) {
   EXPECT_THROW(fromHex("fff"), VeloxUserError);
 
   const auto fromHexToBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_base64(from_hex(c0))", value);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "to_base64(from_hex(c0))", value);
   };
   EXPECT_EQ(
       "12PasXXaWBQ0k1T88jiF",
@@ -453,7 +455,7 @@ TEST_F(BinaryFunctionsTest, toBase64) {
     return evaluateOnce<std::string>("to_base64(cast(c0 as varbinary))", value);
   };
   const auto fromHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_hex(c0)", value);
+    return evaluateOnceWithVarcharArgs<std::string>("from_hex(c0)", value);
   };
 
   EXPECT_EQ(std::nullopt, toBase64(std::nullopt));
@@ -468,11 +470,11 @@ TEST_F(BinaryFunctionsTest, toBase64) {
 
 TEST_F(BinaryFunctionsTest, toBase64Url) {
   const auto toBase64Url = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>(
+    return evaluateOnceWithVarcharArgs<std::string>(
         "to_base64url(cast(c0 as varbinary))", value);
   };
   const auto fromHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_hex(c0)", value);
+    return evaluateOnceWithVarcharArgs<std::string>("from_hex(c0)", value);
   };
 
   EXPECT_EQ(std::nullopt, toBase64Url(std::nullopt));
@@ -490,17 +492,10 @@ TEST_F(BinaryFunctionsTest, fromBase64) {
   const auto fromBase64 = [&](std::optional<std::string> value) {
     // from_base64 allows VARCHAR and VARBINARY inputs.
     auto result =
-        evaluateOnce<std::string>("from_base64(c0)", VARCHAR(), value);
+        evaluateOnceWithVarcharArgs<std::string>("from_base64(c0)", value);
     auto otherResult =
         evaluateOnce<std::string>("from_base64(c0)", VARBINARY(), value);
-
-    VELOX_CHECK_EQ(result.has_value(), otherResult.has_value());
-
-    if (!result.has_value()) {
-      return result;
-    }
-
-    VELOX_CHECK_EQ(result.value(), otherResult.value());
+    EXPECT_EQ(result, otherResult);
     return result;
   };
 
@@ -535,10 +530,12 @@ TEST_F(BinaryFunctionsTest, fromBase64) {
 
 TEST_F(BinaryFunctionsTest, fromBase64Url) {
   const auto fromHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_hex(cast(c0 as varchar))", value);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "from_hex(cast(c0 as varchar))", value);
   };
   const auto fromBase64Url = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_base64url(c0)", value);
+    return evaluateOnceWithVarcharArgs<std::string>(
+        "from_base64url(c0)", value);
   };
 
   EXPECT_EQ(std::nullopt, fromBase64Url(std::nullopt));
