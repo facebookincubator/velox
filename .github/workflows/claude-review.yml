@@ -12,20 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Claude Code Review for Fork PRs
+# Claude Assistant for PRs
 #
-# This workflow enables Claude-powered code reviews on pull requests from forks.
+# This workflow enables Claude-powered interactions on pull requests from forks.
 # Since secrets are not available to workflows triggered by fork PRs (for security),
 # this uses a comment-triggered approach where a maintainer must explicitly request
-# a review by commenting "/claude-review" on the PR.
+# assistance by commenting on the PR.
+#
+# Supported Commands:
+# - /claude-review : Perform a thorough code review of the PR
+# - /claude-query <question> : Ask Claude a question about the PR or codebase
 #
 # Security Model:
-# - Only authorized users can trigger reviews (verified before any code access)
+# - Only authorized users can trigger Claude (verified before any code access)
 # - Code is fetched as text only (never executed)
 # - Claude uses read-only tools (no Bash, no file writes)
 # - All operations run in the context of the base repository
 
-name: Claude Code Review
+name: Claude Assistant
 
 on:
   issue_comment:
@@ -49,8 +53,8 @@ permissions:
   contents: read
 
 jobs:
-  claude-review:
-    name: Claude Code Review
+  claude-assistant:
+    name: Claude Assistant
     runs-on: ubuntu-latest
 
     # Job-level permissions - only what's needed for this job
@@ -61,17 +65,17 @@ jobs:
 
     # Run if:
     # A) workflow_dispatch: Manual trigger for testing
-    # B) issue_comment: PR comment with /claude-review from a CODEOWNER
+    # B) issue_comment: PR comment with /claude-review or /claude-query from authorized user
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
         github.event.issue.pull_request &&
-        contains(github.event.comment.body, '/claude-review') &&
+        (contains(github.event.comment.body, '/claude-review') || contains(github.event.comment.body, '/claude-query')) &&
         contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
       )
 
     steps:
-      # Step 1: Acknowledge the review request (skip for workflow_dispatch)
+      # Step 1: Acknowledge the request (skip for workflow_dispatch)
       - name: Add reaction to comment
         if: github.event_name == 'issue_comment'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
@@ -84,7 +88,41 @@ jobs:
               content: 'eyes'
             });
 
-      # Step 2: Get PR information
+      # Step 2: Detect command type and extract query
+      - name: Detect command type
+        id: command
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const body = context.payload.comment.body;
+
+            if (body.includes('/claude-review')) {
+              core.setOutput('type', 'review');
+              core.setOutput('query', '');
+            } else if (body.includes('/claude-query')) {
+              // Extract everything after /claude-query
+              const match = body.match(/\/claude-query\s+([\s\S]*)/);
+              const query = match ? match[1].trim() : '';
+              if (!query) {
+                core.setFailed('No query provided after /claude-query. Usage: /claude-query <your question>');
+                return;
+              }
+              core.setOutput('type', 'query');
+              core.setOutput('query', query);
+            } else {
+              core.setFailed('Unknown command');
+            }
+
+      # Step 3: Get PR information (set command type for workflow_dispatch)
+      - name: Set command type for workflow_dispatch
+        id: command_dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "type=review" >> "$GITHUB_OUTPUT"
+          echo "query=" >> "$GITHUB_OUTPUT"
+
+      # Step 4: Get PR information
       - name: Get PR details
         id: pr_info
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
@@ -155,8 +193,9 @@ jobs:
             echo "is_truncated=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Step 5: Create the review prompt
+      # Step 7: Create the prompt (review or query)
       - name: Create review prompt
+        if: steps.command.outputs.type == 'review' || github.event_name == 'workflow_dispatch'
         env:
           PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
           PR_BODY: ${{ steps.pr_info.outputs.pr_body }}
@@ -165,7 +204,7 @@ jobs:
           IS_TRUNCATED: ${{ steps.generate_diff.outputs.is_truncated }}
         run: |
           # Create system context first (no variable expansion needed)
-          cat > /tmp/review_prompt.txt << 'PROMPT_EOF'
+          cat > /tmp/prompt.txt << 'PROMPT_EOF'
           You are an expert C++ code reviewer for the Velox project. Your role is to perform
           a thorough, rigorous code review that catches issues before they reach production.
 
@@ -218,7 +257,7 @@ jobs:
           PROMPT_EOF
 
           # Note: Using unquoted PROMPT_EOF to enable variable expansion
-          cat >> /tmp/review_prompt.txt << PROMPT_EOF
+          cat >> /tmp/prompt.txt << PROMPT_EOF
           Please review the following pull request for the Velox project.
 
           ## Pull Request Information
@@ -228,19 +267,19 @@ jobs:
           PROMPT_EOF
 
           if [ "${IS_TRUNCATED}" = "true" ]; then
-            echo "- **Note:** This diff was truncated due to size. Focus on the visible changes." >> /tmp/review_prompt.txt
+            echo "- **Note:** This diff was truncated due to size. Focus on the visible changes." >> /tmp/prompt.txt
           fi
 
           # Using quoted 'PROMPT_EOF' here since this section has no variables to expand
-          cat >> /tmp/review_prompt.txt << 'PROMPT_EOF'
+          cat >> /tmp/prompt.txt << 'PROMPT_EOF'
 
           ## PR Description
           PROMPT_EOF
 
           # PR body may contain special characters, write it safely
-          printf '%s\n' "${PR_BODY}" >> /tmp/review_prompt.txt
+          printf '%s\n' "${PR_BODY}" >> /tmp/prompt.txt
 
-          cat >> /tmp/review_prompt.txt << 'PROMPT_EOF'
+          cat >> /tmp/prompt.txt << 'PROMPT_EOF'
 
           ## Review Guidelines
 
@@ -314,15 +353,81 @@ jobs:
 
           PROMPT_EOF
 
-          cat /tmp/pr.diff >> /tmp/review_prompt.txt
+          cat /tmp/pr.diff >> /tmp/prompt.txt
 
-      # Step 6: Run Claude Code review
-      - name: Run Claude Code Review
+      # Step 8: Create query prompt (for /claude-query)
+      - name: Create query prompt
+        if: steps.command.outputs.type == 'query'
+        env:
+          PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
+          PR_BODY: ${{ steps.pr_info.outputs.pr_body }}
+          PR_AUTHOR: ${{ steps.pr_info.outputs.pr_author }}
+          DIFF_STATS: ${{ steps.generate_diff.outputs.diff_stats }}
+          USER_QUERY: ${{ steps.command.outputs.query }}
+        run: |
+          cat > /tmp/prompt.txt << 'PROMPT_EOF'
+          You are an expert C++ engineer helping with questions about the Velox project.
+
+          **IMPORTANT**: First, read the CLAUDE.md file in the repository root for project context.
+
+          Key things to know about Velox:
+          - Velox is a C++ execution engine library for analytical data processing
+          - Uses C++20 standard with heavy use of templates and SFINAE
+          - Custom memory management with MemoryPool
+          - Vectorized execution with custom Vector types
+          - Follows Google C++ style with some modifications
+
+          You have access to:
+          - The PR diff (changes being proposed)
+          - The full codebase via View, GlobTool, and GrepTool
+          - The CLAUDE.md file with project guidelines
+
+          Answer the user's question thoroughly and accurately. If the question is about
+          the PR changes, analyze them carefully. If it's about the codebase, explore
+          relevant files to provide a complete answer.
+
+          Be specific and reference exact file paths and line numbers when relevant.
+
+          ---
+
+          PROMPT_EOF
+
+          cat >> /tmp/prompt.txt << PROMPT_EOF
+          ## Pull Request Context
+          - **Title:** ${PR_TITLE}
+          - **Author:** ${PR_AUTHOR}
+          - **Changes:** ${DIFF_STATS}
+
+          ## PR Description
+          PROMPT_EOF
+
+          printf '%s\n' "${PR_BODY}" >> /tmp/prompt.txt
+
+          cat >> /tmp/prompt.txt << 'PROMPT_EOF'
+
+          ## User Question
+
+          PROMPT_EOF
+
+          printf '%s\n' "${USER_QUERY}" >> /tmp/prompt.txt
+
+          cat >> /tmp/prompt.txt << 'PROMPT_EOF'
+
+          ---
+
+          ## PR Diff (for reference)
+
+          PROMPT_EOF
+
+          cat /tmp/pr.diff >> /tmp/prompt.txt
+
+      # Step 9: Run Claude
+      - name: Run Claude
         id: claude_review
         uses: anthropics/claude-code-base-action@e8132bc5e637a42c27763fc757faa37e1ee43b34 # beta
         with:
-          prompt_file: /tmp/review_prompt.txt
-          # Use Opus for thorough code review, with read-only tools
+          prompt_file: /tmp/prompt.txt
+          # Use Opus for thorough analysis, with read-only tools
           claude_args: >-
             --model claude-opus-4-1-20250805
             --max-turns 25
@@ -339,8 +444,8 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      # Step 8: Post review as PR comment (skip if dry_run)
-      - name: Post review comment
+      # Step 11: Post response as PR comment (skip if dry_run)
+      - name: Post Claude response
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
@@ -348,11 +453,14 @@ jobs:
           CONCLUSION: ${{ steps.claude_review.outputs.conclusion }}
           REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
           PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
+          COMMAND_TYPE: ${{ steps.command.outputs.type || 'review' }}
         with:
           script: |
             const fs = require('fs');
 
-            let reviewBody = '';
+            let responseBody = '';
+            const commandType = process.env.COMMAND_TYPE;
+            const isReview = commandType === 'review';
 
             try {
               // Read the execution log (array of messages from claude-code-base-action)
@@ -362,50 +470,56 @@ jobs:
                 throw new Error('Expected array format from claude-code-base-action');
               }
 
-              // Find the "result" message which contains the final review
+              // Find the "result" message which contains the final response
               const resultMessage = executionLog.find(m => m.type === 'result');
 
               if (!resultMessage) {
-                reviewBody = '⚠️ No result message found in execution log.';
+                responseBody = '⚠️ No result message found in execution log.';
               } else if (resultMessage.subtype === 'success' && resultMessage.result) {
-                reviewBody = resultMessage.result;
+                responseBody = resultMessage.result;
               } else if (resultMessage.is_error || resultMessage.subtype === 'error') {
                 const errorInfo = resultMessage.result || resultMessage.error || 'Unknown error';
-                reviewBody = `❌ **Claude Code encountered an error:**\n\n${errorInfo}`;
+                responseBody = `❌ **Claude encountered an error:**\n\n${errorInfo}`;
               } else if (resultMessage.result) {
-                reviewBody = `⚠️ **Review completed with status: ${resultMessage.subtype}**\n\n${resultMessage.result}`;
+                responseBody = `⚠️ **Completed with status: ${resultMessage.subtype}**\n\n${resultMessage.result}`;
               } else {
-                reviewBody = '⚠️ Claude completed but produced no review output.';
+                responseBody = '⚠️ Claude completed but produced no output.';
               }
             } catch (error) {
               console.error('Error parsing execution log:', error);
-              reviewBody = '❌ Error parsing Claude response. Please check the workflow logs.';
+              responseBody = '❌ Error parsing Claude response. Please check the workflow logs.';
             }
 
-            // Add header and footer
+            // Add header and footer based on command type
             const conclusion = process.env.CONCLUSION === 'success' ? '✅' : '⚠️';
-            const fullComment = `## ${conclusion} Claude Code Review
+            const headerTitle = isReview ? 'Claude Code Review' : 'Claude Response';
+            const aboutText = isReview
+              ? 'This review was generated by [Claude Code](https://github.com/anthropics/claude-code-action). It analyzed the PR diff and codebase to provide feedback.'
+              : 'This response was generated by [Claude Code](https://github.com/anthropics/claude-code-action). It analyzed the PR and codebase to answer your question.';
+
+            const fullComment = `## ${conclusion} ${headerTitle}
 
             *Requested by @${process.env.REVIEWER}*
 
             ---
 
-            ${reviewBody}
+            ${responseBody}
 
             ---
 
             <details>
-            <summary>ℹ️ About this review</summary>
+            <summary>ℹ️ About this response</summary>
 
-            This review was generated by [Claude Code](https://github.com/anthropics/claude-code-action).
-            It analyzed the PR diff and codebase to provide feedback.
+            ${aboutText}
 
             **Limitations:**
             - Claude may miss context from files not in the diff
             - Large PRs may be truncated
             - Always apply human judgment to AI suggestions
 
-            To request another review, comment \`/claude-review\` on this PR.
+            **Available commands:**
+            - \`/claude-review\` - Request a code review
+            - \`/claude-query <question>\` - Ask a question about the PR or codebase
             </details>`;
 
             await github.rest.issues.createComment({
@@ -470,7 +584,7 @@ jobs:
               content: 'confused'
             });
 
-  # Job to handle unauthorized users attempting to trigger review (issue_comment only)
+  # Job to handle unauthorized users attempting to trigger Claude (issue_comment only)
   unauthorized-notice:
     name: Unauthorized Notice
     runs-on: ubuntu-latest
@@ -483,7 +597,7 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/claude-review') &&
+      (contains(github.event.comment.body, '/claude-review') || contains(github.event.comment.body, '/claude-query')) &&
       !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev"]'), github.event.comment.user.login)
 
     steps:
@@ -495,7 +609,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `👋 @${context.payload.comment.user.login}, the \`/claude-review\` command is currently restricted to a small group of users during this initial rollout.
+              body: `👋 @${context.payload.comment.user.login}, the \`/claude-review\` and \`/claude-query\` commands are currently restricted to a small group of users during this initial rollout.
 
             If you'd like a Claude review, please ask a maintainer to run this command.`
             });
