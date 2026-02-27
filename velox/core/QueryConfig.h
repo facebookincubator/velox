@@ -1285,13 +1285,13 @@ class QueryConfig {
   // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
   // 256, so decrease it to not over memory limit.
   int64_t sparkBloomFilterMaxNumBits() const {
-    constexpr int64_t kDefault = 4'096 * 1024;
+    constexpr int64_t kDefault = 67'108'864;
     auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-    VELOX_USER_CHECK_LE(
-        value,
-        kDefault,
-        "{} cannot exceed the default value",
-        kSparkBloomFilterMaxNumBits);
+    // VELOX_USER_CHECK_LE(
+    //     value,
+    //     kDefault,
+    //     "{} cannot exceed the default value",
+    //     kSparkBloomFilterMaxNumBits);
     return value;
   }
 

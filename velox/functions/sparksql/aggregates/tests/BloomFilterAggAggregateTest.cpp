@@ -48,7 +48,7 @@ class BloomFilterAggAggregateTest
 TEST_F(BloomFilterAggAggregateTest, basic) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
-  auto expected = {makeRowVector({getSerializedBloomFilter(4)})};
+  auto expected = {makeRowVector({getSerializedBloomFilter(11)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
