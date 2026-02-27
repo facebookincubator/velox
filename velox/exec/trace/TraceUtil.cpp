@@ -23,6 +23,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/TableWriteTraits.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/trace/Trace.h"
 
 namespace facebook::velox::exec::trace {
@@ -236,23 +237,23 @@ std::vector<uint32_t> extractDriverIds(const std::string& driverIds) {
 }
 
 bool canTrace(const std::string& operatorType) {
-  static const std::unordered_set<std::string> kSupportedOperatorTypes{
-      "Aggregation",
-      "CallbackSink",
-      "Exchange",
-      "FilterProject",
-      "HashBuild",
-      "HashProbe",
-      "IndexLookupJoin",
-      "MergeExchange",
-      "MergeJoin",
-      "OrderBy",
-      "PartialAggregation",
-      "PartitionedOutput",
-      "TableScan",
-      "TableWrite",
-      "TopNRowNumber",
-      "Unnest"};
+  static const std::unordered_set<std::string_view> kSupportedOperatorTypes{
+      OperatorType::kAggregation,
+      OperatorType::kCallbackSink,
+      OperatorType::kExchange,
+      OperatorType::kFilterProject,
+      OperatorType::kHashBuild,
+      OperatorType::kHashProbe,
+      OperatorType::kIndexLookupJoin,
+      OperatorType::kMergeExchange,
+      OperatorType::kMergeJoin,
+      OperatorType::kOrderBy,
+      OperatorType::kPartialAggregation,
+      OperatorType::kPartitionedOutput,
+      OperatorType::kTableScan,
+      OperatorType::kTableWrite,
+      OperatorType::kTopNRowNumber,
+      OperatorType::kUnnest};
   if (kSupportedOperatorTypes.count(operatorType) > 0 ||
       traceNodeRegistry().count(operatorType) > 0) {
     return true;

@@ -19,12 +19,12 @@
 #include <string>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/UnnestReplayer.h"
@@ -35,6 +35,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::tool::trace::test {
 class UnnestReplayerTest : public HiveConnectorTestBase {

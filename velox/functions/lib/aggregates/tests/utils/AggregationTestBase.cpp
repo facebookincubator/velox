@@ -18,6 +18,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -27,11 +29,10 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
 
+using namespace facebook::velox::common::testutil;
 using facebook::velox::exec::CursorParameters;
 using facebook::velox::exec::test::AssertQueryBuilder;
 using facebook::velox::exec::test::PlanBuilder;
@@ -503,7 +504,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
       builder.project(postAggregationProjections);
     }
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
@@ -753,7 +754,7 @@ void AggregationTestBase::testReadFromFiles(
     return;
   }
 
-  std::vector<std::shared_ptr<exec::test::TempFilePath>> files;
+  std::vector<std::shared_ptr<TempFilePath>> files;
   std::vector<exec::Split> splits;
   std::vector<VectorPtr> inputs;
   auto writerPool = rootPool_->addAggregateChild("AggregationTestBase.writer");
@@ -773,7 +774,7 @@ void AggregationTestBase::testReadFromFiles(
   }
 
   for (auto& vector : inputs) {
-    auto file = exec::test::TempFilePath::create();
+    auto file = TempFilePath::create();
     writeToFile(file->getPath(), vector, writerPool.get());
     files.push_back(file);
     splits.emplace_back(
@@ -963,7 +964,7 @@ void AggregationTestBase::testAggregationsImpl(
       builder.project(postAggregationProjections);
     }
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
 
     ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
     const auto peakSpillMemoryUsage =
@@ -1067,7 +1068,7 @@ void AggregationTestBase::testAggregationsImpl(
       builder.project(postAggregationProjections);
     }
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)

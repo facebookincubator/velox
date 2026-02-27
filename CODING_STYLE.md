@@ -83,6 +83,24 @@ line width, indentation and ordering (for includes, using directives and etc). 
   code paths, and are not recommended for use in production environments. For
   example, `debug_disable_expression_with_peeling` is used to disable peeling
   optimization employed in expression evaluation.
+* **Do not abbreviate** variable, function, or class names. Use full,
+  descriptive names. Clarity is more important than brevity.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `outputCol` | `outputColumn` |
+  | `val` | `value` |
+  | `idx` | `index` |
+  | `agg` | `aggregation` |
+  | `sel` | `selectivity` |
+  | `rowCount` | `numRows` |
+
+  * Well-established abbreviations in the domain are acceptable (e.g., `id`,
+    `url`, `sql`, `expr`).
+  * Loop indices like `i`, `j`, `k` are acceptable for simple loops.
+  * Iterator variables named `it` are acceptable.
+  * `numXxx` naming pattern is acceptable and preferred over `xxxCount` or
+    `xxxCnt` (e.g., `numRows`, `numKeys`).
 
 ## Comments
 
@@ -154,8 +172,36 @@ About comment style:
 
   * Include enough context in the comment itself to make clear what will be
     done, without requiring any references from outside the code.
-  * Do not include the author’s username. If required, this can always be
+  * Do not include the author's username. If required, this can always be
     retrieved from git blame.
+* **Start comments with active verbs**, not "This class…" or "This method…".
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `/// This class builds query plans.` | `/// Builds query plans.` |
+  | `/// This method computes selectivity.` | `/// Computes selectivity.` |
+  | `/// This function returns the cost.` | `/// Returns the cost.` |
+
+* **Avoid redundant comments** that simply repeat what the code already says.
+  Comments should explain *why*, not *what*.
+
+```cpp
+// ❌ Avoid - comment just repeats the code
+// Increment the counter.
+++counter;
+
+// ❌ Avoid - comment states the obvious
+// Return the result.
+return result;
+
+// ✅ Prefer - no comment needed when code is self-explanatory
+++counter;
+return result;
+
+// ✅ Prefer - comment explains WHY, not WHAT
+// Use a larger buffer to avoid repeated reallocations for typical queries.
+buffer.reserve(1024);
+```
 
 ## Asserts and CHECKs
 
@@ -187,6 +233,12 @@ About comment style:
       i)`
     * Note that the values of v1 and v2 are already included in the exception
       message by default.
+* Put runtime information (names, values, types) at the **end** of error
+  messages, after the static description.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
 
 ## Variables
 
@@ -234,8 +286,14 @@ About comment style:
 
 * Always use `nullptr` if you need a constant that represents a null pointer
   (`T*` for some `T`); use `0` otherwise for a zero value.
-* For large literal numbers, use ‘ to make it more readable, e.g:  `1’000’000`
-  instead of `1000000`.
+* For large literal numbers, use `'` to improve readability. Use digit
+  separators for numbers with 4 or more digits.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `10000` | `10'000` |
+  | `1000000` | `1'000'000` |
+  | `100` | `100` (no separator needed) |
 * For floating point literals, never omit the initial 0 before the decimal
   point (always `0.5`, not `.5`).
 * File level variables and constants should be defined in an anonymous
@@ -416,3 +474,44 @@ using TypePtr = std::shared_ptr<const Type>;
 using ContinueFuture = folly::SemiFuture<bool>;
 using ContinuePromise = VeloxPromise<bool>;
 ```
+
+## API Design
+
+* **Keep the public API surface small.** Do not expose methods or types that
+  callers don't need. Fewer public symbols mean less coupling and easier
+  evolution.
+* **Prefer free functions in .cpp over class methods.** If a helper doesn't
+  need access to class state or doesn't need to be called from outside the
+  translation unit, make it a free function (typically in an anonymous
+  namespace) rather than a static or private method.
+* **Keep method implementations in .cpp.** Except for trivial one-liners,
+  define methods in the .cpp file to keep headers small and reduce build times.
+* **Avoid default arguments** when all callers can pass values explicitly.
+
+## Tests
+
+* **Place new tests next to related existing tests**, not at the end of the
+  file. Group tests by topic (e.g., place `tryCast` next to `types`,
+  `notBetween` next to `ifClause` which uses `between`).
+* **Use gtest container matchers** (`testing::ElementsAre`, etc.) for
+  verifying collections:
+
+  ```cpp
+  // ❌ Avoid - multiple individual assertions
+  EXPECT_EQ(result.size(), 3);
+  EXPECT_EQ(result[0], "a");
+  EXPECT_EQ(result[1], "b");
+  EXPECT_EQ(result[2], "c");
+
+  // ✅ Prefer - single matcher assertion
+  EXPECT_THAT(result, testing::ElementsAre("a", "b", "c"));
+  ```
+
+  Common matchers:
+  * `ElementsAre(...)` - exact ordered match
+  * `UnorderedElementsAre(...)` - exact unordered match
+  * `Contains(...)` - at least one element matches
+  * `IsEmpty()` - collection is empty
+  * `SizeIs(n)` - collection has n elements
+
+  Requires `#include <gmock/gmock.h>`.

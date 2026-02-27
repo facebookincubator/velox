@@ -30,7 +30,7 @@ target_link_libraries(
     velox_buffer
     velox_file
     velox_file_test_utils
-    velox_temp_path
+    velox_test_util
     GTest::gmock
     GTest::gtest
     GTest::gtest_main

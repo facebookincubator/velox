@@ -20,6 +20,7 @@
 
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -50,9 +51,15 @@ void IcebergTestBase::SetUp() {
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), true);
 
-  connectorConfig_ =
+  hiveConfig_ =
       std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
+
+  icebergConfig_ =
+      std::make_shared<IcebergConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {IcebergConfig::kFunctionPrefixConfig,
+               IcebergConfig::kDefaultFunctionPrefix}}));
 
   setupMemoryPools();
 
@@ -215,8 +222,8 @@ std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
       tableHandle,
       connectorQueryCtx_.get(),
       CommitStrategy::kNoCommit,
-      connectorConfig_,
-      std::string(kDefaultIcebergFunctionPrefix));
+      hiveConfig_,
+      icebergConfig_);
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
