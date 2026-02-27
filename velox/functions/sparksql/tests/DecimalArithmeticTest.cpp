@@ -912,7 +912,8 @@ TEST_F(DecimalArithmeticTest, checkedMultiply) {
           HugeInt::parse("-10000000000000000000"))),
       "Decimal overflow in multiply");
 
-  // Negative * negative overflow should throw (result is positive but too large).
+  // Negative * negative overflow should throw (result is positive but too
+  // large).
   VELOX_ASSERT_USER_THROW(
       (checked_multiply<int128_t, int128_t>(
           DECIMAL(38, 0),
