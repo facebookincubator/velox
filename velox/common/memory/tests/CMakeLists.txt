@@ -42,7 +42,6 @@ target_link_libraries(
     velox_exec
     velox_exec_test_lib
     velox_memory
-    velox_temp_path
     velox_test_util
     velox_vector_fuzzer
     Folly::folly

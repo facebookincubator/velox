@@ -665,6 +665,27 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   ASSERT_EQ(
       remaining->toString(),
       "and(eq(mod(ROW[\"c0\"],2),0),eq(mod(ROW[\"c1\"],3),0))");
+
+  // Test VARCHAR OR filter pushdown:
+  // n_name = 'FRANCE' OR n_name = 'GERMANY' should push down as
+  // BytesValues('FRANCE', 'GERMANY').
+  {
+    auto varcharRowType = ROW({"n_name"}, {VARCHAR()});
+    expr = parseExpr("n_name = 'FRANCE' or n_name = 'GERMANY'", varcharRowType);
+    filters.clear();
+    remaining = extractFiltersFromRemainingFilter(
+        expr, &evaluator, filters, sampleRate);
+    ASSERT_FALSE(remaining);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    ASSERT_TRUE(filters.contains(Subfield("n_name")));
+    auto* filter = filters.at(Subfield("n_name")).get();
+    ASSERT_TRUE(filter->is(FilterKind::kBytesValues));
+    auto* bytesValues = filter->as<BytesValues>();
+    ASSERT_EQ(bytesValues->values().size(), 2);
+    ASSERT_TRUE(bytesValues->values().count("FRANCE"));
+    ASSERT_TRUE(bytesValues->values().count("GERMANY"));
+  }
 }
 
 TEST_F(HiveConnectorTest, prestoTableSampling) {

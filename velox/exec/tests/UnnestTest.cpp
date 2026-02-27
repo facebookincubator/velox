@@ -15,15 +15,16 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 class UnnestTest : public HiveConnectorTestBase,
                    public testing::WithParamInterface<vector_size_t> {
@@ -867,15 +868,22 @@ TEST_P(UnnestTest, barrier) {
 
   struct {
     bool barrierExecution;
+    bool serialExecution;
     int numOutputRows;
 
     std::string toString() const {
       return fmt::format(
-          "barrierExecution {}, numOutputRows {}",
+          "barrierExecution {}, serialExecution {}, numOutputRows {}",
           barrierExecution,
+          serialExecution,
           numOutputRows);
     }
-  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
+  } testSettings[] = {
+      {true, true, 23},
+      {true, false, 23},
+      {false, true, 200},
+      {false, false, 200},
+  };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
     const int numExpectedOutputVectors =
@@ -887,7 +895,8 @@ TEST_P(UnnestTest, barrier) {
                         core::QueryConfig::kMaxSplitPreloadPerDriver,
                         std::to_string(tempFiles.size()))
                     .splits(makeHiveConnectorSplits(tempFiles))
-                    .serialExecution(true)
+                    .serialExecution(testData.serialExecution)
+                    .maxDrivers(testData.serialExecution ? 1 : 3)
                     .barrierExecution(testData.barrierExecution)
                     .config(
                         core::QueryConfig::kPreferredOutputBatchRows,
@@ -937,13 +946,13 @@ TEST_P(UnnestTest, spiltOutput) {
 
   struct {
     bool produceSingleOutput;
-    int expectedNumOutputExectors;
+    int expectedNumOutputVectors;
 
     std::string toString() const {
       return fmt::format(
-          "produceSingleOutput {}, expectedNumOutputExectors {}",
+          "produceSingleOutput {}, expectedNumOutputVectors {}",
           produceSingleOutput,
-          expectedNumOutputExectors);
+          expectedNumOutputVectors);
     }
   } testSettings[] = {
       {true, numBatches},
@@ -961,7 +970,7 @@ TEST_P(UnnestTest, spiltOutput) {
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
-        testData.expectedNumOutputExectors);
+        testData.expectedNumOutputVectors);
   }
 }
 

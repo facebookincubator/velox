@@ -16,6 +16,8 @@
 
 #include "velox/exec/StreamingEnforceDistinct.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 namespace {
@@ -46,7 +48,7 @@ StreamingEnforceDistinct::StreamingEnforceDistinct(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "StreamingEnforceDistinct"),
+          OperatorType::kStreamingEnforceDistinct),
       inputType_{planNode->sources()[0]->outputType()},
       keyChannels_{toChannels(
           inputType_,

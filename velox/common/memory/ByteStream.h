@@ -415,7 +415,7 @@ class ByteOutputStream {
         auto* buffer = current_->buffer + (position >> 3);
         auto value = folly::loadUnaligned<uint64_t>(buffer);
         value = (value & mask) | (bits[0] << offset);
-        folly::storeUnaligned(buffer, value);
+        folly::storeUnaligned<uint64_t>(buffer, value);
         current_->position += end;
         return;
       }

@@ -88,15 +88,29 @@ class SplitsStore {
   ///
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
-  virtual void requestBarrier(std::vector<ContinuePromise>& promises) = 0;
+  virtual void requestBarrier(
+      uint32_t numDrivers,
+      std::vector<ContinuePromise>& promises) = 0;
 
-  /// Return true when split is set or there is no more splits; false when
+  /// Returns the next split to process.
+  ///
+  /// @param driverId The driver id requesting the split. If set, a barrier
+  /// split will be delivered exactly once for each driver. If not set, all
+  /// barrier splits are cleared and no barrier split is returned. This is
+  /// used when cleaning up remaining remote splits during task termination.
+  /// @param maxPreloadSplits Maximum number of splits to preload.
+  /// @param preload Function to preload connector splits.
+  /// @param split Output parameter for the next split.
+  /// @param future Output parameter for the future to wait on if no split is
+  /// available.
+  /// @return true if a split is set or there are no more splits; false if the
   /// caller should retry when the future is fulfilled.
   virtual bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
+      std::optional<uint32_t> driverId,
       int maxPreloadSplits,
-      const ConnectorSplitPreloadFunc& preload) = 0;
+      const ConnectorSplitPreloadFunc& preload,
+      Split& split,
+      ContinueFuture& future) = 0;
 
   /// Return whether all splits has been consumed and there will be no more
   /// splits.
@@ -139,6 +153,8 @@ class SplitsStore {
 
   ContinueFuture makeFuture();
 
+  bool tryGetBarrier(std::optional<uint32_t> driverId, Split& split);
+
   const bool remoteSplit_;
   TaskStats* taskStats_{};
   folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>*
@@ -146,6 +162,8 @@ class SplitsStore {
 
   // Arrived (added), but not distributed yet, splits.
   std::deque<Split> splits_;
+  // The map from driver id to barrier splits.
+  std::unordered_map<uint32_t, Split> barrierSplits_;
 
   // Signal, that no more splits will arrive.
   bool noMoreSplits_{false};

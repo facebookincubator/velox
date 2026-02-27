@@ -130,6 +130,10 @@ struct ScanState {
   RawScanState rawState;
 };
 
+inline bool isDense(const RowSet& rows) {
+  return rows.empty() || rows.size() == rows.back() + 1;
+}
+
 class SelectiveColumnReader {
  public:
   static constexpr uint64_t kStringBufferSize = 16 * 1024;

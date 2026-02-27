@@ -32,12 +32,12 @@ OperatorCtx::OperatorCtx(
     DriverCtx* driverCtx,
     const core::PlanNodeId& planNodeId,
     int32_t operatorId,
-    const std::string& operatorType)
+    std::string_view operatorType)
     : driverCtx_(driverCtx),
       planNodeId_(planNodeId),
       operatorId_(operatorId),
       operatorType_(operatorType),
-      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType)) {}
+      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType_)) {}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
@@ -83,7 +83,7 @@ Operator::Operator(
     RowTypePtr outputType,
     int32_t operatorId,
     std::string planNodeId,
-    std::string operatorType,
+    std::string_view operatorType,
     std::optional<common::SpillConfig> spillConfig)
     : operatorCtx_(
           std::make_unique<OperatorCtx>(
@@ -101,7 +101,7 @@ Operator::Operator(
               operatorId,
               driverCtx->pipelineId,
               std::move(planNodeId),
-              std::move(operatorType)}) {}
+              std::string(operatorType)}) {}
 
 void Operator::maybeSetReclaimer() {
   VELOX_CHECK_NULL(pool()->reclaimer());
