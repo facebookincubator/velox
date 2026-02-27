@@ -344,6 +344,28 @@ bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
   return this->value_ == casted->value_;
 }
 
+std::optional<bool> ConstantTypedExpr::equals(
+    const ITypedExpr& other,
+    CompareFlags::NullHandlingMode nullHandlingMode,
+    memory::MemoryPool* pool) const {
+  const auto* casted = dynamic_cast<const ConstantTypedExpr*>(&other);
+  if (!casted) {
+    return false;
+  }
+  if (*this->type() != *casted->type()) {
+    return false;
+  }
+
+  const auto valueVector = this->hasValueVector()
+      ? this->valueVector_
+      : this->toConstantVector(pool);
+  const auto castedValueVector = casted->hasValueVector()
+      ? casted->valueVector_
+      : casted->toConstantVector(pool);
+  return valueVector->equalValueAt(
+      castedValueVector.get(), 0, 0, nullHandlingMode);
+}
+
 namespace {
 
 uint64_t hashImpl(const TypePtr& type, const Variant& value);

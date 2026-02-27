@@ -184,7 +184,7 @@ void registerArrayFunctions(const std::string& prefix) {
 
   auto checker = std::make_shared<SimpleComparisonChecker>();
   expression::ExprRewriteRegistry::instance().registerRewrite(
-      [prefix, checker](const auto& expr) {
+      [prefix, checker](const auto& expr, memory::MemoryPool* /*pool*/) {
         return rewriteArraySortCall(prefix, expr, checker);
       });
 
