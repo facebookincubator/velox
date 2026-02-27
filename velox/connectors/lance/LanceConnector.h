@@ -22,6 +22,7 @@
 
 namespace facebook::velox::connector::lance {
 
+/// Reads data from a Lance dataset via the Lance FFI bridge.
 class LanceDataSource : public DataSource {
  public:
   LanceDataSource(
@@ -40,8 +41,9 @@ class LanceDataSource : public DataSource {
     VELOX_NYI("Dynamic filters not supported by LanceConnector.");
   }
 
-  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
-      override;
+  std::optional<RowVectorPtr> next(
+      uint64_t size,
+      velox::ContinueFuture& future) override;
 
   uint64_t getCompletedRows() override {
     return completedRows_;
@@ -52,8 +54,10 @@ class LanceDataSource : public DataSource {
   }
 
  private:
+  // Re-orders imported Arrow columns to match the expected output schema.
   RowVectorPtr projectOutputColumns(RowVectorPtr vector);
 
+  // Closes and frees the active stream and dataset handles.
   void closeStreamAndDataset();
 
   RowTypePtr outputType_;
@@ -69,6 +73,7 @@ class LanceDataSource : public DataSource {
   memory::MemoryPool* pool_;
 };
 
+/// Velox connector for reading Lance datasets.
 class LanceConnector final : public Connector {
  public:
   LanceConnector(
@@ -94,6 +99,7 @@ class LanceConnector final : public Connector {
   }
 };
 
+/// Factory for creating LanceConnector instances.
 class LanceConnectorFactory : public ConnectorFactory {
  public:
   static constexpr const char* kLanceConnectorName = "lance";

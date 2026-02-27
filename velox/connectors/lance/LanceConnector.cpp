@@ -37,7 +37,7 @@ LanceDataSource::LanceDataSource(
       std::dynamic_pointer_cast<const LanceTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
       lanceTableHandle,
-      "TableHandle must be an instance of LanceTableHandle");
+      "TableHandle must be an instance of LanceTableHandle.");
 
   // Build the list of column names to project from the column handles.
   columnNames_.reserve(outputType->size());
@@ -45,14 +45,14 @@ LanceDataSource::LanceDataSource(
     auto it = columnHandles.find(outputName);
     VELOX_CHECK(
         it != columnHandles.end(),
-        "ColumnHandle is missing for output column '{}'",
+        "Missing ColumnHandle for output column: {}",
         outputName);
 
     auto handle =
         std::dynamic_pointer_cast<const LanceColumnHandle>(it->second);
     VELOX_CHECK_NOT_NULL(
         handle,
-        "ColumnHandle must be an instance of LanceColumnHandle for '{}'",
+        "ColumnHandle must be an instance of LanceColumnHandle: {}",
         it->second->name());
 
     columnNames_.push_back(handle->name());
@@ -77,7 +77,8 @@ void LanceDataSource::closeStreamAndDataset() {
 void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK(
       splitProcessed_,
-      "Previous split has not been processed yet. Call next() to process the split.");
+      "Previous split has not been processed yet."
+      " Call next() to process the split.");
 
   auto lanceSplit = std::dynamic_pointer_cast<LanceConnectorSplit>(split);
   VELOX_CHECK(lanceSplit, "Wrong type of split for LanceDataSource.");
@@ -89,9 +90,9 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   dataset_ = lance_open_dataset(lanceSplit->datasetPath.c_str());
   VELOX_CHECK_NOT_NULL(
       dataset_,
-      "Failed to open Lance dataset at '{}': {}",
-      lanceSplit->datasetPath,
-      lance_last_error_message());
+      "Failed to open Lance dataset: {} path: {}",
+      lance_last_error_message(),
+      lanceSplit->datasetPath);
 
   // Build column projection pointers for the FFI call.
   std::vector<const char*> colPtrs;
@@ -111,9 +112,9 @@ void LanceDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       /*offset=*/0);
   VELOX_CHECK_NOT_NULL(
       stream_,
-      "Failed to create scan stream for Lance dataset '{}': {}",
-      lanceSplit->datasetPath,
-      lance_last_error_message());
+      "Failed to create scan stream: {} path: {}",
+      lance_last_error_message(),
+      lanceSplit->datasetPath);
 
   splitProcessed_ = false;
 }
@@ -182,7 +183,7 @@ std::optional<RowVectorPtr> LanceDataSource::next(
   // Import Arrow data into Velox.
   auto result = importFromArrowAsOwner(arrowSchema, arrowArray, pool_);
   auto rowVector = std::dynamic_pointer_cast<RowVector>(result);
-  VELOX_CHECK_NOT_NULL(rowVector, "Arrow import did not produce a RowVector");
+  VELOX_CHECK_NOT_NULL(rowVector, "Arrow import did not produce a RowVector.");
 
   completedRows_ += rowVector->size();
   completedBytes_ += rowVector->retainedSize();
