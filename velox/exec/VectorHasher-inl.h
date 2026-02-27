@@ -13,6 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
+#include "velox/exec/VectorHasher.h"
+
 namespace facebook::velox::exec {
 
 template <typename T>

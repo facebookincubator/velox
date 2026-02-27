@@ -20,6 +20,7 @@
 #include <queue>
 #include <type_traits>
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/lib/KllSketch.h"
 
 namespace facebook::velox::functions::kll {
 
