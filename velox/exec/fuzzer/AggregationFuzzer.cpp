@@ -34,6 +34,11 @@ DEFINE_bool(
     true,
     "When true, generates plans with aggregations over sorted inputs");
 
+DEFINE_bool(
+    enable_streaming_aggregations,
+    true,
+    "When true, generates plans with streaming aggregations");
+
 using facebook::velox::fuzzer::CallableSignature;
 using facebook::velox::fuzzer::SignatureTemplate;
 
@@ -749,7 +754,7 @@ bool AggregationFuzzer::verifyAggregation(
         projections,
         tableScanPlans);
 
-    if (!groupingKeys.empty()) {
+    if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       // Use OrderBy + StreamingAggregation on original input.
       makeStreamingPlansWithTableScan(
           groupingKeys,
@@ -780,7 +785,7 @@ bool AggregationFuzzer::verifyAggregation(
     makeAlternativePlansWithValues(
         groupingKeys, aggregates, masks, flatInput, projections, valuesPlans);
 
-    if (!groupingKeys.empty()) {
+    if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       // Use OrderBy + StreamingAggregation on original input.
       makeStreamingPlansWithValues(
           groupingKeys, aggregates, masks, input, projections, valuesPlans);
@@ -847,7 +852,7 @@ bool AggregationFuzzer::verifySortedAggregation(
   std::vector<PlanWithSplits> plans;
   plans.push_back({firstPlan, {}});
 
-  if (!groupingKeys.empty()) {
+  if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
     plans.push_back(
         {PlanBuilder()
              .values(input)
@@ -877,7 +882,7 @@ bool AggregationFuzzer::verifySortedAggregation(
              .planNode(),
          splits});
 
-    if (!groupingKeys.empty()) {
+    if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       plans.push_back(
           {PlanBuilder()
                .tableScan(inputRowType)
@@ -1143,7 +1148,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
   std::vector<PlanWithSplits> plans;
   plans.push_back({firstPlan, {}});
 
-  if (!groupingKeys.empty()) {
+  if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
     plans.push_back(
         {PlanBuilder()
              .values(input)
@@ -1175,7 +1180,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
              .planNode(),
          splits});
 
-    if (!groupingKeys.empty()) {
+    if (FLAGS_enable_streaming_aggregations && !groupingKeys.empty()) {
       plans.push_back(
           {PlanBuilder()
                .tableScan(inputRowType)
