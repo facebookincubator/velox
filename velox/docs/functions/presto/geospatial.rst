@@ -46,40 +46,40 @@ the coordinate order is (x, y). The details of both WKT and WKB can be found
 Geometry Constructors
 ---------------------
 
-.. function:: ST_GeometryFromText(wkt: varchar) -> geometry: Geometry
+.. function:: st_geometryfromtext(wkt: varchar) -> geometry: Geometry
 
     Creates a Geometry object from the Well-Known Text (WKT) formatted string.
     Ill-formed strings will return a User Error.
 
-.. function:: ST_GeomFromBinary(wkb: varbinary) -> geometry: Geometry
+.. function:: st_geomfrombinary(wkb: varbinary) -> geometry: Geometry
 
     Creates a Geometry object from the Well-Known Binary (WKB) formatted binary.
     Ill-formed binary will return a User Error.
 
-.. function:: ST_AsText(geometry: Geometry) -> wkt: varchar
+.. function:: st_astext(geometry: Geometry) -> wkt: varchar
 
     Returns the Well-Known Text (WKT) formatted string of the Geometry object.
 
-.. function:: ST_AsBinary(geometry: Geometry) -> wkb: varbinary
+.. function:: st_asbinary(geometry: Geometry) -> wkb: varbinary
 
     Returns the Well-Known Binary (WKB) formatted binary of the Geometry object.
 
-.. function:: ST_Point(x: double, y: double) -> geometry: Geometry
+.. function:: st_point(x: double, y: double) -> geometry: Geometry
 
     Returns the Point geometry at the given coordinates.  This will raise an
     error if ``x`` or ``y`` is ``NaN`` or ``infinity``.
 
-.. function:: ST_Polygon(wkt: varchar) -> polygon: Geometry
+.. function:: st_polygon(wkt: varchar) -> polygon: Geometry
 
     Returns a geometry type polygon object from WKT representation.
 
-.. function:: ST_LineFromText(wkt: varchar) -> linestring: Geometry
+.. function:: st_linefromtext(wkt: varchar) -> linestring: Geometry
 
     Returns a geometry type linestring object from WKT representation.
     An error is returned if the input WKT represents a valid non-LineString
     geometry. Null input returns null output.
 
-.. function:: ST_LineString(points: array(Geometry)) -> linestring: Geometry
+.. function:: st_linestring(points: array(Geometry)) -> linestring: Geometry
 
     Returns a LineString formed from an array of points. If there are fewer
     than two non-empty points in the input array, an empty LineString will
@@ -88,7 +88,7 @@ Geometry Constructors
     e.g. may self-intersect or may contain duplicate vertexes depending on the
     input.
 
-.. function:: ST_MultiPoint(points: array(Geometry)) -> multipoint: Geometry
+.. function:: st_multipoint(points: array(Geometry)) -> multipoint: Geometry
 
     Returns a MultiPoint geometry object formed from the specified points.
     Return null if input array is empty. Throws an exception if any element
@@ -117,51 +117,51 @@ as "overlaps" or "touches." The exact conditions can be surprising (especially
 for empty geometries), so be sure to read the documentation for the specific
 function you are using.
 
-.. function:: ST_Contains(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_contains(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if and only if no points of the second geometry lie in the
     exterior of the first geometry, and at least one point of the interior of
     the first geometry lies in the interior of the second geometry.
 
-.. function:: ST_Crosses(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_crosses(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if the supplied geometries have some, but not all, interior
     points in common.
 
-.. function:: ST_Disjoint(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_disjoint(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if the give geometries do not spatially intersect -- if
     they do not share any space together.
 
-.. function:: ST_Equals(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_equals(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if the given geometries represent the same geometry
     according to ISO SQL/MM semantics. Also returns ``true`` if both geometries are empty,
     regardless of their geometry types.
 
-.. function:: ST_Intersects(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_intersects(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if the given geometries spatially intersect in two
     dimensions (share any portion of space) and ``false``0 if they do not (they
     are disjoint).
 
-.. function:: ST_Overlaps(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_overlaps(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if the given geometries share space, are of the same
     dimension, but are not completely contained by each other.
 
-.. function:: ST_Relate(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
+.. function:: st_relate(geometry1: Geometry, geometry2: Geometry, relation: varchar) -> boolean
 
     Returns true if first geometry is spatially related to second geometry as
     described by the relation.  The relation is a string like ``'"1*T***T**'``:
     please see the description of DM-9IM for more details.
 
-.. function:: ST_Touches(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_touches(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns ``true`` if the given geometries have at least one point in common,
     but their interiors do not intersect.
 
-.. function:: ST_Within(geometry1: Geometry, geometry2: Geometry) -> boolean
+.. function:: st_within(geometry1: Geometry, geometry2: Geometry) -> boolean
 
     Returns true if first geometry is completely inside second geometry.
 
@@ -171,38 +171,38 @@ function you are using.
 Spatial Operations
 ------------------
 
-.. function:: ST_Boundary(geometry: Geometry) -> boundary: Geometry
+.. function:: st_boundary(geometry: Geometry) -> boundary: Geometry
 
     Returns the closure of the combinatorial boundary of ``geometry``.
      Empty geometry inputs result in empty output.
 
-.. function:: ST_Difference(geometry1: Geometry, geometry2: Geometry) -> difference: Geometry
+.. function:: st_difference(geometry1: Geometry, geometry2: Geometry) -> difference: Geometry
 
     Returns the geometry that represents the portion of ``geometry1`` that is
     not contained in ``geometry2``.
 
-.. function:: ST_Intersection(geometry1: Geometry, geometry2: Geometry) -> intersection: Geometry
+.. function:: st_intersection(geometry1: Geometry, geometry2: Geometry) -> intersection: Geometry
 
     Returns the geometry that represents the portion of ``geometry1`` that is
     also contained in ``geometry2``.
 
-.. function:: ST_SymDifference(geometry1: Geometry, geometry2: Geometry) -> symdifference: Geometry
+.. function:: st_symdifference(geometry1: Geometry, geometry2: Geometry) -> symdifference: Geometry
 
     Returns the geometry that represents the portion of ``geometry1`` that is
     not contained in ``geometry2`` as well as the portion of ``geometry1`` that
     is not congtained in ``geometry1``.
 
-.. function:: ST_Union(geometry1: Geometry, geometry2: Geometry) -> intersection: Geometry
+.. function:: st_union(geometry1: Geometry, geometry2: Geometry) -> intersection: Geometry
 
     Returns the geometry that represents the all points in either ``geometry1``
     or ``geometry2``.
 
-.. function:: ST_Envelope(geometry: Geometry) -> envelope: Geometry
+.. function:: st_envelope(geometry: Geometry) -> envelope: Geometry
 
     Returns the bounding rectangular polygon of a ``geometry``. Empty input will
     result in empty output.
 
-.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+.. function:: st_exteriorring(geometry: Geometry) -> output: Geometry
 
     Returns a LineString representing the exterior ring of the input polygon.
     Empty or null inputs result in null output. Non-polygon types will return
@@ -235,56 +235,56 @@ Spatial Operations
 
 Accessors
 ---------
-.. function:: ST_IsValid(geometry: Geometry) -> valid: bool
+.. function:: st_isvalid(geometry: Geometry) -> valid: bool
 
     Returns if ``geometry`` is valid, according to `SQL/MM Part 3: Spatial`_.
     Examples of non-valid geometries include Polygons with self-intersecting shells.
 
-.. function:: ST_IsSimple(geometry: Geometry) -> simple: bool
+.. function:: st_issimple(geometry: Geometry) -> simple: bool
 
     Returns if ``geometry`` is simple, according to `SQL/MM Part 3: Spatial`_.
     Examples of non-simple geometries include LineStrings with self-intersections,
     Polygons with empty rings for holes, and more.
 
-.. function:: ST_IsClosed(geometry: Geometry) -> closed: bool
+.. function:: st_isclosed(geometry: Geometry) -> closed: bool
 
     Returns true if the LineString’s start and end points are coincident. Will
     return an error if the input geometry is not a LineString or MultiLineString.
 
-.. function:: ST_IsRing(geometry: Geometry) -> ring: bool
+.. function:: st_isring(geometry: Geometry) -> ring: bool
 
    Returns true if and only if the line is closed and simple. Will return an error
    if input geometry is not a LineString.
 
-.. function:: ST_IsEmpty(geometry: Geometry) -> empty: bool
+.. function:: st_isempty(geometry: Geometry) -> empty: bool
 
    Returns true if and only if this Geometry is an empty GeometryCollection, Polygon,
    Point etc.
 
-.. function:: ST_Length(geometry: Geometry) -> length: double
+.. function:: st_length(geometry: Geometry) -> length: double
 
    Returns the length of a LineString or MultiLineString using Euclidean measurement
    on a two dimensional plane (based on spatial ref) in projected units. Will
    return an error if the input geometry is not a LineString or MultiLineString.
 
-.. function:: ST_Length(sphericalgeography: SphericalGeography) -> length: double
+.. function:: st_length(sphericalgeography: SphericalGeography) -> length: double
 
     Returns the length of a ``LineString`` or ``MultiLineString`` on a spherical model of the
     Earth. This is equivalent to the sum of great-circle distances between adjacent points
     on the ``LineString``.
 
-.. function:: ST_PointN(linestring: Geometry, index: integer) -> point: geometry
+.. function:: st_pointn(linestring: Geometry, index: integer) -> point: geometry
 
    Returns the vertex of a LineString at a given index (indices start at 1).
    If the given index is less than 1 or greater than the total number of elements
    in the collection, returns NULL.
 
-.. function:: ST_Points(geometry: Geometry) -> points: array(geometry)
+.. function:: st_points(geometry: Geometry) -> points: array(geometry)
 
    Returns an array of points in a geometry. Empty or null inputs
    return null.
 
-.. function:: ST_NumPoints(geometry: Geometry) -> points: bigint
+.. function:: st_numpoints(geometry: Geometry) -> points: bigint
 
    Returns the number of points in a geometry. This is an extension
    to the SQL/MM ``ST_NumPoints`` function which only applies to
@@ -299,7 +299,7 @@ Accessors
    argument. If there are multiple pairs with the minimum distance, one pair
    is chosen arbitrarily.
 
-.. function:: ST_EnvelopeAsPts(geometry: Geometry) -> points: array(geometry)
+.. function:: st_envelopeaspts(geometry: Geometry) -> points: array(geometry)
 
    Returns an array of two points: the lower left and upper right corners
    of the bounding rectangular polygon of a geometry. Empty or null inputs
@@ -315,23 +315,23 @@ Accessors
 
     Returns the great-circle distance between two points on Earth's surface in kilometers.
 
-.. function:: ST_Area(geometry: Geometry) -> area: double
+.. function:: st_area(geometry: Geometry) -> area: double
 
     Returns the 2D Euclidean area of ``geometry``.
     For Point and LineString types, returns 0.0. For GeometryCollection types,
     returns the sum of the areas of the individual geometries. Empty geometries
     return 0.
 
-.. function:: ST_Area(sphericalgeography: SphericalGeography) -> area: double
+.. function:: st_area(sphericalgeography: SphericalGeography) -> area: double
 
     Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.
 
-.. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
+.. function:: st_centroid(geometry: Geometry) -> geometry: Geometry
 
     Returns the point value that is the mathematical centroid of ``geometry``.
     Empty geometry inputs result in null output.
 
-.. function:: ST_Centroid(SphericalGeography) -> Point
+.. function:: st_centroid(SphericalGeography) -> Point
 
     Returns the point value that is the mathematical centroid of a spherical geometry.
     Empty geometry inputs result in null output.
@@ -343,64 +343,64 @@ Accessors
     (e.g. MULTIPOINT (0 0, -180 0)), the spherical centroid is undefined and an
     arbitrary point will be returned.
 
-.. function:: ST_Distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
+.. function:: st_distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
 
     Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
     between two geometries in projected units. Empty geometries result in null output.
 
-.. function:: ST_Distance(sphericalgeography1: SphericalGeography, sphericalgeography2: SphericalGeography) -> distance: double
+.. function:: st_distance(sphericalgeography1: SphericalGeography, sphericalgeography2: SphericalGeography) -> distance: double
 
     Returns the great-circle distance in meters between two SphericalGeography points.
 
-.. function:: ST_GeometryType(geometry: Geometry) -> type: varchar
+.. function:: st_geometrytype(geometry: Geometry) -> type: varchar
 
     Returns the type of the geometry.
 
-.. function:: ST_X(geometry: Geometry) -> x: double
+.. function:: st_x(geometry: Geometry) -> x: double
 
     Returns the ``x`` coordinate of the geometry if it is a Point.  Returns
     ``null`` if the geometry is empty.  Raises an error if the geometry is
     not a Point and not empty.
 
-.. function:: ST_Y(geometry: Geometry) -> x: double
+.. function:: st_y(geometry: Geometry) -> x: double
 
     Returns the ``y`` coordinate of the geometry if it is a Point.  Returns
     ``null`` if the geometry is empty.  Raises an error if the geometry is
     not a Point and not empty.
 
-.. function:: ST_XMin(geometry: Geometry) -> x: double
+.. function:: st_xmin(geometry: Geometry) -> x: double
 
     Returns the minimum ``x`` coordinate of the geometries bounding box.
     Returns ``null`` if the geometry is empty.
 
-.. function:: ST_YMin(geometry: Geometry) -> y: double
+.. function:: st_ymin(geometry: Geometry) -> y: double
 
     Returns the minimum ``y`` coordinate of the geometries bounding box.
     Returns ``null`` if the geometry is empty.
 
-.. function:: ST_XMax(geometry: Geometry) -> x: double
+.. function:: st_xmax(geometry: Geometry) -> x: double
 
     Returns the maximum ``x`` coordinate of the geometries bounding box.
     Returns ``null`` if the geometry is empty.
 
-.. function:: ST_YMax(geometry: Geometry) -> y: double
+.. function:: st_ymax(geometry: Geometry) -> y: double
 
     Returns the maximum ``y`` coordinate of the geometries bounding box.
     Returns ``null`` if the geometry is empty.
 
-.. function:: ST_StartPoint(geometry: Geometry) -> point: Geometry
+.. function:: st_startpoint(geometry: Geometry) -> point: Geometry
 
     Returns the first point of a LineString geometry as a Point.
     This is a shortcut for ``ST_PointN(geometry, 1)``. Empty
     input will return ``null``.
 
-.. function:: ST_EndPoint(geometry: Geometry) -> point: Geometry
+.. function:: st_endpoint(geometry: Geometry) -> point: Geometry
 
     Returns the last point of a LineString geometry as a Point.
     This is a shortcut for ``ST_PointN(geometry, ST_NumPoints(geometry))``.
     Empty input will return ``null``.
 
-.. function:: ST_GeometryN(geometry: Geometry, index: integer) -> geometry: Geometry
+.. function:: st_geometryn(geometry: Geometry, index: integer) -> geometry: Geometry
 
     Returns the ``geometry`` element at a given index (indices start at 1).
     If the ``geometry`` is a collection of geometries (e.g., GeometryCollection or
@@ -410,7 +410,7 @@ Accessors
     Singular geometries (e.g., Point, LineString, Polygon), are treated as
     collections of one element. Empty geometries are treated as empty collections.
 
-.. function:: ST_InteriorRingN(geometry: Geometry, index: integer) -> geometry: Geometry
+.. function:: st_interiorringn(geometry: Geometry, index: integer) -> geometry: Geometry
 
     Returns the interior ring element at the specified index (indices start at 1).
     If the given index is less than 1 or greater than the total number of interior
@@ -418,7 +418,7 @@ Accessors
     is not a polygon. Use ``:func:ST_NumInteriorRing`` to find out the total number of
     elements.
 
-.. function:: ST_NumGeometries(geometry: Geometry) -> output: integer
+.. function:: st_numgeometries(geometry: Geometry) -> output: integer
 
     Returns the number of geometries in the collection. If the geometry is a
     collection of geometries (e.g., GeometryCollection or Multi*),
@@ -431,14 +431,14 @@ Accessors
     ``ST_NumGeometries(ST_GeometryFromText('GEOMETRYCOLLECTION(POINT EMPTY, POINT (1 2))'))``
     will evaluate to 1.
 
-.. function:: ST_InteriorRings(geometry: Geometry) -> output: array(geometry)
+.. function:: st_interiorrings(geometry: Geometry) -> output: array(geometry)
 
     Returns an array of all interior rings found in the input geometry,
     or an empty array if the polygon has no interior rings. Returns
     null if the input geometry is empty.
     Throws an error if the input geometry is not a polygon.
 
-.. function:: ST_Geometries(geometry: Geometry) -> output: array(geometry)
+.. function:: st_geometries(geometry: Geometry) -> output: array(geometry)
 
     Returns an array of geometries in the specified collection. Returns
     a one-element array if the input geometry is not a multi-geometry.
@@ -460,28 +460,28 @@ Accessors
     GEOMETRYCOLLECTION (POINT (0 0), GEOMETRYCOLLECTION (POINT (1 1))) ->
     [POINT (0 0), POINT (1 1)], GEOMETRYCOLLECTION EMPTY -> [].
 
-.. function:: ST_NumInteriorRing(geometry: Geometry) -> output: bigint
+.. function:: st_numinteriorring(geometry: Geometry) -> output: bigint
 
     Returns the cardinality of the collection of interior rings of a polygon.
 
-.. function:: ST_ConvexHull(geometry: Geometry) -> output: Geometry
+.. function:: st_convexhull(geometry: Geometry) -> output: Geometry
 
     Returns the minimum convex geometry that encloses all input geometries.
 
-.. function:: ST_CoordDim(geometry: Geometry) -> output: tinyint
+.. function:: st_coorddim(geometry: Geometry) -> output: tinyint
 
     Return the coordinate dimension of the geometry.
 
-.. function:: ST_Dimension(geometry: Geometry) -> output: tinyint
+.. function:: st_dimension(geometry: Geometry) -> output: tinyint
 
     Returns the inherent dimension of this geometry object, which
     must be less than or equal to the coordinate dimension.
 
-.. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+.. function:: st_exteriorring(geometry: Geometry) -> output: Geometry
 
     Returns a line string representing the exterior ring of the input polygon.
 
-.. function:: ST_Buffer(geometry: Geometry, distance: double) -> output: Geometry
+.. function:: st_buffer(geometry: Geometry, distance: double) -> output: Geometry
 
     Returns the geometry that represents all points whose distance from the
     specified ``geometry`` is less than or equal to the specified ``distance``.
