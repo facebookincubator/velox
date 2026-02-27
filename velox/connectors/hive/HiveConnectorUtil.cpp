@@ -868,16 +868,7 @@ core::CallTypedExprPtr replaceInputs(
 }
 
 bool endWith(const std::string& str, const char* suffix) {
-  int len = strlen(suffix);
-  if (str.size() < len) {
-    return false;
-  }
-  for (int i = 0, j = str.size() - len; i < len; ++i, ++j) {
-    if (str[j] != suffix[i]) {
-      return false;
-    }
-  }
-  return true;
+  return str.ends_with(suffix);
 }
 
 bool isNotExpr(
