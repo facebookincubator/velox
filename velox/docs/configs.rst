@@ -907,6 +907,11 @@ Each query can override the config by setting corresponding query session proper
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - parquet.writer.page-row-limit
+     - parquet.writer.page_row_limit
+     - integer
+     - 0 (no limit)
+     - Parquet data page row number limit. This configuration is shared between Hive and Iceberg connectors, hence no connector-specific prefix.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^

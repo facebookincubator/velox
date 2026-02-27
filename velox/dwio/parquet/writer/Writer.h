@@ -111,6 +111,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<int64_t> batchSize;
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
+  std::optional<int64_t> dataPageRowNumberLimit;
   std::optional<bool> enableDictionary;
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
@@ -153,7 +154,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch-size";
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
-
+  static constexpr const char* kParquetSessionDataPageRowCountLimit =
+      "parquet.writer.page_row_limit";
+  static constexpr const char* kParquetConnectorDataPageRowCountLimit =
+      "parquet.writer.page-row-limit";
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
   // The timezone key accepts a timezone string or empty string to disable
