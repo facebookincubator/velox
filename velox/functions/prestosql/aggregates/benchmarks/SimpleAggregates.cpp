@@ -33,6 +33,7 @@ static constexpr int32_t kNumVectors = 1'000;
 static constexpr int32_t kRowsPerVector = 10'000;
 
 namespace {
+using namespace facebook::velox::common::testutil;
 
 class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
  public:

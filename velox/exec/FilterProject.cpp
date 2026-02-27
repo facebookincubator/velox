@@ -15,6 +15,7 @@
  */
 #include "velox/exec/FilterProject.h"
 #include "velox/core/Expressions.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -143,7 +144,7 @@ FilterProject::FilterProject(
           project ? project->outputType() : filter->outputType(),
           operatorId,
           project ? project->id() : filter->id(),
-          "FilterProject"),
+          OperatorType::kFilterProject),
       hasFilter_(filter != nullptr),
       lazyDereference_(
           dynamic_cast<const core::LazyDereferenceNode*>(project.get()) !=

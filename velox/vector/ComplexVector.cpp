@@ -633,7 +633,9 @@ void RowVector::validate(const VectorValidateOptions& options) const {
       if (child->size() < size()) {
         VELOX_CHECK_NOT_NULL(
             nulls_,
-            "Child vector has size less than parent and parent has no nulls.");
+            "Child vector has size {} less than parent and parent has no nulls {}.",
+            child->size(),
+            size());
 
         VELOX_CHECK_GT(
             child->size(),
