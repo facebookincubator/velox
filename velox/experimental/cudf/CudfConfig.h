@@ -40,6 +40,9 @@ struct CudfConfig {
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
 
+  /// Query session configs for the cuDF Operators.
+  static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
+
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
   static CudfConfig& getInstance();
@@ -88,6 +91,9 @@ struct CudfConfig {
 
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
+
+  // Query config key for the TopN batch size in the cuDF TopN operator.
+  int32_t topNBatchSize{5};
 };
 
 } // namespace facebook::velox::cudf_velox
