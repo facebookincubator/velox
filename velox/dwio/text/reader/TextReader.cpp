@@ -1494,7 +1494,7 @@ bool TextRowReader::readHugeInt(
       data,
       insertionRow,
       [](std::string_view s) -> std::optional<int128_t> {
-        return HugeInt::parse(s);
+        return HugeInt::parse(std::string{s});
       },
       filter);
 }
