@@ -981,9 +981,7 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     options->schema = getNonPartitionTypes(dataChannels_, inputType_);
   }
 
-  if (options->memoryPool == nullptr) {
-    options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
-  }
+  options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
 
   if (!options->compressionKind) {
     options->compressionKind = insertTableHandle_->compressionKind();
