@@ -182,7 +182,8 @@ class HiveDataSource : public DataSource {
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
   dwio::common::RuntimeStatistics runtimeStats_;
-  std::atomic<uint64_t> totalRemainingFilterTime_{0};
+  std::atomic_uint64_t totalRemainingFilterTime_{0};
+  std::atomic_uint64_t totalRemainingFilterCpuTime_{0};
   uint64_t completedRows_ = 0;
 
   // Field indices referenced in both remaining filter and output type. These
