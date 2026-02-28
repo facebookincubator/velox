@@ -23,6 +23,7 @@
 #include "velox/functions/sparksql/specialforms/GetArrayStructFields.h"
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
+#include "velox/functions/sparksql/specialforms/NamedStruct.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
 namespace facebook::velox::functions {
@@ -55,6 +56,9 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       GetArrayStructFieldsCallToSpecialForm::kGetArrayStructFields,
       std::make_unique<GetArrayStructFieldsCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      NamedStructCallToSpecialForm::kNamedStruct,
+      std::make_unique<NamedStructCallToSpecialForm>());
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
