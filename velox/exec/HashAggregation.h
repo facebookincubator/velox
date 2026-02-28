@@ -59,6 +59,13 @@ class HashAggregation : public Operator {
 
   bool isFinished() override;
 
+  /// HashAggregation can reclaim memory via lightweight compaction even when
+  /// spilling is not enabled.
+  bool canReclaim() const override {
+    return (memoryCompactionEnabled_ && hasCompactableAggregates_) ||
+        canSpill();
+  }
+
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
 
@@ -103,6 +110,7 @@ class HashAggregation : public Operator {
   const bool isPartialOutput_;
   const bool isGlobal_;
   const bool isDistinct_;
+  const bool memoryCompactionEnabled_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
   // Minimum number of rows to see before deciding to give up on partial
   // aggregation.
@@ -113,6 +121,11 @@ class HashAggregation : public Operator {
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;
+
+  // Cached from groupingSet_->hasCompactableAggregates() during initialize().
+  // Stored separately to allow safe access from the arbitration thread without
+  // dereferencing groupingSet_.
+  bool hasCompactableAggregates_{false};
 
   // Size of a single output row estimated using
   // 'groupingSet_->estimateRowSize()'. If spilling, this value is set to max
