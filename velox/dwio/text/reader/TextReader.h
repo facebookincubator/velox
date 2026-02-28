@@ -173,7 +173,7 @@ class TextRowReader : public dwio::common::RowReader {
       vector_size_t insertionRow,
       DelimType& delim);
 
-  template <typename T, typename Kal, typename Filter, typename F>
+  template <typename T, typename Filter, typename F>
   bool putValue(
       const F& f,
       BaseVector* FOLLY_NULLABLE data,
@@ -197,7 +197,7 @@ class TextRowReader : public dwio::common::RowReader {
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec_;
 
   RowReaderOptions options_;
-  uint64_t currentRow_;
+  uint64_t currentRow_ = 0;
   uint64_t pos_;
   bool atEOL_;
   bool atEOF_;
