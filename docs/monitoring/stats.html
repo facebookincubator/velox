@@ -547,32 +547,36 @@ This is a component of ioWaitWallNanos.</p></td>
 <td><p>nanos</p></td>
 <td><p>The total walltime in nanoseconds that the data or index connector do the remaining filtering.</p></td>
 </tr>
-<tr class="row-odd"><td><p>numIndexFilterConversions</p></td>
+<tr class="row-odd"><td><p>totalRemainingFilterCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>The total CPU time in nanoseconds that the data or index connector do the remaining filtering.</p></td>
+</tr>
+<tr class="row-even"><td><p>numIndexFilterConversions</p></td>
 <td></td>
 <td><p>The number of index columns that were converted from ScanSpec filters to
 index bounds for index-based filtering (e.g., cluster index pruning in
 Nimble). A value greater than zero indicates filters were successfully
 converted to leverage file index structures for row pruning.</p></td>
 </tr>
-<tr class="row-even"><td><p>numStripeLoads</p></td>
+<tr class="row-odd"><td><p>numStripeLoads</p></td>
 <td></td>
 <td><p>The number of times a stripe has been loaded during index lookup. This
 metric helps track the I/O efficiency of index-based reads, where lower
 values indicate better stripe reuse across lookups.</p></td>
 </tr>
-<tr class="row-odd"><td><p>numIndexLookupRequests</p></td>
+<tr class="row-even"><td><p>numIndexLookupRequests</p></td>
 <td></td>
 <td><p>The number of index lookup requests submitted in startLookup(). Each
 request corresponds to one set of index bounds and may match rows across
 multiple stripes.</p></td>
 </tr>
-<tr class="row-even"><td><p>numIndexLookupStripes</p></td>
+<tr class="row-odd"><td><p>numIndexLookupStripes</p></td>
 <td></td>
 <td><p>The total number of stripes that need to be read for all index lookup
 requests. Multiple requests may share the same stripe, and each shared
 stripe is counted once per request that needs it.</p></td>
 </tr>
-<tr class="row-odd"><td><p>numIndexLookupReadSegments</p></td>
+<tr class="row-even"><td><p>numIndexLookupReadSegments</p></td>
 <td></td>
 <td><p>The total number of read segments across all stripes during index lookup.
 A read segment is a contiguous row range within a stripe that needs to be

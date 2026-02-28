@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Hash Table Caching &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Hash Table Caching</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="hash-table-caching">
+<h1>Hash Table Caching<a class="headerlink" href="#hash-table-caching" title="Link to this heading">¶</a></h1>
+<section id="background">
+<h2>Background<a class="headerlink" href="#background" title="Link to this heading">¶</a></h2>
+<p>In materialized execution engines like Spark and Presto on Spark, for broadcast joins,
+the build side splits are replicated to all join tasks due to upfront split planning.
+This kind of upfront split planning allows these engines to provide task level fault tolerance
+as the input splits of the tasks are tracked and output data can be discarded,
+thus enabling task level retries.</p>
+<p>But due to this, each task independently builds an identical hash table from the
+same data. For large build sides this is wasteful: every task spends CPU and memory
+constructing the same hash table that another task in the same query has already built.</p>
+<section id="the-build-io-tax">
+<h3>The Build IO Tax<a class="headerlink" href="#the-build-io-tax" title="Link to this heading">¶</a></h3>
+<p>Also, the broadcast data follows a write-once-read-many I/O pattern. Each task re-reads
+the build side data independently. When the number of tasks is large —
+O(100k) tasks across 10k+ workers — these concurrent reads overwhelm the I/O
+service layer, leading to throttling.</p>
+<p>Throttling causes tasks to stall for seconds to minutes waiting for I/O. When
+queries are charged for reserved workers, these stalls mean reserved resources
+sit idle, increasing query cost. Beyond I/O fetch delays, when the hash table is
+large (in the gigabyte range), the CPU cost of rebuilding it per task is also
+significant and wasteful.</p>
+<p>Hash table caching eliminates this redundant work by allowing the first task to
+build the hash table and making it available to all subsequent tasks in the same
+Velox instance. This is a build-once, reuse-many paradigm. In Sapphire-Velox,
+this implements a once-per-worker model that yields more than an order of
+magnitude savings, since the number of tasks far exceeds the number of workers.</p>
+</section>
+</section>
+<section id="enabling-hash-table-caching">
+<h2>Enabling Hash Table Caching<a class="headerlink" href="#enabling-hash-table-caching" title="Link to this heading">¶</a></h2>
+<p>Hash table caching is enabled by setting the <code class="docutils literal notranslate"><span class="pre">useHashTableCache</span></code> flag to
+<code class="docutils literal notranslate"><span class="pre">true</span></code> on the <code class="docutils literal notranslate"><span class="pre">HashJoinNode</span></code>:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">joinNode</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">core</span><span class="o">::</span><span class="n">HashJoinNode</span><span class="o">::</span><span class="n">Builder</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">id</span><span class="p">(</span><span class="n">planNodeIdGenerator</span><span class="o">-&gt;</span><span class="n">next</span><span class="p">())</span>
+<span class="w">        </span><span class="p">.</span><span class="n">joinType</span><span class="p">(</span><span class="n">core</span><span class="o">::</span><span class="n">JoinType</span><span class="o">::</span><span class="n">kInner</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">nullAware</span><span class="p">(</span><span class="nb">false</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">leftKeys</span><span class="p">({</span><span class="n">leftKeyField</span><span class="p">})</span>
+<span class="w">        </span><span class="p">.</span><span class="n">rightKeys</span><span class="p">({</span><span class="n">rightKeyField</span><span class="p">})</span>
+<span class="w">        </span><span class="p">.</span><span class="n">left</span><span class="p">(</span><span class="n">probeNode</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">right</span><span class="p">(</span><span class="n">buildNode</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">outputType</span><span class="p">(</span><span class="n">outputType</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">useHashTableCache</span><span class="p">(</span><span class="nb">true</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>When <code class="docutils literal notranslate"><span class="pre">useHashTableCache</span></code> is false (the default), the hash join behaves
+exactly as before. The flag is only intended for broadcast joins and is
+currently used by Presto-on-Spark.</p>
+</section>
+<section id="overall-design">
+<h2>Overall Design<a class="headerlink" href="#overall-design" title="Link to this heading">¶</a></h2>
+<p>Hash table caching introduces a global singleton <code class="docutils literal notranslate"><span class="pre">HashTableCache</span></code> that stores
+built hash tables keyed by <code class="docutils literal notranslate"><span class="pre">queryId:planNodeId</span></code>. The cache coordinates
+between tasks so that exactly one task builds the hash table while other tasks
+wait and then reuse the result.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">HashTableCache</span></code> is a process-wide singleton in the Velox instance,
+alongside the <code class="docutils literal notranslate"><span class="pre">AsyncDataCache</span></code> and <code class="docutils literal notranslate"><span class="pre">MemoryManager</span></code>. The cache and its
+methods provide building blocks for drivers within a task and tasks within a
+worker to coordinate hash table construction and reuse.</p>
+<p>The design has three main components:</p>
+<ol class="arabic simple">
+<li><p><strong>HashTableCache</strong> - A process-wide singleton that stores and manages cached
+hash table entries.</p></li>
+<li><p><strong>HashTableCacheEntry</strong> - A cache entry that holds the hash table, build
+coordination state, and a dedicated memory pool.</p></li>
+<li><p><strong>HashBuild operator integration</strong> - Logic in the HashBuild operator to
+check the cache, build or wait, and store the result.</p></li>
+</ol>
+</section>
+<section id="cache-structure">
+<h2>Cache Structure<a class="headerlink" href="#cache-structure" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">HashTableCache</span></code> is a thread-safe singleton that maps cache keys to cache
+entries:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">HashTableCache</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="w"> </span><span class="n">lock_</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">unordered_map</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">,</span>
+<span class="w">                       </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">HashTableCacheEntry</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">tables_</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Each <code class="docutils literal notranslate"><span class="pre">HashTableCacheEntry</span></code> contains:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 25.0%" />
+<col style="width: 75.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cacheKey</span></code></p></td>
+<td><p>The key used to look up this entry (<code class="docutils literal notranslate"><span class="pre">queryId:planNodeId</span></code>).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">builderTaskId</span></code></p></td>
+<td><p>The task ID of the task that is responsible for building the table.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">tablePool</span></code></p></td>
+<td><p>A leaf memory pool under the query pool used for table allocations.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">table</span></code></p></td>
+<td><p>The built <code class="docutils literal notranslate"><span class="pre">BaseHashTable</span></code>, set once build is complete.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">hasNullKeys</span></code></p></td>
+<td><p>Whether the build side contained null join keys.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">buildComplete</span></code></p></td>
+<td><p>Atomic flag indicating whether the table has been fully built.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">buildPromises</span></code></p></td>
+<td><p>Promises used to notify waiting tasks when build completes.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="cache-api">
+<h2>Cache API<a class="headerlink" href="#cache-api" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">HashTableCache</span></code> exposes three methods. All decisions are made under a
+single <code class="docutils literal notranslate"><span class="pre">std::mutex</span></code>. The lock is held only for map lookups, inserts, and
+promise creation — never during table building or memory allocation.</p>
+<section id="get">
+<h3>get()<a class="headerlink" href="#get" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">get()</span></code> method is the central coordination point. It is called by every
+<code class="docutils literal notranslate"><span class="pre">HashBuild</span></code> operator during <code class="docutils literal notranslate"><span class="pre">initialize()</span></code> and determines the caller’s
+role under the mutex:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>get(key, taskId, queryCtx, *future):
+    lock(lock_)
+    Case 1 – No entry:    create entry, set builderTaskId → return entry (Builder)
+    Case 2 – Same task:   return entry (Builder, coordinate via JoinBridge)
+    Case 3 – Diff task, not complete: push promise → return entry + future (Waiter)
+    Case 4 – Complete:    return entry (Late Arrival)
+</pre></div>
+</div>
+<p>When creating a new entry, <code class="docutils literal notranslate"><span class="pre">get()</span></code> allocates a <code class="docutils literal notranslate"><span class="pre">tablePool</span></code> as a leaf child
+of the query pool and registers a <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code> release callback that calls
+<code class="docutils literal notranslate"><span class="pre">drop()</span></code> on query destruction.</p>
+<p>Key design decisions in <code class="docutils literal notranslate"><span class="pre">get()</span></code>:</p>
+<ul class="simple">
+<li><p><strong>Memory pool ownership</strong>: The <code class="docutils literal notranslate"><span class="pre">tablePool</span></code> is a leaf child of the first
+caller’s <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code> root pool. All drivers in the builder task share this
+pool for partial table allocations (via <code class="docutils literal notranslate"><span class="pre">HashBuild::tableMemoryPool()</span></code>),
+tying the cached table’s memory accounting to the originating query.</p></li>
+<li><p><strong>Cleanup callback</strong>: <code class="docutils literal notranslate"><span class="pre">QueryCtx::addReleaseCallback</span></code> ensures the cache entry
+is dropped when the query finishes. <code class="docutils literal notranslate"><span class="pre">drop()</span></code> resets the
+<code class="docutils literal notranslate"><span class="pre">shared_ptr&lt;BaseHashTable&gt;</span></code> outside the lock to free memory before the entry
+is destroyed.</p></li>
+<li><p><strong>Lock scope</strong>: All decisions are made under a single <code class="docutils literal notranslate"><span class="pre">std::mutex</span></code>. The lock
+is held only for map lookups/inserts and promise creation — never during
+table building or memory allocation.</p></li>
+</ul>
+</section>
+<section id="put">
+<h3>put()<a class="headerlink" href="#put" title="Link to this heading">¶</a></h3>
+<p>Called by the last driver of the builder task after merging all partial tables.
+Publishes the table and wakes all waiters:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>put(key, table, hasNullKeys):
+    lock(lock_)
+    entry.table = table
+    entry.buildComplete = true
+    promises = move(entry.buildPromises)
+    unlock(lock_)
+    for each promise: promise.setValue()   // wake waiters outside lock
+</pre></div>
+</div>
+</section>
+<section id="drop">
+<h3>drop()<a class="headerlink" href="#drop" title="Link to this heading">¶</a></h3>
+<p>Removes a cache entry and frees the table memory. Called by the <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code>
+cleanup callback when the query is destroyed:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>drop(key):
+    lock(lock_)
+    entry = move(tables_[key])
+    tables_.erase(key)
+    unlock(lock_)
+    entry.table.reset()   // free memory outside lock
+</pre></div>
+</div>
+</section>
+</section>
+<section id="build-coordination">
+<h2>Build Coordination<a class="headerlink" href="#build-coordination" title="Link to this heading">¶</a></h2>
+<p>When hash table caching is enabled, the HashBuild operator calls
+<code class="docutils literal notranslate"><span class="pre">HashTableCache::get()</span></code> during initialization. The cache uses the first
+caller’s task as the builder and makes subsequent callers wait.</p>
+<section id="builder-task">
+<h3>Builder Task<a class="headerlink" href="#builder-task" title="Link to this heading">¶</a></h3>
+<p>The first task to call <code class="docutils literal notranslate"><span class="pre">get()</span></code> for a given key creates the cache entry and
+becomes the builder. This task proceeds through the normal HashBuild flow:
+all its drivers build partial hash tables, the last driver merges them, and
+the merged table is stored in the cache via <code class="docutils literal notranslate"><span class="pre">HashTableCache::put()</span></code>.</p>
+<p>Drivers within the builder task coordinate with each other through the
+existing <code class="docutils literal notranslate"><span class="pre">HashJoinBridge</span></code> mechanism. The cache does not interfere with
+intra-task driver synchronization.</p>
+</section>
+<section id="waiter-tasks">
+<h3>Waiter Tasks<a class="headerlink" href="#waiter-tasks" title="Link to this heading">¶</a></h3>
+<p>When a task calls <code class="docutils literal notranslate"><span class="pre">get()</span></code> and finds that another task is already building the
+table (<code class="docutils literal notranslate"><span class="pre">builderTaskId</span></code> differs from its own task ID and <code class="docutils literal notranslate"><span class="pre">buildComplete</span></code> is
+false), it receives a <code class="docutils literal notranslate"><span class="pre">ContinueFuture</span></code> and transitions to the
+<code class="docutils literal notranslate"><span class="pre">kWaitForBuild</span></code> state. The task is suspended until the builder task calls
+<code class="docutils literal notranslate"><span class="pre">put()</span></code>, which fulfills all waiting promises.</p>
+<p>Once notified, the waiter task calls <code class="docutils literal notranslate"><span class="pre">noMoreInput()</span></code> which finds the table
+in the cache and passes it directly to the <code class="docutils literal notranslate"><span class="pre">HashJoinBridge</span></code> without building
+anything. The probe side then runs normally against the cached table.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Task 1 (Builder)              Task 2 (Waiter)              Task 3 (Waiter)
+────────────────              ───────────────              ───────────────
+get() → creates entry         get() → sees builder         get() → sees builder
+builds hash table             receives future              receives future
+put() → sets table            (suspended)                  (suspended)
+notifies waiters ──────────→  wakes up                     wakes up
+                              uses cached table            uses cached table
+</pre></div>
+</div>
+</section>
+<section id="cache-hit">
+<h3>Cache Hit<a class="headerlink" href="#cache-hit" title="Link to this heading">¶</a></h3>
+<p>If a task calls <code class="docutils literal notranslate"><span class="pre">get()</span></code> and finds <code class="docutils literal notranslate"><span class="pre">buildComplete</span></code> is already true, the
+cached table is returned immediately. The HashBuild operator skips all build
+logic and passes the table to the <code class="docutils literal notranslate"><span class="pre">HashJoinBridge</span></code>.</p>
+<p>The HashBuild operator reports cache hits and misses via runtime statistics:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">hashtable.cacheHit</span></code> - Table was found in the cache and reused.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hashtable.cacheMiss</span></code> - Table was not in the cache; this task built it.</p></li>
+</ul>
+</section>
+</section>
+<section id="usage-by-hashbuild">
+<h2>Usage by HashBuild<a class="headerlink" href="#usage-by-hashbuild" title="Link to this heading">¶</a></h2>
+<p>The HashBuild operator uses the cache in a three-phase protocol: build, synchronize,
+and probe.</p>
+<section id="step-1-build-phase-producer">
+<h3>Step 1: Build Phase (Producer)<a class="headerlink" href="#step-1-build-phase-producer" title="Link to this heading">¶</a></h3>
+<p>When a <code class="docutils literal notranslate"><span class="pre">HashBuild</span></code> operator is initialized, it checks the cache via
+<code class="docutils literal notranslate"><span class="pre">setupCachedHashTable()</span></code>.</p>
+<ul class="simple">
+<li><p><strong>Cache Miss (Builder)</strong>: The first task to find a miss becomes the Builder.
+It creates a cache entry, pulls data from storage, builds the
+<code class="docutils literal notranslate"><span class="pre">BaseHashTable</span></code>, and calls <code class="docutils literal notranslate"><span class="pre">put()</span></code> to publish it. Within the Builder task,
+subsequent drivers also call <code class="docutils literal notranslate"><span class="pre">get()</span></code> and receive the same entry (since
+<code class="docutils literal notranslate"><span class="pre">builderTaskId</span> <span class="pre">==</span> <span class="pre">taskId</span></code>). Each driver calls <code class="docutils literal notranslate"><span class="pre">setupTable()</span></code> to allocate
+its own partial <code class="docutils literal notranslate"><span class="pre">BaseHashTable</span></code> using <code class="docutils literal notranslate"><span class="pre">cacheEntry-&gt;tablePool</span></code>, receives its
+subset of input via <code class="docutils literal notranslate"><span class="pre">addInput()</span></code>, and builds a partial table. Intra-task
+coordination between these drivers uses the standard <code class="docutils literal notranslate"><span class="pre">allPeersFinished()</span></code> /
+<code class="docutils literal notranslate"><span class="pre">JoinBridge</span></code> mechanism, not the cache.</p></li>
+<li><p><strong>The Wait (Waiters)</strong>: If other tasks arrive while the Builder is building,
+they encounter the pending state and transition to <code class="docutils literal notranslate"><span class="pre">kWaitForBuild</span></code>, waiting
+on a <code class="docutils literal notranslate"><span class="pre">ContinueFuture</span></code> provided by the cache.</p></li>
+<li><p><strong>Short-circuiting Upstream</strong>: Once the Builder publishes the table, waiters
+are unblocked. Upon receiving the cached table, waiter tasks set their
+no-more-input flags. This short-circuits their source operators (e.g.,
+<code class="docutils literal notranslate"><span class="pre">TableScan</span></code>), immediately stopping further data retrieval.</p></li>
+</ul>
+</section>
+<section id="step-2-synchronization-joinbridge">
+<h3>Step 2: Synchronization (JoinBridge)<a class="headerlink" href="#step-2-synchronization-joinbridge" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">HashJoinBridge</span></code> acts as the hand-off point between the build and probe
+sides. Even if the table was retrieved from the cache rather than built locally,
+the bridge ensures the probe side is notified that the data is ready for
+processing. Both builder and waiter tasks call
+<code class="docutils literal notranslate"><span class="pre">joinBridge.setHashTable()</span></code> to publish the table (or cached table) to the
+probe operators.</p>
+</section>
+<section id="step-3-probe-phase-consumer">
+<h3>Step 3: Probe Phase (Consumer)<a class="headerlink" href="#step-3-probe-phase-consumer" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">HashProbe</span></code> operator takes the cached table from the bridge and executes
+as usual. Because the table is held as a <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code>, the probe operator’s
+reference prevents the cache from freeing the table while a join is actively
+scanning it. Once the probe finishes, the reference count is decremented. The
+table is ultimately freed when the <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code> release callback calls
+<code class="docutils literal notranslate"><span class="pre">drop()</span></code>.</p>
+</section>
+</section>
+<section id="hashbuild-lifecycle">
+<h2>HashBuild Lifecycle<a class="headerlink" href="#hashbuild-lifecycle" title="Link to this heading">¶</a></h2>
+<p>The following pseudocode shows the complete lifecycle of a <code class="docutils literal notranslate"><span class="pre">HashBuild</span></code>
+operator when hash table caching is enabled. Only the key function calls are
+shown.</p>
+<section id="initialization">
+<h3>Initialization<a class="headerlink" href="#initialization" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>initialize():
+    cacheKey = &quot;queryId:planNodeId&quot;
+    cacheEntry = HashTableCache::instance()-&gt;get(cacheKey, taskId, queryCtx, &amp;future_)
+
+    if cacheEntry.buildComplete:        // Late Arrival
+        noMoreInput()                   // → finishHashBuild() → getHashTableFromCache()
+        return
+
+    if future_.valid():                 // Waiter
+        state = kWaitForBuild
+        return
+
+    // Builder: proceed with normal table setup
+    setupTable()                        // allocate BaseHashTable using cacheEntry.tablePool
+    setupSpiller()                      // no-op: canSpill() returns false with cache
+</pre></div>
+</div>
+</section>
+<section id="build-and-publish">
+<h3>Build and Publish<a class="headerlink" href="#build-and-publish" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>noMoreInput() → finishHashBuild():
+    if not allPeersFinished():          // wait for peer drivers in same task
+        state = kWaitForBuild
+        return
+
+    if getHashTableFromCache():         // Waiter or Late Arrival: cache has table
+        joinBridge.setHashTable(cacheEntry.table, hasNullKeys)
+        return
+
+    // Builder (last driver): merge and publish
+    table_.prepareJoinTable(otherTables)
+    HashTableCache::instance()-&gt;put(cacheKey, table_, hasNullKeys)
+    joinBridge.setHashTable(table_, hasNullKeys)
+</pre></div>
+</div>
+</section>
+<section id="waiter-wake-up">
+<h3>Waiter Wake-up<a class="headerlink" href="#waiter-wake-up" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>isBlocked():
+    case kWaitForBuild:
+        if receivedCachedHashTable():   // future_ fulfilled, buildComplete == true
+            setRunning()
+            noMoreInput()               // → finishHashBuild() → getHashTableFromCache()
+</pre></div>
+</div>
+</section>
+</section>
+<section id="skipping-source-reads">
+<h2>Skipping Source Reads<a class="headerlink" href="#skipping-source-reads" title="Link to this heading">¶</a></h2>
+<p>Waiter tasks never read any data from storage. No splits are fetched, no
+exchanges are initiated.</p>
+<p>In Velox, a build-side pipeline is a chain of operators ending with
+<code class="docutils literal notranslate"><span class="pre">HashBuild</span></code> as the sink:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>[TableScan / Exchange] → ... → [HashBuild]
+     operators_[0]               operators_[last]
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">Driver::runInternal()</span></code> loop iterates through operator pairs <code class="docutils literal notranslate"><span class="pre">(op,</span>
+<span class="pre">nextOp)</span></code> and, for each pair, follows this sequence:</p>
+<ol class="arabic simple">
+<li><p>Check <code class="docutils literal notranslate"><span class="pre">op-&gt;isBlocked()</span></code> — if blocked, suspend the Driver.</p></li>
+<li><p>Check <code class="docutils literal notranslate"><span class="pre">nextOp-&gt;isBlocked()</span></code> — if blocked, suspend the Driver.</p></li>
+<li><p>Check <code class="docutils literal notranslate"><span class="pre">nextOp-&gt;needsInput()</span></code> — if false, skip pulling from <code class="docutils literal notranslate"><span class="pre">op</span></code>.</p></li>
+<li><p>Call <code class="docutils literal notranslate"><span class="pre">op-&gt;getOutput()</span></code> and feed the result to <code class="docutils literal notranslate"><span class="pre">nextOp-&gt;addInput()</span></code>.</p></li>
+</ol>
+<p>The critical point is that <code class="docutils literal notranslate"><span class="pre">nextOp-&gt;isBlocked()</span></code> is checked <strong>before</strong>
+<code class="docutils literal notranslate"><span class="pre">op-&gt;getOutput()</span></code> is ever called. When the <code class="docutils literal notranslate"><span class="pre">HashBuild</span></code> operator is in the
+<code class="docutils literal notranslate"><span class="pre">kWaitForBuild</span></code> state, it returns a blocked status, which prevents the
+driver from pulling data from any upstream operator (e.g., <code class="docutils literal notranslate"><span class="pre">TableScan</span></code> or
+<code class="docutils literal notranslate"><span class="pre">Exchange</span></code>). Once the cached table arrives and the waiter calls
+<code class="docutils literal notranslate"><span class="pre">noMoreInput()</span></code>, source operators are short-circuited immediately —
+they never execute at all.</p>
+<p>This is a key benefit of the caching design: waiter tasks incur zero I/O cost.</p>
+</section>
+<section id="memory-management">
+<h2>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading">¶</a></h2>
+<p>Cached hash tables must outlive the task that built them because waiter tasks
+from the same query need to access the table after the builder task has
+finished. To support this, cached hash tables use a dedicated leaf memory pool
+created under the <strong>query</strong> memory pool rather than the operator’s task-level
+pool.</p>
+<section id="pool-hierarchy">
+<h3>Pool Hierarchy<a class="headerlink" href="#pool-hierarchy" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Query Pool
+├── Task 1 Pool (builder - may finish first)
+│   └── Operator Pool
+└── cached_table_&lt;key&gt; Pool  ← hash table lives here
+    (created by HashTableCache)
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">tablePool</span></code> is created by the first call to <code class="docutils literal notranslate"><span class="pre">get()</span></code> as a leaf child of
+the caller’s <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code> root pool. All drivers in the builder task share this
+pool for their partial table allocations via <code class="docutils literal notranslate"><span class="pre">HashBuild::tableMemoryPool()</span></code>.
+This ties the cached table’s memory accounting to the originating query rather
+than to any individual task, allowing the table to survive task completion.</p>
+</section>
+<section id="cleanup-callback">
+<h3>Cleanup Callback<a class="headerlink" href="#cleanup-callback" title="Link to this heading">¶</a></h3>
+<p>When a cache entry is created, <code class="docutils literal notranslate"><span class="pre">HashTableCache::get()</span></code> registers a release
+callback on the <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code>. When the query context is destroyed, this
+callback calls <code class="docutils literal notranslate"><span class="pre">HashTableCache::drop()</span></code> to remove the entry and free the
+table’s memory before the query pool is torn down. <code class="docutils literal notranslate"><span class="pre">drop()</span></code> resets the
+<code class="docutils literal notranslate"><span class="pre">shared_ptr&lt;BaseHashTable&gt;</span></code> outside the lock to free memory before the entry
+itself is destroyed. This ensures there are no dangling references to
+destroyed memory pools.</p>
+<p><code class="docutils literal notranslate"><span class="pre">HashBuild::tableMemoryPool()</span></code> returns the cache entry’s <code class="docutils literal notranslate"><span class="pre">tablePool</span></code> when
+caching is enabled, or the operator’s own <code class="docutils literal notranslate"><span class="pre">pool()</span></code> for regular joins.</p>
+</section>
+<section id="ownership-and-shared-pointers">
+<h3>Ownership and Shared Pointers<a class="headerlink" href="#ownership-and-shared-pointers" title="Link to this heading">¶</a></h3>
+<p>Without caching, the hash table is transferred to the <code class="docutils literal notranslate"><span class="pre">HashJoinBridge</span></code> as a
+<code class="docutils literal notranslate"><span class="pre">unique_ptr</span></code>. With caching enabled, the table is stored as a <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code>
+in the cache entry and a copy of the <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code> is passed to the bridge.
+This allows the cache to retain ownership while the bridge and probe operator
+also hold references. The <code class="docutils literal notranslate"><span class="pre">HashJoinBridge::setHashTable()</span></code> signature was
+changed to accept <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code> to support this.</p>
+<p>Reference counting ensures that the table is not freed while any probe operator
+is actively scanning it. Once the probe finishes, the reference count is
+decremented. The table is ultimately freed when the <code class="docutils literal notranslate"><span class="pre">QueryCtx</span></code> release
+callback calls <code class="docutils literal notranslate"><span class="pre">drop()</span></code>.</p>
+</section>
+</section>
+<section id="spilling">
+<h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading">¶</a></h2>
+<p>Spilling is not supported when hash table caching is enabled. Both
+<code class="docutils literal notranslate"><span class="pre">HashBuild::canSpill()</span></code> and <code class="docutils literal notranslate"><span class="pre">HashBuild::canReclaim()</span></code> return false when
+<code class="docutils literal notranslate"><span class="pre">useHashTableCache</span></code> is true:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">HashBuild::canSpill</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">useHashTableCache</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>This is because spilling clears the hash table from memory and rebuilds it
+later, which would corrupt the cached table that other tasks may be using.
+Specifically:</p>
+<ul class="simple">
+<li><p><strong>Builder task</strong>: Cannot spill because the table is shared via the cache.
+Spilling would invalidate the <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code> held by waiter tasks.</p></li>
+<li><p><strong>Waiter tasks</strong>: Cannot spill because they use the cached table directly
+and never build their own.</p></li>
+<li><p><strong>Coordination complexity</strong>: Rebuild-after-spill would require re-coordinating
+across all tasks sharing the cached table.</p></li>
+</ul>
+<p>Broadcast joins (the primary use case for this cache) are generally expected to
+fit in memory. If a build-side relation is large enough to require spilling, it
+should bypass the cache and use a standard partitioned hash join with spilling
+enabled.</p>
+</section>
+<section id="eviction">
+<h2>Eviction<a class="headerlink" href="#eviction" title="Link to this heading">¶</a></h2>
+<p>Cache eviction is not currently supported. Entries remain in the cache until
+the query context is destroyed, at which point the release callback removes
+them.</p>
+<p>Future memory pressure-based eviction would need to address:</p>
+<ol class="arabic simple">
+<li><p><strong>Tracking total memory</strong>: Summing the memory held by all cached tables.</p></li>
+<li><p><strong>Eviction policy</strong>: Deciding which entries to evict (e.g., LRU, by size).</p></li>
+<li><p><strong>Reference invalidation</strong>: Safely handling eviction while probe operators
+hold references via <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code>.</p></li>
+<li><p><strong>Rebuild fallback</strong>: Allowing tasks to re-build the table if it was evicted.</p></li>
+</ol>
+<p>The <code class="docutils literal notranslate"><span class="pre">drop()</span></code> method already provides the mechanism for removing individual
+entries and could be extended to support eviction driven by the memory manager
+or arbitration framework.</p>
+</section>
+<section id="limitations-and-future-work">
+<h2>Limitations and Future Work<a class="headerlink" href="#limitations-and-future-work" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>No spilling</strong>: Cached tables must reside entirely in memory. See
+<span class="xref std std-ref">Spilling</span> above.</p></li>
+<li><p><strong>No eviction</strong>: Cached entries live for the full query lifetime. Memory
+pressure-based eviction is planned.</p></li>
+<li><p><strong>Single-query scope</strong>: The cache key includes the <code class="docutils literal notranslate"><span class="pre">queryId</span></code>, so tables are
+not shared across different queries even if the build side data is identical.
+Cross-query sharing is a potential future optimization.</p></li>
+<li><p><strong>No sanity checks on table sharing during probe</strong>: For right joins, we rely on
+the planner to not do a broadcast join and skip using cached tables. But velox
+as a library does not do checks during probe that it is in fact running a join
+that does not mutate the hash table. Mutating the cached hash table can cause
+incorrect execution results. We should add this check</p></li>
+</ul>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Hash Table Caching</a><ul>
+<li><a class="reference internal" href="#background">Background</a><ul>
+<li><a class="reference internal" href="#the-build-io-tax">The Build IO Tax</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#enabling-hash-table-caching">Enabling Hash Table Caching</a></li>
+<li><a class="reference internal" href="#overall-design">Overall Design</a></li>
+<li><a class="reference internal" href="#cache-structure">Cache Structure</a></li>
+<li><a class="reference internal" href="#cache-api">Cache API</a><ul>
+<li><a class="reference internal" href="#get">get()</a></li>
+<li><a class="reference internal" href="#put">put()</a></li>
+<li><a class="reference internal" href="#drop">drop()</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#build-coordination">Build Coordination</a><ul>
+<li><a class="reference internal" href="#builder-task">Builder Task</a></li>
+<li><a class="reference internal" href="#waiter-tasks">Waiter Tasks</a></li>
+<li><a class="reference internal" href="#cache-hit">Cache Hit</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#usage-by-hashbuild">Usage by HashBuild</a><ul>
+<li><a class="reference internal" href="#step-1-build-phase-producer">Step 1: Build Phase (Producer)</a></li>
+<li><a class="reference internal" href="#step-2-synchronization-joinbridge">Step 2: Synchronization (JoinBridge)</a></li>
+<li><a class="reference internal" href="#step-3-probe-phase-consumer">Step 3: Probe Phase (Consumer)</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#hashbuild-lifecycle">HashBuild Lifecycle</a><ul>
+<li><a class="reference internal" href="#initialization">Initialization</a></li>
+<li><a class="reference internal" href="#build-and-publish">Build and Publish</a></li>
+<li><a class="reference internal" href="#waiter-wake-up">Waiter Wake-up</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#skipping-source-reads">Skipping Source Reads</a></li>
+<li><a class="reference internal" href="#memory-management">Memory Management</a><ul>
+<li><a class="reference internal" href="#pool-hierarchy">Pool Hierarchy</a></li>
+<li><a class="reference internal" href="#cleanup-callback">Cleanup Callback</a></li>
+<li><a class="reference internal" href="#ownership-and-shared-pointers">Ownership and Shared Pointers</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#spilling">Spilling</a></li>
+<li><a class="reference internal" href="#eviction">Eviction</a></li>
+<li><a class="reference internal" href="#limitations-and-future-work">Limitations and Future Work</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/hash-table-caching.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Hash Table Caching</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
