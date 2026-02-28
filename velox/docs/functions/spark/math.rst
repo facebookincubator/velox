@@ -95,6 +95,11 @@ Mathematical Functions
     Returns the results of dividing x by y. The types of x and y must be the same.
     Division by zero results in an error. Corresponds to Spark's operator ``/`` with ``failOnError`` as true.
 
+.. function:: checked_pmod(n, m) -> [same as n]
+
+    Returns the positive modulus (remainder) of ``n`` divided by ``m``. The types of n and m must be the same.
+    Division by zero results in an error. Corresponds to Spark's ``pmod`` function with ``failOnError`` as true.
+
 .. function:: checked_multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
