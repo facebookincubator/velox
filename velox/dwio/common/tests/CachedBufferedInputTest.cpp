@@ -479,4 +479,70 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
   EXPECT_EQ(stats.numEntries, 2);
   EXPECT_EQ(stats.numExclusive, 0);
 }
+
+DEBUG_ONLY_TEST_F(CachedBufferedInputTest, prefetchScope) {
+  constexpr int32_t kContentSize = 32 << 20; // 32MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i);
+  }
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "testFile");
+  StringIdLease groupId(ids, "testGroup");
+
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  // Enqueue non-prefetch requests (with stream IDs)
+  std::vector<std::unique_ptr<StreamIdentifier>> streamIds;
+  for (int i = 0; i < 3; ++i) {
+    streamIds.push_back(std::make_unique<StreamIdentifier>(i));
+  }
+  for (int i = 0; i < 3; ++i) {
+    input.enqueue({static_cast<uint64_t>(i * 1000), 500}, streamIds[i].get());
+  }
+  input.load(LogType::TEST);
+
+  // There should be exactly 1 non-prefetch CoalescedLoad in kPlanned state
+  const auto& loads1 = input.testingCoalescedLoads();
+  ASSERT_EQ(loads1.size(), 1);
+  ASSERT_EQ(loads1[0]->state(), CoalescedLoad::State::kPlanned);
+
+  // Enqueue prefetch requests (without stream IDs)
+  constexpr int32_t kMB = 1 << 20;
+  for (int i = 0; i < 3; ++i) {
+    input.enqueue({static_cast<uint64_t>(10 * kMB + i * 1000), 500}, nullptr);
+  }
+  input.load(LogType::TEST);
+
+  // Wait for executor to complete all submitted tasks.
+  executor_->join();
+  executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(10);
+
+  const auto& loads2 = input.testingCoalescedLoads();
+  // coalescedLoads_ should have 2 entries:
+  //   [0]: non-prefetch load (should remain kPlanned)
+  //   [1]: prefetch load (should be kLoaded after executor runs)
+  ASSERT_EQ(loads2.size(), 2);
+  EXPECT_EQ(loads2[0]->state(), CoalescedLoad::State::kPlanned)
+      << "Non-prefetch load should NOT be submitted to executor";
+  EXPECT_EQ(loads2[1]->state(), CoalescedLoad::State::kLoaded)
+      << "Prefetch load should be submitted and completed by executor";
+
+  EXPECT_GT(ioStatistics_->prefetch().sum(), 0);
+}
 } // namespace
