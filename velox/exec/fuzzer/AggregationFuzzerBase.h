@@ -81,7 +81,11 @@ class AggregationFuzzerBase {
                                       : getFuzzerOptions(timestampPrecision),
             pool_.get()} {
     filesystems::registerLocalFileSystem();
-    registerHiveConnector(hiveConfigs);
+    // Fuzzer test generates a lot of files and directories. Disable file
+    // handle cache to avoid EBADF errors.
+    auto configs = hiveConfigs;
+    configs[connector::hive::HiveConfig::kEnableFileHandleCache] = "false";
+    registerHiveConnector(configs);
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
 
