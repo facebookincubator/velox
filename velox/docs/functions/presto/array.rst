@@ -80,6 +80,27 @@ Array Functions
         SELECT array_frequency(ARRAY ["knock", "knock", "who", "?"]); -- {"knock" -> 2, "who" -> 1, "?" -> 1}
         SELECT array_frequency(ARRAY []); -- {}
 
+.. function:: array_least_frequent(array(T)) -> array(T)
+
+    Returns the least frequent element in the array, wrapped in a single-element array.
+    Null elements are ignored. Ties are broken by element value in ascending order.
+    Returns NULL if the array is NULL or contains only null elements. ::
+
+        SELECT array_least_frequent(ARRAY [1, 0, 5]); -- [0]
+        SELECT array_least_frequent(ARRAY [1, NULL, 1]); -- [1]
+
+.. function:: array_least_frequent(array(T), n) -> array(T)
+    :noindex:
+
+    Returns the ``n`` least frequent elements, sorted by frequency ascending, then by
+    value ascending. Null elements are ignored. ``n`` must be greater than or equal to 0.
+    If ``n`` is 0, returns an empty array. If ``n`` is greater than the number of distinct
+    elements, all distinct elements are returned. Returns NULL if the array is NULL or
+    contains only null elements. ::
+
+        SELECT array_least_frequent(ARRAY [3, 2, 2, 6, 6, 1, 1], 3); -- [3, 1, 2]
+        SELECT array_least_frequent(ARRAY [1, NULL, 1], 2); -- [1]
+
 .. function:: array_has_duplicates(array(E)) -> boolean
 
     Returns a boolean: whether array has any elements that occur more than once.
