@@ -442,7 +442,9 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     return BaseHashTable::JoinResultIterator(
         std::move(varSizeListColumns),
         fixedSizeListColumnsSizeSum,
-        std::nullopt);
+        fixedSizeListColumnsSizeSum > 0
+            ? std::optional<uint64_t>(fixedSizeListColumnsSizeSum)
+            : std::nullopt);
   }
 
   // Hash probe and list join result.
@@ -544,7 +546,7 @@ int main(int argc, char** argv) {
   std::vector<HashTableBenchmarkResult> results;
 
   auto hashTableSize = (2L << 20) - 3;
-  auto probeRowSize = 100000000L;
+  auto probeRowSize = 10'000'000L;
 
   TypePtr onlyKeyType{ROW({"k1"}, {BIGINT()})};
 
