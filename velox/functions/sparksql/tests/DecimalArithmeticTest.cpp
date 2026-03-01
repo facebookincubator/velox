@@ -88,6 +88,16 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       std::optional<U> u) {
     return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
   }
+
+  template <typename T, typename U>
+  std::optional<int128_t> checked_multiply(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int128_t>(
+        "checked_multiply(c0, c1)", {tType, uType}, t, u);
+  }
 };
 
 TEST_F(DecimalArithmeticTest, add) {
@@ -832,6 +842,85 @@ TEST_F(DecimalArithmeticTest, checkedDiv) {
           HugeInt::parse("99999999999999999999999999999999999999"),
           1)),
       "Overflow in integral divide");
+}
+
+TEST_F(DecimalArithmeticTest, checkedMultiply) {
+  // Normal cases: DECIMAL(17,3) * DECIMAL(17,3) -> result precision 35 (long).
+  // 1.000 * 2.000 = 2.000000 (unscaled: 1000 * 2000 = 2000000).
+  EXPECT_EQ(
+      (checked_multiply<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 1000, 2000)),
+      2000000);
+  EXPECT_EQ(
+      (checked_multiply<int64_t, int128_t>(
+          DECIMAL(17, 3), DECIMAL(20, 3), 1000, 2000)),
+      2000000);
+  EXPECT_EQ(
+      (checked_multiply<int128_t, int64_t>(
+          DECIMAL(20, 3), DECIMAL(17, 3), 1000, 2000)),
+      2000000);
+  EXPECT_EQ(
+      (checked_multiply<int128_t, int128_t>(
+          DECIMAL(20, 3), DECIMAL(20, 3), 1000, 2000)),
+      2000000);
+
+  // Multiplying by zero.
+  EXPECT_EQ(
+      (checked_multiply<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), 0, 2000)),
+      0);
+
+  // Multiplying negative numbers: (-1.000) * 2.000 = -2.000000.
+  EXPECT_EQ(
+      (checked_multiply<int64_t, int64_t>(
+          DECIMAL(17, 3), DECIMAL(17, 3), -1000, 2000)),
+      -2000000);
+
+  // Result precision capped at 38, no overflow (small values).
+  // DECIMAL(38,0) * DECIMAL(38,0) -> result precision capped at 38, scale 0.
+  EXPECT_EQ(
+      (checked_multiply<int128_t, int128_t>(
+          DECIMAL(38, 0), DECIMAL(38, 0), 100, 200)),
+      20000);
+
+  // Near-boundary success: large values that just fit.
+  // 1e18 * 1e19 = 1e37, which fits in DECIMAL(38,0).
+  EXPECT_EQ(
+      (checked_multiply<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("1000000000000000000"),
+          HugeInt::parse("10000000000000000000"))),
+      HugeInt::parse("10000000000000000000000000000000000000"));
+
+  // Positive overflow should throw.
+  // 1e19 * 1e19 = 1e38, which exceeds max DECIMAL(38,0).
+  VELOX_ASSERT_USER_THROW(
+      (checked_multiply<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("10000000000000000000"),
+          HugeInt::parse("10000000000000000000"))),
+      "Decimal overflow in multiply");
+
+  // Negative overflow should throw (positive * negative -> overflow).
+  VELOX_ASSERT_USER_THROW(
+      (checked_multiply<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("10000000000000000000"),
+          HugeInt::parse("-10000000000000000000"))),
+      "Decimal overflow in multiply");
+
+  // Negative * negative overflow should throw (result is positive but too
+  // large).
+  VELOX_ASSERT_USER_THROW(
+      (checked_multiply<int128_t, int128_t>(
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("-10000000000000000000"),
+          HugeInt::parse("-10000000000000000000"))),
+      "Decimal overflow in multiply");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
