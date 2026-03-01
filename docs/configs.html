@@ -720,7 +720,15 @@ The value is in the range of [0, 1). Currently only applies to approx_most_frequ
 aggregate with StringView type during global aggregation. May be extended
 to other aggregation types on-demand.</p></td>
 </tr>
-<tr class="row-even"><td><p>streaming_aggregation_min_output_batch_rows</p></td>
+<tr class="row-even"><td><p>aggregation_memory_compaction_reclaim_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, enables lightweight memory compaction before spilling during
+memory reclaim in aggregation. When enabled, the aggregation operator
+will try to compact aggregate function state (e.g., free dead strings)
+before resorting to spilling.</p></td>
+</tr>
+<tr class="row-odd"><td><p>streaming_aggregation_min_output_batch_rows</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>In streaming aggregation, wait until we have enough number of output rows
