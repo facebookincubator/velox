@@ -898,6 +898,7 @@ void Expr::evaluateSharedSubexpr(
     TEval eval) {
   // Captures the inputs referenced by distinctFields_.
   InputForSharedResults expressionInputFields;
+  expressionInputFields.reserve(distinctFields_.size());
   for (auto* field : distinctFields_) {
     expressionInputFields.addInput(context.getField(field->index(context)));
   }
