@@ -735,6 +735,37 @@ TEST_F(ParquetTableScanTest, array) {
       .assertResults(expected);
 }
 
+TEST_F(ParquetTableScanTest, legacyArrayOfStructOfArray) {
+  // Legacy format with Array of Struct of Array
+  // ARRAY<STRUCT<ads_id: BIGINT, shop_id: BIGINT, streamer_cat_ids:
+  // ARRAY<BIGINT>, items: ARRAY<BIGINT>>>.
+  auto rowType =
+      ROW({"ads"},
+          {ARRAY(
+              ROW({"ads_id", "shop_id", "streamer_cat_ids", "items"},
+                  {BIGINT(), BIGINT(), ARRAY(BIGINT()), ARRAY(BIGINT())}))});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  auto adsArray = makeArrayVector(
+      {0, 1, 2},
+      makeRowVector(
+          {"ads_id", "shop_id", "streamer_cat_ids", "items"},
+          {makeFlatVector<int64_t>({1001, 1002}),
+           makeFlatVector<int64_t>({501, 502}),
+           makeArrayVector<int64_t>({{}, {11, 22}}),
+           makeArrayVector<int64_t>({{9001, 9002}, {9101}})}));
+
+  auto expected = makeRowVector({"ads"}, {adsArray});
+
+  AssertQueryBuilder(plan)
+      .split(makeSplit(
+          getExampleFilePath("legacy_array_of_struct_of_array.parquet")))
+      .assertResults(expected);
+}
+
 // Optional array with required elements.
 TEST_F(ParquetTableScanTest, optArrayReqEle) {
   auto vector = makeArrayVector<StringView>({});
