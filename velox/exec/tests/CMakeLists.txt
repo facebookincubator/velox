@@ -306,7 +306,16 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_library(velox_simple_aggregate SimpleAverageAggregate.cpp SimpleArrayAggAggregate.cpp)
+add_library(
+  velox_simple_aggregate
+  SimpleAverageAggregate.cpp
+  SimpleArrayAggAggregate.cpp
+  SimpleVariadicArrayAggAggregate.cpp
+  SimpleVariadicSumAggregateDefaultNull.cpp
+  SimpleVariadicSumAggregateNonDefaultNull.cpp
+  VariadicSumAggregateDefaultNull.cpp
+  VariadicSumAggregateNonDefaultNull.cpp
+)
 
 target_link_libraries(
   velox_simple_aggregate
@@ -314,6 +323,8 @@ target_link_libraries(
   velox_expression
   velox_expression_functions
   velox_aggregates
+  velox_vector
+  velox_memory
 )
 
 add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp Main.cpp)
@@ -377,6 +388,14 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_exec
     velox_exec_test_lib
     velox_spiller_aggregate_benchmark_base
+  )
+
+  add_executable(simple_variadic_sum_benchmark SimpleVariadicSumAggregateBenchmark.cpp)
+  target_link_libraries(
+    simple_variadic_sum_benchmark
+    simple_aggregate
+    velox_exec_test_lib
+    Folly::folly
   )
 endif()
 
