@@ -1170,6 +1170,16 @@ Spark-specific Configuration
      - bool
      - true
      - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
+   * - spark.collect_list.ignore_nulls
+     - bool
+     - true
+     - If true, :spark:func:`collect_list` aggregate function ignores null inputs. If false, null values
+       are included in the output array (RESPECT NULLS behavior).
+   * - spark.collect_set.ignore_nulls
+     - bool
+     - true
+     - If true, :spark:func:`collect_set` aggregate function ignores null inputs. If false, null values
+       are included in the result set (RESPECT NULLS behavior).
 
 Tracing
 --------

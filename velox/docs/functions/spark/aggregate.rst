@@ -66,8 +66,14 @@ General Aggregate Functions
 
 .. spark:function:: collect_set(x) -> array<[same as x]>
 
-    Returns an array consisting of all unique values from the input ``x`` elements excluding NULLs.
-    NaN values are considered distinct. Returns empty array if input is empty or all NULL.
+    Returns an array consisting of all unique values from the input ``x`` elements.
+    By default, ignores null inputs and returns an empty array when all inputs
+    are null. NaN values are considered distinct.
+
+    When the configuration property ``spark.collect_set.ignore_nulls`` is set
+    to ``false``, null values are included in the result set (RESPECT NULLS
+    behavior). In this mode, an all-null input produces an array containing
+    a single null instead of an empty array.
 
     Example::
 

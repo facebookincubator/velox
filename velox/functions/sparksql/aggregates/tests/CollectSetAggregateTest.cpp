@@ -282,5 +282,115 @@ TEST_F(CollectSetAggregateTest, unknownType) {
   testAggregations({data}, {"c0"}, {"collect_set(c0)"}, {}, {expected});
 }
 
+std::unordered_map<std::string, std::string> makeConfig(bool ignoreNulls) {
+  return {{"spark.collect_set.ignore_nulls", ignoreNulls ? "true" : "false"}};
+}
+
+TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
+  // Mixed values and nulls.
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>(
+          {1, 2, std::nullopt, 4, 5, std::nullopt, 4, 2, 6, 7}),
+  });
+
+  auto expected = makeRowVector({
+      makeNullableArrayVector<int32_t>(
+          std::vector<std::vector<std::optional<int32_t>>>{
+              {1, 2, 4, 5, 6, 7, std::nullopt}}),
+  });
+
+  testAggregations(
+      {data},
+      {},
+      {"collect_set(c0)"},
+      {"spark_array_sort(a0)"},
+      {expected},
+      makeConfig(false));
+
+  // All inputs are null — should return array with a single null element.
+  data = makeRowVector({
+      makeAllNullFlatVector<int32_t>(5),
+  });
+
+  expected = makeRowVector({
+      makeNullableArrayVector<int32_t>(
+          std::vector<std::vector<std::optional<int32_t>>>{{std::nullopt}}),
+  });
+
+  testAggregations(
+      {data}, {}, {"collect_set(c0)"}, {}, {expected}, makeConfig(false));
+
+  // No null inputs — should behave same as collect_set.
+  data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 2, 1}),
+  });
+
+  expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[1, 2, 3]"}),
+  });
+
+  testAggregations(
+      {data},
+      {},
+      {"collect_set(c0)"},
+      {"spark_array_sort(a0)"},
+      {expected},
+      makeConfig(false));
+}
+
+TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 2, 1, 2, 1, 2, 1}),
+      makeNullableFlatVector<int32_t>(
+          {1,
+           std::nullopt,
+           3,
+           std::nullopt,
+           5,
+           std::nullopt,
+           3,
+           std::nullopt,
+           6,
+           1}),
+  });
+
+  // With RESPECT NULLS, null is included in the result set.
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeNullableArrayVector<int32_t>(
+          std::vector<std::vector<std::optional<int32_t>>>{
+              {1, std::nullopt}, {3, 5, 6, std::nullopt}}),
+  });
+
+  testAggregations(
+      {data},
+      {"c0"},
+      {"collect_set(c1)"},
+      {"c0", "spark_array_sort(a0)"},
+      {expected},
+      makeConfig(false));
+
+  // All inputs null for a group.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2}),
+      makeNullableFlatVector<int32_t>({1, 2, std::nullopt, std::nullopt}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeNullableArrayVector<int32_t>(
+          std::vector<std::vector<std::optional<int32_t>>>{
+              {1, 2}, {std::nullopt}}),
+  });
+
+  testAggregations(
+      {data},
+      {"c0"},
+      {"collect_set(c1)"},
+      {"c0", "spark_array_sort(a0)"},
+      {expected},
+      makeConfig(false));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

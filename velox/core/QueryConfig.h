@@ -527,6 +527,12 @@ class QueryConfig {
   static constexpr const char* kSparkCollectListIgnoreNulls =
       "spark.collect_list.ignore_nulls";
 
+  /// If true, collect_set aggregate function will ignore nulls in the input.
+  /// Defaults to true to match Spark's default behavior. Set to false to
+  /// include nulls (RESPECT NULLS). Introduced in Spark 4.2 (SPARK-55533).
+  static constexpr const char* kSparkCollectSetIgnoreNulls =
+      "spark.collect_set.ignore_nulls";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -1325,6 +1331,10 @@ class QueryConfig {
 
   bool sparkCollectListIgnoreNulls() const {
     return get<bool>(kSparkCollectListIgnoreNulls, true);
+  }
+
+  bool sparkCollectSetIgnoreNulls() const {
+    return get<bool>(kSparkCollectSetIgnoreNulls, true);
   }
 
   bool exprTrackCpuUsage() const {
