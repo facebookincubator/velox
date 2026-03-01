@@ -284,13 +284,13 @@ MemoryArbitrationFuzzer::MemoryArbitrationFuzzer(size_t initialSeed)
   // paritition key, and presto doesn't supports nanosecond precision.
   vectorFuzzer_.getMutableOptions().timestampPrecision =
       fuzzer::FuzzerTimestampPrecision::kMilliSeconds;
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+  if (!isRegisteredNamedVectorSerde("Presto")) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+  if (!isRegisteredNamedVectorSerde("CompactRow")) {
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+  if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
   // Make sure not to run out of open file descriptors.

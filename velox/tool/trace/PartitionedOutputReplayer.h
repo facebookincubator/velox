@@ -46,7 +46,7 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
       const std::string& queryId,
       const std::string& taskId,
       const std::string& nodeId,
-      VectorSerde::Kind serdeKind,
+      std::string serdeKind,
       const std::string& operatorType,
       const std::string& driverIds,
       uint64_t queryCapacity,
@@ -62,7 +62,7 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
       const core::PlanNodePtr& source) const override;
 
   const core::PartitionedOutputNode* const originalNode_;
-  const VectorSerde::Kind serdeKind_;
+  const std::string serdeKind_;
   const std::shared_ptr<exec::OutputBufferManager> bufferManager_{
       exec::OutputBufferManager::getInstanceRef()};
   const std::unique_ptr<folly::Executor> executor_{

@@ -129,7 +129,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerNamedVectorSerde();
     }

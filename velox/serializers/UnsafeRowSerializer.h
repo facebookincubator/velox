@@ -21,7 +21,7 @@ namespace facebook::velox::serializer::spark {
 
 class UnsafeRowVectorSerde : public VectorSerde {
  public:
-  UnsafeRowVectorSerde() : VectorSerde(VectorSerde::Kind::kUnsafeRow) {}
+  UnsafeRowVectorSerde() : VectorSerde("UnsafeRow") {}
 
   void estimateSerializedSize(
       const row::UnsafeRowFast* unsafeRow,

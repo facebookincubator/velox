@@ -42,12 +42,10 @@ using namespace facebook::velox::common::testutil;
 namespace {
 
 struct TestParam {
-  VectorSerde::Kind serdeKind;
+  std::string serdeKind;
   common::CompressionKind compressionKind;
 
-  TestParam(
-      VectorSerde::Kind _serdeKind,
-      common::CompressionKind _compressionKind)
+  TestParam(std::string _serdeKind, common::CompressionKind _compressionKind)
       : serdeKind(_serdeKind), compressionKind(_compressionKind) {}
 };
 
@@ -56,18 +54,12 @@ class MultiFragmentTest : public HiveConnectorTestBase,
  public:
   static std::vector<TestParam> getTestParams() {
     std::vector<TestParam> params;
-    params.emplace_back(
-        VectorSerde::Kind::kPresto, common::CompressionKind_NONE);
-    params.emplace_back(
-        VectorSerde::Kind::kCompactRow, common::CompressionKind_NONE);
-    params.emplace_back(
-        VectorSerde::Kind::kUnsafeRow, common::CompressionKind_NONE);
-    params.emplace_back(
-        VectorSerde::Kind::kPresto, common::CompressionKind_LZ4);
-    params.emplace_back(
-        VectorSerde::Kind::kCompactRow, common::CompressionKind_LZ4);
-    params.emplace_back(
-        VectorSerde::Kind::kUnsafeRow, common::CompressionKind_LZ4);
+    params.emplace_back("Presto", common::CompressionKind_NONE);
+    params.emplace_back("CompactRow", common::CompressionKind_NONE);
+    params.emplace_back("UnsafeRow", common::CompressionKind_NONE);
+    params.emplace_back("Presto", common::CompressionKind_LZ4);
+    params.emplace_back("CompactRow", common::CompressionKind_LZ4);
+    params.emplace_back("UnsafeRow", common::CompressionKind_LZ4);
     return params;
   }
 
@@ -386,9 +378,11 @@ TEST_P(MultiFragmentTest, aggregationSingleKey) {
           .customStats.at(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 4);
   ASSERT_EQ(
-      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.min,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   ASSERT_EQ(
-      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.max,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
 
   for (const auto& finalTask : finalTasks) {
     auto finalPlanStats = toPlanStats(finalTask->taskStats());
@@ -397,9 +391,11 @@ TEST_P(MultiFragmentTest, aggregationSingleKey) {
             .customStats.at(Operator::kShuffleSerdeKind);
     ASSERT_EQ(serdeKindRuntimsStats.count, 1);
     ASSERT_EQ(
-        serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+        serdeKindRuntimsStats.min,
+        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
     ASSERT_EQ(
-        serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+        serdeKindRuntimsStats.max,
+        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   }
 }
 
@@ -686,9 +682,11 @@ TEST_P(MultiFragmentTest, mergeExchange) {
       mergeExchangeStats.customStats.at(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
-      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.min,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   ASSERT_EQ(
-      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.max,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
 }
 
 // Test reordering and dropping columns in PartitionedOutput operator.
@@ -1003,9 +1001,11 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
       mergeExchangeStats.customStats.at(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
-      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.min,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   ASSERT_EQ(
-      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.max,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
 }
 
 TEST_P(MultiFragmentTest, noHashPartitionSkew) {
@@ -1678,7 +1678,7 @@ namespace {
 core::PlanNodePtr makeJoinOverExchangePlan(
     const RowTypePtr& exchangeType,
     const RowVectorPtr& buildData,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   return PlanBuilder(planNodeIdGenerator)
       .exchange(exchangeType, serdeKind)
@@ -2096,14 +2096,14 @@ class TestCustomExchangeNode : public core::PlanNode {
   TestCustomExchangeNode(
       const core::PlanNodeId& id,
       const RowTypePtr type,
-      VectorSerde::Kind serdeKind)
+      std::string serdeKind)
       : PlanNode(id), outputType_(type), serdeKind_(serdeKind) {}
 
   const RowTypePtr& outputType() const override {
     return outputType_;
   }
 
-  VectorSerde::Kind serdeKind() const {
+  const std::string& serdeKind() const {
     return serdeKind_;
   }
 
@@ -2130,7 +2130,7 @@ class TestCustomExchangeNode : public core::PlanNode {
   }
 
   const RowTypePtr outputType_;
-  const VectorSerde::Kind serdeKind_;
+  const std::string serdeKind_;
 };
 
 class TestCustomExchange : public exec::Exchange {
@@ -2220,9 +2220,11 @@ TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
       planStats.at(partitionNodeId).customStats.at(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
-      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.min,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
   ASSERT_EQ(
-      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
+      serdeKindRuntimsStats.max,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
 }
 
 // This test is to reproduce the race condition between task terminate and no
@@ -2915,12 +2917,12 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
     ASSERT_EQ(numPages, stats.customStats.at("numReceivedPages").sum);
   };
 
-  if (GetParam().serdeKind == VectorSerde::Kind::kPresto) {
+  if (GetParam().serdeKind == "Presto") {
     test(1, 1'000);
     test(1'000, 56);
     test(10'000, 7);
     test(100'000, 2);
-  } else if (GetParam().serdeKind == VectorSerde::Kind::kCompactRow) {
+  } else if (GetParam().serdeKind == "CompactRow") {
     test(1, 1'000);
     test(1'000, 39);
     test(10'000, 5);
@@ -2934,7 +2936,7 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
 }
 
 TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
-  if (GetParam().serdeKind != VectorSerde::Kind::kCompactRow) {
+  if (GetParam().serdeKind != "CompactRow") {
     return;
   }
   const uint64_t kNumColumns = 100;
@@ -2960,14 +2962,13 @@ TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
                               {"c0"},
                               kNumPartitions,
                               /*outputLayout=*/{},
-                              VectorSerde::Kind::kCompactRow)
+                              "CompactRow")
                           .planNode();
   const auto producerTaskId = "local://t1";
 
-  auto plan =
-      test::PlanBuilder()
-          .exchange(asRowType(data->type()), VectorSerde::Kind::kCompactRow)
-          .planNode();
+  auto plan = test::PlanBuilder()
+                  .exchange(asRowType(data->type()), "CompactRow")
+                  .planNode();
 
   auto expected = makeRowVector(columns);
 
@@ -3381,7 +3382,7 @@ TEST_P(MultiFragmentTest, batchBytes) {
   // The fix prevents INT32_MAX overflow by controlling the merge size, but
   // fine-grained batch control requires deeper changes to PrestoVectorSerde.
 
-  if (GetParam().serdeKind == VectorSerde::Kind::kPresto) {
+  if (GetParam().serdeKind == "Presto") {
     // Current implementation merges all pages and processes in one batch
     // The key improvement is preventing overflow, not fine-grained batching
     test(100, 100, 1, 1); // Expect single batch with all data
@@ -3402,7 +3403,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<TestParam>& info) {
       return fmt::format(
           "{}_{}",
-          VectorSerde::kindName(info.param.serdeKind),
+          info.param.serdeKind,
           compressionKindToString(info.param.compressionKind));
     });
 } // namespace

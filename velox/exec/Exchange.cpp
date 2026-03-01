@@ -348,7 +348,8 @@ void Exchange::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serdeKind_)));
+        RuntimeCounter(
+            static_cast<int64_t>(VectorSerde::kindByName(serdeKind_))));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));

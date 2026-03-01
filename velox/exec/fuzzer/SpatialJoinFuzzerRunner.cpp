@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
   parse::registerTypeResolver();
 
   // Register serializers.
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+  if (!isRegisteredNamedVectorSerde("Presto")) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
 

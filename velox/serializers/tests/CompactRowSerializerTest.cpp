@@ -67,13 +67,11 @@ class CompactRowSerializerTest : public ::testing::Test,
   void SetUp() override {
     pool_ = memory::memoryManager()->addLeafPool();
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+    deregisterNamedVectorSerde("CompactRow");
     serializer::CompactRowVectorSerde::registerVectorSerde();
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
-    ASSERT_EQ(getVectorSerde()->kind(), VectorSerde::Kind::kCompactRow);
-    ASSERT_EQ(
-        getNamedVectorSerde(VectorSerde::Kind::kCompactRow)->kind(),
-        VectorSerde::Kind::kCompactRow);
+    ASSERT_EQ(getVectorSerde()->kind(), "CompactRow");
+    ASSERT_EQ(getNamedVectorSerde("CompactRow")->kind(), "CompactRow");
     appendRow_ = GetParam().appendRow;
     compressionKind_ = GetParam().compressionKind;
     microBatchDeserialize_ = GetParam().microBatchDeserialize;
@@ -82,7 +80,7 @@ class CompactRowSerializerTest : public ::testing::Test,
 
   void TearDown() override {
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+    deregisterNamedVectorSerde("CompactRow");
   }
 
   void serialize(RowVectorPtr rowVector, std::ostream* output) {

@@ -496,7 +496,7 @@ TEST_F(PlanNodeBuilderTest, groupIdNode) {
 TEST_F(PlanNodeBuilderTest, exchangeNode) {
   const PlanNodeId id = "exchange_node_id";
   const RowTypePtr type = ROW({"c0"}, {BIGINT()});
-  const auto serdeKind = VectorSerde::Kind::kPresto;
+  const auto serdeKind = "Presto";
 
   const auto verify = [&](const std::shared_ptr<const ExchangeNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -518,7 +518,7 @@ TEST_F(PlanNodeBuilderTest, exchangeNode) {
 TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
   const PlanNodeId id = "merge_exchange_node_id";
   const RowTypePtr type = ROW({"c0"}, {BIGINT()});
-  const auto serdeKind = VectorSerde::Kind::kPresto;
+  const auto serdeKind = "Presto";
   const std::vector<FieldAccessTypedExprPtr> sortingKeys = {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c1")};
   const std::vector<SortOrder> sortingOrders = {SortOrder(true, false)};
@@ -611,7 +611,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
   const auto partitionFunctionSpec =
       std::make_shared<GatherPartitionFunctionSpec>();
   const RowTypePtr outputType = ROW({"c0"}, {BIGINT()});
-  const auto serdeKind = VectorSerde::Kind::kPresto;
+  const auto serdeKind = "Presto";
 
   const auto verify =
       [&](const std::shared_ptr<const PartitionedOutputNode>& node) {

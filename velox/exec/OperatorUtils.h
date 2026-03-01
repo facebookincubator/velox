@@ -321,7 +321,7 @@ class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
 /// settings. Optionally configures minimum compression ratio.
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
-    VectorSerde::Kind kind,
+    const std::string& kind,
     std::optional<float> minCompressionRatio = std::nullopt);
 
 } // namespace facebook::velox::exec

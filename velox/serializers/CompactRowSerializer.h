@@ -22,7 +22,7 @@ namespace facebook::velox::serializer {
 
 class CompactRowVectorSerde : public VectorSerde {
  public:
-  CompactRowVectorSerde() : VectorSerde(VectorSerde::Kind::kCompactRow) {}
+  CompactRowVectorSerde() : VectorSerde("CompactRow") {}
 
   void estimateSerializedSize(
       const row::CompactRow* compactRow,

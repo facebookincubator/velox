@@ -23,7 +23,7 @@ namespace facebook::velox::test {
 
 class MockVectorSerde : public VectorSerde {
  public:
-  MockVectorSerde() : VectorSerde(VectorSerde::Kind::kPresto) {}
+  MockVectorSerde() : VectorSerde("Presto") {}
 
   void estimateSerializedSize(
       const BaseVector* /*vector*/,
@@ -71,7 +71,7 @@ TEST(VectorStreamTest, serdeRegistration) {
 }
 
 TEST(VectorStreamTest, namedSerdeRegistration) {
-  const VectorSerde::Kind kind = VectorSerde::Kind::kPresto;
+  const std::string kind = "Presto";
 
   // Nothing registered yet.
   deregisterNamedVectorSerde(kind);
@@ -87,7 +87,7 @@ TEST(VectorStreamTest, namedSerdeRegistration) {
   EXPECT_NE(serde, nullptr);
   EXPECT_NE(dynamic_cast<MockVectorSerde*>(serde), nullptr);
 
-  const VectorSerde::Kind otherKind = VectorSerde::Kind::kUnsafeRow;
+  const std::string otherKind = "UnsafeRow";
   EXPECT_FALSE(isRegisteredNamedVectorSerde(otherKind));
   VELOX_ASSERT_THROW(
       getNamedVectorSerde(otherKind),
