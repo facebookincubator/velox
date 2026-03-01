@@ -32,6 +32,7 @@ velox_add_library(
   EntropyAggregates.cpp
   GeometricMeanAggregate.cpp
   HistogramAggregate.cpp
+  InternalVariadicVectorSumAggregate.cpp
   KHyperLogLogAggregate.cpp
   MapAggAggregate.cpp
   MapUnionAggregate.cpp
