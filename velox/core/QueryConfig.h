@@ -356,6 +356,10 @@ class QueryConfig {
   static constexpr const char* kRowNumberSpillEnabled =
       "row_number_spill_enabled";
 
+  /// MarkDistinct spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kMarkDistinctSpillEnabled =
+      "mark_distinct_spill_enabled";
+
   /// TopNRowNumber spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
@@ -1154,6 +1158,10 @@ class QueryConfig {
 
   bool rowNumberSpillEnabled() const {
     return get<bool>(kRowNumberSpillEnabled, true);
+  }
+
+  bool markDistinctSpillEnabled() const {
+    return get<bool>(kMarkDistinctSpillEnabled, false);
   }
 
   bool topNRowNumberSpillEnabled() const {

@@ -17,7 +17,9 @@
 #pragma once
 
 #include "velox/exec/GroupingSet.h"
+#include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
 
@@ -29,7 +31,7 @@ class MarkDistinct : public Operator {
       const std::shared_ptr<const core::MarkDistinctNode>& planNode);
 
   bool preservesOrder() const override {
-    return true;
+    return !spilled_;
   }
 
   bool needsInput() const override {
@@ -37,6 +39,8 @@ class MarkDistinct : public Operator {
   }
 
   void addInput(RowVectorPtr input) override;
+
+  void noMoreInput() override;
 
   RowVectorPtr getOutput() override;
 
@@ -46,8 +50,57 @@ class MarkDistinct : public Operator {
 
   bool isFinished() override;
 
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
+
  private:
-  // TODO: Document spilling configuration in spilling.rst.
+  bool spillEnabled() const {
+    return spillConfig_.has_value();
+  }
+
+  void ensureInputFits(const RowVectorPtr& input);
+
+  void spill();
+
+  void spillInput(const RowVectorPtr& input, memory::MemoryPool* pool);
+
+  void setupInputSpiller(const SpillPartitionIdSet& spillPartitionIdSet);
+
+  void setSpillPartitionBits(
+      const SpillPartitionId* restoredPartitionId = nullptr);
+
+  SpillPartitionIdSet spillHashTable();
+
+  void restoreNextSpillPartition();
+
+  void finishSpillInputAndRestoreNext();
+
+  void processSpilledInput();
+
+  void recursiveSpillInput();
+
+  RowTypePtr inputType_;
+
   std::unique_ptr<GroupingSet> groupingSet_;
+
+  HashBitRange spillPartitionBits_;
+
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
+
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
+
+  std::optional<SpillPartitionId> restoringPartitionId_;
+
+  SpillPartitionSet spillInputPartitionSet_;
+
+  std::unique_ptr<HashPartitionFunction> spillHashFunction_;
+
+  bool exceededMaxSpillLevelLimit_{false};
+
+  bool spilled_{false};
+
+  bool yield_{false};
+
+  std::vector<column_index_t> distinctKeyChannels_;
 };
 } // namespace facebook::velox::exec
