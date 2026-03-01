@@ -18,6 +18,8 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Task.h"
 
+#include <folly/container/Reserve.h>
+
 namespace facebook::velox::exec {
 
 using core::PartitionedOutputNode;
@@ -524,6 +526,15 @@ void OutputBuffer::enqueueArbitraryOutputLocked(
 
   arbitraryBuffer_->enqueue(std::move(data));
   VELOX_CHECK_LT(nextArbitraryLoadBufferIndex_, buffers_.size());
+  if (!arbitraryBuffer_->empty()) {
+    size_t numNonNullBuffers = 0;
+    for (const auto& buffer : buffers_) {
+      if (buffer != nullptr) {
+        ++numNonNullBuffers;
+      }
+    }
+    folly::grow_capacity_by(dataAvailableCbs, numNonNullBuffers);
+  }
   int32_t bufferId = nextArbitraryLoadBufferIndex_;
   for (int32_t i = 0; i < buffers_.size();
        ++i, bufferId = (bufferId + 1) % buffers_.size()) {
