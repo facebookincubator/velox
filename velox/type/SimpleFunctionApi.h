@@ -214,6 +214,11 @@ struct IntervalDayTime {
   IntervalDayTime() {}
 };
 
+struct IntervalDayTimeMicros {
+ private:
+  IntervalDayTimeMicros() {}
+};
+
 struct IntervalYearMonth {
  private:
   IntervalYearMonth() {}
@@ -361,6 +366,11 @@ struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::INTEGER> {
 template <>
 struct SimpleTypeTrait<IntervalDayTime> : public TypeTraits<TypeKind::BIGINT> {
   static constexpr const char* name = "INTERVAL DAY TO SECOND";
+};
+
+template <>
+struct SimpleTypeTrait<IntervalDayTimeMicros> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "INTERVAL DAY TO SECOND MICROS";
 };
 
 template <>

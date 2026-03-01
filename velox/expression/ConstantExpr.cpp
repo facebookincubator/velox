@@ -168,6 +168,13 @@ void appendSqlLiteral(
             << " MILLISECOND";
         break;
       }
+      if (vector.type()->isIntervalDayTimeMicros()) {
+        auto* intervalVector =
+            vector.wrappedVector()->as<SimpleVector<int64_t>>();
+        out << "INTERVAL " << intervalVector->valueAt(vector.wrappedIndex(row))
+            << " MICROSECOND";
+        break;
+      }
       [[fallthrough]];
     }
     case TypeKind::HUGEINT:
