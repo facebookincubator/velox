@@ -347,6 +347,13 @@ class ColumnStats : public AbstractColumnStats {
         }
       }
     }
+    if (max == std::numeric_limits<T>::max()) {
+      return std::make_unique<velox::common::AlwaysFalse>();
+    }
+    max += 1;
+    if constexpr (std::is_same_v<T, int128_t>) {
+      return std::make_unique<velox::common::HugeintRange>(max, max, false);
+    }
     return std::make_unique<velox::common::BigintRange>(
         getIntegerValue(max), getIntegerValue(max), false);
   }

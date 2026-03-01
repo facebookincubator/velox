@@ -328,10 +328,10 @@ class DoubleColumnStatistics : public virtual ColumnStatistics {
   std::optional<double> sum_;
 };
 
-/**
- * Statistics for all of the integer columns, such as byte, short, int, and
- * long.
- */
+/// Statistics for all of the integer columns, such as byte, short, int, long,
+/// and int128_t. T is the type of statistics value. By default, it is int64_t
+/// and can be changed to int128_t for huge int statistics.
+template <typename T = int64_t>
 class IntegerColumnStatistics : public virtual ColumnStatistics {
  public:
   IntegerColumnStatistics(
@@ -339,9 +339,9 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
       std::optional<bool> hasNull,
       std::optional<uint64_t> rawSize,
       std::optional<uint64_t> size,
-      std::optional<int64_t> min,
-      std::optional<int64_t> max,
-      std::optional<int64_t> sum)
+      std::optional<T> min,
+      std::optional<T> max,
+      std::optional<T> sum)
       : ColumnStatistics(valueCount, hasNull, rawSize, size),
         min_(min),
         max_(max),
@@ -349,9 +349,9 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
 
   IntegerColumnStatistics(
       const ColumnStatistics& colStats,
-      std::optional<int64_t> min,
-      std::optional<int64_t> max,
-      std::optional<int64_t> sum)
+      std::optional<T> min,
+      std::optional<T> max,
+      std::optional<T> sum)
       : ColumnStatistics(colStats), min_(min), max_(max), sum_(sum) {}
 
   ~IntegerColumnStatistics() override = default;
@@ -360,7 +360,7 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
    * Get optional smallest value in the column. Only defined if
    * getNumberOfValues is non-zero.
    */
-  std::optional<int64_t> getMinimum() const {
+  std::optional<T> getMinimum() const {
     return min_;
   }
 
@@ -368,7 +368,7 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
    * Get optional largest value in the column. Only defined if getNumberOfValues
    * is non-zero.
    */
-  std::optional<int64_t> getMaximum() const {
+  std::optional<T> getMaximum() const {
     return max_;
   }
 
@@ -376,7 +376,7 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
    * Get optional sum of the column. Only valid if getNumberOfValues is non-zero
    * and sum doesn't overflow
    */
-  std::optional<int64_t> getSum() const {
+  std::optional<T> getSum() const {
     return sum_;
   }
 
@@ -394,9 +394,9 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
  protected:
   IntegerColumnStatistics() {}
 
-  std::optional<int64_t> min_;
-  std::optional<int64_t> max_;
-  std::optional<int64_t> sum_;
+  std::optional<T> min_;
+  std::optional<T> max_;
+  std::optional<T> sum_;
 };
 
 /**

@@ -252,7 +252,7 @@ void IntegerStatisticsBuilder::merge(
     bool ignoreSize) {
   StatisticsBuilder::merge(other, ignoreSize);
   auto stats =
-      dynamic_cast<const dwio::common::IntegerColumnStatistics*>(&other);
+      dynamic_cast<const dwio::common::IntegerColumnStatistics<>*>(&other);
   if (!stats) {
     // We only care about the case when type specific stats is missing yet
     // it has non-null values.

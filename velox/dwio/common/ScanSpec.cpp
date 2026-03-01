@@ -17,6 +17,7 @@
 #include "velox/dwio/common/ScanSpec.h"
 
 #include "velox/core/Expressions.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Statistics.h"
 
 namespace facebook::velox::common {
@@ -218,9 +219,13 @@ void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
 }
 
 namespace {
+
+// Test the filter against integer column statistics. T could be int64_t or
+// int128_t.
+template <typename T>
 bool testIntFilter(
     const common::Filter* filter,
-    dwio::common::IntegerColumnStatistics* intStats,
+    dwio::common::IntegerColumnStatistics<T>* intStats,
     bool mayHaveNull) {
   if (!intStats) {
     return true;
@@ -228,26 +233,32 @@ bool testIntFilter(
 
   if (intStats->getMinimum().has_value() &&
       intStats->getMaximum().has_value()) {
-    return filter->testInt64Range(
-        intStats->getMinimum().value(),
-        intStats->getMaximum().value(),
-        mayHaveNull);
+    const auto minValue = intStats->getMinimum().value();
+    const auto maxValue = intStats->getMaximum().value();
+    if constexpr (std::is_same_v<T, int64_t>) {
+      return filter->testInt64Range(minValue, maxValue, mayHaveNull);
+    }
+    return filter->testInt128Range(minValue, maxValue, mayHaveNull);
   }
 
   // only min value
   if (intStats->getMinimum().has_value()) {
-    return filter->testInt64Range(
-        intStats->getMinimum().value(),
-        std::numeric_limits<int64_t>::max(),
-        mayHaveNull);
+    const auto minValue = intStats->getMinimum().value();
+    const auto maxValue = std::numeric_limits<int64_t>::max();
+    if constexpr (std::is_same_v<T, int64_t>) {
+      return filter->testInt64Range(minValue, maxValue, mayHaveNull);
+    }
+    return filter->testInt128Range(minValue, maxValue, mayHaveNull);
   }
 
   // only max value
   if (intStats->getMaximum().has_value()) {
-    return filter->testInt64Range(
-        std::numeric_limits<int64_t>::min(),
-        intStats->getMaximum().value(),
-        mayHaveNull);
+    const auto minValue = std::numeric_limits<int64_t>::min();
+    const auto maxValue = intStats->getMaximum().value();
+    if constexpr (std::is_same_v<T, int64_t>) {
+      return filter->testInt64Range(minValue, maxValue, mayHaveNull);
+    }
+    return filter->testInt128Range(minValue, maxValue, mayHaveNull);
   }
 
   return true;
@@ -343,7 +354,8 @@ bool testFilter(
     const common::Filter* filter,
     dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
-    const TypePtr& type) {
+    const TypePtr& type,
+    dwio::common::FileFormat fileFormat) {
   bool mayHaveNull{true};
 
   // Has-null statistics is often not set. Hence, we supplement it with
@@ -366,20 +378,27 @@ bool testFilter(
   if (mayHaveNull && filter->testNull()) {
     return true;
   }
-  if (type->isDecimal()) {
-    // The min and max value in the metadata for decimal type in Parquet can be
-    // stored in different physical types, including int32, int64 and
-    // fixed_len_byte_array. The loading of them is not supported in Metadata.
+
+  if (fileFormat != dwio::common::FileFormat::PARQUET && type->isDecimal()) {
+    // For non-Parquet files, row group skip based on stats for decimal column
+    // is not supported.
     return true;
   }
+
   switch (type->kind()) {
-    case TypeKind::BIGINT:
-    case TypeKind::INTEGER:
+    case TypeKind::TINYINT:
     case TypeKind::SMALLINT:
-    case TypeKind::TINYINT: {
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT: {
       auto* intStats =
-          dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats);
-      return testIntFilter(filter, intStats, mayHaveNull);
+          dynamic_cast<dwio::common::IntegerColumnStatistics<int64_t>*>(stats);
+      return testIntFilter<int64_t>(filter, intStats, mayHaveNull);
+    }
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK(type->isLongDecimal());
+      auto* intStats =
+          dynamic_cast<dwio::common::IntegerColumnStatistics<int128_t>*>(stats);
+      return testIntFilter<int128_t>(filter, intStats, mayHaveNull);
     }
     case TypeKind::REAL:
     case TypeKind::DOUBLE: {

@@ -398,7 +398,8 @@ bool SplitReader::filterOnStats(
           hiveSplit_->partitionKeys,
           *partitionKeys_,
           hiveConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+              connectorQueryCtx_->sessionProperties()),
+          hiveSplit_->fileFormat)) {
     ++runtimeStats.processedSplits;
     return true;
   }
