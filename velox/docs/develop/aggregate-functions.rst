@@ -137,8 +137,9 @@ Simple Function Interface
 
 This section describes the main concepts and the simple interface of
 aggregation functions. Examples of aggregation functions implemented through
-the simple-function interface can be found at velox/exec/tests/SimpleAverageAggregate.cpp
-and velox/exec/tests/SimpleArrayAggAggregate.cpp.
+the simple-function interface can be found at SimpleAverageAggregate.cpp,
+SimpleArrayAggAggregate.cpp, SimpleVariadicSumAggregate.cpp, and
+SimpleVariadicArrayAggAggregate.cpp under velox/exec/tests.
 
 A simple aggregation function is implemented as a class as the following.
 
@@ -451,16 +452,12 @@ null should be written to the final result vector.
 Limitations
 ^^^^^^^^^^^
 
-The simple aggregation function interface currently has three limitations.
+The simple aggregation function interface currently has two limitations.
 
-1. All values read or written by the aggrgeaiton function must be part of the
-   accumulators. This means that there cannot be function-level states kept
-   outside of accumulators.
-
-2. Optimizations on constant inputs is not supported. I.e., constant input
+1. Optimizations on constant inputs is not supported. I.e., constant input
    arguments are processed once per row in the same way as non-constant inputs.
 
-3. Aggregation pushdown to table scan is not supported yet. We're planning to
+2. Aggregation pushdown to table scan is not supported yet. We're planning to
    add this support.
 
 Vector Function Interface
