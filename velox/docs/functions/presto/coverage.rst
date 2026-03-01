@@ -174,6 +174,7 @@ Here is a list of all scalar, aggregate, and window functions from Presto, with 
     table.coverage tr:nth-child(27) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(27) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(1) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(28) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(28) td:nth-child(7) {background-color: #6BA81E;}
@@ -500,7 +501,7 @@ Here is a list of all scalar, aggregate, and window functions from Presto, with 
     :func:`array_sort_desc`                   :func:`flatten`                           :func:`line_locate_point`                 :func:`sha1`                              tdigest_agg                                   :func:`entropy`
     array_split_into_chunks                   :func:`flatten_geometry_collections`      :func:`ln`                                :func:`sha256`                            :func:`timezone_hour`                         evaluate_classifier_predictions
     :func:`array_sum`                         :func:`floor`                             :func:`localtime`                         :func:`sha512`                            :func:`timezone_minute`                       :func:`every`
-    :func:`array_top_n`                       :func:`fnv1_32`                           localtimestamp                            :func:`shuffle`                           :func:`to_base`                               :func:`geometric_mean`
+    :func:`array_top_n`                       :func:`fnv1_32`                           :func:`localtimestamp`                    :func:`shuffle`                           :func:`to_base`                               :func:`geometric_mean`
     :func:`array_union`                       :func:`fnv1_64`                           :func:`log10`                             :func:`sign`                              to_base32                                     geometry_union_agg
     :func:`arrays_overlap`                    :func:`fnv1a_32`                          :func:`log2`                              :func:`simplify_geometry`                 :func:`to_base64`                             :func:`histogram`
     :func:`asin`                              :func:`fnv1a_64`                          :func:`longest_common_prefix`             :func:`sin`                               :func:`to_base64url`                          khyperloglog_agg
