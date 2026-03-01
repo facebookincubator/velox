@@ -42,7 +42,6 @@ LZ4F_preferences_t defaultPreferences(int32_t compressionLevel) {
   prefs.compressionLevel = compressionLevel;
   return prefs;
 }
-} // namespace
 
 class Lz4CodecBase : public Codec {
  public:
@@ -635,6 +634,8 @@ Expected<uint64_t> Lz4HadoopCodec::decompressInternal(
     uint64_t outputLength) {
   return Lz4RawCodec::decompress(input, inputLength, output, outputLength);
 }
+
+} // namespace
 
 std::unique_ptr<Codec> makeLz4FrameCodec(int32_t compressionLevel) {
   return std::make_unique<Lz4FrameCodec>(compressionLevel);
