@@ -241,6 +241,40 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_ym_interval(2); -- 2-0
         SELECT make_ym_interval(); -- 0-0
 
+Interval Arithmetic Functions
+------------------------------
+
+These functions implement Spark ANSI interval arithmetic (Spark 3.5 and 4.0). The
+behavior is the same regardless of ``spark.sql.ansi.enabled`` for ANSI interval
+types: overflows and divide-by-zero throw errors. For fractional or decimal
+numeric operands, results are rounded to the nearest integer using HALF_UP
+rounding (ties away from zero).
+
+.. spark:function:: checked_interval_add(x: interval, y: interval) -> interval
+
+    Returns the result of adding two intervals.
+    Throws an error when the result overflows.
+    Supports both ``interval day to second`` and ``interval year to month`` types.
+
+.. spark:function:: checked_interval_subtract(x: interval, y: interval) -> interval
+
+    Returns the result of subtracting interval ``y`` from interval ``x``.
+    Throws an error when the result overflows.
+    Supports both ``interval day to second`` and ``interval year to month`` types.
+
+.. spark:function:: checked_interval_multiply(x: interval, y: numeric) -> interval
+
+    Returns the result of multiplying interval ``x`` by numeric ``y``.
+    Throws an error when the result overflows.
+    Supports both ``interval day to second`` and ``interval year to month`` types.
+
+.. spark:function:: checked_interval_divide(x: interval, y: numeric) -> interval
+
+    Returns the result of dividing interval ``x`` by numeric ``y``.
+    Throws an error when the result overflows or when dividing by zero.
+    Supports both ``interval day to second`` and ``interval year to month`` types.
+
+
 .. spark:function:: minute(timestamp) -> integer
 
     Returns the minutes of ``timestamp``.::

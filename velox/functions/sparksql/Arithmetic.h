@@ -22,9 +22,11 @@
 #include <type_traits>
 
 #include "velox/common/base/Doubles.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/sparksql/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -662,6 +664,276 @@ struct CheckedIntegralDivideFunction {
         a == std::numeric_limits<int64_t>::min() && b == -1,
         "Overflow in integral divide");
     result = a / b;
+    return Status::OK();
+  }
+};
+/// Checked interval arithmetic functions for ANSI mode support
+
+namespace detail {
+
+template <typename TResult>
+FOLLY_ALWAYS_INLINE Status setIntervalResult(
+    TResult& result,
+    const int256_t& value,
+    const char* overflowMessage) {
+  const int256_t min = std::numeric_limits<TResult>::min();
+  const int256_t max = std::numeric_limits<TResult>::max();
+  VELOX_USER_RETURN(value < min || value > max, overflowMessage);
+  result = static_cast<TResult>(value);
+  return Status::OK();
+}
+
+template <typename TResult>
+FOLLY_ALWAYS_INLINE Status
+roundHalfUpDouble(TResult& result, double value, const char* overflowMessage) {
+  if (!std::isfinite(value)) {
+    VELOX_USER_RETURN(true, overflowMessage);
+  }
+  const double rounded = std::round(value);
+  const double min = static_cast<double>(std::numeric_limits<TResult>::min());
+  const double max = static_cast<double>(std::numeric_limits<TResult>::max());
+  VELOX_USER_RETURN(rounded < min || rounded > max, overflowMessage);
+  result = static_cast<TResult>(rounded);
+  return Status::OK();
+}
+
+template <typename TResult, typename TNum>
+FOLLY_ALWAYS_INLINE Status multiplyIntegralInterval(
+    TResult& result,
+    TResult interval,
+    TNum num,
+    const char* overflowMessage) {
+  const int128_t product =
+      static_cast<int128_t>(interval) * static_cast<int128_t>(num);
+  return setIntervalResult<TResult>(result, int256_t(product), overflowMessage);
+}
+
+template <typename TResult>
+FOLLY_ALWAYS_INLINE Status multiplyDecimalInterval(
+    TResult& result,
+    TResult interval,
+    int128_t decimalValue,
+    uint8_t scale,
+    const char* overflowMessage) {
+  const int256_t product = int256_t(interval) * int256_t(decimalValue);
+  const int256_t scaleFactor =
+      int256_t(velox::DecimalUtil::kPowersOfTen[scale]);
+
+  int256_t quotient = product / scaleFactor;
+  const int256_t remainder = product % scaleFactor;
+  if (remainder != 0) {
+    const int256_t absRemainder = remainder < 0 ? -remainder : remainder;
+    if (absRemainder * 2 >= scaleFactor) {
+      quotient += (product < 0) ? -1 : 1;
+    }
+  }
+
+  return setIntervalResult<TResult>(result, quotient, overflowMessage);
+}
+
+template <typename TResult, typename TNum>
+FOLLY_ALWAYS_INLINE Status divideIntegralInterval(
+    TResult& result,
+    TResult interval,
+    TNum num,
+    const char* overflowMessage) {
+  VELOX_USER_RETURN_EQ(num, 0, "Division by zero");
+
+  const int128_t numerator = static_cast<int128_t>(interval);
+  const int128_t denominator = static_cast<int128_t>(num);
+  int128_t quotient = numerator / denominator;
+  const int128_t remainder = numerator % denominator;
+  if (remainder != 0) {
+    const int128_t absRemainder = remainder < 0 ? -remainder : remainder;
+    const int128_t absDenominator =
+        denominator < 0 ? -denominator : denominator;
+    if (absRemainder * 2 >= absDenominator) {
+      quotient += ((numerator < 0) ^ (denominator < 0)) ? -1 : 1;
+    }
+  }
+
+  return setIntervalResult<TResult>(
+      result, int256_t(quotient), overflowMessage);
+}
+
+template <typename TResult>
+FOLLY_ALWAYS_INLINE Status divideDecimalInterval(
+    TResult& result,
+    TResult interval,
+    int128_t decimalValue,
+    uint8_t scale,
+    const char* overflowMessage) {
+  VELOX_USER_RETURN_EQ(decimalValue, 0, "Division by zero");
+
+  const int256_t scaleFactor =
+      int256_t(velox::DecimalUtil::kPowersOfTen[scale]);
+  const int256_t numerator = int256_t(interval) * scaleFactor;
+  const int256_t denominator = int256_t(decimalValue);
+  int256_t quotient = numerator / denominator;
+  const int256_t remainder = numerator % denominator;
+  if (remainder != 0) {
+    const int256_t absRemainder = remainder < 0 ? -remainder : remainder;
+    const int256_t absDenominator =
+        denominator < 0 ? -denominator : denominator;
+    if (absRemainder * 2 >= absDenominator) {
+      quotient += ((numerator < 0) ^ (denominator < 0)) ? -1 : 1;
+    }
+  }
+
+  return setIntervalResult<TResult>(result, quotient, overflowMessage);
+}
+
+template <typename T>
+FOLLY_ALWAYS_INLINE int128_t toInt128(const T& value) {
+  if constexpr (std::is_same_v<T, int128_t>) {
+    return value;
+  }
+  return static_cast<int128_t>(value);
+}
+
+} // namespace detail
+
+/// Multiply interval by double with overflow checking.
+/// Throws error on overflow instead of clamping to min/max.
+template <typename TExec>
+struct CheckedIntervalMultiplyFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T1, typename T2>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const T1* /*a*/,
+      const T2* /*b*/) {
+    VELOX_CHECK_EQ(inputTypes.size(), 2);
+    if (inputTypes[0]->isIntervalDayTime() ||
+        inputTypes[0]->isIntervalYearMonth()) {
+      intervalIndex_ = 0;
+      numericIndex_ = 1;
+    } else {
+      intervalIndex_ = 1;
+      numericIndex_ = 0;
+    }
+    numericIsDecimal_ = inputTypes[numericIndex_]->isDecimal();
+    if (numericIsDecimal_) {
+      numericScale_ =
+          getDecimalPrecisionScale(*inputTypes[numericIndex_]).second;
+    }
+  }
+
+  template <typename TResult, typename T1, typename T2>
+  FOLLY_ALWAYS_INLINE Status call(TResult& result, const T1& a, const T2& b) {
+    if (intervalIndex_ == 0) {
+      return multiplyImpl<TResult>(result, a, b);
+    }
+    return multiplyImpl<TResult>(result, b, a);
+  }
+
+ private:
+  template <typename TResult, typename TInterval, typename TNum>
+  FOLLY_ALWAYS_INLINE Status
+  multiplyImpl(TResult& result, const TInterval& interval, const TNum& num) {
+    static constexpr const char* kOverflow = "Interval overflow in multiply";
+    if (numericIsDecimal_) {
+      return detail::multiplyDecimalInterval<TResult>(
+          result,
+          static_cast<TResult>(interval),
+          detail::toInt128(num),
+          numericScale_,
+          kOverflow);
+    }
+    if constexpr (std::is_floating_point_v<TNum>) {
+      const double value =
+          static_cast<double>(interval) * static_cast<double>(num);
+      return detail::roundHalfUpDouble<TResult>(result, value, kOverflow);
+    }
+    if constexpr (std::is_integral_v<TNum>) {
+      return detail::multiplyIntegralInterval<TResult>(
+          result, static_cast<TResult>(interval), num, kOverflow);
+    }
+    VELOX_USER_RETURN(true, kOverflow);
+  }
+
+  int8_t intervalIndex_{0};
+  int8_t numericIndex_{1};
+  bool numericIsDecimal_{false};
+  uint8_t numericScale_{0};
+};
+
+/// Divide interval by double with overflow and division-by-zero checking.
+template <typename TExec>
+struct CheckedIntervalDivideFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T1, typename T2>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const T1* /*a*/,
+      const T2* /*b*/) {
+    VELOX_CHECK_EQ(inputTypes.size(), 2);
+    numericIsDecimal_ = inputTypes[1]->isDecimal();
+    if (numericIsDecimal_) {
+      numericScale_ = getDecimalPrecisionScale(*inputTypes[1]).second;
+    }
+  }
+
+  template <typename TResult, typename TNum>
+  FOLLY_ALWAYS_INLINE Status call(TResult& result, TResult interval, TNum num) {
+    static constexpr const char* kOverflow = "Interval overflow in divide";
+    if (numericIsDecimal_) {
+      return detail::divideDecimalInterval<TResult>(
+          result, interval, detail::toInt128(num), numericScale_, kOverflow);
+    }
+    if constexpr (std::is_floating_point_v<TNum>) {
+      VELOX_USER_RETURN_EQ(num, 0, "Division by zero");
+      const double value =
+          static_cast<double>(interval) / static_cast<double>(num);
+      return detail::roundHalfUpDouble<TResult>(result, value, kOverflow);
+    }
+    if constexpr (std::is_integral_v<TNum>) {
+      return detail::divideIntegralInterval<TResult>(
+          result, interval, num, kOverflow);
+    }
+    VELOX_USER_RETURN(true, kOverflow);
+  }
+
+ private:
+  bool numericIsDecimal_{false};
+  uint8_t numericScale_{0};
+};
+
+/// Add two intervals with overflow checking.
+template <typename TExec>
+struct CheckedIntervalAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t>) {
+      VELOX_USER_RETURN(
+          __builtin_add_overflow(a, b, &result), "Interval overflow in add");
+    } else {
+      result = a + b;
+    }
+    return Status::OK();
+  }
+};
+
+/// Subtract two intervals with overflow checking.
+template <typename TExec>
+struct CheckedIntervalSubtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t>) {
+      VELOX_USER_RETURN(
+          __builtin_sub_overflow(a, b, &result),
+          "Interval overflow in subtract");
+    } else {
+      result = a - b;
+    }
     return Status::OK();
   }
 };

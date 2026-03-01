@@ -135,6 +135,277 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "checked_div"});
   registerFunction<sparksql::FactorialFunction, int64_t, int32_t>(
       {prefix + "factorial"});
+
+  // Checked interval arithmetic functions for ANSI mode (Spark 3.5+/4.0)
+  // IntervalDayTime operations
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int8_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int16_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int32_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int64_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      float>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      double>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      ShortDecimal<P1, S1>>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      LongDecimal<P1, S1>>({prefix + "checked_interval_multiply"});
+
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      int8_t,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      int16_t,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      int32_t,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      int64_t,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      float,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      double,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      ShortDecimal<P1, S1>,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalDayTime,
+      LongDecimal<P1, S1>,
+      IntervalDayTime>({prefix + "checked_interval_multiply"});
+
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int8_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int16_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int32_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      int64_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      float>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      double>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      ShortDecimal<P1, S1>>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      LongDecimal<P1, S1>>({prefix + "checked_interval_divide"});
+
+  registerFunction<
+      CheckedIntervalAddFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "checked_interval_add"});
+  registerFunction<
+      CheckedIntervalSubtractFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "checked_interval_subtract"});
+
+  // IntervalYearMonth operations
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int8_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int16_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int32_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int64_t>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      float>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      double>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      ShortDecimal<P1, S1>>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      LongDecimal<P1, S1>>({prefix + "checked_interval_multiply"});
+
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      int8_t,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      int16_t,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      int32_t,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      int64_t,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      float,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      double,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      ShortDecimal<P1, S1>,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+  registerFunction<
+      CheckedIntervalMultiplyFunction,
+      IntervalYearMonth,
+      LongDecimal<P1, S1>,
+      IntervalYearMonth>({prefix + "checked_interval_multiply"});
+
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int8_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int16_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int32_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      int64_t>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      float>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      double>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      ShortDecimal<P1, S1>>({prefix + "checked_interval_divide"});
+  registerFunction<
+      CheckedIntervalDivideFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      LongDecimal<P1, S1>>({prefix + "checked_interval_divide"});
+
+  registerFunction<
+      CheckedIntervalAddFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "checked_interval_add"});
+  registerFunction<
+      CheckedIntervalSubtractFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "checked_interval_subtract"});
 }
 
 } // namespace facebook::velox::functions::sparksql
