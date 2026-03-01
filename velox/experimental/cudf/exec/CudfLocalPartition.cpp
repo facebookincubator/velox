@@ -171,6 +171,11 @@ void CudfLocalPartition::enqueuePartition(
   ContinueFuture future;
   auto blockingReason =
       queues_[partitionIndex]->enqueue(cudfVector, cudfVector->size(), &future);
+  addRuntimeStat(
+      "gpuExchangeEnqueuedBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(cudfVector->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   if (blockingReason != exec::BlockingReason::kNotBlocked) {
     blockingReasons_.push_back(blockingReason);
     futures_.push_back(std::move(future));

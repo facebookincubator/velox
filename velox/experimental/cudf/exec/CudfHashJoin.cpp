@@ -311,6 +311,30 @@ void CudfHashJoinBuild::noMoreInput() {
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
 
   cudfHashJoinBridge->setBuildStream(stream);
+  {
+    uint64_t buildTableBytes = 0;
+    uint64_t buildTableRows = 0;
+    for (const auto& tbl : shared_tbls) {
+      buildTableBytes += tbl->alloc_size();
+      buildTableRows += tbl->num_rows();
+    }
+    addRuntimeStat(
+        "gpuBridgeBuildTableBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(buildTableBytes),
+            RuntimeCounter::Unit::kBytes));
+    addRuntimeStat(
+        "gpuBridgeBuildTableRows",
+        RuntimeCounter(static_cast<int64_t>(buildTableRows)));
+    addRuntimeStat(
+        "gpuBuildTableBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(buildTableBytes),
+            RuntimeCounter::Unit::kBytes));
+    addRuntimeStat(
+        "gpuBuildTableRows",
+        RuntimeCounter(static_cast<int64_t>(buildTableRows)));
+  }
   cudfHashJoinBridge->setHashTable(
       std::make_optional(
           std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
@@ -1531,6 +1555,16 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     return exec::BlockingReason::kWaitForJoinBuild;
   }
   hashObject_ = std::move(hashObject);
+  if (hashObject_.has_value()) {
+    uint64_t receivedBytes = 0;
+    for (const auto& tbl : hashObject_->first) {
+      receivedBytes += tbl->alloc_size();
+    }
+    addRuntimeStat(
+        "gpuBridgeReceivedBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(receivedBytes), RuntimeCounter::Unit::kBytes));
+  }
   buildStream_ = cudfJoinBridge->getBuildStream();
 
   // Lazy initialize matched flags only when build side is done
