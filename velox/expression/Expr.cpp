@@ -1877,7 +1877,6 @@ ExprSet::ExprSet(
   if (lazyDereference_) {
     validateLazyDereference(exprs_);
   }
-  std::vector<FieldReference*> allDistinctFields;
   for (auto& expr : exprs_) {
     Expr::mergeFields(
         distinctFields_, multiplyReferencedFields_, expr->distinctFields());
