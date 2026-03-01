@@ -251,7 +251,7 @@ StatsTrackingMemoryResource::getOrphanStats() const {
 // __attribute__((error)). The overload below calls the real function.
 namespace cudf {
 
-rmm::cuda_stream_view get_default_stream(allow_default_stream_t) {
+rmm::cuda_stream_view const get_default_stream(allow_default_stream_t) {
   return cudf::get_default_stream();
 }
 

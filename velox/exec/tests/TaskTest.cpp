@@ -2838,9 +2838,8 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
     VELOX_ASSERT_THROW(
         task->requestBarrier(),
         "Can't start barrier on task which has already received no more splits");
-    while (auto next = task->next()) {
-    }
-    ASSERT_TRUE(task->isFinished());
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
   }
 
   {
@@ -2866,6 +2865,8 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
     VELOX_ASSERT_THROW(
         task->requestBarrier(),
         "Can't start barrier on task which has already received no more splits");
+    task->requestAbort().wait();
+    ASSERT_TRUE(!task->isRunning());
   }
   waitForAllTasksToBeDeleted();
 }
@@ -2914,7 +2915,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
 
   {
     const auto task = Task::create(
-        "invalidPlanNodeForBarrier",
+        "barrierAfterNoMoreSplits",
         plan,
         0,
         core::QueryCtx::create(executor_.get()),
@@ -2929,10 +2930,8 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
     task->addSplit(
         scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
     auto future = task->requestBarrier();
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
+    future.wait();
     ASSERT_FALSE(task->underBarrier());
-    ASSERT_TRUE(future.isReady());
-    ASSERT_TRUE(task->isRunning());
     task->requestAbort().wait();
     ASSERT_TRUE(!task->isRunning());
   }
@@ -3007,6 +3006,65 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
     ASSERT_TRUE(barrierFuture.isReady());
     ASSERT_EQ(task->taskStats().numBarriers, 1);
   }
+}
+
+TEST_F(TaskTest, testBarrierClearedOnTerminate) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+  });
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+
+  core::PlanNodeId scanId;
+  auto plan = PlanBuilder()
+                  .tableScan(asRowType(data->type()))
+                  .capturePlanNodeId(scanId)
+                  .project({"c0"})
+                  .planFragment();
+
+  // Verify that barrierRequested_ is cleared when task is aborted while under
+  // barrier in serial execution mode.
+  {
+    const auto task = Task::create(
+        "barrierClearedOnTerminate.serial",
+        plan,
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kSerial);
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+    ASSERT_TRUE(task->underBarrier());
+    task->requestAbort().wait();
+    ASSERT_FALSE(task->isRunning());
+    ASSERT_FALSE(task->underBarrier());
+    ASSERT_TRUE(barrierFuture.isReady());
+  }
+
+  // Verify that barrierRequested_ is cleared when task is aborted while under
+  // barrier in parallel execution mode.
+  {
+    const auto task = Task::create(
+        "barrierClearedOnTerminate.parallel",
+        plan,
+        0,
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](const RowVectorPtr& /*vector*/,
+           bool /*drained*/,
+           velox::ContinueFuture* /*future*/) {
+          return BlockingReason::kNotBlocked;
+        });
+    task->start(2);
+    task->addSplit(
+        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+    task->requestAbort().wait();
+    ASSERT_FALSE(task->isRunning());
+    ASSERT_FALSE(task->underBarrier());
+    ASSERT_TRUE(barrierFuture.isReady());
+  }
+  waitForAllTasksToBeDeleted();
 }
 
 namespace {

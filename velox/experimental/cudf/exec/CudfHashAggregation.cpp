@@ -1016,7 +1016,7 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
     auto distinctOutput = getDistinctKeys(
         concatenatedTable->view(),
         groupingKeyOutputChannels_,
-        inputTableStream);
+        partialOutputStream);
     partialOutput_ = distinctOutput;
   } else {
     // First time processing, just store the result of the input batch's
@@ -1727,13 +1727,15 @@ bool canAggregationBeEvaluatedByCudf(
     const std::vector<TypePtr>& rawInputTypes,
     core::QueryCtx* queryCtx) {
   // Check against step-aware aggregation registry
+  const auto companionStep = getCompanionStep(call.name(), step);
+  const auto originalName = getOriginalName(call.name());
   auto& stepAwareRegistry = getStepAwareAggregationRegistry();
-  auto funcIt = stepAwareRegistry.find(call.name());
+  auto funcIt = stepAwareRegistry.find(originalName);
   if (funcIt == stepAwareRegistry.end()) {
     return false;
   }
 
-  auto stepIt = funcIt->second.find(step);
+  auto stepIt = funcIt->second.find(companionStep);
   if (stepIt == funcIt->second.end()) {
     return false;
   }

@@ -299,11 +299,13 @@ std::unordered_set<std::string> skipFunctionsSOT = {
                      // instances
     "array_subset", // Velox-only function, not available in Presto
     "map_values_in_range", // Velox-only function, not available in Presto
+    "transform_with_index", // Velox-only function, not available in Presto
     "remap_keys", // Velox-only function, not available in Presto
     "map_intersect", // Velox-only function, not available in Presto
     "map_keys_overlap", // Velox-only function, not available in Presto
     "map_append", // Velox-only function, not available in Presto
     "map_update", // Velox-only function, not available in Presto
+    "map_trim_values", // Velox-only function, not available in Presto
     "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
     // https://github.com/facebookincubator/velox/issues/11034
     "cast(real) -> varchar",
@@ -455,6 +457,7 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$contains",
     "localtime", // localtime cannot be called with paranthesis:
                  // https://github.com/facebookincubator/velox/issues/14937,
+    "localtimestamp", // localtimestamp cannot be called with parenthesis
     "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
     // Fuzzer and the underlying engine are confused about SetDigest functions
     // (since KHLL is a user defined type), and tries to pass a
