@@ -1,0 +1,267 @@
+{
+  "name": "velox4j.Query",
+  "plan": {
+    "aggregateNames": [
+      "a0",
+      "a1"
+    ],
+    "aggregates": [
+      {
+        "call": {
+          "functionName": "count",
+          "inputs": [
+            {
+              "fieldName": "a0",
+              "name": "FieldAccessTypedExpr",
+              "type": {
+                "name": "Type",
+                "type": "BIGINT"
+              }
+            }
+          ],
+          "name": "CallTypedExpr",
+          "type": {
+            "name": "Type",
+            "type": "BIGINT"
+          }
+        },
+        "distinct": false,
+        "rawInputTypes": [
+          {
+            "name": "Type",
+            "type": "BIGINT"
+          }
+        ],
+        "sortingKeys": [],
+        "sortingOrders": []
+      },
+      {
+        "call": {
+          "functionName": "sum",
+          "inputs": [
+            {
+              "fieldName": "a1",
+              "name": "FieldAccessTypedExpr",
+              "type": {
+                "name": "Type",
+                "type": "BIGINT"
+              }
+            }
+          ],
+          "name": "CallTypedExpr",
+          "type": {
+            "name": "Type",
+            "type": "BIGINT"
+          }
+        },
+        "distinct": false,
+        "rawInputTypes": [
+          {
+            "name": "Type",
+            "type": "INTEGER"
+          }
+        ],
+        "sortingKeys": [],
+        "sortingOrders": []
+      }
+    ],
+    "globalGroupingSets": [],
+    "groupingKeys": [
+      {
+        "fieldName": "c0",
+        "name": "FieldAccessTypedExpr",
+        "type": {
+          "name": "Type",
+          "type": "BIGINT"
+        }
+      }
+    ],
+    "id": "2",
+    "ignoreNullKeys": false,
+    "name": "AggregationNode",
+    "preGroupedKeys": [],
+    "sources": [
+      {
+        "aggregateNames": [
+          "a0",
+          "a1"
+        ],
+        "aggregates": [
+          {
+            "call": {
+              "functionName": "count",
+              "inputs": [
+                {
+                  "name": "ConstantTypedExpr",
+                  "type": {
+                    "name": "Type",
+                    "type": "BIGINT"
+                  },
+                  "value": {
+                    "type": "BIGINT",
+                    "value": 1
+                  }
+                }
+              ],
+              "name": "CallTypedExpr",
+              "type": {
+                "name": "Type",
+                "type": "BIGINT"
+              }
+            },
+            "distinct": false,
+            "rawInputTypes": [
+              {
+                "name": "Type",
+                "type": "BIGINT"
+              }
+            ],
+            "sortingKeys": [],
+            "sortingOrders": []
+          },
+          {
+            "call": {
+              "functionName": "sum",
+              "inputs": [
+                {
+                  "fieldName": "c1",
+                  "inputs": [
+                    {
+                      "name": "InputTypedExpr",
+                      "type": {
+                        "cTypes": [
+                          {
+                            "name": "Type",
+                            "type": "BIGINT"
+                          },
+                          {
+                            "name": "Type",
+                            "type": "INTEGER"
+                          },
+                          {
+                            "name": "Type",
+                            "type": "BOOLEAN"
+                          }
+                        ],
+                        "name": "Type",
+                        "names": [
+                          "c0",
+                          "c1",
+                          "c2"
+                        ],
+                        "type": "ROW"
+                      }
+                    }
+                  ],
+                  "name": "FieldAccessTypedExpr",
+                  "type": {
+                    "name": "Type",
+                    "type": "INTEGER"
+                  }
+                }
+              ],
+              "name": "CallTypedExpr",
+              "type": {
+                "name": "Type",
+                "type": "BIGINT"
+              }
+            },
+            "distinct": false,
+            "rawInputTypes": [
+              {
+                "name": "Type",
+                "type": "INTEGER"
+              }
+            ],
+            "sortingKeys": [],
+            "sortingOrders": []
+          }
+        ],
+        "globalGroupingSets": [],
+        "groupingKeys": [
+          {
+            "fieldName": "c0",
+            "name": "FieldAccessTypedExpr",
+            "type": {
+              "name": "Type",
+              "type": "BIGINT"
+            }
+          }
+        ],
+        "id": "1",
+        "ignoreNullKeys": false,
+        "name": "AggregationNode",
+        "preGroupedKeys": [],
+        "sources": [
+          {
+            "data": "AAAAAKIAAAB7ImNUeXBlcyI6W3sidHlwZSI6IkJJR0lOVCIsIm5hbWUiOiJUeXBlIn0seyJ0eXBlIjoiSU5URUdFUiIsIm5hbWUiOiJUeXBlIn0seyJ0eXBlIjoiQk9PTEVBTiIsIm5hbWUiOiJUeXBlIn1dLCJuYW1lcyI6WyJjMCIsImMxIiwiYzIiXSwidHlwZSI6IlJPVyIsIm5hbWUiOiJUeXBlIn0DAAAAAAMAAAABAAAAAB8AAAB7InR5cGUiOiJCSUdJTlQiLCJuYW1lIjoiVHlwZSJ9AwAAAAABGAAAAAEAAAAAAAAAAgAAAAAAAAADAAAAAAAAAAEAAAAAIAAAAHsidHlwZSI6IklOVEVHRVIiLCJuYW1lIjoiVHlwZSJ9AwAAAAABDAAAAAoAAAAUAAAAHgAAAAEBAAAAIAAAAHsidHlwZSI6IkJPT0xFQU4iLCJuYW1lIjoiVHlwZSJ9AwAAAAABAQ==",
+            "id": "0",
+            "name": "ValuesNode",
+            "parallelizable": false,
+            "repeatTimes": 1
+          }
+        ],
+        "step": "PARTIAL"
+      }
+    ],
+    "step": "FINAL"
+  },
+  "queryConfig": {
+    "name": "velox4j.Config",
+    "values": [
+      {
+        "key": "max_output_batch_rows",
+        "value": "1000"
+      },
+      {
+        "key": "aggregation_spill_enabled",
+        "value": "false"
+      }
+    ]
+  },
+  "connectorConfig": {
+    "name": "velox4j.ConnectorConfig",
+    "values": [
+      {
+        "connectorId": "conn-1",
+        "config": {
+          "name": "velox4j.Config",
+          "values": [
+            {
+              "key": "k1",
+              "value": "v1"
+            },
+            {
+              "key": "k3",
+              "value": "v3"
+            },
+            {
+              "key": "k2",
+              "value": "v2"
+            }
+          ]
+        }
+      },
+      {
+        "connectorId": "conn-2",
+        "config": {
+          "name": "velox4j.Config",
+          "values": [
+            {
+              "key": "k5",
+              "value": "v5"
+            },
+            {
+              "key": "k1",
+              "value": "v1"
+            },
+            {
+              "key": "k2",
+              "value": "v2"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

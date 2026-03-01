@@ -1,0 +1,56 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Java Bindings - C++ Build
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: 38 8 * * *
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ut-centos7:
+    runs-on: ubuntu-latest
+    env:
+      HOST_CCACHE_DIR: "${{ github.workspace }}/.ccache"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Restore Ccache
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          clean: true
+          path: '${{ env.HOST_CCACHE_DIR }}'
+          key: java-ut-cpp-ut-centos7-ccache
+      - name: Run setup script / Build and run UTs
+        run: |
+          docker run -v ${{ github.workspace }}:/velox -w / centos:7 bash -c "
+            export CCACHE_DIR=/velox/.ccache
+            export CCACHE_MAXSIZE=3000M
+            cd /velox/java/velox4j
+            bash scripts/gha/ut-cpp/setup-centos7.sh
+            bash src/main/cpp/test.sh
+          "
+      - name: Save Ccache
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: '${{ env.HOST_CCACHE_DIR }}'
+          key: java-ut-cpp-ut-centos7-ccache
