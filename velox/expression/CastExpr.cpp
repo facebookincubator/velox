@@ -47,6 +47,38 @@ const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
   return nullptr;
 }
 
+// Returns true if casting from 'fromType' to 'toType' is a supported fast
+// upcast.
+bool isSupportedFastUpcast(const TypePtr& fromType, const TypePtr& toType) {
+  auto isIntegralType = [](const TypePtr& type) {
+    return type == TINYINT() || type == SMALLINT() || type == INTEGER() ||
+        type == BIGINT() || type == HUGEINT();
+  };
+
+  auto isBasicNumericType = [&isIntegralType](const TypePtr& type) {
+    return isIntegralType(type) || type == REAL() || type == DOUBLE();
+  };
+
+  if (isIntegralType(fromType) && isBasicNumericType(toType)) {
+    if (fromType->cppSizeInBytes() < toType->cppSizeInBytes()) {
+      return true;
+    }
+    if (fromType == INTEGER() && toType == REAL()) {
+      return true;
+    }
+    if (fromType == BIGINT() || fromType == HUGEINT()) {
+      if (toType == REAL() || toType == DOUBLE()) {
+        return true;
+      }
+    }
+  }
+
+  if (fromType == REAL() && toType == DOUBLE()) {
+    return true;
+  }
+  return false;
+}
+
 } // namespace
 
 VectorPtr CastExpr::castFromDate(
@@ -897,6 +929,71 @@ void CastExpr::applyPeeled(
             fromType, toType, rows, context, input, result);
         break;
     }
+  } else if (isSupportedFastUpcast(fromType, toType)) {
+    switch (toType->kind()) {
+      case TypeKind::SMALLINT:
+        result = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyNumericUpcast,
+            TypeKind::SMALLINT,
+            fromType->kind(),
+            rows,
+            toType,
+            context,
+            input);
+        break;
+      case TypeKind::INTEGER:
+        result = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyNumericUpcast,
+            TypeKind::INTEGER,
+            fromType->kind(),
+            rows,
+            toType,
+            context,
+            input);
+        break;
+      case TypeKind::BIGINT:
+        result = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyNumericUpcast,
+            TypeKind::BIGINT,
+            fromType->kind(),
+            rows,
+            toType,
+            context,
+            input);
+        break;
+      case TypeKind::REAL:
+        result = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyNumericUpcast,
+            TypeKind::REAL,
+            fromType->kind(),
+            rows,
+            toType,
+            context,
+            input);
+        break;
+      case TypeKind::DOUBLE:
+        result = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyNumericUpcast,
+            TypeKind::DOUBLE,
+            fromType->kind(),
+            rows,
+            toType,
+            context,
+            input);
+        break;
+      case TypeKind::HUGEINT:
+        result = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyNumericUpcast,
+            TypeKind::HUGEINT,
+            fromType->kind(),
+            rows,
+            toType,
+            context,
+            input);
+        break;
+      default:
+        VELOX_UNREACHABLE();
+    }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
@@ -975,6 +1072,66 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
   // Update the exact buffer size.
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
   return result;
+}
+
+template <TypeKind ToKind, TypeKind FromKind>
+VectorPtr CastExpr::applyNumericUpcast(
+    const SelectivityVector& rows,
+    const TypePtr& toType,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  if constexpr (
+      FromKind != TypeKind::TINYINT && FromKind != TypeKind::SMALLINT &&
+      FromKind != TypeKind::INTEGER && FromKind != TypeKind::BIGINT &&
+      FromKind != TypeKind::HUGEINT && FromKind != TypeKind::REAL) {
+    VELOX_UNSUPPORTED(
+        "Cannot upcast from {} to {}", input.type(), toType->toString());
+  } else {
+    using ToNativeType = typename TypeTraits<ToKind>::NativeType;
+    using FromNativeType = typename TypeTraits<FromKind>::NativeType;
+
+    VectorPtr result;
+    context.ensureWritable(rows, toType, result);
+    (*result).clearNulls(rows);
+
+    if (input.isConstantEncoding()) {
+      auto constantInput = input.as<ConstantVector<FromNativeType>>();
+      if (constantInput->isNullAt(0)) {
+        return BaseVector::createNullConstant(
+            toType, rows.end(), context.pool());
+      }
+      auto constantValue = static_cast<ToNativeType>(constantInput->valueAt(0));
+      return std::make_shared<ConstantVector<ToNativeType>>(
+          context.pool(),
+          rows.end(),
+          /*isNull=*/false,
+          toType,
+          std::move(constantValue));
+    }
+
+    if (input.isFlatEncoding()) {
+      const auto simpleInput = input.asFlatVector<FromNativeType>();
+      auto flatResult = result->asFlatVector<ToNativeType>();
+
+      const FromNativeType* in =
+          simpleInput->template rawValues<FromNativeType>();
+      ToNativeType* out = flatResult->template mutableRawValues<ToNativeType>();
+
+      vector_size_t begin = rows.begin();
+      vector_size_t n = rows.end();
+      for (auto i = begin; i < n; ++i) {
+        if (rows.isValid(i)) {
+          // Converting large bigint/hugeint values to float/double directly may
+          // lose precision, but it's consistent with the implementation in
+          // velox/type/Conversions.h.
+          out[i] = static_cast<ToNativeType>(in[i]);
+        }
+      }
+      return result;
+    }
+
+    VELOX_FAIL("applyNumericUpcast only allows constant or flat input.");
+  }
 }
 
 template <typename TInput>
