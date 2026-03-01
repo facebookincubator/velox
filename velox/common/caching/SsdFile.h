@@ -352,7 +352,7 @@ class SsdFile {
   /// Asserts that the region of 'offset' is pinned. This is called by the pin
   /// holder. The pin count can be read without mutex.
   void checkPinned(uint64_t offset) const {
-    tsan_lock_guard<std::shared_mutex> l(mutex_);
+    std::shared_lock<std::shared_mutex> l(mutex_);
     VELOX_CHECK_GT(regionPins_[regionIndex(offset)], 0);
   }
 

@@ -150,7 +150,7 @@ class AsyncSource {
   /// If true, move() will not block. But there is no guarantee that somebody
   /// else will not get the item first.
   bool hasValue() const {
-    tsan_lock_guard<std::mutex> l(mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
     return item_ != nullptr || exception_ != nullptr;
   }
 
