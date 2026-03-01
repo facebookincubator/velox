@@ -899,21 +899,20 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     const auto data = usePrefixSort ? prefixSortData : nonPrefixSortData;
     sortWindowBuild->addInput(data);
 
-    std::atomic_bool hasReserveMemory = false;
+    std::atomic_int numReserves{0};
     // Reserve memory for sort.
     SCOPED_TESTVALUE_SET(
         "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
         std::function<void(memory::MemoryPoolImpl*)>(
-            ([&](memory::MemoryPoolImpl* pool) {
-              hasReserveMemory.store(true);
-            })));
+            ([&](memory::MemoryPoolImpl* pool) { ++numReserves; })));
 
     sortWindowBuild->noMoreInput();
     if (spillEnabled) {
-      // Reserve memory for sort.
-      ASSERT_TRUE(hasReserveMemory);
+      // Reserve memory for sort and when prefix sort.
+      ASSERT_EQ(numReserves, 2);
     } else {
-      ASSERT_FALSE(hasReserveMemory);
+      // Reserve memory when prefix sort.
+      ASSERT_EQ(numReserves, 1);
     }
   }
 }

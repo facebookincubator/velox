@@ -357,55 +357,63 @@ uint64_t PrefixSort::maxRequiredBytes() const {
       2 * pool_->alignment();
 }
 
-void PrefixSort::sortInternal(
+bool PrefixSort::sortInternal(
     std::vector<char*, memory::StlAllocator<char*>>& rows) {
   const auto numRows = rows.size();
   const auto entrySize = sortLayout_.entrySize;
-  memory::ContiguousAllocation prefixBufferAlloc;
-  // Allocates prefix sort buffer.
   {
-    const auto numPages =
-        memory::AllocationTraits::numPages(numRows * entrySize);
-    pool_->allocateContiguous(numPages, prefixBufferAlloc);
-  }
-  char* prefixBuffer = prefixBufferAlloc.data<char>();
-
-  // Extracts rows, and stores the serialized normalized keys plus the row
-  // address (in row container) to prefix sort buffer.
-  for (auto i = 0; i < rows.size(); ++i) {
-    extractRowAndEncodePrefixKeys(rows[i], prefixBuffer + entrySize * i);
-  }
-
-  // Sort rows with the normalized prefix keys.
-  {
-    const auto swapBuffer = AlignedBuffer::allocate<char>(entrySize, pool_);
-    PrefixSortRunner sortRunner(entrySize, swapBuffer->asMutable<char>());
-    auto* prefixBufferStart = prefixBuffer;
-    auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
-    if (sortLayout_.numNormalizedKeys > 0) {
-      addThreadLocalRuntimeStat(
-          PrefixSort::kNumPrefixSortKeys,
-          RuntimeCounter(
-              sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
+    memory::ContiguousAllocation prefixBufferAlloc;
+    // Allocates prefix sort buffer.
+    {
+      const auto numPages =
+          memory::AllocationTraits::numPages(numRows * entrySize);
+      if (!pool_->maybeReserve(memory::AllocationTraits::pageBytes(numPages))) {
+        return false;
+      }
+      pool_->allocateContiguous(numPages, prefixBufferAlloc);
     }
-    if (sortLayout_.hasNonNormalizedKey ||
-        sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys) {
-      sortRunner.quickSort(
-          prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
-            return comparePartNormalizedKeys(lhs, rhs);
-          });
-    } else {
-      sortRunner.quickSort(
-          prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
-            return compareAllNormalizedKeys(lhs, rhs);
-          });
+    char* prefixBuffer = prefixBufferAlloc.data<char>();
+
+    // Extracts rows, and stores the serialized normalized keys plus the row
+    // address (in row container) to prefix sort buffer.
+    for (auto i = 0; i < rows.size(); ++i) {
+      extractRowAndEncodePrefixKeys(rows[i], prefixBuffer + entrySize * i);
+    }
+
+    // Sort rows with the normalized prefix keys.
+    {
+      const auto swapBuffer = AlignedBuffer::allocate<char>(entrySize, pool_);
+      PrefixSortRunner sortRunner(entrySize, swapBuffer->asMutable<char>());
+      auto* prefixBufferStart = prefixBuffer;
+      auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
+      if (sortLayout_.numNormalizedKeys > 0) {
+        addThreadLocalRuntimeStat(
+            PrefixSort::kNumPrefixSortKeys,
+            RuntimeCounter(
+                sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
+      }
+      if (sortLayout_.hasNonNormalizedKey ||
+          sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys) {
+        sortRunner.quickSort(
+            prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
+              return comparePartNormalizedKeys(lhs, rhs);
+            });
+      } else {
+        sortRunner.quickSort(
+            prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
+              return compareAllNormalizedKeys(lhs, rhs);
+            });
+      }
+    }
+
+    // Output sorted row addresses.
+    for (auto i = 0; i < rows.size(); ++i) {
+      rows[i] = getRowAddrFromPrefixBuffer(prefixBuffer + i * entrySize);
     }
   }
+  pool_->release();
 
-  // Output sorted row addresses.
-  for (auto i = 0; i < rows.size(); ++i) {
-    rows[i] = getRowAddrFromPrefixBuffer(prefixBuffer + i * entrySize);
-  }
+  return true;
 }
 
 } // namespace facebook::velox::exec
