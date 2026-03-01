@@ -591,6 +591,13 @@ Table Scan
        increasing the number of running scan threads, and stop once exceeds this
        ratio. The value is in the range of [0, 1]. This only applies if
        'table_scan_scaled_processing_enabled' is true.
+   * - table_scan_output_batch_rows_override
+     - integer
+     - 0
+     - If non-zero, overrides the number of rows in each output batch produced
+       by the TableScan operator, bypassing the dynamic batch size calculation.
+       This is useful for correctness testing where a fixed batch size is needed
+       to produce deterministic results. Zero means 'no override'.
 
 Table Writer
 ------------

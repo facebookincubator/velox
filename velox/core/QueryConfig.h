@@ -306,6 +306,12 @@ class QueryConfig {
   static constexpr const char* kTableScanGetOutputTimeLimitMs =
       "table_scan_getoutput_time_limit_ms";
 
+  /// If non-zero, overrides the number of rows in each output batch produced
+  /// by the TableScan operator, bypassing the dynamic batch size calculation.
+  /// Zero means 'no override'.
+  static constexpr const char* kTableScanOutputBatchRowsOverride =
+      "table_scan_output_batch_rows_override";
+
   /// If false, the 'group by' code is forced to use generic hash mode
   /// hashtable.
   static constexpr const char* kHashAdaptivityEnabled =
@@ -1062,6 +1068,10 @@ class QueryConfig {
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
     return get<uint64_t>(kTableScanGetOutputTimeLimitMs, 5'000);
+  }
+
+  uint32_t tableScanOutputBatchRowsOverride() const {
+    return get<uint32_t>(kTableScanOutputBatchRowsOverride, 0);
   }
 
   bool hashAdaptivityEnabled() const {
