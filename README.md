@@ -1,4 +1,5 @@
 <img src="static/logo.svg" alt="Velox logo" width="50%" align="center" />
+<!-- Velox is an extensible C++ execution engine.-->
 
 [![Linux Build using GCC](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml)
 [![macOS Build](https://github.com/facebookincubator/velox/actions/workflows/macos.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/macos.yml)
