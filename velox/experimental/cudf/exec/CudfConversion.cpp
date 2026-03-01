@@ -97,6 +97,12 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
     // Accumulate inputs
     inputs_.push_back(input);
     currentOutputSize_ += input->size();
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -131,8 +137,16 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto input = mergeRowVectors(selectedInputs, inputs_[0]->pool());
 
   // Remove processed inputs
+  for (size_t i = 0; i < selectedInputs.size(); ++i) {
+    queuedInputBytes_ -= selectedInputs[i]->estimateFlatSize();
+  }
   inputs_.erase(inputs_.begin(), inputs_.begin() + selectedInputs.size());
   currentOutputSize_ -= totalSize;
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 
   // Early return if no input
   if (input->size() == 0) {
@@ -188,6 +202,12 @@ void CudfToVelox::addInput(RowVectorPtr input) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
     inputs_.push_back(std::move(cudfInput));
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -219,7 +239,13 @@ RowVectorPtr CudfToVelox::getOutput() {
     // Move the CudfVector out to keep it alive while we use the view.
     // This avoids expensive materialization when constructed from packed_table.
     auto cudfVector = std::move(inputs_.front());
+    queuedInputBytes_ -= cudfVector->estimateFlatSize();
     inputs_.pop_front();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
 
     auto tableView = cudfVector->getTableView();
     if (tableView.num_rows() == 0) {
@@ -244,6 +270,7 @@ RowVectorPtr CudfToVelox::getOutput() {
     auto& input = inputs_.front();
     if (totalSize + input->size() <= targetBatchSize) {
       totalSize += input->size();
+      queuedInputBytes_ -= input->estimateFlatSize();
       selectedInputs.push_back(std::move(input));
       inputs_.pop_front();
     } else {
@@ -267,7 +294,9 @@ RowVectorPtr CudfToVelox::getOutput() {
           pool(), input->type(), secondPartSize, std::move(secondPart), stream);
 
       // Replace the original input with the second part
+      queuedInputBytes_ -= input->estimateFlatSize();
       input = std::move(secondPartVector);
+      queuedInputBytes_ += input->estimateFlatSize();
 
       // Add the first part to selectedInputs
       selectedInputs.push_back(std::move(firstPartVector));
@@ -276,6 +305,11 @@ RowVectorPtr CudfToVelox::getOutput() {
     }
   }
 
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
   finished_ = noMoreInput_ && inputs_.empty();
 
   // If we have no inputs to process, return nullptr

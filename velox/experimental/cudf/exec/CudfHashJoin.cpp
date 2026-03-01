@@ -173,6 +173,12 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
       lockedStats->numNullKeys += null_count;
     }
     inputs_.push_back(std::move(cudfInput));
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -205,8 +211,16 @@ void CudfHashJoinBuild::noMoreInput() {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
+    for (const auto& peerInput : build->inputs_) {
+      queuedInputBytes_ += peerInput->estimateFlatSize();
+    }
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 
   SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
@@ -234,6 +248,9 @@ void CudfHashJoinBuild::noMoreInput() {
   // Release input data after synchronizing
   stream.synchronize();
   inputs_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
 
   for (auto const& tbl : tbls) {
     VELOX_CHECK_NOT_NULL(tbl);
@@ -480,9 +497,16 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
     auto lockedStats = stats_.wlock();
     lockedStats->numNullKeys += null_count;
   }
+  auto inputBytes = input->estimateFlatSize();
   if (joinNode_->isRightSemiFilterJoin()) {
     // Queue inputs and process all at once
     if (input->size() > 0) {
+      queuedInputBytes_ += inputBytes;
+      addRuntimeStat(
+          "gpuQueuedInputBytes",
+          RuntimeCounter(
+              static_cast<int64_t>(queuedInputBytes_),
+              RuntimeCounter::Unit::kBytes));
       inputs_.push_back(std::move(cudfInput));
     }
     return;
@@ -490,6 +514,12 @@ void CudfHashJoinProbe::addInput(RowVectorPtr input) {
 
   if (input->size() > 0) {
     input_ = std::move(input);
+    queuedInputBytes_ = inputBytes;
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -1445,6 +1475,9 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   // the refcount while cudfInput still holds a reference.
   cudfInput.reset();
   input_.reset();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   finished_ =
       noMoreInput_ && !joinNode_->isRightJoin() && !joinNode_->isFullJoin();
 

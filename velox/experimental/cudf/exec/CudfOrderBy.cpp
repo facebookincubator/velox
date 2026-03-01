@@ -64,6 +64,12 @@ void CudfOrderBy::addInput(RowVectorPtr input) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
     inputs_.push_back(std::move(cudfInput));
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -82,6 +88,9 @@ void CudfOrderBy::noMoreInput() {
   // Release input data after synchronizing
   stream.synchronize();
   inputs_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
 
   VELOX_CHECK_NOT_NULL(tbl);
 

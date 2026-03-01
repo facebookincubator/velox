@@ -156,6 +156,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   void computeIntermediateDistinctPartial(CudfVectorPtr tbl);
 
   CudfVectorPtr partialOutput_;
+
+  uint64_t queuedInputBytes_{0};
 };
 
 // Step-aware aggregation function registry
