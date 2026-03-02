@@ -210,9 +210,10 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
             stream);
       } else if (
           partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow) {
-        return cudf::round_robin_partition(
+        auto result = cudf::round_robin_partition(
             tableView, numPartitions_, counter_, stream);
         counter_ = (counter_ + cudfVector->size()) % numPartitions_;
+        return result;
       }
       VELOX_FAIL("Unsupported partition function");
     }();

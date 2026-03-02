@@ -903,7 +903,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
           cudf::get_current_device_resource_ref());
 
       // Check which build row indices are present in the join result
-      auto matchedInBatch = cudf::contains(rightIdxCol, rowIndices->view());
+      auto matchedInBatch = cudf::contains(
+          rightIdxCol,
+          rowIndices->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
 
       // OR with existing flags to accumulate matches across batches
       auto updatedFlags = cudf::binary_operation(
@@ -957,8 +961,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
                 stream,
                 cudf::get_current_device_resource_ref());
 
-            auto matchedInBatch =
-                cudf::contains(filteredRightIdxCol->view(), rowIndices->view());
+            auto matchedInBatch = cudf::contains(
+                filteredRightIdxCol->view(),
+                rowIndices->view(),
+                stream,
+                cudf::get_current_device_resource_ref());
 
             // OR with existing flags to accumulate matches across batches
             auto updatedFlags = cudf::binary_operation(
@@ -1032,7 +1039,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::get_current_device_resource_ref());
 
       // Check which build row indices are present in the join result
-      auto matchedInBatch = cudf::contains(rightIdxCol, rowIndices->view());
+      auto matchedInBatch = cudf::contains(
+          rightIdxCol,
+          rowIndices->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
 
       // OR with existing flags to accumulate matches across batches
       auto updatedFlags = cudf::binary_operation(
@@ -1083,8 +1094,11 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::get_current_device_resource_ref());
 
       // Check which build row indices are present in the filtered join result
-      auto matchedInBatch =
-          cudf::contains(filteredRightIdxCol, rowIndices->view());
+      auto matchedInBatch = cudf::contains(
+          filteredRightIdxCol,
+          rowIndices->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
 
       // OR with existing flags to accumulate matches across batches
       auto updatedFlags = cudf::binary_operation(
@@ -1348,7 +1362,9 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           auto leftCudfType =
               veloxToCudfTypeId(probeType_->childAt(probeChannel));
           auto nullScalar = cudf::make_default_constructed_scalar(
-              cudf::data_type{leftCudfType});
+              cudf::data_type{leftCudfType},
+              stream,
+              cudf::get_current_device_resource_ref());
           outCols[outIdx] = cudf::make_column_from_scalar(
               *nullScalar, m, stream, cudf::get_current_device_resource_ref());
         }
