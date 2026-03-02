@@ -686,14 +686,25 @@ TEST_F(CudfFilterProjectTest, round) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-// TODO (dm): Enable after adding decimal support to velox-cudf
-TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
+TEST_F(CudfFilterProjectTest, roundDecimal) {
   parse::ParseOptions options;
   options.parseIntegerAsBigint = false;
 
+  // Note that the underlying cudf::round_decimal function returns
+  // a value with the specified scale, and rounds the internal integer
+  // value accordingly, e.g. rounding 41.2389 to 2 decimal places
+  // results in an internal integer value of 4124 with a scale of 2.
+  //
+  // When the specified scale is non-zero, Velox inserts extra casts
+  // to restore the original scale. However, when the specified scale
+  // is zero, Velox does NOT do that, and the result has a scale of 0.
+
+  // Input values 41.2389 and -45.6789 as DECIMAL(10, 4).
   auto decimalData = makeRowVector(
       {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
 
+  // Round to 2 decimal places.
+  // Expected values are 41.24 and -45.68 as DECIMAL(10, 4).
   auto plan = PlanBuilder()
                   .setParseOptions(options)
                   .values({decimalData})
@@ -703,15 +714,19 @@ TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
       {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
+  // Round to 0 decimal places.
+  // Expected values are 41.0 and -46.0 as DECIMAL(10, 0).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
              .project({"round(c0) as c1"})
              .planNode();
-  decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({410000, -460000}, DECIMAL(10, 4))});
+  decimalExpected =
+      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
+  // Round to -1 decimal places.
+  // Expected values are 40.0 and -50.0 as DECIMAL(10, 4).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})

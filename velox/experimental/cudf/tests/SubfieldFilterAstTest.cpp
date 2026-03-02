@@ -138,6 +138,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
             veloxExpected = filter.testBool(v);
             break;
           }
+          case TypeKind::HUGEINT: {
+            auto v = fieldVec->asFlatVector<int128_t>()->valueAt(i);
+            veloxExpected = filter.testInt128(v);
+            break;
+          }
           case TypeKind::VARCHAR: {
             auto sv = fieldVec->asFlatVector<StringView>()->valueAt(i);
             veloxExpected = filter.testBytes(sv.data(), sv.size());
@@ -467,6 +472,42 @@ TEST_F(SubfieldFilterAstTest, SmallIntTypeBounds) {
       << "Should skip both bounds for range exceeding int16 limits";
 
   // Execution validation
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, DecimalRange) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, DECIMAL(20, 2)}});
+  // Range [1.23, 4.56] encoded as unscaled integer values.
+  auto filter = std::make_unique<common::HugeintRange>(
+      int128_t{123}, int128_t{456}, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, DecimalInList) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, DECIMAL(20, 2)}});
+  // Values [1.23, 4.56] encoded as unscaled integer values.
+  std::vector<int128_t> values = {int128_t{123}, int128_t{456}};
+  auto filter = common::createHugeintValues(values, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
   auto vec = makeTestVector(rowType, 100);
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }

@@ -314,7 +314,7 @@ CudfHiveConnectorTestBase::makeCudfHiveInsertTableHandle(
         std::make_shared<connector::hive::CudfHiveColumnHandle>(
             tableColumnNames.at(i),
             tableColumnTypes.at(i),
-            cudf::data_type{veloxToCudfTypeId(tableColumnTypes.at(i))}));
+            veloxToCudfDataType(tableColumnTypes.at(i))));
   }
 
   return std::make_shared<connector::hive::CudfHiveInsertTableHandle>(

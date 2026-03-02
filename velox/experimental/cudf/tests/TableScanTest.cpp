@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/Fs.h"
@@ -42,6 +43,8 @@
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
+#include <cudf/io/parquet.hpp>
+
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
@@ -55,6 +58,37 @@ using namespace facebook::velox::tests::utils;
 using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
+
+namespace {
+struct StatsFilterMetrics {
+  cudf::size_type inputRowGroups{0};
+  std::optional<cudf::size_type> rowGroupsAfterStats;
+  cudf::size_type outputRows{0};
+};
+
+StatsFilterMetrics readParquetWithStatsFilter(
+    const std::string& filePath,
+    const RowTypePtr& rowType,
+    const common::SubfieldFilters& filters,
+    bool useJitFilter) {
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  auto const& expr =
+      createAstFromSubfieldFilters(filters, tree, scalars, rowType);
+
+  auto options =
+      cudf::io::parquet_reader_options::builder(cudf::io::source_info(filePath))
+          .use_jit_filter(useJitFilter)
+          .build();
+  options.set_filter(expr);
+
+  auto result = cudf::io::read_parquet(options);
+  return {
+      result.metadata.num_input_row_groups,
+      result.metadata.num_row_groups_after_stats_filter,
+      result.tbl->num_rows()};
+}
+} // namespace
 
 class TableScanTest : public virtual CudfHiveConnectorTestBase {
  protected:
@@ -524,6 +558,164 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT count(*) FROM tmp");
 #endif
+}
+
+// Disable this test and the one below for now, pending a CUDF fix.
+// simoneves 2/25/26
+// @TODO simoneves/mattgara re-enable once fixed.
+
+TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
+
+  auto vector = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int64_t>(
+              {123, 500, -250, 300, 400, 200}, DECIMAL(12, 2)),
+          makeFlatVector<int128_t>(
+              {int128_t{200},
+               int128_t{200},
+               int128_t{700},
+               int128_t{700},
+               int128_t{900},
+               int128_t{-100}},
+              DECIMAL(20, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {vector};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  // c0 between 1.00 and 4.00 and c1 in (2.00, 7.00)
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  int64_t{100}, int64_t{400}, /*nullAllowed*/ false))
+          .add(
+              "c1",
+              common::createHugeintValues(
+                  {int128_t{200}, int128_t{700}}, /*nullAllowed*/ false))
+          .build();
+
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, true, std::move(subfieldFilters), nullptr);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT c0, c1 FROM tmp "
+      "WHERE c0 BETWEEN CAST('1.00' AS DECIMAL(12, 2)) "
+      "AND CAST('4.00' AS DECIMAL(12, 2)) "
+      "AND c1 IN (CAST('2.00' AS DECIMAL(20, 2)), "
+      "CAST('7.00' AS DECIMAL(20, 2)))");
+}
+
+TEST_F(TableScanTest, DISABLED_decimalStatsFilterIoPruning) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
+  auto vec0 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({100, 200}, DECIMAL(12, 2)),
+       makeFlatVector<int128_t>(
+           {int128_t{1000}, int128_t{2000}}, DECIMAL(20, 2))});
+  auto vec1 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({300, 400}, DECIMAL(12, 2)),
+       makeFlatVector<int128_t>(
+           {int128_t{3000}, int128_t{4000}}, DECIMAL(20, 2))});
+  auto vec2 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({500, 600}, DECIMAL(12, 2)),
+       makeFlatVector<int128_t>(
+           {int128_t{5000}, int128_t{6000}}, DECIMAL(20, 2))});
+
+  std::vector<RowVectorPtr> vectors = {vec0, vec1, vec2};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  common::SubfieldFilters filters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  int64_t{300}, int64_t{400}, /*nullAllowed*/ false))
+          .add(
+              "c1",
+              std::make_unique<common::HugeintRange>(
+                  int128_t{3000}, int128_t{4000}, /*nullAllowed*/ false))
+          .build();
+
+  auto metrics = readParquetWithStatsFilter(
+      filePath->getPath(), rowType, filters, /*useJitFilter*/ true);
+  EXPECT_EQ(metrics.inputRowGroups, 3);
+  ASSERT_TRUE(metrics.rowGroupsAfterStats.has_value());
+  EXPECT_EQ(metrics.rowGroupsAfterStats.value(), 1);
+  EXPECT_EQ(metrics.outputRows, 2);
+}
+
+TEST_F(TableScanTest, doubleStatsFilterIoPruning) {
+  auto rowType = ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()});
+  auto vec0 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<double>({1.0, 2.0}),
+       makeFlatVector<double>({10.0, 20.0})});
+  auto vec1 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<double>({3.0, 4.0}),
+       makeFlatVector<double>({30.0, 40.0})});
+  auto vec2 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<double>({5.0, 6.0}),
+       makeFlatVector<double>({50.0, 60.0})});
+
+  std::vector<RowVectorPtr> vectors = {vec0, vec1, vec2};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  common::SubfieldFilters filters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::DoubleRange>(
+                  3.0,
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  4.0,
+                  /*upperUnbounded*/ false,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .add(
+              "c1",
+              std::make_unique<common::DoubleRange>(
+                  30.0,
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  40.0,
+                  /*upperUnbounded*/ false,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .build();
+
+  auto metrics = readParquetWithStatsFilter(
+      filePath->getPath(), rowType, filters, /*useJitFilter*/ true);
+  EXPECT_EQ(metrics.inputRowGroups, 3);
+  ASSERT_TRUE(metrics.rowGroupsAfterStats.has_value());
+  EXPECT_EQ(metrics.rowGroupsAfterStats.value(), 1);
+  EXPECT_EQ(metrics.outputRows, 2);
 }
 
 TEST_F(TableScanTest, splitOffsetAndLength) {

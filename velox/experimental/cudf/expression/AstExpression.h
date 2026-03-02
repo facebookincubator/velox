@@ -20,6 +20,8 @@
 
 #include <cudf/ast/expressions.hpp>
 
+#include <utility>
+
 namespace facebook::velox::cudf_velox {
 
 const std::string kAstEvaluatorName = "ast";

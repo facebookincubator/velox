@@ -20,6 +20,8 @@
 
 #include <cudf/ast/expressions.hpp>
 
+#include <utility>
+
 namespace facebook::velox::cudf_velox {
 
 // Pre-compute instructions for the expression,
@@ -47,12 +49,12 @@ struct PrecomputeInstruction {
       int depIndex,
       const std::string& name,
       int newIndex,
-      const std::vector<int>& nestedIndices,
+      std::vector<int>&& nestedIndices,
       const std::shared_ptr<CudfExpression>& node = nullptr)
       : dependent_column_index(depIndex),
         ins_name(name),
         new_column_index(newIndex),
-        nested_dependent_column_indices(nestedIndices),
+        nested_dependent_column_indices(std::move(nestedIndices)),
         cudf_expression(node) {}
 };
 
