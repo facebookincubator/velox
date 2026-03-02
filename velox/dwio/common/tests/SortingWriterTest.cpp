@@ -43,9 +43,16 @@ class MockWriter : public Writer {
 
   void flush() override {}
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   void close() override {
     setState(State::kClosed);
   }
+#else
+  std::unique_ptr<FileMetadata> close() override {
+    setState(State::kClosed);
+    return nullptr;
+  }
+#endif
 
   void abort() override {
     setState(State::kAborted);

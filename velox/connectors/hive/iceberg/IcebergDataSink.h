@@ -24,6 +24,12 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
+#endif
+
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
@@ -194,6 +200,8 @@ class IcebergDataSink : public HiveDataSink {
   // Returns nullptr for null partition values.
   folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
 
+  void closeInternal() override;
+
   // Iceberg partition specification defining how the table is partitioned.
   // Contains partition fields with source column names, transform types
   // (e.g., identity, year, month, day, hour, bucket, truncate), transform
@@ -240,6 +248,21 @@ class IcebergDataSink : public HiveDataSink {
   // folly::dynamic array of values across all partition fields), ready for JSON
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
+
+  // Statistics for all data files written by this sink. These statistics
+  // are populated during closeInternal(). These metrics are subsequently used
+  // to construct Iceberg commit messages.
+  // Multiple entries are saved because a single write session from
+  // appendData can generate multiple data files if the input row batch spans
+  // multiple partitions or if file rotation is triggered (e.g., reaching file
+  // size limits). Each entry corresponds to one individual data file.
+  std::vector<IcebergDataFileStatisticsPtr> dataFileStats_;
+
+  const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
+
+#ifdef VELOX_ENABLE_PARQUET
+  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
+#endif
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

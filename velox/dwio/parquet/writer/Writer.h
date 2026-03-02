@@ -20,12 +20,14 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/parquet/ParquetFieldId.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -38,6 +40,21 @@ using facebook::velox::parquet::arrow::util::CodecOptions;
 class ArrowDataBufferSink;
 
 struct ArrowContext;
+
+/// Parquet-specific file metadata wrapper. Provides access to the underlying
+/// arrow::FileMetaData.
+class ParquetFileMetadata : public dwio::common::FileMetadata {
+ public:
+  explicit ParquetFileMetadata(std::shared_ptr<arrow::FileMetaData> metadata)
+      : metadata_(std::move(metadata)) {}
+
+  std::shared_ptr<arrow::FileMetaData> arrowMetadata() const {
+    return metadata_;
+  }
+
+ private:
+  std::shared_ptr<arrow::FileMetaData> metadata_;
+};
 
 class DefaultFlushPolicy : public dwio::common::FlushPolicy {
  public:
@@ -204,10 +221,18 @@ class Writer : public dwio::common::Writer {
     return true;
   }
 
-  // Closes 'this', After close, data can no longer be added and the completed
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  // Closes 'this'. After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
   // live until destruction of 'this'.
   void close() override;
+#else
+  // Closes 'this'. After close, data can no longer be added and the completed
+  // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
+  // live until destruction of 'this'. Returns file metadata, or null if no
+  // metadata is available (e.g. for an empty file).
+  std::unique_ptr<dwio::common::FileMetadata> close() override;
+#endif
 
   void abort() override;
 
