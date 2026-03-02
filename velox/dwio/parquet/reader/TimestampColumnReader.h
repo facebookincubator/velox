@@ -38,9 +38,23 @@ Timestamp toInt64Timestamp(int64_t value, TimestampPrecision filePrecision) {
 
 Timestamp toInt96Timestamp(const int128_t& value) {
   // Convert int128_t to Int96 Timestamp by extracting days and nanos.
-  const int32_t days = static_cast<int32_t>(value >> 64);
+  const auto days = static_cast<uint64_t>(value >> 64);
   const uint64_t nanos = value & ((((1ULL << 63) - 1ULL) << 1) + 1);
-  return Timestamp::fromDaysAndNanos(days, nanos);
+
+  // Check for overflow before casting to int64_t
+  VELOX_USER_CHECK_LE(
+      days,
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+      "Days value {} exceeds int64_t maximum, potential overflow in timestamp conversion",
+      days);
+  VELOX_USER_CHECK_LE(
+      nanos,
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+      "Nanos value {} exceeds int64_t maximum, potential overflow in timestamp conversion",
+      nanos);
+
+  return Timestamp::fromDaysAndNanos(
+      static_cast<int64_t>(days), static_cast<int64_t>(nanos));
 }
 
 // Range filter for Parquet Timestamp.
@@ -143,8 +157,10 @@ class TimestampColumnReader : public IntegerColumnReader {
       if (resultVector->isNullAt(i)) {
         continue;
       }
-
-      const int128_t encoded = reinterpret_cast<int128_t&>(rawValues[i]);
+      const uint64_t seconds = static_cast<uint64_t>(rawValues[i].getSeconds());
+      const uint64_t nanos = static_cast<uint64_t>(rawValues[i].getNanos());
+      const __int128_t encoded = (static_cast<__int128_t>(nanos) << 64) |
+          static_cast<__int128_t>(seconds);
       if constexpr (std::is_same_v<T, int64_t>) {
         rawValues[i] = toInt64Timestamp(encoded, filePrecision_);
         if (needsConversion_) {

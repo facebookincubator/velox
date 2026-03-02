@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "velox/common/file/File.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
@@ -147,6 +148,17 @@ void randomByteArray(
     ByteArray* out,
     int maxSize) {
   randomByteArray(n, seed, buf, out, 0, maxSize);
+}
+
+void writeToFile(
+    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<::arrow::Buffer> buffer) {
+  auto localWriteFile = std::make_unique<facebook::velox::LocalWriteFile>(
+      filePath->getPath(), false, false);
+  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
+  auto bufferToString = bufferReader->buffer()->ToString();
+  localWriteFile->append(bufferToString);
+  localWriteFile->close();
 }
 
 } // namespace test
