@@ -14,9 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+
+#include "velox/common/base/RuntimeMetrics.h"
 
 #include <cudf/sorting.hpp>
 
@@ -61,9 +65,20 @@ CudfOrderBy::CudfOrderBy(
 void CudfOrderBy::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
+    addRuntimeStat(
+        "gpuInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(input->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
     inputs_.push_back(std::move(cudfInput));
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -77,18 +92,23 @@ void CudfOrderBy::noMoreInput() {
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, outputType_, stream);
+  // Using the output memory resource to allow spilling to CPU memory.
+  auto tbl =
+      getConcatenatedTable(inputs_, outputType_, stream, get_output_mr());
 
   // Release input data after synchronizing
   stream.synchronize();
   inputs_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
 
   VELOX_CHECK_NOT_NULL(tbl);
 
   auto keys = tbl->view().select(sortKeys_);
   auto values = tbl->view();
-  auto result =
-      cudf::sort_by_key(values, keys, columnOrder_, nullOrder_, stream);
+  auto result = cudf::sort_by_key(
+      values, keys, columnOrder_, nullOrder_, stream, get_output_mr());
   auto const size = result->num_rows();
   outputTable_ = std::make_shared<CudfVector>(
       pool(), outputType_, size, std::move(result), stream);
@@ -99,10 +119,18 @@ RowVectorPtr CudfOrderBy::getOutput() {
     return nullptr;
   }
   finished_ = noMoreInput_;
+  if (outputTable_) {
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(outputTable_->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
+  }
   return outputTable_;
 }
 
 void CudfOrderBy::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
   exec::Operator::close();
   // Release stored inputs
   // Release cudf memory resources

@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
@@ -88,6 +90,11 @@ CudfFromVelox::CudfFromVelox(
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (input->size() > 0) {
+    addRuntimeStat(
+        "gpuInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(input->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     // Materialize lazy vectors
     for (auto& child : input->children()) {
       child->loadedVector();
@@ -97,6 +104,12 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
     // Accumulate inputs
     inputs_.push_back(input);
     currentOutputSize_ += input->size();
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -131,8 +144,16 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto input = mergeRowVectors(selectedInputs, inputs_[0]->pool());
 
   // Remove processed inputs
+  for (size_t i = 0; i < selectedInputs.size(); ++i) {
+    queuedInputBytes_ -= selectedInputs[i]->estimateFlatSize();
+  }
   inputs_.erase(inputs_.begin(), inputs_.begin() + selectedInputs.size());
   currentOutputSize_ -= totalSize;
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 
   // Early return if no input
   if (input->size() == 0) {
@@ -143,7 +164,8 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto stream = cudfGlobalStreamPool().get_stream();
 
   // Convert RowVector to cudf table
-  auto tbl = with_arrow::toCudfTable(input, input->pool(), stream);
+  auto tbl =
+      with_arrow::toCudfTable(input, input->pool(), stream, get_output_mr());
 
   stream.synchronize();
 
@@ -151,12 +173,20 @@ RowVectorPtr CudfFromVelox::getOutput() {
 
   // Return a CudfVector that owns the cudf table
   const auto size = tbl->num_rows();
-  return std::make_shared<CudfVector>(
+  auto output = std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
+  addRuntimeStat(
+      "gpuOutputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
+  return output;
 }
 
 void CudfFromVelox::close() {
-  cudf::get_default_stream().synchronize();
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  // TODO(kn): Remove default stream after redesign of CudfFromVelox
+  cudf::get_default_stream(cudf::allow_default_stream).synchronize();
   exec::Operator::close();
   inputs_.clear();
 }
@@ -185,9 +215,20 @@ bool CudfToVelox::isPassthroughMode() const {
 void CudfToVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
+    addRuntimeStat(
+        "gpuInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(input->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
     VELOX_CHECK_NOT_NULL(cudfInput);
     inputs_.push_back(std::move(cudfInput));
+    queuedInputBytes_ += input->estimateFlatSize();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
   }
 }
 
@@ -219,7 +260,13 @@ RowVectorPtr CudfToVelox::getOutput() {
     // Move the CudfVector out to keep it alive while we use the view.
     // This avoids expensive materialization when constructed from packed_table.
     auto cudfVector = std::move(inputs_.front());
+    queuedInputBytes_ -= cudfVector->estimateFlatSize();
     inputs_.pop_front();
+    addRuntimeStat(
+        "gpuQueuedInputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(queuedInputBytes_),
+            RuntimeCounter::Unit::kBytes));
 
     auto tableView = cudfVector->getTableView();
     if (tableView.num_rows() == 0) {
@@ -227,10 +274,15 @@ RowVectorPtr CudfToVelox::getOutput() {
       return nullptr;
     }
     RowVectorPtr output =
-        with_arrow::toVeloxColumn(tableView, pool(), "", stream);
+        with_arrow::toVeloxColumn(tableView, pool(), "", stream, get_temp_mr());
     stream.synchronize();
     finished_ = noMoreInput_ && inputs_.empty();
     output->setType(outputType_);
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(output->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     // cudfVector goes out of scope here, freeing the GPU memory
     return output;
   }
@@ -244,6 +296,7 @@ RowVectorPtr CudfToVelox::getOutput() {
     auto& input = inputs_.front();
     if (totalSize + input->size() <= targetBatchSize) {
       totalSize += input->size();
+      queuedInputBytes_ -= input->estimateFlatSize();
       selectedInputs.push_back(std::move(input));
       inputs_.pop_front();
     } else {
@@ -252,22 +305,26 @@ RowVectorPtr CudfToVelox::getOutput() {
       auto cudfTableView = input->getTableView();
       auto partitions = std::vector<cudf::size_type>{
           static_cast<cudf::size_type>(targetBatchSize - totalSize)};
-      auto tableSplits = cudf::split(cudfTableView, partitions);
+      auto tableSplits = cudf::split(cudfTableView, partitions, stream);
 
       // Create new CudfVector from the first part
-      auto firstPart = std::make_unique<cudf::table>(tableSplits[0], stream);
+      auto firstPart =
+          std::make_unique<cudf::table>(tableSplits[0], stream, get_temp_mr());
       auto firstPartSize = firstPart->num_rows();
       auto firstPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), firstPartSize, std::move(firstPart), stream);
 
       // Create new CudfVector from the second part
-      auto secondPart = std::make_unique<cudf::table>(tableSplits[1], stream);
+      auto secondPart =
+          std::make_unique<cudf::table>(tableSplits[1], stream, get_temp_mr());
       auto secondPartSize = secondPart->num_rows();
       auto secondPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), secondPartSize, std::move(secondPart), stream);
 
       // Replace the original input with the second part
+      queuedInputBytes_ -= input->estimateFlatSize();
       input = std::move(secondPartVector);
+      queuedInputBytes_ += input->estimateFlatSize();
 
       // Add the first part to selectedInputs
       selectedInputs.push_back(std::move(firstPartVector));
@@ -276,6 +333,11 @@ RowVectorPtr CudfToVelox::getOutput() {
     }
   }
 
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
   finished_ = noMoreInput_ && inputs_.empty();
 
   // If we have no inputs to process, return nullptr
@@ -284,7 +346,8 @@ RowVectorPtr CudfToVelox::getOutput() {
   }
 
   // Concatenate the selected tables on the GPU
-  auto resultTable = getConcatenatedTable(selectedInputs, outputType_, stream);
+  auto resultTable =
+      getConcatenatedTable(selectedInputs, outputType_, stream, get_temp_mr());
 
   // Convert the concatenated table to a RowVector
   const auto size = resultTable->num_rows();
@@ -293,15 +356,21 @@ RowVectorPtr CudfToVelox::getOutput() {
     return nullptr;
   }
 
-  RowVectorPtr output =
-      with_arrow::toVeloxColumn(resultTable->view(), pool(), "", stream);
+  RowVectorPtr output = with_arrow::toVeloxColumn(
+      resultTable->view(), pool(), "", stream, get_temp_mr());
   stream.synchronize();
   finished_ = noMoreInput_ && inputs_.empty();
   output->setType(outputType_);
+  addRuntimeStat(
+      "gpuOutputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   return output;
 }
 
 void CudfToVelox::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
   exec::Operator::close();
   inputs_.clear();
 }

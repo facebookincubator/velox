@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/FilterProject.h"
@@ -62,6 +63,7 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   bool isFinished() override;
 
   void close() override {
+    RuntimeStatWriterScopeGuard statsGuard(this);
     Operator::close();
     projectEvaluators_.clear();
     filterEvaluator_.reset();
@@ -83,6 +85,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
+
+  uint64_t queuedInputBytes_{0};
 };
 
 bool canBeEvaluatedByCudf(

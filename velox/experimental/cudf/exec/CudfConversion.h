@@ -62,6 +62,7 @@ class CudfFromVelox : public exec::Operator, public NvtxHelper {
   std::vector<RowVectorPtr> inputs_;
   std::size_t currentOutputSize_ = 0;
   bool finished_ = false;
+  uint64_t queuedInputBytes_{0};
 };
 
 class CudfToVelox : public exec::Operator, public NvtxHelper {
@@ -99,6 +100,7 @@ class CudfToVelox : public exec::Operator, public NvtxHelper {
   std::optional<uint64_t> averageRowSize_;
   std::deque<CudfVectorPtr> inputs_;
   bool finished_ = false;
+  uint64_t queuedInputBytes_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -46,6 +47,8 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
+  void close() override;
+
  private:
   const int32_t count_; // N value of TopN
 
@@ -75,5 +78,6 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   std::vector<CudfVectorPtr> topNBatches_;
   int32_t kBatchSize_;
   bool finished_ = false;
+  uint64_t queuedInputBytes_{0};
 };
 } // namespace facebook::velox::cudf_velox

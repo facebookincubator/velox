@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/exec/Operator.h"
@@ -42,9 +43,12 @@ class CudfLimit : public exec::Operator, public NvtxHelper {
     return finished_ || (noMoreInput_ && input_ == nullptr);
   }
 
+  void close() override;
+
  private:
   int64_t remainingOffset_;
   int64_t remainingLimit_;
   bool finished_{false};
+  uint64_t queuedInputBytes_{0};
 };
 } // namespace facebook::velox::cudf_velox

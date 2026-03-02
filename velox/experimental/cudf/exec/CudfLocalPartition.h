@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -59,6 +60,8 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
   void noMoreInput() override;
 
   bool isFinished() override;
+
+  void close() override;
 
   static bool shouldReplace(
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
