@@ -223,7 +223,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
         setConstantArgument("numBits", numBits_, decodedNumBits);
       } else {
         numBits_ = BloomFilter<>::optimalNumOfBits(
-            estimatedNumItems_, maxNumItems_, maxNumBits_);
+            estimatedNumItems_, maxNumItems_);
       }
     } else {
       estimatedNumItems_ = defaultExpectedNumItems_;

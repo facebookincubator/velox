@@ -130,16 +130,14 @@ class BloomFilter {
   ///
   /// @param expectedNumItems expected number of items to insert.
   /// @param maxNumItems maximum number of items.
-  /// @param maxNumOfBits maximum number of bits allowed.
   static int64_t optimalNumOfBits(
       int64_t expectedNumItems,
-      int64_t maxNumItems,
-      int64_t maxNumOfBits) {
+      int64_t maxNumItems) {
     double fpp = std::min(
         static_cast<double>(expectedNumItems) /
             (static_cast<double>(maxNumItems) / kDefaultFpp),
         kDefaultFpp);
-    return std::min(optimalNumOfBits(expectedNumItems, fpp), maxNumOfBits);
+    return optimalNumOfBits(expectedNumItems, fpp);
   }
 
  private:

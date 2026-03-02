@@ -132,29 +132,18 @@ TEST_F(BloomFilterTest, optimalNumOfBitsWithFpp) {
 
 TEST_F(BloomFilterTest, optimalNumOfBitsWithMaxItems) {
   constexpr int64_t kMaxNumItems = 4'000'000L;
-  constexpr int64_t kMaxNumOfBits = 67'108'864L;
 
   EXPECT_EQ(
-      BloomFilter<>::optimalNumOfBits(
-          kMaxNumItems, kMaxNumItems, kMaxNumOfBits),
-      29'193'763);
+      BloomFilter<>::optimalNumOfBits(kMaxNumItems, kMaxNumItems), 29'193'763);
 
   EXPECT_EQ(
-      BloomFilter<>::optimalNumOfBits(1'000'000L, kMaxNumItems, kMaxNumOfBits),
-      10'183'830);
+      BloomFilter<>::optimalNumOfBits(1'000'000L, kMaxNumItems), 10'183'830);
+
+  EXPECT_EQ(BloomFilter<>::optimalNumOfBits(100L, kMaxNumItems), 2935);
 
   EXPECT_EQ(
-      BloomFilter<>::optimalNumOfBits(100L, kMaxNumItems, kMaxNumOfBits), 2935);
+      BloomFilter<>::optimalNumOfBits(5'000'000L, kMaxNumItems), 36'492'204);
 
   EXPECT_EQ(
-      BloomFilter<>::optimalNumOfBits(5'000'000L, kMaxNumItems, kMaxNumOfBits),
-      36'492'204);
-
-  EXPECT_EQ(
-      BloomFilter<>::optimalNumOfBits(
-          10'000'000L, kMaxNumItems, kMaxNumOfBits),
-      kMaxNumOfBits);
-
-  EXPECT_EQ(
-      BloomFilter<>::optimalNumOfBits(kMaxNumItems, kMaxNumItems, 1000L), 1000);
+      BloomFilter<>::optimalNumOfBits(10'000'000L, kMaxNumItems), 72'984'408);
 }
