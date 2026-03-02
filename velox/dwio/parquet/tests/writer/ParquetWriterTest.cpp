@@ -662,6 +662,64 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
       TimestampPrecision::kMilliseconds);
 }
 
+TEST_F(ParquetWriterTest, updateWriterOptionsCompressionLevel) {
+  {
+    std::unordered_map<std::string, std::string> configFromFile = {
+        {parquet::WriterOptions::kParquetHiveConnectorCompressionLevel, "5"}};
+    const config::ConfigBase connectorConfig(std::move(configFromFile));
+    const config::ConfigBase connectorSessionProperties({});
+
+    parquet::WriterOptions options;
+    options.processConfigs(connectorConfig, connectorSessionProperties);
+
+    ASSERT_EQ(options.compressionLevel.value(), 5);
+    ASSERT_EQ(options.codecOptions->compressionLevel, 5);
+  }
+}
+
+TEST_F(ParquetWriterTest, compressionLevelEffect) {
+  constexpr int64_t kRows = 20'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+
+  auto getCompressedSize = [&](CompressionKind kind, int level) {
+    parquet::WriterOptions writerOptions;
+    writerOptions.memoryPool = rootPool_.get();
+    writerOptions.compressionKind = kind;
+    writerOptions.compressionLevel = level;
+    writerOptions.enableDictionary = false;
+
+    auto* sinkPtr = write(data, writerOptions);
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+    EXPECT_EQ(reader->numberOfRows(), kRows);
+    return reader->fileMetaData()
+        .rowGroup(0)
+        .columnChunk(0)
+        .totalCompressedSize();
+  };
+
+  auto test = [&](CompressionKind kind) {
+    // ZSTD: min=1, max=22. Level 1 is fastest, level 22 is best compression.
+    // GZIP: min=1, max=9. Level 1 is fastest, level 9 is best compression.
+    // In both cases, higher level means better compression (smaller size) but
+    // slower speed.
+    auto lowLevelSize = getCompressedSize(kind, 1);
+    auto highLevelSize = getCompressedSize(kind, 9);
+
+    // Higher compression level should produce smaller or equal size.
+    // For this highly compressible data (sequential integers),
+    // we expect the high level compression to be effective and produce smaller
+    // output.
+    ASSERT_GT(lowLevelSize, highLevelSize);
+  };
+
+  test(CompressionKind_GZIP);
+  test(CompressionKind_ZSTD);
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
   SCOPED_TESTVALUE_SET(
