@@ -501,6 +501,10 @@ class QueryConfig {
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
+  /// The max number of items to use for the bloom filter.
+  static constexpr const char* kSparkBloomFilterMaxNumItems =
+      "spark.bloom_filter.max_num_items";
+
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
@@ -1290,17 +1294,14 @@ class QueryConfig {
     return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
   }
 
-  // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
-  // 256, so decrease it to not over memory limit.
   int64_t sparkBloomFilterMaxNumBits() const {
-    constexpr int64_t kDefault = 4'096 * 1024;
-    auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-    VELOX_USER_CHECK_LE(
-        value,
-        kDefault,
-        "{} cannot exceed the default value",
-        kSparkBloomFilterMaxNumBits);
-    return value;
+    constexpr int64_t kDefault = 67'108'864;
+    return get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
+  }
+
+  int64_t sparkBloomFilterMaxNumItems() const {
+    constexpr int64_t kDefault = 4'000'000L;
+    return get<int64_t>(kSparkBloomFilterMaxNumItems, kDefault);
   }
 
   int32_t sparkPartitionId() const {

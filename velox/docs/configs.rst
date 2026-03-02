@@ -1141,15 +1141,18 @@ Spark-specific Configuration
      - integer
      - 1000000
      - The default number of expected items for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.max_num_items
+     - integer
+     - 4000000
+     - The maximum number of items for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.bloom_filter.num_bits
      - integer
      - 8388608
      - The default number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.bloom_filter.max_num_bits
      - integer
-     - 4194304
-     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
-       the value of this config can not exceed the default value.
+     - 67108864
+     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.partition_id
      - integer
      -
