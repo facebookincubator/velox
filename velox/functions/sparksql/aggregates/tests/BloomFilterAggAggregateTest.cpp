@@ -59,7 +59,7 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
   auto expected1 = {makeRowVector({getSerializedBloomFilter(13)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 6)"}, expected1);
 
-  auto expected2 = {makeRowVector({getSerializedBloomFilter(636'489)})};
+  auto expected2 = {makeRowVector({getSerializedBloomFilter(524'288)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
 }
 
