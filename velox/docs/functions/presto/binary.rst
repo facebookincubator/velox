@@ -40,7 +40,7 @@ Binary Functions
 
     Query with partial-padded Base64 string:
     ::
-    SELECT from_base64('SGVsbG8gV29ybGQgZm9yIHZlbG94IQ='); -- UserError: Base64::decode() - invalid input string: string length is not a multiple of 4.
+    SELECT from_base64('SGVsbG8gV29ybGQgZm9yIHZlbG94IQ='); -- UserError: decode() - invalid input string length.
 
     In the above examples, both the fully padded and non-padded Base64 strings ('SGVsbG8gV29ybGQ=' and 'SGVsbG8gV29ybGQ') decode to the binary representation of the text 'Hello World'.
     A partial-padded Base64 string 'SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=' will result in a "UserError" status indicating the Base64 string is invalid.
@@ -48,6 +48,11 @@ Binary Functions
 .. function:: from_base64url(string) -> varbinary
 
     Decodes ``string`` data from the base64 encoded representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_ into a varbinary.
+
+.. function:: from_base32(string) -> varbinary
+
+    Decodes a Base32-encoded ``string`` back into its original binary form using the `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet (A-Z, 2-7).
+    Supports both padded and unpadded input. Lowercase letters are not supported.
 
 .. function:: from_big_endian_32(varbinary) -> integer
 
@@ -147,6 +152,10 @@ Binary Functions
 .. function:: to_base64url(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_.
+
+.. function:: to_base32(binary) -> varchar
+
+    Encodes ``binary`` into a base32 string representation using the `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet (A-Z, 2-7).
 
  .. function:: to_big_endian_32(integer) -> varbinary
 

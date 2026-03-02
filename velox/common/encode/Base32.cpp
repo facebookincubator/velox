@@ -18,6 +18,7 @@
 #include <folly/Expected.h>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -63,12 +64,122 @@ constexpr const Base32::ReverseIndex kBase32ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255 // 240-255
 };
 
+// Character set for Base32 encoding (RFC 4648).
+// Uses uppercase letters A-Z (values 0-25) and digits 2-7 (values 26-31).
+constexpr const Base32::Charset kBase32Charset = {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+    'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
+    'W', 'X', 'Y', 'Z', '2', '3', '4', '5', '6', '7'};
+
+// Verify that for every entry in kBase32Charset, the corresponding entry
+// in kBase32ReverseIndexTable is correct.
+static_assert(
+    BaseEncoderUtils::checkForwardIndex(
+        sizeof(kBase32Charset) - 1,
+        kBase32Charset,
+        kBase32ReverseIndexTable),
+    "kBase32Charset has incorrect entries");
+
+// Verify that for every entry in kBase32ReverseIndexTable, the corresponding
+// entry in kBase32Charset is correct.
+static_assert(
+    BaseEncoderUtils::checkReverseIndex(
+        sizeof(kBase32ReverseIndexTable) - 1,
+        kBase32Charset,
+        kBase32ReverseIndexTable),
+    "kBase32ReverseIndexTable has incorrect entries.");
+
+// static
+size_t Base32::calculateEncodedSize(size_t inputSize, bool withPadding) {
+  return BaseEncoderUtils::calculateEncodedSize(
+      inputSize, withPadding, kBase32BlockSizes);
+}
+
+// static
+std::string Base32::encode(std::string_view text) {
+  return encode(text.data(), text.size());
+}
+
+// static
+std::string Base32::encode(const char* input, size_t inputSize) {
+  size_t encodedSize = calculateEncodedSize(inputSize);
+  std::string encodedResult;
+  encodedResult.resize(encodedSize);
+  encode(input, inputSize, encodedResult.data());
+  return encodedResult;
+}
+
+// static
+void Base32::encode(const char* input, size_t inputSize, char* outputBuffer) {
+  encodeImpl(input, inputSize, kBase32Charset, outputBuffer);
+}
+
+// static
+void Base32::encodeImpl(
+    const char* input,
+    size_t inputSize,
+    const Charset& charset,
+    char* outputBuffer) {
+  if (inputSize == 0) {
+    return;
+  }
+
+  auto outputPointer = outputBuffer;
+
+  // Process full blocks of 5 bytes (40 bits) -> 8 Base32 characters.
+  for (; inputSize >= 5; inputSize -= 5, input += 5) {
+    // Pack 5 bytes into a uint64_t for bit extraction.
+    uint64_t block = static_cast<uint64_t>(static_cast<uint8_t>(input[0]))
+            << 32 |
+        static_cast<uint64_t>(static_cast<uint8_t>(input[1])) << 24 |
+        static_cast<uint64_t>(static_cast<uint8_t>(input[2])) << 16 |
+        static_cast<uint64_t>(static_cast<uint8_t>(input[3])) << 8 |
+        static_cast<uint64_t>(static_cast<uint8_t>(input[4]));
+
+    // Extract 8 groups of 5 bits from the 40-bit block.
+    *outputPointer++ = charset[(block >> 35) & 0x1f];
+    *outputPointer++ = charset[(block >> 30) & 0x1f];
+    *outputPointer++ = charset[(block >> 25) & 0x1f];
+    *outputPointer++ = charset[(block >> 20) & 0x1f];
+    *outputPointer++ = charset[(block >> 15) & 0x1f];
+    *outputPointer++ = charset[(block >> 10) & 0x1f];
+    *outputPointer++ = charset[(block >> 5) & 0x1f];
+    *outputPointer++ = charset[block & 0x1f];
+  }
+
+  // Handle trailing 1-4 bytes with padding (RFC 4648).
+  if (inputSize > 0) {
+    // Pack remaining bytes into the top of a uint64_t.
+    uint64_t block = 0;
+    for (size_t i = 0; i < inputSize; ++i) {
+      block |= static_cast<uint64_t>(static_cast<uint8_t>(input[i]))
+          << (32 - 8 * i);
+    }
+
+    // Number of encoded characters: ceil(inputBits / 5).
+    // 1 byte (8 bits)  -> 2 chars + 6 padding
+    // 2 bytes (16 bits) -> 4 chars + 4 padding
+    // 3 bytes (24 bits) -> 5 chars + 3 padding
+    // 4 bytes (32 bits) -> 7 chars + 1 padding
+    size_t encodedChars = (inputSize * 8 + 4) / 5;
+
+    for (size_t i = 0; i < encodedChars; ++i) {
+      *outputPointer++ = charset[(block >> (35 - 5 * i)) & 0x1f];
+    }
+
+    // Pad to the next multiple of 8.
+    size_t paddingCount = Base32::kEncodedBlockByteSize - encodedChars;
+    memset(outputPointer, BaseEncoderUtils::kPadding, paddingCount);
+    outputPointer += paddingCount;
+  }
+}
+
 // static
 folly::Expected<uint8_t, Status> Base32::base32ReverseLookup(
     char encodedChar,
     const ReverseIndex& reverseIndex) {
   auto index = reverseIndex[static_cast<uint8_t>(encodedChar)];
-  if (index >= 32) {
+  if (index >= kCharsetSize) {
     return folly::makeUnexpected(
         Status::UserError("Unrecognized character: {}", encodedChar));
   }
@@ -87,13 +198,14 @@ folly::Expected<size_t, Status> Base32::calculateDecodedSize(
   size_t validCharCount = 0;
   for (size_t i = 0; i < inputSize; ++i) {
     char c = input[i];
-    if (c == Base32::kPadding || std::isspace(static_cast<unsigned char>(c))) {
+    if (c == BaseEncoderUtils::kPadding ||
+        std::isspace(static_cast<unsigned char>(c))) {
       continue;
     }
 
     // Validate character first
     auto index = kBase32ReverseIndexTable[static_cast<uint8_t>(c)];
-    if (index >= 32) {
+    if (index >= kCharsetSize) {
       return folly::makeUnexpected(
           Status::UserError("Unrecognized character: {}", c));
     }
@@ -159,7 +271,8 @@ folly::Expected<size_t, Status> Base32::decodeImpl(
     char c = input[i];
 
     // Skip padding and whitespace (RFC 4648 allows whitespace in encoded data)
-    if (c == Base32::kPadding || std::isspace(static_cast<unsigned char>(c))) {
+    if (c == BaseEncoderUtils::kPadding ||
+        std::isspace(static_cast<unsigned char>(c))) {
       continue;
     }
 
