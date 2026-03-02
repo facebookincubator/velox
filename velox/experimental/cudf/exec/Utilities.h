@@ -89,6 +89,20 @@ getConcatenatedTableBatched(
     rmm::cuda_stream_view stream);
 
 /**
+ * @brief Makes all target streams wait for a source stream's pending work.
+ *
+ * Records an event on @p stream, then makes each stream in @p streams wait
+ * for that event. This is useful when multiple streams hold resources that
+ * must not be freed until work on @p stream has completed.
+ *
+ * @param streams The streams that should wait
+ * @param stream  The stream whose pending work must complete first
+ */
+void streamsWaitForStream(
+    const std::vector<rmm::cuda_stream_view>& streams,
+    rmm::cuda_stream_view stream);
+
+/**
  * @brief Wrapper for CUDA events used for stream synchronization.
  *
  * CudaEvent provides a safe, move-only wrapper around cudaEvent_t that

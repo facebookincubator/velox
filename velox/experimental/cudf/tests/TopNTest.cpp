@@ -13,9 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfQueryConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -244,6 +247,48 @@ TEST_F(TopNTest, multiBatch) {
 
   testSingleKey(vectors, "c0", 1'500);
   testSingleKey(vectors, "c2", 2'500);
+}
+
+TEST_F(TopNTest, numericTopNSynchronization) {
+  constexpr vector_size_t batchSize = 132000;
+  constexpr int32_t numBatches = 6;
+  constexpr int32_t topN = 1024;
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numBatches);
+
+  for (int32_t batch = 0; batch < numBatches; ++batch) {
+    auto id = makeFlatVector<int64_t>(batchSize, [&](vector_size_t row) {
+      return static_cast<int64_t>(batch) * batchSize + row;
+    });
+    auto key = makeFlatVector<double>(batchSize, [&](vector_size_t row) {
+      // Repeat a small key space to force tie-breaking on c0.
+      auto bucket =
+          static_cast<int64_t>((row + batch * 13) % 10007); // A custom hash.
+      return static_cast<double>(bucket);
+    });
+    auto payload = makeFlatVector<int64_t>(batchSize, [&](vector_size_t row) {
+      return static_cast<int64_t>(row ^ (batch << 10));
+    });
+    vectors.push_back(makeRowVector(std::vector<VectorPtr>{id, key, payload}));
+  }
+
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .topN({"c1 DESC NULLS LAST", "c0 ASC NULLS LAST"}, topN, false)
+          .planNode();
+
+  // Force configuration to maximize chance of replicating a missing stream
+  // sync.
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, batchSize)
+      .config(cudf_velox::CudfQueryConfig::kCudfTopNBatchSize, 1)
+      .assertResults(
+          fmt::format(
+              "SELECT c0, c1, c2 FROM tmp ORDER BY c1 DESC, c0 LIMIT {}",
+              topN));
 }
 
 TEST_F(TopNTest, empty) {
