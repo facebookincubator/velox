@@ -467,6 +467,76 @@ bool MergeJoin::tryAddOutputRow(
   return true;
 }
 
+template <bool IsLeftJoin>
+vector_size_t MergeJoin::addOutputRowsForRange(
+    const RowVectorPtr& outerBatch,
+    vector_size_t outerRow,
+    const RowVectorPtr& innerBatch,
+    vector_size_t innerStartRow,
+    vector_size_t innerEndRow) {
+  const auto requested = innerEndRow - innerStartRow;
+  const auto available =
+      static_cast<vector_size_t>(outputBatchSize_ - outputSize_);
+  const auto count = std::min(requested, available);
+
+  if (count == 0) {
+    return 0;
+  }
+
+  // When filter or anti-join tracking is needed, fall back to per-row path
+  // since joinTracker::addMatch has per-row state dependencies.
+  if (filter_ || isAntiJoin(joinType_)) {
+    const auto& leftBatch = IsLeftJoin ? outerBatch : innerBatch;
+    const auto& rightBatch = IsLeftJoin ? innerBatch : outerBatch;
+    for (vector_size_t i = 0; i < count; ++i) {
+      const auto innerRow = innerStartRow + i;
+      if constexpr (IsLeftJoin) {
+        if (!tryAddOutputRow(leftBatch, outerRow, rightBatch, innerRow)) {
+          return i;
+        }
+      } else {
+        if (!tryAddOutputRow(leftBatch, innerRow, rightBatch, outerRow)) {
+          return i;
+        }
+      }
+    }
+    return count;
+  }
+
+  // Batch-fill output indices: one side is constant, the other is sequential.
+  auto* leftIndices = rawLeftOutputIndices_ + outputSize_;
+  auto* rightIndices = rawRightOutputIndices_ + outputSize_;
+
+  if constexpr (IsLeftJoin) {
+    std::fill(leftIndices, leftIndices + count, outerRow);
+    if (!isRightFlattened_) {
+      std::iota(rightIndices, rightIndices + count, innerStartRow);
+    } else {
+      for (const auto& projection : rightProjections_) {
+        output_->childAt(projection.outputChannel)
+            ->copy(
+                innerBatch->childAt(projection.inputChannel).get(),
+                outputSize_,
+                innerStartRow,
+                count);
+      }
+    }
+  } else {
+    std::iota(leftIndices, leftIndices + count, innerStartRow);
+    if (!isRightFlattened_) {
+      std::fill(rightIndices, rightIndices + count, outerRow);
+    } else {
+      for (vector_size_t i = 0; i < count; ++i) {
+        copyRow(
+            outerBatch, outerRow, output_, outputSize_ + i, rightProjections_);
+      }
+    }
+  }
+
+  outputSize_ += count;
+  return count;
+}
+
 bool MergeJoin::prepareOutput(
     const RowVectorPtr& left,
     const RowVectorPtr& right) {
@@ -676,24 +746,12 @@ bool MergeJoin::addToOutputImpl() {
           return true;
         }
 
-        if (IsLeftJoin) {
-          for (auto innerRow = innerStartRow; innerRow < innerEndRow;
-               ++innerRow) {
-            if (!tryAddOutputRow(leftBatch, outerRow, rightBatch, innerRow)) {
-              outerMatch->setCursor(outerBatchIndex, outerRow);
-              innerMatch->setCursor(innerBatchIndex, innerRow);
-              return true;
-            }
-          }
-        } else {
-          for (auto innerRow = innerStartRow; innerRow < innerEndRow;
-               ++innerRow) {
-            if (!tryAddOutputRow(leftBatch, innerRow, rightBatch, outerRow)) {
-              outerMatch->setCursor(outerBatchIndex, outerRow);
-              innerMatch->setCursor(innerBatchIndex, innerRow);
-              return true;
-            }
-          }
+        const auto added = addOutputRowsForRange<IsLeftJoin>(
+            outerBatch, outerRow, innerBatch, innerStartRow, innerEndRow);
+        if (innerStartRow + added < innerEndRow) {
+          outerMatch->setCursor(outerBatchIndex, outerRow);
+          innerMatch->setCursor(innerBatchIndex, innerStartRow + added);
+          return true;
         }
       }
     }
