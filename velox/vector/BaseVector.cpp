@@ -15,6 +15,7 @@
  */
 
 #include "velox/vector/BaseVector.h"
+#include <folly/container/Reserve.h>
 #include <map>
 #include <vector>
 #include "velox/type/StringView.h"
@@ -423,6 +424,7 @@ VectorPtr BaseVector::createInternal(
     case TypeKind::ROW: {
       std::vector<VectorPtr> children;
       auto& rowType = type->as<TypeKind::ROW>();
+      folly::grow_capacity_by(children, rowType.size());
       // Children are reserved the parent size and accessible for those rows.
       for (int32_t i = 0; i < rowType.size(); ++i) {
         children.push_back(create(rowType.childAt(i), size, pool));
