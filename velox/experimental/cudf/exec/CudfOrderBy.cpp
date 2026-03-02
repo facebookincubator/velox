@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -77,7 +79,9 @@ void CudfOrderBy::noMoreInput() {
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, outputType_, stream);
+  // Using the output memory resource to allow spilling to CPU memory.
+  auto tbl =
+      getConcatenatedTable(inputs_, outputType_, stream, get_output_mr());
 
   // Release input data after synchronizing
   stream.synchronize();
@@ -87,8 +91,8 @@ void CudfOrderBy::noMoreInput() {
 
   auto keys = tbl->view().select(sortKeys_);
   auto values = tbl->view();
-  auto result =
-      cudf::sort_by_key(values, keys, columnOrder_, nullOrder_, stream);
+  auto result = cudf::sort_by_key(
+      values, keys, columnOrder_, nullOrder_, stream, get_output_mr());
   auto const size = result->num_rows();
   outputTable_ = std::make_shared<CudfVector>(
       pool(), outputType_, size, std::move(result), stream);

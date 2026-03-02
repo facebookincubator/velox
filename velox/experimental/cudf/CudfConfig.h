@@ -37,6 +37,7 @@ struct CudfConfig {
       "cudf.jit_expression_enabled"};
   static constexpr const char* kCudfJitExpressionPriority{
       "cudf.jit_expression_priority"};
+  static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
 
@@ -67,6 +68,11 @@ struct CudfConfig {
   /// The initial percent of GPU memory to allocate for pool or arena memory
   /// resources.
   int32_t memoryPercent{50};
+
+  /// Memory resource for output vectors. When set to a value different from
+  /// memoryResource, a separate MR is created for output allocations.
+  /// When empty, the main memoryResource is used.
+  std::string outputMemoryResource;
 
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
