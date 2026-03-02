@@ -234,6 +234,36 @@ CachePin CacheShard::findOrCreate(
   return initEntry(key, entryToInit);
 }
 
+std::optional<CachePin> CacheShard::find(
+    RawFileCacheKey key,
+    folly::SemiFuture<bool>* wait) {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto it = entryMap_.find(key);
+  if (it == entryMap_.end()) {
+    return std::nullopt;
+  }
+  auto* foundEntry = it->second;
+  if (foundEntry->isExclusive()) {
+    ++numWaitExclusive_;
+    if (wait != nullptr) {
+      *wait = foundEntry->getFutureLocked();
+    }
+    return CachePin{};
+  }
+  foundEntry->touch();
+  if (foundEntry->isPrefetch()) {
+    foundEntry->isFirstUse_ = true;
+    foundEntry->setPrefetch(false);
+  } else {
+    ++numHit_;
+    hitBytes_ += foundEntry->size();
+  }
+  ++foundEntry->numPins_;
+  CachePin pin;
+  pin.setEntry(foundEntry);
+  return pin;
+}
+
 void CacheShard::makeEvictable(RawFileCacheKey key) {
   std::lock_guard<std::mutex> l(mutex_);
   auto it = entryMap_.find(key);
@@ -748,6 +778,13 @@ CachePin AsyncDataCache::findOrCreate(
     folly::SemiFuture<bool>* wait) {
   const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->findOrCreate(key, size, wait);
+}
+
+std::optional<CachePin> AsyncDataCache::find(
+    RawFileCacheKey key,
+    folly::SemiFuture<bool>* waitFuture) {
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
+  return shards_[shard]->find(key, waitFuture);
 }
 
 void AsyncDataCache::makeEvictable(RawFileCacheKey key) {

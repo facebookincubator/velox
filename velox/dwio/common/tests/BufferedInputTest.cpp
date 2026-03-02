@@ -151,6 +151,14 @@ class BufferedInputTest : public testing::Test {
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 
+TEST_F(BufferedInputTest, hasCache) {
+  auto readFile =
+      std::make_shared<facebook::velox::InMemoryReadFile>(std::string("test"));
+  BufferedInput input(readFile, *pool_);
+  // Base BufferedInput does not have cache.
+  EXPECT_FALSE(input.hasCache());
+}
+
 TEST_F(BufferedInputTest, zeroLengthStream) {
   auto readFile =
       std::make_shared<facebook::velox::InMemoryReadFile>(std::string());

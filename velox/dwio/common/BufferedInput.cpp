@@ -27,6 +27,40 @@ using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
 
+CachedRegion::CachedRegion(cache::CachePin pin) : pin_(std::move(pin)) {
+  if (pin_.empty()) {
+    return;
+  }
+  auto* entry = pin_.checkedEntry();
+  size_ = entry->size();
+  if (entry->tinyData() != nullptr) {
+    ranges_.push_back(folly::Range<const char*>(entry->tinyData(), size_));
+  } else {
+    auto& allocation = entry->data();
+    ranges_.reserve(allocation.numRuns());
+    uint64_t offset{0};
+    for (int i = 0; i < allocation.numRuns() && offset < size_; ++i) {
+      auto run = allocation.runAt(i);
+      const uint64_t bytes =
+          run.numPages() * memory::AllocationTraits::kPageSize;
+      const uint64_t readSize = std::min(bytes, size_ - offset);
+      ranges_.push_back(
+          folly::Range<const char*>(run.data<const char>(), readSize));
+      offset += readSize;
+    }
+  }
+}
+
+folly::IOBuf CachedRegion::toIOBuf() const {
+  VELOX_CHECK(!ranges_.empty());
+  auto iobuf = folly::IOBuf::wrapBufferAsValue(ranges_[0].data(), ranges_[0].size());
+  for (size_t i = 1; i < ranges_.size(); ++i) {
+    iobuf.appendToChain(
+        folly::IOBuf::wrapBuffer(ranges_[i].data(), ranges_[i].size()));
+  }
+  return iobuf;
+}
+
 static_assert(std::is_move_constructible<BufferedInput>());
 
 namespace {

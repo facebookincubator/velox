@@ -804,6 +804,13 @@ Each query can override the config by setting corresponding query session proper
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
        after filtering. 0 means no limit (default).
+   * - file-metadata-cache-enabled
+     - file_metadata_cache_enabled
+     - bool
+     - false
+     - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
+       the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
+       serve metadata from cache with zero file IO. Currently only supported by Nimble format.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
