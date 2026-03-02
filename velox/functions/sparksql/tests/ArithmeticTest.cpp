@@ -310,6 +310,10 @@ TEST_F(ArithmeticTest, UnaryMinus) {
 }
 
 TEST_F(ArithmeticTest, UnaryMinusOverflow) {
+  // Test unary minus with ANSI off - should return MIN_VALUE on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
   EXPECT_EQ(unaryminus<int8_t>(INT8_MIN), INT8_MIN);
   EXPECT_EQ(unaryminus<int16_t>(INT16_MIN), INT16_MIN);
   EXPECT_EQ(unaryminus<int32_t>(INT32_MIN), INT32_MIN);
@@ -318,6 +322,23 @@ TEST_F(ArithmeticTest, UnaryMinusOverflow) {
   EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
   EXPECT_EQ(unaryminus<double>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+
+  // Test unary minus with ANSI on - should throw on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(
+      unaryminus<int8_t>(std::numeric_limits<int8_t>::min()),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      unaryminus<int16_t>(std::numeric_limits<int16_t>::min()),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      unaryminus<int32_t>(std::numeric_limits<int32_t>::min()),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      unaryminus<int64_t>(std::numeric_limits<int64_t>::min()),
+      "Arithmetic overflow");
 }
 
 TEST_F(ArithmeticTest, Divide) {
@@ -840,6 +861,576 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
       abs<int32_t>(std::numeric_limits<int32_t>::min()), "Arithmetic overflow");
   VELOX_ASSERT_THROW(
       abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
+}
+
+TEST_F(ArithmeticTest, AddAnsiMode) {
+  const auto add = [&](std::optional<int32_t> a, std::optional<int32_t> b) {
+    return evaluateOnce<int32_t>("add(c0, c1)", a, b);
+  };
+
+  // Test with ANSI off - should wrap on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(add(1, 2), 3);
+  EXPECT_EQ(add(-1, -2), -3);
+  EXPECT_EQ(add(INT32_MAX, 1), INT32_MIN); // Wraps around
+
+  // Test with ANSI on - should throw on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(add(1, 2), 3);
+  EXPECT_EQ(add(-1, -2), -3);
+  VELOX_ASSERT_THROW(add(INT32_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add(INT32_MIN, -1), "Arithmetic overflow");
+}
+
+TEST_F(ArithmeticTest, SubtractAnsiMode) {
+  const auto subtract = [&](std::optional<int32_t> a,
+                            std::optional<int32_t> b) {
+    return evaluateOnce<int32_t>("subtract(c0, c1)", a, b);
+  };
+
+  // Test with ANSI off - should wrap on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(subtract(5, 3), 2);
+  EXPECT_EQ(subtract(-5, -3), -2);
+  EXPECT_EQ(subtract(INT32_MIN, 1), INT32_MAX); // Wraps around
+
+  // Test with ANSI on - should throw on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(subtract(5, 3), 2);
+  EXPECT_EQ(subtract(-5, -3), -2);
+  VELOX_ASSERT_THROW(subtract(INT32_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract(INT32_MAX, -1), "Arithmetic overflow");
+}
+
+TEST_F(ArithmeticTest, MultiplyAnsiMode) {
+  const auto multiply = [&](std::optional<int32_t> a,
+                            std::optional<int32_t> b) {
+    return evaluateOnce<int32_t>("multiply(c0, c1)", a, b);
+  };
+
+  // Test with ANSI off - should wrap on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(multiply(2, 3), 6);
+  EXPECT_EQ(multiply(-2, 3), -6);
+  // Overflow wraps around (result depends on implementation)
+  multiply(INT32_MAX, 2);
+
+  // Test with ANSI on - should throw on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  EXPECT_EQ(multiply(2, 3), 6);
+  EXPECT_EQ(multiply(-2, 3), -6);
+  VELOX_ASSERT_THROW(multiply(INT32_MAX, 2), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(multiply(INT32_MIN, -1), "Arithmetic overflow");
+}
+
+TEST_F(ArithmeticTest, BinaryArithmeticAllTypes) {
+  // Test all integer types with ANSI mode.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // int8_t
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "add(c0, c1)",
+          std::optional<int8_t>(INT8_MAX),
+          std::optional<int8_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "subtract(c0, c1)",
+          std::optional<int8_t>(INT8_MIN),
+          std::optional<int8_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "multiply(c0, c1)",
+          std::optional<int8_t>(INT8_MAX),
+          std::optional<int8_t>(2)),
+      "Arithmetic overflow");
+
+  // int16_t
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "add(c0, c1)",
+          std::optional<int16_t>(INT16_MAX),
+          std::optional<int16_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "subtract(c0, c1)",
+          std::optional<int16_t>(INT16_MIN),
+          std::optional<int16_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "multiply(c0, c1)",
+          std::optional<int16_t>(INT16_MAX),
+          std::optional<int16_t>(2)),
+      "Arithmetic overflow");
+
+  // int64_t
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          std::optional<int64_t>(INT64_MAX),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          std::optional<int64_t>(INT64_MIN),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "multiply(c0, c1)",
+          std::optional<int64_t>(INT64_MAX),
+          std::optional<int64_t>(2)),
+      "Arithmetic overflow");
+}
+
+TEST_F(SparkFunctionBaseTest, DivideAnsiMode) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal division cases
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(10),
+          std::optional<int32_t>(2)),
+      5);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(-10),
+          std::optional<int32_t>(3)),
+      -3);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "divide(c0, c1)",
+          std::optional<int64_t>(100),
+          std::optional<int64_t>(10)),
+      10);
+
+  // Division by zero - should throw error in ANSI mode
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(5),
+          std::optional<int32_t>(0)),
+      "Division by zero");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "divide(c0, c1)",
+          std::optional<int64_t>(100),
+          std::optional<int64_t>(0)),
+      "Division by zero");
+
+  // Overflow: MIN_VALUE / -1 - should throw error in ANSI mode
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int8_t>(
+          "divide(c0, c1)",
+          std::optional<int8_t>(INT8_MIN),
+          std::optional<int8_t>(-1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int16_t>(
+          "divide(c0, c1)",
+          std::optional<int16_t>(INT16_MIN),
+          std::optional<int16_t>(-1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(INT32_MIN),
+          std::optional<int32_t>(-1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "divide(c0, c1)",
+          std::optional<int64_t>(INT64_MIN),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Normal cases still work
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(10),
+          std::optional<int32_t>(2)),
+      5);
+
+  // Division by zero - should return NULL in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(5),
+          std::optional<int32_t>(0)),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "divide(c0, c1)",
+          std::optional<int64_t>(100),
+          std::optional<int64_t>(0)),
+      std::nullopt);
+
+  // Overflow: MIN_VALUE / -1 - should wraparound in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int8_t>(
+          "divide(c0, c1)",
+          std::optional<int8_t>(INT8_MIN),
+          std::optional<int8_t>(-1)),
+      INT8_MIN);
+  EXPECT_EQ(
+      evaluateOnce<int16_t>(
+          "divide(c0, c1)",
+          std::optional<int16_t>(INT16_MIN),
+          std::optional<int16_t>(-1)),
+      INT16_MIN);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "divide(c0, c1)",
+          std::optional<int32_t>(INT32_MIN),
+          std::optional<int32_t>(-1)),
+      INT32_MIN);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "divide(c0, c1)",
+          std::optional<int64_t>(INT64_MIN),
+          std::optional<int64_t>(-1)),
+      INT64_MIN);
+}
+
+TEST_F(SparkFunctionBaseTest, DivideFloatingPoint) {
+  // Floating point division
+
+  // Normal cases
+  EXPECT_DOUBLE_EQ(
+      evaluateOnce<double>(
+          "divide(c0, c1)",
+          std::optional<double>(10.0),
+          std::optional<double>(3.0))
+          .value(),
+      10.0 / 3.0);
+  EXPECT_FLOAT_EQ(
+      evaluateOnce<float>(
+          "divide(c0, c1)",
+          std::optional<float>(5.0f),
+          std::optional<float>(2.0f))
+          .value(),
+      2.5f);
+
+  // Division by zero returns NULL (for compatibility with existing behavior)
+  EXPECT_EQ(
+      evaluateOnce<double>(
+          "divide(c0, c1)",
+          std::optional<double>(5.0),
+          std::optional<double>(0.0)),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<double>(
+          "divide(c0, c1)",
+          std::optional<double>(-5.0),
+          std::optional<double>(0.0)),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<double>(
+          "divide(c0, c1)",
+          std::optional<double>(0.0),
+          std::optional<double>(0.0)),
+      std::nullopt);
+}
+
+// ============================================================================
+// Interval Arithmetic Tests with ANSI Support
+// ============================================================================
+
+TEST_F(SparkFunctionBaseTest, IntervalDayTimeUnaryMinusAnsi) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal cases
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(1000)),
+      -1000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(-1000)),
+      1000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(0)),
+      0);
+
+  // Overflow case: MIN_VALUE should throw in ANSI mode
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)",
+          INTERVAL_DAY_TIME(),
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
+      "Arithmetic overflow: cannot negate minimum interval value");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // MIN_VALUE should return MIN_VALUE (wraparound) in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)",
+          INTERVAL_DAY_TIME(),
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalYearMonthUnaryMinusAnsi) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal cases
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(12)),
+      -12);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(-12)),
+      12);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(0)),
+      0);
+
+  // Overflow case: MIN_VALUE should throw in ANSI mode
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)",
+          INTERVAL_YEAR_MONTH(),
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
+      "Arithmetic overflow: cannot negate minimum interval value");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // MIN_VALUE should return MIN_VALUE (wraparound) in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)",
+          INTERVAL_YEAR_MONTH(),
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
+      std::numeric_limits<int32_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalDayTimeAddAnsi) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal cases
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(1000),
+          std::optional<int64_t>(2000)),
+      3000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(-1000),
+          std::optional<int64_t>(500)),
+      -500);
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Overflow should wraparound in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(1)),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalYearMonthAddAnsi) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal cases
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(12),
+          std::optional<int32_t>(24)),
+      36);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(-12),
+          std::optional<int32_t>(6)),
+      -6);
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::max()),
+          std::optional<int32_t>(1)),
+      "Arithmetic overflow");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Overflow should wraparound in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::max()),
+          std::optional<int32_t>(1)),
+      std::numeric_limits<int32_t>::min());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalDayTimeSubtractAnsi) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal cases
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(3000),
+          std::optional<int64_t>(1000)),
+      2000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(1000),
+          std::optional<int64_t>(2000)),
+      -1000);
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Overflow should wraparound in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(1)),
+      std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(SparkFunctionBaseTest, IntervalYearMonthSubtractAnsi) {
+  // Test with ANSI mode enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  // Normal cases
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(36),
+          std::optional<int32_t>(12)),
+      24);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(12),
+          std::optional<int32_t>(24)),
+      -12);
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min()),
+          std::optional<int32_t>(1)),
+      "Arithmetic overflow");
+
+  // Test with ANSI mode disabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Overflow should wraparound in non-ANSI mode
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min()),
+          std::optional<int32_t>(1)),
+      std::numeric_limits<int32_t>::max());
 }
 
 class LogNTest : public SparkFunctionBaseTest {
