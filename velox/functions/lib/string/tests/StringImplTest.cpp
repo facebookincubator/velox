@@ -17,6 +17,7 @@
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/StringView.h"
 
 #include <gtest/gtest.h>
@@ -363,6 +364,157 @@ TEST_F(StringImplTest, cappedLength) {
   ASSERT_EQ(cappedLength</*isAscii*/ false>(input, 7), 5);
 }
 
+TEST_F(StringImplTest, cappedLengthUnicode) {
+  constexpr int32_t batchSize = xsimd::batch<uint8_t>::size;
+
+  // Empty string.
+  EXPECT_EQ(cappedLengthUnicode("", 0, 10), 0);
+
+  // Short ASCII string (smaller than one SIMD batch, scalar tail only).
+  {
+    std::string s = "hello";
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 100), 5);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 3), 3);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 5), 5);
+  }
+
+  // Long ASCII string (SIMD ASCII fast-path).
+  {
+    std::string s(batchSize * 3, 'a');
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), batchSize * 3 + 100),
+        batchSize * 3);
+  }
+
+  // ASCII string with maxChars limiting within the SIMD fast-path.
+  // maxChars < batchSize forces the jump to be capped.
+  {
+    std::string s(batchSize * 2, 'x');
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 5), 5);
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), batchSize + 1), batchSize + 1);
+  }
+
+  // Mixed string that fits entirely within maxChars.
+  // 3-byte Unicode characters mixed with ASCII.
+  // "你好abc世界" = 3 + 3 + 1 + 1 + 1 + 3 + 3 = 15 bytes, 7 characters.
+  {
+    std::string s = "你好abc世界";
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 100), 7);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 7), 7);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 3), 3);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 4), 4);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 1), 1);
+  }
+
+  // maxChars hit within a SIMD block (return maxChars branch).
+  // Build a string longer than batchSize with enough Unicode chars to
+  // trigger the character-start counting path, then set maxChars so
+  // that numChars + countInBlock >= maxChars.
+  {
+    // Build: (batchSize / 3) 3-byte chars, then fill rest with ASCII.
+    // This ensures the first SIMD block has mixed content.
+    std::string s;
+    auto numUnicodeChars = batchSize / 3;
+    for (auto i = 0; i < numUnicodeChars; ++i) {
+      s += "你"; // 3-byte character
+    }
+    // Pad with ASCII to exceed batchSize.
+    while (static_cast<int32_t>(s.size()) < batchSize * 2) {
+      s += 'a';
+    }
+    int64_t totalChars = numUnicodeChars + (s.size() - numUnicodeChars * 3);
+
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), totalChars + 10), totalChars);
+
+    // Cap within the first (mixed) SIMD block. The SIMD block contains
+    // numUnicodeChars character starts from multi-byte chars.
+    // Setting maxChars to numUnicodeChars - 1 should return maxChars.
+    if (numUnicodeChars > 2) {
+      EXPECT_EQ(
+          cappedLengthUnicode(s.data(), s.size(), numUnicodeChars - 1),
+          numUnicodeChars - 1);
+    }
+  }
+
+  // Pure Unicode string (all 3-byte chars).
+  {
+    std::string s;
+    int32_t numChars = batchSize;
+    for (int32_t i = 0; i < numChars; ++i) {
+      s += "世";
+    }
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), numChars + 10), numChars);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 5), 5);
+  }
+
+  // 4-byte UTF-8 characters (emoji).
+  {
+    std::string s = "😊😊😊😊😊";
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 10), 5);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 3), 3);
+  }
+
+  // 2-byte UTF-8 characters.
+  {
+    std::string s = "ñéüôà";
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 10), 5);
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 2), 2);
+  }
+
+  // Scalar tail processing multi-byte characters that straddle the
+  // SIMD block boundary.
+  {
+    // batchSize - 1 ASCII bytes + one 3-byte Unicode char + 1 ASCII.
+    // The 3-byte char starts at the last byte of the first SIMD block
+    // and spills into the scalar tail.
+    std::string s(batchSize - 1, 'a');
+    s += "你"; // 3 bytes.
+    s += "b";
+    // Total characters: (batchSize - 1) + 1 + 1 = batchSize + 1.
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), batchSize + 10), batchSize + 1);
+  }
+
+  // String exactly one SIMD batch long (pure ASCII).
+  {
+    std::string s(batchSize, 'z');
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), batchSize), batchSize);
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), batchSize - 1), batchSize - 1);
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), batchSize + 1), batchSize);
+  }
+
+  // maxChars = 0 should return 0.
+  {
+    std::string s = "hello";
+    EXPECT_EQ(cappedLengthUnicode(s.data(), s.size(), 0), 0);
+  }
+
+  // Large mixed string: multiple SIMD blocks with alternating
+  // ASCII and Unicode content.
+  {
+    std::string s;
+    int64_t expectedChars = 0;
+    for (int32_t i = 0; i < batchSize * 2; ++i) {
+      if (i % 5 == 0) {
+        s += "你"; // 3-byte.
+      } else {
+        s += 'a';
+      }
+      expectedChars++;
+    }
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), expectedChars + 100),
+        expectedChars);
+    EXPECT_EQ(
+        cappedLengthUnicode(s.data(), s.size(), expectedChars / 2),
+        expectedChars / 2);
+  }
+}
+
 TEST_F(StringImplTest, cappedUnicodeBytes) {
   // Test functions use case for indexing
   // UTF strings.
@@ -381,6 +533,19 @@ TEST_F(StringImplTest, cappedUnicodeBytes) {
   ASSERT_EQ("Singing is fun!♫", stringInput.substr(sPos));
   ASSERT_EQ("♫¡Singing is fun!", stringInput.substr(0, exPos));
   ASSERT_EQ("Singing is fun!", stringInput.substr(sPos, exPos - sPos));
+
+  // Ensure the remainder loop handles a continuation byte at the block
+  // boundary. Place a UTF-8 lead byte (0xC2) as the last byte of a SIMD block
+  // and its continuation byte (0xA2) in the remainder. The string layout is:
+  // (batchSize - 1) ASCII 'a' bytes, then a 2-byte UTF-8 character, then 'b'.
+  // With maxChars set to include the trailing 'b', the expected byte length
+  // must account for both bytes of the UTF-8 character.
+  constexpr int32_t batchSize = xsimd::batch<uint8_t>::size;
+  stringInput = std::string(batchSize - 1, 'a');
+  stringInput.push_back(static_cast<char>(0xC2));
+  stringInput.push_back(static_cast<char>(0xA2));
+  stringInput.push_back('b');
+  ASSERT_EQ(cappedByteLength<false>(stringInput, batchSize + 1), batchSize + 2);
 
   stringInput = std::string("abcd");
   auto stringViewInput = std::string_view(stringInput);
@@ -455,6 +620,159 @@ TEST_F(StringImplTest, cappedUnicodeBytes) {
   ASSERT_EQ(cappedByteLength<false>(stringViewInput, 1), 4);
   ASSERT_EQ(cappedByteLength<false>(stringViewInput, 2), 4);
   ASSERT_EQ(cappedByteLength<false>(stringViewInput, 3), 4);
+}
+
+TEST_F(StringImplTest, cappedByteLengthUnicode) {
+  constexpr int32_t batchSize = xsimd::batch<uint8_t>::size;
+
+  // Empty string.
+  EXPECT_EQ(cappedByteLengthUnicode("", 0, 10), 0);
+
+  // maxChars = 0 should return 0.
+  {
+    std::string s = "hello";
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 0), 0);
+  }
+
+  // Short ASCII string (scalar tail only).
+  {
+    std::string s = "hello";
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 100), 5);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 3), 3);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 5), 5);
+  }
+
+  // Long ASCII string (SIMD ASCII fast-path).
+  {
+    std::string s(batchSize * 3, 'a');
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), batchSize * 3 + 100),
+        batchSize * 3);
+  }
+
+  // ASCII string with maxChars limiting within the SIMD fast-path.
+  {
+    std::string s(batchSize * 2, 'x');
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 5), 5);
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), batchSize + 1),
+        batchSize + 1);
+  }
+
+  // Mixed string: return byte position, not character count.
+  // "你好abc世界" = 3+3+1+1+1+3+3 = 15 bytes, 7 characters.
+  {
+    std::string s = "你好abc世界";
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 100), 15);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 1), 3);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 2), 6);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 3), 7);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 4), 8);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 5), 9);
+  }
+
+  // maxChars hit within a SIMD block (bit-scanning branch).
+  // Build: (batchSize / 3) 3-byte chars, then fill rest with ASCII.
+  {
+    std::string s;
+    int32_t numUnicodeChars = batchSize / 3;
+    for (int32_t i = 0; i < numUnicodeChars; ++i) {
+      s += "你"; // 3-byte.
+    }
+    while (static_cast<int32_t>(s.size()) < batchSize * 2) {
+      s += 'a';
+    }
+
+    // Cap at 2 characters — should return byte position after 2nd char.
+    // First 2 chars are 3-byte each, so expected = 6.
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 2), 6);
+
+    // Cap at 1 character — first char is 3 bytes.
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 1), 3);
+  }
+
+  // Pure Unicode string (all 3-byte chars).
+  {
+    std::string s;
+    int32_t numChars = batchSize;
+    for (int32_t i = 0; i < numChars; ++i) {
+      s += "世";
+    }
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), numChars + 10),
+        numChars * 3);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 5), 15);
+  }
+
+  // 4-byte UTF-8 characters (emoji).
+  {
+    std::string s = "😊😊😊😊😊";
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 10), 20);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 3), 12);
+  }
+
+  // 2-byte UTF-8 characters.
+  {
+    std::string s = "ñéüôà";
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 10), 10);
+    EXPECT_EQ(cappedByteLengthUnicode(s.data(), s.size(), 2), 4);
+  }
+
+  // Scalar tail with multi-byte char span the SIMD block boundary.
+  {
+    // batchSize - 1 ASCII + one 2-byte char (0xC2, 0xA2) + 'b'.
+    // The leading byte 0xC2 is in the SIMD block, continuation 0xA2 is in
+    // the scalar tail. The SIMD block counts 0xC2 as a char start.
+    // Scalar tail sees 0xA2 (continuation, skip) then 'b'.
+    std::string s(batchSize - 1, 'a');
+    s.push_back(static_cast<char>(0xC2));
+    s.push_back(static_cast<char>(0xA2));
+    s.push_back('b');
+    // maxChars = batchSize + 1 means batchSize chars counted.
+    // The SIMD block has batchSize char starts (batchSize-1 'a's + 0xC2).
+    // After SIMD: remainingChars = 1. Scalar tail: skip 0xA2, then 'b'
+    // counts as the last char. Byte position = batchSize + 2 + 1 = batchSize+3.
+    // Wait: let me recalculate. batchSize-1 'a's + 0xC2 = batchSize bytes.
+    // In SIMD: batchSize char starts found. maxChars = batchSize + 1.
+    // countInBlock (batchSize) < remainingChars (batchSize+1) → consume block.
+    // remainingChars = 1, utf8Position = batchSize.
+    // Scalar tail at byte batchSize: 0xA2 → continuation, skip, pos++.
+    // byte batchSize+1: 'b' → char start, advance by 1, remainingChars = 0.
+    // Return batchSize + 2.
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), batchSize + 1),
+        batchSize + 2);
+  }
+
+  // String exactly one SIMD batch long (pure ASCII).
+  {
+    std::string s(batchSize, 'z');
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), batchSize), batchSize);
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), batchSize - 1),
+        batchSize - 1);
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), batchSize + 1), batchSize);
+  }
+
+  // Large mixed string: multiple SIMD blocks.
+  {
+    std::string s;
+    int64_t expectedChars = 0;
+    for (int32_t i = 0; i < batchSize * 2; ++i) {
+      if (i % 5 == 0) {
+        s += "你"; // 3-byte.
+      } else {
+        s += 'a';
+      }
+      expectedChars++;
+    }
+    // Full count should return total byte length.
+    EXPECT_EQ(
+        cappedByteLengthUnicode(s.data(), s.size(), expectedChars + 100),
+        static_cast<int64_t>(s.size()));
+  }
 }
 
 TEST_F(StringImplTest, badUnicodeLength) {
