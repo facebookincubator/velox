@@ -30,6 +30,14 @@ struct ParquetStatsContext : dwio::common::StatsContext {
       : parquetVersion(version) {}
 
   bool shouldIgnoreStatistics(thrift::Type::type type) const {
+    // Follow parquet-java community's approach: check type first, then
+    // version.
+    // https://github.com/apache/parquet-java/blob/312a15f53a011d1dc4863df196c0169bdf6db629/parquet-column/src/main/java/org/apache/parquet/CorruptStatistics.java#L57
+    if (type != thrift::Type::BYTE_ARRAY &&
+        type != thrift::Type::FIXED_LEN_BYTE_ARRAY) {
+      return false;
+    }
+
     if (!parquetVersion.has_value()) {
       return true;
     }
