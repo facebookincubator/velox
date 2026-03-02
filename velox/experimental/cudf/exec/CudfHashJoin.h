@@ -232,6 +232,10 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   // emits. This value is set true only for that driver. See noMoreInput
   bool isLastDriver_{false};
 
+  /// Last probe stream used for rightMatchedFlags_ updates (for cross-driver
+  /// sync).
+  std::optional<rmm::cuda_stream_view> lastProbeStream_;
+
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
   /**
    * @brief Performs inner join between probe table and all build tables.

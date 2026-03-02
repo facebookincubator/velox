@@ -31,6 +31,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/join/filtered_join.hpp>
@@ -524,6 +525,26 @@ void CudfHashJoinProbe::noMoreInput() {
     isLastDriver_ = true;
     if (hashObject_.has_value()) {
       auto stream = cudfGlobalStreamPool().get_stream();
+
+      // Synchronize with all drivers' probe streams before reading their flags.
+      std::vector<rmm::cuda_stream_view> inputStreams;
+      if (lastProbeStream_.has_value()) {
+        inputStreams.push_back(lastProbeStream_.value());
+      }
+      for (auto& peer : peers) {
+        if (peer.get() == operatorCtx_->driver()) {
+          continue;
+        }
+        auto op = peer->findOperator(planNodeId());
+        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+        if (probe != nullptr && probe->lastProbeStream_.has_value()) {
+          inputStreams.push_back(probe->lastProbeStream_.value());
+        }
+      }
+      if (!inputStreams.empty()) {
+        cudf::detail::join_streams(inputStreams, stream);
+      }
+
       for (auto& peer : peers) {
         if (peer.get() == operatorCtx_->driver()) {
           continue;
@@ -903,7 +924,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
           cudf::get_current_device_resource_ref());
 
       // Check which build row indices are present in the join result
-      auto matchedInBatch = cudf::contains(rightIdxCol, rowIndices->view());
+      auto matchedInBatch = cudf::contains(
+          rightIdxCol,
+          rowIndices->view(),
+          cudf::nan_equality::ALL_EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
 
       // OR with existing flags to accumulate matches across batches
       auto updatedFlags = cudf::binary_operation(
@@ -957,8 +983,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
                 stream,
                 cudf::get_current_device_resource_ref());
 
-            auto matchedInBatch =
-                cudf::contains(filteredRightIdxCol->view(), rowIndices->view());
+            auto matchedInBatch = cudf::contains(
+                filteredRightIdxCol->view(),
+                rowIndices->view(),
+                cudf::nan_equality::ALL_EQUAL,
+                stream,
+                cudf::get_current_device_resource_ref());
 
             // OR with existing flags to accumulate matches across batches
             auto updatedFlags = cudf::binary_operation(
@@ -1032,7 +1062,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::get_current_device_resource_ref());
 
       // Check which build row indices are present in the join result
-      auto matchedInBatch = cudf::contains(rightIdxCol, rowIndices->view());
+      auto matchedInBatch = cudf::contains(
+          rightIdxCol,
+          rowIndices->view(),
+          cudf::nan_equality::ALL_EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
 
       // OR with existing flags to accumulate matches across batches
       auto updatedFlags = cudf::binary_operation(
@@ -1083,8 +1118,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::get_current_device_resource_ref());
 
       // Check which build row indices are present in the filtered join result
-      auto matchedInBatch =
-          cudf::contains(filteredRightIdxCol, rowIndices->view());
+      auto matchedInBatch = cudf::contains(
+          filteredRightIdxCol,
+          rowIndices->view(),
+          cudf::nan_equality::ALL_EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
 
       // OR with existing flags to accumulate matches across batches
       auto updatedFlags = cudf::binary_operation(
@@ -1437,6 +1476,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       break;
     default:
       VELOX_FAIL("Unsupported join type: ", joinNode_->joinType());
+  }
+
+  // Record probe stream for cross-driver synchronization in noMoreInput().
+  if (joinNode_->isRightJoin() || joinNode_->isFullJoin()) {
+    lastProbeStream_ = stream;
   }
 
   // Release input CudfVector to free GPU memory before creating output.
