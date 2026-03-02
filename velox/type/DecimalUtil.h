@@ -83,6 +83,9 @@ class DecimalUtil {
   static constexpr int128_t kShortDecimalMax =
       kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
 
+  /// Scale threshold for scientific notation.
+  static constexpr int32_t kMinScientificNotationScale = 6;
+
   static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
   static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
 
@@ -335,17 +338,34 @@ class DecimalUtil {
   /// @param scale The scale of decimal.
   /// @param maxSize The estimated max size of string.
   /// @param startPosition The start position to write from.
-  /// @return The actual size of the string.
+  /// @param isScientific Whether to format small magnitude decimals using
+  /// scientific notation (Spark-compatible). When true, absolute values less
+  /// than 1e-6 are formatted in scientific notation. For example:
+  /// - With scale=20 and value=1: "1E-20" (scientific) vs
+  /// "0.00000000000000000001" (normal)
+  /// @return The number of characters written starting from startPosition.
   template <typename T>
   static size_t castToString(
       T unscaledValue,
       int32_t scale,
       int32_t maxSize,
-      char* const startPosition) {
+      char* const startPosition,
+      bool isScientific = false) {
     char* writePosition = startPosition;
     if (unscaledValue == 0) {
       *writePosition++ = '0';
-      if (scale > 0) {
+      if (isScientific && scale > kMinScientificNotationScale) {
+        *writePosition++ = 'E';
+        auto exp =
+            std::to_chars(writePosition, startPosition + maxSize, -scale);
+        VELOX_DCHECK_EQ(
+            exp.ec,
+            std::errc(),
+            "Failed to cast exponent value to varchar: {}",
+            std::make_error_code(exp.ec).message());
+        VELOX_DCHECK_LE(exp.ptr - startPosition, maxSize);
+        writePosition = exp.ptr;
+      } else if (scale > 0) {
         *writePosition++ = '.';
         // Append trailing zeros.
         std::memset(writePosition, '0', scale);
@@ -355,6 +375,44 @@ class DecimalUtil {
       if (unscaledValue < 0) {
         *writePosition++ = '-';
         unscaledValue = -unscaledValue;
+      }
+      if (isScientific) {
+        if (scale >= kMinScientificNotationScale &&
+            unscaledValue < DecimalUtil::kPowersOfTen
+                                [scale - kMinScientificNotationScale]) {
+          // Use scientific notation if the absolute value is less than 1e-6.
+          // This is consistent with Spark's behavior.
+          const auto digits = countDigits(unscaledValue);
+          auto coefficientBuf = std::vector<char>(digits);
+          VELOX_DCHECK_EQ(
+              [&]() {
+                return std::to_chars(
+                           coefficientBuf.data(),
+                           coefficientBuf.data() + digits,
+                           unscaledValue)
+                    .ec;
+              }(),
+              std::errc(),
+              "Failed to cast coefficient to varchar.");
+          *writePosition++ = coefficientBuf[0];
+          if (digits > 1) {
+            *writePosition++ = '.';
+            size_t toCopy = digits - 1;
+            std::memcpy(writePosition, coefficientBuf.data() + 1, toCopy);
+            writePosition += toCopy;
+          }
+          *writePosition++ = 'E';
+          const auto adjusted = digits - 1 - scale;
+          auto exp = std::to_chars(
+              writePosition, writePosition + maxSize - digits - 2, adjusted);
+          VELOX_DCHECK_EQ(
+              exp.ec,
+              std::errc(),
+              "Failed to cast exponent value to varchar: {}",
+              std::make_error_code(exp.ec).message());
+          writePosition = exp.ptr;
+          return writePosition - startPosition;
+        }
       }
       auto [position, errorCode] = std::to_chars(
           writePosition,

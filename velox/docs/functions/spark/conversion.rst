@@ -203,8 +203,9 @@ From DECIMAL
 *(ANSI compliant)*
 
 Casting a DECIMAL to STRING returns a plain decimal value.
-Scientific notation is not used.
-The scale is preserved and trailing zeros are kept.
+The scale is preserved and trailing zeros are kept for normal (non-scientific) form.
+When the absolute value is less than:math:`10^{-6}`, the result is formatted in scientific notation (e.g. ``1.23E-8``).
+
 The conversion always succeeds with identical results for both ANSI ON and OFF modes.
 
 Valid examples
@@ -219,6 +220,9 @@ Valid examples
   SELECT cast(cast(0.00 as decimal(5, 2)) as string); -- '0.00'
   SELECT cast(cast(999.99 as decimal(5, 2)) as string); -- '999.99'
   SELECT cast(cast(-0.01 as decimal(3, 2)) as string); -- '-0.01'
+  SELECT cast(cast(1 as decimal(38, 20)) as string);   -- '1E-20'
+  SELECT cast(cast(0 as decimal(10, 7)) as string);   -- '0E-7'
+  SELECT cast(cast(123 as decimal(38, 10)) as string); -- '1.23E-8'
 
 From TIMESTAMP
 ^^^^^^^^^^^^^^
