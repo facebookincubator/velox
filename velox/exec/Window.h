@@ -69,7 +69,7 @@ class Window : public Operator {
 
   /// Runtime statistics holding total number of batches read from spilled data.
   /// 0 if no spilling occurred.
-  static inline const std::string kWindowSpillReadNumBatches{
+  static constexpr std::string_view kWindowSpillReadNumBatches{
       "windowSpillReadNumBatches"};
 
  private:

@@ -50,11 +50,11 @@ class RowReader {
   /// Tracks the number of index columns that were converted from ScanSpec
   /// filters to index bounds for index-based filtering (e.g., cluster index
   /// pruning in Nimble).
-  static inline const std::string kNumIndexFilterConversions =
+  static constexpr std::string_view kNumIndexFilterConversions =
       "numIndexFilterConversions";
 
   /// Tracks the number of times a stripe has been loaded during index lookup.
-  static inline const std::string kNumStripeLoads = "numStripeLoads";
+  static constexpr std::string_view kNumStripeLoads = "numStripeLoads";
 
   virtual ~RowReader() = default;
 
@@ -210,13 +210,13 @@ class IndexReader {
   /// Tracks the number of index lookup requests submitted in startLookup().
   /// Each request corresponds to one set of index bounds and may match rows
   /// across multiple stripes.
-  static inline const std::string kNumIndexLookupRequests =
+  static constexpr std::string_view kNumIndexLookupRequests =
       "numIndexLookupRequests";
 
   /// Tracks the total number of stripes that need to be read for all requests.
   /// Multiple requests may share the same stripe, and each shared stripe is
   /// counted once per request that needs it.
-  static inline const std::string kNumIndexLookupStripes =
+  static constexpr std::string_view kNumIndexLookupStripes =
       "numIndexLookupStripes";
 
   /// Tracks the total number of read segments across all stripes. A read
@@ -224,7 +224,7 @@ class IndexReader {
   /// When filters are present, overlapping request ranges are split at
   /// boundaries to enable per-request output tracking. Without filters,
   /// overlapping ranges are merged to minimize I/O.
-  static inline const std::string kNumIndexLookupReadSegments =
+  static constexpr std::string_view kNumIndexLookupReadSegments =
       "numIndexLookupReadSegments";
 
   virtual ~IndexReader() = default;

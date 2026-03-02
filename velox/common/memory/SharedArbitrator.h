@@ -284,17 +284,17 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   /// Operator level runtime stats reported for an arbitration operation
   /// execution.
-  static inline const std::string kMemoryArbitrationWallNanos{
+  static constexpr std::string_view kMemoryArbitrationWallNanos{
       "memoryArbitrationWallNanos"};
-  static inline const std::string kLocalArbitrationCount{
+  static constexpr std::string_view kLocalArbitrationCount{
       "localArbitrationCount"};
-  static inline const std::string kLocalArbitrationWaitWallNanos{
+  static constexpr std::string_view kLocalArbitrationWaitWallNanos{
       "localArbitrationWaitWallNanos"};
-  static inline const std::string kLocalArbitrationExecutionWallNanos{
+  static constexpr std::string_view kLocalArbitrationExecutionWallNanos{
       "localArbitrationExecutionWallNanos"};
-  static inline const std::string kGlobalArbitrationWaitCount{
+  static constexpr std::string_view kGlobalArbitrationWaitCount{
       "globalArbitrationWaitCount"};
-  static inline const std::string kGlobalArbitrationWaitWallNanos{
+  static constexpr std::string_view kGlobalArbitrationWaitWallNanos{
       "globalArbitrationWaitWallNanos"};
 
  private:

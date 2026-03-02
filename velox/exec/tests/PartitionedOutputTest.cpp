@@ -159,7 +159,8 @@ TEST_P(PartitionedOutputTest, flush) {
 
   auto planStats = toPlanStats(task->taskStats());
   const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId).customStats.at(Operator::kShuffleSerdeKind);
+      planStats.at(partitionNodeId)
+          .customStats.at(std::string(Operator::kShuffleSerdeKind));
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam()));
   ASSERT_EQ(serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam()));
@@ -270,7 +271,8 @@ TEST_P(PartitionedOutputTest, multipleFlushCycles) {
 
   auto planStats = toPlanStats(task->taskStats());
   const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId).customStats.at(Operator::kShuffleSerdeKind);
+      planStats.at(partitionNodeId)
+          .customStats.at(std::string(Operator::kShuffleSerdeKind));
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam()));
   ASSERT_EQ(serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam()));

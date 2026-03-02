@@ -470,21 +470,21 @@ std::string makeOperatorSpillPath(
 }
 
 void setOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  stats[name] = RuntimeMetric(value.unit);
-  stats[name].addValue(value.value);
+  auto [it, _] =
+      stats.insert_or_assign(std::string(name), RuntimeMetric(value.unit));
+  it->second.addValue(value.value);
 }
 
 void addOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  auto statIt = stats.find(name);
-  if (UNLIKELY(statIt == stats.end())) {
-    statIt = stats.insert(std::pair(name, RuntimeMetric(value.unit))).first;
-  } else {
+  auto [statIt, inserted] =
+      stats.emplace(std::string(name), RuntimeMetric(value.unit));
+  if (!inserted) {
     VELOX_CHECK_EQ(statIt->second.unit, value.unit);
   }
   statIt->second.addValue(value.value);
