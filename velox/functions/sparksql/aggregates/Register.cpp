@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/aggregates/Register.h"
 
+#include "velox/functions/sparksql/aggregates/ApproxCountDistinctForIntervalsAggregate.h"
 #include "velox/functions/sparksql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/functions/sparksql/aggregates/AverageAggregate.h"
 #include "velox/functions/sparksql/aggregates/BitwiseXorAggregate.h"
@@ -65,6 +66,8 @@ void registerAggregateFunctions(
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectListAggregate(prefix, withCompanionFunctions, overwrite);
+  registerApproxCountDistinctForIntervalsAggregate(
+      prefix, withCompanionFunctions, overwrite);
   registerRegrReplacementAggregate(prefix, withCompanionFunctions, overwrite);
   registerModeAggregate(prefix, withCompanionFunctions, overwrite);
   registerVarianceAggregate(prefix, withCompanionFunctions, overwrite);
