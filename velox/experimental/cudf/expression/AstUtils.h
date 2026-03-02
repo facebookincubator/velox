@@ -31,7 +31,11 @@ template <typename T>
 cudf::ast::literal makeLiteralFromScalar(
     cudf::scalar& scalar,
     const TypePtr& type) {
-  if constexpr (cudf::is_fixed_width<T>()) {
+  if constexpr (std::is_same_v<T, Timestamp>) {
+    using CudfTsType = cudf::timestamp_us;
+    using CudfScalarType = cudf::timestamp_scalar<CudfTsType>;
+    return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+  } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
@@ -42,6 +46,12 @@ cudf::ast::literal makeLiteralFromScalar(
       using CudfDateType = cudf::timestamp_D;
       if constexpr (std::is_same_v<T, CudfDateType::rep>) {
         using CudfScalarType = cudf::timestamp_scalar<CudfDateType>;
+        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+      }
+    } else if (type->kind() == TypeKind::TIMESTAMP) {
+      if constexpr (std::is_same_v<T, Timestamp>) {
+        using CudfTsType = cudf::timestamp_us;
+        using CudfScalarType = cudf::timestamp_scalar<CudfTsType>;
         return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
       }
     } else {
@@ -116,6 +126,10 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
           value, !isNull, stream, mr);
     }
     VELOX_FAIL("Unsupported fixed-width scalar type");
+  } else if constexpr (std::is_same_v<T, Timestamp>) {
+    auto micros = cudf::duration_us{value.toMicros()};
+    return std::make_unique<cudf::timestamp_scalar<cudf::timestamp_us>>(
+        micros, !isNull, stream, mr);
   } else if constexpr (
       std::is_same_v<T, StringView> || std::is_same_v<T, std::string_view> ||
       std::is_same_v<T, std::string>) {
@@ -151,7 +165,9 @@ cudf::ast::literal makeScalarAndLiteral(
     const variant& var,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
   using T = typename TypeTraits<kind>::NativeType;
-  if constexpr (cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR) {
+  if constexpr (
+      cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR ||
+      kind == TypeKind::TIMESTAMP) {
     auto value = var.value<T>();
     auto scalar = makeScalarFromValue(type, value, false);
     scalars.emplace_back(std::move(scalar));
