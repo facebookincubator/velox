@@ -29,6 +29,8 @@ add_library(
   TableScanTestBase.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
+  VeloxPlanLoader.cpp
+  TpcdsQueryBuilder.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
   SerializedPageUtil.cpp
