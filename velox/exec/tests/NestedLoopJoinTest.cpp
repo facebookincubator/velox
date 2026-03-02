@@ -620,6 +620,39 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
   assertEqualVectors(expectedLeft, results);
 }
 
+TEST_F(NestedLoopJoinTest, addOutputRowWithContinuesBuildRow) {
+  auto probeVector = makeRowVector(
+      {"l1", "l2"},
+      {
+          makeNullableFlatVector<int64_t>({1, 8, 0}),
+          makeFlatVector<StringView>({"a", "b", "c"}),
+      });
+  auto buildVector = makeRowVector(
+      {"r1", "r2"},
+      {
+          makeNullableFlatVector<int64_t>({1, 1, 0}),
+          makeFlatVector<StringView>({"z", "x", "y"}),
+      });
+
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u", {buildVector});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto op = PlanBuilder(planNodeIdGenerator)
+                .values({probeVector})
+                .nestedLoopJoin(
+                    PlanBuilder(planNodeIdGenerator)
+                        .values({buildVector})
+                        .planNode(),
+                    "l1 = r1",
+                    {"l1", "l2", "r1", "r2"},
+                    core::JoinType::kLeft)
+                .planNode();
+
+  assertQuery(
+      op, "SELECT l1, l2, r1, r2 FROM t LEFT JOIN u ON l1 = r1");
+}
+
 TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
   const std::vector<RowVectorPtr> buildVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2})}),

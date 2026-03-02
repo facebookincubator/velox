@@ -653,6 +653,8 @@ void NestedLoopJoinProbe::addOutputRow() {
   // For the build side, we accumulate the ranges to copy, then copy all of them
   // at once. If records are consecutive and can have a single copy range run.
   if (!buildCopyRanges_.empty() &&
+      (buildCopyRanges_.back().targetIndex + buildCopyRanges_.back().count) ==
+          numOutputRows_ &&
       (buildCopyRanges_.back().sourceIndex + buildCopyRanges_.back().count) ==
           buildRow_) {
     ++buildCopyRanges_.back().count;
