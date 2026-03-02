@@ -52,6 +52,7 @@ enum class TokenType {
   Identifier,
   EndOfStream,
   Decimal,
+  Time,
   LeftRoundBracket,
   RightRoundBracket,
   MaxTokenType
