@@ -16,6 +16,8 @@
 
 #include "velox/exec/RowContainer.h"
 
+#include <numeric>
+
 #include "velox/common/memory/RawVector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
@@ -1215,6 +1217,71 @@ std::string RowContainer::toString(const char* row) const {
   }
 
   return vector->toString(0);
+}
+
+void RowContainer::extractColumns(
+    const char* const* rows,
+    int32_t numRows,
+    const std::vector<column_index_t>& columnIndices,
+    int32_t resultOffset,
+    std::vector<VectorPtr>& results) const {
+  VELOX_CHECK_EQ(columnIndices.size(), results.size());
+
+  // Single column: no cross-column cache reuse benefit from tiling.
+  const int32_t numCols = columnIndices.size();
+  if (numCols < 2) {
+    for (int32_t c = 0; c < numCols; ++c) {
+      extractColumn(rows, numRows, columnIndices[c], resultOffset, results[c]);
+    }
+    return;
+  }
+
+  // Tiled column-major extraction: process tiles of rows at a time,
+  // iterating all columns within each tile before moving to the next.
+  // This keeps the tile's rows in cache across column switches.
+  const int32_t tileSize = computeTileSize(fixedRowSize_);
+
+  // Pre-compute column metadata to avoid repeated lookups per tile.
+  struct ColMeta {
+    RowColumn col;
+    bool hasNulls;
+  };
+  std::vector<ColMeta> colMeta;
+  colMeta.reserve(numCols);
+  for (int32_t c = 0; c < numCols; ++c) {
+    colMeta.push_back(
+        {columnAt(columnIndices[c]), columnHasNulls(columnIndices[c])});
+  }
+
+  for (int32_t base = 0; base < numRows; base += tileSize) {
+    const int32_t tileRows = std::min(tileSize, numRows - base);
+    for (int32_t c = 0; c < numCols; ++c) {
+      extractColumn(
+          rows + base,
+          tileRows,
+          colMeta[c].col,
+          colMeta[c].hasNulls,
+          resultOffset + base,
+          results[c]);
+    }
+  }
+}
+
+void RowContainer::extractColumns(
+    const char* const* rows,
+    int32_t numRows,
+    int32_t numColumns,
+    RowVectorPtr& result) const {
+  std::vector<column_index_t> indices(numColumns);
+  std::iota(indices.begin(), indices.end(), 0);
+  std::vector<VectorPtr> children(numColumns);
+  for (int32_t i = 0; i < numColumns; ++i) {
+    children[i] = result->childAt(i);
+  }
+  extractColumns(rows, numRows, indices, 0, children);
+  for (int32_t i = 0; i < numColumns; ++i) {
+    result->childAt(i) = std::move(children[i]);
+  }
 }
 
 RowPartitions::RowPartitions(int32_t numRows, memory::MemoryPool& pool)

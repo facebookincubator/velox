@@ -1429,9 +1429,7 @@ void HashBuildSpiller::extractSpill(
 
   auto* result = resultPtr.get();
   const auto& types = container_->columnTypes();
-  for (auto i = 0; i < types.size(); ++i) {
-    container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
-  }
+  container_->extractColumns(rows.data(), rows.size(), types.size(), resultPtr);
   if (spillProbeFlag_) {
     container_->extractProbedFlags(
         rows.data(), rows.size(), false, false, result->childAt(types.size()));
