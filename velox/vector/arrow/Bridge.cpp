@@ -415,15 +415,27 @@ void gatherFromTimeBuffer(
 }
 
 // Gather values from timestamp buffer. Nulls are skipped.
+// If parentNulls is provided, positions where parent is null are also skipped
+// (to avoid reading garbage data from child at positions where parent is null).
 void gatherFromTimestampBuffer(
     const BaseVector& vec,
     const Selection& rows,
     TimestampUnit unit,
-    Buffer& out) {
+    Buffer& out,
+    const uint64_t* parentNulls = nullptr) {
   auto src = (*vec.values()).as<Timestamp>();
   auto dst = out.asMutable<int64_t>();
   vector_size_t j = 0; // index into dst
-  if (!vec.mayHaveNulls() || vec.getNullCount() == 0) {
+  // Helper to check if position is null (either in child or parent)
+  auto isNullAt = [&](vector_size_t i) {
+    if (parentNulls && bits::isBitNull(parentNulls, i)) {
+      return true;
+    }
+    return vec.isNullAt(i);
+  };
+
+  // Fast path: no nulls in child AND no parent nulls to worry about
+  if ((!vec.mayHaveNulls() || vec.getNullCount() == 0) && !parentNulls) {
     switch (unit) {
       case TimestampUnit::kSecond:
         rows.apply([&](vector_size_t i) { dst[j++] = src[i].getSeconds(); });
@@ -442,10 +454,11 @@ void gatherFromTimestampBuffer(
     }
     return;
   }
+  // Slow path: check nulls (child or parent) before reading
   switch (unit) {
     case TimestampUnit::kSecond:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!isNullAt(i)) {
           dst[j] = src[i].getSeconds();
         }
         j++;
@@ -453,7 +466,7 @@ void gatherFromTimestampBuffer(
       break;
     case TimestampUnit::kMilli:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!isNullAt(i)) {
           dst[j] = src[i].toMillis();
         }
         j++;
@@ -461,7 +474,7 @@ void gatherFromTimestampBuffer(
       break;
     case TimestampUnit::kMicro:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!isNullAt(i)) {
           dst[j] = src[i].toMicros();
         };
         j++;
@@ -469,7 +482,7 @@ void gatherFromTimestampBuffer(
       break;
     case TimestampUnit::kNano:
       rows.apply([&](vector_size_t i) {
-        if (!vec.isNullAt(i)) {
+        if (!isNullAt(i)) {
           dst[j] = src[i].toNanos();
         }
         j++;
@@ -682,35 +695,80 @@ VectorPtr createStringFlatVector(
 
 // This functions does two things: (a) sets the value of null_count, and (b)
 // the validity buffer (if there is at least one null row).
+// nulls in the output Arrow validity bitmap. This handles the case where a
+// parent struct is null - the child's Arrow representation must also show null
+// at those positions, even if the source child vector doesn't have nulls there.
 void exportValidityBitmap(
     const BaseVector& vec,
     const Selection& rows,
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
-  if (!vec.nulls()) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* parentNulls = nullptr) {
+  // If no nulls in child and no parent nulls to propagate, we're done.
+  if (!vec.nulls() && !parentNulls) {
     out.null_count = 0;
     return;
   }
 
-  auto nulls = vec.nulls();
+  bool needsMerge = parentNulls != nullptr;
+  bool hasChildNulls = vec.nulls() != nullptr;
 
-  // If we're only exporting a subset, create a new validity buffer.
-  if (rows.changed()) {
-    nulls = AlignedBuffer::allocate<bool>(out.length, pool);
-    gatherFromBuffer(*BOOLEAN(), *vec.nulls(), rows, options, *nulls);
-  }
-
-  // Set null counts.
-  if (!rows.changed() && (vec.getNullCount() != std::nullopt)) {
-    out.null_count = *vec.getNullCount();
-  } else {
+  if (!hasChildNulls && needsMerge) {
+    // Child has no nulls, but parent does. Create buffer from parent nulls.
+    auto nulls = AlignedBuffer::allocate<bool>(out.length, pool);
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    // Initialize all bits to NOT NULL (1)
+    memset(rawNulls, 0xFF, nulls->size());
+    // Copy parent nulls
+    vector_size_t idx = 0;
+    rows.apply([&](vector_size_t j) {
+      if (bits::isBitNull(parentNulls, j)) {
+        bits::setNull(rawNulls, idx);
+      }
+      ++idx;
+    });
     out.null_count = BaseVector::countNulls(nulls, rows.count());
+    if (out.null_count > 0) {
+      holder.setBuffer(0, nulls);
+    }
+    return;
   }
 
-  if (out.null_count > 0) {
-    holder.setBuffer(0, nulls);
+  // hasChildNulls is true at this point
+  if (rows.changed() || needsMerge) {
+    // Need a new buffer: either gathering subset or merging with parent
+    auto nulls = AlignedBuffer::allocate<bool>(out.length, pool);
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    // Initialize all bits to NOT NULL (1) for safety, in case any bits
+    // in the last partial word aren't explicitly set by the loop below.
+    memset(rawNulls, 0xFF, nulls->size());
+    const uint64_t* childNulls = vec.rawNulls();
+    vector_size_t idx = 0;
+    rows.apply([&](vector_size_t j) {
+      // A position is null if child is null OR parent is null
+      if (bits::isBitNull(childNulls, j) ||
+          (parentNulls && bits::isBitNull(parentNulls, j))) {
+        bits::setNull(rawNulls, idx);
+      }
+      ++idx;
+    });
+    out.null_count = BaseVector::countNulls(nulls, rows.count());
+    if (out.null_count > 0) {
+      holder.setBuffer(0, nulls);
+    }
+  } else {
+    // No subset, no parent merge - use child's nulls directly
+    // Use cached null count if available
+    if (vec.getNullCount() != std::nullopt) {
+      out.null_count = *vec.getNullCount();
+    } else {
+      out.null_count = BaseVector::countNulls(vec.nulls(), rows.count());
+    }
+    if (out.null_count > 0) {
+      holder.setBuffer(0, vec.nulls());
+    }
   }
 }
 
@@ -744,11 +802,12 @@ void exportValues(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* parentNulls = nullptr) {
   const auto& type = vec.type();
   out.n_buffers = 2;
 
-  if (!rows.changed() && isFlatScalarZeroCopy(type)) {
+  if (!rows.changed() && isFlatScalarZeroCopy(type) && !parentNulls) {
     // Arrow does not allow a nullptr for the values buffer. If the input vector
     // has no values buffer (all-null case), allocate an empty buffer of size 0.
     auto values =
@@ -764,7 +823,8 @@ void exportValues(
       : AlignedBuffer::allocate<uint8_t>(
             checkedMultiply<size_t>(out.length, size), pool);
   if (type->kind() == TypeKind::TIMESTAMP) {
-    gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
+    gatherFromTimestampBuffer(
+        vec, rows, options.timestampUnit, *values, parentNulls);
   } else if (type->kind() == TypeKind::BIGINT && type->isTime()) {
     gatherFromTimeBuffer(vec, rows, *values);
   } else {
@@ -903,7 +963,8 @@ void exportFlat(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* parentNulls = nullptr) {
   out.n_children = 0;
   out.children = nullptr;
   switch (vec.typeKind()) {
@@ -916,7 +977,7 @@ void exportFlat(
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::TIMESTAMP:
-      exportValues(vec, rows, options, out, pool, holder);
+      exportValues(vec, rows, options, out, pool, holder, parentNulls);
       break;
     case TypeKind::UNKNOWN:
       // Keep out.n_children = 0 for UNKNOWN type.
@@ -951,7 +1012,8 @@ void exportToArrowImpl(
     const Selection&,
     const ArrowOptions& options,
     ArrowArray&,
-    memory::MemoryPool*);
+    memory::MemoryPool*,
+    const uint64_t* parentNulls = nullptr);
 
 void exportRows(
     const RowVector& vec,
@@ -959,11 +1021,43 @@ void exportRows(
     const ArrowOptions& options,
     ArrowArray& out,
     memory::MemoryPool* pool,
-    VeloxToArrowBridgeHolder& holder) {
+    VeloxToArrowBridgeHolder& holder,
+    const uint64_t* incomingParentNulls = nullptr) {
   out.n_buffers = 1;
   holder.resizeChildren(vec.childrenSize());
   out.n_children = vec.childrenSize();
   out.children = holder.getChildrenArrays();
+  // Get parent nulls to propagate to children during Arrow export.
+  // When parent struct is null, children may have uninitialized garbage data.
+  // We pass parent nulls to child export so the Arrow validity bitmap will
+  // correctly mark those positions as null, without modifying the source
+  // Velox vectors (which may be shared).
+  //
+  // For nested structs, we need to merge incoming parent nulls with current
+  // struct nulls. A position is null if EITHER the incoming parent is null
+  // OR the current struct is null.
+  const uint64_t* currentNulls =
+      (vec.mayHaveNulls() && vec.rawNulls()) ? vec.rawNulls() : nullptr;
+
+  // Compute merged nulls for children
+  const uint64_t* parentNulls = nullptr;
+  BufferPtr mergedNullsBuffer;
+  if (incomingParentNulls && currentNulls) {
+    // Both have nulls - need to merge. A position is null if EITHER parent is
+    // null OR current struct is null. In Velox, 0=null, 1=valid, so we AND.
+    // Use bits::andBits which properly handles partial words at the end.
+    auto numBytes = bits::nbytes(vec.size());
+    mergedNullsBuffer = AlignedBuffer::allocate<uint8_t>(numBytes, pool);
+    auto* mergedNulls = mergedNullsBuffer->asMutable<uint64_t>();
+    bits::andBits(
+        mergedNulls, incomingParentNulls, currentNulls, 0, vec.size());
+    parentNulls = mergedNulls;
+  } else if (incomingParentNulls) {
+    parentNulls = incomingParentNulls;
+  } else {
+    parentNulls = currentNulls;
+  }
+
   for (column_index_t i = 0; i < vec.childrenSize(); ++i) {
     try {
       exportToArrowImpl(
@@ -971,7 +1065,8 @@ void exportRows(
           rows,
           options,
           *holder.allocateChild(i),
-          pool);
+          pool,
+          parentNulls);
     } catch (const VeloxException&) {
       for (column_index_t j = 0; j < i; ++j) {
         // When exception is thrown, i th child is guaranteed unset.
@@ -1226,21 +1321,28 @@ void exportToArrowImpl(
     const Selection& rows,
     const ArrowOptions& options,
     ArrowArray& out,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const uint64_t* parentNulls) {
   auto holder = std::make_unique<VeloxToArrowBridgeHolder>();
   out.buffers = holder->getArrowBuffers();
   out.length = rows.count();
   out.offset = 0;
   out.dictionary = nullptr;
-  exportValidityBitmap(vec, rows, options, out, pool, *holder);
+  exportValidityBitmap(vec, rows, options, out, pool, *holder, parentNulls);
 
   switch (vec.encoding()) {
     case VectorEncoding::Simple::FLAT:
-      exportFlat(vec, rows, options, out, pool, *holder);
+      exportFlat(vec, rows, options, out, pool, *holder, parentNulls);
       break;
     case VectorEncoding::Simple::ROW:
       exportRows(
-          *vec.asUnchecked<RowVector>(), rows, options, out, pool, *holder);
+          *vec.asUnchecked<RowVector>(),
+          rows,
+          options,
+          out,
+          pool,
+          *holder,
+          parentNulls);
       break;
     case VectorEncoding::Simple::ARRAY:
       exportArrays(
