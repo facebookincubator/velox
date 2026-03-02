@@ -110,6 +110,36 @@ class BloomFilter {
     }
   }
 
+  /// Computes m (total bits of Bloom filter) which is expected to achieve,
+  /// for the specified expected insertions, the required false positive
+  /// probability.
+  ///
+  /// See
+  /// http://en.wikipedia.org/wiki/Bloom_filter#Probability_of_false_positives
+  /// for the formula.
+  ///
+  /// @param n expected insertions (must be positive).
+  /// @param p false positive rate (must be 0 < p < 1).
+  static int64_t optimalNumOfBits(int64_t n, double p) {
+    return static_cast<int64_t>(
+        -n * std::log(p) / (std::log(2.0) * std::log(2.0)));
+  }
+
+  /// Computes m (total bits of Bloom filter) which is expected to achieve.
+  /// The smaller the expectedNumItems, the smaller the fpp.
+  ///
+  /// @param expectedNumItems expected number of items to insert.
+  /// @param maxNumItems maximum number of items.
+  static int64_t optimalNumOfBits(
+      int64_t expectedNumItems,
+      int64_t maxNumItems) {
+    double fpp = std::min(
+        static_cast<double>(expectedNumItems) /
+            (static_cast<double>(maxNumItems) / kDefaultFpp),
+        kDefaultFpp);
+    return optimalNumOfBits(expectedNumItems, fpp);
+  }
+
  private:
   // We use 4 independent hash functions by taking 24 bits of
   // the hash code and breaking these up into 4 groups of 6 bits. Each group
@@ -142,6 +172,8 @@ class BloomFilter {
   }
 
   static constexpr int8_t kBloomFilterV1 = 1;
+  static constexpr double kDefaultFpp = 0.03;
+
   std::vector<uint64_t, Allocator> bits_;
 };
 

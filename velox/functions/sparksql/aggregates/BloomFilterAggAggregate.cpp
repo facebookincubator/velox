@@ -66,7 +66,8 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       : Aggregate(resultType),
         defaultExpectedNumItems_(config.sparkBloomFilterExpectedNumItems()),
         defaultNumBits_(config.sparkBloomFilterNumBits()),
-        maxNumBits_(config.sparkBloomFilterMaxNumBits()) {}
+        maxNumBits_(config.sparkBloomFilterMaxNumBits()),
+        maxNumItems_(config.sparkBloomFilterMaxNumItems()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(BloomFilterAccumulator);
@@ -221,7 +222,8 @@ class BloomFilterAggAggregate : public exec::Aggregate {
         DecodedVector decodedNumBits(*args[2], rows);
         setConstantArgument("numBits", numBits_, decodedNumBits);
       } else {
-        numBits_ = estimatedNumItems_ * 8;
+        numBits_ = BloomFilter<>::optimalNumOfBits(
+            estimatedNumItems_, maxNumItems_);
       }
     } else {
       estimatedNumItems_ = defaultExpectedNumItems_;
@@ -277,6 +279,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   const int64_t defaultExpectedNumItems_;
   const int64_t defaultNumBits_;
   const int64_t maxNumBits_;
+  const int64_t maxNumItems_;
 
   // Reusable instance of DecodedVector for decoding input vectors.
   DecodedVector decodedRaw_;
