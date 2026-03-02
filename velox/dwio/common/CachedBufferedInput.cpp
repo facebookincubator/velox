@@ -504,6 +504,10 @@ void CachedBufferedInput::readRegions(
     VELOX_CHECK(groupEnds.empty());
     return;
   }
+  // Record the starting position so that we only submit the loads created by
+  // this call. Without this, non-prefetch loads or stale loads from previous
+  // cycles could be incorrectly submitted for async prefetching.
+  const int startIndex = static_cast<int>(coalescedLoads_.size());
   int32_t requestIdx{0};
   std::vector<CacheRequest*> requestGroup;
   for (auto groupEndIdx : groupEnds) {
@@ -515,8 +519,8 @@ void CachedBufferedInput::readRegions(
   }
 
   if (prefetch && executor_) {
-    std::vector<int32_t> doneIndices;
-    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
+    // Only submit the loads created by this call to the executor.
+    for (auto i = startIndex; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
@@ -524,12 +528,16 @@ void CachedBufferedInput::readRegions(
               process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
-      } else {
+      }
+    }
+    // Remove completed loads from the entire vector. This cleans up loads from
+    // previous cycles that have completed asynchronously.
+    std::vector<int32_t> doneIndices;
+    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
+      if (coalescedLoads_[i]->state() != CoalescedLoad::State::kPlanned) {
         doneIndices.push_back(i);
       }
     }
-    // Remove the loads that were complete. There can be done loads if the same
-    // CachedBufferedInput has multiple cycles of enqueues and loads.
     for (int i = 0, j = 0, k = 0; i < coalescedLoads_.size(); ++i) {
       if (j < doneIndices.size() && doneIndices[j] == i) {
         ++j;
