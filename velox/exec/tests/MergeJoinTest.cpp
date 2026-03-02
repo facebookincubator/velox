@@ -567,17 +567,25 @@ TEST_F(MergeJoinTest, mixedCardinalityKeys) {
   auto leftKeys = makeFlatVector<int32_t>(600, [](auto row) {
     // key=1 for rows 0-199, key=2 for row 200, key=3 for rows 201-400,
     // key=4 for row 401, ...
-    if (row <= 199) return 1;
-    if (row == 200) return 2;
-    if (row <= 400) return 3;
-    if (row == 401) return 4;
+    if (row <= 199)
+      return 1;
+    if (row == 200)
+      return 2;
+    if (row <= 400)
+      return 3;
+    if (row == 401)
+      return 4;
     return 5;
   });
   auto rightKeys = makeFlatVector<int32_t>(600, [](auto row) {
-    if (row <= 199) return 1;
-    if (row == 200) return 2;
-    if (row <= 400) return 3;
-    if (row == 401) return 4;
+    if (row <= 199)
+      return 1;
+    if (row == 200)
+      return 2;
+    if (row <= 400)
+      return 3;
+    if (row == 401)
+      return 4;
     return 5;
   });
 
