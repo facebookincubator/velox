@@ -41,7 +41,8 @@ CudfTopN::CudfTopN(
           operatorId,
           fmt::format("[{}]", topNNode->id())),
       count_(topNNode->count()),
-      topNNode_(topNNode) {
+      topNNode_(topNNode),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   kBatchSize_ = driverCtx->queryConfig().get<int32_t>(
       CudfQueryConfig::kCudfTopNBatchSize, kBatchSize_);
   const auto numColumns{outputType_->children().size()};
@@ -90,7 +91,7 @@ CudfVectorPtr CudfTopN::mergeTopK(
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
   // Ensure input-stream deallocations don't race with merge stream.
-  streamsWaitForStream(cudaEvent_, inputStreams, stream);
+  streamsWaitForStream(*cudaEvent_, inputStreams, stream);
   // slice it
   auto topk =
       cudf::split(

@@ -16,12 +16,13 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::cudf_velox {
+
+class CudaEvent;
 
 class CudfTopN : public exec::Operator, public NvtxHelper {
  public:
@@ -76,6 +77,6 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   std::vector<CudfVectorPtr> topNBatches_;
   int32_t kBatchSize_{5};
   bool finished_ = false;
-  CudaEvent cudaEvent_{cudaEventDisableTiming};
+  std::unique_ptr<CudaEvent> cudaEvent_;
 };
 } // namespace facebook::velox::cudf_velox
