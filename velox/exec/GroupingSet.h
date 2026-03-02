@@ -58,6 +58,7 @@ class GroupingSet {
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       std::vector<column_index_t>&& preGroupedKeys,
+      const common::SpillConfig* spillConfig,
       OperatorCtx* operatorCtx,
       tsan_atomic<bool>* nonReclaimableSection);
 
@@ -147,6 +148,20 @@ class GroupingSet {
   /// Return the number of rows kept in memory.
   int64_t numRows() const {
     return table_ ? table_->rows()->numRows() : 0;
+  }
+
+  /// Returns the estimated hash table size increase in bytes for adding
+  /// 'numNewDistinct' new distinct values. Returns 0 if no table exists.
+  uint64_t hashTableSizeIncrease(int32_t numNewDistinct) const {
+    return table_ != nullptr ? table_->hashTableSizeIncrease(numNewDistinct)
+                             : 0;
+  }
+
+  /// Returns the underlying RowContainer, or nullptr if the hash table has not
+  /// been created yet. Used by operators like MarkDistinct for memory
+  /// estimation in ensureInputFits().
+  RowContainer* rows() const {
+    return table_ != nullptr ? table_->rows() : nullptr;
   }
 
   /// Frees hash tables and other state when giving up partial aggregation as
