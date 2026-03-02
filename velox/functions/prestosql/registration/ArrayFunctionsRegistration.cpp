@@ -34,6 +34,7 @@
 namespace facebook::velox::functions {
 extern void registerArrayConcatFunctions(const std::string& prefix);
 extern void registerArrayNGramsFunctions(const std::string& prefix);
+extern void registerArraySplitIntoChunksFunctions(const std::string& prefix);
 
 template <typename T>
 inline void registerArrayMinMaxFunctions(const std::string& prefix) {
@@ -230,6 +231,7 @@ void registerArrayFunctions(const std::string& prefix) {
 
   registerArrayConcatFunctions(prefix);
   registerArrayNGramsFunctions(prefix);
+  registerArraySplitIntoChunksFunctions(prefix);
 
   registerArrayRemoveFunctions<int8_t>(prefix);
   registerArrayRemoveFunctions<int16_t>(prefix);
