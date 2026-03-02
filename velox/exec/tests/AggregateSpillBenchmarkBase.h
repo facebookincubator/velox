@@ -20,7 +20,7 @@ namespace facebook::velox::exec::test {
 class AggregateSpillBenchmarkBase : public SpillerBenchmarkBase {
  public:
   explicit AggregateSpillBenchmarkBase(std::string spillerType)
-      : spillerType_(spillerType){};
+      : spillerType_(spillerType) {};
 
   /// Sets up the test.
   void setUp() override;

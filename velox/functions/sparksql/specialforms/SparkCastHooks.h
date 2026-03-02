@@ -24,7 +24,9 @@ namespace facebook::velox::functions::sparksql {
 // This class provides cast hooks following Spark semantics.
 class SparkCastHooks : public exec::CastHooks {
  public:
-  explicit SparkCastHooks(const velox::core::QueryConfig& config);
+  explicit SparkCastHooks(
+      const velox::core::QueryConfig& config,
+      bool allowOverflow);
 
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
@@ -67,6 +69,10 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   bool truncate() const override {
+    return allowOverflow_;
+  }
+
+  bool applyTryCastRecursively() const override {
     return true;
   }
 
@@ -80,6 +86,9 @@ class SparkCastHooks : public exec::CastHooks {
   Expected<Timestamp> castNumberToTimestamp(T seconds) const;
 
   const core::QueryConfig& config_;
+
+  // If true, the cast will truncate the overflow value to fit the target type.
+  const bool allowOverflow_;
 
   /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
   /// microsecond. 3) Does not append trailing zeros. 4) Adds a positive

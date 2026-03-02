@@ -16,11 +16,14 @@ add_library(velox_aggregation_result_verifier MinMaxByResultVerifier.cpp)
 
 target_link_libraries(
   velox_aggregation_result_verifier
+  velox_common_hyperloglog
   velox_core
   velox_aggregation_fuzzer_base
   velox_exec_test_lib
+  velox_functions_lib
   velox_vector
-  velox_vector_test_lib)
+  velox_vector_test_lib
+)
 
 add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
 
@@ -34,7 +37,8 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_vector_test_lib
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
 
 # Window Fuzzer
 add_executable(velox_window_fuzzer_test WindowFuzzerTest.cpp)
@@ -49,7 +53,8 @@ target_link_libraries(
   velox_functions_prestosql
   velox_vector_test_lib
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)
 
 # Writer Fuzzer
 add_executable(velox_writer_fuzzer_test WriterFuzzerTest.cpp)
@@ -59,4 +64,5 @@ target_link_libraries(
   velox_writer_fuzzer
   velox_fuzzer_util
   GTest::gtest
-  GTest::gtest_main)
+  GTest::gtest_main
+)

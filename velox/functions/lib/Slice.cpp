@@ -15,7 +15,7 @@
  */
 
 #include "velox/functions/lib/Slice.h"
-#include "velox/expression/Expr.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions {
@@ -54,7 +54,7 @@ class SliceFunction : public exec::VectorFunction {
     VELOX_CHECK(
         kind == TypeKind::BIGINT || kind == TypeKind::INTEGER,
         "Unsupported parameter type {} to register slice function",
-        mapTypeKindToName(kind));
+        TypeKindName::toName(kind));
   }
 
   void apply(
@@ -71,7 +71,7 @@ class SliceFunction : public exec::VectorFunction {
         args[1]->typeKind(),
         kind_,
         "Function slice() requires second argument of type {}",
-        mapTypeKindToName(kind_));
+        TypeKindName::toName(kind_));
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
         args[2]->typeKind(),
@@ -213,7 +213,7 @@ class SliceFunction : public exec::VectorFunction {
 
 // @param kind The type kind of start and length.
 void registerSliceFunction(const std::string& prefix, TypeKind kind) {
-  auto kindName = exec::sanitizeName(mapTypeKindToName(kind));
+  auto kindName = exec::sanitizeName(std::string(TypeKindName::toName(kind)));
 
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
       exec::FunctionSignatureBuilder()

@@ -40,7 +40,9 @@ class StreamingAggregation : public Operator {
   RowVectorPtr getOutput() override;
 
   bool needsInput() const override {
-    return true;
+    // We don't need input if the first group is ready to output which has mixed
+    // input sources across streaming input batches.
+    return !outputFirstGroup_;
   }
 
   bool startDrain() override;
@@ -71,8 +73,9 @@ class StreamingAggregation : public Operator {
   RowVectorPtr createOutput(size_t numGroups);
 
   // Assign input rows to groups based on values of the grouping keys. Store the
-  // assignments in inputGroups_.
-  void assignGroups();
+  // assignments in inputGroups_. Returns true if there is input rows have been
+  // assigned to the previously last group.
+  bool assignGroups();
 
   // Add input data to accumulators.
   void evaluateAggregates();
@@ -87,16 +90,25 @@ class StreamingAggregation : public Operator {
   // Initialize the aggregations setting allocator and offsets.
   void initializeAggregates(uint32_t numKeys);
 
-  /// Maximum number of rows in the output batch.
+  // Maximum number of rows in the output batch.
   const vector_size_t maxOutputBatchSize_;
 
-  /// Maximum number of rows in the output batch.
+  // Maximum number of rows in the output batch.
   const vector_size_t minOutputBatchSize_;
+
+  // If the size of the data in the RowContainer exceeds this value, we will
+  // output a batch regardless of the number of rows.
+  const uint64_t maxOutputBatchBytes_;
 
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const core::AggregationNode::Step step_;
+
+  // When true, indicates that no sort group spans across input batches. Each
+  // input batch contains complete data for its groups. This allows the
+  // streaming aggregation operator to produce all group results for each input.
+  const bool noGroupsSpanBatches_;
 
   std::vector<column_index_t> groupingKeys_;
   std::vector<AggregateInfo> aggregates_;
@@ -118,6 +130,17 @@ class StreamingAggregation : public Operator {
   // Number of active entries at the beginning of the groups_ vector. The
   // remaining entries are re-usable.
   size_t numGroups_{0};
+
+  // If true, we want to output the first group which has inputs across
+  // different batches. Hence the next output could only contain the input from
+  // a single streaming input batch. This is used to help avoid data copy in
+  // streaming aggregation function processing which is only applicable if all
+  // the sources are from the same input batch.
+  //
+  // NOTE: the streaming aggregation operator must have at-least more than one
+  // groups in this case. Also we only enable this optimization if
+  // 'minOutputBatchSize_' is set to one for eagerly streaming output producing.
+  bool outputFirstGroup_{false};
 
   // Reusable memory.
 

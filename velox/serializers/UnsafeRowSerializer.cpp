@@ -19,6 +19,39 @@
 #include "velox/serializers/RowSerializer.h"
 
 namespace facebook::velox::serializer::spark {
+namespace {
+std::unique_ptr<RowIterator> unsafeRowIteratorFactory(
+    ByteInputStream* source,
+    const VectorSerde::Options* options) {
+  const auto header = detail::RowGroupHeader::read(source);
+  if (!header.compressed) {
+    return std::make_unique<RowIteratorImpl>(
+        source, header.uncompressedSize + source->tellp());
+  }
+
+  const auto compressionKind = options == nullptr
+      ? VectorSerde::Options().compressionKind
+      : options->compressionKind;
+  VELOX_DCHECK_NE(
+      compressionKind, common::CompressionKind::CompressionKind_NONE);
+  auto compressBuf = folly::IOBuf::create(header.compressedSize);
+  source->readBytes(compressBuf->writableData(), header.compressedSize);
+  compressBuf->append(header.compressedSize);
+
+  // Process chained uncompressed results IOBufs.
+  const auto codec = common::compressionKindToCodec(compressionKind);
+  auto uncompressedBuf =
+      codec->uncompress(compressBuf.get(), header.uncompressedSize);
+
+  auto uncompressedStream = std::make_unique<BufferInputStream>(
+      byteRangesFromIOBuf(uncompressedBuf.get()));
+  const std::streampos initialSize = uncompressedStream->tellp();
+  return std::make_unique<RowIteratorImpl>(
+      std::move(uncompressedStream),
+      std::move(uncompressedBuf),
+      header.uncompressedSize + initialSize);
+}
+} // namespace
 
 void UnsafeRowVectorSerde::estimateSerializedSize(
     const row::UnsafeRowFast* unsafeRow,
@@ -49,23 +82,35 @@ void UnsafeRowVectorSerde::deserialize(
       source,
       serializedRows,
       serializedBuffers,
-      [](auto* source,
-         auto uncompressedStream,
-         auto uncompressedBuf,
-         auto endOffset) {
-        if (source != nullptr) {
-          VELOX_CHECK_NULL(uncompressedStream);
-          VELOX_CHECK_NULL(uncompressedBuf);
-          return std::make_unique<RowIteratorImpl>(source, endOffset);
-        } else {
-          VELOX_CHECK_NOT_NULL(uncompressedStream);
-          VELOX_CHECK_NOT_NULL(uncompressedBuf);
-          return std::make_unique<RowIteratorImpl>(
-              std::move(uncompressedStream),
-              std::move(uncompressedBuf),
-              endOffset);
-        }
-      },
+      unsafeRowIteratorFactory,
+      options);
+
+  if (serializedRows.empty()) {
+    *result = BaseVector::create<RowVector>(type, 0, pool);
+    return;
+  }
+
+  *result = std::dynamic_pointer_cast<RowVector>(
+      row::UnsafeRowFast::deserialize(serializedRows, type, pool));
+}
+
+void UnsafeRowVectorSerde::deserialize(
+    ByteInputStream* source,
+    std::unique_ptr<RowIterator>& sourceRowIterator,
+    uint64_t maxRows,
+    RowTypePtr type,
+    RowVectorPtr* result,
+    velox::memory::MemoryPool* pool,
+    const Options* options) {
+  std::vector<char*> serializedRows;
+  std::vector<std::unique_ptr<std::string>> serializedBuffers;
+  RowDeserializer<char*>::deserialize(
+      source,
+      maxRows,
+      sourceRowIterator,
+      serializedRows,
+      serializedBuffers,
+      unsafeRowIteratorFactory,
       options);
 
   if (serializedRows.empty()) {

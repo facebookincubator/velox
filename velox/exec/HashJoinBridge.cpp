@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/HashJoinBridge.h"
-#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/exec/HashBuild.h"
 
 namespace facebook::velox::exec {
@@ -43,13 +42,18 @@ RowTypePtr hashJoinTableType(
     types.emplace_back(inputType->childAt(channel));
   }
 
+  if (joinNode->canDropDuplicates()) {
+    // For left semi and anti join with no extra filter, hash table does not
+    // store dependent columns.
+    return ROW(std::move(names), std::move(types));
+  }
+
   for (auto i = 0; i < inputType->size(); ++i) {
     if (keyChannelSet.find(i) == keyChannelSet.end()) {
       names.emplace_back(inputType->nameOf(i));
       types.emplace_back(inputType->childAt(i));
     }
   }
-
   return ROW(std::move(names), std::move(types));
 }
 
@@ -99,7 +103,7 @@ std::unique_ptr<HashBuildSpiller> createSpiller(
     const RowTypePtr& tableType,
     const HashBitRange& hashBitRange,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats) {
+    exec::SpillStats* stats) {
   return std::make_unique<HashBuildSpiller>(
       joinType,
       parentId,
@@ -167,7 +171,7 @@ SpillPartitionSet spillHashJoinTable(
     const HashBitRange& hashBitRange,
     const std::shared_ptr<const core::HashJoinNode>& joinNode,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* stats) {
+    exec::SpillStats* spillStats) {
   VELOX_CHECK_NOT_NULL(table);
   VELOX_CHECK_NOT_NULL(spillConfig);
   if (table->numDistinct() == 0) {
@@ -190,7 +194,7 @@ SpillPartitionSet spillHashJoinTable(
         tableType,
         hashBitRange,
         spillConfig,
-        stats));
+        spillStats));
     spillers.push_back(spillersHolder.back().get());
   }
   if (spillersHolder.empty()) {
@@ -212,7 +216,7 @@ SpillPartitionSet spillHashJoinTable(
 }
 
 void HashJoinBridge::setHashTable(
-    std::unique_ptr<BaseHashTable> table,
+    std::shared_ptr<BaseHashTable> table,
     SpillPartitionSet spillPartitionSet,
     bool hasNullKeys,
     HashJoinTableSpillFunc&& tableSpillFunc) {
@@ -453,11 +457,11 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
 }
 
 bool isHashBuildMemoryPool(const memory::MemoryPool& pool) {
-  return folly::StringPiece(pool.name()).endsWith("HashBuild");
+  return pool.name().ends_with("HashBuild");
 }
 
 bool isHashProbeMemoryPool(const memory::MemoryPool& pool) {
-  return folly::StringPiece(pool.name()).endsWith("HashProbe");
+  return pool.name().ends_with("HashProbe");
 }
 
 bool needRightSideJoin(core::JoinType joinType) {

@@ -41,7 +41,7 @@ struct fmt::formatter<Counter> {
   template <typename FormatContext>
   auto format(const Counter& c, FormatContext& ctx) const {
     auto x = c.counter++;
-    return format_to(ctx.out(), "{}", x);
+    return fmt::format_to(ctx.out(), "{}", x);
   }
 };
 
@@ -65,7 +65,7 @@ void verifyVeloxException(
     std::function<void()> f,
     const std::string& messagePrefix) {
   verifyException<VeloxException>(f, [&messagePrefix](const auto& e) {
-    EXPECT_TRUE(folly::StringPiece{e.what()}.startsWith(messagePrefix))
+    EXPECT_TRUE(std::string_view{e.what()}.starts_with(messagePrefix))
         << "\nException message prefix mismatch.\n\nExpected prefix: "
         << messagePrefix << "\n\nActual message: " << e.what();
   });
@@ -106,11 +106,12 @@ void testExceptionTraceCollectionControl(bool userException, bool enabled) {
           false);
     }
   } catch (VeloxException& e) {
-    SCOPED_TRACE(fmt::format(
-        "enabled: {}, user flag: {}, sys flag: {}",
-        enabled,
-        FLAGS_velox_exception_user_stacktrace_enabled,
-        FLAGS_velox_exception_system_stacktrace_enabled));
+    SCOPED_TRACE(
+        fmt::format(
+            "enabled: {}, user flag: {}, sys flag: {}",
+            enabled,
+            FLAGS_velox_exception_user_stacktrace_enabled,
+            FLAGS_velox_exception_system_stacktrace_enabled));
     ASSERT_EQ(userException, e.exceptionType() == VeloxException::Type::kUser);
     ASSERT_EQ(enabled, e.stackTrace() != nullptr);
   }
@@ -170,12 +171,13 @@ void testExceptionTraceCollectionRateControl(
             false);
       }
     } catch (VeloxException& e) {
-      SCOPED_TRACE(fmt::format(
-          "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
-          userException,
-          hasRateLimit,
-          FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
-          FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
+      SCOPED_TRACE(
+          fmt::format(
+              "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
+              userException,
+              hasRateLimit,
+              FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
+              FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
       ASSERT_EQ(
           userException, e.exceptionType() == VeloxException::Type::kUser);
       ASSERT_EQ(!hasRateLimit || ((iter % 2) == 0), e.stackTrace() != nullptr);
@@ -1015,6 +1017,6 @@ TEST(ExceptionTest, exceptionMacroInlining) {
   try {
     VELOX_USER_FAIL(errorStr, "definitely");
   } catch (const std::exception& e) {
-    ASSERT_TRUE(folly::StringPiece{e.what()}.startsWith("argument not found"));
+    ASSERT_TRUE(std::string_view{e.what()}.starts_with("argument not found"));
   }
 }

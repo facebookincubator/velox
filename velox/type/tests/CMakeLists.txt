@@ -21,12 +21,15 @@ add_executable(
   FilterSerDeTest.cpp
   FloatingPointUtilTest.cpp
   HugeIntTest.cpp
+  OpaqueCustomTypesTest.cpp
   StringViewTest.cpp
   SubfieldTest.cpp
   TimestampConversionTest.cpp
   TimestampTest.cpp
   TypeTest.cpp
-  VariantTest.cpp)
+  TypeCoercerTest.cpp
+  VariantTest.cpp
+)
 
 add_test(velox_type_test velox_type_test)
 
@@ -39,7 +42,8 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
-  glog::glog)
+  glog::glog
+)
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_filter_benchmark FilterBenchmark.cpp)
@@ -52,10 +56,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
-    glog::glog)
+    glog::glog
+  )
 
-  add_executable(velox_negated_values_filter_benchmark
-                 NegatedValuesFilterBenchmark.cpp)
+  add_executable(velox_negated_values_filter_benchmark NegatedValuesFilterBenchmark.cpp)
 
   target_link_libraries(
     velox_negated_values_filter_benchmark
@@ -65,10 +69,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
-    glog::glog)
+    glog::glog
+  )
 
-  add_executable(velox_negated_bytes_values_benchmark
-                 NegatedBytesValuesBenchmark.cpp)
+  add_executable(velox_negated_bytes_values_benchmark NegatedBytesValuesBenchmark.cpp)
 
   target_link_libraries(
     velox_negated_bytes_values_benchmark
@@ -78,10 +82,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
-    glog::glog)
+    glog::glog
+  )
 
-  add_executable(velox_negated_bigint_range_benchmark
-                 NegatedBigintRangeBenchmark.cpp)
+  add_executable(velox_negated_bigint_range_benchmark NegatedBigintRangeBenchmark.cpp)
 
   target_link_libraries(
     velox_negated_bigint_range_benchmark
@@ -91,10 +95,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
-    glog::glog)
+    glog::glog
+  )
 
-  add_executable(velox_negated_bytes_range_benchmark
-                 NegatedBytesRangeBenchmark.cpp)
+  add_executable(velox_negated_bytes_range_benchmark NegatedBytesRangeBenchmark.cpp)
 
   target_link_libraries(
     velox_negated_bytes_range_benchmark
@@ -104,7 +108,8 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
-    glog::glog)
+    glog::glog
+  )
 
   add_executable(velox_string_view_benchmark StringViewBenchmark.cpp)
 
@@ -115,5 +120,6 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
-    glog::glog)
+    glog::glog
+  )
 endif()

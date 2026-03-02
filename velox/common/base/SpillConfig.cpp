@@ -34,8 +34,10 @@ SpillConfig::SpillConfig(
     uint64_t _maxSpillRunRows,
     uint64_t _writerFlushThresholdSize,
     const std::string& _compressionKind,
+    uint32_t _numMaxMergeFiles,
     std::optional<PrefixSortConfig> _prefixSortConfig,
-    const std::string& _fileCreateConfig)
+    const std::string& _fileCreateConfig,
+    uint32_t _windowMinReadBatchRows)
     : getSpillDirPathCb(std::move(_getSpillDirPathCb)),
       updateAndCheckSpillLimitCb(std::move(_updateAndCheckSpillLimitCb)),
       fileNamePrefix(std::move(_fileNamePrefix)),
@@ -53,12 +55,18 @@ SpillConfig::SpillConfig(
       maxSpillRunRows(_maxSpillRunRows),
       writerFlushThresholdSize(_writerFlushThresholdSize),
       compressionKind(common::stringToCompressionKind(_compressionKind)),
+      numMaxMergeFiles(_numMaxMergeFiles),
       prefixSortConfig(_prefixSortConfig),
-      fileCreateConfig(_fileCreateConfig) {
+      fileCreateConfig(_fileCreateConfig),
+      windowMinReadBatchRows(_windowMinReadBatchRows) {
   VELOX_USER_CHECK_GE(
       spillableReservationGrowthPct,
       minSpillableReservationPct,
       "Spillable memory reservation growth pct should not be lower than minimum available pct");
+  VELOX_CHECK_NE(
+      numMaxMergeFiles,
+      1,
+      "NumMaxMergeFiles should not be 1 as merging should take at least 2 files to make progress");
 }
 
 int32_t SpillConfig::spillLevel(uint8_t startBitOffset) const {

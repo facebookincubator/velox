@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/CPortability.h>
+
 namespace facebook::velox {
 
 // Copied from format.h of fmt.

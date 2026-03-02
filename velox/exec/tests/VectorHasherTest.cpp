@@ -462,14 +462,15 @@ TEST_F(VectorHasherTest, stringDistinctOverflow) {
   for (auto i = 0; i < 7; ++i) {
     auto& stringVec = strings[i];
     stringVec.resize(numRows);
-    batches.emplace_back(makeFlatVector<StringView>(
-        numRows, [&i, &stringVec, numRows](vector_size_t row) {
-          const auto num = numRows * i + row;
-          stringVec[row] = (row != 0)
-              ? fmt::format("abcdefghijabcdefghij{}", num)
-              : fmt::format("s{}", num);
-          return StringView(stringVec[row]);
-        }));
+    batches.emplace_back(
+        makeFlatVector<StringView>(
+            numRows, [&i, &stringVec, numRows](vector_size_t row) {
+              const auto num = numRows * i + row;
+              stringVec[row] = (row != 0)
+                  ? fmt::format("abcdefghijabcdefghij{}", num)
+                  : fmt::format("s{}", num);
+              return StringView(stringVec[row]);
+            }));
   }
 
   SelectivityVector rows(numRows, true);
@@ -680,9 +681,9 @@ TEST_F(VectorHasherTest, merge) {
   VectorHasher emptyHasher(BIGINT(), 0);
   VectorHasher otherEmptyHasher(BIGINT(), 0);
   EXPECT_TRUE(emptyHasher.empty());
-  emptyHasher.merge(otherHasher);
-  hasher.merge(emptyHasher);
-  hasher.merge(otherEmptyHasher);
+  emptyHasher.merge(otherHasher, 1'000'000);
+  hasher.merge(emptyHasher, 1'000'000);
+  hasher.merge(otherEmptyHasher, 1'000'000);
   uint64_t numRange;
   uint64_t numDistinct;
   hasher.cardinality(0, numRange, numDistinct);
@@ -718,6 +719,45 @@ TEST_F(VectorHasherTest, merge) {
   // Check all values have distinct id. -1 to account for null that
   // does not occur in the data.
   EXPECT_EQ(numDistinct - 1, ids.size());
+}
+
+TEST_F(VectorHasherTest, mergeMaxNumDistinct) {
+  constexpr vector_size_t kSize = 100;
+  SelectivityVector rows(kSize);
+  raw_vector<uint64_t> hashes(kSize);
+
+  auto vector1 =
+      makeFlatVector<int64_t>(kSize, [](vector_size_t row) { return row; });
+  auto vector2 = makeFlatVector<int64_t>(
+      kSize, [](vector_size_t row) { return 1000 + row; });
+  auto vector3 = makeFlatVector<int64_t>(
+      kSize, [](vector_size_t row) { return 2000 + row; });
+
+  VectorHasher hasher1(BIGINT(), 0);
+  hasher1.decode(*vector1, rows);
+  hasher1.computeValueIds(rows, hashes);
+
+  VectorHasher hasher2(BIGINT(), 0);
+  hasher2.decode(*vector2, rows);
+  hasher2.computeValueIds(rows, hashes);
+
+  VectorHasher hasher3(BIGINT(), 0);
+  hasher3.decode(*vector3, rows);
+  hasher3.computeValueIds(rows, hashes);
+
+  hasher1.merge(hasher2, kSize * 2);
+  uint64_t numRange;
+  uint64_t numDistinct;
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numDistinct, kSize * 2 + 1);
+
+  hasher1.merge(hasher3, kSize * 2);
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
+
+  hasher1.merge(hasher3, kSize * 10);
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
 }
 
 TEST_F(VectorHasherTest, computeValueIdsBigint) {
@@ -1196,4 +1236,85 @@ TEST_F(VectorHasherTest, customComparisonRow) {
           {makeNullableFlatVector<int64_t>(
               {std::nullopt, 0, 1, 0, 1, 0, 1},
               velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())}));
+}
+
+TEST_F(VectorHasherTest, customComparisonValueIds) {
+  // Test that VectorHasher created with custom comparison type
+  // has value IDs disabled (distinctOverflow_ and rangeOverflow_ set).
+  auto vectorHasher = exec::VectorHasher::create(
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 1);
+
+  // Test that types with custom comparison do not support value IDs.
+  EXPECT_FALSE(vectorHasher->typeSupportsValueIds());
+
+  // Verify that mayUseValueIds() returns false for custom comparison types.
+  EXPECT_FALSE(vectorHasher->mayUseValueIds());
+}
+
+DEBUG_ONLY_TEST_F(VectorHasherTest, customComparisonNoValueIds) {
+  // Test that custom comparison types cannot use value IDs for optimization.
+  auto data = makeRowVector({makeNullableFlatVector<int64_t>(
+      {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+
+  auto hasher = exec::VectorHasher::create(
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
+
+  SelectivityVector allRows(data->size());
+  raw_vector<uint64_t> result(data->size());
+  std::fill(result.begin(), result.end(), 0);
+
+  hasher->decode(*data->childAt(0), allRows);
+
+  VELOX_ASSERT_THROW(
+      hasher->computeValueIds(allRows, result), "Value IDs cannot be used");
+  VectorHasher::ScratchMemory scratchMemory;
+  VELOX_ASSERT_THROW(
+      hasher->lookupValueIds(*data->childAt(0), allRows, scratchMemory, result),
+      "Value IDs cannot be used");
+  EXPECT_EQ(nullptr, hasher->getFilter(true));
+  VELOX_ASSERT_THROW(
+      hasher->enableValueRange(1, 50), "Value IDs cannot be used");
+  VELOX_ASSERT_THROW(
+      hasher->enableValueRange(1, 50), "Value IDs cannot be used");
+}
+
+DEBUG_ONLY_TEST_F(VectorHasherTest, computeValueIdsForRowsCustomComparison) {
+  // Test that computeValueIdsForRows throws an exception for types with custom
+  // comparison.
+  auto hasher = exec::VectorHasher::create(
+      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
+
+  constexpr int32_t kNumGroups = 5;
+  constexpr int32_t kRowSize = 16;
+  constexpr int32_t kValueOffset = 0;
+  constexpr int32_t kNullByte = 8;
+  constexpr uint8_t kNullMask = 1;
+
+  // Allocate memory for row-wise data.
+  std::vector<std::vector<char>> rowData(kNumGroups);
+  std::vector<char*> groups(kNumGroups);
+
+  for (int i = 0; i < kNumGroups; ++i) {
+    rowData[i].resize(kRowSize, 0);
+    groups[i] = rowData[i].data();
+
+    // Set values for all rows (no nulls for simplicity).
+    *reinterpret_cast<int64_t*>(groups[i] + kValueOffset) = i * 256;
+  }
+
+  raw_vector<uint64_t> result(kNumGroups);
+  std::fill(result.begin(), result.end(), 0);
+
+  // computeValueIdsForRows should throw an exception for types with custom
+  // comparison.
+  VELOX_ASSERT_THROW(
+      hasher->computeValueIdsForRows(
+          groups.data(),
+          kNumGroups,
+          kValueOffset,
+          kNullByte,
+          kNullMask,
+          result),
+      "Value IDs cannot be used");
 }

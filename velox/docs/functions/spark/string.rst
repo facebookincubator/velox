@@ -1,6 +1,6 @@
-====================================
+================
 String Functions
-====================================
+================
 
 .. note::
 
@@ -13,11 +13,36 @@ String Functions
 
     Returns unicode code point of the first character of ``string``. Returns 0 if ``string`` is empty.
 
+.. spark:function:: base64(expr) -> varchar
+
+    Converts ``expr`` to a base 64 string using RFC2045 Base64 transfer encoding for MIME. ::
+
+        SELECT base64('Spark SQL'); -- 'U3BhcmsgU1FM'
+
 .. spark:function:: bit_length(string/binary) -> integer
 
     Returns the bit length for the specified string column. ::
 
         SELECT bit_length('123'); -- 24
+
+.. spark:function:: char_type_write_side_check(string, limit) -> varchar
+
+    Ensures that input ``string`` fits within the specified length ``limit`` in characters by padding or trimming spaces as needed.
+    If the length of ``string`` is less than ``limit``, it is padded with trailing spaces (ASCII 32) to reach ``limit``.
+    If the length of ``string`` is greater than ``limit``, trailing spaces are trimmed to fit within ``limit``.
+    Throws exception when ``string`` still exceeds ``limit`` after trimming trailing spaces or when ``limit`` is not greater than 0.
+    Note: This function is not directly callable in Spark SQL, but internally used for length check when writing char type columns. ::
+
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        char_type_write_side_check("abc", 3) -- "abc"
+        char_type_write_side_check("ab", 3) -- "ab "
+        char_type_write_side_check("a", 3) -- "a  "
+        char_type_write_side_check("abc  ", 3) -- "abc"
+        char_type_write_side_check("abcd", 3) -- VeloxUserError: "Exceeds allowed length limitation: '3'"
+        char_type_write_side_check("世界", 2) -- "世界"
+        char_type_write_side_check("世", 3) -- "世  "
+        char_type_write_side_check("世界人", 2) -- VeloxUserError: "Exceeds allowed length limitation: '2'"
+        char_type_write_side_check("abc", 0) -- VeloxUserError: "The length limit must be greater than 0."
 
 .. spark:function:: chr(n) -> varchar
 
@@ -108,6 +133,20 @@ String Functions
         SELECT find_in_set(NULL, ',123'); -- NULL
         SELECT find_in_set("abc", NULL); -- NULL
 
+.. spark:function:: initcap(string) -> varchar
+
+   The ``initcap`` function converts the first character of each word to uppercase
+   and all other characters in the word to lowercase. It supports UTF-8 multibyte
+   characters, up to four bytes per character.
+
+   A *word* is defined as a sequence of characters separated by whitespace. ::
+
+        SELECT initcap('spark sql'); -- Spark Sql
+        SELECT initcap('spARK sQL'); -- Spark Sql
+        SELECT initcap('123abc DEF!ghi'); -- 123abc Def!ghi
+        SELECT initcap('élan vital für alle'); -- Élan Vital Für Alle
+        SELECT initcap('hello-world test_case'); -- Hello-world Test_case
+
 .. spark:function:: instr(string, substring) -> integer
 
     Returns the starting position of the first instance of ``substring`` in
@@ -184,7 +223,7 @@ String Functions
         SELECT ltrim('  data  '); -- "data  "
 
 .. spark:function:: ltrim(trimCharacters, string) -> varchar
-   :noindex:
+    :noindex:
 
     Removes specified leading characters from ``string``. The specified character
     is any character contained in ``trimCharacters``.
@@ -247,6 +286,45 @@ String Functions
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: randstr(length, seed) -> varchar
+
+    Returns a string of the specified ``length`` whose characters are chosen uniformly
+    at random from the following pool of characters: 0-9, a-z, A-Z.
+    Both ``length`` and ``seed`` must be non-null constants.
+    ``length`` must be a non-negative integer (SMALLINT or INT).
+    ``seed`` must be an integer (INT or BIGINT).
+    With the same ``seed`` and partition ID, the function produces a reproducible sequence
+    of outputs, though each row receives a different value from the sequence as the
+    internal generator advances.
+    The partition ID is retrieved from the ``spark_partition_id`` query configuration.
+    It's consistent with Spark's internal assignment for tasks.
+    Uses XORShift random number generator matching Spark's implementation.
+    Note: Spark's analyzer always provides a seed (either user-specified or
+    auto-generated), so only the seeded variant is implemented.
+    This function was added in Spark 4.0. ::
+
+        SELECT randstr(5, 0);  -- "ceV0P" (reproducible with seed)
+        SELECT randstr(10, 0); -- "ceV0PXaR2I"
+        SELECT randstr(0, 42); -- ""
+
+.. spark:function:: read_side_padding(string, limit) -> varchar
+
+    Right-pads the given string with spaces to the specified length ``limit``.
+    If the string's length is already greater than or equal to ``limit``, it is returned as-is.
+    Throws an exception if ``limit`` is not greater than 0.
+    Note: This function is not directly callable in Spark SQL, but is used internally for reading CHAR type columns. ::
+
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        read_side_padding("a", 3) -- "a  "
+        read_side_padding("abc", 3) -- "abc"
+        read_side_padding("abcd", 3) -- "abcd"
+        read_side_padding("世", 3) -- "世  "
+        read_side_padding("世界", 2) -- "世界"
+        read_side_padding("Привет", 8) -- "Привет  "
+        read_side_padding("Γειά", 5) -- "Γειά "
+        read_side_padding("Приветик", 6) -- "Приветик"
+        read_side_padding("a", 0) -- VeloxUserError: "The length limit must be greater than 0."
+
 .. spark:function:: repeat(input, n) -> varchar
 
     Returns the string which repeats ``input`` ``n`` times.
@@ -294,7 +372,7 @@ String Functions
         SELECT rtrim('  data  '); -- "  data"
 
 .. spark:function:: rtrim(trimCharacters, string) -> varchar
-   :noindex:
+    :noindex:
 
     Removes specified trailing characters from ``string``. The specified character
     is any character contained in ``trimCharacters``.
@@ -360,7 +438,7 @@ String Functions
     the meaning is to refer to the first character.Type of 'start' must be an INTEGER.
 
 .. spark:function:: substring(string, start, length) -> varchar
-   :noindex:
+    :noindex:
 
     Returns a substring from ``string`` of length ``length`` from the starting
     position ``start``. Positions start with ``1``. A negative starting
@@ -401,6 +479,26 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
 
+.. spark:function:: to_pretty_string(x) -> varchar
+
+    Returns pretty string for ``x``. All scalar types are supported.
+    Adjusts the timestamp input to the given time zone if set through ``session_timezone`` config.
+    The result is different from that of casting ``x`` as string in the following aspects.
+
+    - It prints null input as "NULL" rather than producing null output.
+
+    - It prints binary values using the hex format.
+
+    ::
+
+        SELECT to_pretty_string(4); -- "4"
+        SELECT to_pretty_string(cast("1.0" as float)); -- "1.0"
+        SELECT to_pretty_string("spark"); -- "spark"
+        SELECT to_pretty_string(cast('abcdef' as binary)); -- "[61 62 63 64 65 66]"
+        SELECT to_pretty_string(null); -- "NULL"
+        SELECT to_pretty_string(cast(2347589 as timestamp)); -- "1970-01-28 12:06:29"
+        SELECT to_pretty_string(cast('2024-05-08' as date)); -- "2024-05-08"
+
 .. spark:function:: translate(string, match, replace) -> varchar
 
     Returns a new translated string. It translates the character in ``string`` by a
@@ -425,7 +523,7 @@ String Functions
         SELECT trim('  data  '); -- "data"
 
 .. spark:function:: trim(trimCharacters, string) -> varchar
-   :noindex:
+    :noindex:
 
     Removes specified leading and trailing characters from ``string``.
     The specified character is any character contained in ``trimCharacters``.

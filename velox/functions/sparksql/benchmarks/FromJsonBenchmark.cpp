@@ -17,6 +17,7 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
+#include "velox/core/Expressions.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
@@ -41,11 +42,10 @@ class FromJsonBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
     auto rowVector = makeData(input);
 
-    std::vector<core::TypedExprPtr> inputs = {
-        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")};
-
     auto typedExpr = std::make_shared<const core::CallTypedExpr>(
-        outputType, std::move(inputs), "from_json");
+        outputType,
+        "from_json",
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"));
     exec::ExprSet exprSet({typedExpr}, &execCtx_);
     suspender.dismiss();
 

@@ -16,6 +16,7 @@
 #include <string>
 #include "velox/functions/prestosql/IPAddressFunctions.h"
 #include "velox/functions/prestosql/UuidFunctions.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogRegistration.h"
 
 namespace facebook::velox::functions {
 
@@ -29,7 +30,12 @@ extern void registerComparisonFunctions(const std::string& prefix);
 extern void registerDateTimeFunctions(const std::string& prefix);
 extern void registerGeneralFunctions(const std::string& prefix);
 extern void registerHyperLogFunctions(const std::string& prefix);
+extern void registerKHyperLogLogFunctions(const std::string& prefix);
 extern void registerTDigestFunctions(const std::string& prefix);
+extern void registerQDigestFunctions(const std::string& prefix);
+extern void registerSetDigestFunctions(const std::string& prefix);
+extern void registerSfmSketchFunctions(const std::string& prefix);
+extern void registerEnumFunctions(const std::string& prefix);
 extern void registerIntegerFunctions(const std::string& prefix);
 extern void registerFloatingPointFunctions(const std::string& prefix);
 extern void registerJsonFunctions(const std::string& prefix);
@@ -42,7 +48,10 @@ extern void registerMapAllowingDuplicates(
     const std::string& name,
     const std::string& prefix);
 extern void registerBingTileFunctions(const std::string& prefix);
+#ifdef VELOX_ENABLE_GEO
 extern void registerGeometryFunctions(const std::string& prefix);
+extern void registerSphericalGeographyFunctions();
+#endif
 extern void registerInternalArrayFunctions();
 
 namespace prestosql {
@@ -80,6 +89,18 @@ void registerTDigestFunctions(const std::string& prefix) {
   functions::registerTDigestFunctions(prefix);
 }
 
+void registerQDigestFunctions(const std::string& prefix) {
+  functions::registerQDigestFunctions(prefix);
+}
+
+void registerSfmSketchFunctions(const std::string& prefix) {
+  functions::registerSfmSketchFunctions(prefix);
+}
+
+void registerEnumFunctions(const std::string& prefix) {
+  functions::registerEnumFunctions(prefix);
+}
+
 void registerIntegerFunctions(const std::string& prefix) {
   functions::registerIntegerFunctions(prefix);
 }
@@ -92,9 +113,15 @@ void registerBingTileFunctions(const std::string& prefix) {
   functions::registerBingTileFunctions(prefix);
 }
 
+#ifdef VELOX_ENABLE_GEO
 void registerGeometryFunctions(const std::string& prefix) {
   functions::registerGeometryFunctions(prefix);
 }
+
+void registerSphericalGeographyFunctions() {
+  functions::registerSphericalGeographyFunctions();
+}
+#endif
 
 void registerGeneralFunctions(const std::string& prefix) {
   functions::registerGeneralFunctions(prefix);
@@ -121,6 +148,7 @@ void registerBitwiseFunctions(const std::string& prefix) {
 }
 
 void registerAllScalarFunctions(const std::string& prefix) {
+  registerP4HyperLogLogType();
   registerArithmeticFunctions(prefix);
   registerCheckedArithmeticFunctions(prefix);
   registerComparisonFunctions(prefix);
@@ -128,11 +156,19 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerArrayFunctions(prefix);
   registerJsonFunctions(prefix);
   registerHyperLogFunctions(prefix);
+  registerKHyperLogLogFunctions(prefix);
   registerTDigestFunctions(prefix);
+  registerQDigestFunctions(prefix);
+  registerSfmSketchFunctions(prefix);
+  registerSetDigestFunctions(prefix);
+  registerEnumFunctions(prefix);
   registerIntegerFunctions(prefix);
   registerFloatingPointFunctions(prefix);
   registerBingTileFunctions(prefix);
+#ifdef VELOX_ENABLE_GEO
   registerGeometryFunctions(prefix);
+  registerSphericalGeographyFunctions();
+#endif
   registerGeneralFunctions(prefix);
   registerDateTimeFunctions(prefix);
   registerURLFunctions(prefix);

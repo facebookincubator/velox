@@ -410,7 +410,7 @@ void SelectiveColumnReader::compactScalarValues<bool, bool>(
   values_->setSize(bits::nbytes(numValues_));
 }
 
-char* SelectiveColumnReader::copyStringValue(folly::StringPiece value) {
+char* SelectiveColumnReader::copyStringValue(std::string_view value) {
   uint64_t size = value.size();
   if (stringBuffers_.empty() || rawStringUsed_ + size > rawStringSize_) {
     auto bytes = std::max(size, kStringBufferSize);
@@ -431,7 +431,7 @@ char* SelectiveColumnReader::copyStringValue(folly::StringPiece value) {
   return rawStringBuffer_ + start;
 }
 
-void SelectiveColumnReader::addStringValue(folly::StringPiece value) {
+void SelectiveColumnReader::addStringValue(std::string_view value) {
   auto copy = copyStringValue(value);
   reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
       StringView(copy, value.size());
@@ -449,8 +449,11 @@ void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {
 
 void SelectiveColumnReader::resetFilterCaches() {
   if (scanState_.filterCache.empty() && scanSpec_->hasFilter()) {
-    scanState_.filterCache.resize(std::max<int32_t>(
-        1, scanState_.dictionary.numValues + scanState_.dictionary2.numValues));
+    scanState_.filterCache.resize(
+        std::max<int32_t>(
+            1,
+            scanState_.dictionary.numValues +
+                scanState_.dictionary2.numValues));
     scanState_.updateRawState();
   }
   if (!scanState_.filterCache.empty()) {
@@ -476,7 +479,7 @@ void SelectiveColumnReader::addSkippedParentNulls(
     int64_t from,
     int64_t to,
     int32_t numNulls) {
-  auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
+  const auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
   if (rowsPerRowGroup.has_value() &&
       from / rowsPerRowGroup.value() >
           parentNullsRecordedTo_ / rowsPerRowGroup.value()) {
@@ -484,7 +487,7 @@ void SelectiveColumnReader::addSkippedParentNulls(
     parentNullsRecordedTo_ = from;
     numParentNulls_ = 0;
   }
-  if (parentNullsRecordedTo_) {
+  if (parentNullsRecordedTo_ > 0) {
     VELOX_CHECK_EQ(parentNullsRecordedTo_, from);
   }
   numParentNulls_ += numNulls;

@@ -20,11 +20,7 @@
 #include "folly/io/IOBuf.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace encryption {
+namespace facebook::velox::dwio::common::encryption {
 
 enum class EncryptionProvider { Unknown = 0, CryptoService };
 
@@ -64,7 +60,7 @@ class Encrypter {
   virtual const std::string& getKey() const = 0;
 
   virtual std::unique_ptr<folly::IOBuf> encrypt(
-      folly::StringPiece input) const = 0;
+      std::string_view input) const = 0;
 
   virtual std::unique_ptr<Encrypter> clone() const = 0;
 };
@@ -87,7 +83,7 @@ class Decrypter {
   virtual bool isKeyLoaded() const = 0;
 
   virtual std::unique_ptr<folly::IOBuf> decrypt(
-      folly::StringPiece input) const = 0;
+      std::string_view input) const = 0;
 
   virtual std::unique_ptr<Decrypter> clone() const = 0;
 };
@@ -108,7 +104,7 @@ class DummyDecrypter : public Decrypter {
   }
 
   std::unique_ptr<folly::IOBuf> decrypt(
-      folly::StringPiece /* unused */) const override {
+      std::string_view /* unused */) const override {
     DWIO_RAISE("Failed to access encrypted data");
   }
 
@@ -127,8 +123,4 @@ class DummyDecrypterFactory : public DecrypterFactory {
   }
 };
 
-} // namespace encryption
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::encryption

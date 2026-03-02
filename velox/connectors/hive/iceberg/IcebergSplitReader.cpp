@@ -26,14 +26,13 @@ namespace facebook::velox::connector::hive::iceberg {
 
 IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const hive::HiveConnectorSplit>& hiveSplit,
-    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
-        partitionKeys,
+    const HiveTableHandlePtr& hiveTableHandle,
+    const HiveColumnHandleMap* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
@@ -44,8 +43,8 @@ IcebergSplitReader::IcebergSplitReader(
           connectorQueryCtx,
           hiveConfig,
           readerOutputType,
+          ioStatistics,
           ioStats,
-          fsStats,
           fileHandleFactory,
           executor,
           scanSpec),
@@ -55,7 +54,8 @@ IcebergSplitReader::IcebergSplitReader(
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   createReader();
   if (emptySplit_) {
     return;
@@ -67,10 +67,9 @@ void IcebergSplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(std::move(metadataFilter), std::move(rowType));
+  createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 
-  std::shared_ptr<const HiveIcebergSplit> icebergSplit =
-      std::dynamic_pointer_cast<const HiveIcebergSplit>(hiveSplit_);
+  auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(hiveSplit_);
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
@@ -85,10 +84,10 @@ void IcebergSplitReader::prepareSplit(
                 hiveSplit_->filePath,
                 fileHandleFactory_,
                 connectorQueryCtx_,
-                executor_,
+                ioExecutor_,
                 hiveConfig_,
+                ioStatistics_,
                 ioStats_,
-                fsStats_,
                 runtimeStats,
                 splitOffset_,
                 hiveSplit_->connectorId));
@@ -110,7 +109,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   }
 
   const auto actualSize = baseRowReader_->nextReadSize(size);
-
+  baseReadOffset_ = baseRowReader_->nextRowNumber() - splitOffset_;
   if (actualSize == dwio::common::RowReader::kAtEnd) {
     return 0;
   }
@@ -137,9 +136,61 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
-  baseReadOffset_ += rowsScanned;
 
   return rowsScanned;
+}
+
+std::vector<TypePtr> IcebergSplitReader::adaptColumns(
+    const RowTypePtr& fileType,
+    const RowTypePtr& tableSchema) const {
+  std::vector<TypePtr> columnTypes = fileType->children();
+  auto& childrenSpecs = scanSpec_->children();
+  // Iceberg table stores all column's data in data file.
+  for (const auto& childSpec : childrenSpecs) {
+    const std::string& fieldName = childSpec->fieldName();
+    if (auto iter = hiveSplit_->infoColumns.find(fieldName);
+        iter != hiveSplit_->infoColumns.end()) {
+      auto infoColumnType = readerOutputType_->findChild(fieldName);
+      auto constant = newConstantFromString(
+          infoColumnType,
+          iter->second,
+          connectorQueryCtx_->memoryPool(),
+          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()),
+          false);
+      childSpec->setConstantValue(constant);
+    } else {
+      auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
+      auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+      if (outputTypeIdx.has_value() && fileTypeIdx.has_value()) {
+        childSpec->setConstantValue(nullptr);
+        auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
+        columnTypes[*fileTypeIdx] = outputType;
+      } else if (!fileTypeIdx.has_value()) {
+        // Handle columns missing from the data file in two scenarios:
+        // 1. Schema evolution: Column was added after the data file was
+        // written and doesn't exist in older data files.
+        // 2. Partition columns: Hive migrated table. In Hive-written data
+        // files, partition column values are stored in partition metadata
+        // rather than in the data file itself, following Hive's partitioning
+        // convention.
+        if (auto it = hiveSplit_->partitionKeys.find(fieldName);
+            it != hiveSplit_->partitionKeys.end()) {
+          setPartitionValue(childSpec.get(), fieldName, it->second);
+        } else {
+          childSpec->setConstantValue(
+              BaseVector::createNullConstant(
+                  tableSchema->findChild(fieldName),
+                  1,
+                  connectorQueryCtx_->memoryPool()));
+        }
+      }
+    }
+  }
+
+  scanSpec_->resetCachedValues(false);
+
+  return columnTypes;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

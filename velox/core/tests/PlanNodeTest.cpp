@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <gtest/gtest.h>
-
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -46,8 +46,7 @@ TEST_F(PlanNodeTest, findFirstNode) {
   auto rowType = ROW({"name1"}, {BIGINT()});
 
   std::shared_ptr<connector::ConnectorTableHandle> tableHandle;
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments;
+  connector::ColumnHandleMap assignments;
 
   std::shared_ptr<PlanNode> tableScan3 =
       std::make_shared<TableScanNode>("3", rowType, tableHandle, assignments);
@@ -84,6 +83,55 @@ TEST_F(PlanNodeTest, findFirstNode) {
       PlanNode::findFirstNode(project0.get(), [](const PlanNode* node) {
         return node->name() == "Unknown";
       }));
+}
+
+TEST_F(PlanNodeTest, findNodeById) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  auto filter = std::make_shared<FilterNode>(
+      "3",
+      std::make_shared<CallTypedExpr>(
+          BOOLEAN(),
+          "gt",
+          std::make_shared<FieldAccessTypedExpr>(DOUBLE(), "a"),
+          std::make_shared<ConstantTypedExpr>(DOUBLE(), 0.5)),
+      project);
+
+  auto limit = std::make_shared<LimitNode>("4", 0, 10, false, filter);
+
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "1"), values.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "2"), project.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "3"), filter.get());
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "4"), limit.get());
+
+  ASSERT_EQ(PlanNode::findNodeById(limit.get(), "5"), nullptr);
+  ASSERT_EQ(PlanNode::findNodeById(project.get(), "4"), nullptr);
+}
+
+TEST_F(PlanNodeTest, is) {
+  auto values = std::make_shared<ValuesNode>("1", std::vector<RowVectorPtr>{});
+  auto project = std::make_shared<ProjectNode>(
+      "2",
+      std::vector<std::string>{"a", "b"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+          std::make_shared<CallTypedExpr>(DOUBLE(), "rand"),
+      },
+      values);
+
+  ASSERT_TRUE(values->is<ValuesNode>());
+  ASSERT_FALSE(values->is<ProjectNode>());
+
+  ASSERT_FALSE(project->is<ValuesNode>());
+  ASSERT_TRUE(project->is<ProjectNode>());
 }
 
 TEST_F(PlanNodeTest, sortOrder) {
@@ -133,6 +181,7 @@ TEST_F(PlanNodeTest, duplicateSortKeys) {
           "orderBy", sortingKeys, sortingOrders, false, nullptr),
       "Duplicate sorting keys are not allowed: c0");
 }
+
 class TestIndexTableHandle : public connector::ConnectorTableHandle {
  public:
   TestIndexTableHandle()
@@ -164,7 +213,32 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   }
 };
 
-TEST_F(PlanNodeTest, isIndexLookupJoin) {
+TEST_F(PlanNodeTest, nestedLoopJoin) {
+  auto leftData = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      });
+
+  auto rightData = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  core::PlanNodeIdGenerator planNodeIdGenerator;
+  auto nextId = [&planNodeIdGenerator]() { return planNodeIdGenerator.next(); };
+
+  auto leftValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{leftData});
+  auto rightValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{rightData});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<NestedLoopJoinNode>(
+          nextId(), leftValues, rightValues, ROW({"a"}, VARCHAR())),
+      "Join output column type must match the input type: VARCHAR vs. INTEGER");
+}
+
+TEST_F(PlanNodeTest, indexLookupJoin) {
   const auto rowType = ROW({"name"}, {BIGINT()});
   const auto valueNode = std::make_shared<ValuesNode>("orderBy", rowData_);
   ASSERT_FALSE(isIndexLookupJoin(valueNode.get()));
@@ -174,34 +248,341 @@ TEST_F(PlanNodeTest, isIndexLookupJoin) {
   const RowTypePtr outputType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto indexTableHandle = std::make_shared<TestIndexTableHandle>();
   const auto probeNode = std::make_shared<TableScanNode>(
-      "tableScan-probe",
-      probeType,
-      nullptr,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>{});
+      "tableScan-probe", probeType, nullptr, connector::ColumnHandleMap{});
   ASSERT_FALSE(isIndexLookupJoin(probeNode.get()));
   const auto buildNode = std::make_shared<TableScanNode>(
       "tableScan-build",
       buildType,
       indexTableHandle,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>{});
+      connector::ColumnHandleMap{});
   ASSERT_FALSE(isIndexLookupJoin(buildNode.get()));
   const std::vector<FieldAccessTypedExprPtr> leftKeys{
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
   const std::vector<FieldAccessTypedExprPtr> rightKeys{
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c1")};
-  const auto indexJoinNode = std::make_shared<IndexLookupJoinNode>(
-      "indexJoinNode",
-      core::JoinType::kInner,
-      leftKeys,
-      rightKeys,
-      std::vector<IndexLookupConditionPtr>{},
-      probeNode,
-      buildNode,
-      outputType);
-  ASSERT_TRUE(isIndexLookupJoin(indexJoinNode.get()));
+  {
+    const auto indexJoinNodeWithInnerJoin =
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kInner,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/false,
+            probeNode,
+            buildNode,
+            outputType);
+    ASSERT_TRUE(isIndexLookupJoin(indexJoinNodeWithInnerJoin.get()));
+    ASSERT_FALSE(indexJoinNodeWithInnerJoin->hasMarker());
+    ASSERT_EQ(indexJoinNodeWithInnerJoin->filter(), nullptr);
+    ASSERT_EQ(
+        indexJoinNodeWithInnerJoin->toString(/*detailed=*/true),
+        "-- IndexLookupJoin[indexJoinNode][INNER c0=c1] -> c0:BIGINT, c1:BIGINT\n");
+  }
+  {
+    const RowTypePtr outputTypeWithMatchColumn =
+        ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BOOLEAN()});
+    const auto indexJoinNodeWithLeftJoin =
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
+            probeNode,
+            buildNode,
+            outputTypeWithMatchColumn);
+    ASSERT_TRUE(isIndexLookupJoin(indexJoinNodeWithLeftJoin.get()));
+    ASSERT_TRUE(indexJoinNodeWithLeftJoin->hasMarker());
+    ASSERT_EQ(indexJoinNodeWithLeftJoin->filter(), nullptr);
+    ASSERT_EQ(
+        indexJoinNodeWithLeftJoin->toString(/*detailed=*/true),
+        "-- IndexLookupJoin[indexJoinNode][LEFT c0=c1] -> c0:BIGINT, c1:BIGINT, c2:BOOLEAN\n");
+  }
+  {
+    // Test IndexLookupJoinNode with filter
+    const auto filterExpr = std::make_shared<core::FieldAccessTypedExpr>(
+        BOOLEAN(), "filter_column");
+    const auto indexJoinNodeWithFilter = std::make_shared<IndexLookupJoinNode>(
+        "indexJoinNodeWithFilter",
+        core::JoinType::kInner,
+        leftKeys,
+        rightKeys,
+        std::vector<IndexLookupConditionPtr>{},
+        /*filter=*/filterExpr,
+        /*hasMarker=*/false,
+        probeNode,
+        buildNode,
+        outputType);
+    ASSERT_TRUE(isIndexLookupJoin(indexJoinNodeWithFilter.get()));
+    ASSERT_FALSE(indexJoinNodeWithFilter->hasMarker());
+    ASSERT_EQ(indexJoinNodeWithFilter->filter(), filterExpr);
+    ASSERT_EQ(
+        indexJoinNodeWithFilter->toString(/*detailed=*/true),
+        "-- IndexLookupJoin[indexJoinNodeWithFilter][INNER c0=c1, filter: \"filter_column\"] -> c0:BIGINT, c1:BIGINT\n");
+  }
+  // Error case.
+  {
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kInner,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
+            probeNode,
+            buildNode,
+            outputType),
+        "Index join match column can only present for LEFT but not INNER");
+  }
+  {
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
+            probeNode,
+            buildNode,
+            outputType),
+        "The last output column must be boolean type if match column is present");
+  }
+  {
+    const RowTypePtr outputTypeWithDuplicateMatchColumn =
+        ROW({"c0", "c1", "c0"}, {BIGINT(), BIGINT(), BOOLEAN()});
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/true,
+            probeNode,
+            buildNode,
+            outputTypeWithDuplicateMatchColumn),
+        "");
+  }
+  {
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/false,
+            probeNode,
+            buildNode,
+            ROW({"c0", "c1"}, {VARCHAR(), BIGINT()})),
+        "Join output column type must match the input type: VARCHAR vs. BIGINT");
+  }
+}
+
+TEST_F(PlanNodeTest, partitionedOutputNode) {
+  const PlanNodeId id{"partitionedOutputNode"};
+  const PartitionedOutputNode::Kind kind =
+      PartitionedOutputNode::Kind::kPartitioned;
+  const std::vector<TypedExprPtr> keys = {
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const PartitionFunctionSpecPtr partitionFunctionSpec =
+      std::make_shared<GatherPartitionFunctionSpec>();
+  const VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto;
+  PlanNodePtr source = std::make_shared<ValuesNode>("source", rowData_);
+
+  {
+    // Creating a PartitionedOutputNode with a single partition, empty keys, and
+    // a null partition function should succeed.
+    PartitionedOutputNode node(
+        id,
+        kind,
+        {},
+        1, // numPartitions
+        true, // replicateNullsAndAny
+        nullptr, // partitionFunctionSpec
+        rowType_,
+        serdeKind,
+        source);
+    // Attempting to dereference the nullptr should fail.
+    ASSERT_EQ(node.partitionFunctionSpecPtr(), nullptr);
+    VELOX_ASSERT_THROW(node.partitionFunctionSpec(), "");
+  }
+
+  // Creating a PartitionedOutputNode that is not partitioned and has empty keys
+  // and a partition function (even kinds other than partitioned still use a
+  // partition function) should succeed.
+  {
+    PartitionedOutputNode node(
+        id,
+        PartitionedOutputNode::Kind::kArbitrary,
+        {},
+        10, // numPartitions
+        true, // replicateNullsAndAny
+        partitionFunctionSpec,
+        rowType_,
+        serdeKind,
+        source);
+    // We should be able to dereference the partition function spec.
+    ASSERT_EQ(node.partitionFunctionSpecPtr(), partitionFunctionSpec);
+    ASSERT_EQ(
+        node.partitionFunctionSpec().toString(),
+        partitionFunctionSpec->toString());
+  }
+
+  // Creating a PartitionedOutputNode with numPartitions = 0 should throw.
+  VELOX_ASSERT_THROW(
+      PartitionedOutputNode(
+          id,
+          kind,
+          keys,
+          0, // numPartitions
+          true, // replicateNullsAndAny
+          partitionFunctionSpec,
+          rowType_,
+          serdeKind,
+          source),
+      "");
+
+  // Creating a PartitionedOutputNode with numPartitions = 1 and non-empty
+  // keys should throw.
+  VELOX_ASSERT_THROW(
+      PartitionedOutputNode(
+          id,
+          kind,
+          keys,
+          1, // numPartitions
+          true, // replicateNullsAndAny
+          partitionFunctionSpec,
+          rowType_,
+          serdeKind,
+          source),
+      "Non-empty partitioning keys require more than one partition");
+
+  // Creating a PartitionedOutputNode with numPartitions > 1 and no partition
+  // function should throw.
+  VELOX_ASSERT_THROW(
+      PartitionedOutputNode(
+          id,
+          kind,
+          keys,
+          5, // numPartitions
+          true, // replicateNullsAndAny
+          nullptr, // partitionFunctionSpec
+          rowType_,
+          serdeKind,
+          source),
+      "Partition function spec must be specified when the number of destinations is more than 1.");
+
+  // Creating a PartitionedOutputNode that is not partitioned with non-empty
+  // keys should throw.
+  VELOX_ASSERT_THROW(
+      PartitionedOutputNode(
+          id,
+          PartitionedOutputNode::Kind::kArbitrary,
+          keys,
+          5, // numPartitions
+          true, // replicateNullsAndAny
+          partitionFunctionSpec,
+          rowType_,
+          serdeKind,
+          source),
+      "partitioning doesn't allow for partitioning keys");
+}
+
+TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
+  auto values = std::make_shared<ValuesNode>("values", rowData_);
+
+  const std::vector<FieldAccessTypedExprPtr> groupingKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<std::string> aggregateNames{"sum"};
+  const std::vector<AggregationNode::Aggregate> aggregates{
+      {.call = std::make_shared<CallTypedExpr>(BIGINT(), "sum"),
+       .rawInputTypes = {BIGINT()}}};
+
+  // noGroupsSpanBatches=true with preGroupedKeys (streaming aggregation) should
+  // succeed and the accessor should return true.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/true,
+        values);
+    ASSERT_TRUE(aggNode->noGroupsSpanBatches());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum() noGroupsSpanBatches] -> c0:BIGINT, sum:BIGINT\n");
+  }
+
+  // noGroupsSpanBatches=false with preGroupedKeys should succeed and the
+  // accessor should return false.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        preGroupedKeys,
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        values);
+    ASSERT_FALSE(aggNode->noGroupsSpanBatches());
+    ASSERT_TRUE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE STREAMING [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
+
+  // noGroupsSpanBatches=true without preGroupedKeys (non-streaming aggregation)
+  // should fail.
+  VELOX_ASSERT_THROW(
+      std::make_shared<AggregationNode>(
+          "agg",
+          AggregationNode::Step::kSingle,
+          groupingKeys,
+          /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+          aggregateNames,
+          aggregates,
+          /*ignoreNullKeys=*/false,
+          /*noGroupsSpanBatches=*/true,
+          values),
+      "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
+
+  // noGroupsSpanBatches=false without preGroupedKeys should succeed.
+  {
+    auto aggNode = std::make_shared<AggregationNode>(
+        "agg",
+        AggregationNode::Step::kSingle,
+        groupingKeys,
+        /*preGroupedKeys=*/std::vector<FieldAccessTypedExprPtr>{},
+        aggregateNames,
+        aggregates,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
+        values);
+    ASSERT_FALSE(aggNode->noGroupsSpanBatches());
+    ASSERT_FALSE(aggNode->isPreGrouped());
+    ASSERT_EQ(
+        aggNode->toString(true),
+        "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
+  }
 }
 } // namespace

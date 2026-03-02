@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/aggregates/AverageAggregate.h"
 #include "velox/functions/lib/aggregates/AverageAggregateBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -31,52 +30,56 @@ namespace facebook::velox::aggregate::prestosql {
 ///     ALL INTs        |     DOUBLE          |    DOUBLE
 ///     DECIMAL         |     DECIMAL         |    DECIMAL
 void registerAverageAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(double,bigint)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(double,bigint)")
+            .argumentType(inputType)
+            .build());
   }
 
   // Interval input type in Presto has special case and returns INTERVAL, not
   // DOUBLE.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("interval day to second")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("interval day to second")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("interval day to second")
+          .intermediateType("row(double,bigint)")
+          .argumentType("interval day to second")
+          .build());
 
   // Real input type in Presto has special case and returns REAL, not DOUBLE.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("real")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("real")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("real")
+          .intermediateType("row(double,bigint)")
+          .argumentType("real")
+          .build());
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("varbinary")
-                           .returnType("DECIMAL(a_precision, a_scale)")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("varbinary")
+          .returnType("DECIMAL(a_precision, a_scale)")
+          .build());
 
-  auto name = prefix + kAvg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         auto inputType = argTypes[0];
@@ -156,7 +159,7 @@ void registerAverageAggregate(
           }
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

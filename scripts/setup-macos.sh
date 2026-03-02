@@ -41,8 +41,9 @@ export OS_CXXFLAGS
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz xxhash zstd"
-
+# gflags and glog are installed from source to ensure version compatibility.
+# Homebrew's glog 0.7.x has breaking API changes that are incompatible with folly.
+MACOS_VELOX_DEPS="bison flex googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz xxhash zstd"
 MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"
@@ -87,12 +88,13 @@ function install_build_prerequisites {
     python3 -m venv "${PYTHON_VENV}"
   fi
   source "${PYTHON_VENV}"/bin/activate
-  pip3 install cmake-format regex pyyaml
+  pip3 install regex pyyaml
 
   # Install ccache
-  curl -L https://github.com/ccache/ccache/releases/download/v"${CCACHE_VERSION}"/ccache-"${CCACHE_VERSION}"-darwin.tar.gz >ccache.tar.gz
+  curl -L https://github.com/ccache/ccache/releases/download/v"${CCACHE_VERSION}"/ccache-"${CCACHE_VERSION}"-darwin.tar.gz -o ccache.tar.gz
   tar -xf ccache.tar.gz
-  mv ccache-"${CCACHE_VERSION}"-darwin/ccache /usr/local/bin/
+  $SUDO mkdir -p "$INSTALL_PREFIX"/bin
+  $SUDO mv ccache-"${CCACHE_VERSION}"-darwin/ccache "$INSTALL_PREFIX"/bin
   rm -rf ccache-"${CCACHE_VERSION}"-darwin ccache.tar.gz
 }
 
@@ -100,6 +102,11 @@ function install_velox_deps_from_brew {
   for pkg in ${MACOS_VELOX_DEPS}; do
     install_from_brew "${pkg}"
   done
+}
+
+function install_gflags {
+  wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
 }
 
 function install_s3 {
@@ -110,11 +117,11 @@ function install_s3 {
 }
 
 function install_gcs {
-  install_gcs-sdk-cpp
+  install_gcs_sdk_cpp
 }
 
 function install_abfs {
-  install_azure-storage-sdk-cpp
+  install_azure_storage_sdk_cpp
 }
 
 function install_hdfs {
@@ -150,7 +157,6 @@ function install_faiss {
     install_faiss_deps
 
     wget_and_untar "https://github.com/facebookresearch/faiss/archive/refs/tags/v${FAISS_VERSION}.tar.gz" faiss
-
     local cmake_args
     cmake_args=(
       -DFAISS_ENABLE_GPU=OFF
@@ -176,6 +182,8 @@ function install_velox_deps {
   run_and_time install_ranges_v3
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_gflags
+  run_and_time install_glog
   run_and_time install_boost
   run_and_time install_fmt
   run_and_time install_fast_float

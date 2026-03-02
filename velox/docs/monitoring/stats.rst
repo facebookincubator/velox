@@ -193,6 +193,28 @@ These stats are reported only by IndexLookupJoin operator
      -
      - The number of lazy decoded result batches returned from the storage client.
 
+Merge
+-----
+These stats are reported only by Merge operator
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - streamingSourceReadWallNanos
+     - nanos
+     - The number of a spillable operators that don't support spill because of
+       spill limitation. For instance, a window operator do not support spill
+       if there is no partitioning.
+   * - spilledSourceReadWallNanos
+     - nanos
+     - The running wall time of the merge operator reading from the spilled source to
+       produce the final output. This only applies when spilling is enabled for local
+       merge.
+
 Spilling
 --------
 These stats are reported by operators that support spilling.
@@ -308,3 +330,73 @@ These stats are reported by IterativeVectorSerializer.
    * - compressionSkippedBytes
      -
      - The number of bytes that skip in-efficient compression.
+
+Connector
+---------
+These stats are reported only by connector data or index sources.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - ioWaitWallNanos
+     - nanos
+     - Total time spent by query processing threads waiting for I/O operations
+       to complete. This includes waiting for synchronously issued I/O or for
+       in-progress read-ahead operations to finish.
+   * - storageReadWallNanos
+     - nanos
+     - Time spent waiting for direct remote storage reads (e.g., S3, HDFS).
+       This is a component of ioWaitWallNanos.
+   * - ssdCacheReadWallNanos
+     - nanos
+     - Time spent waiting for SSD cache reads. This is a component of
+       ioWaitWallNanos.
+   * - cacheWaitWallNanos
+     - nanos
+     - Time spent waiting for cache entries that are being loaded by another
+       thread (EXCLUSIVE state). This is a component of ioWaitWallNanos.
+   * - coalescedSsdLoadWallNanos
+     - nanos
+     - Time spent waiting for coalesced loads from SSD cache. This occurs when
+       multiple requests are combined into a single SSD read operation.
+       This is a component of ioWaitWallNanos.
+   * - coalescedStorageLoadWallNanos
+     - nanos
+     - Time spent waiting for coalesced loads from remote storage. This occurs
+       when multiple requests are combined into a single remote storage read.
+       This is a component of ioWaitWallNanos.
+   * - totalRemainingFilterWallNanos
+     - nanos
+     - The total walltime in nanoseconds that the data or index connector do the remaining filtering.
+   * - numIndexFilterConversions
+     -
+     - The number of index columns that were converted from ScanSpec filters to
+       index bounds for index-based filtering (e.g., cluster index pruning in
+       Nimble). A value greater than zero indicates filters were successfully
+       converted to leverage file index structures for row pruning.
+   * - numStripeLoads
+     -
+     - The number of times a stripe has been loaded during index lookup. This
+       metric helps track the I/O efficiency of index-based reads, where lower
+       values indicate better stripe reuse across lookups.
+   * - numIndexLookupRequests
+     -
+     - The number of index lookup requests submitted in startLookup(). Each
+       request corresponds to one set of index bounds and may match rows across
+       multiple stripes.
+   * - numIndexLookupStripes
+     -
+     - The total number of stripes that need to be read for all index lookup
+       requests. Multiple requests may share the same stripe, and each shared
+       stripe is counted once per request that needs it.
+   * - numIndexLookupReadSegments
+     -
+     - The total number of read segments across all stripes during index lookup.
+       A read segment is a contiguous row range within a stripe that needs to be
+       read. When filters are present, overlapping request ranges are split at
+       boundaries to enable per-request output tracking. Without filters,
+       overlapping ranges are merged to minimize I/O.

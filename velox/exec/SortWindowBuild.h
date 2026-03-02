@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/WindowBuild.h"
@@ -32,7 +33,8 @@ class SortWindowBuild : public WindowBuild {
       common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      folly::Synchronized<OperatorStats>* opStats,
+      exec::SpillStats* spillStats);
 
   ~SortWindowBuild() override {
     pool_->release();
@@ -45,9 +47,13 @@ class SortWindowBuild : public WindowBuild {
 
   void addInput(RowVectorPtr input) override;
 
+  void addDecodedInputRow(
+      std::vector<DecodedVector>& decodedInputVectors,
+      vector_size_t row);
+
   void spill() override;
 
-  std::optional<common::SpillStats> spilledStats() const override;
+  std::optional<exec::SpillStats> spilledStats() const override;
 
   void noMoreInput() override;
 
@@ -55,9 +61,9 @@ class SortWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
- private:
   void ensureInputFits(const RowVectorPtr& input);
 
+ private:
   void ensureSortFits();
 
   void setupSpiller();
@@ -75,8 +81,10 @@ class SortWindowBuild : public WindowBuild {
   // Find the next partition start row from start.
   vector_size_t findNextPartitionStartRow(vector_size_t start);
 
-  // Reads next partition from spilled data into 'data_' and 'sortedRows_'.
-  void loadNextPartitionFromSpill();
+  // Load the next partition batch if needed. If current partition batch is not
+  // entirely consumed, return directly. Otherwise, read next partition batch
+  // from spilled data into 'data_' and set pointers in 'sortedRows_'.
+  void loadNextPartitionBatchFromSpill();
 
   const size_t numPartitionKeys_;
 
@@ -92,7 +100,9 @@ class SortWindowBuild : public WindowBuild {
   // Config for Prefix-sort.
   const common::PrefixSortConfig prefixSortConfig_;
 
-  folly::Synchronized<common::SpillStats>* const spillStats_;
+  folly::Synchronized<OperatorStats>* const opStats_;
+
+  exec::SpillStats* const spillStats_;
 
   // allKeyInfo_ is a combination of (partitionKeyInfo_ and sortKeyInfo_).
   // It is used to perform a full sorting of the input rows to be able to
@@ -121,5 +131,8 @@ class SortWindowBuild : public WindowBuild {
 
   // Used to sort-merge spilled data.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge_;
+
+  // Number of batches of whole partitions read from spilled data.
+  uint64_t numSpillReadBatches_ = 0;
 };
 } // namespace facebook::velox::exec

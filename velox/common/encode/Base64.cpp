@@ -187,14 +187,13 @@ size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
 
 // static
 void Base64::encode(const char* input, size_t inputSize, char* output) {
-  encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64Charset, true, output);
+  encodeImpl(std::string_view(input, inputSize), kBase64Charset, true, output);
 }
 
 // static
 void Base64::encodeUrl(const char* input, size_t inputSize, char* output) {
   encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64UrlCharset, true, output);
+      std::string_view(input, inputSize), kBase64UrlCharset, true, output);
 }
 
 // static
@@ -249,13 +248,13 @@ void Base64::encodeImpl(
 }
 
 // static
-std::string Base64::encode(folly::StringPiece text) {
+std::string Base64::encode(std::string_view text) {
   return encodeImpl(text, kBase64Charset, true);
 }
 
 // static
 std::string Base64::encode(const char* input, size_t inputSize) {
-  return encode(folly::StringPiece(input, inputSize));
+  return encode(std::string_view(input, inputSize));
 }
 
 namespace {
@@ -308,7 +307,7 @@ std::string Base64::encode(const folly::IOBuf* inputBuffer) {
 }
 
 // static
-std::string Base64::decode(folly::StringPiece encodedText) {
+std::string Base64::decode(std::string_view encodedText) {
   std::string decodedResult;
   decode(std::make_pair(encodedText.data(), encodedText.size()), decodedResult);
   return decodedResult;
@@ -346,9 +345,10 @@ Expected<uint8_t> Base64::base64ReverseLookup(
     const ReverseIndex& reverseIndex) {
   auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
   if (reverseLookupValue >= 0x40) {
-    return folly::makeUnexpected(Status::UserError(
-        "decode() - invalid input string: invalid character '{}'",
-        encodedChar));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "decode() - invalid input string: invalid character '{}'",
+            encodedChar));
   }
   return reverseLookupValue;
 }
@@ -381,8 +381,9 @@ Expected<size_t> Base64::calculateDecodedSize(
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
       return folly::makeUnexpected(
-          Status::UserError("Base64::decode() - invalid input string: "
-                            "string length is not a multiple of 4."));
+          Status::UserError(
+              "Base64::decode() - invalid input string: "
+              "string length is not a multiple of 4."));
     }
 
     auto decodedSize =
@@ -403,9 +404,10 @@ Expected<size_t> Base64::calculateDecodedSize(
   // Adjust the needed size for extra bytes, if present
   if (extraBytes) {
     if (extraBytes == 1) {
-      return folly::makeUnexpected(Status::UserError(
-          "Base64::decode() - invalid input string: "
-          "string length cannot be 1 more than a multiple of 4."));
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Base64::decode() - invalid input string: "
+              "string length cannot be 1 more than a multiple of 4."));
     }
     decodedSize += (extraBytes * kBinaryBlockByteSize) / kEncodedBlockByteSize;
   }
@@ -431,8 +433,9 @@ Expected<size_t> Base64::decodeImpl(
 
   if (outputSize < decodedSize.value()) {
     return folly::makeUnexpected(
-        Status::UserError("Base64::decode() - invalid output string: "
-                          "output string is too small."));
+        Status::UserError(
+            "Base64::decode() - invalid output string: "
+            "output string is too small."));
   }
   outputSize = decodedSize.value();
 
@@ -492,13 +495,13 @@ Expected<size_t> Base64::decodeImpl(
 }
 
 // static
-std::string Base64::encodeUrl(folly::StringPiece text) {
+std::string Base64::encodeUrl(std::string_view text) {
   return encodeImpl(text, kBase64UrlCharset, false);
 }
 
 // static
 std::string Base64::encodeUrl(const char* input, size_t inputSize) {
-  return encodeUrl(folly::StringPiece(input, inputSize));
+  return encodeUrl(std::string_view(input, inputSize));
 }
 
 // static
@@ -521,7 +524,7 @@ Status Base64::decodeUrl(
 }
 
 // static
-std::string Base64::decodeUrl(folly::StringPiece encodedText) {
+std::string Base64::decodeUrl(std::string_view encodedText) {
   std::string decodedOutput;
   decodeUrl(
       std::make_pair(encodedText.data(), encodedText.size()), decodedOutput);
@@ -628,8 +631,9 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
     if (kBase64ReverseIndexTable[static_cast<uint8_t>(input[0])] >= 0x40) {
       return 0;
     }
-    return folly::makeUnexpected(Status::UserError(
-        "Input should at least have 2 bytes for base64 bytes."));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Input should at least have 2 bytes for base64 bytes."));
   }
   auto decodedSize = inputSize;
   // Compute how many true Base64 chars.
@@ -651,6 +655,83 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
   // Each 4-char block yields 3 bytes; subtract padding.
   decodedSize = 3 * ((decodedSize + 3) / 4) - paddings;
   return decodedSize;
+}
+
+// static
+void Base64::encodeMime(const char* input, size_t inputSize, char* output) {
+  // If there's nothing to encode, do nothing.
+  if (inputSize == 0) {
+    return;
+  }
+
+  const char* readPtr = input;
+  char* writePtr = output;
+  // Bytes per 76-char line.
+  const size_t bytesPerLine = (kMaxLineLength / 4) * 3;
+  size_t remaining = inputSize;
+
+  // Process full lines of up to 'bytesPerLine' bytes.
+  while (remaining >= 3) {
+    // Round down to a multiple of 3, but not more than one line.
+    size_t chunk = std::min(bytesPerLine, (remaining / 3) * 3);
+    const char* chunkEnd = readPtr + chunk;
+
+    // Encode each group of 3 bytes into 4 Base64 characters.
+    while (readPtr + 2 < chunkEnd) {
+      // Read three bytes separately to avoid undefined behavior.
+      uint8_t b0 = static_cast<uint8_t>(*readPtr++);
+      uint8_t b1 = static_cast<uint8_t>(*readPtr++);
+      uint8_t b2 = static_cast<uint8_t>(*readPtr++);
+      // Pack into a 24-bit value.
+      uint32_t trio = (static_cast<uint32_t>(b0) << 16) |
+          (static_cast<uint32_t>(b1) << 8) | static_cast<uint32_t>(b2);
+      // Emit four Base64 characters.
+      *writePtr++ = kBase64Charset[(trio >> 18) & 0x3F];
+      *writePtr++ = kBase64Charset[(trio >> 12) & 0x3F];
+      *writePtr++ = kBase64Charset[(trio >> 6) & 0x3F];
+      *writePtr++ = kBase64Charset[trio & 0x3F];
+    }
+
+    remaining -= chunk;
+
+    // Insert CRLF if we filled exactly one line and still have more data.
+    if (chunk == bytesPerLine && remaining > 0) {
+      *writePtr++ = kNewline[0];
+      *writePtr++ = kNewline[1];
+    }
+  }
+
+  // Handle the final 1 or 2 leftover bytes with padding.
+  if (remaining > 0) {
+    uint8_t b0 = static_cast<uint8_t>(*readPtr++);
+    // First Base64 character from the high 6 bits.
+    *writePtr++ = kBase64Charset[b0 >> 2];
+
+    if (remaining == 1) {
+      // Only one byte remains: produce two chars + two '=' paddings.
+      *writePtr++ = kBase64Charset[(b0 & 0x03) << 4];
+      *writePtr++ = kPadding;
+      *writePtr = kPadding;
+    } else {
+      // Two bytes remain: produce three chars + one '=' padding.
+      uint8_t b1 = static_cast<uint8_t>(*readPtr);
+      *writePtr++ = kBase64Charset[((b0 & 0x03) << 4) | (b1 >> 4)];
+      *writePtr++ = kBase64Charset[(b1 & 0x0F) << 2];
+      *writePtr = kPadding;
+    }
+  }
+}
+
+// static
+size_t Base64::calculateMimeEncodedSize(size_t inputSize) {
+  if (inputSize == 0) {
+    return 0;
+  }
+
+  size_t encodedSize = calculateEncodedSize(inputSize, true);
+  // Add CRLFs: one per full kMaxLineLength block.
+  encodedSize += (encodedSize - 1) / kMaxLineLength * kNewline.size();
+  return encodedSize;
 }
 
 } // namespace facebook::velox::encoding

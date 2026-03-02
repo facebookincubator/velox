@@ -58,7 +58,7 @@ class SelectiveStringDirectColumnReader
   template <bool hasNulls>
   void skipInDecode(int32_t numValues, int32_t current, const uint64_t* nulls);
 
-  folly::StringPiece readValue(int32_t length);
+  std::string_view readValue(int32_t length);
 
   template <bool hasNulls, typename Visitor>
   void decode(const uint64_t* nulls, Visitor visitor);

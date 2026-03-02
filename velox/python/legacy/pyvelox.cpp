@@ -88,8 +88,7 @@ static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
     facebook::velox::memory::MemoryPool* pool) {
   using NativeType = typename TypeTraits<T>::NativeType;
-  constexpr bool kNeedsHolder =
-      (T == TypeKind::VARCHAR || T == TypeKind::VARBINARY);
+  constexpr bool kNeedsHolder = is_string_kind(T);
 
   TypePtr type = createScalarType(T);
   auto result =
@@ -257,7 +256,7 @@ static void addExpressionBindings(
           "getInputs",
           [](IExprWrapper& e) {
             const std::vector<std::shared_ptr<const core::IExpr>>& inputs =
-                e.expr->getInputs();
+                e.expr->inputs();
             std::vector<IExprWrapper> wrapped_inputs;
             wrapped_inputs.resize(inputs.size());
             for (const std::shared_ptr<const core::IExpr>& input : inputs) {
@@ -291,8 +290,7 @@ static void addExpressionBindings(
           },
           "Evaluates the expression, taking in a map from names to input vectors")
       .def_static("from_string", [](std::string& str) {
-        parse::ParseOptions opts;
-        return IExprWrapper{parse::parseExpr(str, opts)};
+        return IExprWrapper{parse::DuckSqlExpressionsParser().parseExpr(str)};
       });
 }
 

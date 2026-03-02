@@ -32,7 +32,9 @@ class DictionaryVector : public SimpleVector<T> {
   DictionaryVector(const DictionaryVector&) = delete;
   DictionaryVector& operator=(const DictionaryVector&) = delete;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   static constexpr bool can_simd = std::is_same_v<T, int64_t>;
+#endif
 
   // Creates dictionary vector using base vector (dictionaryValues) and a set
   // of indices (dictionaryIndexArray).
@@ -53,7 +55,7 @@ class DictionaryVector : public SimpleVector<T> {
   DictionaryVector(
       velox::memory::MemoryPool* pool,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       VectorPtr dictionaryValues,
       BufferPtr dictionaryIndexArray,
       const SimpleVectorStats<T>& stats = {},
@@ -93,13 +95,13 @@ class DictionaryVector : public SimpleVector<T> {
     }
   }
 
-  const T valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
   /**
    * @return the value at the given index value for a dictionary entry, i.e.
    * gets the dictionary value by its indexed value.
    */
-  const T valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     VELOX_DCHECK(initialized_);
     VELOX_DCHECK(!isNullAt(idx), "found null value at: {}", idx);
     auto innerIndex = getDictionaryIndex(idx);
@@ -108,6 +110,7 @@ class DictionaryVector : public SimpleVector<T> {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /**
    * Loads a SIMD vector of data at the virtual byteOffset given
    * Note this method is implemented on each vector type, but is intentionally
@@ -117,6 +120,7 @@ class DictionaryVector : public SimpleVector<T> {
    * @return the vector of values starting at the given index
    */
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+#endif
 
   inline const BufferPtr& indices() const {
     return indices_;
@@ -146,11 +150,6 @@ class DictionaryVector : public SimpleVector<T> {
     BaseVector::resizeIndices(
         BaseVector::length_, size, BaseVector::pool_, indices_, &rawIndices_);
     return indices_;
-  }
-
-  uint64_t retainedSize() const override {
-    return BaseVector::retainedSize() + dictionaryValues_->retainedSize() +
-        indices_->capacity();
   }
 
   bool isScalar() const override {
@@ -250,6 +249,15 @@ class DictionaryVector : public SimpleVector<T> {
         BaseVector::storageByteCount_);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    dictionaryValues_->transferOrCopyTo(pool);
+    if (!indices_->transferTo(pool)) {
+      indices_ = AlignedBuffer::copy<vector_size_t>(indices_, pool);
+      rawIndices_ = indices_->as<vector_size_t>();
+    }
+  }
+
  private:
   // return the dictionary index for the specified vector index.
   inline vector_size_t getDictionaryIndex(vector_size_t idx) const {
@@ -257,6 +265,12 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setInternalState();
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return BaseVector::retainedSizeImpl() +
+        dictionaryValues_->retainedSize(totalStringBufferSize) +
+        indices_->capacity();
+  }
 
   BufferPtr indices_;
   const vector_size_t* rawIndices_ = nullptr;

@@ -161,7 +161,7 @@ class RowNumberHashTableSpiller : public SpillerBase {
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
+      exec::SpillStats* spillStats);
 
   void spill();
 

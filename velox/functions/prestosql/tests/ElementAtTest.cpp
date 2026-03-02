@@ -232,6 +232,248 @@ TEST_F(ElementAtTest, mapWithDictionaryKeys) {
   }
 }
 
+TEST_F(ElementAtTest, flatMapTest) {
+  // Null map.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {makeFlatMapVectorFromJson<int64_t, int32_t>({"null"})})));
+
+  // Empty map.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {makeFlatMapVectorFromJson<int64_t, int32_t>({"{}"})})));
+
+  // Single row.
+  test::assertEqualVectors(
+      makeFlatVector<int32_t>({10}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({makeFlatMapVectorFromJson<int64_t, int32_t>(
+              {"{1:10, 2:20, 4:40, 5:50, 6:60}"})})));
+
+  // Multiple rows.
+  auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:11, 4:41}",
+      "{}",
+      "{2:23, 4:43}",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate("element_at(c0, 1)", makeRowVector({input})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({40, 41, std::nullopt, 43}),
+      evaluate("element_at(c0, 4)", makeRowVector({input})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {50, std::nullopt, std::nullopt, std::nullopt}),
+      evaluate("element_at(c0, 5)", makeRowVector({input})));
+  // Key doesn't exist
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+      evaluate("element_at(c0, 7)", makeRowVector({input})));
+  // Column elementAt
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({input, makeConstant<int32_t>(1, 4)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({20, 11, std::nullopt, 43}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({input, makeFlatVector<int32_t>({2, 1, 1, 4})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 0, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({20, std::nullopt, std::nullopt, 23}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 1, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 2, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({40, 41, std::nullopt, 43}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {input,
+               BaseVector::wrapInConstant(
+                   4, 3, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
+}
+
+TEST_F(ElementAtTest, flatMapTestDictionaryWrapped) {
+  vector_size_t size = 4, halved = 2;
+
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:11, 4:41}",
+      "{}",
+      "{2:23, 4:43}",
+  });
+
+  auto same = [](vector_size_t row) { return row; };
+  auto shifted = [](auto row) { return (row + 2) % 4; };
+
+  // Same size between base vector and wrapped dictionary vector.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, same), size, base)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 10, 11}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, shifted), size, base)})));
+
+  // Cardinality mismatch between wrapped vector and base.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, same), halved, base)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, shifted), halved, base)})));
+
+  // Column elementAt
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, same), size, base),
+               makeConstant<int32_t>(1, size)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, std::nullopt, std::nullopt, 43}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, same), size, base),
+               makeFlatVector<int32_t>({1, 2, 3, 4})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 10, 11}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, shifted), size, base),
+               makeConstant<int32_t>(1, size)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 23, std::nullopt, 41}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(size, shifted), size, base),
+               makeFlatVector<int32_t>({1, 2, 3, 4})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, 11}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, same), halved, base),
+               makeConstant<int32_t>(1, halved)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, same), halved, base),
+               makeFlatVector<int32_t>({1, 2})})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, shifted), halved, base),
+               makeConstant<int32_t>(1, halved)})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 23}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {wrapInDictionary(makeIndices(halved, shifted), halved, base),
+               makeFlatVector<int32_t>({1, 2})})));
+}
+
+TEST_F(ElementAtTest, flatMapTestConstantWrapped) {
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:11, 4:41}",
+      "{}",
+      "{2:23, 4:43}",
+  });
+  test::assertEqualVectors(
+      makeConstant<int32_t>(10, 10),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({BaseVector::wrapInConstant(10, 0, base)})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(11, 10),
+      evaluate(
+          "element_at(c0, 1)",
+          makeRowVector({BaseVector::wrapInConstant(10, 1, base)})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(10, 10),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(10, 0, base),
+               makeConstant<int32_t>(1, 10)})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(10, 10),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(10, 0, base),
+               BaseVector::wrapInConstant(
+                   10, 0, makeFlatVector<int32_t>({1, 2}))})));
+  test::assertEqualVectors(
+      makeConstant<int32_t>(20, 10),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(10, 0, base),
+               BaseVector::wrapInConstant(
+                   10, 1, makeFlatVector<int32_t>({1, 2}))})));
+  test::assertEqualVectors(
+      makeFlatVector<int32_t>({10, 20}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {BaseVector::wrapInConstant(2, 0, base),
+               makeFlatVector<int32_t>({1, 2})})));
+}
+
 TEST_F(ElementAtTest, arrayWithDictionaryElements) {
   {
     auto elementsIndices = makeIndices({6, 5, 4, 3, 2, 1, 0});
@@ -295,33 +537,44 @@ TEST_F(ElementAtTest, constantInputArray) {
 // #2 - allow out of bounds access for array and map.
 // #3 - allow negative indices.
 TEST_F(ElementAtTest, allFlavors1) {
-  // Case 1: Simple arrays and maps
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  // Case 1: Simple arrays and maps (also test constant inputs)
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
 
-  // #1
-  VELOX_ASSERT_THROW(
-      elementAtSimple("element_at(C0, 0)", {arrayVector}),
-      "SQL array indices start at 1");
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    // #1
+    VELOX_ASSERT_THROW(
+        elementAtSimple("element_at(C0, 0)", {arrayVector}),
+        "SQL array indices start at 1. Got 0.");
 
-  EXPECT_EQ(
-      elementAtSimple("try(element_at(C0, 0))", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("try(element_at(C0, 0))", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("element_at(C0, 1)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 2)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 3)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("element_at(C0, 1)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("element_at(C0, 2)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("element_at(C0, 3)", {arrayVector}), 12);
 
-  // #2
-  EXPECT_EQ(elementAtSimple("element_at(C0, 4)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 5)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("element_at(C0, 1001)", {mapVector}), std::nullopt);
+    // #2
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, 4)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, 5)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, 1001)", {mapVector}), std::nullopt);
 
-  // #3
-  EXPECT_EQ(elementAtSimple("element_at(C0, -1)", {arrayVector}), 12);
-  EXPECT_EQ(elementAtSimple("element_at(C0, -2)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("element_at(C0, -3)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
-
+    // #3
+    EXPECT_EQ(elementAtSimple("element_at(C0, -1)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("element_at(C0, -2)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("element_at(C0, -3)", {arrayVector}), 10);
+    EXPECT_EQ(
+        elementAtSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
+  }
   // Case 2: Empty values vector
   auto emptyValues = makeFlatVector<int64_t>({});
   auto emptyKeys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
@@ -341,7 +594,7 @@ TEST_F(ElementAtTest, allFlavors1) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("element_at(C0, 0)", {emptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   EXPECT_EQ(
@@ -371,7 +624,7 @@ TEST_F(ElementAtTest, allFlavors1) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("element_at(C0, 0)", {emptyContainerNonEmptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   EXPECT_EQ(
@@ -418,7 +671,7 @@ TEST_F(ElementAtTest, allFlavors1) {
           makeRowVector({partiallyEmptyArray}),
           rows,
           result),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   auto expected = makeNullConstant(TypeKind::BIGINT, 1);
@@ -441,42 +694,52 @@ TEST_F(ElementAtTest, allFlavors1) {
 // #2 - do not allow out of bounds access for arrays.
 // #3 - do not allow negative indices.
 TEST_F(ElementAtTest, allFlavors2) {
-  // Case 1: Simple arrays and maps
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  // Case 1: Simple arrays and maps (also test constant inputs)
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    // #1
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[0]", {arrayVector}),
+        "SQL array indices start at 1. Got 0.");
 
-  // #1
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[0]", {arrayVector}), "SQL array indices start at 1");
+    EXPECT_EQ(elementAtSimple("try(C0[0])", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("try(C0[0])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("C0[1]", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("C0[2]", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("C0[3]", {arrayVector}), 12);
 
-  EXPECT_EQ(elementAtSimple("C0[1]", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("C0[2]", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("C0[3]", {arrayVector}), 12);
+    // #2
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[4]", {arrayVector}),
+        "Array subscript index out of bounds, Index: 4 Array size: 3");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[5]", {arrayVector}),
+        "Array subscript index out of bounds, Index: 5 Array size: 3");
 
-  // #2
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[4]", {arrayVector}),
-      "Array subscript out of bounds.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[5]", {arrayVector}),
-      "Array subscript out of bounds.");
+    EXPECT_EQ(elementAtSimple("try(C0[4])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(C0[5])", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("try(C0[4])", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(C0[5])", {arrayVector}), std::nullopt);
+    // Maps are ok.
+    EXPECT_EQ(elementAtSimple("C0[1001]", {mapVector}), std::nullopt);
 
-  // Maps are ok.
-  EXPECT_EQ(elementAtSimple("C0[1001]", {mapVector}), std::nullopt);
+    // #3
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[-1]", {arrayVector}),
+        "Array subscript index cannot be negative, Index: -1");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("C0[-4]", {arrayVector}),
+        "Array subscript index cannot be negative, Index: -4");
 
-  // #3
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[-1]", {arrayVector}), "Array subscript is negative.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("C0[-4]", {arrayVector}), "Array subscript is negative.");
-
-  EXPECT_EQ(elementAtSimple("try(C0[-1])", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(C0[-4])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(C0[-1])", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(C0[-4])", {arrayVector}), std::nullopt);
+  }
 
   // Case 2: Empty values vector
   auto emptyValues = makeFlatVector<int64_t>({});
@@ -497,19 +760,20 @@ TEST_F(ElementAtTest, allFlavors2) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[0]", {emptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   VELOX_ASSERT_THROW(
-      elementAtSimple("C0[4]", {arrayVector}),
-      "Array subscript out of bounds.");
+      elementAtSimple("C0[4]", {emptyValuesArray}),
+      "Array subscript index out of bounds, Index: 4 Array size: 0");
   EXPECT_EQ(elementAtSimple("try(C0[4])", {emptyValuesArray}), std::nullopt);
   // Maps are ok.
   EXPECT_EQ(elementAtSimple("C0[1001]", {emptyValuesMap}), std::nullopt);
 
   // #3
   VELOX_ASSERT_THROW(
-      elementAtSimple("C0[-1]", {arrayVector}), "Array subscript is negative.");
+      elementAtSimple("C0[-1]", {emptyValuesArray}),
+      "Array subscript index cannot be negative, Index: -1");
 
   // Case 3: Empty individual arrays/maps and non-empty values vector
   auto nonEmptyValues = makeFlatVector<int64_t>(std::vector<int64_t>{2});
@@ -529,12 +793,12 @@ TEST_F(ElementAtTest, allFlavors2) {
   // #1
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[0]", {emptyContainerNonEmptyValuesArray}),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[4]", {emptyContainerNonEmptyValuesArray}),
-      "Array subscript out of bounds.");
+      "Array subscript index out of bounds, Index: 4 Array size: 0");
   EXPECT_EQ(
       elementAtSimple("try(C0[4])", {emptyContainerNonEmptyValuesArray}),
       std::nullopt);
@@ -546,7 +810,7 @@ TEST_F(ElementAtTest, allFlavors2) {
   // #3
   VELOX_ASSERT_THROW(
       elementAtSimple("C0[-1]", {emptyContainerNonEmptyValuesArray}),
-      "Array subscript is negative.");
+      "Array subscript index cannot be negative, Index: -1");
 
   // Case 4: Intermittently empty individual arrays/maps and non-empty values
   // vector
@@ -576,13 +840,13 @@ TEST_F(ElementAtTest, allFlavors2) {
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<int64_t>>(
           "C0[0]", makeRowVector({partiallyEmptyArray}), rows, result),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   // #2
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<int64_t>>(
           "C0[4]", makeRowVector({partiallyEmptyArray}), rows, result),
-      "Array subscript out of bounds.");
+      "Array subscript index out of bounds, Index: 4 Array size: 0");
   auto expected = makeNullConstant(TypeKind::BIGINT, 1);
   evaluate<SimpleVector<int64_t>>(
       "try(C0[4])", makeRowVector({partiallyEmptyArray}), rows, result);
@@ -596,7 +860,7 @@ TEST_F(ElementAtTest, allFlavors2) {
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<int64_t>>(
           "C0[-1]", makeRowVector({partiallyEmptyArray}), rows, result),
-      "Array subscript is negative.");
+      "Array subscript index cannot be negative, Index: -1");
 }
 
 // Third flavor:
@@ -604,41 +868,49 @@ TEST_F(ElementAtTest, allFlavors2) {
 // #2 - do not allow out of bound access for arrays (throw).
 // #3 - null on negative indices.
 TEST_F(ElementAtTest, allFlavors3) {
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
 
   exec::registerVectorFunction(
       "__f2",
       SubscriptImpl<false, true, false, false>::signatures(),
       std::make_unique<SubscriptImpl<false, true, false, false>>(false));
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    // #1
+    EXPECT_EQ(elementAtSimple("__f2(C0, 0)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("__f2(C0, 1)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("__f2(C0, 2)", {arrayVector}), 12);
 
-  // #1
-  EXPECT_EQ(elementAtSimple("__f2(C0, 0)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("__f2(C0, 1)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("__f2(C0, 2)", {arrayVector}), 12);
+    // #2
+    VELOX_ASSERT_THROW(
+        elementAtSimple("__f2(C0, 3)", {arrayVector}),
+        "Array subscript index out of bounds, Index: 3 Array size: 3");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("__f2(C0, 4)", {arrayVector}),
+        "Array subscript index out of bounds, Index: 4 Array size: 3");
+    VELOX_ASSERT_THROW(
+        elementAtSimple("__f2(C0, 100)", {arrayVector}),
+        "Array subscript index out of bounds, Index: 100 Array size: 3");
 
-  // #2
-  VELOX_ASSERT_THROW(
-      elementAtSimple("__f2(C0, 3)", {arrayVector}),
-      "Array subscript out of bounds.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("__f2(C0, 4)", {arrayVector}),
-      "Array subscript out of bounds.");
-  VELOX_ASSERT_THROW(
-      elementAtSimple("__f2(C0, 100)", {arrayVector}),
-      "Array subscript out of bounds.");
+    EXPECT_EQ(elementAtSimple("try(__f2(C0, 3))", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("try(__f2(C0, 4))", {arrayVector}), std::nullopt);
+    EXPECT_EQ(
+        elementAtSimple("try(__f2(C0, 100))", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("try(__f2(C0, 3))", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(__f2(C0, 4))", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("try(__f2(C0, 100))", {arrayVector}), std::nullopt);
+    // We still allow non-existent map keys, even if out of bounds is disabled
+    // for arrays.
+    EXPECT_EQ(elementAtSimple("__f2(C0, 1001)", {mapVector}), std::nullopt);
 
-  // We still allow non-existent map keys, even if out of bounds is disabled for
-  // arrays.
-  EXPECT_EQ(elementAtSimple("__f2(C0, 1001)", {mapVector}), std::nullopt);
-
-  // #3
-  EXPECT_EQ(elementAtSimple("__f2(C0, -1)", {mapVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("__f2(C0, -5)", {mapVector}), std::nullopt);
+    // #3
+    EXPECT_EQ(elementAtSimple("__f2(C0, -1)", {mapVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f2(C0, -5)", {mapVector}), std::nullopt);
+  }
 }
 
 // Fourth flavor:
@@ -646,25 +918,32 @@ TEST_F(ElementAtTest, allFlavors3) {
 // #2 - allow out of bound access (throw).
 // #3 - allow negative indices.
 TEST_F(ElementAtTest, allFlavors4) {
-  auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
-  auto mapVector = getSimpleMapVector();
+  auto simpleArray = makeArrayVector<int64_t>({{10, 11, 12}});
+  auto simpleMap = getSimpleMapVector();
 
   exec::registerVectorFunction(
       "__f3",
       SubscriptImpl<true, false, true, false>::signatures(),
       std::make_unique<SubscriptImpl<true, false, true, false>>(false));
+  for (bool wrapInConstant : {false, true}) {
+    auto arrayVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleArray)
+        : simpleArray;
+    auto mapVector = wrapInConstant
+        ? BaseVector::wrapInConstant(1, 0, simpleMap)
+        : simpleMap;
+    EXPECT_EQ(elementAtSimple("__f3(C0, 0)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 1)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 2)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 3)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 4)", {arrayVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -1)", {arrayVector}), 12);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -2)", {arrayVector}), 11);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -3)", {arrayVector}), 10);
+    EXPECT_EQ(elementAtSimple("__f3(C0, -4)", {arrayVector}), std::nullopt);
 
-  EXPECT_EQ(elementAtSimple("__f3(C0, 0)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 1)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 2)", {arrayVector}), 12);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 3)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("__f3(C0, 4)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -1)", {arrayVector}), 12);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -2)", {arrayVector}), 11);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -3)", {arrayVector}), 10);
-  EXPECT_EQ(elementAtSimple("__f3(C0, -4)", {arrayVector}), std::nullopt);
-
-  EXPECT_EQ(elementAtSimple("__f3(C0, 1001)", {mapVector}), std::nullopt);
+    EXPECT_EQ(elementAtSimple("__f3(C0, 1001)", {mapVector}), std::nullopt);
+  }
 }
 
 TEST_F(ElementAtTest, constantInputMap) {
@@ -1023,7 +1302,7 @@ TEST_F(ElementAtTest, errorStatesArray) {
   VELOX_ASSERT_THROW(
       testElementAt<int64_t>(
           "element_at(C0, C1)", {arrayVector, indicesVector}, expectedValueAt),
-      "SQL array indices start at 1");
+      "SQL array indices start at 1. Got 0.");
 
   testElementAt<int64_t>(
       "try(element_at(C0, C1))",
@@ -1176,6 +1455,46 @@ TEST_F(ElementAtTest, testCachingOptimization) {
   }
 }
 
+TEST_F(ElementAtTest, testCachingOptimizationNonZeroOffset) {
+  // Test the case where the input map has a non-zero offset when caching is
+  // enabled.
+
+  // Make a dummy eval context.
+  exec::ExprSet exprSet({}, &execCtx_);
+  auto inputs = makeRowVector({});
+  exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
+
+  SelectivityVector rows(1);
+  auto key = makeArrayVectorFromJson<int64_t>({"[1]", "[2]"});
+  auto value = makeFlatVector<int64_t>({10, 20});
+  // The map's offset is 1 (non-zero).
+  auto map = makeMapVector({1}, key, value);
+  auto search = makeArrayVectorFromJson<int64_t>({"[2]"});
+
+  std::vector<VectorPtr> args = {map, search};
+
+  facebook::velox::functions::detail::MapSubscript mapSubscriptWithCaching(
+      true);
+
+  auto checkStatus = [&](bool cachingEnabled,
+                         bool materializedMapIsNull,
+                         const VectorPtr& firtSeen) {
+    EXPECT_EQ(cachingEnabled, mapSubscriptWithCaching.cachingEnabled());
+    EXPECT_EQ(firtSeen, mapSubscriptWithCaching.firstSeenMap());
+    EXPECT_EQ(
+        materializedMapIsNull,
+        nullptr == mapSubscriptWithCaching.lookupTable());
+  };
+
+  // Initial state.
+  checkStatus(true, true, nullptr);
+
+  mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  auto result = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  test::assertEqualVectors(
+      makeFlatVector<int64_t>(1, [](auto) { return 20; }), result);
+}
+
 TEST_F(ElementAtTest, floatingPointCornerCases) {
   // Verify that different code paths (keys of simple types, complex types and
   // optimized caching) correctly identify NaNs and treat all NaNs with
@@ -1248,8 +1567,9 @@ TEST_F(ElementAtTest, testCachingOptimizationComplexKey) {
     for (int i = 0; i < keysVector->size(); i += 3) {
       EXPECT_NE(
           cachedMap.end(),
-          cachedMap.find(facebook::velox::functions::detail::MapKey{
-              keysVector.get(), 0, 0}));
+          cachedMap.find(
+              facebook::velox::functions::detail::MapKey{
+                  keysVector.get(), 0, 0}));
     }
   };
 

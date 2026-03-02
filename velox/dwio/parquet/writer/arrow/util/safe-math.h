@@ -75,39 +75,39 @@
   PSNIP_SAFE__COMPILER_ATTRIBUTES static PSNIP_SAFE__INLINE
 #endif
 
-// !defined(__cplusplus) added for Solaris support
+// !Defined(__cplusplus) added for Solaris support.
 #if !defined(__cplusplus) && defined(__STDC_VERSION__) && \
     __STDC_VERSION__ >= 199901L
-#define psnip_safe_bool _Bool
+#define psnipSafeBool bool
 #else
-#define psnip_safe_bool int
+#define psnipSafeBool int
 #endif
 
 #if !defined(PSNIP_SAFE_NO_FIXED)
 /* For maximum portability include the exact-int module from
    portable snippets. */
-#if !defined(psnip_int64_t) || !defined(psnip_uint64_t) || \
-    !defined(psnip_int32_t) || !defined(psnip_uint32_t) || \
-    !defined(psnip_int16_t) || !defined(psnip_uint16_t) || \
+#if !defined(Psnip_int64_t) || !defined(Psnip_uint64_t) || \
+    !defined(Psnip_int32_t) || !defined(Psnip_uint32_t) || \
+    !defined(Psnip_int16_t) || !defined(Psnip_uint16_t) || \
     !defined(psnip_int8_t) || !defined(psnip_uint8_t)
 #include <stdint.h>
-#if !defined(psnip_int64_t)
-#define psnip_int64_t int64_t
+#if !defined(Psnip_int64_t)
+#define Psnip_int64_t int64_t
 #endif
-#if !defined(psnip_uint64_t)
-#define psnip_uint64_t uint64_t
+#if !defined(Psnip_uint64_t)
+#define Psnip_uint64_t uint64_t
 #endif
-#if !defined(psnip_int32_t)
-#define psnip_int32_t int32_t
+#if !defined(Psnip_int32_t)
+#define Psnip_int32_t int32_t
 #endif
-#if !defined(psnip_uint32_t)
-#define psnip_uint32_t uint32_t
+#if !defined(Psnip_uint32_t)
+#define Psnip_uint32_t uint32_t
 #endif
-#if !defined(psnip_int16_t)
-#define psnip_int16_t int16_t
+#if !defined(Psnip_int16_t)
+#define Psnip_int16_t int16_t
 #endif
-#if !defined(psnip_uint16_t)
-#define psnip_uint16_t uint16_t
+#if !defined(Psnip_uint16_t)
+#define Psnip_uint16_t uint16_t
 #endif
 #if !defined(psnip_int8_t)
 #define psnip_int8_t int8_t
@@ -154,16 +154,16 @@
 
 #if !defined(PSNIP_SAFE_NO_PROMOTIONS)
 
-#define PSNIP_SAFE_DEFINE_LARGER_BINARY_OP(T, name, op_name, op)             \
-  PSNIP_SAFE__FUNCTION psnip_safe_##name##_larger                            \
-      psnip_safe_larger_##name##_##op_name(T a, T b) {                       \
-    return ((psnip_safe_##name##_larger)a)op((psnip_safe_##name##_larger)b); \
+#define PSNIP_SAFE_DEFINE_LARGER_BINARY_OP(T, name, opName, op)        \
+  PSNIP_SAFE__FUNCTION psnipSafe##name##Larger                         \
+  psnipSafeLarger_##name##_##opName(T a, T b) {                        \
+    return ((psnipSafe##name##Larger)a)op((psnipSafe##name##Larger)b); \
   }
 
-#define PSNIP_SAFE_DEFINE_LARGER_UNARY_OP(T, name, op_name, op) \
-  PSNIP_SAFE__FUNCTION psnip_safe_##name##_larger               \
-      psnip_safe_larger_##name##_##op_name(T value) {           \
-    return (op((psnip_safe_##name##_larger)value));             \
+#define PSNIP_SAFE_DEFINE_LARGER_UNARY_OP(T, name, opName, op) \
+  PSNIP_SAFE__FUNCTION psnipSafe##name##Larger                 \
+  psnipSafeLarger_##name##_##opName(T value) {                 \
+    return (op((psnipSafe##name##Larger)value));               \
   }
 
 #define PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(T, name)  \
@@ -188,235 +188,235 @@
     ((__GNUC__ >= 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)) && \
     defined(__SIZEOF_INT128__) && !defined(__ibmxl__)
 #define PSNIP_SAFE_HAVE_128
-typedef __int128 psnip_safe_int128_t;
-typedef unsigned __int128 psnip_safe_uint128_t;
+typedef __int128 Psnip_safe_int128_t;
+typedef unsigned __int128 Psnip_safe_uint128_t;
 #endif /* defined(__GNUC__) */
 
 #if !defined(PSNIP_SAFE_NO_FIXED)
 #define PSNIP_SAFE_HAVE_INT8_LARGER
 #define PSNIP_SAFE_HAVE_UINT8_LARGER
-typedef psnip_int16_t psnip_safe_int8_larger;
-typedef psnip_uint16_t psnip_safe_uint8_larger;
+typedef Psnip_int16_t psnipSafeint8Larger;
+typedef Psnip_uint16_t psnipSafeuint8Larger;
 
 #define PSNIP_SAFE_HAVE_INT16_LARGER
-typedef psnip_int32_t psnip_safe_int16_larger;
-typedef psnip_uint32_t psnip_safe_uint16_larger;
+typedef Psnip_int32_t psnipSafeint16Larger;
+typedef Psnip_uint32_t psnipSafeuint16Larger;
 
 #define PSNIP_SAFE_HAVE_INT32_LARGER
-typedef psnip_int64_t psnip_safe_int32_larger;
-typedef psnip_uint64_t psnip_safe_uint32_larger;
+typedef Psnip_int64_t psnipSafeint32Larger;
+typedef Psnip_uint64_t psnipSafeuint32Larger;
 
 #if defined(PSNIP_SAFE_HAVE_128)
 #define PSNIP_SAFE_HAVE_INT64_LARGER
-typedef psnip_safe_int128_t psnip_safe_int64_larger;
-typedef psnip_safe_uint128_t psnip_safe_uint64_larger;
+typedef Psnip_safe_int128_t psnipSafeint64Larger;
+typedef Psnip_safe_uint128_t psnipSafeuint64Larger;
 #endif /* defined(PSNIP_SAFE_HAVE_128) */
 #endif /* !defined(PSNIP_SAFE_NO_FIXED) */
 
 #define PSNIP_SAFE_HAVE_LARGER_SCHAR
 #if PSNIP_SAFE_IS_LARGER(SCHAR_MAX, SHRT_MAX)
-typedef short psnip_safe_schar_larger;
+typedef short psnipSafescharLarger;
 #elif PSNIP_SAFE_IS_LARGER(SCHAR_MAX, INT_MAX)
-typedef int psnip_safe_schar_larger;
+typedef int psnipSafescharLarger;
 #elif PSNIP_SAFE_IS_LARGER(SCHAR_MAX, LONG_MAX)
-typedef long psnip_safe_schar_larger;
+typedef long psnipSafescharLarger;
 #elif PSNIP_SAFE_IS_LARGER(SCHAR_MAX, LLONG_MAX)
-typedef long long psnip_safe_schar_larger;
+typedef long long psnipSafescharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(SCHAR_MAX, 0x7fff)
-typedef psnip_int16_t psnip_safe_schar_larger;
+typedef Psnip_int16_t psnipSafescharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(SCHAR_MAX, 0x7fffffffLL)
-typedef psnip_int32_t psnip_safe_schar_larger;
+typedef Psnip_int32_t psnipSafescharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(SCHAR_MAX, 0x7fffffffffffffffLL)
-typedef psnip_int64_t psnip_safe_schar_larger;
+typedef Psnip_int64_t psnipSafescharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (SCHAR_MAX <= 0x7fffffffffffffffLL)
-typedef psnip_safe_int128_t psnip_safe_schar_larger;
+typedef Psnip_safe_int128_t psnipSafescharLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_SCHAR
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_UCHAR
 #if PSNIP_SAFE_IS_LARGER(UCHAR_MAX, USHRT_MAX)
-typedef unsigned short psnip_safe_uchar_larger;
+typedef unsigned short psnipSafeucharLarger;
 #elif PSNIP_SAFE_IS_LARGER(UCHAR_MAX, UINT_MAX)
-typedef unsigned int psnip_safe_uchar_larger;
+typedef unsigned int psnipSafeucharLarger;
 #elif PSNIP_SAFE_IS_LARGER(UCHAR_MAX, ULONG_MAX)
-typedef unsigned long psnip_safe_uchar_larger;
+typedef unsigned long psnipSafeucharLarger;
 #elif PSNIP_SAFE_IS_LARGER(UCHAR_MAX, ULLONG_MAX)
-typedef unsigned long long psnip_safe_uchar_larger;
+typedef unsigned long long psnipSafeucharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(UCHAR_MAX, 0xffffU)
-typedef psnip_uint16_t psnip_safe_uchar_larger;
+typedef Psnip_uint16_t psnipSafeucharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(UCHAR_MAX, 0xffffffffUL)
-typedef psnip_uint32_t psnip_safe_uchar_larger;
+typedef Psnip_uint32_t psnipSafeucharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(UCHAR_MAX, 0xffffffffffffffffULL)
-typedef psnip_uint64_t psnip_safe_uchar_larger;
+typedef Psnip_uint64_t psnipSafeucharLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (UCHAR_MAX <= 0xffffffffffffffffULL)
-typedef psnip_safe_uint128_t psnip_safe_uchar_larger;
+typedef Psnip_safe_uint128_t psnipSafeucharLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_UCHAR
 #endif
 
 #if CHAR_MIN == 0 && defined(PSNIP_SAFE_HAVE_LARGER_UCHAR)
 #define PSNIP_SAFE_HAVE_LARGER_CHAR
-typedef psnip_safe_uchar_larger psnip_safe_char_larger;
+typedef psnipSafeucharLarger psnipSafecharLarger;
 #elif CHAR_MIN < 0 && defined(PSNIP_SAFE_HAVE_LARGER_SCHAR)
 #define PSNIP_SAFE_HAVE_LARGER_CHAR
-typedef psnip_safe_schar_larger psnip_safe_char_larger;
+typedef psnipSafescharLarger psnipSafecharLarger;
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_SHRT
 #if PSNIP_SAFE_IS_LARGER(SHRT_MAX, INT_MAX)
-typedef int psnip_safe_short_larger;
+typedef int psnipSafeshortLarger;
 #elif PSNIP_SAFE_IS_LARGER(SHRT_MAX, LONG_MAX)
-typedef long psnip_safe_short_larger;
+typedef long psnipSafeshortLarger;
 #elif PSNIP_SAFE_IS_LARGER(SHRT_MAX, LLONG_MAX)
-typedef long long psnip_safe_short_larger;
+typedef long long psnipSafeshortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(SHRT_MAX, 0x7fff)
-typedef psnip_int16_t psnip_safe_short_larger;
+typedef Psnip_int16_t psnipSafeshortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(SHRT_MAX, 0x7fffffffLL)
-typedef psnip_int32_t psnip_safe_short_larger;
+typedef Psnip_int32_t psnipSafeshortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(SHRT_MAX, 0x7fffffffffffffffLL)
-typedef psnip_int64_t psnip_safe_short_larger;
+typedef Psnip_int64_t psnipSafeshortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (SHRT_MAX <= 0x7fffffffffffffffLL)
-typedef psnip_safe_int128_t psnip_safe_short_larger;
+typedef Psnip_safe_int128_t psnipSafeshortLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_SHRT
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_USHRT
 #if PSNIP_SAFE_IS_LARGER(USHRT_MAX, UINT_MAX)
-typedef unsigned int psnip_safe_ushort_larger;
+typedef unsigned int psnipSafeushortLarger;
 #elif PSNIP_SAFE_IS_LARGER(USHRT_MAX, ULONG_MAX)
-typedef unsigned long psnip_safe_ushort_larger;
+typedef unsigned long psnipSafeushortLarger;
 #elif PSNIP_SAFE_IS_LARGER(USHRT_MAX, ULLONG_MAX)
-typedef unsigned long long psnip_safe_ushort_larger;
+typedef unsigned long long psnipSafeushortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(USHRT_MAX, 0xffff)
-typedef psnip_uint16_t psnip_safe_ushort_larger;
+typedef Psnip_uint16_t psnipSafeushortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(USHRT_MAX, 0xffffffffUL)
-typedef psnip_uint32_t psnip_safe_ushort_larger;
+typedef Psnip_uint32_t psnipSafeushortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(USHRT_MAX, 0xffffffffffffffffULL)
-typedef psnip_uint64_t psnip_safe_ushort_larger;
+typedef Psnip_uint64_t psnipSafeushortLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (USHRT_MAX <= 0xffffffffffffffffULL)
-typedef psnip_safe_uint128_t psnip_safe_ushort_larger;
+typedef Psnip_safe_uint128_t psnipSafeushortLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_USHRT
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_INT
 #if PSNIP_SAFE_IS_LARGER(INT_MAX, LONG_MAX)
-typedef long psnip_safe_int_larger;
+typedef long psnipSafeintLarger;
 #elif PSNIP_SAFE_IS_LARGER(INT_MAX, LLONG_MAX)
-typedef long long psnip_safe_int_larger;
+typedef long long psnipSafeintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(INT_MAX, 0x7fff)
-typedef psnip_int16_t psnip_safe_int_larger;
+typedef Psnip_int16_t psnipSafeintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(INT_MAX, 0x7fffffffLL)
-typedef psnip_int32_t psnip_safe_int_larger;
+typedef Psnip_int32_t psnipSafeintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(INT_MAX, 0x7fffffffffffffffLL)
-typedef psnip_int64_t psnip_safe_int_larger;
+typedef Psnip_int64_t psnipSafeintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (INT_MAX <= 0x7fffffffffffffffLL)
-typedef psnip_safe_int128_t psnip_safe_int_larger;
+typedef Psnip_safe_int128_t psnipSafeintLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_INT
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_UINT
 #if PSNIP_SAFE_IS_LARGER(UINT_MAX, ULONG_MAX)
-typedef unsigned long psnip_safe_uint_larger;
+typedef unsigned long psnipSafeuintLarger;
 #elif PSNIP_SAFE_IS_LARGER(UINT_MAX, ULLONG_MAX)
-typedef unsigned long long psnip_safe_uint_larger;
+typedef unsigned long long psnipSafeuintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(UINT_MAX, 0xffff)
-typedef psnip_uint16_t psnip_safe_uint_larger;
+typedef Psnip_uint16_t psnipSafeuintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(UINT_MAX, 0xffffffffUL)
-typedef psnip_uint32_t psnip_safe_uint_larger;
+typedef Psnip_uint32_t psnipSafeuintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(UINT_MAX, 0xffffffffffffffffULL)
-typedef psnip_uint64_t psnip_safe_uint_larger;
+typedef Psnip_uint64_t psnipSafeuintLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (UINT_MAX <= 0xffffffffffffffffULL)
-typedef psnip_safe_uint128_t psnip_safe_uint_larger;
+typedef Psnip_safe_uint128_t psnipSafeuintLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_UINT
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_LONG
 #if PSNIP_SAFE_IS_LARGER(LONG_MAX, LLONG_MAX)
-typedef long long psnip_safe_long_larger;
+typedef long long psnipSafelongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(LONG_MAX, 0x7fff)
-typedef psnip_int16_t psnip_safe_long_larger;
+typedef Psnip_int16_t psnipSafelongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(LONG_MAX, 0x7fffffffLL)
-typedef psnip_int32_t psnip_safe_long_larger;
+typedef Psnip_int32_t psnipSafelongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(LONG_MAX, 0x7fffffffffffffffLL)
-typedef psnip_int64_t psnip_safe_long_larger;
+typedef Psnip_int64_t psnipSafelongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (LONG_MAX <= 0x7fffffffffffffffLL)
-typedef psnip_safe_int128_t psnip_safe_long_larger;
+typedef Psnip_safe_int128_t psnipSafelongLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_LONG
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_ULONG
 #if PSNIP_SAFE_IS_LARGER(ULONG_MAX, ULLONG_MAX)
-typedef unsigned long long psnip_safe_ulong_larger;
+typedef unsigned long long psnipSafeulongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(ULONG_MAX, 0xffff)
-typedef psnip_uint16_t psnip_safe_ulong_larger;
+typedef Psnip_uint16_t psnipSafeulongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(ULONG_MAX, 0xffffffffUL)
-typedef psnip_uint32_t psnip_safe_ulong_larger;
+typedef Psnip_uint32_t psnipSafeulongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(ULONG_MAX, 0xffffffffffffffffULL)
-typedef psnip_uint64_t psnip_safe_ulong_larger;
+typedef Psnip_uint64_t psnipSafeulongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (ULONG_MAX <= 0xffffffffffffffffULL)
-typedef psnip_safe_uint128_t psnip_safe_ulong_larger;
+typedef Psnip_safe_uint128_t psnipSafeulongLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_ULONG
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_LLONG
 #if !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(LLONG_MAX, 0x7fff)
-typedef psnip_int16_t psnip_safe_llong_larger;
+typedef Psnip_int16_t psnipSafellongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(LLONG_MAX, 0x7fffffffLL)
-typedef psnip_int32_t psnip_safe_llong_larger;
+typedef Psnip_int32_t psnipSafellongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(LLONG_MAX, 0x7fffffffffffffffLL)
-typedef psnip_int64_t psnip_safe_llong_larger;
+typedef Psnip_int64_t psnipSafellongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (LLONG_MAX <= 0x7fffffffffffffffLL)
-typedef psnip_safe_int128_t psnip_safe_llong_larger;
+typedef Psnip_safe_int128_t psnipSafellongLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_LLONG
 #endif
 
 #define PSNIP_SAFE_HAVE_LARGER_ULLONG
 #if !defined(PSNIP_SAFE_NO_FIXED) && PSNIP_SAFE_IS_LARGER(ULLONG_MAX, 0xffff)
-typedef psnip_uint16_t psnip_safe_ullong_larger;
+typedef Psnip_uint16_t psnipSafeullongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(ULLONG_MAX, 0xffffffffUL)
-typedef psnip_uint32_t psnip_safe_ullong_larger;
+typedef Psnip_uint32_t psnipSafeullongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(ULLONG_MAX, 0xffffffffffffffffULL)
-typedef psnip_uint64_t psnip_safe_ullong_larger;
+typedef Psnip_uint64_t psnipSafeullongLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (ULLONG_MAX <= 0xffffffffffffffffULL)
-typedef psnip_safe_uint128_t psnip_safe_ullong_larger;
+typedef Psnip_safe_uint128_t psnipSafeullongLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_ULLONG
 #endif
@@ -424,25 +424,25 @@ typedef psnip_safe_uint128_t psnip_safe_ullong_larger;
 #if defined(PSNIP_SAFE_SIZE_MAX)
 #define PSNIP_SAFE_HAVE_LARGER_SIZE
 #if PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, USHRT_MAX)
-typedef unsigned short psnip_safe_size_larger;
+typedef unsigned short psnipSafesizeLarger;
 #elif PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, UINT_MAX)
-typedef unsigned int psnip_safe_size_larger;
+typedef unsigned int psnipSafesizeLarger;
 #elif PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, ULONG_MAX)
-typedef unsigned long psnip_safe_size_larger;
+typedef unsigned long psnipSafesizeLarger;
 #elif PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, ULLONG_MAX)
-typedef unsigned long long psnip_safe_size_larger;
+typedef unsigned long long psnipSafesizeLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, 0xffff)
-typedef psnip_uint16_t psnip_safe_size_larger;
+typedef Psnip_uint16_t psnipSafesizeLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, 0xffffffffUL)
-typedef psnip_uint32_t psnip_safe_size_larger;
+typedef Psnip_uint32_t psnipSafesizeLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && \
     PSNIP_SAFE_IS_LARGER(PSNIP_SAFE_SIZE_MAX, 0xffffffffffffffffULL)
-typedef psnip_uint64_t psnip_safe_size_larger;
+typedef Psnip_uint64_t psnipSafesizeLarger;
 #elif !defined(PSNIP_SAFE_NO_FIXED) && defined(PSNIP_SAFE_HAVE_128) && \
     (PSNIP_SAFE_SIZE_MAX <= 0xffffffffffffffffULL)
-typedef psnip_safe_uint128_t psnip_safe_size_larger;
+typedef Psnip_safe_uint128_t psnipSafesizeLarger;
 #else
 #undef PSNIP_SAFE_HAVE_LARGER_SIZE
 #endif
@@ -503,180 +503,177 @@ PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(size_t, size)
 #if !defined(PSNIP_SAFE_NO_FIXED)
 PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(psnip_int8_t, int8)
 PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(psnip_uint8_t, uint8)
-PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(psnip_int16_t, int16)
-PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(psnip_uint16_t, uint16)
-PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(psnip_int32_t, int32)
-PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(psnip_uint32_t, uint32)
+PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(Psnip_int16_t, int16)
+PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(Psnip_uint16_t, uint16)
+PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(Psnip_int32_t, int32)
+PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(Psnip_uint32_t, uint32)
 #if defined(PSNIP_SAFE_HAVE_128)
-PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(psnip_int64_t, int64)
-PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(psnip_uint64_t, uint64)
+PSNIP_SAFE_DEFINE_LARGER_SIGNED_OPS(Psnip_int64_t, int64)
+PSNIP_SAFE_DEFINE_LARGER_UNSIGNED_OPS(Psnip_uint64_t, uint64)
 #endif
 #endif
 
 #endif /* !defined(PSNIP_SAFE_NO_PROMOTIONS) */
 
-#define PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(T, name, op_name)         \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_##op_name( \
-      T* res, T a, T b) {                                             \
-    return !__builtin_##op_name##_overflow(a, b, res);                \
+#define PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(T, name, opName)      \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_##opName( \
+      T* res, T a, T b) {                                         \
+    return !__builtin_##opName##_overflow(a, b, res);             \
   }
 
-#define PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(                  \
-    T, name, op_name, min, max)                                       \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_##op_name( \
-      T* res, T a, T b) {                                             \
-    const psnip_safe_##name##_larger r =                              \
-        psnip_safe_larger_##name##_##op_name(a, b);                   \
-    *res = (T)r;                                                      \
-    return (r >= min) && (r <= max);                                  \
+#define PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(T, name, opName, min, max) \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_##opName(              \
+      T* res, T a, T b) {                                                      \
+    const psnipSafe_##name##Larger r =                                         \
+        psnipSafeLarger_##name##_##opName(a, b);                               \
+    *res = (T)r;                                                               \
+    return (r >= min) && (r <= max);                                           \
   }
 
-#define PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(T, name, op_name, max) \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_##op_name(        \
-      T* res, T a, T b) {                                                    \
-    const psnip_safe_##name##_larger r =                                     \
-        psnip_safe_larger_##name##_##op_name(a, b);                          \
-    *res = (T)r;                                                             \
-    return (r <= max);                                                       \
+#define PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(T, name, opName, max) \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_##opName(           \
+      T* res, T a, T b) {                                                   \
+    const psnipSafe_##name##Larger r =                                      \
+        psnipSafeLarger_##name##_##opName(a, b);                            \
+    *res = (T)r;                                                            \
+    return (r <= max);                                                      \
   }
 
 #define PSNIP_SAFE_DEFINE_SIGNED_ADD(T, name, min, max)                  \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_add(          \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_add(             \
       T* res, T a, T b) {                                                \
-    psnip_safe_bool r =                                                  \
+    psnipSafeBool r =                                                    \
         !(((b > 0) && (a > (max - b))) || ((b < 0) && (a < (min - b)))); \
     if (PSNIP_SAFE_LIKELY(r))                                            \
       *res = a + b;                                                      \
     return r;                                                            \
   }
 
-#define PSNIP_SAFE_DEFINE_UNSIGNED_ADD(T, name, max)            \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_add( \
-      T* res, T a, T b) {                                       \
-    *res = (T)(a + b);                                          \
-    return !PSNIP_SAFE_UNLIKELY((b > 0) && (a > (max - b)));    \
+#define PSNIP_SAFE_DEFINE_UNSIGNED_ADD(T, name, max)         \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_add( \
+      T* res, T a, T b) {                                    \
+    *res = (T)(a + b);                                       \
+    return !PSNIP_SAFE_UNLIKELY((b > 0) && (a > (max - b))); \
   }
 
-#define PSNIP_SAFE_DEFINE_SIGNED_SUB(T, name, min, max)          \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_sub(  \
-      T* res, T a, T b) {                                        \
-    psnip_safe_bool r =                                          \
-        !((b > 0 && a < (min + b)) || (b < 0 && a > (max + b))); \
-    if (PSNIP_SAFE_LIKELY(r))                                    \
-      *res = a - b;                                              \
-    return r;                                                    \
+#define PSNIP_SAFE_DEFINE_SIGNED_SUB(T, name, min, max)                        \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_sub(                   \
+      T* res, T a, T b) {                                                      \
+    psnipSafeBool r = !((b > 0 && a < (min + b)) || (b < 0 && a > (max + b))); \
+    if (PSNIP_SAFE_LIKELY(r))                                                  \
+      *res = a - b;                                                            \
+    return r;                                                                  \
   }
 
-#define PSNIP_SAFE_DEFINE_UNSIGNED_SUB(T, name, max)            \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_sub( \
-      T* res, T a, T b) {                                       \
-    *res = a - b;                                               \
-    return !PSNIP_SAFE_UNLIKELY(b > a);                         \
+#define PSNIP_SAFE_DEFINE_UNSIGNED_SUB(T, name, max)         \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_sub( \
+      T* res, T a, T b) {                                    \
+    *res = a - b;                                            \
+    return !PSNIP_SAFE_UNLIKELY(b > a);                      \
   }
 
-#define PSNIP_SAFE_DEFINE_SIGNED_MUL(T, name, min, max)         \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_mul( \
-      T* res, T a, T b) {                                       \
-    psnip_safe_bool r = 1;                                      \
-    if (a > 0) {                                                \
-      if (b > 0) {                                              \
-        if (a > (max / b)) {                                    \
-          r = 0;                                                \
-        }                                                       \
-      } else {                                                  \
-        if (b < (min / a)) {                                    \
-          r = 0;                                                \
-        }                                                       \
-      }                                                         \
-    } else {                                                    \
-      if (b > 0) {                                              \
-        if (a < (min / b)) {                                    \
-          r = 0;                                                \
-        }                                                       \
-      } else {                                                  \
-        if ((a != 0) && (b < (max / a))) {                      \
-          r = 0;                                                \
-        }                                                       \
-      }                                                         \
-    }                                                           \
-    if (PSNIP_SAFE_LIKELY(r))                                   \
-      *res = a * b;                                             \
-    return r;                                                   \
+#define PSNIP_SAFE_DEFINE_SIGNED_MUL(T, name, min, max)      \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_mul( \
+      T* res, T a, T b) {                                    \
+    psnipSafeBool r = 1;                                     \
+    if (a > 0) {                                             \
+      if (b > 0) {                                           \
+        if (a > (max / b)) {                                 \
+          r = 0;                                             \
+        }                                                    \
+      } else {                                               \
+        if (b < (min / a)) {                                 \
+          r = 0;                                             \
+        }                                                    \
+      }                                                      \
+    } else {                                                 \
+      if (b > 0) {                                           \
+        if (a < (min / b)) {                                 \
+          r = 0;                                             \
+        }                                                    \
+      } else {                                               \
+        if ((a != 0) && (b < (max / a))) {                   \
+          r = 0;                                             \
+        }                                                    \
+      }                                                      \
+    }                                                        \
+    if (PSNIP_SAFE_LIKELY(r))                                \
+      *res = a * b;                                          \
+    return r;                                                \
   }
 
 #define PSNIP_SAFE_DEFINE_UNSIGNED_MUL(T, name, max)                    \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_mul(         \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_mul(            \
       T* res, T a, T b) {                                               \
     *res = (T)(a * b);                                                  \
     return !PSNIP_SAFE_UNLIKELY((a > 0) && (b > 0) && (a > (max / b))); \
   }
 
-#define PSNIP_SAFE_DEFINE_SIGNED_DIV(T, name, min, max)         \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_div( \
-      T* res, T a, T b) {                                       \
-    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                          \
-      *res = 0;                                                 \
-      return 0;                                                 \
-    } else if (PSNIP_SAFE_UNLIKELY(a == min && b == -1)) {      \
-      *res = min;                                               \
-      return 0;                                                 \
-    } else {                                                    \
-      *res = (T)(a / b);                                        \
-      return 1;                                                 \
-    }                                                           \
+#define PSNIP_SAFE_DEFINE_SIGNED_DIV(T, name, min, max)      \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_div( \
+      T* res, T a, T b) {                                    \
+    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                       \
+      *res = 0;                                              \
+      return 0;                                              \
+    } else if (PSNIP_SAFE_UNLIKELY(a == min && b == -1)) {   \
+      *res = min;                                            \
+      return 0;                                              \
+    } else {                                                 \
+      *res = (T)(a / b);                                     \
+      return 1;                                              \
+    }                                                        \
   }
 
-#define PSNIP_SAFE_DEFINE_UNSIGNED_DIV(T, name, max)            \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_div( \
-      T* res, T a, T b) {                                       \
-    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                          \
-      *res = 0;                                                 \
-      return 0;                                                 \
-    } else {                                                    \
-      *res = a / b;                                             \
-      return 1;                                                 \
-    }                                                           \
+#define PSNIP_SAFE_DEFINE_UNSIGNED_DIV(T, name, max)         \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_div( \
+      T* res, T a, T b) {                                    \
+    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                       \
+      *res = 0;                                              \
+      return 0;                                              \
+    } else {                                                 \
+      *res = a / b;                                          \
+      return 1;                                              \
+    }                                                        \
   }
 
-#define PSNIP_SAFE_DEFINE_SIGNED_MOD(T, name, min, max)         \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_mod( \
-      T* res, T a, T b) {                                       \
-    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                          \
-      *res = 0;                                                 \
-      return 0;                                                 \
-    } else if (PSNIP_SAFE_UNLIKELY(a == min && b == -1)) {      \
-      *res = min;                                               \
-      return 0;                                                 \
-    } else {                                                    \
-      *res = (T)(a % b);                                        \
-      return 1;                                                 \
-    }                                                           \
+#define PSNIP_SAFE_DEFINE_SIGNED_MOD(T, name, min, max)      \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_mod( \
+      T* res, T a, T b) {                                    \
+    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                       \
+      *res = 0;                                              \
+      return 0;                                              \
+    } else if (PSNIP_SAFE_UNLIKELY(a == min && b == -1)) {   \
+      *res = min;                                            \
+      return 0;                                              \
+    } else {                                                 \
+      *res = (T)(a % b);                                     \
+      return 1;                                              \
+    }                                                        \
   }
 
-#define PSNIP_SAFE_DEFINE_UNSIGNED_MOD(T, name, max)            \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_mod( \
-      T* res, T a, T b) {                                       \
-    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                          \
-      *res = 0;                                                 \
-      return 0;                                                 \
-    } else {                                                    \
-      *res = a % b;                                             \
-      return 1;                                                 \
-    }                                                           \
+#define PSNIP_SAFE_DEFINE_UNSIGNED_MOD(T, name, max)         \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_mod( \
+      T* res, T a, T b) {                                    \
+    if (PSNIP_SAFE_UNLIKELY(b == 0)) {                       \
+      *res = 0;                                              \
+      return 0;                                              \
+    } else {                                                 \
+      *res = a % b;                                          \
+      return 1;                                              \
+    }                                                        \
   }
 
-#define PSNIP_SAFE_DEFINE_SIGNED_NEG(T, name, min, max)         \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_neg( \
-      T* res, T value) {                                        \
-    psnip_safe_bool r = value != min;                           \
-    *res = PSNIP_SAFE_LIKELY(r) ? -value : max;                 \
-    return r;                                                   \
+#define PSNIP_SAFE_DEFINE_SIGNED_NEG(T, name, min, max)                        \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_neg(T* res, T value) { \
+    psnipSafeBool r = value != min;                                            \
+    *res = PSNIP_SAFE_LIKELY(r) ? -value : max;                                \
+    return r;                                                                  \
   }
 
-#define PSNIP_SAFE_DEFINE_INTSAFE(T, name, op, isf)              \
-  PSNIP_SAFE__FUNCTION psnip_safe_bool psnip_safe_##name##_##op( \
-      T* res, T a, T b) {                                        \
-    return isf(a, b, res) == S_OK;                               \
+#define PSNIP_SAFE_DEFINE_INTSAFE(T, name, op, isf)           \
+  PSNIP_SAFE__FUNCTION psnipSafeBool psnipSafe_##name##_##op( \
+      T* res, T a, T b) {                                     \
+    return isf(a, b, res) == S_OK;                            \
   }
 
 #if CHAR_MIN == 0
@@ -1071,260 +1068,260 @@ PSNIP_SAFE_DEFINE_UNSIGNED_DIV(psnip_uint8_t, uint8, 0xff)
 PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint8_t, uint8, 0xff)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int16_t, int16, add)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int16_t, int16, sub)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int16_t, int16, mul)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int16_t, int16, add)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int16_t, int16, sub)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int16_t, int16, mul)
 #elif defined(PSNIP_SAFE_HAVE_LARGER_INT16)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int16_t,
+    Psnip_int16_t,
     int16,
     add,
     (-32767 - 1),
     0x7fff)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int16_t,
+    Psnip_int16_t,
     int16,
     sub,
     (-32767 - 1),
     0x7fff)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int16_t,
+    Psnip_int16_t,
     int16,
     mul,
     (-32767 - 1),
     0x7fff)
 #else
-PSNIP_SAFE_DEFINE_SIGNED_ADD(psnip_int16_t, int16, (-32767 - 1), 0x7fff)
-PSNIP_SAFE_DEFINE_SIGNED_SUB(psnip_int16_t, int16, (-32767 - 1), 0x7fff)
-PSNIP_SAFE_DEFINE_SIGNED_MUL(psnip_int16_t, int16, (-32767 - 1), 0x7fff)
+PSNIP_SAFE_DEFINE_SIGNED_ADD(Psnip_int16_t, int16, (-32767 - 1), 0x7fff)
+PSNIP_SAFE_DEFINE_SIGNED_SUB(Psnip_int16_t, int16, (-32767 - 1), 0x7fff)
+PSNIP_SAFE_DEFINE_SIGNED_MUL(Psnip_int16_t, int16, (-32767 - 1), 0x7fff)
 #endif
-PSNIP_SAFE_DEFINE_SIGNED_DIV(psnip_int16_t, int16, (-32767 - 1), 0x7fff)
-PSNIP_SAFE_DEFINE_SIGNED_MOD(psnip_int16_t, int16, (-32767 - 1), 0x7fff)
-PSNIP_SAFE_DEFINE_SIGNED_NEG(psnip_int16_t, int16, (-32767 - 1), 0x7fff)
+PSNIP_SAFE_DEFINE_SIGNED_DIV(Psnip_int16_t, int16, (-32767 - 1), 0x7fff)
+PSNIP_SAFE_DEFINE_SIGNED_MOD(Psnip_int16_t, int16, (-32767 - 1), 0x7fff)
+PSNIP_SAFE_DEFINE_SIGNED_NEG(Psnip_int16_t, int16, (-32767 - 1), 0x7fff)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint16_t, uint16, add)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint16_t, uint16, sub)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint16_t, uint16, mul)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint16_t, uint16, add)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint16_t, uint16, sub)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint16_t, uint16, mul)
 #elif defined(PSNIP_SAFE_HAVE_INTSAFE_H) && defined(_WIN32)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint16_t, uint16, add, UShortAdd)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint16_t, uint16, sub, UShortSub)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint16_t, uint16, mul, UShortMult)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint16_t, uint16, add, UShortAdd)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint16_t, uint16, sub, UShortSub)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint16_t, uint16, mul, UShortMult)
 #elif defined(PSNIP_SAFE_HAVE_LARGER_UINT16)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint16_t,
+    Psnip_uint16_t,
     uint16,
     add,
     0xffff)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint16_t,
+    Psnip_uint16_t,
     uint16,
     sub,
     0xffff)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint16_t,
+    Psnip_uint16_t,
     uint16,
     mul,
     0xffff)
 #else
-PSNIP_SAFE_DEFINE_UNSIGNED_ADD(psnip_uint16_t, uint16, 0xffff)
-PSNIP_SAFE_DEFINE_UNSIGNED_SUB(psnip_uint16_t, uint16, 0xffff)
-PSNIP_SAFE_DEFINE_UNSIGNED_MUL(psnip_uint16_t, uint16, 0xffff)
+PSNIP_SAFE_DEFINE_UNSIGNED_ADD(Psnip_uint16_t, uint16, 0xffff)
+PSNIP_SAFE_DEFINE_UNSIGNED_SUB(Psnip_uint16_t, uint16, 0xffff)
+PSNIP_SAFE_DEFINE_UNSIGNED_MUL(Psnip_uint16_t, uint16, 0xffff)
 #endif
-PSNIP_SAFE_DEFINE_UNSIGNED_DIV(psnip_uint16_t, uint16, 0xffff)
-PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint16_t, uint16, 0xffff)
+PSNIP_SAFE_DEFINE_UNSIGNED_DIV(Psnip_uint16_t, uint16, 0xffff)
+PSNIP_SAFE_DEFINE_UNSIGNED_MOD(Psnip_uint16_t, uint16, 0xffff)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int32_t, int32, add)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int32_t, int32, sub)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int32_t, int32, mul)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int32_t, int32, add)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int32_t, int32, sub)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int32_t, int32, mul)
 #elif defined(PSNIP_SAFE_HAVE_LARGER_INT32)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     add,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     sub,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     mul,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 #else
 PSNIP_SAFE_DEFINE_SIGNED_ADD(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_SUB(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_MUL(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 #endif
 PSNIP_SAFE_DEFINE_SIGNED_DIV(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_MOD(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_NEG(
-    psnip_int32_t,
+    Psnip_int32_t,
     int32,
     (-0x7fffffffLL - 1),
     0x7fffffffLL)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint32_t, uint32, add)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint32_t, uint32, sub)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint32_t, uint32, mul)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint32_t, uint32, add)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint32_t, uint32, sub)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint32_t, uint32, mul)
 #elif defined(PSNIP_SAFE_HAVE_INTSAFE_H) && defined(_WIN32)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint32_t, uint32, add, UIntAdd)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint32_t, uint32, sub, UIntSub)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint32_t, uint32, mul, UIntMult)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint32_t, uint32, add, UIntAdd)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint32_t, uint32, sub, UIntSub)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint32_t, uint32, mul, UIntMult)
 #elif defined(PSNIP_SAFE_HAVE_LARGER_UINT32)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint32_t,
+    Psnip_uint32_t,
     uint32,
     add,
     0xffffffffUL)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint32_t,
+    Psnip_uint32_t,
     uint32,
     sub,
     0xffffffffUL)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint32_t,
+    Psnip_uint32_t,
     uint32,
     mul,
     0xffffffffUL)
 #else
-PSNIP_SAFE_DEFINE_UNSIGNED_ADD(psnip_uint32_t, uint32, 0xffffffffUL)
-PSNIP_SAFE_DEFINE_UNSIGNED_SUB(psnip_uint32_t, uint32, 0xffffffffUL)
-PSNIP_SAFE_DEFINE_UNSIGNED_MUL(psnip_uint32_t, uint32, 0xffffffffUL)
+PSNIP_SAFE_DEFINE_UNSIGNED_ADD(Psnip_uint32_t, uint32, 0xffffffffUL)
+PSNIP_SAFE_DEFINE_UNSIGNED_SUB(Psnip_uint32_t, uint32, 0xffffffffUL)
+PSNIP_SAFE_DEFINE_UNSIGNED_MUL(Psnip_uint32_t, uint32, 0xffffffffUL)
 #endif
-PSNIP_SAFE_DEFINE_UNSIGNED_DIV(psnip_uint32_t, uint32, 0xffffffffUL)
-PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint32_t, uint32, 0xffffffffUL)
+PSNIP_SAFE_DEFINE_UNSIGNED_DIV(Psnip_uint32_t, uint32, 0xffffffffUL)
+PSNIP_SAFE_DEFINE_UNSIGNED_MOD(Psnip_uint32_t, uint32, 0xffffffffUL)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int64_t, int64, add)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int64_t, int64, sub)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_int64_t, int64, mul)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int64_t, int64, add)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int64_t, int64, sub)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_int64_t, int64, mul)
 #elif defined(PSNIP_SAFE_HAVE_LARGER_INT64)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     add,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     sub,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 PSNIP_SAFE_DEFINE_PROMOTED_SIGNED_BINARY_OP(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     mul,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 #else
 PSNIP_SAFE_DEFINE_SIGNED_ADD(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_SUB(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_MUL(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 #endif
 PSNIP_SAFE_DEFINE_SIGNED_DIV(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_MOD(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 PSNIP_SAFE_DEFINE_SIGNED_NEG(
-    psnip_int64_t,
+    Psnip_int64_t,
     int64,
     (-0x7fffffffffffffffLL - 1),
     0x7fffffffffffffffLL)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint64_t, uint64, add)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint64_t, uint64, sub)
-PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(psnip_uint64_t, uint64, mul)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint64_t, uint64, add)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint64_t, uint64, sub)
+PSNIP_SAFE_DEFINE_BUILTIN_BINARY_OP(Psnip_uint64_t, uint64, mul)
 #elif defined(PSNIP_SAFE_HAVE_INTSAFE_H) && defined(_WIN32)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint64_t, uint64, add, ULongLongAdd)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint64_t, uint64, sub, ULongLongSub)
-PSNIP_SAFE_DEFINE_INTSAFE(psnip_uint64_t, uint64, mul, ULongLongMult)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint64_t, uint64, add, ULongLongAdd)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint64_t, uint64, sub, ULongLongSub)
+PSNIP_SAFE_DEFINE_INTSAFE(Psnip_uint64_t, uint64, mul, ULongLongMult)
 #elif defined(PSNIP_SAFE_HAVE_LARGER_UINT64)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint64_t,
+    Psnip_uint64_t,
     uint64,
     add,
     0xffffffffffffffffULL)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint64_t,
+    Psnip_uint64_t,
     uint64,
     sub,
     0xffffffffffffffffULL)
 PSNIP_SAFE_DEFINE_PROMOTED_UNSIGNED_BINARY_OP(
-    psnip_uint64_t,
+    Psnip_uint64_t,
     uint64,
     mul,
     0xffffffffffffffffULL)
 #else
-PSNIP_SAFE_DEFINE_UNSIGNED_ADD(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
-PSNIP_SAFE_DEFINE_UNSIGNED_SUB(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
-PSNIP_SAFE_DEFINE_UNSIGNED_MUL(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
+PSNIP_SAFE_DEFINE_UNSIGNED_ADD(Psnip_uint64_t, uint64, 0xffffffffffffffffULL)
+PSNIP_SAFE_DEFINE_UNSIGNED_SUB(Psnip_uint64_t, uint64, 0xffffffffffffffffULL)
+PSNIP_SAFE_DEFINE_UNSIGNED_MUL(Psnip_uint64_t, uint64, 0xffffffffffffffffULL)
 #endif
-PSNIP_SAFE_DEFINE_UNSIGNED_DIV(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
-PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
+PSNIP_SAFE_DEFINE_UNSIGNED_DIV(Psnip_uint64_t, uint64, 0xffffffffffffffffULL)
+PSNIP_SAFE_DEFINE_UNSIGNED_MOD(Psnip_uint64_t, uint64, 0xffffffffffffffffULL)
 
 #endif /* !defined(PSNIP_SAFE_NO_FIXED) */
 
 #define PSNIP_SAFE_C11_GENERIC_SELECTION(res, op) \
-  _Generic(                                       \
+  generic(                                        \
       (*res),                                     \
-      char: psnip_safe_char_##op,                 \
-      unsigned char: psnip_safe_uchar_##op,       \
-      short: psnip_safe_short_##op,               \
-      unsigned short: psnip_safe_ushort_##op,     \
-      int: psnip_safe_int_##op,                   \
-      unsigned int: psnip_safe_uint_##op,         \
-      long: psnip_safe_long_##op,                 \
-      unsigned long: psnip_safe_ulong_##op,       \
-      long long: psnip_safe_llong_##op,           \
-      unsigned long long: psnip_safe_ullong_##op)
+      char : psnipSafeChar_##op,                  \
+      unsigned char : psnipSafeUchar_##op,        \
+      short : psnipSafeShort_##op,                \
+      unsigned short : psnipSafeUshort_##op,      \
+      int : psnipSafeInt_##op,                    \
+      unsigned int : psnipSafeUint_##op,          \
+      long : psnipSafeLong_##op,                  \
+      unsigned long : psnipSafeUlong_##op,        \
+      long long : psnipSafeLlong_##op,            \
+      unsigned long long : psnipSafeUllong_##op)
 
 #define PSNIP_SAFE_C11_GENERIC_BINARY_OP(op, res, a, b) \
   PSNIP_SAFE_C11_GENERIC_SELECTION(res, op)(res, a, b)
@@ -1332,12 +1329,12 @@ PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
   PSNIP_SAFE_C11_GENERIC_SELECTION(res, op)(res, v)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-#define psnip_safe_add(res, a, b) (!__builtin_add_overflow(a, b, res))
-#define psnip_safe_sub(res, a, b) (!__builtin_sub_overflow(a, b, res))
-#define psnip_safe_mul(res, a, b) (!__builtin_mul_overflow(a, b, res))
-#define psnip_safe_div(res, a, b) (!__builtin_div_overflow(a, b, res))
-#define psnip_safe_mod(res, a, b) (!__builtin_mod_overflow(a, b, res))
-#define psnip_safe_neg(res, v) PSNIP_SAFE_C11_GENERIC_UNARY_OP(neg, res, v)
+#define psnipSafeAdd(res, a, b) (!__builtin_add_overflow(a, b, res))
+#define psnipSafeSub(res, a, b) (!__builtin_sub_overflow(a, b, res))
+#define psnipSafeMul(res, a, b) (!__builtin_mul_overflow(a, b, res))
+#define psnipSafeDiv(res, a, b) (!__builtin_div_overflow(a, b, res))
+#define psnipSafeMod(res, a, b) (!__builtin_mod_overflow(a, b, res))
+#define psnipSafeNeg(res, v) PSNIP_SAFE_C11_GENERIC_UNARY_OP(neg, res, v)
 
 #elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 /* The are no fixed-length or size selections because they cause an
@@ -1345,42 +1342,37 @@ PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
  * this doesn't cause problems on exotic platforms, but if it does
  * please let me know and I'll try to figure something out. */
 
-#define psnip_safe_add(res, a, b) \
-  PSNIP_SAFE_C11_GENERIC_BINARY_OP(add, res, a, b)
-#define psnip_safe_sub(res, a, b) \
-  PSNIP_SAFE_C11_GENERIC_BINARY_OP(sub, res, a, b)
-#define psnip_safe_mul(res, a, b) \
-  PSNIP_SAFE_C11_GENERIC_BINARY_OP(mul, res, a, b)
-#define psnip_safe_div(res, a, b) \
-  PSNIP_SAFE_C11_GENERIC_BINARY_OP(div, res, a, b)
-#define psnip_safe_mod(res, a, b) \
-  PSNIP_SAFE_C11_GENERIC_BINARY_OP(mod, res, a, b)
-#define psnip_safe_neg(res, v) PSNIP_SAFE_C11_GENERIC_UNARY_OP(neg, res, v)
+#define psnipSafeAdd(res, a, b) PSNIP_SAFE_C11_GENERIC_BINARY_OP(add, res, a, b)
+#define psnipSafeSub(res, a, b) PSNIP_SAFE_C11_GENERIC_BINARY_OP(sub, res, a, b)
+#define psnipSafeMul(res, a, b) PSNIP_SAFE_C11_GENERIC_BINARY_OP(mul, res, a, b)
+#define psnipSafeDiv(res, a, b) PSNIP_SAFE_C11_GENERIC_BINARY_OP(div, res, a, b)
+#define psnipSafeMod(res, a, b) PSNIP_SAFE_C11_GENERIC_BINARY_OP(mod, res, a, b)
+#define psnipSafeNeg(res, v) PSNIP_SAFE_C11_GENERIC_UNARY_OP(neg, res, v)
 #endif
 
 #if !defined(PSNIP_SAFE_HAVE_BUILTINS) &&  \
     (defined(PSNIP_SAFE_EMULATE_NATIVE) || \
      defined(PSNIP_BUILTIN_EMULATE_NATIVE))
-#define __builtin_sadd_overflow(a, b, res) (!psnip_safe_int_add(res, a, b))
-#define __builtin_saddl_overflow(a, b, res) (!psnip_safe_long_add(res, a, b))
-#define __builtin_saddll_overflow(a, b, res) (!psnip_safe_llong_add(res, a, b))
-#define __builtin_uadd_overflow(a, b, res) (!psnip_safe_uint_add(res, a, b))
-#define __builtin_uaddl_overflow(a, b, res) (!psnip_safe_ulong_add(res, a, b))
-#define __builtin_uaddll_overflow(a, b, res) (!psnip_safe_ullong_add(res, a, b))
+#define __builtin_sadd_overflow(a, b, res) (!psnipSafeIntAdd(res, a, b))
+#define __builtin_saddl_overflow(a, b, res) (!psnipSafeLongAdd(res, a, b))
+#define __builtin_saddll_overflow(a, b, res) (!psnipSafeLlongAdd(res, a, b))
+#define __builtin_uadd_overflow(a, b, res) (!psnipSafeUintAdd(res, a, b))
+#define __builtin_uaddl_overflow(a, b, res) (!psnipSafeUlongAdd(res, a, b))
+#define __builtin_uaddll_overflow(a, b, res) (!psnipSafeUllongAdd(res, a, b))
 
-#define __builtin_ssub_overflow(a, b, res) (!psnip_safe_int_sub(res, a, b))
-#define __builtin_ssubl_overflow(a, b, res) (!psnip_safe_long_sub(res, a, b))
-#define __builtin_ssubll_overflow(a, b, res) (!psnip_safe_llong_sub(res, a, b))
-#define __builtin_usub_overflow(a, b, res) (!psnip_safe_uint_sub(res, a, b))
-#define __builtin_usubl_overflow(a, b, res) (!psnip_safe_ulong_sub(res, a, b))
-#define __builtin_usubll_overflow(a, b, res) (!psnip_safe_ullong_sub(res, a, b))
+#define __builtin_ssub_overflow(a, b, res) (!psnipSafeIntSub(res, a, b))
+#define __builtin_ssubl_overflow(a, b, res) (!psnipSafeLongSub(res, a, b))
+#define __builtin_ssubll_overflow(a, b, res) (!psnipSafeLlongSub(res, a, b))
+#define __builtin_usub_overflow(a, b, res) (!psnipSafeUintSub(res, a, b))
+#define __builtin_usubl_overflow(a, b, res) (!psnipSafeUlongSub(res, a, b))
+#define __builtin_usubll_overflow(a, b, res) (!psnipSafeUllongSub(res, a, b))
 
-#define __builtin_smul_overflow(a, b, res) (!psnip_safe_int_mul(res, a, b))
-#define __builtin_smull_overflow(a, b, res) (!psnip_safe_long_mul(res, a, b))
-#define __builtin_smulll_overflow(a, b, res) (!psnip_safe_llong_mul(res, a, b))
-#define __builtin_umul_overflow(a, b, res) (!psnip_safe_uint_mul(res, a, b))
-#define __builtin_umull_overflow(a, b, res) (!psnip_safe_ulong_mul(res, a, b))
-#define __builtin_umulll_overflow(a, b, res) (!psnip_safe_ullong_mul(res, a, b))
+#define __builtin_smul_overflow(a, b, res) (!psnipSafeIntMul(res, a, b))
+#define __builtin_smull_overflow(a, b, res) (!psnipSafeLongMul(res, a, b))
+#define __builtin_smulll_overflow(a, b, res) (!psnipSafeLlongMul(res, a, b))
+#define __builtin_umul_overflow(a, b, res) (!psnipSafeUintMul(res, a, b))
+#define __builtin_umull_overflow(a, b, res) (!psnipSafeUlongMul(res, a, b))
+#define __builtin_umulll_overflow(a, b, res) (!psnipSafeUllongMul(res, a, b))
 #endif
 
 #endif /* !defined(PSNIP_SAFE_H) */

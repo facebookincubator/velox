@@ -371,12 +371,12 @@ CudaSpecialization::atomic_add<breeze::utils::Slice<
   static_assert(sizeof(double) == sizeof(unsigned long long),
                 "unexpected type sizes");
   unsigned long long old =
-      *reinterpret_cast<unsigned long long *>(address.data());
+      *reinterpret_cast<unsigned long long*>(address.data());
   unsigned long long assumed;
   do {
     assumed = old;
     old = atomicCAS(
-        reinterpret_cast<unsigned long long *>(address.data()), assumed,
+        reinterpret_cast<unsigned long long*>(address.data()), assumed,
         __double_as_longlong(value + __longlong_as_double(assumed)));
   } while (assumed != old);
 
@@ -394,9 +394,9 @@ CudaSpecialization::atomic_add<breeze::utils::Slice<
         address,
     long long value) {
   unsigned long long result =
-      atomicAdd(reinterpret_cast<unsigned long long *>(address.data()),
-                *reinterpret_cast<unsigned long long *>(&value));
-  return *reinterpret_cast<long long *>(&result);
+      atomicAdd(reinterpret_cast<unsigned long long*>(address.data()),
+                *reinterpret_cast<unsigned long long*>(&value));
+  return *reinterpret_cast<long long*>(&result);
 }
 
 // specialization for T=Slice<GLOBAL, BLOCKED, float>
@@ -409,10 +409,10 @@ __device__ __forceinline__ void CudaSpecialization::atomic_min<
   static_assert(sizeof(float) == sizeof(unsigned), "unexpected type sizes");
   float current = atomic_load(address);
   while (current > value) {
-    unsigned old = atomicCAS(reinterpret_cast<unsigned *>(address.data()),
-                             *reinterpret_cast<unsigned *>(&current),
-                             *reinterpret_cast<unsigned *>(&value));
-    current = *reinterpret_cast<float *>(&old);
+    unsigned old = atomicCAS(reinterpret_cast<unsigned*>(address.data()),
+                             *reinterpret_cast<unsigned*>(&current),
+                             *reinterpret_cast<unsigned*>(&value));
+    current = *reinterpret_cast<float*>(&old);
     if (current == value) {
       break;
     }
@@ -429,10 +429,10 @@ __device__ __forceinline__ void CudaSpecialization::atomic_max<
   static_assert(sizeof(float) == sizeof(unsigned), "unexpected type sizes");
   float current = atomic_load(address);
   while (current < value) {
-    unsigned old = atomicCAS(reinterpret_cast<unsigned *>(address.data()),
-                             *reinterpret_cast<unsigned *>(&current),
-                             *reinterpret_cast<unsigned *>(&value));
-    current = *reinterpret_cast<float *>(&old);
+    unsigned old = atomicCAS(reinterpret_cast<unsigned*>(address.data()),
+                             *reinterpret_cast<unsigned*>(&current),
+                             *reinterpret_cast<unsigned*>(&value));
+    current = *reinterpret_cast<float*>(&old);
     if (current == value) {
       break;
     }
@@ -452,10 +452,10 @@ CudaSpecialization::atomic_min<breeze::utils::Slice<
   double current = atomic_load(address);
   while (current > value) {
     unsigned long long old =
-        atomicCAS(reinterpret_cast<unsigned long long *>(address.data()),
-                  *reinterpret_cast<unsigned long long *>(&current),
-                  *reinterpret_cast<unsigned long long *>(&value));
-    current = *reinterpret_cast<double *>(&old);
+        atomicCAS(reinterpret_cast<unsigned long long*>(address.data()),
+                  *reinterpret_cast<unsigned long long*>(&current),
+                  *reinterpret_cast<unsigned long long*>(&value));
+    current = *reinterpret_cast<double*>(&old);
     if (current == value) {
       break;
     }
@@ -475,10 +475,10 @@ CudaSpecialization::atomic_max<breeze::utils::Slice<
   double current = atomic_load(address);
   while (current < value) {
     unsigned long long old =
-        atomicCAS(reinterpret_cast<unsigned long long *>(address.data()),
-                  *reinterpret_cast<unsigned long long *>(&current),
-                  *reinterpret_cast<unsigned long long *>(&value));
-    current = *reinterpret_cast<double *>(&old);
+        atomicCAS(reinterpret_cast<unsigned long long*>(address.data()),
+                  *reinterpret_cast<unsigned long long*>(&current),
+                  *reinterpret_cast<unsigned long long*>(&value));
+    current = *reinterpret_cast<double*>(&old);
     if (current == value) {
       break;
     }
@@ -496,10 +496,10 @@ __device__ __forceinline__ long long CudaSpecialization::atomic_cas<
         address,
     long long compare, long long value) {
   unsigned long long old =
-      atomicCAS(reinterpret_cast<unsigned long long *>(address.data()),
-                *reinterpret_cast<unsigned long long *>(&compare),
-                *reinterpret_cast<unsigned long long *>(&value));
-  return *reinterpret_cast<long long *>(&old);
+      atomicCAS(reinterpret_cast<unsigned long long*>(address.data()),
+                *reinterpret_cast<unsigned long long*>(&compare),
+                *reinterpret_cast<unsigned long long*>(&value));
+  return *reinterpret_cast<long long*>(&old);
 }
 
 // specialization for T=Slice<SHARED, BLOCKED, long long>
@@ -518,9 +518,9 @@ __device__ __forceinline__ long long CudaSpecialization::atomic_cas<
                                     unsigned long long>::pointer_type;
   unsigned long long old =
       atomicCAS(reinterpret_cast<pointer_type>(address.data()),
-                *reinterpret_cast<unsigned long long *>(&compare),
-                *reinterpret_cast<unsigned long long *>(&value));
-  return *reinterpret_cast<long long *>(&old);
+                *reinterpret_cast<unsigned long long*>(&compare),
+                *reinterpret_cast<unsigned long long*>(&value));
+  return *reinterpret_cast<long long*>(&old);
 }
 
 // specialization for T=Slice<GLOBAL, BLOCKED, float>
@@ -532,10 +532,10 @@ __device__ __forceinline__ float CudaSpecialization::atomic_cas<
         address,
     float compare, float value) {
   static_assert(sizeof(float) == sizeof(unsigned), "unexpected type sizes");
-  unsigned old = atomicCAS(reinterpret_cast<unsigned *>(address.data()),
-                           *reinterpret_cast<unsigned *>(&compare),
-                           *reinterpret_cast<unsigned *>(&value));
-  return *reinterpret_cast<float *>(&old);
+  unsigned old = atomicCAS(reinterpret_cast<unsigned*>(address.data()),
+                           *reinterpret_cast<unsigned*>(&compare),
+                           *reinterpret_cast<unsigned*>(&value));
+  return *reinterpret_cast<float*>(&old);
 }
 
 #if __CUDA_ARCH__ >= 800

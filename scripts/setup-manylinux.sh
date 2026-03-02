@@ -30,7 +30,7 @@ set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPT_DIR/setup-common.sh
+source "$SCRIPT_DIR"/setup-common.sh
 CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CXXFLAGS
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
@@ -80,7 +80,7 @@ function install_conda {
 function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
-  wget_and_untar https://github.com/gflags/gflags/archive/${GFLAGS_VERSION}.tar.gz gflags
+  wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
   cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
 }
 
@@ -103,7 +103,7 @@ function install_cuda {
   dnf config-manager --add-repo "$repo_url"
   local dashed
   dashed="$(echo "$1" | tr '.' '-')"
-  dnf install -y cuda-nvcc-"$dashed" cuda-cudart-devel-"$dashed" cuda-nvrtc-devel-"$dashed" cuda-driver-devel-"$dashed"
+  dnf install -y cuda-nvcc-"$dashed" cuda-cudart-devel-"$dashed" cuda-nvrtc-devel-"$dashed" cuda-driver-devel-"$dashed" libnvjitlink-devel-"$dashed"
 }
 
 function install_velox_deps {

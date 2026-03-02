@@ -47,7 +47,8 @@ struct VectorWriter : public VectorWriterBase {
     }
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
       data_ = vector_->mutableRawValues();
@@ -118,7 +119,8 @@ struct VectorWriter<Array<V>> : public VectorWriterBase {
     return *arrayVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > arrayVector_->size()) {
       arrayVector_->resize(size);
     }
@@ -198,7 +200,8 @@ struct VectorWriter<Map<K, V>> : public VectorWriterBase {
     return *mapVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > mapVector_->size()) {
       mapVector_->resize(size);
     }
@@ -275,7 +278,8 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     return *rowVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > rowVector_->size()) {
       // Note order is important here, we resize children first to ensure
       // data_ is cached and are not reset when rowVector resizes them.
@@ -336,8 +340,9 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     } else {
       using type = std::tuple_element_t<I, children_types>;
       std::get<I>(writer_.childrenWriters_)
-          .init(static_cast<typename TypeToFlatVector<type>::type&>(
-              *rowVector_->childAt(I).get()));
+          .init(
+              static_cast<typename TypeToFlatVector<type>::type&>(
+                  *rowVector_->childAt(I).get()));
 
       initVectorWriters<I + 1>();
     }
@@ -359,9 +364,10 @@ struct VectorWriter<
     proxy_.vector_ = &vector;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > proxy_.vector_->size()) {
-      proxy_.vector_->resize(size, /*setNotNull*/ false);
+      proxy_.vector_->resize(size, /*setNotNull=*/false);
     }
   }
 
@@ -410,7 +416,8 @@ struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>>
     vector_ = &vector;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
     }
@@ -457,7 +464,8 @@ struct VectorWriter<std::shared_ptr<T>> : public VectorWriterBase {
     vector_ = &vector;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
     }
@@ -546,7 +554,8 @@ struct VectorWriter<Generic<T, comparable, orderable>>
     }
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (castType_) {
       castWriter_->ensureSize(size);
     } else {
@@ -723,7 +732,8 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
     return *rowVector_;
   }
 
-  void ensureSize(size_t size) override {
+  void ensureSize(vector_size_t size) override {
+    VELOX_CHECK_GE(size, 0);
     if (size > rowVector_->size()) {
       for (int i = 0; i < writer_.childrenCount_; ++i) {
         writer_.childrenWriters_[i]->ensureSize(size);

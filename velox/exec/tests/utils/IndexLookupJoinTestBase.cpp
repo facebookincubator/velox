@@ -15,15 +15,30 @@
  */
 
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
-namespace fecebook::velox::exec::test {
+namespace facebook::velox::exec::test {
+using namespace facebook::velox::test;
 
-facebook::velox::RowTypePtr IndexLookupJoinTestBase::concat(
-    const facebook::velox::RowTypePtr& a,
-    const facebook::velox::RowTypePtr& b) {
+namespace {
+std::vector<std::string> appendMarker(const std::vector<std::string> columns) {
+  std::vector<std::string> resultColumns;
+  resultColumns.reserve(columns.size() + 1);
+  for (const auto& column : columns) {
+    resultColumns.push_back(column);
+  }
+  resultColumns.push_back("__match__");
+  return resultColumns;
+}
+} // namespace
+
+RowTypePtr IndexLookupJoinTestBase::concat(
+    const RowTypePtr& a,
+    const RowTypePtr& b) {
   std::vector<std::string> names = a->names();
-  std::vector<facebook::velox::TypePtr> types = a->children();
+  std::vector<TypePtr> types = a->children();
   names.insert(names.end(), b->names().begin(), b->names().end());
   types.insert(types.end(), b->children().begin(), b->children().end());
   return ROW(std::move(names), std::move(types));
@@ -37,15 +52,15 @@ int IndexLookupJoinTestBase::getNumRows(const std::vector<int>& cardinalities) {
   return numRows;
 }
 
-std::vector<facebook::velox::RowVectorPtr>
-IndexLookupJoinTestBase::generateProbeInput(
+std::vector<RowVectorPtr> IndexLookupJoinTestBase::generateProbeInput(
     size_t numBatches,
     size_t batchSize,
     size_t numDuplicateProbeRows,
-    SequenceTableData& tableData,
-    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
+    IndexTableData& tableData,
+    std::shared_ptr<memory::MemoryPool>& pool,
     const std::vector<std::string>& probeJoinKeys,
-    const std::vector<std::string> inColumns,
+    bool hasNullKeys,
+    const std::vector<std::string>& inColumns,
     const std::vector<std::pair<std::string, std::string>>& betweenColumns,
     std::optional<int> equalMatchPct,
     std::optional<int> inMatchPct,
@@ -53,59 +68,83 @@ IndexLookupJoinTestBase::generateProbeInput(
   VELOX_CHECK_LE(
       probeJoinKeys.size() + betweenColumns.size() + inColumns.size(),
       keyType_->size());
-  std::vector<facebook::velox::RowVectorPtr> probeInputs;
+  std::vector<RowVectorPtr> probeInputs;
   probeInputs.reserve(numBatches);
-  facebook::velox::VectorFuzzer::Options opts;
+  VectorFuzzer::Options opts;
   opts.vectorSize = batchSize * numDuplicateProbeRows;
   opts.allowSlice = false;
   // TODO: add nullable handling later.
-  opts.nullRatio = 0.0;
-  facebook::velox::VectorFuzzer fuzzer(opts, pool.get());
+  opts.nullRatio = hasNullKeys ? 0.1 : 0.0;
+  VectorFuzzer fuzzer(opts, pool.get());
   for (int i = 0; i < numBatches; ++i) {
     probeInputs.push_back(fuzzer.fuzzInputRow(probeType_));
+    // NOTE: index connector doesn't expect in condition column rray elements to
+    // be null.
+    if ((!inMatchPct.has_value() || tableData.keyVectors->size() == 0) &&
+        hasNullKeys) {
+      for (int i = 0; i < probeType_->size(); ++i) {
+        const auto columnType = probeType_->childAt(i);
+        if (columnType->isArray()) {
+          opts.nullRatio = 0.0;
+          VectorFuzzer vectorFuzzer(opts, pool.get());
+          probeInputs.back()->childAt(i) = vectorFuzzer.fuzz(columnType);
+          VELOX_CHECK(!probeInputs.back()->childAt(i)->mayHaveNulls());
+          VELOX_CHECK_EQ(
+              probeInputs.back()->childAt(i)->size(),
+              probeInputs.back()->size());
+        }
+      }
+    }
   }
 
-  if (tableData.keyData->size() == 0) {
+  if (tableData.keyVectors->size() == 0) {
     return probeInputs;
   }
 
-  const auto numTableRows = tableData.keyData->size();
-  std::vector<facebook::velox::FlatVectorPtr<int64_t>> tableKeyVectors;
+  const auto numTableRows = tableData.keyVectors->size();
+  std::vector<FlatVectorPtr<int64_t>> tableKeyVectors;
   for (int i = 0; i < probeJoinKeys.size(); ++i) {
-    auto keyVector = tableData.keyData->childAt(i);
+    auto keyVector = tableData.keyVectors->childAt(i);
     keyVector->loadedVector();
-    facebook::velox::BaseVector::flattenVector(keyVector);
+    BaseVector::flattenVector(keyVector);
     tableKeyVectors.push_back(
-        std::dynamic_pointer_cast<facebook::velox::FlatVector<int64_t>>(
-            keyVector));
+        std::dynamic_pointer_cast<FlatVector<int64_t>>(keyVector));
   }
 
   if (equalMatchPct.has_value()) {
     VELOX_CHECK_GE(equalMatchPct.value(), 0);
     VELOX_CHECK_LE(equalMatchPct.value(), 100);
-    for (int i = 0, totalRows = 0; i < numBatches; ++i) {
-      std::vector<facebook::velox::FlatVectorPtr<int64_t>> probeKeyVectors;
+    for (int i = 0; i < numBatches; ++i) {
+      std::vector<FlatVectorPtr<int64_t>> probeKeyVectors;
       for (int j = 0; j < probeJoinKeys.size(); ++j) {
-        probeKeyVectors.push_back(facebook::velox::BaseVector::create<
-                                  facebook::velox::FlatVector<int64_t>>(
-            probeType_->findChild(probeJoinKeys[j]),
-            probeInputs[i]->size(),
-            pool.get()));
+        probeKeyVectors.push_back(
+            BaseVector::create<FlatVector<int64_t>>(
+                probeType_->findChild(probeJoinKeys[j]),
+                probeInputs[i]->size(),
+                pool.get()));
       }
       for (int row = 0; row < probeInputs[i]->size();
-           row += numDuplicateProbeRows, totalRows += numDuplicateProbeRows) {
-        if ((totalRows / numDuplicateProbeRows) % 100 < equalMatchPct.value()) {
-          const auto matchKeyRow = folly::Random::rand64(numTableRows);
+           row += numDuplicateProbeRows) {
+        const auto hit =
+            (folly::Random::rand32(rng_) % 100) < equalMatchPct.value();
+        if (hit) {
+          const auto matchKeyRow = folly::Random::rand32(numTableRows, rng_);
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
             for (int k = 0; k < numDuplicateProbeRows; ++k) {
+              if (probeKeyVectors[j]->isNullAt(row + k)) {
+                continue;
+              }
               probeKeyVectors[j]->set(
                   row + k, tableKeyVectors[j]->valueAt(matchKeyRow));
             }
           }
         } else {
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
-            const auto randomValue = folly::Random::rand32() % 4096;
+            const auto randomValue = folly::Random::rand32(rng_) % 4096;
             for (int k = 0; k < numDuplicateProbeRows; ++k) {
+              if (probeKeyVectors[j]->isNullAt(row + k)) {
+                continue;
+              }
               probeKeyVectors[j]->set(
                   row + k, tableData.maxKeys[j] + 1 + randomValue);
             }
@@ -125,9 +164,8 @@ IndexLookupJoinTestBase::generateProbeInput(
     for (int i = 0; i < inColumns.size(); ++i) {
       const auto inColumnName = inColumns[i];
       const auto inColumnChannel = probeType_->getChildIdx(inColumnName);
-      auto inColumnType =
-          std::dynamic_pointer_cast<const facebook::velox::ArrayType>(
-              probeType_->childAt(inColumnChannel));
+      auto inColumnType = std::dynamic_pointer_cast<const ArrayType>(
+          probeType_->childAt(inColumnChannel));
       VELOX_CHECK_NOT_NULL(inColumnType);
       const auto tableKeyChannel = probeJoinKeys.size() + i;
       VELOX_CHECK(keyType_->childAt(tableKeyChannel)
@@ -144,10 +182,11 @@ IndexLookupJoinTestBase::generateProbeInput(
       for (int i = 0; i < numBatches; ++i) {
         probeInputs[i]->childAt(inColumnChannel) = makeArrayVector<int64_t>(
             probeInputs[i]->size(),
-            [&](auto row) -> facebook::velox::vector_size_t {
-              return maxValue - minValue + 1;
-            },
-            [&](auto /*unused*/, auto index) { return minValue + index; });
+            [&](auto row) -> vector_size_t { return maxValue - minValue + 1; },
+            [&](auto /*unused*/, auto index) { return minValue + index; },
+            [&](auto row) {
+              return probeInputs[i]->childAt(inColumnChannel)->isNullAt(row);
+            });
       }
     }
   }
@@ -177,15 +216,22 @@ IndexLookupJoinTestBase::generateProbeInput(
         if (lowerBoundChannel.has_value()) {
           probeInputs[i]->childAt(lowerBoundChannel.value()) =
               makeFlatVector<int64_t>(
-                  probeInputs[i]->size(), [&](auto /*unused*/) {
+                  probeInputs[i]->size(),
+                  [&](auto /*unused*/) {
                     return tableData.minKeys[tableKeyChannel];
+                  },
+                  [&](auto row) {
+                    return probeInputs[i]
+                        ->childAt(lowerBoundChannel.value())
+                        ->isNullAt(row);
                   });
         }
         const auto upperBoundColumn = betweenColumn.second;
         if (upperBoundChannel.has_value()) {
           probeInputs[i]->childAt(upperBoundChannel.value()) =
               makeFlatVector<int64_t>(
-                  probeInputs[i]->size(), [&](auto /*unused*/) -> int64_t {
+                  probeInputs[i]->size(),
+                  [&](auto /*unused*/) -> int64_t {
                     if (betweenMatchPct.value() == 0) {
                       return tableData.minKeys[tableKeyChannel] - 1;
                     } else {
@@ -194,6 +240,11 @@ IndexLookupJoinTestBase::generateProbeInput(
                            tableData.minKeys[tableKeyChannel]) *
                           betweenMatchPct.value() / 100;
                     }
+                  },
+                  [&](auto row) {
+                    return probeInputs[i]
+                        ->childAt(upperBoundChannel.value())
+                        ->isNullAt(row);
                   });
         }
       }
@@ -202,64 +253,68 @@ IndexLookupJoinTestBase::generateProbeInput(
   return probeInputs;
 }
 
-facebook::velox::core::PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
-    const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
-        planNodeIdGenerator,
-    facebook::velox::core::TableScanNodePtr indexScanNode,
-    const std::vector<facebook::velox::RowVectorPtr>& probeVectors,
+PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
+    const std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TableScanNodePtr indexScanNode,
+    const std::vector<RowVectorPtr>& probeVectors,
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const std::vector<std::string>& joinConditions,
-    facebook::velox::core::JoinType joinType,
+    bool hasMarker,
+    JoinType joinType,
     const std::vector<std::string>& outputColumns,
-    facebook::velox::core::PlanNodeId& joinNodeId) {
+    PlanNodeId& joinNodeId) {
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
   VELOX_CHECK_LE(leftKeys.size(), keyType_->size());
-  return facebook::velox::exec::test::PlanBuilder(
-             planNodeIdGenerator, pool_.get())
+  return PlanBuilder(planNodeIdGenerator, pool_.get())
       .values(probeVectors)
-      .indexLookupJoin(
-          leftKeys,
-          rightKeys,
-          indexScanNode,
-          joinConditions,
-          outputColumns,
-          joinType)
+      .startIndexLookupJoin()
+      .leftKeys(leftKeys)
+      .rightKeys(rightKeys)
+      .indexSource(indexScanNode)
+      .joinConditions(joinConditions)
+      .hasMarker(hasMarker)
+      .outputLayout(hasMarker ? appendMarker(outputColumns) : outputColumns)
+      .joinType(joinType)
+      .endIndexLookupJoin()
       .capturePlanNodeId(joinNodeId)
       .planNode();
 }
 
-facebook::velox::core::PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
-    const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
-        planNodeIdGenerator,
-    facebook::velox::core::TableScanNodePtr indexScanNode,
+PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
+    const std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TableScanNodePtr indexScanNode,
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const std::vector<std::string>& joinConditions,
-    facebook::velox::core::JoinType joinType,
+    const std::string& filter,
+    bool hasMarker,
+    JoinType joinType,
     const std::vector<std::string>& outputColumns) {
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
   VELOX_CHECK_LE(leftKeys.size(), keyType_->size());
-  return facebook::velox::exec::test::PlanBuilder(
-             planNodeIdGenerator, pool_.get())
+  return PlanBuilder(planNodeIdGenerator, pool_.get())
       .startTableScan()
       .outputType(probeType_)
       .endTableScan()
       .captureScanNodeId(probeScanNodeId_)
-      .indexLookupJoin(
-          leftKeys,
-          rightKeys,
-          indexScanNode,
-          joinConditions,
-          outputColumns,
-          joinType)
+      .startIndexLookupJoin()
+      .leftKeys(leftKeys)
+      .rightKeys(rightKeys)
+      .indexSource(indexScanNode)
+      .joinConditions(joinConditions)
+      .filter(filter)
+      .hasMarker(hasMarker)
+      .outputLayout(hasMarker ? appendMarker(outputColumns) : outputColumns)
+      .joinType(joinType)
+      .endIndexLookupJoin()
       .capturePlanNodeId(joinNodeId_)
       .planNode();
 }
 
 void IndexLookupJoinTestBase::createDuckDbTable(
     const std::string& tableName,
-    const std::vector<facebook::velox::RowVectorPtr>& data) {
+    const std::vector<RowVectorPtr>& data) {
   // Change each column with prefix 'c' to simplify the duckdb table
   // column naming.
   std::vector<std::string> columnNames;
@@ -267,7 +322,7 @@ void IndexLookupJoinTestBase::createDuckDbTable(
   for (int i = 0; i < data[0]->type()->size(); ++i) {
     columnNames.push_back(fmt::format("c{}", i));
   }
-  std::vector<facebook::velox::RowVectorPtr> duckDbInputs;
+  std::vector<RowVectorPtr> duckDbInputs;
   duckDbInputs.reserve(data.size());
   for (const auto& dataVector : data) {
     duckDbInputs.emplace_back(
@@ -276,49 +331,40 @@ void IndexLookupJoinTestBase::createDuckDbTable(
   duckDbQueryRunner_.createTable(tableName, duckDbInputs);
 }
 
-facebook::velox::core::TableScanNodePtr
-IndexLookupJoinTestBase::makeIndexScanNode(
-    const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
-        planNodeIdGenerator,
-    const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>
-        indexTableHandle,
-    const facebook::velox::RowTypePtr& outputType,
-    std::unordered_map<
-        std::string,
-        std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
-        assignments) {
-  auto planBuilder = facebook::velox::exec::test::PlanBuilder(
-      planNodeIdGenerator, pool_.get());
-  auto indexTableScan =
-      std::dynamic_pointer_cast<const facebook::velox::core::TableScanNode>(
-          facebook::velox::exec::test::PlanBuilder::TableScanBuilder(
-              planBuilder)
-              .tableHandle(indexTableHandle)
-              .outputType(outputType)
-              .assignments(assignments)
-              .endTableScan()
-              .capturePlanNodeId(indexScanNodeId_)
-              .planNode());
+TableScanNodePtr IndexLookupJoinTestBase::makeIndexScanNode(
+    const std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    const connector::ConnectorTableHandlePtr& indexTableHandle,
+    const RowTypePtr& outputType,
+    const connector::ColumnHandleMap& assignments) {
+  auto planBuilder = PlanBuilder(planNodeIdGenerator, pool_.get());
+  auto indexTableScan = std::dynamic_pointer_cast<const TableScanNode>(
+      PlanBuilder::TableScanBuilder(planBuilder)
+          .tableHandle(indexTableHandle)
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
+          .capturePlanNodeId(indexScanNodeId_)
+          .planNode());
   VELOX_CHECK_NOT_NULL(indexTableScan);
   return indexTableScan;
 }
 
 void IndexLookupJoinTestBase::generateIndexTableData(
     const std::vector<int>& keyCardinalities,
-    SequenceTableData& tableData,
-    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+    IndexTableData& tableData,
+    std::shared_ptr<memory::MemoryPool>& pool) {
   VELOX_CHECK_EQ(keyCardinalities.size(), keyType_->size());
   const auto numRows = getNumRows(keyCardinalities);
-  facebook::velox::VectorFuzzer::Options opts;
+  VectorFuzzer::Options opts;
   opts.vectorSize = numRows;
   opts.nullRatio = 0.0;
   opts.allowSlice = false;
-  facebook::velox::VectorFuzzer fuzzer(opts, pool.get());
+  VectorFuzzer fuzzer(opts, pool.get());
 
-  tableData.keyData = fuzzer.fuzzInputFlatRow(keyType_);
-  tableData.valueData = fuzzer.fuzzInputFlatRow(valueType_);
+  tableData.keyVectors = fuzzer.fuzzInputFlatRow(keyType_);
+  tableData.valueVectors = fuzzer.fuzzInputFlatRow(valueType_);
 
-  VELOX_CHECK_EQ(numRows, tableData.keyData->size());
+  VELOX_CHECK_EQ(numRows, tableData.keyVectors->size());
   tableData.maxKeys.resize(keyType_->size());
   tableData.minKeys.resize(keyType_->size());
   // Set the key column vector to the same value to easy testing with
@@ -328,8 +374,8 @@ void IndexLookupJoinTestBase::generateIndexTableData(
     int64_t minKey = std::numeric_limits<int64_t>::max();
     int64_t maxKey = std::numeric_limits<int64_t>::min();
     int numKeys = keyCardinalities[i];
-    tableData.keyData->childAt(i) =
-        makeFlatVector<int64_t>(tableData.keyData->size(), [&](auto row) {
+    tableData.keyVectors->childAt(i) =
+        makeFlatVector<int64_t>(tableData.keyVectors->size(), [&](auto row) {
           const int64_t keyValue = 1 + (row / numRepeats) % numKeys;
           minKey = std::min(minKey, keyValue);
           maxKey = std::max(maxKey, keyValue);
@@ -339,21 +385,21 @@ void IndexLookupJoinTestBase::generateIndexTableData(
     tableData.maxKeys[i] = maxKey;
   }
 
-  std::vector<facebook::velox::VectorPtr> tableColumns;
+  std::vector<VectorPtr> tableColumns;
   VELOX_CHECK_EQ(tableType_->size(), keyType_->size() + valueType_->size());
   tableColumns.reserve(tableType_->size());
   for (auto i = 0; i < keyType_->size(); ++i) {
-    tableColumns.push_back(tableData.keyData->childAt(i));
+    tableColumns.push_back(tableData.keyVectors->childAt(i));
   }
   for (auto i = 0; i < valueType_->size(); ++i) {
-    tableColumns.push_back(tableData.valueData->childAt(i));
+    tableColumns.push_back(tableData.valueVectors->childAt(i));
   }
-  tableData.tableData = makeRowVector(tableType_->names(), tableColumns);
+  tableData.tableVectors = makeRowVector(tableType_->names(), tableColumns);
 }
 
-facebook::velox::RowTypePtr IndexLookupJoinTestBase::makeScanOutputType(
+RowTypePtr IndexLookupJoinTestBase::makeScanOutputType(
     std::vector<std::string> outputNames) {
-  std::vector<facebook::velox::TypePtr> types;
+  std::vector<TypePtr> types;
   for (int i = 0; i < outputNames.size(); ++i) {
     if (valueType_->getChildIdxIfExists(outputNames[i]).has_value()) {
       types.push_back(valueType_->findChild(outputNames[i]));
@@ -361,65 +407,140 @@ facebook::velox::RowTypePtr IndexLookupJoinTestBase::makeScanOutputType(
     }
     types.push_back(keyType_->findChild(outputNames[i]));
   }
-  return facebook::velox::ROW(std::move(outputNames), std::move(types));
+  return ROW(std::move(outputNames), std::move(types));
 }
 
 bool IndexLookupJoinTestBase::isFilter(const std::string& conditionSql) const {
   const auto inputType = concat(keyType_, probeType_);
-  return facebook::velox::exec::test::PlanBuilder::parseIndexJoinCondition(
+  return PlanBuilder::parseIndexJoinCondition(
              conditionSql, inputType, pool_.get())
       ->isFilter();
 }
 
-std::shared_ptr<facebook::velox::exec::Task>
-IndexLookupJoinTestBase::runLookupQuery(
-    const facebook::velox::core::PlanNodePtr& plan,
+std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
+    const PlanNodePtr& plan,
     int numPrefetchBatches,
     const std::string& duckDbVefifySql) {
-  return facebook::velox::exec::test::AssertQueryBuilder(duckDbQueryRunner_)
+  return AssertQueryBuilder(duckDbQueryRunner_)
       .plan(plan)
       .config(
-          facebook::velox::core::QueryConfig::
-              kIndexLookupJoinMaxPrefetchBatches,
+          QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
           std::to_string(numPrefetchBatches))
       .assertResults(duckDbVefifySql);
 }
 
-std::shared_ptr<facebook::velox::exec::Task>
-IndexLookupJoinTestBase::runLookupQuery(
-    const facebook::velox::core::PlanNodePtr& plan,
-    const std::vector<
-        std::shared_ptr<facebook::velox::exec::test::TempFilePath>>& probeFiles,
+std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
+    const PlanNodePtr& plan,
+    const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
     bool serialExecution,
     bool barrierExecution,
     int maxOutputRows,
     int numPrefetchBatches,
+    bool needsIndexSplit,
     const std::string& duckDbVefifySql) {
-  return facebook::velox::exec::test::AssertQueryBuilder(duckDbQueryRunner_)
-      .plan(plan)
+  AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+  queryBuilder.plan(plan)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
       .serialExecution(serialExecution)
       .barrierExecution(barrierExecution)
+      .config(QueryConfig::kMaxOutputBatchRows, std::to_string(maxOutputRows))
       .config(
-          facebook::velox::core::QueryConfig::kMaxOutputBatchRows,
-          std::to_string(maxOutputRows))
-      .config(
-          facebook::velox::core::QueryConfig::
-              kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(numPrefetchBatches))
-      .assertResults(duckDbVefifySql);
+          QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
+          std::to_string(numPrefetchBatches));
+  if (needsIndexSplit) {
+    // Add a fake split for the index source. The test index source doesn't
+    // actually use splits, but this is used to verify the split passing
+    // mechanism works correctly.
+    queryBuilder.split(
+        indexScanNodeId_,
+        Split(
+            std::make_shared<TestIndexConnectorSplit>(
+                kTestIndexConnectorName)));
+  }
+  return queryBuilder.assertResults(duckDbVefifySql);
 }
 
-std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
+void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
+    const PlanNodePtr& planWithoutMatchColumn,
+    const PlanNodeId& probeScanNodeIdWithoutMatchColumn,
+    const PlanNodePtr& planWithMatchColumn,
+    const PlanNodeId& probeScanNodeIdWithMatchColumn,
+    const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
+    bool needsIndexSplit) {
+  AssertQueryBuilder expectedResultBuilder(duckDbQueryRunner_);
+  expectedResultBuilder.plan(planWithoutMatchColumn)
+      .splits(
+          probeScanNodeIdWithoutMatchColumn,
+          makeHiveConnectorSplits(probeFiles));
+  if (needsIndexSplit) {
+    expectedResultBuilder.split(
+        indexScanNodeId_,
+        Split(
+            std::make_shared<TestIndexConnectorSplit>(
+                kTestIndexConnectorName)));
+  }
+  VectorPtr expectedResult = expectedResultBuilder.copyResults(pool());
+  BaseVector::flattenVector(expectedResult);
+
+  AssertQueryBuilder resultWithMatchColumnBuilder(duckDbQueryRunner_);
+  resultWithMatchColumnBuilder.plan(planWithMatchColumn)
+      .splits(
+          probeScanNodeIdWithMatchColumn, makeHiveConnectorSplits(probeFiles));
+  if (needsIndexSplit) {
+    resultWithMatchColumnBuilder.split(
+        indexScanNodeId_,
+        Split(
+            std::make_shared<TestIndexConnectorSplit>(
+                kTestIndexConnectorName)));
+  }
+  VectorPtr resultWithMatchColumn =
+      resultWithMatchColumnBuilder.copyResults(pool());
+  BaseVector::flattenVector(resultWithMatchColumn);
+  auto rowResultWithMatchMatchColumn =
+      std::dynamic_pointer_cast<RowVector>(resultWithMatchColumn);
+  const auto resultWithMatchColumnType =
+      std::dynamic_pointer_cast<const RowType>(
+          rowResultWithMatchMatchColumn->type());
+  std::vector<VectorPtr> childVectors;
+  std::unordered_set<std::string> lookupColumnNameSet(
+      valueType_->names().begin(), valueType_->names().end());
+  std::vector<VectorPtr> lookupColumnVectors;
+  for (int i = 0; i < rowResultWithMatchMatchColumn->childrenSize() - 1; ++i) {
+    childVectors.push_back(rowResultWithMatchMatchColumn->childAt(i));
+    if (lookupColumnNameSet.contains(resultWithMatchColumnType->nameOf(i))) {
+      lookupColumnVectors.push_back(rowResultWithMatchMatchColumn->childAt(i));
+    }
+  }
+  auto resultWithoutMatchColumn = makeRowVector(childVectors);
+  assertEqualVectors(expectedResult, resultWithoutMatchColumn);
+  // Verify the match column if it is expected.
+  const auto matchColumn =
+      rowResultWithMatchMatchColumn
+          ->childAt(rowResultWithMatchMatchColumn->childrenSize() - 1)
+          ->asFlatVector<bool>();
+  for (int i = 0; i < resultWithMatchColumn->size(); ++i) {
+    const bool match = matchColumn->valueAt(i);
+    if (match) {
+      for (const auto& lookupColumnVector : lookupColumnVectors) {
+        ASSERT_FALSE(lookupColumnVector->isNullAt(i));
+      }
+    } else {
+      for (const auto& lookupColumnVector : lookupColumnVectors) {
+        ASSERT_TRUE(lookupColumnVector->isNullAt(i));
+      }
+    }
+  }
+}
+
+std::vector<std::shared_ptr<TempFilePath>>
 IndexLookupJoinTestBase::createProbeFiles(
-    const std::vector<facebook::velox::RowVectorPtr>& probeVectors) {
-  std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
-      probeFiles;
+    const std::vector<RowVectorPtr>& probeVectors) {
+  std::vector<std::shared_ptr<TempFilePath>> probeFiles;
   probeFiles.reserve(probeVectors.size());
   for (auto i = 0; i < probeVectors.size(); ++i) {
-    probeFiles.push_back(facebook::velox::exec::test::TempFilePath::create());
+    probeFiles.push_back(TempFilePath::create());
   }
   writeToFiles(toFilePaths(probeFiles), probeVectors);
   return probeFiles;
 }
-} // namespace fecebook::velox::exec::test
+} // namespace facebook::velox::exec::test

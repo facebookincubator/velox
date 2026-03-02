@@ -20,22 +20,30 @@ if(VELOX_ENABLE_ABFS)
   velox_sources(
     velox_abfs
     PRIVATE
-    AbfsFileSystem.cpp
-    AbfsConfig.cpp
-    AbfsWriteFile.cpp)
+      AbfsFileSystem.cpp
+      AbfsPath.cpp
+      AbfsReadFile.cpp
+      AbfsUtil.cpp
+      AbfsWriteFile.cpp
+      AzureClientProviderFactories.cpp
+      AzureClientProviderImpl.cpp
+      DynamicSasTokenClientProvider.cpp
+  )
 
   velox_link_libraries(
     velox_abfs
-    PUBLIC velox_file
-           velox_core
-           velox_hive_config
-           velox_dwio_common_exception
-           Azure::azure-identity
-           Azure::azure-storage-blobs
-           Azure::azure-storage-files-datalake
-           Folly::folly
-           glog::glog
-           fmt::fmt)
+    PUBLIC
+      velox_file
+      velox_core
+      velox_hive_config
+      velox_dwio_common_exception
+      Azure::azure-identity
+      Azure::azure-storage-blobs
+      Azure::azure-storage-files-datalake
+      Folly::folly
+      glog::glog
+      fmt::fmt
+  )
 
   if(${VELOX_BUILD_TESTING})
     add_subdirectory(tests)

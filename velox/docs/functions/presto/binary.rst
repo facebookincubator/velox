@@ -6,6 +6,22 @@ Binary Functions
 
     Computes the crc32 checksum of ``binary``.
 
+.. function:: fnv1_32(binary) -> integer
+
+    Computes the FNV-1 32-bit hash of ``binary``.
+
+.. function:: fnv1_64(binary) -> bigint
+
+    Computes the FNV-1 64-bit hash of ``binary``.
+
+.. function:: fnv1a_32(binary) -> integer
+
+    Computes the FNV-1a 32-bit hash of ``binary``.
+
+.. function:: fnv1a_64(binary) -> bigint
+
+    Computes the FNV-1a 64-bit hash of ``binary``.
+
 .. function:: from_base64(string) -> varbinary
 
     Decodes a Base64-encoded ``string`` back into its original binary form.
@@ -150,3 +166,7 @@ Binary Functions
 .. function:: xxhash64(binary) -> varbinary
 
     Computes the xxhash64 hash of ``binary``.
+
+.. function:: xxhash64(binary, bigint) -> varbinary
+
+    Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.

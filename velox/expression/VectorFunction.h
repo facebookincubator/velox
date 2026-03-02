@@ -17,7 +17,7 @@
 #pragma once
 
 #include <vector>
-#include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
@@ -166,7 +166,8 @@ class SimpleFunctionAdapterFactory {
   virtual std::unique_ptr<VectorFunction> createVectorFunction(
       const std::vector<TypePtr>& inputTypes,
       const std::vector<VectorPtr>& constantInputs,
-      const core::QueryConfig& config) const = 0;
+      const core::QueryConfig& config,
+      memory::MemoryPool* memoryPool = nullptr) const = 0;
   virtual ~SimpleFunctionAdapterFactory() = default;
 };
 
@@ -187,10 +188,28 @@ TypePtr resolveVectorFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
 
+TypePtr resolveVectorFunctionWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
+
 std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadata(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
+
+/// Like 'resolveVectorFunctionWithMetadata', but with support for applying type
+/// coercions if no signature matches 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve the function successfully. Contains one entry per argument. The
+/// entry is null if no coercion is required for that argument. The entry is not
+/// null if coercion is necessary.
+std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadataWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
 
 /// Returns an instance of VectorFunction for the given name, input types and
 /// optionally constant input values.
@@ -273,22 +292,6 @@ bool registerStatefulVectorFunction(
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata = {},
     bool overwrite = true);
-
-/// An expression re-writer that takes an expression and returns an equivalent
-/// expression or nullptr if re-write is not possible.
-using ExpressionRewrite = std::function<core::TypedExprPtr(core::TypedExprPtr)>;
-
-/// Returns a list of registered re-writes.
-std::vector<ExpressionRewrite>& expressionRewrites();
-
-/// Appends a 'rewrite' to 'expressionRewrites'.
-///
-/// The logic that applies re-writes is very simple and assumes that all
-/// rewrites are independent. Re-writes are applied to all expressions starting
-/// at the root and going down the hierarchy. For each expression, rewrites are
-/// applied in the order they were registered. The first rewrite that returns
-/// non-null result terminates the re-write for this particular expression.
-void registerExpressionRewrite(ExpressionRewrite rewrite);
 
 } // namespace facebook::velox::exec
 

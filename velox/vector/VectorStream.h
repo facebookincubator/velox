@@ -36,7 +36,7 @@ struct IndexRange {
 namespace row {
 class CompactRow;
 class UnsafeRowFast;
-}; // namespace row
+} // namespace row
 
 struct CompressionStats {
   // Number of times compression was not attempted.
@@ -190,7 +190,13 @@ class RowIterator {
 
   virtual bool hasNext() const = 0;
 
-  virtual std::unique_ptr<std::string> next() = 0;
+  virtual std::unique_ptr<std::string> nextRow() = 0;
+
+  /// Returns a batch of serialized rows as string views. Reads up to maxRows
+  /// from the source stream. The returned views are valid until the next call
+  /// to nextBatch or object destruction. This method provides better
+  /// performance for bulk operations compared to repeated nextRow() calls.
+  virtual std::vector<std::string_view> nextBatch(size_t maxRows) = 0;
 
  protected:
   ByteInputStream* const source_;
@@ -467,7 +473,9 @@ class VectorStreamGroup : public StreamArena {
       const VectorSerde::Options* options);
 
   void clear() override {
+    serializer_->clear();
     StreamArena::clear();
+    // TODO: provide a separate method to initialize the serializer header.
     serializer_->clear();
   }
 
@@ -498,6 +506,22 @@ folly::IOBuf rowVectorToIOBuf(
     vector_size_t rangeEnd,
     memory::MemoryPool& pool,
     VectorSerde* serde = nullptr);
+
+/// Convenience function to serialize a single rowVector into an IOBuf using
+/// BatchVectorSerializer, which preserves encodings of input vectors.
+folly::IOBuf rowVectorToIOBufBatch(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool& pool,
+    VectorSerde* serde = nullptr,
+    const VectorSerde::Options* options = nullptr);
+
+/// Same as above but serializes up until row `rangeEnd`.
+folly::IOBuf rowVectorToIOBufBatch(
+    const RowVectorPtr& rowVector,
+    vector_size_t rangeEnd,
+    memory::MemoryPool& pool,
+    VectorSerde* serde = nullptr,
+    const VectorSerde::Options* options = nullptr);
 
 /// Convenience function to deserialize an IOBuf into a rowVector. If `serde` is
 /// nullptr, use the default installed serializer.

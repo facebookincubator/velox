@@ -30,7 +30,7 @@
 # Minimal setup for Ubuntu 22.04.
 set -eufx -o pipefail
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPT_DIR/setup-common.sh
+source "$SCRIPT_DIR"/setup-common.sh
 
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
@@ -46,6 +46,10 @@ if [[ ${VERSION} =~ "20.04" ]]; then
   export CXX=/usr/bin/g++-11
 fi
 
+if lscpu | grep -q "sve"; then
+  $SUDO apt install -y gcc-12 g++-12
+fi
+
 function install_clang15 {
   if [[ ! ${VERSION} =~ "22.04" && ! ${VERSION} =~ "24.04" ]]; then
     echo "Warning: using the Clang configuration is for Ubuntu 22.04 and 24.04. Errors might occur."
@@ -54,7 +58,7 @@ function install_clang15 {
   if [[ ${VERSION} =~ "22.04" ]]; then
     CLANG_PACKAGE_LIST="${CLANG_PACKAGE_LIST} gcc-12 g++-12 libc++-12-dev"
   fi
-  ${SUDO} apt install "${CLANG_PACKAGE_LIST}" -y
+  ${SUDO} apt install ${CLANG_PACKAGE_LIST} -y
 }
 
 # For Ubuntu 20.04 we need add the toolchain PPA to get access to gcc11.
@@ -84,13 +88,8 @@ function install_build_prerequisites {
     libtool \
     wget
 
-  if [ ! -f "${PYTHON_VENV}"/pyvenv.cfg ]; then
-    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
-    python3 -m venv "${PYTHON_VENV}"
-  fi
-  source "${PYTHON_VENV}"/bin/activate
-  # Install to /usr/local to make it available to all users.
-  ${SUDO} pip3 install cmake==3.28.3
+  install_uv
+  uv_install cmake==3.30.4
 
   install_gcc11_if_needed
 
@@ -98,14 +97,6 @@ function install_build_prerequisites {
     install_clang15
   fi
 
-}
-
-# Install packages required to fix format
-function install_format_prerequisites {
-  pip3 install regex
-  ${SUDO} apt install -y \
-    clang-format \
-    cmake-format
 }
 
 # Install packages required for build.
@@ -198,6 +189,7 @@ function install_cuda {
     cuda-minimal-build-"$dashed" \
     cuda-nvrtc-dev-"$dashed" \
     libcufile-dev-"$dashed" \
+    libnvjitlink-dev-"$dashed" \
     libnuma1
 }
 
@@ -210,18 +202,18 @@ function install_s3 {
 
 function install_gcs {
   # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-  apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
-  install_gcs-sdk-cpp
+  ${SUDO} apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
+  install_gcs_sdk_cpp
 }
 
 function install_abfs {
   # Dependencies of Azure Storage Blob cpp
-  apt install -y openssl libxml2-dev
-  install_azure-storage-sdk-cpp
+  ${SUDO} apt install -y openssl libxml2-dev
+  install_azure_storage_sdk_cpp
 }
 
 function install_hdfs {
-  apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
+  ${SUDO} apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
   install_hdfs_deps
 }
 
@@ -233,7 +225,7 @@ function install_adapters {
 }
 
 function install_faiss_deps {
-  sudo apt-get install -y libopenblas-dev libomp-dev
+  ${SUDO} apt-get install -y libopenblas-dev libomp-dev
 }
 
 function install_velox_deps {
@@ -260,7 +252,6 @@ function install_velox_deps {
 
 function install_apt_deps {
   install_build_prerequisites
-  install_format_prerequisites
   install_velox_deps_from_apt
 }
 

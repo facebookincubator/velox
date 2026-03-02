@@ -1,27 +1,23 @@
 import React from 'react';
-import clsx from 'clsx';
 import styles from './styles.module.css';
-import useBaseUrl from "@docusaurus/useBaseUrl";
+import Link from '@docusaurus/Link';
 
 export default function VeloxConBanner() {
   return (
-    <section className={styles.banner}>
-      <div className="container">
-        <div className="row">
-          <div className="col col--9">
-            <h2>VeloxCon 2025 Sessions Are Now Available On-Demand</h2>
-          </div>
-          <div className="col col--3">
-            <a
-              className="button button--info button--lg"
-              href="https://www.youtube.com/playlist?list=PLJvBe8nQAEsE0dT7XVIrD8QE-gmuX3Fe6"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Watch Now
-            </a>
-          </div>
+    <section className={styles.banner} role="region" aria-label="VeloxCon China announcement">
+      <div className={styles.container}>
+        <div className={styles.text}>
+          <h2 className={styles.title}>Announcing VeloxCon China 2025</h2>
+          <p className={styles.subtitle}>December 13 | Ant Group Offices, Beijing</p>
         </div>
+        <Link
+          className={styles.button}
+          to="https://www.bagevent.com/event/veloxcon-china-2025-en"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Learn more and Register →
+        </Link>
       </div>
     </section>
   );

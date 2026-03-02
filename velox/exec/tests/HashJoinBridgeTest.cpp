@@ -44,6 +44,7 @@ class HashJoinBridgeTestHelper {
   HashJoinBridge* const bridge_;
 };
 
+namespace {
 struct TestParam {
   int32_t numProbers{1};
   int32_t numBuilders{1};
@@ -670,12 +671,16 @@ TEST_P(HashJoinBridgeTest, hashJoinTableType) {
     std::vector<core::FieldAccessTypedExprPtr> buildKeys;
     std::vector<core::FieldAccessTypedExprPtr> probeKeys;
     for (uint32_t i = 0; i < testData.buildKeyType->size(); i++) {
-      buildKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          testData.buildKeyType->childAt(i), testData.buildKeyType->nameOf(i)));
+      buildKeys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              testData.buildKeyType->childAt(i),
+              testData.buildKeyType->nameOf(i)));
     }
     for (uint32_t i = 0; i < testData.probeKeyType->size(); i++) {
-      probeKeys.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-          testData.probeKeyType->childAt(i), testData.probeKeyType->nameOf(i)));
+      probeKeys.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              testData.probeKeyType->childAt(i),
+              testData.probeKeyType->nameOf(i)));
     }
     const auto joinNode = std::make_shared<core::HashJoinNode>(
         "join-bridge-test",
@@ -707,7 +712,7 @@ TEST(HashJoinBridgeTest, hashJoinTableSpillType) {
     std::string debugString() const {
       return fmt::format(
           "joinType: {}, expectedTableSpillType: {}",
-          joinTypeName(joinType),
+          core::JoinTypeName::toName(joinType),
           expectedTableSpillType->toString());
     }
   } testSettings[] = {
@@ -724,4 +729,5 @@ TEST(HashJoinBridgeTest, hashJoinTableSpillType) {
     ASSERT_EQ(spillType->names(), testData.expectedTableSpillType->names());
   }
 }
+} // namespace
 } // namespace facebook::velox::exec::test

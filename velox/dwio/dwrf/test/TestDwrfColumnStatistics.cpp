@@ -195,12 +195,12 @@ void checkEntries(
   for (const auto& entry : entries) {
     EXPECT_NE(
         std::find_if(
-            expectedEntries.begin(),
-            expectedEntries.end(),
+            expectedEntries.cbegin(),
+            expectedEntries.cend(),
             [&](const ColumnStatistics& expectedStats) {
               return expectedStats == entry;
             }),
-        expectedEntries.end());
+        expectedEntries.cend());
   }
 }
 
@@ -490,11 +490,11 @@ TEST(MapStatisticsBuilderTest, mergeKeyStats) {
   statsBuilder.increaseRawSize(8);
   mapStatsBuilder.addValues(createKeyInfo(1), statsBuilder);
 
-  keyStats = dynamic_cast<StatisticsBuilder&>(
+  auto& keyStats1 = dynamic_cast<StatisticsBuilder&>(
       *mapStatsBuilder.getEntryStatistics().at(KeyInfo{1}));
-  ASSERT_EQ(2, keyStats.getNumberOfValues());
-  ASSERT_TRUE(keyStats.getRawSize().has_value());
-  ASSERT_EQ(8, keyStats.getRawSize().value());
-  EXPECT_TRUE(keyStats.getSize().has_value());
-  EXPECT_EQ(42, keyStats.getSize().value());
+  ASSERT_EQ(2, keyStats1.getNumberOfValues());
+  ASSERT_TRUE(keyStats1.getRawSize().has_value());
+  ASSERT_EQ(8, keyStats1.getRawSize().value());
+  EXPECT_TRUE(keyStats1.getSize().has_value());
+  EXPECT_EQ(42, keyStats1.getSize().value());
 }

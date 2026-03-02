@@ -68,7 +68,7 @@ class RowNumberFunction : public exec::WindowFunction {
 void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
-          .returnType(mapTypeKindToName(resultTypeKind))
+          .returnType(std::string(TypeKindName::toName(resultTypeKind)))
           .build(),
   };
 

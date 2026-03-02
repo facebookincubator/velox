@@ -95,6 +95,11 @@ class PrestoQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
     VELOX_NYI();
   }
 
+  void visit(const core::EnforceDistinctNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::MergeExchangeNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
@@ -124,8 +129,19 @@ class PrestoQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
   void visit(const core::ProjectNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
 
+  void visit(const core::ParallelProjectNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::RowNumberNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
+
+  void visit(
+      const core::SpatialJoinNode& node,
+      core::PlanNodeVisitorContext& ctx) const override {
+    VELOX_NYI();
+  }
 
   void visit(const core::TableScanNode& node, core::PlanNodeVisitorContext& ctx)
       const override {
@@ -167,6 +183,11 @@ class PrestoQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
 
   void visit(const core::WindowNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
+
+  void visit(const core::MixedUnionNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.
   void visit(const core::PlanNode&, core::PlanNodeVisitorContext&)

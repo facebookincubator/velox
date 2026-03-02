@@ -17,16 +17,22 @@
 #include "velox/expression/EvalCtx.h"
 #include <exception>
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/QueryConfig.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/PeeledEncoding.h"
+#include "velox/vector/LazyVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
-EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
-    : execCtx_(execCtx), exprSet_(exprSet), row_(row) {
+EvalCtx::EvalCtx(
+    core::ExecCtx* execCtx,
+    ExprSet* exprSet,
+    const RowVector* row,
+    bool lazyDereference)
+    : execCtx_(execCtx),
+      exprSet_(exprSet),
+      row_(row),
+      lazyDereference_(lazyDereference) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
   VELOX_CHECK_NOT_NULL(execCtx);
@@ -44,7 +50,10 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
 }
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx)
-    : execCtx_(execCtx), exprSet_(nullptr), row_(nullptr) {
+    : execCtx_(execCtx),
+      exprSet_(nullptr),
+      row_(nullptr),
+      lazyDereference_(false) {
   VELOX_CHECK_NOT_NULL(execCtx);
   inputFlatNoNulls_ = false;
 }
@@ -183,6 +192,25 @@ void EvalCtx::setStatus(vector_size_t index, const Status& status) {
   }
 }
 
+void EvalCtx::setStatuses(const SelectivityVector& rows, const Status& status) {
+  VELOX_CHECK(!status.ok(), "Status must be an error");
+  if (status.isUserError()) {
+    if (throwOnError_) {
+      VELOX_USER_FAIL(status.message());
+    }
+
+    if (captureErrorDetails_) {
+      auto veloxException = toVeloxUserError(status.message());
+      rows.applyToSelected(
+          [&](auto row) { addError(row, veloxException, errors_); });
+    } else {
+      rows.applyToSelected([&](auto row) { addError(row, errors_); });
+    }
+  } else {
+    VELOX_FAIL(status.message());
+  }
+}
+
 void EvalCtx::setError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr) {
@@ -294,6 +322,7 @@ const VectorPtr& EvalCtx::getField(int32_t index) const {
 VectorPtr EvalCtx::ensureFieldLoaded(
     int32_t index,
     const SelectivityVector& rows) {
+  VELOX_CHECK(!lazyDereference_);
   auto field = getField(index);
   if (isLazyNotLoaded(*field)) {
     const auto& rowsToLoad = isFinalSelection_ ? rows : *finalSelection_;
@@ -333,7 +362,7 @@ VectorPtr extendSizeByWrappingInDictionary(
   VELOX_DCHECK(
       !vector->type()->isPrimitiveType(), "Only used for complex types.");
   BufferPtr indices = allocateIndices(targetSize, context.pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
+  auto* rawIndices = indices->asMutable<vector_size_t>();
   // Only fill in indices for existing rows in the vector.
   std::iota(rawIndices, rawIndices + currentSize, 0);
   // A nulls buffer is required otherwise wrapInDictionary() can return a

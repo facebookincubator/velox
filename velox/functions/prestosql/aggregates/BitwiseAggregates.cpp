@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/aggregates/BitwiseAggregates.h"
 #include "velox/functions/lib/aggregates/BitwiseAggregateBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -102,21 +101,22 @@ class BitwiseAndAggregate : public BitwiseAggregateBase<T> {
 
 } // namespace
 
-void registerBitwiseAggregates(
-    const std::string& prefix,
+void registerBitwiseAndAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite) {
+  registerBitwise<BitwiseAndAggregate>(
+      names, true, withCompanionFunctions, onlyPrestoSignatures, overwrite);
+}
+
+void registerBitwiseOrAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
   registerBitwise<BitwiseOrAggregate>(
-      prefix + kBitwiseOr,
-      withCompanionFunctions,
-      onlyPrestoSignatures,
-      overwrite);
-  registerBitwise<BitwiseAndAggregate>(
-      prefix + kBitwiseAnd,
-      withCompanionFunctions,
-      onlyPrestoSignatures,
-      overwrite);
+      names, true, withCompanionFunctions, onlyPrestoSignatures, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

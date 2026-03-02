@@ -30,7 +30,7 @@ RowNumber::RowNumber(
           rowNumberNode->id(),
           "RowNumber",
           rowNumberNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "RowNumber")
               : std::nullopt),
       limit_{rowNumberNode->limit()},
       generateRowNumber_{rowNumberNode->generateRowNumber()} {
@@ -120,13 +120,13 @@ void RowNumber::restoreNextSpillPartition() {
   auto it = spillInputPartitionSet_.begin();
   restoringPartitionId_ = it->first;
   spillInputReader_ = it->second->createUnorderedReader(
-      spillConfig_->readBufferSize, pool(), &spillStats_);
+      spillConfig_->readBufferSize, pool(), spillStats_.get());
 
   // Find matching partition for the hash table.
   auto hashTableIt = spillHashTablePartitionSet_.find(it->first);
   if (hashTableIt != spillHashTablePartitionSet_.end()) {
     spillHashTableReader_ = hashTableIt->second->createUnorderedReader(
-        spillConfig_->readBufferSize, pool(), &spillStats_);
+        spillConfig_->readBufferSize, pool(), spillStats_.get());
 
     setSpillPartitionBits(&(it->first));
 
@@ -388,7 +388,8 @@ void RowNumber::reclaim(
                  << spillConfig_->maxSpillLevel
                  << ", and abandon spilling for memory pool: "
                  << pool()->name();
-    ++spillStats_.wlock()->spillMaxLevelExceededCount;
+    spillStats_->spillMaxLevelExceededCount.fetch_add(
+        1, std::memory_order_relaxed);
     return;
   }
 
@@ -408,7 +409,7 @@ SpillPartitionIdSet RowNumber::spillHashTable() {
       tableType,
       spillPartitionBits_,
       &spillConfig,
-      &spillStats_);
+      spillStats_.get());
 
   hashTableSpiller->spill();
   hashTableSpiller->finishSpill(spillHashTablePartitionSet_);
@@ -429,7 +430,7 @@ void RowNumber::setupInputSpiller(
       restoringPartitionId_,
       spillPartitionBits_,
       &spillConfig,
-      &spillStats_);
+      spillStats_.get());
 
   const auto& hashers = table_->hashers();
 
@@ -509,7 +510,7 @@ void RowNumber::recursiveSpillInput() {
   while (spillInputReader_->nextBatch(unspilledInput)) {
     spillInput(unspilledInput, pool());
 
-    if (operatorCtx_->driver()->shouldYield()) {
+    if (shouldYield()) {
       yield_ = true;
       return;
     }
@@ -544,7 +545,7 @@ RowNumberHashTableSpiller::RowNumberHashTableSpiller(
     RowTypePtr rowType,
     HashBitRange bits,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),

@@ -48,7 +48,7 @@ class WindowBuild {
   virtual void spill() = 0;
 
   /// Returns the spiller stats including total bytes and rows spilled so far.
-  virtual std::optional<common::SpillStats> spilledStats() const = 0;
+  virtual std::optional<exec::SpillStats> spilledStats() const = 0;
 
   /// The Window operator invokes this function to indicate that no more input
   /// rows will be passed from the Window operator to the WindowBuild. When
@@ -70,8 +70,16 @@ class WindowBuild {
 
   /// Returns the average size of input rows in bytes stored in the data
   /// container of the WindowBuild.
-  std::optional<int64_t> estimateRowSize() {
+  virtual std::optional<int64_t> estimateRowSize() {
     return data_->estimateRowSize();
+  }
+
+  /// Releases the memory held by the window build. This is called by the
+  /// window operator when all rows have been processed.
+  void release() {
+    if (data_) {
+      data_->clear();
+    }
   }
 
   void setNumRowsPerOutput(vector_size_t numRowsPerOutput) {

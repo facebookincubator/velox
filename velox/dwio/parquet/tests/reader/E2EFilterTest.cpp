@@ -59,7 +59,8 @@ class E2EFilterTest : public E2EFilterTestBase,
   void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip = false) override {
+      bool forRowGroupSkip = false,
+      const std::vector<std::string>& /*indexColumns*/ = {}) override {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
@@ -99,8 +100,9 @@ class E2EFilterTest : public E2EFilterTestBase,
 TEST_F(E2EFilterTest, writerMagic) {
   rowType_ = ROW({"c0"}, {INTEGER()});
   std::vector<RowVectorPtr> batches;
-  batches.push_back(std::static_pointer_cast<RowVector>(
-      test::BatchMaker::createBatch(rowType_, 20000, *leafPool_, nullptr, 0)));
+  batches.push_back(
+      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
+          rowType_, 20000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   auto data = sinkData_.data();
   auto size = sinkData_.size();
@@ -136,7 +138,7 @@ TEST_F(E2EFilterTest, integerDirect) {
 TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
   options_.enableDictionary = false;
   options_.encoding =
-      facebook::velox::parquet::arrow::Encoding::DELTA_BINARY_PACKED;
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   testWithTypes(
       "short_val:smallint,"
@@ -525,7 +527,7 @@ TEST_F(E2EFilterTest, stringDictionary) {
 TEST_F(E2EFilterTest, stringDeltaByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
-      facebook::velox::parquet::arrow::Encoding::DELTA_BYTE_ARRAY;
+      facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
 
   testWithTypes(
       "string_val:string,"
@@ -657,8 +659,9 @@ TEST_F(E2EFilterTest, largeMetadata) {
 
   rowType_ = ROW({"c0"}, {INTEGER()});
   std::vector<RowVectorPtr> batches;
-  batches.push_back(std::static_pointer_cast<RowVector>(
-      test::BatchMaker::createBatch(rowType_, 1000, *leafPool_, nullptr, 0)));
+  batches.push_back(
+      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
+          rowType_, 1000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setFooterEstimatedSize(1024);
@@ -694,8 +697,9 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   rowType_ = ROW({"c0"}, {INTEGER()});
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < 5; i++) {
-    batches.push_back(std::static_pointer_cast<RowVector>(
-        test::BatchMaker::createBatch(rowType_, 1, *leafPool_, nullptr, 0)));
+    batches.push_back(
+        std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
+            rowType_, 1, *leafPool_, nullptr, 0)));
   }
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -711,7 +715,7 @@ TEST_F(E2EFilterTest, writeDecimalAsInteger) {
   auto rowVector = makeRowVector(
       {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
        makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
-       makeFlatVector<int64_t>({1, 2}, DECIMAL(19, 2))});
+       makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
   writeToMemory(rowVector->type(), {rowVector}, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto input = std::make_unique<BufferedInput>(
@@ -777,7 +781,7 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
 
 TEST_F(E2EFilterTest, booleanRle) {
   options_.enableDictionary = false;
-  options_.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options_.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options_.useParquetDataPageV2 = true;
 
   testWithTypes(

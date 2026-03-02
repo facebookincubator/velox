@@ -22,3 +22,5 @@ elseif(${VELOX_BUILD_TEST_UTILS})
 endif()
 add_subdirectory(utils)
 add_subdirectory(writer)
+
+velox_install_library_headers()

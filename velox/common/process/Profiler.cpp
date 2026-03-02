@@ -153,12 +153,13 @@ void Profiler::copyToResult(const std::string* data) {
     auto now = nowSeconds();
     auto elapsed = (now - sampleStartTime_);
     auto cpu = cpuSeconds();
-    out->append(fmt::format(
-        "Profile from {} to {} at {}% CPU\n\n",
+    out->append(
+        fmt::format(
+            "Profile from {} to {} at {}% CPU\n\n",
 
-        timeString(sampleStartTime_),
-        timeString(now),
-        100 * (cpu - cpuAtSampleStart_) / std::max<int64_t>(1, elapsed)));
+            timeString(sampleStartTime_),
+            timeString(now),
+            100 * (cpu - cpuAtSampleStart_) / std::max<int64_t>(1, elapsed)));
     out->append(std::string_view(buffer, resultSize));
     if (extraReport_) {
       std::string extra = extraReport_();
@@ -191,18 +192,19 @@ std::thread Profiler::startSample() {
     // and killing it with SIGINT produces a corrupt perf.data
     // file. The perf.data file generated when called via system() is
     // good, though. Unsolved mystery.
-    system(fmt::format(
-               "(cd {}; /usr/bin/perf record --pid {} {};"
-               "perf report --sort symbol > perf ;"
-               "sed --in-place 's/          / /'g perf;"
-               "sed --in-place 's/        / /'g perf; date) "
-               ">> {}/perftrace 2>>{}/perftrace2",
-               FLAGS_profiler_tmp_dir,
-               getpid(),
-               FLAGS_profiler_perf_flags,
-               FLAGS_profiler_tmp_dir,
-               FLAGS_profiler_tmp_dir)
-               .c_str()); // NOLINT
+    system(
+        fmt::format(
+            "(cd {}; /usr/bin/perf record --pid {} {};"
+            "perf report --sort symbol > perf ;"
+            "sed --in-place 's/          / /'g perf;"
+            "sed --in-place 's/        / /'g perf; date) "
+            ">> {}/perftrace 2>>{}/perftrace2",
+            FLAGS_profiler_tmp_dir,
+            getpid(),
+            FLAGS_profiler_perf_flags,
+            FLAGS_profiler_tmp_dir,
+            FLAGS_profiler_tmp_dir)
+            .c_str()); // NOLINT
     if (shouldSaveResult_) {
       copyToResult();
     }

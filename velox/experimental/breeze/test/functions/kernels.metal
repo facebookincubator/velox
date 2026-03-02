@@ -35,8 +35,8 @@ using namespace breeze::utils;
 
 #define GEN_LOAD(T)                                                          \
   kernel void NAME(load, T, 4, 2)(                                           \
-      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],         \
-      const device int *num_items [[buffer(2)]],                             \
+      const device T* in [[buffer(0)]], device T* out [[buffer(1)]],         \
+      const device int* num_items [[buffer(2)]],                             \
       uint thread_idx [[thread_index_in_threadgroup]]) {                     \
     block_load<4, 2>(MetalPlatform<4, WARP_THREADS>{thread_idx, 0}, in, out, \
                      *num_items);                                            \
@@ -50,9 +50,9 @@ GEN_LOAD(float)
 
 #define GEN_LOAD_IF(T)                                                        \
   kernel void NAME(load_if, T, 4, 2)(                                         \
-      const device T *in [[buffer(0)]],                                       \
-      const device int *in_selection_flags [[buffer(1)]],                     \
-      device T *out [[buffer(2)]], const device int *num_items [[buffer(3)]], \
+      const device T* in [[buffer(0)]],                                       \
+      const device int* in_selection_flags [[buffer(1)]],                     \
+      device T* out [[buffer(2)]], const device int* num_items [[buffer(3)]], \
       uint thread_idx [[thread_index_in_threadgroup]]) {                      \
     block_load_if<4, 2>(MetalPlatform<4, WARP_THREADS>{thread_idx, 0}, in,    \
                         in_selection_flags, out, *num_items);                 \
@@ -66,9 +66,9 @@ GEN_LOAD_IF(float)
 
 #define GEN_LOAD_FROM(T)                                                     \
   kernel void NAME(load_from, T, 4, 2)(                                      \
-      const device T *in [[buffer(0)]],                                      \
-      const device int *offsets [[buffer(1)]], device T *out [[buffer(2)]],  \
-      const device int *num_items [[buffer(3)]],                             \
+      const device T* in [[buffer(0)]],                                      \
+      const device int* offsets [[buffer(1)]], device T* out [[buffer(2)]],  \
+      const device int* num_items [[buffer(3)]],                             \
       uint thread_idx [[thread_index_in_threadgroup]]) {                     \
     block_load_from<4, 2>(MetalPlatform<4, WARP_THREADS>{thread_idx, 0}, in, \
                           offsets, out, *num_items);                         \
@@ -82,8 +82,8 @@ GEN_LOAD_FROM(float)
 
 #define GEN_STORE(T)                                                          \
   kernel void NAME(store, T, 4, 2)(                                           \
-      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],          \
-      const device int *num_items [[buffer(2)]],                              \
+      const device T* in [[buffer(0)]], device T* out [[buffer(1)]],          \
+      const device int* num_items [[buffer(2)]],                              \
       uint thread_idx [[thread_index_in_threadgroup]]) {                      \
     block_store<4, 2>(MetalPlatform<4, WARP_THREADS>{thread_idx, 0}, in, out, \
                       *num_items);                                            \
@@ -97,9 +97,9 @@ GEN_STORE(float)
 
 #define GEN_STORE_IF(T)                                                       \
   kernel void NAME(store_if, T, 4, 2)(                                        \
-      const device T *in [[buffer(0)]],                                       \
-      const device int *selection_flags [[buffer(1)]],                        \
-      device T *out [[buffer(2)]], const device int *num_items [[buffer(3)]], \
+      const device T* in [[buffer(0)]],                                       \
+      const device int* selection_flags [[buffer(1)]],                        \
+      device T* out [[buffer(2)]], const device int* num_items [[buffer(3)]], \
       uint thread_idx [[thread_index_in_threadgroup]]) {                      \
     block_store_if<4, 2>(MetalPlatform<4, WARP_THREADS>{thread_idx, 0}, in,   \
                          selection_flags, out, *num_items);                   \
@@ -113,9 +113,9 @@ GEN_STORE_IF(float)
 
 #define GEN_STORE_AT(T)                                                     \
   kernel void NAME(store_at, T, 1, 8)(                                      \
-      const device T *in [[buffer(0)]],                                     \
-      const device int *offsets [[buffer(1)]], device T *out [[buffer(2)]], \
-      const device int *num_items [[buffer(3)]],                            \
+      const device T* in [[buffer(0)]],                                     \
+      const device int* offsets [[buffer(1)]], device T* out [[buffer(2)]], \
+      const device int* num_items [[buffer(3)]],                            \
       uint thread_idx [[thread_index_in_threadgroup]]) {                    \
     block_store_at<1, 8>(MetalPlatform<1, WARP_THREADS>{thread_idx, 0}, in, \
                          offsets, out, *num_items);                         \
@@ -129,10 +129,10 @@ GEN_STORE_AT(float)
 
 #define GEN_STORE_AT_IF(T)                                                     \
   kernel void NAME(store_at_if, T, 1, 8)(                                      \
-      const device T *in [[buffer(0)]],                                        \
-      const device int *offsets [[buffer(1)]],                                 \
-      const device int *selection_flags [[buffer(2)]],                         \
-      device T *out [[buffer(3)]], const device int *num_items [[buffer(4)]],  \
+      const device T* in [[buffer(0)]],                                        \
+      const device int* offsets [[buffer(1)]],                                 \
+      const device int* selection_flags [[buffer(2)]],                         \
+      device T* out [[buffer(3)]], const device int* num_items [[buffer(4)]],  \
       uint thread_idx [[thread_index_in_threadgroup]]) {                       \
     block_store_at_if<1, 8>(MetalPlatform<1, WARP_THREADS>{thread_idx, 0}, in, \
                             offsets, selection_flags, out, *num_items);        \
@@ -146,8 +146,8 @@ GEN_STORE_AT_IF(float)
 
 #define GEN_FILL(T)                                                        \
   kernel void NAME(fill, T, 4, 2)(                                         \
-      const device T *value [[buffer(0)]], device T *out [[buffer(1)]],    \
-      const device int *num_items [[buffer(2)]],                           \
+      const device T* value [[buffer(0)]], device T* out [[buffer(1)]],    \
+      const device int* num_items [[buffer(2)]],                           \
       uint thread_idx [[thread_index_in_threadgroup]]) {                   \
     block_fill<4, 2>(MetalPlatform<4, WARP_THREADS>{thread_idx, 0}, value, \
                      out, *num_items);                                     \
@@ -161,10 +161,10 @@ GEN_FILL(float)
 
 #define GEN_FILL_AT_IF(T)                                                     \
   kernel void NAME(fill_at_if, T, 1, 8)(                                      \
-      const device T *value [[buffer(0)]],                                    \
-      const device int *offsets [[buffer(1)]],                                \
-      const device int *selection_flags [[buffer(2)]],                        \
-      device T *out [[buffer(3)]], const device int *num_items [[buffer(4)]], \
+      const device T* value [[buffer(0)]],                                    \
+      const device int* offsets [[buffer(1)]],                                \
+      const device int* selection_flags [[buffer(2)]],                        \
+      device T* out [[buffer(3)]], const device int* num_items [[buffer(4)]], \
       uint thread_idx [[thread_index_in_threadgroup]]) {                      \
     block_fill_at_if<1, 8>(MetalPlatform<1, WARP_THREADS>{thread_idx, 0},     \
                            value, offsets, selection_flags, out, *num_items); \
@@ -182,8 +182,8 @@ GEN_FILL_AT_IF(float)
 
 #define GEN_REDUCE_T(O, T, BT, IPT)                                         \
   kernel void NAME(reduce_##O##_##T, T, BT, IPT)(                           \
-      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],        \
-      const device int *num_items [[buffer(2)]],                            \
+      const device T* in [[buffer(0)]], device T* out [[buffer(1)]],        \
+      const device int* num_items [[buffer(2)]],                            \
       uint thread_idx [[thread_index_in_threadgroup]]) {                    \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                       \
     threadgroup BlockReduce<decltype(p), T>::Scratch scratch;               \
@@ -206,8 +206,8 @@ GEN_REDUCE(max)
 
 #define GEN_SCAN_T(O, T, BT, IPT)                                       \
   kernel void NAME(scan_##O##_##T, T, BT, IPT)(                         \
-      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],    \
-      const device int *num_items [[buffer(2)]],                        \
+      const device T* in [[buffer(0)]], device T* out [[buffer(1)]],    \
+      const device int* num_items [[buffer(2)]],                        \
       uint thread_idx [[thread_index_in_threadgroup]]) {                \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                   \
     threadgroup BlockScan<decltype(p), T, IPT>::Scratch scratch;        \
@@ -226,8 +226,8 @@ GEN_SCAN(add)
 
 #define GEN_RADIX_RANK(T, BT, IPT, RB)                                 \
   kernel void NAME(radix_rank, T, BT, IPT##x##RB)(                     \
-      const device T *in [[buffer(0)]], device int *out [[buffer(1)]], \
-      const device int *num_items [[buffer(2)]],                       \
+      const device T* in [[buffer(0)]], device int* out [[buffer(1)]], \
+      const device int* num_items [[buffer(2)]],                       \
       uint thread_idx [[thread_index_in_threadgroup]]) {               \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                  \
     threadgroup BlockRadixRank<decltype(p), IPT, RB>::Scratch scratch; \
@@ -242,11 +242,11 @@ GEN_RADIX_RANK(uint, 64, 2, 6)
 
 #define GEN_RADIX_SORT(KT, VT, BT, IPT, RB)                                    \
   kernel void NAME2(radix_sort, KT, VT, BT, IPT##x##RB)(                       \
-      const device KT *in_keys [[buffer(0)]],                                  \
-      const device VT##_value_type *in_values [[buffer(1)]],                   \
-      device KT *out_keys [[buffer(2)]],                                       \
-      device VT##_value_type *out_values [[buffer(3)]],                        \
-      const device int *num_items [[buffer(4)]],                               \
+      const device KT* in_keys [[buffer(0)]],                                  \
+      const device VT##_value_type* in_values [[buffer(1)]],                   \
+      device KT* out_keys [[buffer(2)]],                                       \
+      device VT##_value_type* out_values [[buffer(3)]],                        \
+      const device int* num_items [[buffer(4)]],                               \
       uint thread_idx [[thread_index_in_threadgroup]]) {                       \
     MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                          \
     threadgroup BlockRadixSort<decltype(p), IPT, RB, KT,                       \

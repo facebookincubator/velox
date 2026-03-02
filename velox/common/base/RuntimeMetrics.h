@@ -19,9 +19,6 @@
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
 #include <limits>
-#include <sstream>
-
-#include "velox/common/base/SuccinctPrinter.h"
 
 namespace facebook::velox {
 
@@ -51,13 +48,21 @@ struct RuntimeMetric {
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit), sum{value}, count{1}, min{value}, max{value} {}
 
+  explicit RuntimeMetric(
+      int64_t _sum,
+      int64_t _count,
+      int64_t _min,
+      int64_t _max,
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
+      : unit(_unit), sum{_sum}, count{_count}, min{_min}, max{_max} {}
+
   void addValue(int64_t value);
 
   /// Aggregate sets 'min' and 'max' to 'sum', also sets 'count' to 1 if
   /// positive.
   void aggregate();
 
-  void printMetric(std::stringstream& stream) const;
+  void printMetric(std::ostream& stream) const;
 
   void merge(const RuntimeMetric& other);
 

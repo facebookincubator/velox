@@ -64,6 +64,20 @@ using S2 = IntegerVariable<6>;
 using S3 = IntegerVariable<7>;
 using S4 = IntegerVariable<8>;
 
+template <size_t id>
+struct EnumVariable {
+  static size_t getId() {
+    return id;
+  }
+
+  static std::string name() {
+    return fmt::format("E{}", id);
+  }
+};
+
+using E1 = EnumVariable<1>;
+using E2 = EnumVariable<2>;
+
 template <typename P, typename S>
 struct ShortDecimal {
  private:
@@ -220,6 +234,30 @@ struct Varchar {
   Varchar() {}
 };
 
+// Type to use for inputs and outputs of simple functions with BigintEnum types.
+// E.g. arg_type<BigintEnum<E1>> and out_type<BigintEnum<E1>>.
+template <typename E>
+struct BigintEnumT {
+  using type = int64_t;
+
+  static inline const std::string typeName = "bigint_enum(" + E::name() + ")";
+};
+
+template <typename E>
+using BigintEnum = CustomType<BigintEnumT<E>>;
+
+// Type to use for inputs and outputs of simple functions with VarcharEnum
+// types. E.g. arg_type<VarcharEnum<E1>> and out_type<VarcharEnum<E1>>.
+template <typename E>
+struct VarcharEnumT {
+  using type = Varchar;
+
+  static inline const std::string typeName = "varchar_enum(" + E::name() + ")";
+};
+
+template <typename E>
+using VarcharEnum = CustomType<VarcharEnumT<E>>;
+
 template <typename T>
 struct Constant {};
 
@@ -316,18 +354,24 @@ template <>
 struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
 
 template <>
-struct SimpleTypeTrait<Date> : public SimpleTypeTrait<int32_t> {
+struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::INTEGER> {
   static constexpr const char* name = "DATE";
 };
 
 template <>
-struct SimpleTypeTrait<IntervalDayTime> : public SimpleTypeTrait<int64_t> {
+struct SimpleTypeTrait<IntervalDayTime> : public TypeTraits<TypeKind::BIGINT> {
   static constexpr const char* name = "INTERVAL DAY TO SECOND";
 };
 
 template <>
-struct SimpleTypeTrait<IntervalYearMonth> : public SimpleTypeTrait<int32_t> {
+struct SimpleTypeTrait<IntervalYearMonth>
+    : public TypeTraits<TypeKind::INTEGER> {
   static constexpr const char* name = "INTERVAL YEAR TO MONTH";
+};
+
+template <>
+struct SimpleTypeTrait<Time> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "TIME";
 };
 
 template <typename T, bool comparable, bool orderable>
@@ -424,14 +468,14 @@ template <>
 struct MaterializeType<Varchar> {
   using nullable_t = std::string;
   using null_free_t = std::string;
-  static constexpr bool requiresMaterialization = false;
+  static constexpr bool requiresMaterialization = true;
 };
 
 template <>
 struct MaterializeType<Varbinary> {
   using nullable_t = std::string;
   using null_free_t = std::string;
-  static constexpr bool requiresMaterialization = false;
+  static constexpr bool requiresMaterialization = true;
 };
 
 } // namespace facebook::velox

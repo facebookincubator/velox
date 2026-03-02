@@ -17,6 +17,7 @@
 #include "folly/Unicode.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -149,11 +150,11 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
       const TypePtr& returnType,
       const RowVectorPtr& data,
       const VectorPtr& expected) {
-    auto inputFeild =
+    auto inputField =
         std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
 
     auto expression = std::make_shared<core::CallTypedExpr>(
-        returnType, std::vector<core::TypedExprPtr>{inputFeild}, functionName);
+        returnType, functionName, inputField);
 
     SelectivityVector rows(data->size());
     std::vector<VectorPtr> result(1);
@@ -173,6 +174,12 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
   jsonArrayGet(VectorPtr json, VectorPtr index, bool wrapInTry = false) {
     return evaluateJsonVectorFunction("json_array_get", json, index, wrapInTry);
   }
+
+  const std::vector<std::string> badReplacements_ = {
+      "garbage",
+      "NaN",
+      "}",
+      "0/0"};
 
  private:
   // Utility function to evaluate a function both with and without constant
@@ -244,6 +251,18 @@ TEST_F(JsonFunctionsTest, jsonFormat) {
   velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(JsonFunctionsTest, jsonParseErrorContext) {
+  auto data = makeRowVector(
+      {makeFlatVector<StringView>({"1]"}), makeFlatVector<StringView>({"2]"})});
+  // Verify that exceptions thrown have the correct error context information.
+  testContextMessageOnThrow(
+      "json_parse(c0)", data, "Top-level Expression: json_parse(c0)");
+  // Test twice to ensure that the context is correctly generated for each
+  // expression and not cached and reused.
+  testContextMessageOnThrow(
+      "json_parse(c1)", data, "Top-level Expression: json_parse(c1)");
+}
+
 TEST_F(JsonFunctionsTest, jsonParse) {
   const auto jsonParse = [&](std::optional<std::string> value) {
     return evaluateOnce<StringView>("json_parse(c0)", value);
@@ -303,10 +322,13 @@ TEST_F(JsonFunctionsTest, jsonParse) {
       R"([{"response":"[\"fusil a peinture\",\"�uD83E\\uDE2Dau bois\"]"}])");
 
   VELOX_ASSERT_THROW(
-      jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
+      jsonParse(R"({"k1":})"),
+      "The JSON element does not have the requested type");
   VELOX_ASSERT_THROW(
       jsonParse(R"({:"k1"})"), "The JSON document has an improper structure");
-  VELOX_ASSERT_THROW(jsonParse(R"(not_json)"), "Problem while parsing an atom");
+  // The exact exception message can change based on the simdjson version used.
+  // Instead, check that VeloxUserError for invalid Json is returned.
+  ASSERT_THROW(jsonParse(R"(not_json)"), VeloxUserError);
   VELOX_ASSERT_THROW(
       jsonParse("[1"),
       "JSON document ended early in the middle of an object or array");
@@ -683,6 +705,16 @@ TEST_F(JsonFunctionsTest, isJsonScalar) {
   EXPECT_EQ(isJsonScalar(R"({"k1":""})"), false);
 }
 
+TEST_F(JsonFunctionsTest, isJsonScalarBadJsons) {
+  for (const auto& badReplacement : badReplacements_) {
+    std::string js = fmt::format(
+        fmt::runtime(
+            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        badReplacement);
+    EXPECT_THROW(isJsonScalar(js), VeloxUserError);
+  }
+}
+
 TEST_F(JsonFunctionsTest, jsonArrayLength) {
   EXPECT_EQ(jsonArrayLength(R"([])"), 0);
   EXPECT_EQ(jsonArrayLength(R"([1])"), 1);
@@ -702,6 +734,14 @@ TEST_F(JsonFunctionsTest, jsonArrayLength) {
 
   // Malformed Json.
   EXPECT_EQ(jsonArrayLength(R"((})"), std::nullopt);
+
+  for (const auto& badReplacement : badReplacements_) {
+    std::string js = fmt::format(
+        fmt::runtime(
+            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        badReplacement);
+    EXPECT_EQ(jsonArrayLength(js), std::nullopt);
+  }
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayGet) {
@@ -711,7 +751,7 @@ TEST_F(JsonFunctionsTest, jsonArrayGet) {
     std::optional<StringView> s = json.has_value()
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
-    auto jsonInput = makeNullableFlatVector<std::string>({s}, jsontype);
+    auto jsonInput = makeNullableFlatVector<StringView>({s}, jsontype);
     auto indexInput = makeFlatVector<int64_t>(std::vector<int64_t>{index});
     return JsonFunctionsTest::jsonArrayGet(jsonInput, indexInput);
   };
@@ -752,6 +792,15 @@ TEST_F(JsonFunctionsTest, jsonArrayGet) {
     EXPECT_FALSE(arrayGet("[1, 2, ...", 1, type).has_value());
     EXPECT_FALSE(arrayGet("not json", 1, type).has_value());
   }
+
+  // Test it fails on bad jsons
+  for (const auto& badReplacement : badReplacements_) {
+    std::string js = fmt::format(
+        fmt::runtime(
+            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        badReplacement);
+    EXPECT_EQ(arrayGet(js.data(), 1, JSON()), std::nullopt);
+  }
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsBool) {
@@ -791,8 +840,9 @@ true, true, true, true, true, true, true, true, true, true, true])",
 
   // Test errors of getting the specified type of json value.
   // Error code is "INCORRECT_TYPE".
-  EXPECT_EQ(jsonArrayContains<bool>(R"([truet])", false), false);
-  EXPECT_EQ(jsonArrayContains<bool>(R"([truet, false])", false), true);
+  // Bad jsons will return null.
+  EXPECT_EQ(jsonArrayContains<bool>(R"([truet])", false), std::nullopt);
+  EXPECT_EQ(jsonArrayContains<bool>(R"([truet, false])", false), std::nullopt);
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsBigint) {
@@ -840,8 +890,8 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsBigint) {
   EXPECT_EQ(
       jsonArrayContains<int64_t>(R"([-9223372036854775809,-9])", -9), true);
   // Error code is "NUMBER_ERROR".
-  EXPECT_EQ(jsonArrayContains<int64_t>(R"([01])", 4), false);
-  EXPECT_EQ(jsonArrayContains<int64_t>(R"([01, 4])", 4), true);
+  EXPECT_EQ(jsonArrayContains<int64_t>(R"([01])", 4), std::nullopt);
+  EXPECT_EQ(jsonArrayContains<int64_t>(R"([01, 4])", 4), std::nullopt);
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsDouble) {
@@ -889,8 +939,8 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsDouble) {
 
   // Test errors of getting the specified type of json value.
   // Error code is "NUMBER_ERROR".
-  EXPECT_EQ(jsonArrayContains<double>(R"([9.6E400])", 4.2), false);
-  EXPECT_EQ(jsonArrayContains<double>(R"([9.6E400,4.2])", 4.2), true);
+  EXPECT_EQ(jsonArrayContains<double>(R"([9.6E400])", 4.2), std::nullopt);
+  EXPECT_EQ(jsonArrayContains<double>(R"([9.6E400,4.2])", 4.2), std::nullopt);
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsString) {
@@ -958,6 +1008,14 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsMalformed) {
       evaluateOnce<bool>(
           "json_array_contains(c0, 'a')", makeRowVector({jsonVector})),
       std::nullopt);
+
+  for (const auto& badReplacement : badReplacements_) {
+    std::string js = fmt::format(
+        fmt::runtime(
+            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        badReplacement);
+    EXPECT_EQ(jsonArrayContains<std::string>(js, {""}), std::nullopt);
+  }
 }
 
 TEST_F(JsonFunctionsTest, jsonSize) {
@@ -974,6 +1032,14 @@ TEST_F(JsonFunctionsTest, jsonSize) {
       jsonSize(
           R"({"k1":{"k2": 999, "k3": [{"k4": [1, 2, 3]}]}})", "$.k1.k3[0].k4"),
       3);
+
+  for (const auto& badReplacement : badReplacements_) {
+    std::string js = fmt::format(
+        fmt::runtime(
+            "{{\"hands_v1\": {}, \"over_occlusion_rate\": 0.0358322490205352}}"),
+        badReplacement);
+    EXPECT_EQ(jsonSize(js, "$.k1"), std::nullopt);
+  }
 }
 
 TEST_F(JsonFunctionsTest, invalidPath) {
@@ -1066,7 +1132,7 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   EXPECT_EQ(std::nullopt, jsonExtract(R"({"a": [{"b": 123}]})", "$.a[0].c"));
 
   // Wildcard on empty object and array
-  EXPECT_EQ("[]", jsonExtract("{\"a\": {}", "$.a.[*]"));
+  EXPECT_EQ("[]", jsonExtract("{\"a\": {}}", "$.a.[*]"));
   EXPECT_EQ("[]", jsonExtract("{\"a\": []}", "$.a.[*]"));
 
   // Calling wildcard on a scalar
@@ -1129,6 +1195,9 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   EXPECT_EQ(std::nullopt, jsonExtract(kJson, "max($..price)", true));
   EXPECT_EQ(std::nullopt, jsonExtract(kJson, "concat($..category)", true));
   EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.store.keys()", true));
+
+  // Invalid JSON
+  EXPECT_EQ(std::nullopt, jsonExtract("{\"a\": {}", "$.a.[*]"));
 }
 
 TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
@@ -1138,7 +1207,7 @@ TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
     std::optional<StringView> s = json.has_value()
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
-    auto varcharInput = makeNullableFlatVector<std::string>({s}, VARCHAR());
+    auto varcharInput = makeNullableFlatVector<StringView>({s}, VARCHAR());
     auto pathInput = makeFlatVector<std::string>({path});
     return JsonFunctionsTest::jsonExtract(varcharInput, pathInput, wrapInTry);
   };
@@ -1172,11 +1241,12 @@ TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
 
 TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
   // Array of strings.
-  auto data = makeRowVector({makeNullableFlatVector<std::string>(
-      {R"(["red","blue"])"_sv,
-       R"([null,null,"purple"])"_sv,
-       "[]"_sv,
-       "null"_sv})});
+  auto data = makeRowVector({makeNullableFlatVector<StringView>({
+      R"(["red","blue"])"_sv,
+      R"([null,null,"purple"])"_sv,
+      "[]"_sv,
+      "null"_sv,
+  })});
   auto expected = makeNullableArrayVector<StringView>(
       {{{"red"_sv, "blue"_sv}},
        {{std::nullopt, std::nullopt, "purple"_sv}},
@@ -1187,8 +1257,10 @@ TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
       "$internal$json_string_to_array_cast", ARRAY(VARCHAR()), data, expected);
 
   // Array of integers.
-  data = makeRowVector({makeNullableFlatVector<std::string>(
-      {R"(["10212","1015353"])"_sv, R"(["10322","285000"])"})});
+  data = makeRowVector({makeNullableFlatVector<StringView>({
+      R"(["10212","1015353"])"_sv,
+      R"(["10322","285000"])",
+  })});
   expected =
       makeNullableArrayVector<int64_t>({{10212, 1015353}, {10322, 285000}});
 
@@ -1198,19 +1270,21 @@ TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
 
 TEST_F(JsonFunctionsTest, jsonStringToMapCast) {
   // Map of strings.
-  auto data = makeRowVector({makeFlatVector<std::string>(
-      {R"({"red":1,"blue":2})"_sv,
-       R"({"green":3,"magenta":4})"_sv,
-       R"({"violet":1,"blue":2})"_sv,
-       R"({"yellow":1,"blue":2})"_sv,
-       R"({"purple":10,"cyan":5})"_sv})});
+  auto data = makeRowVector({makeFlatVector<StringView>({
+      R"({"red":1,"blue":2})"_sv,
+      R"({"green":3,"magenta":4})"_sv,
+      R"({"violet":1,"blue":2})"_sv,
+      R"({"yellow":1,"blue":2})"_sv,
+      R"({"purple":10,"cyan":5})"_sv,
+  })});
 
-  auto expected = makeMapVector<StringView, int64_t>(
-      {{{"red"_sv, 1}, {"blue"_sv, 2}},
-       {{"green"_sv, 3}, {"magenta"_sv, 4}},
-       {{"violet"_sv, 1}, {"blue"_sv, 2}},
-       {{"yellow"_sv, 1}, {"blue"_sv, 2}},
-       {{"purple"_sv, 10}, {"cyan"_sv, 5}}});
+  auto expected = makeMapVector<StringView, int64_t>({
+      {{"red"_sv, 1}, {"blue"_sv, 2}},
+      {{"green"_sv, 3}, {"magenta"_sv, 4}},
+      {{"violet"_sv, 1}, {"blue"_sv, 2}},
+      {{"yellow"_sv, 1}, {"blue"_sv, 2}},
+      {{"purple"_sv, 10}, {"cyan"_sv, 5}},
+  });
 
   checkInternalFn(
       "$internal$json_string_to_map_cast",
@@ -1221,12 +1295,13 @@ TEST_F(JsonFunctionsTest, jsonStringToMapCast) {
 
 TEST_F(JsonFunctionsTest, jsonStringToRowCast) {
   // Row of strings.
-  auto data = makeRowVector({makeFlatVector<std::string>(
-      {R"({"red":1,"blue":2})"_sv,
-       R"({"red":3,"blue":4})"_sv,
-       R"({"red":1,"blue":2})"_sv,
-       R"({"red":1,"blue":2})"_sv,
-       R"({"red":10,"blue":5})"_sv})});
+  auto data = makeRowVector({makeFlatVector<StringView>({
+      R"({"red":1,"blue":2})"_sv,
+      R"({"red":3,"blue":4})"_sv,
+      R"({"red":1,"blue":2})"_sv,
+      R"({"red":1,"blue":2})"_sv,
+      R"({"red":10,"blue":5})"_sv,
+  })});
 
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>({1, 3, 1, 1, 10}),

@@ -16,6 +16,7 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
@@ -23,6 +24,7 @@
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -107,8 +109,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
     auto queryCtx = core::QueryCtx::create(
         executor ? executor : executor_.get(),
         core::QueryConfig(std::move(configCopy)));
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
@@ -126,16 +129,22 @@ class MultiFragmentTest : public HiveConnectorTestBase,
       int destination = 0,
       Consumer consumer = nullptr,
       int64_t maxMemory = memory::kMaxMemory,
-      folly::Executor* executor = nullptr) const {
+      const std::optional<common::SpillDiskOptions>& diskSpillOpts =
+          std::nullopt) const {
     auto configCopy = configSettings_;
     for (const auto& [k, v] : extraQueryConfigs) {
       configCopy[k] = v;
     }
     auto queryCtx = core::QueryCtx::create(
-        executor ? executor : executor_.get(),
-        core::QueryConfig(std::move(configCopy)));
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+        executor_.get(),
+        core::QueryConfig(std::move(configCopy)),
+        {},
+        nullptr,
+        nullptr,
+        executor_.get());
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool(
+            queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
@@ -143,7 +152,9 @@ class MultiFragmentTest : public HiveConnectorTestBase,
         destination,
         std::move(queryCtx),
         Task::ExecutionMode::kParallel,
-        std::move(consumer));
+        std::move(consumer),
+        /*memoryArbitrationPriority=*/0,
+        diskSpillOpts);
   }
 
   std::vector<RowVectorPtr> makeVectors(int count, int rowsPerVector) {
@@ -247,7 +258,7 @@ class MultiFragmentTest : public HiveConnectorTestBase,
         exchangeStats.at("localExchangeSource.numPages").count);
     ASSERT_EQ(
         expectedBackgroundCpuCount,
-        exchangeStats.at(ExchangeClient::kBackgroundCpuTimeMs).count);
+        exchangeStats.at(Operator::kBackgroundCpuTimeNanos).count);
     ASSERT_EQ(
         expectedBackgroundCpuCount, taskStats.at("0").backgroundTiming.count);
   }
@@ -880,7 +891,7 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
   core::PlanNodeId partitionNodeId;
   std::unordered_map<std::string, std::string> spillMergeConfigs{
       {"spill_enabled", "true"},
-      {"local_merge_enabled", "true"},
+      {"local_merge_spill_enabled", "true"},
       {"local_merge_max_num_merge_sources", "3"}};
   std::vector<core::PlanNodeId> localMergeNodeIds;
   for (int numPartialSortTasks = 0; numPartialSortTasks < 2;
@@ -912,11 +923,17 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
             .capturePlanNodeId(partitionNodeId)
             .planNode();
     localMergeNodeIds.push_back(localMergeNodeId);
-    auto sortTask =
-        makeTask(sortTaskId, partialSortPlan, spillMergeConfigs, tasks.size());
     spillDirectories.push_back(TempDirectoryPath::create());
-    sortTask->setSpillDirectory(
-        spillDirectories[numPartialSortTasks]->getPath());
+    common::SpillDiskOptions spillOpts;
+    spillOpts.spillDirPath = spillDirectories[numPartialSortTasks]->getPath();
+    auto sortTask = makeTask(
+        sortTaskId,
+        partialSortPlan,
+        spillMergeConfigs,
+        tasks.size(),
+        /*consumer=*/nullptr,
+        memory::kMaxMemory,
+        spillOpts);
     tasks.push_back(sortTask);
     sortTask->start(4);
 
@@ -1600,6 +1617,56 @@ TEST_P(MultiFragmentTest, mergeExchangeOverEmptySources) {
           core::QueryConfig::kShuffleCompressionKind,
           common::compressionKindToString(GetParam().compressionKind))
       .assertResults("");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeExchangeFailureOnStart) {
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::vector<std::string> leafTaskIds;
+
+  const auto injectErrorMsg{"injectError"};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::ExchangeQueue::dequeueLocked",
+      std::function<void(ExchangeQueue*)>(
+          ([&](ExchangeQueue* /*unused*/) { VELOX_FAIL(injectErrorMsg); })));
+
+  auto data = makeRowVector(rowType_, 0);
+
+  for (int i = 0; i < 2; ++i) {
+    auto taskId = makeTaskId("leaf-", i);
+    leafTaskIds.push_back(taskId);
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .planNode();
+
+    auto task = makeTask(taskId, plan, tasks.size());
+    tasks.push_back(task);
+    task->start(4);
+  }
+
+  auto exchangeTaskId = makeTaskId("exchange-", 0);
+  auto plan = PlanBuilder()
+                  .mergeExchange(rowType_, {"c0"}, GetParam().serdeKind)
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .planNode();
+
+  std::vector<Split> leafTaskSplits;
+  for (auto leafTaskId : leafTaskIds) {
+    leafTaskSplits.emplace_back(remoteSplit(leafTaskId));
+  }
+  VELOX_ASSERT_THROW(
+      test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .splits(std::move(leafTaskSplits))
+          .config(
+              core::QueryConfig::kShuffleCompressionKind,
+              common::compressionKindToString(GetParam().compressionKind))
+          .assertResults(""),
+      injectErrorMsg);
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -2359,7 +2426,7 @@ DEBUG_ONLY_TEST_P(
   std::thread failThread([&]() {
     try {
       VELOX_FAIL("Test terminate task");
-    } catch (const VeloxException& e) {
+    } catch (const VeloxException&) {
       task->setError(std::current_exception());
     }
   });
@@ -2432,8 +2499,8 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeWithEarlyTermination) {
   mergeIsBlockedReady.store(true);
   mergeIsBlockedWait.notifyAll();
 
-  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 1'000'000'000));
-  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 1'000'000'000));
+  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 30'000'000));
+  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 30'000'000));
 }
 
 class DataFetcher {
@@ -2765,7 +2832,7 @@ TEST_P(MultiFragmentTest, earlyTaskFailure) {
     if (internalFailure) {
       try {
         VELOX_FAIL("memoryAbortTest");
-      } catch (const VeloxRuntimeError& e) {
+      } catch (const VeloxRuntimeError&) {
         finalSortTask->pool()->abort(std::current_exception());
       }
     } else {
@@ -2850,8 +2917,8 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
   if (GetParam().serdeKind == VectorSerde::Kind::kPresto) {
     test(1, 1'000);
     test(1'000, 56);
-    test(10'000, 6);
-    test(100'000, 1);
+    test(10'000, 7);
+    test(100'000, 2);
   } else if (GetParam().serdeKind == VectorSerde::Kind::kCompactRow) {
     test(1, 1'000);
     test(1'000, 39);
@@ -2860,8 +2927,8 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
   } else {
     test(1, 1'000);
     test(1'000, 72);
-    test(10'000, 7);
-    test(100'000, 1);
+    test(10'000, 8);
+    test(100'000, 2);
   }
 }
 
@@ -3038,10 +3105,11 @@ TEST_P(MultiFragmentTest, compression) {
       test("local://t1", 0.7, false);
     }
     SCOPED_TRACE(fmt::format("minCompressionRatio 0.0000001"));
-    { test("local://t2", 0.0000001, true); }
+    {
+      test("local://t2", 0.0000001, true);
+    }
   }
 }
-
 TEST_P(MultiFragmentTest, scaledTableScan) {
   const int numSplits = 20;
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
@@ -3165,6 +3233,158 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
               .customStats.count(TableScan::kNumRunningScaleThreads),
           0);
     }
+  }
+}
+
+// Test row output with no columns (empty schema).
+TEST_P(MultiFragmentTest, emptySchema) {
+  // Create data with rows but no columns
+  auto emptyRowType = ROW({}, {});
+  auto data = makeRowVector(emptyRowType, 1'000);
+
+  std::vector<std::shared_ptr<Task>> tasks;
+  auto leafTaskId = makeTaskId("leaf", 0);
+
+  // Leaf task: Values -> PartitionedOutput
+  auto leafPlan =
+      PlanBuilder()
+          .values({data})
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  auto leafTask = makeTask(leafTaskId, leafPlan, tasks.size());
+  tasks.push_back(leafTask);
+  leafTask->start(4);
+
+  // Root task: Exchange -> Project
+  auto rootTaskId = makeTaskId("root", 0);
+  auto rootPlan = PlanBuilder()
+                      .exchange(emptyRowType, GetParam().serdeKind)
+                      .singleAggregation({}, {"count(1)"})
+                      .planNode();
+
+  test::AssertQueryBuilder(rootPlan, duckDbQueryRunner_)
+      .split(remoteSplit(leafTaskId))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults("SELECT 1000");
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+}
+
+// Test stateful deserialization with different batch byte limits.
+// This validates that the Exchange operator correctly breaks in the middle
+// and continues from the leftover when batch size limits are reached.
+TEST_P(MultiFragmentTest, batchBytes) {
+  auto test = [&](int32_t numBatches,
+                  int32_t rowsPerBatch,
+                  uint64_t preferredBatchBytes,
+                  uint64_t expectedAtLeastOutputBatches = 0) {
+    SCOPED_TRACE(
+        fmt::format(
+            "numBatches={}, rowsPerBatch={}, preferredBatchBytes={}",
+            numBatches,
+            rowsPerBatch,
+            succinctBytes(preferredBatchBytes)));
+
+    std::vector<RowVectorPtr> batches;
+    batches.reserve(numBatches);
+
+    for (int i = 0; i < numBatches; ++i) {
+      auto batch = makeRowVector({
+          makeFlatVector<int64_t>(
+              rowsPerBatch,
+              [i, rowsPerBatch](auto row) { return i * rowsPerBatch + row; }),
+          makeFlatVector<int32_t>(
+              rowsPerBatch,
+              [i, rowsPerBatch](auto row) {
+                return (i * rowsPerBatch + row) % 1000;
+              }),
+          makeFlatVector<double>(
+              rowsPerBatch,
+              [i, rowsPerBatch](auto row) {
+                return (i * rowsPerBatch + row) * 1.5;
+              }),
+      });
+      batches.push_back(batch);
+    }
+
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan =
+        PlanBuilder()
+            .values(batches)
+            .partitionedOutput({}, 1, {"c0", "c1", "c2"}, GetParam().serdeKind)
+            .planNode();
+
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    leafTask->start(1);
+
+    core::PlanNodeId exchangeNodeId;
+    auto rootPlan =
+        PlanBuilder()
+            .exchange(
+                ROW({"c0", "c1", "c2"}, {BIGINT(), INTEGER(), DOUBLE()}),
+                GetParam().serdeKind)
+            .capturePlanNodeId(exchangeNodeId)
+            .singleAggregation({}, {"count(1)", "sum(c0)", "avg(c2)"})
+            .planNode();
+
+    auto extraConfigs = std::unordered_map<std::string, std::string>{
+        {core::QueryConfig::kPreferredOutputBatchBytes,
+         std::to_string(preferredBatchBytes)},
+        {core::QueryConfig::kShuffleCompressionKind,
+         common::compressionKindToString(GetParam().compressionKind)}};
+
+    auto task = test::AssertQueryBuilder(rootPlan, duckDbQueryRunner_)
+                    .split(remoteSplit(leafTaskId))
+                    .configs(extraConfigs)
+                    .assertResults(
+                        fmt::format(
+                            "SELECT {}, {}, {}",
+                            numBatches * rowsPerBatch,
+                            (static_cast<int64_t>(numBatches) * rowsPerBatch *
+                             (numBatches * rowsPerBatch - 1)) /
+                                2,
+                            (static_cast<int64_t>(numBatches) * rowsPerBatch *
+                             (numBatches * rowsPerBatch - 1)) /
+                                2 * 1.5 / (numBatches * rowsPerBatch)));
+
+    waitForTaskCompletion(leafTask.get());
+
+    // Verify Exchange stats to ensure data was processed correctly
+    auto rootTaskStats = toPlanStats(task->taskStats());
+    const auto& exchangeStats = rootTaskStats.at(exchangeNodeId);
+
+    EXPECT_GE(exchangeStats.outputVectors, expectedAtLeastOutputBatches);
+  };
+
+  // Presto serialization operates at page-level granularity (pages are atomic).
+  // The number of output batches depends on how many Presto pages are created
+  // during serialization, which varies based on encoding, compression, and
+  // data.
+  //
+  // For this test (100 input batches × 100 rows = 10,000 rows):
+  // The actual behavior shows all pages are merged and processed together,
+  // resulting in a single batch output currently.
+  //
+  // This is a known limitation - Presto pages cannot be partially deserialized.
+  // The fix prevents INT32_MAX overflow by controlling the merge size, but
+  // fine-grained batch control requires deeper changes to PrestoVectorSerde.
+
+  if (GetParam().serdeKind == VectorSerde::Kind::kPresto) {
+    // Current implementation merges all pages and processes in one batch
+    // The key improvement is preventing overflow, not fine-grained batching
+    test(100, 100, 1, 1); // Expect single batch with all data
+    test(100, 100, 1ULL << 30, 1); // Expect single batch with all data
+  } else {
+    // Row-based serialization (CompactRow/UnsafeRow) supports row-level
+    // batching With 1 byte limit: Can produce many small batches
+    test(100, 100, 1, 100);
+    // With 1GB limit: All rows fit in one batch
+    test(100, 100, 1ULL << 30, 1);
   }
 }
 

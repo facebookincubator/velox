@@ -373,24 +373,25 @@ void CacheFuzzer::initializeInputs() {
   const auto readOptions = io::ReaderOptions(pool_.get());
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
-  auto ioStats = std::make_shared<IoStatistics>();
-  auto fsStats = std::make_shared<filesystems::File::IoStats>();
+  auto ioStatistics = std::make_shared<IoStatistics>();
+  auto ioStats = std::make_shared<IoStats>();
   inputs_.reserve(FLAGS_num_source_files);
   for (auto i = 0; i < FLAGS_num_source_files; ++i) {
     // Initialize buffered input.
     auto readFile = fs_->openFileForRead(fileNames_[i]);
     auto const withExecutor = !folly::Random::oneIn(3, rng_);
-    inputs_.emplace_back(std::make_unique<CachedBufferedInput>(
-        std::move(readFile),
-        MetricsLog::voidLog(),
-        fileIds_[i], // NOLINT
-        cache_.get(),
-        tracker,
-        fileIds_[i], // NOLINT
-        ioStats,
-        fsStats,
-        withExecutor ? executor_.get() : nullptr,
-        readOptions));
+    inputs_.emplace_back(
+        std::make_unique<CachedBufferedInput>(
+            std::move(readFile),
+            MetricsLog::voidLog(),
+            fileIds_[i], // NOLINT
+            cache_.get(),
+            tracker,
+            fileIds_[i], // NOLINT
+            ioStatistics,
+            ioStats,
+            withExecutor ? executor_.get() : nullptr,
+            readOptions));
 
     // Divide file into fragments.
     std::vector<std::pair<int32_t, int32_t>> fragments;

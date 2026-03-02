@@ -16,11 +16,12 @@
 
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 
+#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 
 namespace facebook::velox {
 namespace {
-class QDigestTypeFactories : public CustomTypeFactories {
+class QDigestTypeFactory : public CustomTypeFactory {
  public:
   TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
     VELOX_CHECK_EQ(parameters.size(), 1);
@@ -34,13 +35,31 @@ class QDigestTypeFactories : public CustomTypeFactories {
   }
 
   AbstractInputGeneratorPtr getInputGenerator(
-      const InputGeneratorConfig& /*config*/) const override {
-    return nullptr;
+      const InputGeneratorConfig& config) const override {
+    VELOX_USER_CHECK_NOT_NULL(config.type_, "QDigest Type must be provided");
+    auto parameters = config.type_->parameters();
+
+    VELOX_USER_CHECK(
+        parameters.size() == 1 &&
+            parameters[0].kind == TypeParameterKind::kType,
+        "QDigest must have exactly one parameter");
+
+    const auto paramType = parameters[0].type;
+    const auto kind = paramType->kind();
+    VELOX_USER_CHECK(
+        // QDigest supports three types: BIGINT, REAL, and DOUBLE
+        kind == TypeKind::BIGINT || kind == TypeKind::REAL ||
+            kind == TypeKind::DOUBLE,
+        "QDigest only supports BIGINT, REAL, and DOUBLE parameter types, got: {}",
+        paramType->toString());
+
+    return std::make_shared<fuzzer::QDigestInputGenerator>(
+        config.seed_, QDIGEST(paramType), config.nullRatio_, paramType);
   }
 };
 } // namespace
 
 void registerQDigestType() {
-  registerCustomType("qdigest", std::make_unique<const QDigestTypeFactories>());
+  registerCustomType("qdigest", std::make_unique<const QDigestTypeFactory>());
 }
 } // namespace facebook::velox

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <pybind11/embed.h>
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::py {
@@ -43,9 +43,11 @@ class PyType {
   // Factory functions:
 
   static PyType createRowType(
-      const std::vector<std::string>& names,
+      std::vector<std::string> names,
       const std::vector<PyType>& pyTypes) {
     std::vector<TypePtr> types;
+    types.reserve(pyTypes.size());
+
     for (const auto& pyType : pyTypes) {
       types.emplace_back(pyType.type());
     }
@@ -53,7 +55,7 @@ class PyType {
     if (names.empty()) {
       return PyType{ROW(std::move(types))};
     }
-    return PyType{ROW(folly::copy(names), std::move(types))};
+    return PyType{ROW(std::move(names), std::move(types))};
   }
 
   static PyType createMapType(const PyType& keyType, const PyType& valueType) {
@@ -102,6 +104,10 @@ class PyType {
 
   static PyType createVarbinary() {
     return PyType{VARBINARY()};
+  }
+
+  static PyType createJson() {
+    return PyType{JSON()};
   }
 
  private:

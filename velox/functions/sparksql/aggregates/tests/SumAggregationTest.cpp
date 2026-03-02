@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/exec/AggregateUtil.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/SumTestBase.h"
+#include "velox/functions/sparksql/aggregates/DecimalSumAggregate.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 using facebook::velox::exec::test::PlanBuilder;
@@ -107,6 +110,148 @@ class SumAggregationTest : public SumTestBase {
         {"c0", "a0"},
         {expected},
         {});
+  }
+
+  // Registers a dummy sum aggregate function whose result type cannot be
+  // resolved from the intermediate type. The "i_precision" variable is
+  // intentionally added to fail the intermediate-to-result type resolving.
+  exec::AggregateRegistrationResult registerDummySum(const std::string& name) {
+    std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+        exec::AggregateFunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("i_precision", "min(38, a_precision + 10)")
+            .integerVariable("r_precision", "min(38, a_precision + 10)")
+            .integerVariable("r_scale", "min(38, a_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .intermediateType("ROW(DECIMAL(i_precision, r_scale), boolean)")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .build(),
+    };
+
+    return exec::registerAggregateFunction(
+        name,
+        std::move(signatures),
+        [this, name](
+            core::AggregationNode::Step step,
+            const std::vector<TypePtr>& argTypes,
+            const TypePtr& resultType,
+            const core::QueryConfig& /*config*/)
+            -> std::unique_ptr<exec::Aggregate> {
+          VELOX_CHECK_EQ(
+              argTypes.size(), 1, "{} takes only one argument", name);
+          auto inputType = argTypes[0];
+          switch (inputType->kind()) {
+            case TypeKind::BIGINT: {
+              if (inputType->isShortDecimal()) {
+                return constructDecimalSumAgg(
+                    step,
+                    argTypes,
+                    resultType,
+                    inputType,
+                    getDecimalSumType(resultType));
+              }
+              VELOX_NYI();
+            }
+            case TypeKind::HUGEINT: {
+              VELOX_CHECK(inputType->isLongDecimal());
+              // If inputType is long decimal,
+              // its output type is always long decimal.
+              return constructDecimalSumAgg(
+                  step,
+                  argTypes,
+                  resultType,
+                  inputType,
+                  getDecimalSumType(resultType));
+            }
+            case TypeKind::ROW: {
+              VELOX_DCHECK(!exec::isRawInput(step));
+              // For the intermediate aggregation step, input intermediate sum
+              // type is equal to final result sum type.
+              return constructDecimalSumAgg(
+                  step,
+                  argTypes,
+                  resultType,
+                  inputType->childAt(0),
+                  inputType->childAt(0));
+            }
+            default:
+              VELOX_NYI();
+          }
+        },
+        /*registerCompanionFunctions=*/true,
+        /*overwrite=*/true);
+  }
+
+ private:
+  // Copied from SumAggregate.cpp
+  TypePtr getDecimalSumType(const TypePtr& resultType) {
+    if (resultType->isRow()) {
+      // If the resultType is ROW, then the type if sum is the type of the first
+      // child of the ROW.
+      return resultType->childAt(0);
+    }
+    return resultType;
+  }
+
+  // Copied from SumAggregate.cpp
+  std::unique_ptr<exec::Aggregate> constructDecimalSumAgg(
+      core::AggregationNode::Step step,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& resultType,
+      const TypePtr& inputType,
+      const TypePtr& sumType) {
+    uint8_t precision = getDecimalPrecisionScale(*sumType).first;
+    switch (precision) {
+      // The sum precision is calculated from the input precision with the
+      // formula min(p + 10, 38). Therefore, the sum precision must >= 11.
+#define PRECISION_CASE(precision)                                         \
+  case precision:                                                         \
+    if (inputType->isShortDecimal() && sumType->isShortDecimal()) {       \
+      return std::make_unique<exec::SimpleAggregateAdapter<               \
+          DecimalSumAggregate<int64_t, int64_t, precision>>>(             \
+          step, argTypes, resultType);                                    \
+    } else if (inputType->isShortDecimal() && sumType->isLongDecimal()) { \
+      return std::make_unique<exec::SimpleAggregateAdapter<               \
+          DecimalSumAggregate<int64_t, int128_t, precision>>>(            \
+          step, argTypes, resultType);                                    \
+    } else {                                                              \
+      return std::make_unique<exec::SimpleAggregateAdapter<               \
+          DecimalSumAggregate<int128_t, int128_t, precision>>>(           \
+          step, argTypes, resultType);                                    \
+    }
+      PRECISION_CASE(11)
+      PRECISION_CASE(12)
+      PRECISION_CASE(13)
+      PRECISION_CASE(14)
+      PRECISION_CASE(15)
+      PRECISION_CASE(16)
+      PRECISION_CASE(17)
+      PRECISION_CASE(18)
+      PRECISION_CASE(19)
+      PRECISION_CASE(20)
+      PRECISION_CASE(21)
+      PRECISION_CASE(22)
+      PRECISION_CASE(23)
+      PRECISION_CASE(24)
+      PRECISION_CASE(25)
+      PRECISION_CASE(26)
+      PRECISION_CASE(27)
+      PRECISION_CASE(28)
+      PRECISION_CASE(29)
+      PRECISION_CASE(30)
+      PRECISION_CASE(31)
+      PRECISION_CASE(32)
+      PRECISION_CASE(33)
+      PRECISION_CASE(34)
+      PRECISION_CASE(35)
+      PRECISION_CASE(36)
+      PRECISION_CASE(37)
+      PRECISION_CASE(38)
+#undef PRECISION_CASE
+      default:
+        VELOX_UNREACHABLE();
+    }
   }
 };
 
@@ -486,5 +631,95 @@ TEST_F(SumAggregationTest, sumFloat) {
       {"spark_sum(c0)"},
       "SELECT sum(c0) FROM tmp");
 }
+
+// Spark executes aggregates using a mix of partial, intermediate, and final
+// aggregate functions. The planner translates Spark's aggregate modes into
+// corresponding Velox companion functions and assigns the "single" step to
+// Velox’s AggregationNode. This test verifies that such a plan can execute
+// successfully.
+TEST_F(SumAggregationTest, sumDistinct) {
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(100, [&](auto row) { return row; }),
+      makeFlatVector<int32_t>(100, [&](auto row) { return row * 2; }),
+  });
+  createDuckDbTable({input});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .singleAggregation({"c0"}, {"avg_partial(c1)"})
+          .singleAggregation({"c0"}, {"avg_merge(a0)"})
+          .singleAggregation({}, {"sum_partial(c0)", "avg_merge(a0)"})
+          .singleAggregation(
+              {},
+              {"sum_merge_extract_bigint(a0)", "avg_merge_extract_double(a1)"})
+          .planNode();
+
+  assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");
+}
+
+// A dummy sum aggregate function is registered for testing. This function's
+// result type cannot be inferred from the intermediate type. This test verifies
+// that the companion functions can be registered and that the plan executes
+// successfully.
+TEST_F(SumAggregationTest, dummySum) {
+  registerDummySum("dummy_sum");
+
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          100, [&](auto row) { return row; }, nullptr, DECIMAL(18, 2)),
+      makeFlatVector<int32_t>(100, [&](auto row) { return row * 2; }),
+  });
+  createDuckDbTable({input});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto child =
+      PlanBuilder(planNodeIdGenerator)
+          .values({input})
+          .singleAggregation({"c0"}, {"avg_partial(c1)"})
+          .singleAggregation({"c0"}, {"avg_merge(a0)"})
+          .singleAggregation({}, {"dummy_sum_partial(c0)", "avg_merge(a0)"})
+          .planNode();
+
+  // "PlanBuilder::aggregation" relies on "inferTypes" to resolve the result
+  // type from intermediate type. In this test, we manually construct the
+  // AggregationNode to bypass the type inferring.
+  std::vector<core::AggregationNode::Aggregate> aggregates;
+  core::AggregationNode::Aggregate sumAggregate;
+  // Create the aggregate function: dummy_sum_merge_extract(a0).
+  sumAggregate.call = std::make_shared<core::CallTypedExpr>(
+      DECIMAL(28, 2),
+      "dummy_sum_merge_extract",
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ROW({DECIMAL(28, 2), BOOLEAN()}), "a0")});
+  sumAggregate.rawInputTypes = {ROW({DECIMAL(28, 2), BOOLEAN()})};
+  aggregates.emplace_back(sumAggregate);
+
+  core::AggregationNode::Aggregate avgAggregate;
+  // Create the aggregate function: avg_merge_extract_double(a1).
+  avgAggregate.call = std::make_shared<core::CallTypedExpr>(
+      DOUBLE(),
+      "avg_merge_extract_double",
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ROW({DOUBLE(), BIGINT()}), "a1")});
+  avgAggregate.rawInputTypes = {ROW({DOUBLE(), BIGINT()})};
+  aggregates.emplace_back(avgAggregate);
+
+  auto plan = std::make_shared<core::AggregationNode>(
+      planNodeIdGenerator->next(),
+      core::AggregationNode::Step::kSingle,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<std::string>{"c0", "c1"},
+      std::move(aggregates),
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
+      std::move(child));
+
+  assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");
+}
+
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

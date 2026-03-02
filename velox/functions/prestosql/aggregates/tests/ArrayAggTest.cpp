@@ -586,8 +586,12 @@ TEST_F(ArrayAggTest, clusteredInput) {
       }
       auto plan = builder.finalAggregation().planNode();
       for (int32_t flushRows : {0, 1}) {
-        SCOPED_TRACE(fmt::format(
-            "mask={} batchRows={} flushRows={}", mask, batchRows, flushRows));
+        SCOPED_TRACE(
+            fmt::format(
+                "mask={} batchRows={} flushRows={}",
+                mask,
+                batchRows,
+                flushRows));
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
             .config(
@@ -599,5 +603,33 @@ TEST_F(ArrayAggTest, clusteredInput) {
   }
 }
 
+TEST_F(ArrayAggTest, maskedRows) {
+  std::vector<int> numRows{1, 5};
+  std::vector<RowVectorPtr> data;
+  data.reserve(numRows.size());
+  for (auto numRow : numRows) {
+    data.emplace_back(makeRowVector({
+        makeFlatVector<int64_t>(numRow, [](auto row) { return row; }),
+        makeFlatVector<int64_t>(
+            numRow,
+            [](auto row) { return row; },
+            [](auto row) { return true; }),
+        makeFlatVector<bool>(numRow, [](auto row) { return false; }),
+    }));
+  }
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"array_agg(c1)"},
+                      {"c2"},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
+                  .planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .assertResults("SELECT c0, null FROM tmp");
+}
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -15,16 +15,21 @@
  */
 #pragma once
 
-#include "velox/vector/ComplexVector.h"
+#include "velox/vector/BaseVector.h"
 
-namespace facebook::velox::core {
+namespace facebook::velox {
 
-// Converts a sequence of values from a variant array to an ArrayVector. The
-// output ArrayVector contains one single row, which contains the elements
-// extracted from the input variant vector.
-ArrayVectorPtr variantArrayToVector(
-    const TypePtr& arrayType,
-    const std::vector<variant>& variantArray,
-    velox::memory::MemoryPool* pool);
+// Converts Variant `value` into a Velox vector using specified type.
+//
+// Supports all primitive types and complex types.
+//
+// @returns ConstantVector of size 1.
+//
+// Deprecated: use BaseVector::createConstant instead.
+[[deprecated("Use BaseVector::createConstant")]]
+VectorPtr variantToVector(
+    const TypePtr& type,
+    const Variant& value,
+    memory::MemoryPool* pool);
 
-} // namespace facebook::velox::core
+} // namespace facebook::velox

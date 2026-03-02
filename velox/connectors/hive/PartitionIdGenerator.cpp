@@ -16,37 +16,30 @@
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
-#include "velox/connectors/hive/HivePartitionUtil.h"
-#include "velox/dwio/catalog/fbhive/FileUtils.h"
-
-using namespace facebook::velox::dwio::catalog::fbhive;
-
 namespace facebook::velox::connector::hive {
 
 PartitionIdGenerator::PartitionIdGenerator(
     const RowTypePtr& inputType,
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
-    memory::MemoryPool* pool,
-    bool partitionPathAsLowerCase)
-    : partitionChannels_(std::move(partitionChannels)),
-      maxPartitions_(maxPartitions),
-      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
+    memory::MemoryPool* pool)
+    : pool_(pool),
+      partitionChannels_(std::move(partitionChannels)),
+      maxPartitions_(maxPartitions) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
     hashers_.emplace_back(
         exec::VectorHasher::create(inputType->childAt(channel), channel));
+    VELOX_USER_CHECK(
+        hashers_.back()->typeSupportsValueIds(),
+        "Unsupported partition type: {}.",
+        inputType->childAt(channel)->toString());
   }
 
   std::vector<TypePtr> partitionKeyTypes;
   std::vector<std::string> partitionKeyNames;
   for (auto channel : partitionChannels_) {
-    VELOX_USER_CHECK(
-        exec::VectorHasher::typeKindSupportsValueIds(
-            inputType->childAt(channel)->kind()),
-        "Unsupported partition type: {}.",
-        inputType->childAt(channel)->toString());
     partitionKeyTypes.push_back(inputType->childAt(channel));
     partitionKeyNames.push_back(inputType->nameOf(channel));
   }
@@ -94,12 +87,6 @@ void PartitionIdGenerator::run(
       result[i] = nextPartitionId;
     }
   }
-}
-
-std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
-  return FileUtils::makePartName(
-      extractPartitionKeyValues(partitionValues_, partitionId),
-      partitionPathAsLowerCase_);
 }
 
 void PartitionIdGenerator::computeValueIds(
@@ -154,7 +141,7 @@ void PartitionIdGenerator::updateValueToPartitionIdMapping() {
 
   partitionIds_.clear();
 
-  raw_vector<uint64_t> newValueIds(numPartitions);
+  raw_vector<uint64_t> newValueIds(numPartitions, pool_);
   SelectivityVector rows(numPartitions);
   for (auto i = 0; i < hashers_.size(); ++i) {
     auto& hasher = hashers_[i];

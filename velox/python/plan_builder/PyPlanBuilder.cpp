@@ -22,14 +22,7 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/TypeResolver.h"
 #include "velox/python/vector/PyVector.h"
 #include "velox/tpch/gen/TpchGen.h"
 
@@ -46,14 +39,13 @@ PyPlanNode::PyPlanNode(
   }
 }
 
-PyPlanBuilder::PyPlanBuilder(const std::shared_ptr<PyPlanContext>& planContext)
-    : planContext_(
-          planContext ? planContext : std::make_shared<PyPlanContext>()) {
-  rootPool_ = memory::memoryManager()->addRootPool();
-  leafPool_ = rootPool_->addLeafChild("py_plan_builder_pool");
-  planBuilder_ = exec::test::PlanBuilder(
-      planContext_->planNodeIdGenerator, leafPool_.get());
-}
+PyPlanBuilder::PyPlanBuilder(
+    const std::shared_ptr<memory::MemoryPool>& pool,
+    const std::shared_ptr<PyPlanContext>& planContext)
+    : pool_(pool),
+      planContext_(
+          planContext ? planContext : std::make_shared<PyPlanContext>()),
+      planBuilder_{planContext_->planNodeIdGenerator, pool_.get()} {}
 
 std::optional<PyPlanNode> PyPlanBuilder::planNode() const {
   if (planBuilder_.planNode() != nullptr) {
@@ -104,8 +96,8 @@ PyPlanBuilder& PyPlanBuilder::tableWrite(
 
 PyPlanBuilder& PyPlanBuilder::tableScan(
     const PyType& outputSchema,
-    const py::dict& aliases,
-    const py::dict& subfields,
+    const std::unordered_map<std::string, std::string>& aliases,
+    const std::unordered_map<std::string, std::vector<int64_t>>& subfields,
     const std::vector<std::string>& filters,
     const std::string& remainingFilter,
     const std::string& rowIndexColumnName,
@@ -120,49 +112,24 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
     throw std::runtime_error("Output schema must be a ROW().");
   }
 
-  // If there are any aliases, convert to std container and add to the builder.
-  std::unordered_map<std::string, std::string> aliasMap;
-
-  if (!aliases.empty()) {
-    for (const auto& item : aliases) {
-      if (!py::isinstance<py::str>(item.first) ||
-          !py::isinstance<py::str>(item.second)) {
-        throw std::runtime_error(
-            "Keys and values from aliases map need to be strings.");
-      }
-      aliasMap[item.first.cast<std::string>()] =
-          item.second.cast<std::string>();
-    }
-  }
-
   // If there are subfields, create the appropriate structures and add to the
   // scan.
   if (!subfields.empty() || !rowIndexColumnName.empty()) {
-    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-        assignments;
+    connector::ColumnHandleMap assignments;
 
     for (size_t i = 0; i < outputRowSchema->size(); ++i) {
       auto name = outputRowSchema->nameOf(i);
       auto type = outputRowSchema->childAt(i);
       std::vector<common::Subfield> requiredSubfields;
 
-      py::object key = py::cast(name);
-
       // Check if the column was aliased by the user.
-      auto it = aliasMap.find(name);
-      auto hiveName = it == aliasMap.end() ? name : it->second;
+      auto it = aliases.find(name);
+      auto hiveName = it == aliases.end() ? name : it->second;
 
-      if (subfields.contains(key)) {
-        py::handle value = subfields[key];
-        if (!py::isinstance<py::list>(value)) {
-          throw std::runtime_error(
-              "Subfield map value should be a list of integers.");
-        }
-
-        auto values = value.cast<std::vector<int64_t>>();
-
-        // TODO: Assume for now they are fields in a flap map.
-        for (const auto& subfield : values) {
+      auto subfieldIt = subfields.find(name);
+      if (subfieldIt != subfields.end()) {
+        // TODO: Assume for now they are fields in a flat map.
+        for (const auto& subfield : subfieldIt->second) {
           requiredSubfields.emplace_back(
               fmt::format("{}[{}]", hiveName, subfield));
         }
@@ -190,7 +157,7 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
   }
 
   builder.outputType(outputRowSchema)
-      .columnAliases(std::move(aliasMap))
+      .columnAliases(aliases)
       .connectorId(connectorId)
       .endTableScan();
 
@@ -198,8 +165,9 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   if (inputFiles.has_value()) {
     for (const auto& inputFile : *inputFiles) {
-      splits.push_back(std::make_shared<connector::hive::HiveConnectorSplit>(
-          connectorId, inputFile.filePath(), inputFile.fileFormat()));
+      splits.push_back(
+          std::make_shared<connector::hive::HiveConnectorSplit>(
+              connectorId, inputFile.filePath(), inputFile.fileFormat()));
     }
   }
 
@@ -239,6 +207,18 @@ PyPlanBuilder& PyPlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregations) {
   planBuilder_.singleAggregation(groupingKeys, aggregations);
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::streamingAggregate(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregations) {
+  planBuilder_.streamingAggregation(
+      groupingKeys,
+      aggregations,
+      {},
+      core::AggregationNode::Step::kSingle,
+      false);
   return *this;
 }
 
@@ -299,11 +279,28 @@ PyPlanBuilder& PyPlanBuilder::indexLookupJoin(
           std::dynamic_pointer_cast<const core::TableScanNode>(
               indexPlanSubtree.planNode())) {
     planBuilder_.indexLookupJoin(
-        leftKeys, rightKeys, tableScanNode, {}, output, joinType);
+        leftKeys,
+        rightKeys,
+        tableScanNode,
+        {},
+        /*filter=*/"",
+        /*hasMarker=*/false,
+        output,
+        joinType);
   } else {
     throw std::runtime_error(
         "Index Loop Join subtree must be a single TableScanNode.");
   }
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::unnest(
+    const std::vector<std::string>& unnestColumns,
+    const std::vector<std::string>& replicateColumns,
+    const std::optional<std::string>& ordinalColumn,
+    const std::optional<std::string>& emptyUnnestValueName) {
+  planBuilder_.unnest(
+      replicateColumns, unnestColumns, ordinalColumn, emptyUnnestValueName);
   return *this;
 }
 
@@ -340,8 +337,9 @@ PyPlanBuilder& PyPlanBuilder::tpchGen(
   // Generate one split per part.
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   for (size_t i = 0; i < numParts; ++i) {
-    splits.push_back(std::make_shared<connector::tpch::TpchConnectorSplit>(
-        connectorId, numParts, i));
+    splits.push_back(
+        std::make_shared<connector::tpch::TpchConnectorSplit>(
+            connectorId, numParts, i));
   }
 
   planContext_->scanFiles[planBuilder_.planNode()->id()] = std::move(splits);

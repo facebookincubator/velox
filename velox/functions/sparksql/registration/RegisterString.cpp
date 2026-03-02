@@ -15,15 +15,22 @@
  */
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/UpperLower.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
+#include "velox/functions/sparksql/Base64Function.h"
+#include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
+#include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
+#include "velox/functions/sparksql/RandStr.h"
+#include "velox/functions/sparksql/ReadSidePaddingFunction.h"
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/ToPrettyString.h"
 #include "velox/functions/sparksql/UnBase64Function.h"
 #include "velox/functions/sparksql/VarcharTypeWriteSideCheck.h"
 
@@ -34,8 +41,51 @@ void registerSparkStringFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+
+void registerToPrettyStringFunctions(const std::string& prefix) {
+  const std::vector<std::string> aliases = {prefix + "to_pretty_string"};
+  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(aliases);
+  registerUnaryFloatingPointWithTReturn<ToPrettyStringFunction, Varchar>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, bool>(aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(aliases);
+  registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
+  registerFunction<ToPrettyStringTimestampFunction, Varchar, Timestamp>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, UnknownValue>(aliases);
+  registerFunction<
+      ToPrettyStringDecimalFunction,
+      Varchar,
+      ShortDecimal<P1, S1>>(aliases);
+  registerFunction<ToPrettyStringDecimalFunction, Varchar, LongDecimal<P1, S1>>(
+      aliases);
+}
+
 void registerStringFunctions(const std::string& prefix) {
   registerSparkStringFunctions(prefix);
+  // randstr(length, seed) - Spark's analyzer always provides a seed.
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int16_t>,
+      Constant<int32_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int16_t>,
+      Constant<int64_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int32_t>,
+      Constant<int32_t>>({prefix + "randstr"});
+  registerFunction<
+      RandStrFunction,
+      Varchar,
+      Constant<int32_t>,
+      Constant<int64_t>>({prefix + "randstr"});
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
       {prefix + "startswith"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
@@ -62,10 +112,6 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "replace"});
   registerFunction<FindInSetFunction, int32_t, Varchar, Varchar>(
       {prefix + "find_in_set"});
-  registerFunction<UrlEncodeFunction, Varchar, Varchar>(
-      {prefix + "url_encode"});
-  registerFunction<UrlDecodeFunction, Varchar, Varchar>(
-      {prefix + "url_decode"});
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
   registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t, Varchar>(
@@ -151,10 +197,14 @@ void registerStringFunctions(const std::string& prefix) {
       std::make_unique<ConcatWsCallToSpecialForm>());
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
 
-  using SparkUpperFunction =
-      UpperLowerTemplateFunction</*isLower=*/false, /*forSpark=*/true>;
-  using SparkLowerFunction =
-      UpperLowerTemplateFunction</*isLower=*/true, /*forSpark=*/true>;
+  using SparkUpperFunction = UpperLowerTemplateFunction<
+      /*isLower=*/false,
+      /*turkishCasing=*/true,
+      /*greekFinalSigma=*/true>;
+  using SparkLowerFunction = UpperLowerTemplateFunction<
+      /*isLower=*/true,
+      /*turkishCasing=*/true,
+      /*greekFinalSigma=*/true>;
   exec::registerVectorFunction(
       prefix + "upper",
       SparkUpperFunction::signatures(),
@@ -163,13 +213,23 @@ void registerStringFunctions(const std::string& prefix) {
       prefix + "lower",
       SparkLowerFunction::signatures(),
       std::make_unique<SparkLowerFunction>());
+  registerFunction<ReadSidePaddingFunction, Varchar, Varchar, int32_t>(
+      {prefix + "read_side_padding"});
   registerFunction<
       VarcharTypeWriteSideCheckFunction,
       Varchar,
       Varchar,
       int32_t>({prefix + "varchar_type_write_side_check"});
 
+  registerFunction<CharTypeWriteSideCheckFunction, Varchar, Varchar, int32_t>(
+      {prefix + "char_type_write_side_check"});
+
+  registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
+
+  registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
+
+  registerToPrettyStringFunctions(prefix);
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

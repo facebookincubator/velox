@@ -362,6 +362,10 @@ class TestingCoalescedLoad : public CoalescedLoad {
     return sum;
   }
 
+  bool isSsdLoad() const override {
+    return false;
+  }
+
  protected:
   const std::shared_ptr<AsyncDataCache> cache_;
   const std::vector<Request> requests_;
@@ -413,6 +417,10 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       throw;
     }
     return pins;
+  }
+
+  bool isSsdLoad() const override {
+    return true;
   }
 
  private:
@@ -670,7 +678,7 @@ TEST_P(AsyncDataCacheTest, pin) {
   EXPECT_LT(0, cache_->incrementPrefetchPages(0));
   auto stats = cache_->refreshStats();
   EXPECT_EQ(1, stats.numExclusive);
-  EXPECT_LE(kSize, stats.largeSize);
+  EXPECT_EQ(0, stats.largeSize);
 
   CachePin otherPin;
   EXPECT_THROW(otherPin = pin, VeloxException);
@@ -1138,13 +1146,13 @@ TEST_P(AsyncDataCacheTest, shrinkCache) {
       pins.push_back(std::move(largePin));
     }
     auto stats = cache_->refreshStats();
-    ASSERT_EQ(stats.numEntries, numEntries * 2);
+    ASSERT_EQ(stats.numEntries, 0);
     ASSERT_EQ(stats.numEmptyEntries, 0);
     ASSERT_EQ(stats.numExclusive, numEntries * 2);
     ASSERT_EQ(stats.numEvict, 0);
     ASSERT_EQ(stats.numHit, 0);
-    ASSERT_EQ(stats.tinySize, kTinyDataSize * numEntries);
-    ASSERT_EQ(stats.largeSize, kLargeDataSize * numEntries);
+    ASSERT_EQ(stats.tinySize, 0);
+    ASSERT_EQ(stats.largeSize, 0);
     ASSERT_EQ(stats.sharedPinnedBytes, 0);
     ASSERT_GE(
         stats.exclusivePinnedBytes,
@@ -1402,9 +1410,10 @@ TEST_P(AsyncDataCacheTest, makeEvictable) {
       std::vector<RawFileCacheKey> keys;
       keys.reserve(cachePins.size());
       for (const auto& pin : cachePins) {
-        keys.push_back(RawFileCacheKey{
-            pin.checkedEntry()->key().fileNum.id(),
-            pin.checkedEntry()->key().offset});
+        keys.push_back(
+            RawFileCacheKey{
+                pin.checkedEntry()->key().fileNum.id(),
+                pin.checkedEntry()->key().offset});
       }
       cachePins.clear();
       for (const auto& key : keys) {
@@ -1495,6 +1504,65 @@ TEST_P(AsyncDataCacheTest, ssdWriteOptions) {
   }
 }
 
+TEST_P(AsyncDataCacheTest, ssdFlushThresholdBytes) {
+  constexpr uint64_t kRamBytes = 16UL << 20; // 16 MB
+  constexpr uint64_t kSsdBytes = 64UL << 20; // 64 MB
+
+  struct {
+    double maxWriteRatio;
+    double ssdSavableRatio;
+    int32_t minSsdSavableBytes;
+    uint64_t ssdFlushThresholdBytes;
+    bool expectedSaveToSsd;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxWriteRatio {}, ssdSavableRatio {}, minSsdSavableBytes {}, ssdFlushThresholdBytes {}, expectedSaveToSsd {}",
+          maxWriteRatio,
+          ssdSavableRatio,
+          minSsdSavableBytes,
+          ssdFlushThresholdBytes,
+          expectedSaveToSsd);
+    }
+  } testSettings[] = {
+      // Ratio-based threshold not met, ssdFlushThresholdBytes disabled (0).
+      // No flush expected.
+      {0.8, 0.95, 32 << 20, 0, false},
+      // Ratio-based threshold not met, but ssdFlushThresholdBytes is small
+      // (1MB).
+      // Flush expected due to absolute threshold.
+      {0.8, 0.95, 32 << 20, 1UL << 20, true},
+      // Ratio-based threshold met. ssdFlushThresholdBytes disabled.
+      // Flush expected due to ratio.
+      {0.8, 0.3, 4 << 20, 0, true},
+      // Both thresholds could trigger. Flush expected.
+      {0.8, 0.3, 4 << 20, 1UL << 20, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    initializeCache(
+        kRamBytes,
+        kSsdBytes,
+        0,
+        true,
+        AsyncDataCache::Options(
+            testData.maxWriteRatio,
+            testData.ssdSavableRatio,
+            testData.minSsdSavableBytes,
+            AsyncDataCache::kDefaultNumShards,
+            testData.ssdFlushThresholdBytes));
+    // Load data half of the in-memory capacity.
+    loadLoop(0, kRamBytes / 2);
+    waitForPendingLoads();
+    auto stats = cache_->refreshStats();
+    if (testData.expectedSaveToSsd) {
+      EXPECT_GT(stats.ssdStats->entriesWritten, 0);
+    } else {
+      EXPECT_EQ(stats.ssdStats->entriesWritten, 0);
+    }
+  }
+}
+
 TEST_P(AsyncDataCacheTest, appendSsdSaveable) {
   constexpr uint64_t kRamBytes = 64UL << 20; // 64 MB
   constexpr uint64_t kSsdBytes = 128UL << 20; // 128 MB
@@ -1571,6 +1639,45 @@ TEST_P(AsyncDataCacheTest, checkpoint) {
 }
 
 // TODO: add concurrent fuzzer test.
+
+TEST_P(AsyncDataCacheTest, numShardsDefault) {
+  constexpr uint64_t kRamBytes = 16UL << 20;
+
+  initializeCache(kRamBytes);
+  ASSERT_EQ(
+      asyncDataCacheHelper_->numShards(), AsyncDataCache::kDefaultNumShards);
+}
+
+TEST_P(AsyncDataCacheTest, numShardsInvalid) {
+  constexpr uint64_t kRamBytes = 16UL << 20;
+
+  // Non-power-of-2 should fail.
+  for (int32_t numShards : {3, 5, 6, 7, 9, 10}) {
+    AsyncDataCache::Options options;
+    options.numShards = numShards;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be a power of 2");
+  }
+
+  // Zero should fail.
+  {
+    AsyncDataCache::Options options;
+    options.numShards = 0;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be positive");
+  }
+
+  // Negative should fail.
+  {
+    AsyncDataCache::Options options;
+    options.numShards = -1;
+    VELOX_ASSERT_THROW(
+        initializeCache(kRamBytes, 0, 0, false, options),
+        "numShards must be positive");
+  }
+}
 
 INSTANTIATE_TEST_SUITE_P(
     AsyncDataCacheTest,

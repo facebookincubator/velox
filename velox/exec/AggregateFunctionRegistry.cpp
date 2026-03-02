@@ -16,28 +16,125 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 
 #include "velox/exec/Aggregate.h"
-#include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
 
-std::pair<TypePtr, TypePtr> resolveAggregateFunction(
-    const std::string& functionName,
+namespace {
+std::string makeSignatureNotSupportedError(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    const std::vector<std::shared_ptr<AggregateFunctionSignature>>&
+        signatures) {
+  std::stringstream error;
+  error << "Aggregate function signature is not supported: "
+        << toString(name, argTypes)
+        << ". Supported signatures: " << toString(signatures) << ".";
+  return error.str();
+}
+} // namespace
+
+TypePtr resolveResultType(
+    const std::string& name,
     const std::vector<TypePtr>& argTypes) {
-  if (auto aggregateFunctionSignatures =
-          getAggregateFunctionSignatures(functionName)) {
-    for (const auto& signature : aggregateFunctionSignatures.value()) {
+  if (auto signatures = getAggregateFunctionSignatures(name)) {
+    for (const auto& signature : signatures.value()) {
       SignatureBinder binder(*signature, argTypes);
       if (binder.tryBind()) {
-        return std::make_pair(
-            binder.tryResolveReturnType(),
-            binder.tryResolveType(signature->intermediateType()));
+        return binder.tryResolveReturnType();
       }
+    }
+
+    VELOX_USER_FAIL(
+        makeSignatureNotSupportedError(name, argTypes, signatures.value()));
+  } else {
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
+  }
+}
+
+namespace {
+bool hasCoercion(const std::vector<Coercion>& coercions) {
+  for (const auto& coercion : coercions) {
+    if (coercion.type != nullptr) {
+      return true;
     }
   }
 
-  return std::make_pair(nullptr, nullptr);
+  return false;
+}
+} // namespace
+
+TypePtr resolveResultTypeWithCoercions(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  coercions.clear();
+
+  std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
+  if (auto signatures = getAggregateFunctionSignatures(name)) {
+    for (const auto& signature : signatures.value()) {
+      exec::SignatureBinder binder(*signature, argTypes);
+      std::vector<Coercion> requiredCoercions;
+      if (binder.tryBindWithCoercions(requiredCoercions)) {
+        auto type = binder.tryResolveReturnType();
+        if (!hasCoercion(requiredCoercions)) {
+          coercions.resize(argTypes.size(), nullptr);
+          return type;
+        }
+
+        candidates.emplace_back(requiredCoercions, type);
+      }
+    }
+
+    if (auto index = Coercion::pickLowestCost(candidates)) {
+      const auto& requiredCoercions = candidates[index.value()].first;
+      coercions.reserve(requiredCoercions.size());
+      for (const auto& coercion : requiredCoercions) {
+        coercions.push_back(coercion.type);
+      }
+
+      return candidates[index.value()].second;
+    }
+
+    VELOX_USER_FAIL(
+        makeSignatureNotSupportedError(name, argTypes, signatures.value()));
+  } else {
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
+  }
+}
+
+TypePtr resolveIntermediateType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  if (auto signatures = getAggregateFunctionSignatures(name)) {
+    for (const auto& signature : signatures.value()) {
+      SignatureBinder binder(*signature, argTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveType(signature->intermediateType());
+      }
+    }
+
+    std::stringstream error;
+    error << "Aggregate function signature is not supported: "
+          << toString(name, argTypes)
+          << ". Supported signatures: " << toString(signatures.value()) << ".";
+    VELOX_USER_FAIL(error.str());
+  } else {
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
+  }
+}
+
+std::vector<std::string> getAggregateFunctionNames() {
+  std::vector<std::string> names;
+  exec::aggregateFunctions().withRLock([&](const auto& map) {
+    names.reserve(map.size());
+    for (const auto& function : map) {
+      names.push_back(function.first);
+    }
+  });
+
+  return names;
 }
 
 } // namespace facebook::velox::exec

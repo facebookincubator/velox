@@ -24,17 +24,16 @@ namespace facebook::velox::wave {
 class WaveHiveDataSource : public WaveDataSource {
  public:
   WaveHiveDataSource(
-      const std::shared_ptr<connector::hive::HiveTableHandle>& hiveTableHandle,
+      const connector::hive::HiveTableHandlePtr& hiveTableHandle,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       const RowTypePtr& readerOutputType,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::hive::HiveColumnHandle>>* partitionKeys,
+      std::unordered_map<std::string, connector::hive::HiveColumnHandlePtr>*
+          partitionKeys,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const connector::ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<connector::hive::HiveConfig>& hiveConfig,
-      const std::shared_ptr<io::IoStatistics>& ioStats,
+      const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const exec::ExprSet* remainingFilter,
       std::shared_ptr<common::MetadataFilter> metadataFilter);
 
@@ -60,7 +59,7 @@ class WaveHiveDataSource : public WaveDataSource {
 
   uint64_t getCompletedRows() override;
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
   static void registerConnector();
 

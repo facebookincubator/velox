@@ -21,18 +21,29 @@
 namespace facebook::velox::type {
 namespace {
 
-TEST(TypeUtilTest, ConcatRowTypes) {
-  auto keyType = velox::ROW({"k0", "k1"}, {velox::BIGINT(), velox::INTEGER()});
-  auto valueType = velox::ROW(
-      {"v0", "v1"}, {velox::VARBINARY(), velox::ARRAY(velox::BIGINT())});
+TEST(TypeUtilTest, concatRowTypes) {
+  auto keyType = ROW({"k0", "k1"}, {BIGINT(), INTEGER()});
+  auto valueType = ROW({"v0", "v1"}, {VARBINARY(), ARRAY(BIGINT())});
   auto type = concatRowTypes({keyType, valueType});
-  auto expected = velox::ROW(
-      {"k0", "k1", "v0", "v1"},
-      {velox::BIGINT(),
-       velox::INTEGER(),
-       velox::VARBINARY(),
-       velox::ARRAY(velox::BIGINT())});
+  auto expected =
+      ROW({"k0", "k1", "v0", "v1"},
+          {BIGINT(), INTEGER(), VARBINARY(), ARRAY(BIGINT())});
   EXPECT_EQ(type->toString(), expected->toString());
+}
+
+TEST(TypeUtilTest, tryGetHomogeneousRowChild) {
+  {
+    auto child = tryGetHomogeneousRowChild(ROW({"c1", "c2", "c3"}, BIGINT()));
+    ASSERT_NE(child, nullptr);
+    ASSERT_EQ(*child, *BIGINT());
+  }
+
+  ASSERT_EQ(tryGetHomogeneousRowChild(INTEGER()), nullptr);
+  ASSERT_EQ(tryGetHomogeneousRowChild(ROW({})), nullptr);
+  ASSERT_EQ(tryGetHomogeneousRowChild(ROW({BIGINT(), VARCHAR()})), nullptr);
+  ASSERT_EQ(
+      tryGetHomogeneousRowChild(ROW({"c1", "c2"}, {BIGINT(), VARCHAR()})),
+      nullptr);
 }
 
 } // namespace

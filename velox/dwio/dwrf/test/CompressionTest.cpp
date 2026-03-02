@@ -291,6 +291,8 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     Values(
         std::make_tuple(CompressionKind_ZLIB, nullptr, nullptr),
         std::make_tuple(CompressionKind_ZLIB, &testEncrypter, &testDecrypter),
+        std::make_tuple(CompressionKind_GZIP, nullptr, nullptr),
+        std::make_tuple(CompressionKind_GZIP, &testEncrypter, &testDecrypter),
         std::make_tuple(CompressionKind_ZSTD, nullptr, nullptr),
         std::make_tuple(CompressionKind_ZSTD, &testEncrypter, &testDecrypter),
         std::make_tuple(CompressionKind_NONE, nullptr, nullptr),
@@ -399,10 +401,11 @@ TEST_P(CompressionTest, getCompressionBufferOOM) {
       {true, true}, {true, false}, {false, true}, {false, false}};
 
   for (const auto& testData : testSettings) {
-    SCOPED_TRACE(fmt::format(
-        "{} compression {}",
-        testData.debugString(),
-        compressionKindToString(kind_)));
+    SCOPED_TRACE(
+        fmt::format(
+            "{} compression {}",
+            testData.debugString(),
+            compressionKindToString(kind_)));
 
     auto config = std::make_shared<Config>();
     config->set<CompressionKind>(Config::COMPRESSION, kind_);
@@ -456,6 +459,8 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     Values(
         std::make_tuple(CompressionKind_ZLIB, nullptr),
         std::make_tuple(CompressionKind_ZLIB, &testEncrypter),
+        std::make_tuple(CompressionKind_GZIP, nullptr),
+        std::make_tuple(CompressionKind_GZIP, &testEncrypter),
         std::make_tuple(CompressionKind_ZSTD, nullptr),
         std::make_tuple(CompressionKind_ZSTD, &testEncrypter),
         std::make_tuple(CompressionKind_NONE, &testEncrypter)));

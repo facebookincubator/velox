@@ -341,8 +341,9 @@ template <bool isSigned>
     case 57 ... 63:
       return writeVarint<1>(value, buffer);
   }
-  DWIO_RAISE(folly::sformat(
-      "Unexpected leading zeros {} for value {}", leadingZeros, value));
+  DWIO_RAISE(
+      folly::sformat(
+          "Unexpected leading zeros {} for value {}", leadingZeros, value));
 }
 
 template <bool isSigned>

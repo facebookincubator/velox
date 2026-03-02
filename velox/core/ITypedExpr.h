@@ -19,28 +19,91 @@
 
 namespace facebook::velox::core {
 
+enum class ExprKind : int32_t {
+  kInput = 0,
+  kFieldAccess = 1,
+  kDereference = 2,
+  kCall = 3,
+  kCast = 5,
+  kConstant = 6,
+  kConcat = 7,
+  kLambda = 8,
+};
+
+VELOX_DECLARE_ENUM_NAME(ExprKind);
+
 class ITypedExpr;
 class ITypedExprVisitor;
 class ITypedExprVisitorContext;
 
 using TypedExprPtr = std::shared_ptr<const ITypedExpr>;
 
+struct ITypedExprHasher {
+  size_t operator()(const ITypedExpr* expr) const;
+};
+
+struct ITypedExprComparer {
+  bool operator()(const ITypedExpr* lhs, const ITypedExpr* rhs) const;
+};
+
 /// Strongly-typed expression, e.g. literal, function call, etc.
 class ITypedExpr : public ISerializable {
  public:
-  explicit ITypedExpr(TypePtr type) : type_{std::move(type)}, inputs_{} {}
+  ITypedExpr(ExprKind kind, TypePtr type)
+      : kind_{kind}, type_{std::move(type)}, inputs_{} {}
 
-  ITypedExpr(TypePtr type, std::vector<TypedExprPtr> inputs)
-      : type_{std::move(type)}, inputs_{std::move(inputs)} {}
+  ITypedExpr(ExprKind kind, TypePtr type, std::vector<TypedExprPtr> inputs)
+      : kind_{kind}, type_{std::move(type)}, inputs_{std::move(inputs)} {}
+
+  virtual ~ITypedExpr() = default;
+
+  ExprKind kind() const {
+    return kind_;
+  }
 
   const TypePtr& type() const {
     return type_;
   }
 
-  virtual ~ITypedExpr() = default;
-
   const std::vector<TypedExprPtr>& inputs() const {
     return inputs_;
+  }
+
+  bool isInputKind() const {
+    return kind_ == ExprKind::kInput;
+  }
+
+  bool isFieldAccessKind() const {
+    return kind_ == ExprKind::kFieldAccess;
+  }
+
+  bool isDereferenceKind() const {
+    return kind_ == ExprKind::kDereference;
+  }
+
+  bool isCallKind() const {
+    return kind_ == ExprKind::kCall;
+  }
+
+  bool isCastKind() const {
+    return kind_ == ExprKind::kCast;
+  }
+
+  bool isConstantKind() const {
+    return kind_ == ExprKind::kConstant;
+  }
+
+  bool isConcatKind() const {
+    return kind_ == ExprKind::kConcat;
+  }
+
+  bool isLambdaKind() const {
+    return kind_ == ExprKind::kLambda;
+  }
+
+  template <typename T>
+  const T* asUnchecked() const {
+    return dynamic_cast<const T*>(this);
   }
 
   /// Returns a copy of this expression with input fields replaced according
@@ -60,11 +123,20 @@ class ITypedExpr : public ISerializable {
 
   virtual std::string toString() const = 0;
 
+  /// Returns a hash value for this expression node only, not including inputs.
+  /// Implementations must use a stable hash like folly::hasher to ensure
+  /// stable hashing across processes and builds.
   virtual size_t localHash() const = 0;
 
+  /// Returns a hash value for the entire expression tree rooted at this node.
+  /// The hash is computed by combining localHash() with the type's hash and
+  /// the hashes of all input expressions.
+  ///
+  /// STABILITY GUARANTEE: This hash is stable across different processes,
+  /// builds, and machines.
   size_t hash() const {
     size_t hash = bits::hashMix(type_->hashKind(), localHash());
-    for (int32_t i = 0; i < inputs_.size(); ++i) {
+    for (size_t i = 0; i < inputs_.size(); ++i) {
       hash = bits::hashMix(hash, inputs_[i]->hash());
     }
     return hash;
@@ -88,8 +160,9 @@ class ITypedExpr : public ISerializable {
   }
 
  private:
-  TypePtr type_;
-  std::vector<TypedExprPtr> inputs_;
+  const ExprKind kind_;
+  const TypePtr type_;
+  const std::vector<TypedExprPtr> inputs_;
 };
 
 } // namespace facebook::velox::core

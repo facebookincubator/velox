@@ -31,11 +31,13 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
       std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
+  dwio::common::ColumnReaderStatistics stats;
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
       common::CompressionKind::CompressionKind_GZIP,
-      headerSize);
+      headerSize,
+      stats);
   auto header = pageReader->readPageHeader();
   EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
   EXPECT_EQ(header.uncompressed_page_size, 16950);
@@ -50,6 +52,7 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   auto maxValue = header.data_page_header.statistics.max_value;
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
+  EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
 }
 
 TEST_F(ParquetPageReaderTest, largePage) {
@@ -59,11 +62,13 @@ TEST_F(ParquetPageReaderTest, largePage) {
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
       std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
+  dwio::common::ColumnReaderStatistics stats;
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
       common::CompressionKind::CompressionKind_GZIP,
-      headerSize);
+      headerSize,
+      stats);
   auto header = pageReader->readPageHeader();
 
   EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
@@ -79,6 +84,7 @@ TEST_F(ParquetPageReaderTest, largePage) {
   auto maxValue = header.data_page_header.statistics.max_value;
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
+  EXPECT_GT(stats.pageLoadTimeNs.sum(), 0);
 }
 
 TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
@@ -92,11 +98,13 @@ TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
   // In the corrupted_page_header, the min_value length is set incorrectly on
   // purpose. This is to simulate the situation where the Parquet Page Header is
   // corrupted. And an error is expected to be thrown.
+  dwio::common::ColumnReaderStatistics stats;
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
       common::CompressionKind::CompressionKind_GZIP,
-      headerSize);
+      headerSize,
+      stats);
 
   EXPECT_THROW(pageReader->readPageHeader(), VeloxException);
 }

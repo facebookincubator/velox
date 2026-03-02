@@ -68,6 +68,12 @@ class SIMDJsonExtractor {
       TConsumer& consumer,
       bool& isDefinitePath);
 
+  template <typename TConsumer>
+  simdjson::error_code extract(
+      simdjson::ondemand::document& jsonDoc,
+      TConsumer& consumer,
+      bool& isDefinitePath);
+
   /// Returns true if this extractor was initialized with the trivial path "$".
   bool isRootOnlyPath() {
     return tokens_.empty();
@@ -76,7 +82,7 @@ class SIMDJsonExtractor {
   /// Use this method to get an instance of SIMDJsonExtractor given a JSON path.
   /// Uses a thread local cache, therefore the caller must ensure the returned
   /// instance is not passed between threads.
-  static SIMDJsonExtractor& getInstance(folly::StringPiece path);
+  static SIMDJsonExtractor& getInstance(std::string_view path);
 
  private:
   // Shouldn't instantiate directly - use getInstance().
@@ -127,6 +133,14 @@ simdjson::error_code SIMDJsonExtractor::extract(
     TConsumer& consumer,
     bool& isDefinitePath) {
   SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
+  return extract(jsonDoc, consumer, isDefinitePath);
+}
+
+template <typename TConsumer>
+simdjson::error_code SIMDJsonExtractor::extract(
+    simdjson::ondemand::document& jsonDoc,
+    TConsumer& consumer,
+    bool& isDefinitePath) {
   SIMDJSON_ASSIGN_OR_RAISE(auto isScalar, jsonDoc.is_scalar());
   if (isScalar) {
     // Note, we cannot convert this to a value as this is not supported if the

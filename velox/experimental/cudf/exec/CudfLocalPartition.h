@@ -16,11 +16,18 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::cudf_velox {
+
+enum class PartitionFunctionType {
+  kHash,
+  kRoundRobin,
+  kRoundRobinRow,
+};
 
 class CudfLocalPartition : public exec::Operator, public NvtxHelper {
  public:
@@ -32,6 +39,8 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
   std::string toString() const override {
     return fmt::format("CudfLocalPartition({})", numPartitions_);
   }
+
+  void recordOutputStats(RowVectorPtr& input);
 
   void addInput(RowVectorPtr input) override;
 
@@ -51,9 +60,18 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
+  static bool shouldReplace(
+      const std::shared_ptr<const core::LocalPartitionNode>& planNode);
+
+ private:
+  void enqueuePartition(int partitionIndex, const CudfVectorPtr& cudfVector);
+  void flushVectorPool();
+
  protected:
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
+  PartitionFunctionType partitionFunctionType_;
+  size_t counter_{0};
 
   std::vector<exec::BlockingReason> blockingReasons_;
   std::vector<ContinueFuture> futures_;

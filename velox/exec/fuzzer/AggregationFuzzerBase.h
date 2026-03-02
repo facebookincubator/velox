@@ -81,8 +81,6 @@ class AggregationFuzzerBase {
                                       : getFuzzerOptions(timestampPrecision),
             pool_.get()} {
     filesystems::registerLocalFileSystem();
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
     registerHiveConnector(hiveConfigs);
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
@@ -123,6 +121,7 @@ class AggregationFuzzerBase {
     opts.stringVariableLength = true;
     opts.stringLength = 4'000;
     opts.nullRatio = FLAGS_null_ratio;
+    opts.useRandomNullPattern = true;
     opts.timestampPrecision = timestampPrecision;
     return opts;
   }

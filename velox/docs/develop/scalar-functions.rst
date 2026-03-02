@@ -216,6 +216,38 @@ An example of such function is rand():
     }
   };
 
+Function Owner
+^^^^^^^^^^^^^^
+
+Functions can specify an owner (team or individual) responsible for the function.
+This information is included in exception context messages to help with error
+attribution and debugging. By default, no owner is set.
+
+To specify a custom owner, define a static ``owner`` variable in your function class:
+
+.. code-block:: c++
+
+  template <typename TExec>
+  struct MyFunction {
+    VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+    // Specify the team or individual responsible for this function.
+    static constexpr std::string_view owner = "my-team";
+
+    FOLLY_ALWAYS_INLINE bool call(int64_t& result, const int64_t& input) {
+      result = input * 2;
+      return true;
+    }
+  };
+
+When an exception occurs during function evaluation, the error context will
+include the owner information (if specified), making it easier to identify which team should
+investigate the issue. For example, an error message might look like:
+
+.. code-block:: text
+
+  Owner: my-team. Expression: my_function(c0)
+
 All-ASCII Fast Path
 ^^^^^^^^^^^^^^^^^^^
 
@@ -722,7 +754,7 @@ cardinality function for maps:
 
       BaseVector::ensureWritable(rows, BIGINT(), context.pool(), result);
       BufferPtr resultValues =
-           result->as<FlatVector<int64_t>>()->mutableValues(rows.size());
+           result->as<FlatVector<int64_t>>()->mutableValues();
       auto rawResult = resultValues->asMutable<int64_t>();
 
       auto mapVector = args[0]->as<MapVector>();
@@ -870,12 +902,31 @@ Use exec::registerVectorFunction to register a stateless vector function.
 exec::registerVectorFunction takes a name, a list of supported signatures
 and unique_ptr to an instance of the function. It takes an optional 'metadata'
 parameter that specifies whether a function is deterministic, has default null
-behavior, and other properties. A helper VectorFunctionMetadataBuilder class
+behavior, owner, and other properties. A helper VectorFunctionMetadataBuilder class
 allows to easily construct 'metadata'. For example,
 
 .. code-block:: c++
 
     VectorFunctionMetadataBuilder().defaultNullBehavior(false).build();
+
+To specify a custom owner for a vector function, use the owner() method of
+VectorFunctionMetadataBuilder:
+
+.. code-block:: c++
+
+    VectorFunctionMetadataBuilder()
+        .defaultNullBehavior(false)
+        .owner("my-team")
+        .build();
+
+The owner information is included in exception context messages to help with
+error attribution and debugging. By default, no owner is set.
+When an exception occurs during function evaluation, the error message will
+include the owner (if specified), for example:
+
+.. code-block:: text
+
+    Owner: my-team. Expression: my_vector_function(c0)
 
 
 An optional “overwrite” flag specifies whether to overwrite a function if a function

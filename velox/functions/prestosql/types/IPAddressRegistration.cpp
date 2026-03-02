@@ -136,8 +136,9 @@ class IPAddressCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto ipAddressString = ipAddressStrings->valueAt(row);
-      auto maybeIpAsInt128 =
-          ipaddress::tryGetIPv6asInt128FromString(ipAddressString);
+      // TODO: Remove explicit std::string_view cast.
+      auto maybeIpAsInt128 = ipaddress::tryGetIPv6asInt128FromString(
+          std::string_view(ipAddressString));
 
       if (maybeIpAsInt128.hasError()) {
         if (threadSkipErrorDetails()) {
@@ -256,9 +257,9 @@ class IPAddressCastOperator : public exec::CastOperator {
   }
 };
 
-class IPAddressTypeFactories : public CustomTypeFactories {
+class IPAddressTypeFactory : public CustomTypeFactory {
  public:
-  IPAddressTypeFactories() = default;
+  IPAddressTypeFactory() = default;
 
   TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
     VELOX_CHECK(parameters.empty());
@@ -283,6 +284,6 @@ class IPAddressTypeFactories : public CustomTypeFactories {
 
 void registerIPAddressType() {
   registerCustomType(
-      "ipaddress", std::make_unique<const IPAddressTypeFactories>());
+      "ipaddress", std::make_unique<const IPAddressTypeFactory>());
 }
 } // namespace facebook::velox

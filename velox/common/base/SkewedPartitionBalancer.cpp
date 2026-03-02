@@ -30,9 +30,10 @@ SkewedPartitionRebalancer::SkewedPartitionRebalancer(
       numTasks_(numTasks),
       minProcessedBytesRebalanceThresholdPerPartition_(
           minProcessedBytesRebalanceThresholdPerPartition),
-      minProcessedBytesRebalanceThreshold_(std::max(
-          minProcessedBytesRebalanceThreshold,
-          minProcessedBytesRebalanceThresholdPerPartition_)),
+      minProcessedBytesRebalanceThreshold_(
+          std::max(
+              minProcessedBytesRebalanceThreshold,
+              minProcessedBytesRebalanceThresholdPerPartition_)),
       partitionRowCount_(numPartitions_),
       partitionAssignments_(numPartitions_) {
   VELOX_CHECK_GT(numPartitions_, 0);
@@ -174,9 +175,10 @@ void SkewedPartitionRebalancer::rebalanceBasedOnTaskSkewness(
 
       const uint32_t totalAssignedTasks =
           partitionAssignments_[maxPartition].size();
-      if (partitionBytes_[maxPartition] <
-          (minProcessedBytesRebalanceThresholdPerPartition_ *
-           totalAssignedTasks)) {
+      if (partitionBytes_[maxPartition] == 0 ||
+          (partitionBytes_[maxPartition] <
+           (minProcessedBytesRebalanceThresholdPerPartition_ *
+            totalAssignedTasks))) {
         break;
       }
 

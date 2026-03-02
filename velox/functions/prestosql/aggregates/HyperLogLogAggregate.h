@@ -18,174 +18,16 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
-#include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/HllUtils.h"
-#include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/common/hyperloglog/SparseHll.h"
-#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/functions/lib/HllAccumulator.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
-using facebook::velox::common::hll::DenseHll;
 using facebook::velox::common::hll::SparseHll;
 
 namespace facebook::velox::aggregate::prestosql {
-
-template <typename T, bool HllAsFinalResult>
-inline uint64_t hashOne(T value) {
-  if constexpr (HllAsFinalResult) {
-    if constexpr (std::is_same_v<T, int64_t>) {
-      return common::hll::Murmur3Hash128::hash64ForLong(value, 0);
-    } else if constexpr (std::is_same_v<T, double>) {
-      return common::hll::Murmur3Hash128::hash64ForLong(
-          *reinterpret_cast<int64_t*>(&value), 0);
-    }
-    return common::hll::Murmur3Hash128::hash64(&value, sizeof(T), 0);
-  } else {
-    return XXH64(&value, sizeof(T), 0);
-  }
-}
-
-// Use timestamp.toMillis() to compute hash value.
-template <>
-inline uint64_t hashOne<Timestamp, false>(Timestamp value) {
-  return hashOne<int64_t, false>(value.toMillis());
-}
-
-template <>
-inline uint64_t hashOne<Timestamp, true>(Timestamp /*value*/) {
-  VELOX_UNREACHABLE("approx_set(timestamp) is not supported.");
-}
-
-template <>
-inline uint64_t hashOne<StringView, false>(StringView value) {
-  return XXH64(value.data(), value.size(), 0);
-}
-
-template <>
-inline uint64_t hashOne<StringView, true>(StringView value) {
-  return common::hll::Murmur3Hash128::hash64(value.data(), value.size(), 0);
-}
-
-template <typename T, bool HllAsFinalResult>
-struct HllAccumulator {
-  explicit HllAccumulator(HashStringAllocator* allocator)
-      : sparseHll_{allocator}, denseHll_{allocator} {}
-
-  void setIndexBitLength(int8_t indexBitLength) {
-    indexBitLength_ = indexBitLength;
-    sparseHll_.setSoftMemoryLimit(
-        DenseHll::estimateInMemorySize(indexBitLength_));
-  }
-
-  void append(T value) {
-    const auto hash = hashOne<T, HllAsFinalResult>(value);
-
-    if (isSparse_) {
-      if (sparseHll_.insertHash(hash)) {
-        toDense();
-      }
-    } else {
-      denseHll_.insertHash(hash);
-    }
-  }
-
-  int64_t cardinality() const {
-    return isSparse_ ? sparseHll_.cardinality() : denseHll_.cardinality();
-  }
-
-  void mergeWith(StringView serialized, HashStringAllocator* allocator) {
-    auto input = serialized.data();
-    if (SparseHll::canDeserialize(input)) {
-      if (isSparse_) {
-        sparseHll_.mergeWith(input);
-        if (indexBitLength_ < 0) {
-          setIndexBitLength(DenseHll::deserializeIndexBitLength(input));
-        }
-        if (sparseHll_.overLimit()) {
-          toDense();
-        }
-      } else {
-        SparseHll other{input, allocator};
-        other.toDense(denseHll_);
-      }
-    } else if (DenseHll::canDeserialize(input)) {
-      if (isSparse_) {
-        if (indexBitLength_ < 0) {
-          setIndexBitLength(DenseHll::deserializeIndexBitLength(input));
-        }
-        toDense();
-      }
-      denseHll_.mergeWith(input);
-    } else {
-      VELOX_USER_FAIL("Unexpected type of HLL");
-    }
-  }
-
-  int32_t serializedSize() {
-    return isSparse_ ? sparseHll_.serializedSize() : denseHll_.serializedSize();
-  }
-
-  void serialize(char* outputBuffer) {
-    return isSparse_ ? sparseHll_.serialize(indexBitLength_, outputBuffer)
-                     : denseHll_.serialize(outputBuffer);
-  }
-
- private:
-  void toDense() {
-    isSparse_ = false;
-    denseHll_.initialize(indexBitLength_);
-    sparseHll_.toDense(denseHll_);
-    sparseHll_.reset();
-  }
-
-  bool isSparse_{true};
-  int8_t indexBitLength_{-1};
-  SparseHll sparseHll_;
-  DenseHll denseHll_;
-};
-
-template <>
-struct HllAccumulator<bool, false> {
-  explicit HllAccumulator(HashStringAllocator* /*allocator*/) {}
-
-  void append(bool value) {
-    approxDistinctState_ |= (1 << value);
-  }
-
-  int64_t cardinality() const {
-    return (approxDistinctState_ & 1) + ((approxDistinctState_ & 2) >> 1);
-  }
-
-  void mergeWith(
-      StringView /*serialized*/,
-      HashStringAllocator* /*allocator*/) {
-    VELOX_UNREACHABLE(
-        "APPROX_DISTINCT<BOOLEAN> unsupported mergeWith(StringView, HashStringAllocator*)");
-  }
-
-  void mergeWith(int8_t data) {
-    approxDistinctState_ |= data;
-  }
-
-  int32_t serializedSize() const {
-    return sizeof(int8_t);
-  }
-
-  void serialize(char* /*outputBuffer*/) {
-    VELOX_UNREACHABLE("APPROX_DISTINCT<BOOLEAN> unsupported serialize(char*)");
-  }
-
-  void setIndexBitLength(int8_t /*indexBitLength*/) {}
-
-  int8_t getState() const {
-    return approxDistinctState_;
-  }
-
- private:
-  int8_t approxDistinctState_{0};
-};
 
 template <typename T, bool HllAsFinalResult>
 class HyperLogLogAggregate : public exec::Aggregate {
@@ -200,11 +42,11 @@ class HyperLogLogAggregate : public exec::Aggregate {
         indexBitLength_{common::hll::toIndexBitLength(defaultError)} {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(HllAccumulator<T, HllAsFinalResult>);
+    return sizeof(velox::common::hll::HllAccumulator<T, HllAsFinalResult>);
   }
 
   int32_t accumulatorAlignmentSize() const override {
-    return alignof(HllAccumulator<T, HllAsFinalResult>);
+    return alignof(velox::common::hll::HllAccumulator<T, HllAsFinalResult>);
   }
 
   bool isFixedSize() const override {
@@ -234,7 +76,8 @@ class HyperLogLogAggregate : public exec::Aggregate {
           groups,
           numGroups,
           flatResult,
-          [](HllAccumulator<T, HllAsFinalResult>* accumulator,
+          [](velox::common::hll::HllAccumulator<T, HllAsFinalResult>*
+                 accumulator,
              FlatVector<int64_t>* result,
              vector_size_t index) {
             result->set(index, accumulator->cardinality());
@@ -251,7 +94,8 @@ class HyperLogLogAggregate : public exec::Aggregate {
 
       for (auto i = 0; i < numGroups; ++i) {
         char* group = groups[i];
-        auto* accumulator = value<HllAccumulator<bool, false>>(group);
+        auto* accumulator =
+            value<velox::common::hll::HllAccumulator<bool, false>>(group);
         flatResult->set(i, accumulator->getState());
       }
 
@@ -262,7 +106,8 @@ class HyperLogLogAggregate : public exec::Aggregate {
           groups,
           numGroups,
           flatResult,
-          [&](HllAccumulator<T, HllAsFinalResult>* accumulator,
+          [&](velox::common::hll::HllAccumulator<T, HllAsFinalResult>*
+                  accumulator,
               FlatVector<StringView>* result,
               vector_size_t index) {
             auto size = accumulator->serializedSize();
@@ -298,7 +143,9 @@ class HyperLogLogAggregate : public exec::Aggregate {
 
         auto group = groups[row];
         auto tracker = trackRowSize(group);
-        auto accumulator = value<HllAccumulator<T, HllAsFinalResult>>(group);
+        auto accumulator =
+            value<velox::common::hll::HllAccumulator<T, HllAsFinalResult>>(
+                group);
         clearNull(group);
         accumulator->setIndexBitLength(indexBitLength_);
         accumulator->append(decodedValue_.valueAt<T>(row));
@@ -342,7 +189,9 @@ class HyperLogLogAggregate : public exec::Aggregate {
           return;
         }
 
-        auto accumulator = value<HllAccumulator<T, HllAsFinalResult>>(group);
+        auto accumulator =
+            value<velox::common::hll::HllAccumulator<T, HllAsFinalResult>>(
+                group);
         clearNull(group);
         accumulator->setIndexBitLength(indexBitLength_);
 
@@ -376,24 +225,26 @@ class HyperLogLogAggregate : public exec::Aggregate {
     setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
-      new (group + offset_) HllAccumulator<T, HllAsFinalResult>(allocator_);
+      new (group + offset_)
+          velox::common::hll::HllAccumulator<T, HllAsFinalResult>(allocator_);
     }
   }
 
   void destroyInternal(folly::Range<char**> groups) override {
-    destroyAccumulators<HllAccumulator<T, HllAsFinalResult>>(groups);
+    destroyAccumulators<
+        velox::common::hll::HllAccumulator<T, HllAsFinalResult>>(groups);
   }
 
  private:
   void mergeToAccumulator(char* group, const vector_size_t row) {
     if constexpr (std::is_same_v<T, bool>) {
       static_assert(!HllAsFinalResult);
-      value<HllAccumulator<bool, false>>(group)->mergeWith(
+      value<velox::common::hll::HllAccumulator<bool, false>>(group)->mergeWith(
           decodedHll_.valueAt<int8_t>(row));
     } else {
       auto serialized = decodedHll_.valueAt<StringView>(row);
-      HllAccumulator<T, HllAsFinalResult>* accumulator =
-          value<HllAccumulator<T, HllAsFinalResult>>(group);
+      velox::common::hll::HllAccumulator<T, HllAsFinalResult>* accumulator =
+          value<velox::common::hll::HllAccumulator<T, HllAsFinalResult>>(group);
       accumulator->mergeWith(serialized, allocator_);
     }
   }
@@ -432,7 +283,9 @@ class HyperLogLogAggregate : public exec::Aggregate {
           bits::clearBit(rawNulls, i);
         }
 
-        auto accumulator = value<HllAccumulator<T, HllAsFinalResult>>(group);
+        auto accumulator =
+            value<velox::common::hll::HllAccumulator<T, HllAsFinalResult>>(
+                group);
         extractFunction(accumulator, result, i);
       }
     }

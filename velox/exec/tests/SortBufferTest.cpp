@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/SortBuffer.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -89,6 +90,7 @@ class SortBufferTest : public OperatorTestBase,
         0,
         0,
         "none",
+        0,
         spillPrefixSortConfig);
   }
 
@@ -118,7 +120,9 @@ class SortBufferTest : public OperatorTestBase,
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
+  const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
+      memory::memoryManager()->addLeafPool("SortBufferTest");
 
   tsan_atomic<bool> nonReclaimableSection_{false};
   folly::Random::DefaultGenerator rng_;
@@ -335,13 +339,10 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
         &nonReclaimableSection_,
         prefixSortConfig_);
 
-    const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-        memory::memoryManager()->addLeafPool("VectorFuzzer");
-
     std::vector<RowVectorPtr> inputVectors;
     inputVectors.reserve(3);
     for (size_t inputRows : {1000, 1000, 1000}) {
-      VectorFuzzer fuzzer({.vectorSize = inputRows}, fuzzerPool.get());
+      VectorFuzzer fuzzer({.vectorSize = inputRows}, fuzzerPool_.get());
       RowVectorPtr input = fuzzer.fuzzRow(inputType_);
       sortBuffer->addInput(input);
       inputVectors.push_back(input);
@@ -401,8 +402,9 @@ TEST_P(SortBufferTest, batchOutput) {
         0,
         0,
         "none",
+        0,
         prefixSortConfig_);
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -413,15 +415,11 @@ TEST_P(SortBufferTest, batchOutput) {
         testData.triggerSpill ? &spillConfig : nullptr,
         &spillStats);
     ASSERT_EQ(sortBuffer->canSpill(), testData.triggerSpill);
-
-    const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-        memory::memoryManager()->addLeafPool("VectorFuzzer");
-
     std::vector<RowVectorPtr> inputVectors;
     inputVectors.reserve(testData.numInputRows.size());
     uint64_t totalNumInput = 0;
     for (size_t inputRows : testData.numInputRows) {
-      VectorFuzzer fuzzer({.vectorSize = inputRows}, fuzzerPool.get());
+      VectorFuzzer fuzzer({.vectorSize = inputRows}, fuzzerPool_.get());
       RowVectorPtr input = fuzzer.fuzzRow(inputType_);
       sortBuffer->addInput(input);
       inputVectors.push_back(input);
@@ -438,14 +436,14 @@ TEST_P(SortBufferTest, batchOutput) {
     }
 
     if (!testData.triggerSpill) {
-      ASSERT_TRUE(spillStats.rlock()->empty());
+      ASSERT_TRUE(spillStats.empty());
     } else {
-      ASSERT_FALSE(spillStats.rlock()->empty());
-      ASSERT_GT(spillStats.rlock()->spilledRows, 0);
-      ASSERT_LE(spillStats.rlock()->spilledRows, totalNumInput);
-      ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-      ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
-      ASSERT_GT(spillStats.rlock()->spilledFiles, 0);
+      ASSERT_FALSE(spillStats.empty());
+      ASSERT_GT(spillStats.spilledRows, 0);
+      ASSERT_LE(spillStats.spilledRows, totalNumInput);
+      ASSERT_GT(spillStats.spilledBytes, 0);
+      ASSERT_EQ(spillStats.spilledPartitions, 1);
+      ASSERT_GT(spillStats.spilledFiles, 0);
     }
   }
 }
@@ -498,8 +496,9 @@ TEST_P(SortBufferTest, spill) {
         0,
         0,
         "none",
+        0,
         prefixSortConfig_);
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -510,9 +509,7 @@ TEST_P(SortBufferTest, spill) {
         testData.spillEnabled ? &spillConfig : nullptr,
         &spillStats);
 
-    const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-        memory::memoryManager()->addLeafPool("spillSource");
-    VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
+    VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
     uint64_t totalNumInput = 0;
 
     ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
@@ -528,20 +525,20 @@ TEST_P(SortBufferTest, spill) {
     sortBuffer->noMoreInput();
 
     if (!testData.spillTriggered) {
-      ASSERT_TRUE(spillStats.rlock()->empty());
+      ASSERT_TRUE(spillStats.empty());
       if (!testData.spillEnabled) {
         VELOX_ASSERT_THROW(sortBuffer->spill(), "spill config is null");
       }
     } else {
-      ASSERT_FALSE(spillStats.rlock()->empty());
-      ASSERT_GT(spillStats.rlock()->spilledRows, 0);
-      ASSERT_LE(spillStats.rlock()->spilledRows, totalNumInput);
-      ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-      ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
+      ASSERT_FALSE(spillStats.empty());
+      ASSERT_GT(spillStats.spilledRows, 0);
+      ASSERT_LE(spillStats.spilledRows, totalNumInput);
+      ASSERT_GT(spillStats.spilledBytes, 0);
+      ASSERT_EQ(spillStats.spilledPartitions, 1);
       // SortBuffer shall not respect maxFileSize. Total files should be num
       // addInput() calls minus one which is the first one that has nothing to
       // spill.
-      ASSERT_EQ(spillStats.rlock()->spilledFiles, 3);
+      ASSERT_EQ(spillStats.spilledFiles, 3);
       sortBuffer.reset();
       ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       if (memory::spillMemoryPool()->trackUsage()) {
@@ -570,7 +567,7 @@ TEST_P(SortBufferTest, spill) {
 DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   const auto spillConfig = getSpillConfig(spillDirectory->getPath());
-  folly::Synchronized<common::SpillStats> spillStats;
+  exec::SpillStats spillStats;
   auto sortBuffer = std::make_unique<SortBuffer>(
       inputType_,
       sortColumnIndices_,
@@ -595,9 +592,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
         ASSERT_EQ(sortBuffer->pool()->usedBytes(), 0);
       })));
 
-  const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-      memory::memoryManager()->addLeafPool("spillDuringInput");
-  VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
+  VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
 
   ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
   const auto peakSpillMemoryUsage =
@@ -608,12 +603,12 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
   }
   sortBuffer->noMoreInput();
 
-  ASSERT_FALSE(spillStats.rlock()->empty());
-  ASSERT_GT(spillStats.rlock()->spilledRows, 0);
-  ASSERT_EQ(spillStats.rlock()->spilledRows, numInputs * 1024);
-  ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-  ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
-  ASSERT_EQ(spillStats.rlock()->spilledFiles, 2);
+  ASSERT_FALSE(spillStats.empty());
+  ASSERT_GT(spillStats.spilledRows, 0);
+  ASSERT_EQ(spillStats.spilledRows, numInputs * 1024);
+  ASSERT_GT(spillStats.spilledBytes, 0);
+  ASSERT_EQ(spillStats.spilledPartitions, 1);
+  ASSERT_EQ(spillStats.spilledFiles, 2);
 
   ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
   if (memory::spillMemoryPool()->trackUsage()) {
@@ -621,12 +616,13 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
     ASSERT_GE(
         memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
   }
+  ASSERT_EQ(pool_->usedBytes(), 0);
 }
 
 DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   const auto spillConfig = getSpillConfig(spillDirectory->getPath());
-  folly::Synchronized<common::SpillStats> spillStats;
+  exec::SpillStats spillStats;
   auto sortBuffer = std::make_unique<SortBuffer>(
       inputType_,
       sortColumnIndices_,
@@ -645,10 +641,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
         sortBuffer->spill();
         ASSERT_EQ(sortBuffer->pool()->usedBytes(), 0);
       })));
-
-  const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-      memory::memoryManager()->addLeafPool("spillDuringOutput");
-  VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
+  VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
 
   ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
   const auto peakSpillMemoryUsage =
@@ -659,12 +652,12 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
   }
   sortBuffer->noMoreInput();
 
-  ASSERT_FALSE(spillStats.rlock()->empty());
-  ASSERT_GT(spillStats.rlock()->spilledRows, 0);
-  ASSERT_EQ(spillStats.rlock()->spilledRows, numInputs * 1024);
-  ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-  ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
-  ASSERT_EQ(spillStats.rlock()->spilledFiles, 1);
+  ASSERT_FALSE(spillStats.empty());
+  ASSERT_GT(spillStats.spilledRows, 0);
+  ASSERT_EQ(spillStats.spilledRows, numInputs * 1024);
+  ASSERT_GT(spillStats.spilledBytes, 0);
+  ASSERT_EQ(spillStats.spilledPartitions, 1);
+  ASSERT_EQ(spillStats.spilledFiles, 1);
 
   ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
   if (memory::spillMemoryPool()->trackUsage()) {
@@ -680,7 +673,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     const auto spillConfig = getSpillConfig(spillDirectory->getPath());
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -690,10 +683,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
         prefixSortConfig_,
         spillEnabled ? &spillConfig : nullptr,
         &spillStats);
-
-    const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-        memory::memoryManager()->addLeafPool("reserveMemoryGetOutput");
-    VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
+    VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
 
     const int numInputs{10};
     for (int i = 0; i < numInputs; ++i) {
@@ -735,11 +725,14 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
   } testSettings[] = {{false, true}, {true, false}, {true, true}};
 
   for (const auto [usePrefixSort, spillEnabled] : testSettings) {
-    SCOPED_TRACE(fmt::format(
-        "usePrefixSort: {}, spillEnabled: {}, ", usePrefixSort, spillEnabled));
+    SCOPED_TRACE(
+        fmt::format(
+            "usePrefixSort: {}, spillEnabled: {}, ",
+            usePrefixSort,
+            spillEnabled));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath(), usePrefixSort);
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -777,14 +770,11 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
 }
 
 TEST_P(SortBufferTest, emptySpill) {
-  const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-      memory::memoryManager()->addLeafPool("emptySpillSource");
-
   for (bool hasPostSpillData : {false, true}) {
     SCOPED_TRACE(fmt::format("hasPostSpillData {}", hasPostSpillData));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath());
-    folly::Synchronized<common::SpillStats> spillStats;
+    exec::SpillStats spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,
         sortColumnIndices_,
@@ -797,11 +787,11 @@ TEST_P(SortBufferTest, emptySpill) {
 
     sortBuffer->spill();
     if (hasPostSpillData) {
-      VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
+      VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
       sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
     }
     sortBuffer->noMoreInput();
-    ASSERT_TRUE(spillStats.rlock()->empty());
+    ASSERT_TRUE(spillStats.empty());
   }
 }
 

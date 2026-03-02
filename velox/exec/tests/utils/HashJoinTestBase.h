@@ -42,18 +42,35 @@ using facebook::velox::test::BatchMaker;
 
 struct TestParam {
   int64_t numDrivers{1};
+  bool parallelBuildSideRowsEnabled;
 
-  explicit TestParam(int _numDrivers) : numDrivers(_numDrivers) {}
+  explicit TestParam(int _numDrivers)
+      : numDrivers(_numDrivers), parallelBuildSideRowsEnabled(false) {}
+
+  TestParam(int _numDrivers, bool _parallelBuildSideRowsEnabled)
+      : numDrivers(_numDrivers),
+        parallelBuildSideRowsEnabled(_parallelBuildSideRowsEnabled) {}
 };
+
+// Required for GTest to generate unique parameterized test names.
+inline std::string TestParamToName(const TestParam& param) {
+  return fmt::format(
+      "{}_drivers_{}_parallelBuildSideRowsEnabled",
+      param.numDrivers,
+      param.parallelBuildSideRowsEnabled ? "with" : "without");
+}
+
+using SplitPath =
+    std::unordered_map<core::PlanNodeId, std::vector<std::string>>;
 
 using SplitInput =
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>;
 
 // Returns aggregated spilled stats by build and probe operators from 'task'.
-std::pair<common::SpillStats, common::SpillStats> taskSpilledStats(
+std::pair<exec::SpillStats, exec::SpillStats> taskSpilledStats(
     const exec::Task& task) {
-  common::SpillStats buildStats;
-  common::SpillStats probeStats;
+  exec::SpillStats buildStats;
+  exec::SpillStats probeStats;
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
@@ -361,8 +378,20 @@ class HashJoinBuilder {
     return *this;
   }
 
-  HashJoinBuilder& inputSplits(const SplitInput& inputSplits) {
-    makeInputSplits_ = [inputSplits] { return inputSplits; };
+  HashJoinBuilder& inputSplits(const SplitPath& splitPaths) {
+    makeInputSplits_ = [splitPaths] {
+      SplitInput inputSplits;
+      for (const auto& [nodeId, paths] : splitPaths) {
+        std::vector<exec::Split> splits;
+        splits.reserve(paths.size());
+        for (const auto& path : paths) {
+          splits.emplace_back(
+              exec::Split(HiveConnectorSplitBuilder(path).build()));
+        }
+        inputSplits[nodeId] = std::move(splits);
+      }
+      return inputSplits;
+    };
     return *this;
   }
 
@@ -404,6 +433,11 @@ class HashJoinBuilder {
 
   HashJoinBuilder& hashProbeFinishEarlyOnEmptyBuild(bool value) {
     hashProbeFinishEarlyOnEmptyBuild_ = value;
+    return *this;
+  }
+
+  HashJoinBuilder& parallelizeJoinBuildRows(bool value) {
+    parallelJoinBuildRowsEnabled_ = value;
     return *this;
   }
 
@@ -467,8 +501,9 @@ class HashJoinBuilder {
     }
 
     for (const auto& testData : testSettings) {
-      SCOPED_TRACE(fmt::format(
-          "{} numDrivers: {}", testData.debugString(), numDrivers_));
+      SCOPED_TRACE(
+          fmt::format(
+              "{} numDrivers: {}", testData.debugString(), numDrivers_));
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       std::shared_ptr<const core::HashJoinNode> joinNode;
       auto planNode =
@@ -596,15 +631,14 @@ class HashJoinBuilder {
         builder.splits(splitEntry.first, splitEntry.second);
       }
     }
-    auto queryCtx = core::QueryCtx::create(
-        executor_,
-        core::QueryConfig{{}},
-        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-        cache::AsyncDataCache::getInstance(),
-        memory::MemoryManager::getInstance()->addRootPool(
-            "query_pool",
-            memory::kMaxMemory,
-            memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::Builder()
+                        .executor(executor_)
+                        .pool(
+                            memory::MemoryManager::getInstance()->addRootPool(
+                                "query_pool",
+                                memory::kMaxMemory,
+                                memory::MemoryReclaimer::create()))
+                        .build();
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     int32_t spillPct{0};
     if (injectSpill) {
@@ -628,6 +662,9 @@ class HashJoinBuilder {
     config(
         core::QueryConfig::kHashProbeFinishEarlyOnEmptyBuild,
         hashProbeFinishEarlyOnEmptyBuild_ ? "true" : "false");
+    config(
+        core::QueryConfig::kParallelOutputJoinBuildRowsEnabled,
+        parallelJoinBuildRowsEnabled_ ? "true" : "false");
     if (maxDriverYieldTimeMs != 0) {
       config(
           core::QueryConfig::kDriverCpuTimeSliceLimitMs,
@@ -759,8 +796,8 @@ class HashJoinBuilder {
   std::shared_ptr<memory::MemoryPool> queryPool_;
   std::string spillDirectory_;
   bool hashProbeFinishEarlyOnEmptyBuild_{true};
+  bool parallelJoinBuildRowsEnabled_{false};
 
-  SplitInput inputSplits_;
   std::function<SplitInput()> makeInputSplits_;
   core::PlanNodePtr planNode_;
   std::unordered_map<std::string, std::string> configs_;
@@ -773,7 +810,8 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   HashJoinTestBase() : HashJoinTestBase(TestParam(1)) {}
 
   explicit HashJoinTestBase(const TestParam& param)
-      : numDrivers_(param.numDrivers) {}
+      : numDrivers_(param.numDrivers),
+        parallelBuildSideRowsEnabled_(param.parallelBuildSideRowsEnabled) {}
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
@@ -791,7 +829,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   }
 
   // Make splits with each plan node having a number of source files.
-  SplitInput makeSpiltInput(
+  SplitInput makeSplitInput(
       const std::vector<core::PlanNodeId>& nodeIds,
       const std::vector<std::vector<std::shared_ptr<TempFilePath>>>& files) {
     VELOX_CHECK_EQ(nodeIds.size(), files.size());
@@ -855,15 +893,13 @@ class HashJoinTestBase : public HiveConnectorTestBase {
                       outputLayout,
                       joinType)
                   .planNode();
-    SplitInput splitInput = {
-        {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-        {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    SplitPath splitPaths = {
+        {probeScanId, {probeFile->getPath()}},
+        {buildScanId, {buildFile->getPath()}},
     };
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splitInput)
+        .inputSplits(splitPaths)
         .checkSpillStats(false)
         .referenceQuery(referenceQuery)
         .run();
@@ -945,7 +981,8 @@ class HashJoinTestBase : public HiveConnectorTestBase {
       case core::JoinType::kRightSemiProject:
         return core::JoinType::kLeftSemiProject;
       default:
-        VELOX_FAIL("Cannot flip join type: {}", core::joinTypeName(joinType));
+        VELOX_FAIL(
+            "Cannot flip join type: {}", core::JoinTypeName::toName(joinType));
     }
   }
 
@@ -965,6 +1002,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
   }
 
   const int32_t numDrivers_;
+  const bool parallelBuildSideRowsEnabled_;
 
   // The default left and right table types used for test.
   RowTypePtr probeType_;

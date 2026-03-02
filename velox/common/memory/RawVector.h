@@ -36,10 +36,18 @@ class raw_vector {
   static_assert(
       std::is_trivially_destructible_v<T> && std::is_trivially_copyable_v<T>);
 
-  explicit raw_vector(memory::MemoryPool* pool = nullptr) : pool_(pool) {}
+  explicit raw_vector() {}
 
-  explicit raw_vector(int64_t size, memory::MemoryPool* pool = nullptr)
-      : pool_(pool) {
+  explicit raw_vector(int64_t size) {
+    resize(size);
+  }
+
+  explicit raw_vector(memory::MemoryPool* pool) : pool_(pool) {
+    VELOX_CHECK_NOT_NULL(pool);
+  }
+
+  explicit raw_vector(int64_t size, memory::MemoryPool* pool) : pool_(pool) {
+    VELOX_CHECK_NOT_NULL(pool);
     resize(size);
   }
 
@@ -204,9 +212,12 @@ class raw_vector {
     // Clear the word below the pointer so that we do not get read of
     // uninitialized when reading a partial word that extends below
     // the pointer.
+    // Suppress GCC14 warning. "error: writing 8 bytes into a region of size 0"
+    VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
     *reinterpret_cast<int64_t*>(
         reinterpret_cast<uint8_t*>(getDataFromBuffer(buffer)) -
         sizeof(int64_t)) = 0;
+    VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
     return getDataFromBuffer(buffer);
   }
 

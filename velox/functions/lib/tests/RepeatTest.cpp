@@ -213,5 +213,66 @@ TEST_F(RepeatTest, repeatAllowNegativeCount) {
       {elementVector, countVector},
       expected);
 }
+
+// Test that repeat() properly detects integer overflow when totalCount
+// exceeds INT32_MAX. Without the fix, count * numRows would overflow
+// causing a small buffer allocation followed by a large write, resulting
+// in SIGSEGV.
+TEST_F(RepeatTest, repeatTotalCountOverflow) {
+  // Set a high max elements limit to allow large per-row counts.
+  // We want to test the total count overflow, not the per-row limit.
+  execCtx_.queryCtx()->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kMaxElementsSizeInRepeatAndSequence, "1000000000"},
+  });
+
+  // Test constant count path: count * numRows > INT32_MAX
+  // With count=10000 and numRows=300000, totalCount = 3,000,000,000
+  // which exceeds INT32_MAX (2,147,483,647).
+  {
+    const int32_t count = 10'000;
+    const int32_t numElements = 300'000;
+    const auto elementVector =
+        makeFlatVector<int32_t>(numElements, [](auto row) { return row; });
+
+    // Using constant count path.
+    VELOX_ASSERT_THROW(
+        evaluate(
+            fmt::format("repeat(C0, '{}'::INTEGER)", count),
+            makeRowVector({elementVector})),
+        "REPEAT result too large");
+  }
+
+  // Test non-constant count path: sum of counts > INT32_MAX
+  // With count in {10000, 10001, 10002} for each of 300000 rows,
+  // totalCount > 3,000,000,000.
+  {
+    const int32_t count = 10'000;
+    const int32_t numElements = 300'000;
+    const auto elementVector =
+        makeFlatVector<int32_t>(numElements, [](auto row) { return row; });
+    const auto countVector = makeFlatVector<int32_t>(
+        numElements, [count](auto row) { return count + row % 3; });
+
+    VELOX_ASSERT_THROW(
+        evaluate("repeat(C0, C1)", makeRowVector({elementVector, countVector})),
+        "REPEAT result too large");
+  }
+
+  // Test with try() - should return null rows instead of throwing.
+  {
+    const int32_t count = 10'000;
+    const int32_t numElements = 300'000;
+    const auto elementVector =
+        makeFlatVector<int32_t>(numElements, [](auto row) { return row; });
+
+    auto result = evaluate(
+        fmt::format("try(repeat(C0, '{}'::INTEGER))", count),
+        makeRowVector({elementVector}));
+    // All rows should be null.
+    for (auto i = 0; i < numElements; ++i) {
+      ASSERT_TRUE(result->isNullAt(i)) << "Row " << i << " should be null";
+    }
+  }
+}
 } // namespace
 } // namespace facebook::velox::functions

@@ -136,12 +136,13 @@ VectorGeneratedData<T> genTestData(
   testData.reserve(cardinality);
 
   for (int64_t m = 0; m < cardinality; m++) {
-    testData.push_back(VectorValueGenerator::cardValueOf<T>(
-        useFullTypeRange,
-        rng,
-        testData.stringViewBufferHolder(),
-        fixedWidthStringSize,
-        type));
+    testData.push_back(
+        VectorValueGenerator::cardValueOf<T>(
+            useFullTypeRange,
+            rng,
+            testData.stringViewBufferHolder(),
+            fixedWidthStringSize,
+            type));
   }
 
   if (includeNulls) {

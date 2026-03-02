@@ -17,6 +17,7 @@ velox_add_library(
   velox_functions_spark_impl
   ArrayGetFunction.cpp
   ArraySort.cpp
+  Transform.cpp
   CharVarcharUtils.cpp
   Comparisons.cpp
   ConcatWs.cpp
@@ -31,7 +32,9 @@ velox_add_library(
   RegexFunctions.cpp
   Size.cpp
   String.cpp
-  UnscaledValueFunction.cpp)
+  TimestampUtils.cpp
+  UnscaledValueFunction.cpp
+)
 
 velox_link_libraries(
   velox_functions_spark_impl
@@ -40,11 +43,11 @@ velox_link_libraries(
   velox_functions_spark_specialforms
   velox_functions_util
   Folly::folly
-  simdjson::simdjson)
+  simdjson::simdjson
+)
 
 if(NOT VELOX_MONO_LIBRARY)
-  set_property(TARGET velox_functions_spark_impl PROPERTY JOB_POOL_COMPILE
-                                                          high_memory_pool)
+  set_property(TARGET velox_functions_spark_impl PROPERTY JOB_POOL_COMPILE high_memory_pool)
 endif()
 
 add_subdirectory(window)

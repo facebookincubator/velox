@@ -1,0 +1,76 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Weekly Date Tag
+
+on:
+  schedule:
+    # Runs every Friday at 09:23 UTC, using a odd time avoids jobs
+    # from being skipped during peak hours.
+    - cron: 23 9 * * 5
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Which commit to tag
+        required: true
+
+      patch-version:
+        description: Additional version component
+        required: false
+        default: '00'
+
+permissions: {}
+
+jobs:
+  create-date-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required to push tag
+      checks: read
+    env:
+      COMMIT: ${{ inputs.commit || github.sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check CI Status
+        # Allow manual triggered workflows to circumvent the check
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # This `gh` invocation returns a json array with the workflow status like this
+          # [ { "status": "completed" } ]
+          # If the workflow wasn't success full the array will be empty which we check for
+          # using `grep` -q = set exit code -v = invert match
+          gh run list --commit "$COMMIT" \
+            --workflow "Linux Build using GCC" \
+            --status success --json status | grep -qv '\[\]'
+
+      - name: Create and push date-version tag
+        env:
+          PATCH_VERSION: ${{ inputs.patch-version || '00' }}
+        run: |
+          MESSAGE="This is convenience tag, not a full release."
+          DATE_TAG=$(date -u +"v%Y.%m.%d.$PATCH_VERSION")
+            git tag -m "$MESSAGE" "$DATE_TAG" "$COMMIT"
+            git push origin "$DATE_TAG"

@@ -268,7 +268,11 @@ long mk_part(DSS_HUGE index, part_t* p, DBGenContext* ctx) {
 
   p->partkey = index;
   agg_str(
-      &colors, static_cast<long>(P_NAME_SCL), &ctx->Seed[P_NAME_SD], p->name);
+      &colors,
+      static_cast<long>(P_NAME_SCL),
+      &ctx->Seed[P_NAME_SD],
+      p->name,
+      ctx);
   RANDOM(temp, P_MFG_MIN, P_MFG_MAX, &ctx->Seed[P_MFG_SD]);
   sprintf(p->mfgr, partSzFormat, P_MFG_TAG, temp);
   RANDOM(brnd, P_BRND_MIN, P_BRND_MAX, &ctx->Seed[P_BRND_SD]);

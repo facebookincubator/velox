@@ -19,6 +19,12 @@ String Functions
     some languages. Specifically, this will return incorrect results for
     Lithuanian, Turkish and Azeri.
 
+.. function:: bit_length(string) -> integer
+
+    Returns the bit length for the specified string column.
+
+        SELECT bit_length('123'); -- 24
+
 .. function:: chr(n) -> varchar
 
     Returns the Unicode code point ``n`` as a single character string.
@@ -60,6 +66,10 @@ String Functions
     i.e. the number of positions at which the corresponding characters are different.
     Note that the two strings must have the same length.
 
+.. function:: jarowinkler_similarity(string1, string2) -> double
+
+    Returns the Jaro-Winkler similarity of ``string1`` and ``string2``.
+
 .. function:: length(string) -> bigint
 
     Returns the length of ``string`` in characters.
@@ -68,6 +78,10 @@ String Functions
 
     Returns the Levenshtein edit distance of 2 strings. I.e. the minimum number of single-character edits
     (insertions, deletions or substitutions) needed to convert ``string_1`` to ``string_2``.
+
+.. function:: longest_common_prefix(string1, string2) -> varchar
+
+    Returns the longest common prefix between ``string1`` and ``string2``
 
 .. function:: lower(string) -> varchar
 
@@ -93,7 +107,7 @@ String Functions
         SELECT ltrim('test', 't'); -- est
         SELECT ltrim('tetris', 'te'); -- ris
 
-.. function:: replaceFirst(string, search, replace) -> varchar
+.. function:: replace_first(string, search, replace) -> varchar
 
     Removes the first instances of ``search`` with ``replace`` in ``string``.
 

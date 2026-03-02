@@ -14,17 +14,29 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 
+#include "folly/Conv.h"
+#include "velox/exec/AssignUniqueId.h"
+#include "velox/exec/CallbackSink.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -33,7 +45,11 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/TopN.h"
+#include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 
@@ -41,10 +57,7 @@
 
 #include <iostream>
 
-DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
-DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
-DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
-DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
+static const std::string kCudfAdapterName = "cuDF";
 
 namespace facebook::velox::cudf_velox {
 
@@ -57,110 +70,75 @@ bool isAnyOf(const Base* p) {
 
 } // namespace
 
-bool CompileState::compile() {
+core::PlanNodePtr CompileState::getPlanNode(const core::PlanNodeId& id) const {
+  auto& nodes = driverFactory_.planNodes;
+  auto it = std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
+    return node->id() == id;
+  });
+  if (it != nodes.end()) {
+    return *it;
+  }
+  VELOX_CHECK(driverFactory_.consumerNode->id() == id);
+  return driverFactory_.consumerNode;
+}
+
+bool CompileState::compile(bool allowCpuFallback) {
   auto operators = driver_.operators();
 
-  if (FLAGS_velox_cudf_debug) {
-    std::cout << "Operators before adapting for cuDF: count ["
-              << operators.size() << "]" << std::endl;
-    for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString() << std::endl;
+  // Cache debug flag to avoid repeated getInstance() calls
+  const bool debugEnabled = CudfConfig::getInstance().debugEnabled;
+
+  // Cache "before" operator descriptions so we can print before/after together.
+  std::vector<std::pair<int32_t, std::string>> beforeOperators;
+  if (debugEnabled) {
+    for (const auto& op : operators) {
+      beforeOperators.emplace_back(op->operatorId(), op->toString());
     }
   }
-
-  // Make sure operator states are initialized.  We will need to inspect some of
-  // them during the transformation.
-  driver_.initializeOperators();
 
   bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
 
-  // Get plan node by id lookup.
-  auto getPlanNode = [&](const core::PlanNodeId& id) {
-    auto& nodes = driverFactory_.planNodes;
-    auto it =
-        std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
-          return node->id() == id;
-        });
-    if (it != nodes.end()) {
-      return *it;
-    }
-    VELOX_CHECK(driverFactory_.consumerNode->id() == id);
-    return driverFactory_.consumerNode;
+  // Helper to check if planNodeId is valid (some operators like CallbackSink
+  // have "N/A")
+  auto isValidPlanNodeId = [](const core::PlanNodeId& id) {
+    return !id.empty() && id != "N/A";
   };
 
-  const bool isParquetConnectorRegistered =
-      facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
-  auto isTableScanSupported =
-      [isParquetConnectorRegistered](const exec::Operator* op) {
-        return isAnyOf<exec::TableScan>(op) && isParquetConnectorRegistered &&
-            cudfTableScanEnabled();
+  // Use adapter registry for GPU Operator Replacement
+  auto& registry = OperatorAdapterRegistry::getInstance();
+
+  // Cached operator properties including adapter pointer.
+  struct OperatorProperties : OperatorAdapter::Properties {
+    const OperatorAdapter* adapter = nullptr;
+  };
+
+  auto getOperatorProperties =
+      [&registry, this, &isValidPlanNodeId, ctx](const exec::Operator* op) {
+        OperatorProperties props;
+        auto adapter = registry.findAdapter(op);
+        props.adapter = adapter;
+        if (adapter && isValidPlanNodeId(op->planNodeId())) {
+          static_cast<OperatorAdapter::Properties&>(props) =
+              adapter->properties(op, getPlanNode(op->planNodeId()), ctx);
+        }
+        if (isAnyOf<CudfOperator>(op)) {
+          // CudfOperator is always fully GPU compatible
+          // (runs on GPU, accepts GPU input, produces GPU output).
+          props.canRunOnGPU = true;
+          props.acceptsGpuInput = true;
+          props.producesGpuOutput = true;
+        }
+        return props;
       };
 
-  auto isFilterProjectSupported = [](const exec::Operator* op) {
-    if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
-      auto info = filterProjectOp->exprsAndProjection();
-      return ExpressionEvaluator::canBeEvaluated(info.exprs->exprs());
-    }
-    return false;
-  };
-
-  auto isJoinSupported = [getPlanNode](const exec::Operator* op) {
-    if (!isAnyOf<exec::HashBuild, exec::HashProbe>(op)) {
-      return false;
-    }
-    auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
-        getPlanNode(op->planNodeId()));
-    if (!planNode) {
-      return false;
-    }
-    if (!CudfHashJoinProbe::isSupportedJoinType(planNode->joinType())) {
-      return false;
-    }
-    return true;
-  };
-
-  auto isSupportedGpuOperator =
-      [isFilterProjectSupported, isJoinSupported, isTableScanSupported](
-          const exec::Operator* op) {
-        return isAnyOf<
-                   exec::OrderBy,
-                   exec::HashAggregation,
-                   exec::Limit,
-                   exec::LocalPartition,
-                   exec::LocalExchange>(op) ||
-            isFilterProjectSupported(op) || isJoinSupported(op) ||
-            isTableScanSupported(op);
-      };
-
-  std::vector<bool> isSupportedGpuOperators(operators.size());
+  // caching operator properties
+  std::vector<OperatorProperties> opProps(operators.size());
   std::transform(
       operators.begin(),
       operators.end(),
-      isSupportedGpuOperators.begin(),
-      isSupportedGpuOperator);
-  auto acceptsGpuInput = [isFilterProjectSupported,
-                          isJoinSupported](const exec::Operator* op) {
-    return isAnyOf<
-               exec::OrderBy,
-               exec::HashAggregation,
-               exec::Limit,
-               exec::LocalPartition>(op) ||
-        isFilterProjectSupported(op) || isJoinSupported(op);
-  };
-  auto producesGpuOutput = [isFilterProjectSupported,
-                            isJoinSupported,
-                            isTableScanSupported](const exec::Operator* op) {
-    return isAnyOf<
-               exec::OrderBy,
-               exec::HashAggregation,
-               exec::Limit,
-               exec::LocalExchange>(op) ||
-        isFilterProjectSupported(op) ||
-        (isAnyOf<exec::HashProbe>(op) && isJoinSupported(op)) ||
-        (isTableScanSupported(op));
-  };
+      opProps.begin(),
+      getOperatorProperties);
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -170,103 +148,114 @@ bool CompileState::compile() {
     exec::Operator* oper = operators[operatorIndex];
     auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
+    const auto& thisOpProps =
+        opProps[operatorIndex]; // cached operator properties
 
     const bool previousOperatorIsNotGpu =
-        (operatorIndex > 0 and !isSupportedGpuOperators[operatorIndex - 1]);
-    const bool nextOperatorIsNotGpu =
-        (operatorIndex < operators.size() - 1 and
-         !isSupportedGpuOperators[operatorIndex + 1]);
+        operatorIndex > 0 and !opProps[operatorIndex - 1].producesGpuOutput;
+    const bool nextOperatorIsNotGpu = (operatorIndex < operators.size() - 1) and
+        !opProps[operatorIndex + 1].acceptsGpuInput;
     const bool isLastOperatorOfTask =
         driverFactory_.outputDriver and operatorIndex == operators.size() - 1;
 
     auto id = oper->operatorId();
-    if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
-      auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfFromVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
-      replaceOp.back()->initialize();
+
+    // Cache planNode for this operator (avoid multiple lookups)
+    core::PlanNodePtr planNode = nullptr;
+    if (isValidPlanNodeId(oper->planNodeId())) {
+      planNode = getPlanNode(oper->planNodeId());
     }
 
-    // This is used to denote if the current operator is kept or replaced.
-    auto keepOperator = 0;
-    // TableScan
-    if (isTableScanSupported(oper)) {
-      auto planNode = std::dynamic_pointer_cast<const core::TableScanNode>(
-          getPlanNode(oper->planNodeId()));
-      VELOX_CHECK(planNode != nullptr);
-      keepOperator = 1;
-    } else if (isJoinSupported(oper)) {
-      if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
-        auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
-            getPlanNode(joinBuildOp->planNodeId()));
-        VELOX_CHECK(planNode != nullptr);
-        // From-Velox (optional)
-        replaceOp.push_back(
-            std::make_unique<CudfHashJoinBuild>(id, ctx, planNode));
-        replaceOp.back()->initialize();
-      } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
-        auto planNode = std::dynamic_pointer_cast<const core::HashJoinNode>(
-            getPlanNode(joinProbeOp->planNodeId()));
-        VELOX_CHECK(planNode != nullptr);
-        // From-Velox (optional)
-        replaceOp.push_back(
-            std::make_unique<CudfHashJoinProbe>(id, ctx, planNode));
-        replaceOp.back()->initialize();
-        // To-Velox (optional)
+    if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
+      replaceOp.push_back(
+          std::make_unique<CudfFromVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+    }
+    if (not replaceOp.empty()) {
+      // from-velox only, because need to inserted before current operator.
+      operatorsOffset += replaceOp.size();
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+          driver_,
+          replacingOperatorIndex,
+          replacingOperatorIndex,
+          std::move(replaceOp));
+      replacingOperatorIndex = operatorIndex + operatorsOffset;
+      replaceOp.clear();
+      replacementsMade = true;
+    }
+
+    // Use adapter registry to handle operator replacement
+    auto keepOperator = 1; // Default: keep original
+    const auto& adapter = thisOpProps.adapter;
+    bool isPureCpuOperator = true;
+
+    if (adapter) {
+      keepOperator = adapter->keepOperator();
+      if (keepOperator == 0) {
+        if (planNode && thisOpProps.canRunOnGPU) {
+          auto replacements =
+              adapter->createReplacements(oper, planNode, ctx, id);
+          for (auto& r : replacements) {
+            replaceOp.push_back(std::move(r));
+          }
+          isPureCpuOperator = false;
+        } else {
+          // This is the CPU fallback case.
+          isPureCpuOperator = true;
+        }
+      } else {
+        // adapter is present and keepOperator is 1, so this is GPU compatible
+        // operator. so this CPU operators is allowed even if fallback is
+        // disabled.
+        isPureCpuOperator = false;
       }
-    } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
-      auto id = orderByOp->operatorId();
-      auto planNode = std::dynamic_pointer_cast<const core::OrderByNode>(
-          getPlanNode(orderByOp->planNodeId()));
-      VELOX_CHECK(planNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
-      replaceOp.back()->initialize();
-    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
-      auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
-          getPlanNode(hashAggOp->planNodeId()));
-      VELOX_CHECK(planNode != nullptr);
+    } else {
+      // special case for CudfOperator
+      if (isAnyOf<CudfOperator>(oper)) {
+        isPureCpuOperator = false;
+      } else {
+        // CPU operator without adapter
+        isPureCpuOperator = true;
+      }
+    }
+    if (thisOpProps.producesGpuOutput and
+        (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
-          std::make_unique<CudfHashAggregation>(id, ctx, planNode));
-      replaceOp.back()->initialize();
-    } else if (isFilterProjectSupported(oper)) {
-      auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
-      auto info = filterProjectOp->exprsAndProjection();
-      auto& idProjections = filterProjectOp->identityProjections();
-      auto projectPlanNode = std::dynamic_pointer_cast<const core::ProjectNode>(
-          getPlanNode(filterProjectOp->planNodeId()));
-      auto filterPlanNode = std::dynamic_pointer_cast<const core::FilterNode>(
-          getPlanNode(filterProjectOp->planNodeId()));
-      // If filter only, filter node only exists.
-      // If project only, or filter and project, project node only exists.
-      VELOX_CHECK(projectPlanNode != nullptr or filterPlanNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, info, idProjections, filterPlanNode, projectPlanNode));
-      replaceOp.back()->initialize();
-    } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
-      auto planNode = std::dynamic_pointer_cast<const core::LimitNode>(
-          getPlanNode(limitOp->planNodeId()));
-      VELOX_CHECK(planNode != nullptr);
-      replaceOp.push_back(std::make_unique<CudfLimit>(id, ctx, planNode));
-      replaceOp.back()->initialize();
-    } else if (
-        auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
-      auto planNode = std::dynamic_pointer_cast<const core::LocalPartitionNode>(
-          getPlanNode(localPartitionOp->planNodeId()));
-      VELOX_CHECK(planNode != nullptr);
-      replaceOp.push_back(
-          std::make_unique<CudfLocalPartition>(id, ctx, planNode));
-      replaceOp.back()->initialize();
+          std::make_unique<CudfToVelox>(
+              id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
     }
 
-    if (producesGpuOutput(oper) and
-        (nextOperatorIsNotGpu or isLastOperatorOfTask)) {
+    if (debugEnabled) {
+      VLOG(1) << "Operator: ID " << oper->operatorId() << ": "
+              << oper->toString() << ", keepOperator = " << keepOperator
+              << ", isPureCpuOperator = " << isPureCpuOperator
+              << ", replaceOp.size() = " << replaceOp.size()
+              << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
+              << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
+              << ", isLastOperatorOfTask = " << isLastOperatorOfTask
+              << ", canRunOnGPU[" << operatorIndex
+              << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
+              << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
+              << ", producesGpuOutput[" << operatorIndex
+              << "] = " << thisOpProps.producesGpuOutput
+              << ", planNode = " << bool(planNode);
+    }
+    if (!allowCpuFallback) {
+      // condition is if GPU replacement success or if CPU operators itself is
+      // GPU compatible. or if specific CPU operator is allowed even when
+      // fallback is disabled.
+      VELOX_CHECK(!isPureCpuOperator, "Replacement with cuDF operator failed");
+    } else if (isPureCpuOperator) {
+      LOG(WARNING)
+          << "Replacement with cuDF operator failed. Falling back to CPU execution";
+      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
       auto planNode = getPlanNode(oper->planNodeId());
-      replaceOp.push_back(std::make_unique<CudfToVelox>(
-          id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
-      replaceOp.back()->initialize();
+      LOG(WARNING) << "Replacement Failed PlanNode: "
+                   << planNode->toString(true, false);
     }
 
     if (not replaceOp.empty()) {
+      // ReplaceOp, to-velox.
       operatorsOffset += replaceOp.size() - 1 + keepOperator;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
@@ -277,59 +266,95 @@ bool CompileState::compile() {
     }
   }
 
-  if (FLAGS_velox_cudf_debug) {
+  if (debugEnabled) {
+    // Print before/after together for easy comparison.
+    LOG(INFO) << "Operators " << "before adapting for cuDF"
+              << ": count [" << beforeOperators.size() << "]";
+    for (const auto& [id, desc] : beforeOperators) {
+      LOG(INFO) << "  Operator: ID " << id << ": " << desc;
+    }
+    LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
+
     operators = driver_.operators();
-    std::cout << "Operators after adapting for cuDF: count ["
-              << operators.size() << "]" << std::endl;
-    for (auto& op : operators) {
-      std::cout << "  Operator: ID " << op->operatorId() << ": "
-                << op->toString() << std::endl;
+    LOG(INFO) << "Operators " << "after adapting for cuDF"
+              << ": count [" << operators.size() << "]";
+    for (const auto& op : operators) {
+      LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
+                << op->toString();
     }
   }
 
   return replacementsMade;
 }
 
-struct CudfDriverAdapter {
-  std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
-  CudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
-      : mr_(mr) {}
+struct CudfDriverAdapter {
+  CudfDriverAdapter(bool allowCpuFallback)
+      : allowCpuFallback_{allowCpuFallback} {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
+    if (!driver.driverCtx()->queryConfig().get<bool>(
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
+        allowCpuFallback_) {
+      return false;
+    }
     auto state = CompileState(factory, driver);
-    auto res = state.compile();
+    auto res = state.compile(allowCpuFallback_);
     return res;
   }
+
+ private:
+  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
 
-void registerCudf(const CudfOptions& options) {
+bool cudfIsRegistered() {
+  return isCudfRegistered;
+}
+
+void registerCudf() {
   if (cudfIsRegistered()) {
     return;
   }
-  if (!options.cudfEnabled) {
-    return;
-  }
+
+  // Register operator adapters
+  registerAllOperatorAdapters();
+
+  auto prefix = CudfConfig::getInstance().functionNamePrefix;
+  registerBuiltinFunctions(prefix);
+  registerStepAwareBuiltinAggregationFunctions(prefix);
 
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
-  const std::string mrMode = options.cudfMemoryResource;
-  auto mr = cudf_velox::createMemoryResource(mrMode);
+  const std::string mrMode = CudfConfig::getInstance().memoryResource;
+  auto mr = cudf_velox::createMemoryResource(
+      mrMode, CudfConfig::getInstance().memoryPercent);
   cudf::set_current_device_resource(mr.get());
+  mr_ = mr;
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  CudfDriverAdapter cda{mr};
+  CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+
+  if (CudfConfig::getInstance().astExpressionEnabled) {
+    registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
+  }
+
+  if (CudfConfig::getInstance().jitExpressionEnabled) {
+    registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
 void unregisterCudf() {
+  mr_ = nullptr;
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
@@ -342,16 +367,44 @@ void unregisterCudf() {
   isCudfRegistered = false;
 }
 
-bool cudfIsRegistered() {
-  return isCudfRegistered;
+CudfConfig& CudfConfig::getInstance() {
+  static CudfConfig instance;
+  return instance;
 }
 
-bool cudfDebugEnabled() {
-  return FLAGS_velox_cudf_debug;
-}
-
-bool cudfTableScanEnabled() {
-  return FLAGS_velox_cudf_table_scan;
+void CudfConfig::initialize(
+    std::unordered_map<std::string, std::string>&& config) {
+  if (config.find(kCudfEnabled) != config.end()) {
+    enabled = folly::to<bool>(config[kCudfEnabled]);
+  }
+  if (config.find(kCudfDebugEnabled) != config.end()) {
+    debugEnabled = folly::to<bool>(config[kCudfDebugEnabled]);
+  }
+  if (config.find(kCudfMemoryResource) != config.end()) {
+    memoryResource = config[kCudfMemoryResource];
+  }
+  if (config.find(kCudfMemoryPercent) != config.end()) {
+    memoryPercent = folly::to<int32_t>(config[kCudfMemoryPercent]);
+  }
+  if (config.find(kCudfFunctionNamePrefix) != config.end()) {
+    functionNamePrefix = config[kCudfFunctionNamePrefix];
+  }
+  if (config.find(kCudfAstExpressionEnabled) != config.end()) {
+    astExpressionEnabled = folly::to<bool>(config[kCudfAstExpressionEnabled]);
+  }
+  if (config.find(kCudfJitExpressionEnabled) != config.end()) {
+    jitExpressionEnabled = folly::to<bool>(config[kCudfJitExpressionEnabled]);
+  }
+  if (config.find(kCudfAstExpressionPriority) != config.end()) {
+    astExpressionPriority =
+        folly::to<int32_t>(config[kCudfAstExpressionPriority]);
+  }
+  if (config.find(kCudfAllowCpuFallback) != config.end()) {
+    allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
+  }
+  if (config.find(kCudfLogFallback) != config.end()) {
+    logFallback = folly::to<bool>(config[kCudfLogFallback]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

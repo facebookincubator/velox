@@ -102,7 +102,12 @@ class DecimalUtil {
   }
 
   /// Helper function to convert a decimal value to string.
-  static std::string toString(int128_t value, const TypePtr& type);
+  static std::string toString(int128_t value, const Type& type);
+
+  // TODO Remove.
+  static std::string toString(int128_t value, const TypePtr& type) {
+    return toString(value, *type);
+  }
 
   template <typename T>
   inline static void fillDecimals(
@@ -502,6 +507,53 @@ class DecimalUtil {
     }
   }
 
+  /// Converts string view to decimal value of given precision and scale.
+  /// Derives from Arrow function DecimalFromString. Arrow implementation:
+  /// https://github.com/apache/arrow/blob/56c0e2f508fdc5137d6734b406634386f9284a52/cpp/src/arrow/util/decimal.cc#L862.
+  ///
+  /// Firstly, it parses the varchar to DecimalComponents which contains the
+  /// message that can represent a decimal value. Secondly, processes the
+  /// exponent to get the scale. Thirdly, compute the rescaled value. Returns
+  /// status for the outcome of computing.
+  template <typename T>
+  static Status castFromString(
+      const StringView s,
+      int32_t toPrecision,
+      int32_t toScale,
+      T& decimalValue) {
+    int32_t parsedPrecision = 0;
+    int32_t parsedScale = 0;
+    int128_t out = 0;
+    VELOX_RETURN_NOT_OK(parseStringToDecimalComponents(
+        s, toScale, parsedPrecision, parsedScale, out));
+
+    const auto status = rescaleWithRoundUp<int128_t, T>(
+        out,
+        std::min(
+            static_cast<uint8_t>(parsedPrecision),
+            LongDecimalType::kMaxPrecision),
+        parsedScale,
+        toPrecision,
+        toScale,
+        decimalValue);
+    if (!status.ok()) {
+      return Status::UserError("Value too large.");
+    }
+    return status;
+  }
+
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+
+ private:
+  // Parses the string view to decimal components, which contains the
+  // unscaled value, precision, and scale. The parsed precision and scale are
+  // returned through the reference parameters. The unscaled value is returned
+  // through the out parameter.
+  static Status parseStringToDecimalComponents(
+      const StringView& s,
+      int32_t toScale,
+      int32_t& parsedPrecision,
+      int32_t& parsedScale,
+      int128_t& out);
 }; // DecimalUtil
 } // namespace facebook::velox

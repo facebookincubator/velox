@@ -209,8 +209,9 @@ class CastBaseTest : public FunctionBaseTest {
       std::optional<bool> isTryCast = std::nullopt) {
     const auto& fromType = input->type();
     const auto& toType = expected->type();
-    SCOPED_TRACE(fmt::format(
-        "Cast from {} to {}", fromType->toString(), toType->toString()));
+    SCOPED_TRACE(
+        fmt::format(
+            "Cast from {} to {}", fromType->toString(), toType->toString()));
     const auto copy = createCopy(input);
     // Test with flat encoding.
     {
@@ -312,9 +313,9 @@ class CastBaseTest : public FunctionBaseTest {
   std::shared_ptr<core::CastTypedExpr> makeCastExpr(
       const core::TypedExprPtr& input,
       const TypePtr& toType,
-      bool nullOnFailure) {
+      bool isTryCast) {
     std::vector<core::TypedExprPtr> inputs = {input};
-    return std::make_shared<core::CastTypedExpr>(toType, inputs, nullOnFailure);
+    return std::make_shared<core::CastTypedExpr>(toType, inputs, isTryCast);
   }
 
   const float kInf = std::numeric_limits<float>::infinity();

@@ -51,6 +51,47 @@ Mathematical Functions
 
         SELECT cosine_similarity(ARRAY[], ARRAY[]); -- NaN
 
+.. function:: cosine_similarity(array(real), array(real)) -> real
+
+    Returns the `cosine similarity <https://en.wikipedia.org/wiki/Cosine_similarity>`_ between the vectors represented as array(real).
+    If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
+.. function:: l2_squared(array(real), array(real)) -> real
+
+    Returns the squared `Euclidean distance <https://en.wikipedia.org/wiki/Euclidean_distance>`_ between the vectors represented as array(real).
+    If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
+        SELECT l2_squared(ARRAY[1], ARRAY[2]); -- 1.0
+
+        SELECT l2_squared(ARRAY[1.0, 2.0], ARRAY[NULL, 3.0]); -- NULL
+
+        SELECT l2_squared(ARRAY[], ARRAY[2, 3]); -- Throws VeloxUserError
+
+        SELECT l2_squared(ARRAY[], ARRAY[]); -- NaN
+
+.. function:: l2_squared(array(double), array(double)) -> double
+
+    Returns the squared `Euclidean distance <https://en.wikipedia.org/wiki/Euclidean_distance>`_ between the vectors represented as array(double).
+    If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
+.. function:: dot_product(array(real), array(real)) -> real
+
+    Returns the `Dot Product <https://en.wikipedia.org/wiki/Dot_product>`_ between the vectors represented as array(real).
+    If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
+        SELECT dot_product(ARRAY[1], ARRAY[2]); -- 2.0
+
+        SELECT dot_product(ARRAY[1.0, 2.0], ARRAY[NULL, 3.0]); -- NULL
+
+        SELECT dot_product(ARRAY[], ARRAY[2, 3]); -- Throws VeloxUserError
+
+        SELECT dot_product(ARRAY[], ARRAY[]); -- NaN
+
+.. function:: dot_product(array(double), array(double)) -> double
+
+    Returns the `Dot Product <https://en.wikipedia.org/wiki/Dot_product>`_ between the vectors represented as array(double).
+    If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
 .. function:: degrees(x) -> double
 
     Converts angle x in radians to degrees.
@@ -342,6 +383,10 @@ Probability Functions: cdf
     Compute the Poisson cdf with given lambda (mean) parameter:  P(N <= value; lambda).
     The lambda parameter must be a positive real number (of type DOUBLE) and value must be a non-negative integer.
 
+.. function:: t_cdf(df, value) -> double
+
+    Compute the Student's t cdf with given degrees of freedom:  P(N < value; df).
+    The degrees of freedom must be a positive real number and value must be a real value.
 
 .. function:: weibull_cdf(a, b, value) -> double
 
@@ -380,6 +425,45 @@ Probability Functions: inverse_cdf
     Compute the inverse of the Fisher F cdf with a given ``df1`` (numerator degrees of freedom) and ``df2`` (denominator degrees of freedom) parameters
     for the cumulative probability (p): P(N < n). The numerator and denominator df parameters must be positive real numbers.
     The probability ``p`` must lie on the interval [0, 1].
+
+.. function:: inverse_normal_cdf(mean, sd, p) -> double
+
+    Compute the inverse of the Normal cdf with given mean and standard
+    deviation (sd) for the cumulative probability (p): P(N < n). The mean must be
+    a real value and the standard deviation must be a real and positive value (both of type DOUBLE).
+    The probability p must lie on the interval (0, 1).
+
+.. function:: inverse_gamma_cdf(shape, scale, p) -> double
+
+    Compute the inverse of the Gamma cdf with given shape and scale parameters for the cumulative
+    probability (p): P(N < n). The shape and scale parameters must be positive real values.
+    The probability p must lie on the interval [0, 1].
+
+.. function:: inverse_binomial_cdf(numberOfTrials, successProbability, p) -> int
+
+    Compute the inverse of the Binomial cdf with given numberOfTrials and successProbability (of a single trial) the
+    cumulative probability (p):  P(N <= n).
+    The successProbability and p must be real values in [0, 1] and the numberOfTrials must be
+    a positive integer.
+
+.. function:: inverse_poisson_cdf(lambda, p) -> integer
+
+    Compute the inverse of the Poisson cdf with given lambda (mean) parameter for the cumulative
+    probability (p). It returns the value of n so that: P(N <= n; lambda) = p.
+    The lambda parameter must be a positive real number (of type DOUBLE).
+    The probability p must lie on the interval [0, 1).
+
+.. function:: inverse_chi_squared_cdf(df, p) -> double
+
+    Compute the inverse of the Chi-square cdf with given df (degrees of freedom) parameter for the cumulative
+    probability (p): P(N < n). The df parameter must be positive real values.
+    The probability p must lie on the interval [0, 1].
+
+.. function:: inverse_t_cdf(df, p) -> double
+
+    Compute the inverse of the Student's t cdf with given degrees of freedom for the cumulative
+    probability (p): P(N < n). The degrees of freedom must be a positive real value.
+    The probability p must lie on the interval [0, 1].
 
 ====================================
 Statistical Functions

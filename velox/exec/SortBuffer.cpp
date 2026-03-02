@@ -28,7 +28,7 @@ SortBuffer::SortBuffer(
     tsan_atomic<bool>* nonReclaimableSection,
     common::PrefixSortConfig prefixSortConfig,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<velox::common::SpillStats>* spillStats)
+    exec::SpillStats* spillStats)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
       pool_(pool),
@@ -37,7 +37,7 @@ SortBuffer::SortBuffer(
       spillConfig_(spillConfig),
       spillStats_(spillStats),
       sortedRows_(0, memory::StlAllocator<char*>(*pool)) {
-  VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
+  VELOX_CHECK_GE(input_->children().size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
@@ -74,7 +74,7 @@ SortBuffer::SortBuffer(
   }
 
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes, nonSortedColumnTypes, pool_);
+      sortedColumnTypes, nonSortedColumnTypes, /*useListRowIndex=*/true, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
@@ -90,12 +90,12 @@ void SortBuffer::addInput(const VectorPtr& input) {
   VELOX_CHECK(!noMoreInput_);
   ensureInputFits(input);
 
-  SelectivityVector allRows(input->size());
+  const SelectivityVector allRows(input->size());
   std::vector<char*> rows(input->size());
   for (int row = 0; row < input->size(); ++row) {
     rows[row] = data_->newRow();
   }
-  auto* inputRow = input->as<RowVector>();
+  const auto* inputRow = input->as<RowVector>();
   for (const auto& columnProjection : columnMap_) {
     DecodedVector decoded(
         *inputRow->childAt(columnProjection.outputChannel), allRows);
@@ -128,6 +128,7 @@ void SortBuffer::noMoreInput() {
     updateEstimatedOutputRowSize();
     // Sort the pointers to the rows in RowContainer (data_) instead of sorting
     // the rows.
+    // TODO: Reuse 'RowContainer::rowPointers_'.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numInputRows_, sortedRows_.data());
@@ -310,7 +311,7 @@ void SortBuffer::ensureSortFits() {
   }
 
   // The memory for std::vector sorted rows and prefix sort required buffer.
-  uint64_t sortBufferToReserve =
+  const auto sortBufferToReserve =
       numInputRows_ * sizeof(char*) +
       PrefixSort::maxRequiredBytes(
           data_.get(), sortCompareFlags_, prefixSortConfig_, pool_);
@@ -387,10 +388,6 @@ void SortBuffer::prepareOutput(vector_size_t batchSize) {
   } else {
     output_ = std::static_pointer_cast<RowVector>(
         BaseVector::create(input_, batchSize, pool_));
-  }
-
-  for (auto& child : output_->children()) {
-    child->resize(batchSize);
   }
 
   if (hasSpilled()) {
@@ -488,7 +485,7 @@ void SortBuffer::prepareOutputWithSpill() {
 
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
   spillMerger_ = spillPartitionSet_.begin()->second->createOrderedReader(
-      spillConfig_->readBufferSize, pool(), spillStats_);
+      *spillConfig_, pool(), spillStats_);
   spillPartitionSet_.clear();
 }
 } // namespace facebook::velox::exec

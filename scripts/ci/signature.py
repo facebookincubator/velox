@@ -337,7 +337,7 @@ def parse_args(args):
     bias_command_parser.add_argument("contender", type=str)
     bias_command_parser.add_argument("output_path", type=str)
     bias_command_parser.add_argument(
-        "ticket_value", type=get_tickets, default=10, nargs="?"
+        "ticket_value", type=get_tickets, default=20, nargs="?"
     )
     bias_command_parser.add_argument("error_path", type=str, default="")
 

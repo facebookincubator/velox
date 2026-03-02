@@ -23,13 +23,16 @@ NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 
 CURL_OPTIONS=${CURL_OPTIONS:-""}
 CMAKE_OPTIONS=${CMAKE_OPTIONS:-""}
+ARM_BUILD_TARGET=${ARM_BUILD_TARGET:-"local"}
 
 function run_and_time {
-  time "$@" || (
+  time "$@"
+  if [ $? -ne 0 ]; then
     echo "Failed to run $* ."
     exit 1
-  )
-  { echo "+ Finished running $*"; } 2>/dev/null
+  else
+    echo "+ Finished running $*" 2>/dev/null
+  fi
 }
 
 function prompt {
@@ -46,6 +49,7 @@ function prompt {
     done
   ) 2>/dev/null
 }
+
 function github_checkout {
   local REPO=$1
   shift
@@ -66,7 +70,6 @@ function github_checkout {
   if [ ! -d "${DIRNAME}" ]; then
     git clone -q -b "$VERSION" "${GIT_CLONE_PARAMS[@]}" "https://github.com/${REPO}.git"
   fi
-  cd "${DIRNAME}" || exit
 }
 
 # get_cxx_flags [$CPU_ARCH]
@@ -147,7 +150,7 @@ function get_cxx_flags {
     Neoverse_N2="d49"
     Neoverse_V1="d40"
     Neoverse_V2="d4f"
-    if [ -f "$ARM_CPU_FILE" ]; then
+    if [ -f "$ARM_CPU_FILE" ] && [ "$ARM_BUILD_TARGET" = "local" ]; then
       hex_ARM_CPU_DETECT=$(cat $ARM_CPU_FILE)
       # PartNum, [15:4]: The primary part number such as Neoverse N1/N2 core.
       ARM_CPU_PRODUCT=${hex_ARM_CPU_DETECT: -4:3}
@@ -173,7 +176,7 @@ function get_cxx_flags {
         echo -n "-march=armv8-a+crc+crypto "
       fi
     else
-      echo -n ""
+      echo -n "-march=armv8-a+crc+crypto "
     fi
     ;;
   *)
@@ -182,6 +185,33 @@ function get_cxx_flags {
   esac
 
 }
+
+detect_sve_flags() {
+  if grep -q "sve" /proc/cpuinfo; then
+    ARCH_FLAGS="-march=armv8-a+sve"
+    SVE_VECTOR_BITS=$(
+      gcc $ARCH_FLAGS -o detect_sve_vector -xc++ - -lstdc++ <<EOF
+      #include <arm_sve.h>
+      #include <iostream>
+      int main() {
+          std::cout << svcntb() * 8 << std::endl;
+          return 0;
+      }
+EOF
+      ./detect_sve_vector 2>/dev/null
+    )
+
+    if [ "$SVE_VECTOR_BITS" ]; then
+      echo "-msve-vector-bits=$SVE_VECTOR_BITS -DSVE_BITS=$SVE_VECTOR_BITS"
+    fi
+
+    rm -f detect_sve_vector
+  fi
+}
+
+if [[ ${BASH_SOURCE[0]} == "${0}" && $1 == "detect_sve_flags" ]]; then
+  detect_sve_flags
+fi
 
 function wget_and_untar {
   local URL=$1
@@ -201,8 +231,8 @@ function wget_and_untar {
   pushd "${DIR}" || exit
   # Use ${VAR:+"$VAR"} pattern to only include CURL_OPTIONS if it's not empty
   # as curl >=8.6.0 rejects empty arguments
-  curl ${CURL_OPTIONS:+${CURL_OPTIONS}} -L "${URL}" >"$2".tar.gz
-  tar -xz --strip-components=1 -f "$2".tar.gz
+  curl ${CURL_OPTIONS:+${CURL_OPTIONS}} -L "${URL}" -o "$2".tar.gz
+  tar -xz --strip-components=1 --no-same-owner -f "$2".tar.gz
   popd || exit
   popd || exit
 }
@@ -237,6 +267,7 @@ function cmake_install {
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
   cmake -Wno-dev "${CMAKE_OPTIONS}" -B"${BINARY_DIR}" \
     -GNinja \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \

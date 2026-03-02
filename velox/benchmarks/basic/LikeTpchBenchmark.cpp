@@ -127,8 +127,9 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
         return tpchSupplier->childAt(6);
       }
       default:
-        VELOX_FAIL(fmt::format(
-            "Tpch data generation for case {} is not supported", tpchCase));
+        VELOX_FAIL(
+            fmt::format(
+                "Tpch data generation for case {} is not supported", tpchCase));
     }
   }
 

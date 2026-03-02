@@ -35,7 +35,12 @@ HashAggregation::HashAggregation(
               ? "PartialAggregation"
               : "Aggregation",
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    aggregationNode->step() ==
+                            core::AggregationNode::Step::kPartial
+                        ? "PartialAggregation"
+                        : "Aggregation")
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
@@ -84,7 +89,7 @@ void HashAggregation::initialize() {
         "Unexpected result type for an aggregation: {}, expected {}, step {}",
         aggResultType->toString(),
         expectedType->toString(),
-        core::AggregationNode::stepName(aggregationNode_->step()));
+        core::AggregationNode::toName(aggregationNode_->step()));
   }
 
   for (auto i = 0; i < hashers.size(); ++i) {
@@ -112,8 +117,9 @@ void HashAggregation::initialize() {
       groupIdChannel,
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
       &nonReclaimableSection_,
-      operatorCtx_.get(),
-      &spillStats_);
+      &operatorCtx_->driverCtx()->queryConfig(),
+      operatorCtx_->pool(),
+      spillStats_.get());
 
   aggregationNode_.reset();
 }

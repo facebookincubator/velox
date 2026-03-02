@@ -126,13 +126,14 @@ std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
 inline std::vector<std::shared_ptr<exec::FunctionSignature>>
 comparisonSignatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  signatures.emplace_back(exec::FunctionSignatureBuilder()
-                              .integerVariable("a_precision")
-                              .integerVariable("a_scale")
-                              .returnType("boolean")
-                              .argumentType("DECIMAL(a_precision, a_scale)")
-                              .argumentType("DECIMAL(a_precision, a_scale)")
-                              .build());
+  signatures.emplace_back(
+      exec::FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType("boolean")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .build());
   for (const auto& inputType :
        {"tinyint",
         "smallint",
@@ -147,11 +148,12 @@ comparisonSignatures() {
         "date",
         "interval day to second",
         "interval year to month"}) {
-    signatures.emplace_back(exec::FunctionSignatureBuilder()
-                                .returnType("boolean")
-                                .argumentType(inputType)
-                                .argumentType(inputType)
-                                .build());
+    signatures.emplace_back(
+        exec::FunctionSignatureBuilder()
+            .returnType("boolean")
+            .argumentType(inputType)
+            .argumentType(inputType)
+            .build());
   }
   return signatures;
 }

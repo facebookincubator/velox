@@ -165,7 +165,7 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
   // perform decryption
   if (decrypter_) {
     decryptionBuffer_ =
-        decrypter_->decrypt(folly::StringPiece{input, remainingLength_});
+        decrypter_->decrypt(std::string_view{input, remainingLength_});
     input = reinterpret_cast<const char*>(decryptionBuffer_->data());
     remainingLength_ = decryptionBuffer_->length();
     if (data) {

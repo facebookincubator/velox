@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/aggregates/BitwiseXorAggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::exec;
 
@@ -70,34 +69,34 @@ class BitwiseXorAggregate {
 } // namespace
 
 void registerBitwiseXorAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
-  const std::string name = prefix + kBitwiseXor;
-
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> typeList{"tinyint", "smallint", "integer", "bigint"};
   if (onlyPrestoSignatures) {
     typeList = {"bigint"};
   }
   for (const auto& inputType : typeList) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType(inputType)
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(inputType)
+            .intermediateType(inputType)
+            .argumentType(inputType)
+            .build());
   }
 
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_USER_CHECK_EQ(argTypes.size(), 1, "{} takes one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {

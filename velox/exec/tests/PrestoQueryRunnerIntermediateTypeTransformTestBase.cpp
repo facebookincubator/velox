@@ -148,24 +148,46 @@ void PrestoQueryRunnerIntermediateTypeTransformTestBase::testRow(
   test(vectorMaker_.rowVector({field1, field2, field3}));
 
   // Test row vector some nulls.
-  test(std::make_shared<RowVector>(
-      pool_.get(),
-      rowType,
-      makeNulls(size, [](vector_size_t row) { return row % 10 == 0; }),
-      size,
-      std::vector<VectorPtr>{field1, field2, field3}));
+  test(
+      std::make_shared<RowVector>(
+          pool_.get(),
+          rowType,
+          makeNulls(size, [](vector_size_t row) { return row % 10 == 0; }),
+          size,
+          std::vector<VectorPtr>{field1, field2, field3}));
 
   // Test row vector all nulls.
-  test(std::make_shared<RowVector>(
-      pool_.get(),
-      rowType,
-      makeNulls(size, [](vector_size_t) { return true; }),
-      size,
-      std::vector<VectorPtr>{field1, field2, field3}));
+  test(
+      std::make_shared<RowVector>(
+          pool_.get(),
+          rowType,
+          makeNulls(size, [](vector_size_t) { return true; }),
+          size,
+          std::vector<VectorPtr>{field1, field2, field3}));
 
   const auto base = vectorMaker_.rowVector({field1, field2, field3});
   testDictionary(base);
   testConstant(base);
+}
+
+void PrestoQueryRunnerIntermediateTypeTransformTestBase::testArray(
+    const VectorPtr& vector) {
+  test(fuzzer_.fuzzArray(vector, vector->size()));
+}
+
+void PrestoQueryRunnerIntermediateTypeTransformTestBase::testMap(
+    const VectorPtr& keys,
+    const VectorPtr& values) {
+  VELOX_DCHECK_EQ(keys->size(), values->size());
+  test(fuzzer_.fuzzMap(keys, values, keys->size()));
+}
+
+void PrestoQueryRunnerIntermediateTypeTransformTestBase::testRow(
+    std::vector<VectorPtr>&& vectors,
+    std::vector<std::string> names) {
+  auto vector_size = vectors.size();
+  VELOX_DCHECK_EQ(vector_size, names.size());
+  test(fuzzer_.fuzzRow(std::move(vectors), names, vector_size));
 }
 
 } // namespace facebook::velox::exec::test

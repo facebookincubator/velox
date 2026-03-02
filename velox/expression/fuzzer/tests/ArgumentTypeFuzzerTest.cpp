@@ -18,7 +18,10 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestRegistration.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/type/Type.h"
@@ -712,6 +715,43 @@ TEST_F(ArgumentTypeFuzzerTest, tdigestType) {
                        .argumentType("double")
                        .build();
   testFuzzingSuccess(signature, TDIGEST(DOUBLE()), {DOUBLE()});
+}
+
+TEST_F(ArgumentTypeFuzzerTest, qdigestType) {
+  registerQDigestType();
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("qdigest(DOUBLE)")
+                       .argumentType("double")
+                       .build();
+  testFuzzingSuccess(signature, QDIGEST(DOUBLE()), {DOUBLE()});
+
+  signature = exec::FunctionSignatureBuilder()
+                  .returnType("qdigest(BIGINT)")
+                  .argumentType("double")
+                  .build();
+  testFuzzingSuccess(signature, QDIGEST(BIGINT()), {DOUBLE()});
+
+  signature = exec::FunctionSignatureBuilder()
+                  .returnType("qdigest(REAL)")
+                  .argumentType("double")
+                  .build();
+  testFuzzingSuccess(signature, QDIGEST(REAL()), {DOUBLE()});
+}
+
+TEST_F(ArgumentTypeFuzzerTest, setdigestType) {
+  registerSetDigestType();
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("setdigest")
+                       .argumentType("bigint")
+                       .build();
+  testFuzzingSuccess(signature, SETDIGEST(), {BIGINT()});
+
+  signature = exec::FunctionSignatureBuilder()
+                  .returnType("setdigest")
+                  .argumentType("varchar")
+                  .build();
+  testFuzzingSuccess(signature, SETDIGEST(), {VARCHAR()});
+  testFuzzingSuccess(signature, SETDIGEST(), {VARCHAR()});
 }
 
 } // namespace facebook::velox::fuzzer::test

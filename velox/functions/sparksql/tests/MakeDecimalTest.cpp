@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -28,14 +29,15 @@ class MakeDecimalTest : public SparkFunctionBaseTest {
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")};
     if (nullOnOverflow.has_value()) {
-      inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
-          BOOLEAN(), variant(nullOnOverflow.value())));
+      inputs.emplace_back(
+          std::make_shared<core::ConstantTypedExpr>(
+              BOOLEAN(), variant(nullOnOverflow.value())));
     }
     auto makeDecimal = std::make_shared<const core::CallTypedExpr>(
         outputType, std::move(inputs), "make_decimal");
     if (tryMakeDecimal) {
       return std::make_shared<core::CallTypedExpr>(
-          outputType, std::vector<core::TypedExprPtr>{makeDecimal}, "try");
+          outputType, "try", makeDecimal);
     } else {
       return makeDecimal;
     }

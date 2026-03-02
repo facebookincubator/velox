@@ -27,6 +27,7 @@
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox::exec;
 
@@ -192,7 +193,24 @@ struct ExtractJsonTypeImpl {
         const folly::
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
         column_index_t /*nodeIndex*/) {
+      if (writer.type()->isShortDecimal()) {
+        return castJsonToDecimal<int64_t>(value, writer);
+      }
       return castJsonToInt<int64_t>(value, writer);
+    }
+  };
+
+  template <typename Dummy>
+  struct KindDispatcher<TypeKind::HUGEINT, Dummy> {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*nodeIndex*/) {
+      VELOX_CHECK(writer.type()->isLongDecimal());
+      return castJsonToDecimal<int128_t>(value, writer);
     }
   };
 
@@ -445,37 +463,75 @@ struct ExtractJsonTypeImpl {
     return simdjson::SUCCESS;
   }
 
+  template <typename T>
+  static simdjson::error_code parseSpecialFloatingStrings(
+      const std::string_view& s,
+      exec::GenericWriter& writer) {
+    constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
+    constexpr T kInf = std::numeric_limits<T>::infinity();
+    // Strip surrounding quotes if any.
+    std::string_view stripped = s;
+    if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
+      stripped = s.substr(1, s.size() - 2);
+    }
+    if (stripped == "NaN") {
+      writer.castTo<T>() = kNaN;
+    } else if (
+        stripped == "+INF" || stripped == "+Infinity" ||
+        stripped == "Infinity") {
+      writer.castTo<T>() = kInf;
+    } else if (stripped == "-INF" || stripped == "-Infinity") {
+      writer.castTo<T>() = -kInf;
+    } else {
+      return simdjson::INCORRECT_TYPE;
+    }
+    return simdjson::SUCCESS;
+  }
+
   // Casts a JSON value to a float point, handling both numeric special cases
   // for NaN and Infinity.
   template <typename T>
   static simdjson::error_code castJsonToFloatingPoint(
       Input value,
       exec::GenericWriter& writer) {
-    SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
-    switch (type) {
-      case simdjson::ondemand::json_type::number: {
-        SIMDJSON_ASSIGN_OR_RAISE(auto num, value.get_double());
-        return convertIfInRange<T>(num, writer);
-      }
-      case simdjson::ondemand::json_type::string: {
-        SIMDJSON_ASSIGN_OR_RAISE(auto s, value.get_string());
-        constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
-        constexpr T kInf = std::numeric_limits<T>::infinity();
-        if (s == "NaN") {
-          writer.castTo<T>() = kNaN;
-        } else if (s == "+INF" || s == "+Infinity" || s == "Infinity") {
-          writer.castTo<T>() = kInf;
-        } else if (s == "-INF" || s == "-Infinity") {
-          writer.castTo<T>() = -kInf;
-        } else {
-          return simdjson::INCORRECT_TYPE;
-        }
-        break;
-      }
-      default:
-        return simdjson::INCORRECT_TYPE;
+    auto result = value.get_double();
+    if (result.error() == simdjson::SUCCESS) {
+      auto num = result.value_unsafe();
+      writer.castTo<T>() = num;
+      return simdjson::SUCCESS;
     }
-    return simdjson::SUCCESS;
+
+    std::string_view s = value.raw_json_token();
+    // Spark support such special floating point with/without quotes:
+    // NaN, +INF, +Infinity, Infinity, -INF, -Infinity.
+    if (parseSpecialFloatingStrings<T>(s, writer) == simdjson::SUCCESS) {
+      return simdjson::SUCCESS;
+    }
+
+    // simdjson parses floating point numbers in the range
+    // [std::numeric_limits<double>::lowest(),
+    // std::numeric_limits<double>::max()], i.e., from approximately
+    // -1.7976e308 to 1.7975e308. Values outside this range
+    // (<= -1e308 or >= 1e308) are rejected and simdjson returns
+    // NUMBER_ERROR. However, our expected behavior is to convert such
+    // extreme values to -INF or +INF, so we add extra logic here to
+    // handle NUMBER_ERROR and perform the conversion.
+    if (s.length() > 0 && s.back() == '.') {
+      // If the number ends with a dot, it is not a valid JSON number,
+      // so we return NUMBER_ERROR.
+      return simdjson::NUMBER_ERROR;
+    }
+    if (s.length() > 1 && s.front() == '0') {
+      // If the number starts with '0' and has more than one character,
+      // it is not a valid JSON number, so we return NUMBER_ERROR.
+      return simdjson::NUMBER_ERROR;
+    }
+    auto castResult = util::Converter<TypeKind::DOUBLE>::tryCast(s);
+    if (!castResult.hasError()) {
+      writer.castTo<T>() = castResult.value();
+      return simdjson::SUCCESS;
+    }
+    return simdjson::NUMBER_ERROR;
   }
 
   template <typename To, typename From>
@@ -491,6 +547,38 @@ struct ExtractJsonTypeImpl {
       }
     }
     writer.castTo<To>() = x;
+    return simdjson::SUCCESS;
+  }
+
+  template <typename T>
+  static simdjson::error_code castJsonToDecimal(
+      Input value,
+      exec::GenericWriter& writer) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
+    std::string_view s;
+    switch (type) {
+      case simdjson::ondemand::json_type::string: {
+        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
+        break;
+      }
+      case simdjson::ondemand::json_type::number: {
+        s = value.raw_json_token();
+        break;
+      }
+      default:
+        return simdjson::INCORRECT_TYPE;
+    }
+    const auto toPrecisionScale = getDecimalPrecisionScale(*writer.type());
+    T decimalValue;
+    const auto status = velox::DecimalUtil::castFromString<T>(
+        StringView(s),
+        toPrecisionScale.first,
+        toPrecisionScale.second,
+        decimalValue);
+    if (!status.ok()) {
+      return simdjson::INCORRECT_TYPE;
+    }
+    writer.castTo<T>() = decimalValue;
     return simdjson::SUCCESS;
   }
 
@@ -712,12 +800,8 @@ bool isSupportedType(const TypePtr& type, bool isRootType) {
           type->childAt(0)->kind() == TypeKind::VARCHAR &&
           isSupportedType(type->childAt(1), false));
     }
-    case TypeKind::BIGINT: {
-      if (type->isDecimal()) {
-        return false;
-      }
-      return !isRootType;
-    }
+    case TypeKind::HUGEINT:
+    case TypeKind::BIGINT:
     case TypeKind::INTEGER:
     case TypeKind::BOOLEAN:
     case TypeKind::SMALLINT:

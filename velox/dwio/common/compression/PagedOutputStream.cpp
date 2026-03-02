@@ -18,7 +18,7 @@
 
 namespace facebook::velox::dwio::common::compression {
 
-std::vector<folly::StringPiece> PagedOutputStream::createPage() {
+std::vector<std::string_view> PagedOutputStream::createPage() {
   auto origSize = buffer_.size();
   VELOX_CHECK_GT(origSize, pageHeaderSize_);
   origSize -= pageHeaderSize_;
@@ -34,15 +34,15 @@ std::vector<folly::StringPiece> PagedOutputStream::createPage() {
         origSize);
   }
 
-  folly::StringPiece compressed;
+  std::string_view compressed;
   if (compressedSize >= origSize) {
     // write orig
     writeHeader(buffer_.data(), origSize, true);
-    compressed = folly::StringPiece(buffer_.data(), origSize + pageHeaderSize_);
+    compressed = std::string_view(buffer_.data(), origSize + pageHeaderSize_);
   } else {
     // write compressed
     writeHeader(compressionBuffer_->data(), compressedSize, false);
-    compressed = folly::StringPiece(
+    compressed = std::string_view(
         compressionBuffer_->data(), compressedSize + pageHeaderSize_);
   }
 
@@ -50,13 +50,13 @@ std::vector<folly::StringPiece> PagedOutputStream::createPage() {
     return {compressed};
   }
 
-  encryptionBuffer_ = encryptor_->encrypt(folly::StringPiece(
-      compressed.begin() + pageHeaderSize_, compressed.end()));
+  encryptionBuffer_ = encryptor_->encrypt(
+      std::string_view(compressed.begin() + pageHeaderSize_, compressed.end()));
   updateSize(
       const_cast<char*>(compressed.begin()), encryptionBuffer_->length());
   return {
-      folly::StringPiece(compressed.begin(), pageHeaderSize_),
-      folly::StringPiece(
+      std::string_view(compressed.begin(), pageHeaderSize_),
+      std::string_view(
           reinterpret_cast<const char*>(encryptionBuffer_->data()),
           encryptionBuffer_->length())};
 }

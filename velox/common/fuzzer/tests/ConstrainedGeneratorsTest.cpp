@@ -21,6 +21,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/type/Variant.h"
 
@@ -404,9 +406,10 @@ TEST_F(ConstrainedGeneratorsTest, jsonPath) {
     const auto jsonPath = jsonPathGenerator->generate();
     if (jsonPath.hasValue()) {
       if (json.hasValue()) {
-        EXPECT_NO_THROW(functions::jsonExtract(
-            json.value<TypeKind::VARCHAR>(),
-            jsonPath.value<TypeKind::VARCHAR>()));
+        EXPECT_NO_THROW(
+            functions::jsonExtract(
+                json.value<TypeKind::VARCHAR>(),
+                jsonPath.value<TypeKind::VARCHAR>()));
       }
     } else {
       hasNull = true;
@@ -419,6 +422,31 @@ TEST_F(ConstrainedGeneratorsTest, tdigest) {
   std::unique_ptr<TDigestInputGenerator> generator =
       std::make_unique<TDigestInputGenerator>(0, TDIGEST(DOUBLE()), 0.4);
   auto value = generator->generate();
+  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+}
+
+TEST_F(ConstrainedGeneratorsTest, setdigest) {
+  std::unique_ptr<SetDigestInputGenerator> generator =
+      std::make_unique<SetDigestInputGenerator>(0, SETDIGEST(), 0.4);
+  auto value = generator->generate();
+  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+}
+
+TEST_F(ConstrainedGeneratorsTest, qdigest) {
+  std::unique_ptr<QDigestInputGenerator> generator =
+      std::make_unique<QDigestInputGenerator>(
+          0, QDIGEST(DOUBLE()), 0.4, DOUBLE());
+  auto value = generator->generate();
+  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+
+  generator =
+      std::make_unique<QDigestInputGenerator>(0, QDIGEST(REAL()), 0.4, REAL());
+  value = generator->generate();
+  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+
+  generator = std::make_unique<QDigestInputGenerator>(
+      0, QDIGEST(BIGINT()), 0.4, BIGINT());
+  value = generator->generate();
   EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
 }
 

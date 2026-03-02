@@ -42,7 +42,11 @@ class ColumnReader {
             fileType_,
             scanSpec,
             operand ? operand->id : kNoOperand)),
-        scanSpec_(&scanSpec) {}
+        scanSpec_(&scanSpec) {
+    if (operand) {
+      operand->notNull = !formatData_->hasNulls();
+    }
+  }
 
   virtual ~ColumnReader() = default;
 
@@ -118,7 +122,7 @@ class ReadStream : public Executable {
   ReadStream(
       StructColumnReader* columnReader,
       WaveStream& waveStream,
-      velox::io::IoStatistics* ioStats,
+      velox::io::IoStatistics* ioStatistics,
       FileInfo& fileInfo,
       const OperandSet* firstColumns = nullptr);
 
@@ -188,6 +192,8 @@ class ReadStream : public Executable {
   // launch cost but run all non-filter columns in their own TBs.
   bool decodenonFiltersInFiltersKernel();
 
+  void initializeResultNulls(Stream& stream);
+
   StructColumnReader* reader_;
   std::vector<AbstractOperand*> abstractOperands_;
 
@@ -235,6 +241,12 @@ class ReadStream : public Executable {
   // Set to true when after first griddize() and akeOps().
   bool inited_{false};
   FileInfo fileInfo_;
+
+  // Keep track of which level of encodings we are decoding for. This is
+  // necessary when you decode multiple streams together and want them to be
+  // fully decoded in the same kernel launch in order to implement filters.
+  int32_t decodeLevel_{0};
+  bool filtersCompacted_{false};
 };
 
 } // namespace facebook::velox::wave

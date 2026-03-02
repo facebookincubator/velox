@@ -43,6 +43,24 @@ struct OperationCounters {
 
 class IoCounter {
  public:
+  IoCounter& operator=(const IoCounter& other) noexcept {
+    if (this != &other) {
+      count_.store(
+          other.count_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+      sum_.store(
+          other.sum_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+      min_.store(
+          other.min_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+      max_.store(
+          other.max_.load(std::memory_order_relaxed),
+          std::memory_order_relaxed);
+    }
+    return *this;
+  }
+
   uint64_t count() const {
     return count_;
   }
@@ -123,8 +141,28 @@ class IoStatistics {
     return ramHit_;
   }
 
-  IoCounter& queryThreadIoLatency() {
-    return queryThreadIoLatency_;
+  IoCounter& queryThreadIoLatencyUs() {
+    return queryThreadIoLatencyUs_;
+  }
+
+  IoCounter& storageReadLatencyUs() {
+    return storageReadLatencyUs_;
+  }
+
+  IoCounter& ssdCacheReadLatencyUs() {
+    return ssdCacheReadLatencyUs_;
+  }
+
+  IoCounter& cacheWaitLatencyUs() {
+    return cacheWaitLatencyUs_;
+  }
+
+  IoCounter& coalescedSsdLoadLatencyUs() {
+    return coalescedSsdLoadLatencyUs_;
+  }
+
+  IoCounter& coalescedStorageLoadLatencyUs() {
+    return coalescedStorageLoadLatencyUs_;
   }
 
   void incOperationCounters(
@@ -169,7 +207,24 @@ class IoStatistics {
 
   // Time spent by a query processing thread waiting for synchronously issued IO
   // or for an in-progress read-ahead to finish.
-  IoCounter queryThreadIoLatency_;
+  IoCounter queryThreadIoLatencyUs_;
+
+  // Breakdown of queryThreadIoLatencyUs_ by I/O type:
+
+  // Time spent waiting for remote storage reads (S3, HDFS, etc.)
+  IoCounter storageReadLatencyUs_;
+
+  // Time spent waiting for SSD cache reads
+  IoCounter ssdCacheReadLatencyUs_;
+
+  // Time spent waiting for EXCLUSIVE cache entries (another thread is loading)
+  IoCounter cacheWaitLatencyUs_;
+
+  // Time spent waiting for coalesced loads from SSD cache
+  IoCounter coalescedSsdLoadLatencyUs_;
+
+  // Time spent waiting for coalesced loads from remote storage
+  IoCounter coalescedStorageLoadLatencyUs_;
 
   std::unordered_map<std::string, OperationCounters> operationStats_;
   mutable std::mutex operationStatsMutex_;

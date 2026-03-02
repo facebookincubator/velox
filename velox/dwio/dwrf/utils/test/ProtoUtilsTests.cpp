@@ -31,7 +31,8 @@ TEST(ProtoUtilsTests, AllTypes) {
     HiveTypeParser parser;
     auto schema = parser.parse(type);
     proto::Footer footer;
-    ProtoUtils::writeType(*schema, footer);
+    auto footerWrapper = FooterWriteWrapper(&footer);
+    ProtoUtils::writeType(*schema, footerWrapper);
 
     auto out = ProtoUtils::fromFooter(footer);
     auto str = HiveTypeSerializer::serialize(out);
@@ -45,7 +46,8 @@ TEST(ProtoUtilsTests, Projection) {
   auto schema = parser.parse(
       "struct<a:boolean,b:tinyint,c:smallint,d:struct<a:int,b:int,c:int>>");
   proto::Footer footer;
-  ProtoUtils::writeType(*schema, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*schema, footerWrapper);
 
   auto type = ProtoUtils::fromFooter(
       footer, [](auto id) { return id != 2 && id != 5; });

@@ -31,8 +31,8 @@ void StringIdMap::release(uint64_t id) {
   std::lock_guard<std::mutex> l(mutex_);
   auto it = idToEntry_.find(id);
   if (it != idToEntry_.end()) {
-    VELOX_CHECK_LT(
-        0, it->second.numInUse, "Extra release of id in StringIdMap");
+    VELOX_CHECK_GT(
+        it->second.numInUse, 0, "Extra release of id in StringIdMap");
     if (--it->second.numInUse == 0) {
       pinnedSize_ -= it->second.string.size();
       auto strIter = stringToId_.find(it->second.string);
@@ -60,11 +60,11 @@ uint64_t StringIdMap::makeId(std::string_view string) {
   if (it != stringToId_.end()) {
     auto entry = idToEntry_.find(it->second);
     VELOX_CHECK(entry != idToEntry_.end());
-    if (++entry->second.numInUse == 1) {
-      pinnedSize_ += entry->second.string.size();
-    }
+    VELOX_CHECK_GE(entry->second.numInUse, 1);
+    ++entry->second.numInUse;
     return it->second;
   }
+
   Entry entry;
   entry.string = string;
   // Check that we do not use an id twice. In practice this never
@@ -91,9 +91,8 @@ uint64_t StringIdMap::recoverId(uint64_t id, std::string_view string) {
         id, it->second, "Multiple recover ids assigned to {}", string);
     auto entry = idToEntry_.find(it->second);
     VELOX_CHECK(entry != idToEntry_.end());
-    if (++entry->second.numInUse == 1) {
-      pinnedSize_ += entry->second.string.size();
-    }
+    VELOX_CHECK_GE(entry->second.numInUse, 1);
+    ++entry->second.numInUse;
     return id;
   }
 

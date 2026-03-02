@@ -16,8 +16,8 @@
 
 #include "velox/tool/trace/UnnestReplayer.h"
 
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -36,6 +36,7 @@ core::PlanNodePtr UnnestReplayer::createPlanNode(
       unnestNode->unnestVariables(),
       unnestNode->unnestNames(),
       unnestNode->ordinalityName(),
+      unnestNode->markerName(),
       source);
 }
 } // namespace facebook::velox::tool::trace

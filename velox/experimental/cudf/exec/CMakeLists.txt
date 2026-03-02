@@ -14,6 +14,7 @@
 
 add_library(
   velox_cudf_exec
+  CudfAssignUniqueId.cpp
   CudfConversion.cpp
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
@@ -21,11 +22,13 @@ add_library(
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
+  CudfTopN.cpp
   DebugUtil.cpp
-  ExpressionEvaluator.cpp
+  OperatorAdapters.cpp
   ToCudf.cpp
   Utilities.cpp
-  VeloxCudfInterop.cpp)
+  VeloxCudfInterop.cpp
+)
 
 target_link_libraries(
   velox_cudf_exec
@@ -36,6 +39,9 @@ target_link_libraries(
     velox_exception
     velox_common_base
     velox_cudf_vector
-    velox_exec)
+    velox_exec
+    velox_cudf_hive_connector
+    velox_cudf_expression
+)
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

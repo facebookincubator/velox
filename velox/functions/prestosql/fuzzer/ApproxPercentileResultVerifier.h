@@ -250,9 +250,10 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
 
     std::vector<std::string> projections = groupingKeys_;
     projections.push_back(fmt::format("{} as x", valueField));
-    projections.push_back(fmt::format(
-        "{} as w",
-        weightField.has_value() ? weightField.value() : "1::bigint"));
+    projections.push_back(
+        fmt::format(
+            "{} as w",
+            weightField.has_value() ? weightField.value() : "1::bigint"));
 
     PlanBuilder planBuilder;
     planBuilder.values(input).projectExpressions(inputProjections);

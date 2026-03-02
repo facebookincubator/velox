@@ -17,7 +17,8 @@
 #pragma once
 
 #include <limits>
-#include <unordered_set>
+#include <string>
+#include <unordered_map>
 
 #include <folly/Executor.h>
 #include "velox/common/base/RandomUtil.h"
@@ -51,6 +52,7 @@ enum class FileFormat {
   NIMBLE = 8,
   ORC = 9,
   SST = 10, // rocksdb sst format
+  FLUX = 11,
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -72,7 +74,34 @@ enum class SerDeSeparator {
 
 class SerDeOptions {
  public:
+  /// The following members control how data is separated in TEXT format files:
+  ///
+  /// - 'separators': An array of separator characters used to delimit columns
+  ///   and nested data.
+  ///     - 'separators[0]' defines the delimiter that separates top-level
+  ///     columns.
+  ///     - 'separators[1 to depth_-1]' defines the delimiters that separate
+  ///     nested data within a ComplexType column.
+  /// - 'newLine': The character used to separate rows in the file.
+  ///
+  /// Suppose we have a schema: ROW(MAP(VARCHAR(), ARRAY(BIGINT())), BOOLEAN())
+  /// With the following configuration:
+  ///   - separators = [',', '@', ':', '#]
+  ///   - newLine = '\n'
+  ///   - nullString = "NULL"
+  ///
+  /// With the following data to be written:
+  ///   - row1: {key1:[10, 20, 30], key2:[40, 50, 60]}, true
+  ///   - row2: {key3:[100, 2, 30], key4:[80, 40, 45]}, true
+  ///
+  /// A sample text file with the 2 rows of data above would look like this:
+  /// key1:10#20#30@key2:40#50#60,true\n
+  /// key3:100#2#30@key4:80#40#45,true\n
+
   std::array<uint8_t, 8> separators;
+  uint8_t newLine;
+
+  /// Null values are represented by 'nullString'
   std::string nullString;
   bool lastColumnTakesRest;
   uint8_t escapeChar;
@@ -88,8 +117,10 @@ class SerDeOptions {
       uint8_t collectionDelim = '\2',
       uint8_t mapKeyDelim = '\3',
       uint8_t escape = '\\',
-      bool isEscapedFlag = false)
+      bool isEscapedFlag = false,
+      uint8_t newLine = '\n')
       : separators{{fieldDelim, collectionDelim, mapKeyDelim, 4, 5, 6, 7, 8}},
+        newLine(newLine),
         nullString("\\N"),
         lastColumnTakesRest(false),
         escapeChar(escape),
@@ -253,6 +284,22 @@ class RowReaderOptions {
     scanSpec_ = std::move(scanSpec);
   }
 
+  folly::Executor* ioExecutor() const {
+    return ioExecutor_;
+  }
+
+  void setIOExecutor(folly::Executor* const ioExecutor) {
+    ioExecutor_ = ioExecutor;
+  }
+
+  const size_t parallelUnitLoadCount() const {
+    return parallelUnitLoadCount_;
+  }
+
+  void setParallelUnitLoadCount(size_t parallelUnitLoadCount) {
+    parallelUnitLoadCount_ = parallelUnitLoadCount;
+  }
+
   const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter() const {
     return metadataFilter_;
   }
@@ -267,8 +314,8 @@ class RowReaderOptions {
           flatmapNodeIdsAsStruct) {
     VELOX_CHECK(
         std::all_of(
-            flatmapNodeIdsAsStruct.begin(),
-            flatmapNodeIdsAsStruct.end(),
+            flatmapNodeIdsAsStruct.cbegin(),
+            flatmapNodeIdsAsStruct.cend(),
             [](const auto& kv) { return !kv.second.empty(); }),
         "To use struct encoding for flatmap, keys to project must be specified");
     flatmapNodeIdAsStruct_ = std::move(flatmapNodeIdsAsStruct);
@@ -279,7 +326,7 @@ class RowReaderOptions {
     return flatmapNodeIdAsStruct_;
   }
 
-  void setPreserveFlatMapsInMemory(uint64_t preserveFlatMapsInMemory) {
+  void setPreserveFlatMapsInMemory(bool preserveFlatMapsInMemory) {
     preserveFlatMapsInMemory_ = preserveFlatMapsInMemory;
   }
 
@@ -399,12 +446,42 @@ class RowReaderOptions {
     serdeParameters_ = std::move(serdeParameters);
   }
 
+  bool trackRowSize() const {
+    return trackRowSize_;
+  }
+
+  void setTrackRowSize(bool trackRowSize) {
+    trackRowSize_ = trackRowSize;
+  }
+
+  bool indexEnabled() const {
+    return indexEnabled_;
+  }
+
+  /// Sets whether to use the cluster index for filter-based row pruning.
+  /// When enabled, filters from ScanSpec are converted to index bounds for
+  /// efficient row skipping based on the file's cluster index.
+  ///
+  /// NOTE: currently only supported by Nimble format.
+  void setIndexEnabled(bool enabled) {
+    indexEnabled_ = enabled;
+  }
+
+  bool passStringBuffersFromDecoder() const {
+    return passStringBuffersFromDecoder_;
+  }
+
+  void setPassStringBuffersFromDecoder(bool passStringBuffersFromDecoder) {
+    passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
   bool preloadStripe_;
   bool projectSelectedType_;
   bool returnFlatVector_ = false;
+  size_t parallelUnitLoadCount_ = 0;
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   RowTypePtr requestedType_;
@@ -417,7 +494,8 @@ class RowReaderOptions {
   // Whether to generate FlatMapVectors when reading flat maps from the file. By
   // default, converts flat maps in the file to MapVectors.
   bool preserveFlatMapsInMemory_ = false;
-
+  // Optional io executor to enable parallel unit loader.
+  folly::Executor* ioExecutor_{nullptr};
   // Optional executors to enable internal reader parallelism.
   // 'decodingExecutor' allow parallelising the vector decoding process.
   // 'ioExecutor' enables parallelism when performing file system read
@@ -456,6 +534,11 @@ class RowReaderOptions {
   TimestampPrecision timestampPrecision_ = TimestampPrecision::kMilliseconds;
 
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
+  bool trackRowSize_{false};
+  bool indexEnabled_{false};
+  // NOTE: we will control this option with a session property
+  // for prod. Tests are parameterized on both branches.
+  bool passStringBuffersFromDecoder_{false};
 };
 
 /// Options for creating a Reader.
@@ -475,6 +558,13 @@ class ReaderOptions : public io::ReaderOptions {
   /// "dwrf".
   ReaderOptions& setFileFormat(FileFormat format) {
     fileFormat_ = format;
+    return *this;
+  }
+
+  /// Sets the property bag.
+  ReaderOptions& setProperties(
+      std::unordered_map<std::string, std::string> properties) {
+    properties_ = std::move(properties);
     return *this;
   }
 
@@ -549,6 +639,11 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the file format.
   FileFormat fileFormat() const {
     return fileFormat_;
+  }
+
+  /// Gets the property bag.
+  const std::unordered_map<std::string, std::string>& properties() const {
+    return properties_;
   }
 
   /// Gets the file schema.
@@ -641,6 +736,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_;
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
+  std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t footerEstimatedSize_{kDefaultFooterEstimatedSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};

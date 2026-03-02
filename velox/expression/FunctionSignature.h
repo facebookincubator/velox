@@ -34,7 +34,11 @@ std::string sanitizeName(const std::string& name);
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
 
-enum class ParameterType : int8_t { kTypeParameter, kIntegerParameter };
+enum class ParameterType : int8_t {
+  kTypeParameter,
+  kIntegerParameter,
+  kEnumParameter,
+};
 
 /// Canonical names for functions that have special treatments in pushdowns.
 enum class FunctionCanonicalName {
@@ -49,7 +53,7 @@ enum class FunctionCanonicalName {
 /// a_precision + b_precision" in decimals).
 class SignatureVariable {
  public:
-  explicit SignatureVariable(
+  SignatureVariable(
       std::string name,
       std::optional<std::string> constraint,
       ParameterType type,
@@ -80,12 +84,20 @@ class SignatureVariable {
     return comparableTypesOnly_;
   }
 
+  /// Return true if this variable describes a type and the specified type
+  /// satisfies the constraints.
+  bool isEligibleType(const Type& type) const;
+
   bool isTypeParameter() const {
     return type_ == ParameterType::kTypeParameter;
   }
 
   bool isIntegerParameter() const {
     return type_ == ParameterType::kIntegerParameter;
+  }
+
+  bool isEnumParameter() const {
+    return type_ == ParameterType::kEnumParameter;
   }
 
   bool operator==(const SignatureVariable& rhs) const {
@@ -137,6 +149,23 @@ class FunctionSignature {
 
   const std::vector<TypeSignature>& argumentTypes() const {
     return argumentTypes_;
+  }
+
+  const TypeSignature& argumentTypeAt(size_t index) const {
+    return argumentTypes_.at(index);
+  }
+
+  bool isLambdaArgumentAt(size_t index) const {
+    return argumentTypes().at(index).baseName() == "function";
+  }
+
+  bool hasLambdaArgument() const {
+    for (auto i = 0; i < argumentTypes_.size(); ++i) {
+      if (isLambdaArgumentAt(i)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   const std::vector<bool>& constantArguments() const {
@@ -292,27 +321,37 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
+  FunctionSignatureBuilder& enumVariable(
+      const std::string& name,
+      std::optional<std::string> constraint = std::nullopt) {
+    addVariable(
+        variables_,
+        SignatureVariable(name, constraint, ParameterType::kEnumParameter));
+    return *this;
+  }
+
   FunctionSignatureBuilder& returnType(const std::string& type) {
     returnType_.emplace(parseTypeSignature(type));
     return *this;
   }
 
   FunctionSignatureBuilder& argumentType(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(false);
-    return *this;
+    return addArgument(type, /*constant=*/false, /*variableArity=*/false);
   }
 
   FunctionSignatureBuilder& constantArgumentType(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(true);
-    return *this;
+    return addArgument(type, /*constant=*/true, /*variableArity=*/false);
   }
 
   /// Variable arity arguments can appear only at the end of the argument list
   /// and their types must match the type specified in the last entry of
   /// 'argumentTypes'. Variable arity arguments can appear zero or more times.
   FunctionSignatureBuilder& variableArity() {
+    VELOX_USER_CHECK(
+        !variableArity_, "Only one variable arity argument is allowed.");
+    VELOX_USER_CHECK(
+        !argumentTypes_.empty(),
+        "Variable arity requires at least one argument");
     variableArity_ = true;
     return *this;
   }
@@ -320,24 +359,33 @@ class FunctionSignatureBuilder {
   /// Variable arity arguments can appear only at the end of the argument list
   /// and can appear zero or more times.
   FunctionSignatureBuilder& variableArity(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(false);
-    variableArity_ = true;
-    return *this;
+    return addArgument(type, /*constant=*/false, /*variableArity=*/true);
   }
 
   /// Variable arity arguments can appear only at the end of the argument list
   /// and can appear zero or more times.
   FunctionSignatureBuilder& constantVariableArity(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
-    constantArguments_.push_back(true);
-    variableArity_ = true;
-    return *this;
+    return addArgument(type, /*constant=*/true, /*variableArity=*/true);
   }
 
   FunctionSignaturePtr build();
 
  private:
+  FunctionSignatureBuilder&
+  addArgument(const std::string& type, bool constant, bool variableArity) {
+    VELOX_USER_CHECK(
+        !variableArity_, "Cannot add arguments after variable arity argument");
+
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(constant);
+
+    if (variableArity) {
+      this->variableArity();
+    }
+
+    return *this;
+  }
+
   std::unordered_map<std::string, SignatureVariable> variables_;
   std::optional<TypeSignature> returnType_;
   std::vector<TypeSignature> argumentTypes_;

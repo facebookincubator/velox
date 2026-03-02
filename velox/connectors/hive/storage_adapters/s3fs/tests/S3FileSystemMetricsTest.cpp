@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/init/Init.h>
+#include <functional>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
@@ -23,8 +25,9 @@
 
 #include <gtest/gtest.h>
 
-namespace facebook::velox::filesystems {
+namespace facebook::velox::filesystems::test {
 namespace {
+
 class S3TestReporter : public BaseStatsReporter {
  public:
   mutable std::mutex m;
@@ -39,6 +42,7 @@ class S3TestReporter : public BaseStatsReporter {
     statTypeMap.clear();
     histogramPercentilesMap.clear();
   }
+
   void registerMetricExportType(const char* key, StatType statType)
       const override {
     statTypeMap[key] = statType;
@@ -168,7 +172,7 @@ TEST_F(S3FileSystemMetricsTest, metrics) {
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetObjectCalls}]);
 }
 
-} // namespace facebook::velox::filesystems
+} // namespace facebook::velox::filesystems::test
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

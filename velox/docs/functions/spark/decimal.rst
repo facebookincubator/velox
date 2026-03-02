@@ -38,7 +38,7 @@ The HiveQL behavior:
 https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
 
 Additionally, the computation of decimal division adapts to the allow-precision-loss flag,
-while the decimal addition, subtraction, and multiplication do not.
+while the decimal addition, subtraction, multiplication and integer division do not.
 
 Addition and Subtraction
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -73,6 +73,15 @@ When allow-precision-loss is false:
     fractionalDigits = min(38, max(6, s1 + p2 + 1));
     p = wholeDigits + fractionalDigits
     s = fractionalDigits
+
+Integer Division
+~~~~~~~~~~~~~~~~
+
+::
+
+    precision = p1 - s1 + s2
+    p = precision == 0 ? 1 : min(38,  precision)
+    s = 0
 
 Decimal Precision and Scale Adjustment
 --------------------------------------
@@ -112,6 +121,28 @@ Decimal division uses a different formula:
 
 Returns NULL when the actual result cannot be represented with the calculated decimal type.
 
+Arithmetic Functions
+--------------------
+
+.. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+
+    Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
+    Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+    Division by zero or overflow results in NULL. Does not respect the ``allow-precision-loss`` configuration.
+    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1 as DECIMAL(17, 3)) div CAST(2 as DECIMAL(17, 3)); -- 0
+        SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
+        SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
+        SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
+
+.. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+
+    Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
+    Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+    Division by zero or overflow results in an error.
+    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
+
 Decimal Functions
 -----------------
 .. spark:function:: ceil(x: decimal(p, s)) -> r: decimal(pr, 0)
@@ -121,6 +152,36 @@ Decimal Functions
     ::
 
         SELECT ceil(cast(1.23 as DECIMAL(3, 2))); -- 2 // Output type: decimal(2,0)
+
+.. spark:function:: decimal_equalto(x, y) -> boolean
+
+    Returns true if x is equal to y. Supports decimal types with different precisions and scales.
+    Corresponds to Spark's operator ``==``.
+
+.. spark:function:: decimal_greaterthan(x, y) -> boolean
+
+    Returns true if x is greater than y. Supports decimal types with different precisions and scales.
+    Corresponds to Spark's operator ``>``.
+
+.. spark:function:: decimal_greaterthanorequal(x, y) -> boolean
+
+    Returns true if x is greater than y or x is equal to y. Supports decimal types with different precisions and scales.
+    Corresponds to Spark's operator ``>=``.
+
+.. spark:function:: decimal_lessthan(x, y) -> boolean
+
+    Returns true if x is less than y. Supports decimal types with different precisions and scales.
+    Corresponds to Spark's operator ``<``.
+
+.. spark:function:: decimal_lessthanorequal(x, y) -> boolean
+
+    Returns true if x is less than y or x is equal to y. Supports decimal types with different precisions and scales.
+    Corresponds to Spark's operator ``<=``.
+
+.. spark:function:: decimal_notequalto(x, y) -> boolean
+
+    Returns true if x is not equal to y. Supports decimal types with different precisions and scales.
+    Corresponds to Spark's operator ``!=``.
 
 .. spark:function:: floor(x: decimal(p, s)) -> r: decimal(pr, 0)
 
@@ -149,12 +210,6 @@ Decimal Functions
 
 Decimal Special Forms
 ---------------------
-
-.. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal
-
-    Create ``decimal`` of requsted precision and scale from an unscaled bigint value ``x``.
-    By default, the value of ``nullOnOverflow`` is true, and null will be returned when ``x`` is too large for the result precision.
-    Otherwise, exception will be thrown when ``x`` overflows.
 
 .. spark:function:: decimal_round(decimal[, scale]) -> [decimal]
 
@@ -195,3 +250,9 @@ Decimal Special Forms
         SELECT round(cast (85.681 as DECIMAL(5, 3)), 1); -- decimal 85.7
         SELECT round(cast (85.681 as DECIMAL(5, 3)), 999); -- decimal 85.681
         SELECT round(cast (0.1234567890123456789 as DECIMAL(19, 19)), 14); -- decimal 0.12345678901235
+
+.. spark:function:: make_decimal(x[, nullOnOverflow]) -> decimal
+
+    Create ``decimal`` of requsted precision and scale from an unscaled bigint value ``x``.
+    By default, the value of ``nullOnOverflow`` is true, and null will be returned when ``x`` is too large for the result precision.
+    Otherwise, exception will be thrown when ``x`` overflows.

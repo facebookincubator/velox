@@ -83,6 +83,8 @@ struct RowContainerIterator {
   char* rowBegin{nullptr};
   /// First byte after the end of the range containing 'currentRow'.
   char* endOfRun{nullptr};
+  /// Cursor of the list row operation.
+  int32_t listRowCursor{0};
 
   /// Returns the current row, skipping a possible normalized key below the
   /// first byte of row.
@@ -116,6 +118,10 @@ class RowPartitions {
 
   int32_t size() const {
     return size_;
+  }
+
+  void reset() {
+    size_ = 0;
   }
 
  private:
@@ -275,6 +281,21 @@ class RowContainer {
       memory::MemoryPool* pool)
       : RowContainer(
             keyTypes,
+            dependentTypes,
+            /*useListRowIndex=*/false,
+            pool) {}
+
+  /// If 'useListRowIndex' is true, the container maintains an internal array of
+  /// row pointers so that listRowsFast() can return rows without scanning
+  /// underlying allocations or checking free/probe flags. It is intended to be
+  /// used in SortBuffer and SortInputSpiller to improve performance.
+  RowContainer(
+      const std::vector<TypePtr>& keyTypes,
+      const std::vector<TypePtr>& dependentTypes,
+      bool useListRowIndex,
+      memory::MemoryPool* pool)
+      : RowContainer(
+            keyTypes,
             true, // nullableKeys
             std::vector<Accumulator>{},
             dependentTypes,
@@ -282,6 +303,7 @@ class RowContainer {
             false, // isJoinBuild
             false, // hasProbedFlag
             false, // hasNormalizedKey
+            useListRowIndex,
             pool) {}
 
   ~RowContainer();
@@ -313,6 +335,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
+      bool useListRowIndex,
       memory::MemoryPool* pool);
 
   /// Allocates a new row and initializes possible aggregates to null.
@@ -328,13 +351,7 @@ class RowContainer {
   /// Sets all fields, aggregates, keys and dependents to null. Used when making
   /// a row with uninitialized keys for aggregates with no-op partial
   /// aggregation.
-  void setAllNull(char* row) {
-    removeOrUpdateRowColumnStats(row, /*setToNull=*/true);
-    if (!nullOffsets_.empty()) {
-      memset(row + nullByte(nullOffsets_[0]), 0xff, initialNulls_.size());
-      bits::clearBit(row, freeFlagOffset_);
-    }
-  }
+  void setAllNull(char* row);
 
   /// The row size excluding any out-of-line stored variable length values.
   int32_t fixedRowSize() const {
@@ -579,8 +596,7 @@ class RowContainer {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  int32_t
-  listRows(
+  int32_t listRows(
       RowContainerIterator* iter,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -644,6 +660,20 @@ class RowContainer {
     return count;
   }
 
+  /// Fast path for `listRows` that returns `rowPointers_` directly. Used by
+  /// `SortBuffer` and `SortInputSpiller`, so it skips checking the free and
+  /// probe flags.
+  int32_t listRowsFast(RowContainerIterator* iter, int32_t maxRows, char** rows)
+      const {
+    int32_t count = 0;
+    while (count < maxRows && iter->listRowCursor < rowPointers_.size()) {
+      char* row = rowPointers_[iter->listRowCursor];
+      rows[count++] = row;
+      ++iter->listRowCursor;
+    }
+    return count;
+  }
+
   /// Extracts up to 'maxRows' rows starting at the position of 'iter'. A
   /// default constructed or reset iter starts at the beginning. Returns the
   /// number of rows written to 'rows'. Returns 0 when at end. Stops after the
@@ -658,6 +688,9 @@ class RowContainer {
 
   int32_t listRows(RowContainerIterator* iter, int32_t maxRows, char** rows)
       const {
+    if (useListRowIndex_) {
+      return listRowsFast(iter, maxRows, rows);
+    }
     return listRows<ProbeType::kAll>(iter, maxRows, kUnlimited, rows);
   }
 
@@ -674,21 +707,13 @@ class RowContainer {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  void
-  setProbedFlag(char** rows, int32_t numRows);
-
-  /// Returns true if 'row' at 'column' equals the value at 'index' in
-  /// 'decoded'. 'mayHaveNulls' specifies if nulls need to be checked. This is a
-  /// fast path for compare().
-  template <bool mayHaveNulls>
-  bool equals(
-      const char* row,
-      RowColumn column,
-      const DecodedVector& decoded,
-      vector_size_t index) const;
+  void setProbedFlag(char** rows, int32_t numRows);
 
   /// Compares the value at 'column' in 'row' with the value at 'index' in
   /// 'decoded'. Returns 0 for equal, < 0 for 'row' < 'decoded', > 0 otherwise.
+  /// 'mayHaveNulls' specifies if nulls need to be checked. This is a fast path
+  /// for compare().
+  template <bool mayHaveNulls = true>
   int32_t compare(
       const char* row,
       RowColumn column,
@@ -804,6 +829,10 @@ class RowContainer {
       }
     }
     return 0;
+  }
+
+  const std::vector<char*, StlAllocator<char*>>& testingRowPointers() const {
+    return rowPointers_;
   }
 
   memory::MemoryPool* pool() const {
@@ -1102,7 +1131,7 @@ class RowContainer {
 
     BufferPtr& nullBuffer = result->mutableNulls(maxRows, true);
     auto nulls = nullBuffer->asMutable<uint64_t>();
-    BufferPtr valuesBuffer = result->mutableValues(maxRows);
+    BufferPtr valuesBuffer = result->mutableValues();
     [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
@@ -1134,9 +1163,9 @@ class RowContainer {
       int32_t offset,
       int32_t resultOffset,
       FlatVector<T>* result) {
-    auto maxRows = numRows + resultOffset;
+    [[maybe_unused]] auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
-    BufferPtr valuesBuffer = result->mutableValues(maxRows);
+    BufferPtr valuesBuffer = result->mutableValues();
     [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
@@ -1173,56 +1202,29 @@ class RowContainer {
       bool mix,
       uint64_t* result) const;
 
-  template <bool typeProvidesCustomComparison, TypeKind Kind>
-  inline bool equalsWithNulls(
+  template <bool mayHaveNulls, TypeKind Kind>
+  inline int compare(
       const char* row,
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
+      RowColumn column,
       const DecodedVector& decoded,
-      vector_size_t index) const {
-    bool rowIsNull = isNullAt(row, nullByte, nullMask);
-    bool indexIsNull = decoded.isNullAt(index);
-    if (rowIsNull || indexIsNull) {
-      return rowIsNull == indexIsNull;
-    }
-
-    return equalsNoNulls<typeProvidesCustomComparison, Kind>(
-        row, offset, decoded, index);
-  }
-
-  template <bool typeProvidesCustomComparison, TypeKind Kind>
-  inline bool equalsNoNulls(
-      const char* row,
-      int32_t offset,
-      const DecodedVector& decoded,
-      vector_size_t index) const {
-    using T = typename KindToFlatVector<Kind>::HashRowType;
-
-    if constexpr (
-        Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
-        Kind == TypeKind::MAP) {
-      return compareComplexType(row, offset, decoded, index) == 0;
-    } else if constexpr (
-        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
-      return compareStringAsc(
-                 valueAt<StringView>(row, offset), decoded, index) == 0;
-    } else if constexpr (typeProvidesCustomComparison) {
-      return SimpleVector<T>::template comparePrimitiveAscWithCustomComparison<
-                 Kind>(
-                 decoded.base()->type().get(),
-                 decoded.valueAt<T>(index),
-                 valueAt<T>(row, offset)) == 0;
+      vector_size_t index,
+      CompareFlags flags) const {
+    if (decoded.base()->typeUsesCustomComparison()) {
+      return compare<true, Kind, mayHaveNulls>(
+          row, column, decoded, index, flags);
     } else {
-      return SimpleVector<T>::comparePrimitiveAsc(
-                 decoded.valueAt<T>(index), valueAt<T>(row, offset)) == 0;
+      return compare<false, Kind, mayHaveNulls>(
+          row, column, decoded, index, flags);
     }
   }
 
   template <
       bool typeProvidesCustomComparison,
       TypeKind Kind,
-      std::enable_if_t<Kind != TypeKind::OPAQUE, int32_t> = 0>
+      bool mayHaveNulls,
+      std::enable_if_t<
+          Kind != TypeKind::OPAQUE && Kind != TypeKind::UNKNOWN,
+          int32_t> = 0>
   inline int compare(
       const char* row,
       RowColumn column,
@@ -1230,20 +1232,23 @@ class RowContainer {
       vector_size_t index,
       CompareFlags flags) const {
     using T = typename KindToFlatVector<Kind>::HashRowType;
-    bool rowIsNull = isNullAt(row, column.nullByte(), column.nullMask());
-    bool indexIsNull = decoded.isNullAt(index);
-    if (rowIsNull) {
-      return indexIsNull ? 0 : flags.nullsFirst ? -1 : 1;
+
+    if constexpr (mayHaveNulls) {
+      bool rowIsNull = isNullAt(row, column.nullByte(), column.nullMask());
+      bool indexIsNull = decoded.isNullAt(index);
+      if (rowIsNull) {
+        return indexIsNull ? 0 : flags.nullsFirst ? -1 : 1;
+      }
+      if (indexIsNull) {
+        return flags.nullsFirst ? 1 : -1;
+      }
     }
-    if (indexIsNull) {
-      return flags.nullsFirst ? 1 : -1;
-    }
+
     if constexpr (
         Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       return compareComplexType(row, column.offset(), decoded, index, flags);
-    } else if constexpr (
-        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (is_string_kind(Kind)) {
       auto result = compareStringAsc(
           valueAt<StringView>(row, column.offset()), decoded, index);
       return flags.ascending ? result : result * -1;
@@ -1267,6 +1272,22 @@ class RowContainer {
   template <
       bool typeProvidesCustomComparison,
       TypeKind Kind,
+      bool mayHaveNulls,
+      std::enable_if_t<Kind == TypeKind::UNKNOWN, int32_t> = 0>
+  inline int compare(
+      const char* row,
+      RowColumn column,
+      const DecodedVector& /*decoded*/,
+      vector_size_t /*index*/,
+      CompareFlags flags) const {
+    const bool rowIsNull = isNullAt(row, column.nullByte(), column.nullMask());
+    return rowIsNull ? 0 : flags.nullsFirst ? 1 : -1;
+  }
+
+  template <
+      bool typeProvidesCustomComparison,
+      TypeKind Kind,
+      bool mayHaveNulls,
       std::enable_if_t<Kind == TypeKind::OPAQUE, int32_t> = 0>
   inline int compare(
       const char* /*row*/,
@@ -1307,8 +1328,7 @@ class RowContainer {
         Kind == TypeKind::MAP) {
       return compareComplexType(
           left, right, type, leftOffset, rightOffset, flags);
-    } else if constexpr (
-        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (is_string_kind(Kind)) {
       auto leftValue = valueAt<StringView>(left, leftOffset);
       auto rightValue = valueAt<StringView>(right, rightOffset);
       auto result = compareStringAsc(leftValue, rightValue);
@@ -1493,7 +1513,8 @@ class RowContainer {
   const bool isJoinBuild_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
-
+  // True if use 'listRowsFast'.
+  const bool useListRowIndex_;
   const std::unique_ptr<HashStringAllocator> stringAllocator_;
 
   // Indicates if we can add new row to this row container. It is set to false
@@ -1512,7 +1533,7 @@ class RowContainer {
   // Indicates if this row container has rows with duplicate keys. This only
   // applies if 'nextOffset_' is set.
   tsan_atomic<bool> hasDuplicateRows_{false};
-  // Bit position of null bit  in the row. 0 if no null flag. Order is keys,
+  // Bit position of null bit in the row. 0 if no null flag. Order is keys,
   // accumulators, dependent.
   std::vector<int32_t> nullOffsets_;
   // Position of field or accumulator. Corresponds 1:1 to 'nullOffset_'.
@@ -1543,15 +1564,13 @@ class RowContainer {
   // Extra bytes to reserve before  each added row for a normalized key. Set to
   // 0 after deciding not to use normalized keys.
   int normalizedKeySize_;
-  // Copied over the null bits of each row on initialization. Keys are
-  // not null, aggregates are null.
-  std::vector<uint8_t> initialNulls_;
   uint64_t numRows_ = 0;
   // Head of linked list of free rows.
   char* firstFreeRow_ = nullptr;
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
+  std::vector<char*, StlAllocator<char*>> rowPointers_;
 
   int alignment_ = 1;
 
@@ -1739,60 +1758,21 @@ inline void RowContainer::extractNulls(
 }
 
 template <bool mayHaveNulls>
-inline bool RowContainer::equals(
-    const char* row,
-    RowColumn column,
-    const DecodedVector& decoded,
-    vector_size_t index) const {
-  auto typeKind = decoded.base()->typeKind();
-  if (typeKind == TypeKind::UNKNOWN) {
-    return isNullAt(row, column.nullByte(), column.nullMask());
-  }
-
-  if constexpr (!mayHaveNulls) {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
-        equalsNoNulls, false, typeKind, row, column.offset(), decoded, index);
-  } else {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
-        equalsWithNulls,
-        false,
-        typeKind,
-        row,
-        column.offset(),
-        column.nullByte(),
-        column.nullMask(),
-        decoded,
-        index);
-  }
-}
-
 inline int RowContainer::compare(
     const char* row,
     RowColumn column,
     const DecodedVector& decoded,
     vector_size_t index,
     CompareFlags flags) const {
-  if (decoded.base()->typeUsesCustomComparison()) {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
-        compare,
-        true,
-        decoded.base()->typeKind(),
-        row,
-        column,
-        decoded,
-        index,
-        flags);
-  } else {
-    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
-        compare,
-        false,
-        decoded.base()->typeKind(),
-        row,
-        column,
-        decoded,
-        index,
-        flags);
-  }
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+      compare,
+      mayHaveNulls,
+      decoded.base()->typeKind(),
+      row,
+      column,
+      decoded,
+      index,
+      flags);
 }
 
 inline int RowContainer::compare(

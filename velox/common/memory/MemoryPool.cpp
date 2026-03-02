@@ -17,8 +17,8 @@
 #include "velox/common/memory/MemoryPool.h"
 
 #include <signal.h>
-#include <set>
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -39,14 +39,14 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::memory {
 namespace {
 // Check if memory operation is allowed and increment the named stats.
-#define CHECK_AND_INC_MEM_OP_STATS(stats)                             \
+#define CHECK_AND_INC_MEM_OP_STATS(pool, stats)                       \
   do {                                                                \
-    if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {                       \
+    if (FOLLY_UNLIKELY(pool->kind_ != Kind::kLeaf)) {                 \
       VELOX_FAIL(                                                     \
           "Memory operation is only allowed on leaf memory pool: {}", \
-          toString());                                                \
+          pool->toString());                                          \
     }                                                                 \
-    ++num##stats##_;                                                  \
+    ++pool->num##stats##_;                                            \
   } while (0)
 
 // Check if memory operation is allowed and increment the named stats.
@@ -154,9 +154,9 @@ std::string capacityToString(int64_t capacity) {
   return capacity == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity);
 }
 
-#define DEBUG_RECORD_ALLOC(...)         \
-  if (FOLLY_UNLIKELY(debugEnabled())) { \
-    recordAllocDbg(__VA_ARGS__);        \
+#define DEBUG_RECORD_ALLOC(pool, ...)         \
+  if (FOLLY_UNLIKELY(pool->debugEnabled())) { \
+    pool->recordAllocDbg(__VA_ARGS__);        \
   }
 #define DEBUG_RECORD_FREE(...)          \
   if (FOLLY_UNLIKELY(debugEnabled())) { \
@@ -384,7 +384,7 @@ void MemoryPool::dropChild(const MemoryPool* child) {
       1,
       "Child memory pool {} doesn't exist in {}",
       child->name(),
-      toString());
+      name());
 }
 
 bool MemoryPool::aborted() const {
@@ -522,60 +522,63 @@ void* MemoryPoolImpl::allocate(
     }
   }
 
-  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
   void* buffer = allocator_->allocateBytes(alignedSize, alignment_);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} from {} {}",
-        __FUNCTION__,
-        succinctBytes(size),
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} from {} {}",
+            __FUNCTION__,
+            succinctBytes(size),
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
-  DEBUG_RECORD_ALLOC(buffer, size);
+  DEBUG_RECORD_ALLOC(this, buffer, size);
   return buffer;
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
-  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto size = sizeEach * numEntries;
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} entries and {} each from {} {}",
-        __FUNCTION__,
-        numEntries,
-        succinctBytes(sizeEach),
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} entries and {} each from {} {}",
+            __FUNCTION__,
+            numEntries,
+            succinctBytes(sizeEach),
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
-  DEBUG_RECORD_ALLOC(buffer, size);
+  DEBUG_RECORD_ALLOC(this, buffer, size);
   return buffer;
 }
 
 void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
-  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   const auto alignedNewSize = sizeAlign(newSize);
   reserve(alignedNewSize);
 
   void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     release(alignedNewSize);
-    handleAllocationFailure(fmt::format(
-        "{} failed with new {} and old {} from {} {}",
-        __FUNCTION__,
-        succinctBytes(newSize),
-        succinctBytes(size),
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with new {} and old {} from {} {}",
+            __FUNCTION__,
+            succinctBytes(newSize),
+            succinctBytes(size),
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
-  DEBUG_RECORD_ALLOC(newP, newSize);
+  DEBUG_RECORD_ALLOC(this, newP, newSize);
   if (p != nullptr) {
     ::memcpy(newP, p, std::min(size, newSize));
     free(p, size);
@@ -584,18 +587,40 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
 }
 
 void MemoryPoolImpl::free(void* p, int64_t size) {
-  CHECK_AND_INC_MEM_OP_STATS(Frees);
+  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
   const auto alignedSize = sizeAlign(size);
   DEBUG_RECORD_FREE(p, size);
   allocator_->freeBytes(p, alignedSize);
   release(alignedSize);
 }
 
+bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
+  if (!isLeaf() || !dest->isLeaf()) {
+    return false;
+  }
+  VELOX_CHECK_NOT_NULL(dest);
+  auto* destImpl = checkedPointerCast<MemoryPoolImpl, MemoryPool>(dest);
+  if (allocator_ != destImpl->allocator_) {
+    return false;
+  }
+
+  CHECK_AND_INC_MEM_OP_STATS(destImpl, Allocs);
+  const auto alignedSize = sizeAlign(size);
+  destImpl->reserve(alignedSize);
+  DEBUG_RECORD_ALLOC(destImpl, buffer, size);
+
+  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
+  DEBUG_RECORD_FREE(buffer, size);
+  release(alignedSize);
+
+  return true;
+}
+
 void MemoryPoolImpl::allocateNonContiguous(
     MachinePageCount numPages,
     Allocation& out,
     MachinePageCount minSizeClass) {
-  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   if (!out.empty()) {
     INC_MEM_OP_STATS(Frees);
   }
@@ -616,21 +641,22 @@ void MemoryPoolImpl::allocateNonContiguous(
           },
           minSizeClass)) {
     VELOX_CHECK(out.empty());
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} pages from {} {}",
-        __FUNCTION__,
-        numPages,
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} pages from {} {}",
+            __FUNCTION__,
+            numPages,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
-  DEBUG_RECORD_ALLOC(out);
+  DEBUG_RECORD_ALLOC(this, out);
   VELOX_CHECK(!out.empty());
   VELOX_CHECK_NULL(out.pool());
   out.setPool(this);
 }
 
 void MemoryPoolImpl::freeNonContiguous(Allocation& allocation) {
-  CHECK_AND_INC_MEM_OP_STATS(Frees);
+  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
   DEBUG_RECORD_FREE(allocation);
   const int64_t freedBytes = allocator_->freeNonContiguous(allocation);
   VELOX_CHECK(allocation.empty());
@@ -649,7 +675,7 @@ void MemoryPoolImpl::allocateContiguous(
     MachinePageCount numPages,
     ContiguousAllocation& out,
     MachinePageCount maxPages) {
-  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
   if (!out.empty()) {
     INC_MEM_OP_STATS(Frees);
   }
@@ -668,21 +694,22 @@ void MemoryPoolImpl::allocateContiguous(
           },
           maxPages)) {
     VELOX_CHECK(out.empty());
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} pages from {} {}",
-        __FUNCTION__,
-        numPages,
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} pages from {} {}",
+            __FUNCTION__,
+            numPages,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
-  DEBUG_RECORD_ALLOC(out);
+  DEBUG_RECORD_ALLOC(this, out);
   VELOX_CHECK(!out.empty());
   VELOX_CHECK_NULL(out.pool());
   out.setPool(this);
 }
 
 void MemoryPoolImpl::freeContiguous(ContiguousAllocation& allocation) {
-  CHECK_AND_INC_MEM_OP_STATS(Frees);
+  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
   const int64_t bytesToFree = allocation.size();
   DEBUG_RECORD_FREE(allocation);
   allocator_->freeContiguous(allocation);
@@ -701,12 +728,13 @@ void MemoryPoolImpl::growContiguous(
               release(allocBytes);
             }
           })) {
-    handleAllocationFailure(fmt::format(
-        "{} failed with {} pages from {} {}",
-        __FUNCTION__,
-        increment,
-        toString(),
-        allocator_->getAndClearFailureMessage()));
+    handleAllocationFailure(
+        fmt::format(
+            "{} failed with {} pages from {} {}",
+            __FUNCTION__,
+            increment,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   if (FOLLY_UNLIKELY(debugEnabled())) {
     recordGrowDbg(allocation.data(), allocation.size());
@@ -776,7 +804,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
-  CHECK_AND_INC_MEM_OP_STATS(Reserves);
+  CHECK_AND_INC_MEM_OP_STATS(this, Reserves);
   TestValue::adjust(
       "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve", this);
   // TODO: make this a configurable memory pool option.
@@ -804,9 +832,6 @@ void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
     } else {
       reserveNonThreadSafe(size, reserveOnly);
     }
-  }
-  if (reserveOnly) {
-    return;
   }
 }
 
@@ -885,9 +910,16 @@ void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
   VELOX_CHECK(requestor->isLeaf());
   ++numCapacityGrowths_;
 
-  {
+  try {
     MemoryPoolArbitrationSection arbitrationSection(requestor);
     arbitrator_->growCapacity(this, size);
+  } catch (const VeloxRuntimeError& veloxError) {
+    if (FOLLY_UNLIKELY(
+            debugEnabled() &&
+            veloxError.errorCode() == error_code::kMemCapExceeded)) {
+      std::rethrow_exception(wrapExceptionDbg(veloxError));
+    }
+    throw;
   }
   // The memory pool might have been aborted during the time it leaves the
   // arbitration no matter the arbitration succeed or not.
@@ -927,7 +959,7 @@ void MemoryPoolImpl::incrementReservationLocked(uint64_t bytes) {
 }
 
 void MemoryPoolImpl::release() {
-  CHECK_AND_INC_MEM_OP_STATS(Releases);
+  CHECK_AND_INC_MEM_OP_STATS(this, Releases);
   release(0, true);
 }
 
@@ -982,6 +1014,21 @@ void MemoryPoolImpl::decrementReservation(uint64_t size) noexcept {
   std::lock_guard<std::mutex> l(mutex_);
   reservationBytes_ -= size;
   sanityCheckLocked();
+}
+
+std::string MemoryPoolImpl::toString(bool detail) const {
+  std::string result;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    result = toStringLocked();
+  }
+  if (detail) {
+    result += "\n" + treeMemoryUsage();
+  }
+  if (FOLLY_UNLIKELY(debugEnabled())) {
+    result += "\n" + dumpRecordsDbg();
+  }
+  return result;
 }
 
 std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
@@ -1203,10 +1250,31 @@ void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
   if (!needRecordDbg(true)) {
     return;
   }
-  std::lock_guard<std::mutex> l(debugAllocMutex_);
-  debugAllocRecords_.emplace(
-      reinterpret_cast<uint64_t>(addr),
-      AllocationRecord{size, process::StackTrace()});
+  AllocationRecord allocationRecord{size, process::StackTrace()};
+  std::lock_guard<std::mutex> debugAllocLock(debugAllocMutex_);
+  auto [it, inserted] = debugAllocRecords_.try_emplace(
+      reinterpret_cast<uint64_t>(addr), std::move(allocationRecord));
+  VELOX_CHECK(inserted);
+  if (debugOptions_->debugPoolWarnThresholdBytes == 0 ||
+      debugWarnThresholdExceeded_) {
+    return;
+  }
+  const auto usedBytes = reservedBytes();
+  if (usedBytes >= debugOptions_->debugPoolWarnThresholdBytes) {
+    debugWarnThresholdExceeded_ = true;
+    VELOX_MEM_LOG(WARNING) << fmt::format(
+        "[MemoryPool] Memory pool '{}' exceeded warning threshold of {} with allocation of {}, resulting in total size of {}.\n"
+        "======== Allocation Stack ========\n"
+        "{}\n"
+        "======= Current Allocations ======\n"
+        "{}",
+        name_,
+        succinctBytes(debugOptions_->debugPoolWarnThresholdBytes),
+        succinctBytes(size),
+        succinctBytes(usedBytes),
+        it->second.callStack.toString(),
+        dumpRecordsDbgLocked());
+  }
 }
 
 void MemoryPoolImpl::recordAllocDbg(const Allocation& allocation) {
@@ -1239,16 +1307,17 @@ void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
   const auto allocRecord = allocResult->second;
   if (allocRecord.size != size) {
     const auto freeStackTrace = process::StackTrace().toString();
-    VELOX_FAIL(fmt::format(
-        "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
-        "======== Allocation Stack ========\n"
-        "{}\n"
-        "============ Free Stack ==========\n"
-        "{}\n",
-        size,
-        allocRecord.size,
-        allocRecord.callStack.toString(),
-        freeStackTrace));
+    VELOX_FAIL(
+        fmt::format(
+            "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
+            "======== Allocation Stack ========\n"
+            "{}\n"
+            "============ Free Stack ==========\n"
+            "{}\n",
+            size,
+            allocRecord.size,
+            allocRecord.callStack.toString(),
+            freeStackTrace));
   }
   debugAllocRecords_.erase(addrUint64);
 }
@@ -1288,10 +1357,79 @@ void MemoryPoolImpl::leakCheckDbg() {
   if (debugAllocRecords_.empty()) {
     return;
   }
-  std::stringbuf buf;
-  std::ostream oss(&buf);
-  oss << "[MemoryPool] : " << name_ << " - Detected total of "
-      << debugAllocRecords_.size() << " leaked allocations:\n";
+  VELOX_FAIL(
+      fmt::format(
+          "[MemoryPool] Leak check failed for '{}' pool - {}",
+          name_,
+          dumpRecordsDbg()));
+}
+
+void MemoryPoolImpl::treeAllocationRecordsDbg(
+    std::vector<MemoryPoolDump>& poolDumps) const {
+  VELOX_CHECK(debugEnabled());
+  {
+    std::lock_guard<std::mutex> debugAllocLock(debugAllocMutex_);
+    if (!debugAllocRecords_.empty()) {
+      MemoryPoolDump dump{
+          .dumpedRecords = fmt::format(
+              "Memory pool '{}' - {}", name(), dumpRecordsDbgLocked()),
+          .bytes = reservedBytes(),
+      };
+      poolDumps.emplace_back(std::move(dump));
+    }
+  }
+  if (isLeaf()) {
+    return;
+  }
+  visitChildren([&poolDumps](MemoryPool* pool) {
+    toImpl(pool)->treeAllocationRecordsDbg(poolDumps);
+    return true;
+  });
+}
+
+std::exception_ptr MemoryPoolImpl::wrapExceptionDbg(
+    const VeloxRuntimeError& veloxError) const {
+  VELOX_CHECK(debugEnabled());
+  VELOX_CHECK(isRoot());
+  std::vector<MemoryPoolDump> poolAllocationsSorted;
+  treeAllocationRecordsDbg(poolAllocationsSorted);
+  std::stringstream oss;
+  if (poolAllocationsSorted.empty()) {
+    oss << "No allocation records found.";
+  } else {
+    std::sort(
+        poolAllocationsSorted.begin(),
+        poolAllocationsSorted.end(),
+        [](const auto& a, const auto& b) { return a.bytes > b.bytes; });
+    for (const auto& record : poolAllocationsSorted) {
+      oss << record.dumpedRecords << "\n\n";
+    }
+  }
+  const auto wrappedMessage = fmt::format(
+      "{}\n\n"
+      "======= Current Allocations ======\n"
+      "{}",
+      veloxError.message(),
+      oss.str());
+  return std::make_exception_ptr(VeloxRuntimeError(
+      veloxError.file(),
+      veloxError.line(),
+      veloxError.function(),
+      veloxError.failingExpression(),
+      wrappedMessage,
+      veloxError.errorSource(),
+      veloxError.errorCode(),
+      veloxError.isRetriable(),
+      veloxError.exceptionName()));
+}
+
+std::string MemoryPoolImpl::dumpRecordsDbgLocked() const {
+  VELOX_CHECK(debugEnabled());
+  std::stringstream oss;
+  oss << fmt::format(
+      "Found {} allocations with {} total size:\n",
+      debugAllocRecords_.size(),
+      succinctBytes(reservedBytes()));
   struct AllocationStats {
     uint64_t size{0};
     uint64_t numAllocations{0};
@@ -1316,12 +1454,13 @@ void MemoryPoolImpl::leakCheckDbg() {
         return a.second.size > b.second.size;
       });
   for (const auto& pair : sortedRecords) {
-    oss << "======== Leaked memory from " << pair.second.numAllocations
-        << " total allocations of " << succinctBytes(pair.second.size)
-        << " total size ========\n"
-        << pair.first << "\n";
+    oss << fmt::format(
+        "======== {} allocations of {} total size ========\n{}\n",
+        pair.second.numAllocations,
+        succinctBytes(pair.second.size),
+        pair.first);
   }
-  VELOX_FAIL(buf.str());
+  return oss.str();
 }
 
 void MemoryPoolImpl::handleAllocationFailure(

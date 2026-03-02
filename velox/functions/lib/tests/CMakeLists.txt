@@ -17,23 +17,29 @@ add_executable(
   ArrayRemoveNullsTest.cpp
   CheckNestedNullsTest.cpp
   DateTimeFormatterTest.cpp
+  HllAccumulatorTest.cpp
   IsNullTest.cpp
   IsNotNullTest.cpp
+  KHyperLogLogTest.cpp
   KllSketchTest.cpp
   LambdaFunctionUtilTest.cpp
+  MakeRowFromMapTest.cpp
   MapConcatTest.cpp
   QuantileDigestTest.cpp
   Re2FunctionsTest.cpp
   RepeatTest.cpp
+  SetDigestTest.cpp
   TDigestTest.cpp
   TimeUtilsTest.cpp
   Utf8Test.cpp
-  ZetaDistributionTest.cpp)
+  ZetaDistributionTest.cpp
+)
 
 add_test(
   NAME velox_functions_lib_test
   COMMAND velox_functions_lib_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 target_link_libraries(
   velox_functions_lib_test
@@ -46,4 +52,5 @@ target_link_libraries(
   velox_dwio_common_test_utils
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock)
+  GTest::gmock
+)

@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <cstdint>
 
 namespace facebook::velox {
@@ -34,6 +35,7 @@ struct FileProperties {
   std::optional<int64_t> modificationTime;
   std::optional<int64_t> readRangeHint{std::nullopt};
   std::shared_ptr<std::string> extraFileInfo{nullptr};
+  folly::F14FastMap<std::string, std::string> fileReadOps{};
 };
 
 } // namespace facebook::velox

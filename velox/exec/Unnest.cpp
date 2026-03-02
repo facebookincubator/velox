@@ -41,11 +41,12 @@ Unnest::Unnest(
           operatorId,
           unnestNode->id(),
           "Unnest"),
-      withOrdinality_(unnestNode->withOrdinality()),
+      withOrdinality_(unnestNode->hasOrdinality()),
+      withMarker_(unnestNode->hasMarker()),
       maxOutputSize_(
           driverCtx->queryConfig().unnestSplitOutput()
               ? outputBatchRows()
-              : std::numeric_limits<uint32_t>::max()) {
+              : std::numeric_limits<vector_size_t>::max()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
@@ -58,9 +59,17 @@ Unnest::Unnest(
   }
   unnestDecoded_.resize(unnestVariables.size());
 
+  column_index_t checkOutputChannel = outputType_->size() - 1;
+  if (withMarker_) {
+    VELOX_CHECK_EQ(
+        outputType_->childAt(checkOutputChannel),
+        BOOLEAN(),
+        "Marker column should be BOOLEAN type.");
+    --checkOutputChannel;
+  }
   if (withOrdinality_) {
     VELOX_CHECK_EQ(
-        outputType_->children().back(),
+        outputType_->childAt(checkOutputChannel),
         BIGINT(),
         "Ordinality column should be BIGINT type.");
   }
@@ -143,9 +152,7 @@ RowVectorPtr Unnest::getOutput() {
   // might be split into multiple batches.
   const auto rowRange = extractRowRange(numInputRows);
   if (rowRange.numInnerRows == 0) {
-    // All arrays/maps are null or empty.
-    input_ = nullptr;
-    nextInputRow_ = 0;
+    finishInput();
     maybeFinishDrain();
     return nullptr;
   }
@@ -162,22 +169,35 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   if (nextInputRow_ >= numInputRows) {
-    input_ = nullptr;
-    nextInputRow_ = 0;
+    finishInput();
   }
   debugCheckOutput(output);
   return output;
+}
+
+void Unnest::finishInput() {
+  input_ = nullptr;
+  nextInputRow_ = 0;
+  firstInnerRowStart_ = 0;
 }
 
 Unnest::RowRange Unnest::extractRowRange(vector_size_t inputSize) const {
   vector_size_t numInputRows{0};
   vector_size_t numInnerRows{0};
   std::optional<vector_size_t> lastInnerRowEnd;
+  bool hasEmptyUnnestValue{false};
   for (auto inputRow = nextInputRow_; inputRow < inputSize; ++inputRow) {
     const bool isFirstRow = (inputRow == nextInputRow_);
-    const vector_size_t remainingInnerRows = isFirstRow
+    vector_size_t remainingInnerRows = isFirstRow
         ? rawMaxSizes_[inputRow] - firstInnerRowStart_
         : rawMaxSizes_[inputRow];
+    if (rawMaxSizes_[inputRow] == 0) {
+      VELOX_CHECK_EQ(remainingInnerRows, 0);
+      hasEmptyUnnestValue = true;
+      if (withMarker_) {
+        remainingInnerRows = 1;
+      }
+    }
     ++numInputRows;
     if (numInnerRows + remainingInnerRows > maxOutputSize_) {
       // A single row's output needs to be split into multiple batches.
@@ -198,8 +218,14 @@ Unnest::RowRange Unnest::extractRowRange(vector_size_t inputSize) const {
       break;
     }
   }
+  VELOX_DCHECK_GE(numInnerRows, 0);
   VELOX_DCHECK_LE(numInnerRows, maxOutputSize_);
-  return {nextInputRow_, numInputRows, lastInnerRowEnd, numInnerRows};
+  return {
+      nextInputRow_,
+      numInputRows,
+      lastInnerRowEnd,
+      numInnerRows,
+      hasEmptyUnnestValue};
 };
 
 void Unnest::generateRepeatedColumns(
@@ -208,18 +234,40 @@ void Unnest::generateRepeatedColumns(
   // Create "indices" buffer to repeat rows as many times as there are elements
   // in the array (or map) in unnestDecoded.
   auto repeatedIndices = allocateIndices(range.numInnerRows, pool());
-  auto* rawRepeatedIndices = repeatedIndices->asMutable<vector_size_t>();
-  vector_size_t index = 0;
-  VELOX_DCHECK_GT(range.numInputRows, 0);
+  vector_size_t* rawRepeatedIndices =
+      repeatedIndices->asMutable<vector_size_t>();
+
+  const bool generateMarker = withMarker_ && range.hasEmptyUnnestValue;
+  vector_size_t index{0};
+  VELOX_CHECK_GT(range.numInputRows, 0);
   // Record the row number to process.
-  range.forEachRow(
-      [&](vector_size_t row, vector_size_t /*start*/, vector_size_t size) {
-        std::fill(
-            rawRepeatedIndices + index, rawRepeatedIndices + index + size, row);
-        index += size;
-      },
-      rawMaxSizes_,
-      firstInnerRowStart_);
+  if (generateMarker) {
+    range.forEachRow(
+        [&](vector_size_t row, vector_size_t /*start*/, vector_size_t size) {
+          if (FOLLY_UNLIKELY(size == 0)) {
+            rawRepeatedIndices[index++] = row;
+          } else {
+            std::fill(
+                rawRepeatedIndices + index,
+                rawRepeatedIndices + index + size,
+                row);
+            index += size;
+          }
+        },
+        rawMaxSizes_,
+        firstInnerRowStart_);
+  } else {
+    range.forEachRow(
+        [&](vector_size_t row, vector_size_t /*start*/, vector_size_t size) {
+          std::fill(
+              rawRepeatedIndices + index,
+              rawRepeatedIndices + index + size,
+              row);
+          index += size;
+        },
+        rawMaxSizes_,
+        firstInnerRowStart_);
+  }
 
   // Wrap "replicated" columns in a dictionary using 'repeatedIndices'.
   for (const auto& projection : identityProjections_) {
@@ -253,7 +301,10 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   range.forEachRow(
       [&](vector_size_t row, vector_size_t start, vector_size_t size) {
         const auto end = start + size;
-        if (!currentDecoded.isNullAt(row)) {
+        if (size == 0 && withMarker_) {
+          identityMapping = false;
+          bits::setNull(rawNulls, index++, true);
+        } else if (!currentDecoded.isNullAt(row)) {
           const auto offset = currentOffsets[currentIndices[row]];
           const auto unnestSize = currentSizes[currentIndices[row]];
           // The 'identityMapping' is false when there exists a partially
@@ -266,7 +317,6 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
           for (auto i = start; i < currentUnnestSize; ++i) {
             rawInnerRowIndices[index++] = offset + i;
           }
-
           for (auto i = std::max(start, currentUnnestSize); i < end; ++i) {
             bits::setNull(rawNulls, index++, true);
           }
@@ -284,24 +334,79 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
 }
 
 VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
+  VELOX_DCHECK_GT(range.numInputRows, 0);
+
   auto ordinalityVector = BaseVector::create<FlatVector<int64_t>>(
       BIGINT(), range.numInnerRows, pool());
 
   // Set the ordinality at each result row to be the index of the element in
   // the original array (or map) plus one.
   auto* rawOrdinality = ordinalityVector->mutableRawValues();
+  const bool hasMarker = withMarker_ && range.hasEmptyUnnestValue;
+  if (!hasMarker) {
+    range.forEachRow(
+        [&](vector_size_t /*row*/, vector_size_t start, vector_size_t size) {
+          std::iota(rawOrdinality, rawOrdinality + size, start + 1);
+          rawOrdinality += size;
+        },
+        rawMaxSizes_,
+        firstInnerRowStart_);
+  } else {
+    range.forEachRow(
+        [&](vector_size_t /*row*/, vector_size_t start, vector_size_t size) {
+          if (FOLLY_LIKELY(size > 0)) {
+            std::iota(rawOrdinality, rawOrdinality + size, start + 1);
+            rawOrdinality += size;
+          } else {
+            // Set ordinality to 0 for output row with empty unnest value.
+            //
+            // NOTE: for non-empty unnest value row, the ordinality starts
+            // from 1.
+            VELOX_DCHECK_EQ(size, 0);
+            *rawOrdinality++ = 0;
+          }
+        },
+        rawMaxSizes_,
+        firstInnerRowStart_);
+  }
+  return ordinalityVector;
+}
 
+VectorPtr Unnest::generateMarkerVector(const RowRange& range) {
+  VELOX_CHECK(withMarker_);
   VELOX_DCHECK_GT(range.numInputRows, 0);
 
+  if (!range.hasEmptyUnnestValue) {
+    return BaseVector::createConstant(
+        BOOLEAN(), true, range.numInnerRows, pool());
+  }
+
+  // Create a vector with all elements set to true initially assuming most
+  // output rows have non-empty unnest values.
+  auto markerBuffer =
+      velox::AlignedBuffer::allocate<bool>(range.numInnerRows, pool(), true);
+  auto markerVector = std::make_shared<velox::FlatVector<bool>>(
+      pool(),
+      /*type=*/BOOLEAN(),
+      /*nulls=*/nullptr,
+      range.numInnerRows,
+      /*values=*/std::move(markerBuffer),
+      /*stringBuffers=*/std::vector<velox::BufferPtr>{});
+  // Set each output row with empty unnest values to false.
+  auto* const rawMarker = markerVector->mutableRawValues<uint64_t>();
+  size_t index{0};
   range.forEachRow(
       [&](vector_size_t /*row*/, vector_size_t start, vector_size_t size) {
-        std::iota(rawOrdinality, rawOrdinality + size, start + 1);
-        rawOrdinality += size;
+        if (size > 0) {
+          index += size;
+        } else {
+          VELOX_DCHECK_EQ(size, 0);
+          bits::setBit(rawMarker, index++, false);
+        }
       },
       rawMaxSizes_,
       firstInnerRowStart_);
-
-  return ordinalityVector;
+  return markerVector;
 }
 
 RowVectorPtr Unnest::generateOutput(const RowRange& range) {
@@ -309,7 +414,7 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
   generateRepeatedColumns(range, outputs);
 
   // Create unnest columns.
-  vector_size_t outputColumnIndex = identityProjections_.size();
+  column_index_t outputColumnIndex = identityProjections_.size();
   for (auto channel = 0; channel < unnestChannels_.size(); ++channel) {
     const auto unnestChannelEncoding =
         generateEncodingForChannel(channel, range);
@@ -332,9 +437,12 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
     }
   }
 
+  // 'Ordinality' and 'EmptyUnnestValue' columns are always at the end.
   if (withOrdinality_) {
-    // Ordinality column is always at the end.
-    outputs.back() = generateOrdinalityVector(range);
+    outputs[outputColumnIndex++] = generateOrdinalityVector(range);
+  }
+  if (withMarker_) {
+    outputs[outputColumnIndex++] = generateMarkerVector(range);
   }
 
   return std::make_shared<RowVector>(
@@ -381,11 +489,11 @@ bool Unnest::isFinished() {
 }
 
 void Unnest::RowRange::forEachRow(
-    std::function<void(
+    const std::function<void(
         vector_size_t /*row*/,
         vector_size_t /*start*/,
-        vector_size_t /*size*/)> func,
-    const vector_size_t* const rawMaxSizes,
+        vector_size_t /*size*/)>& func,
+    const vector_size_t* rawMaxSizes,
     vector_size_t firstInnerRowStart) const {
   // Process the first row.
   const auto firstInnerRowEnd = numInputRows == 1 && lastInnerRowEnd.has_value()

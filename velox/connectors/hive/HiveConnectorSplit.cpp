@@ -30,6 +30,10 @@ std::string HiveConnectorSplit::toString() const {
   return fmt::format("Hive: {} {} - {}", filePath, start, length);
 }
 
+uint64_t HiveConnectorSplit::size() const {
+  return length;
+}
+
 std::string HiveConnectorSplit::getFileName() const {
   const auto i = filePath.rfind('/');
   return i == std::string::npos ? filePath : filePath.substr(i + 1);
@@ -144,8 +148,10 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
     std::vector<std::shared_ptr<HiveColumnHandle>> bucketColumnHandles;
     for (const auto& bucketColumnHandleObj :
          bucketConversionObj["bucketColumnHandles"]) {
-      bucketColumnHandles.push_back(std::const_pointer_cast<HiveColumnHandle>(
-          ISerializable::deserialize<HiveColumnHandle>(bucketColumnHandleObj)));
+      bucketColumnHandles.push_back(
+          std::const_pointer_cast<HiveColumnHandle>(
+              ISerializable::deserialize<HiveColumnHandle>(
+                  bucketColumnHandleObj)));
     }
     bucketConversion = HiveBucketConversion{
         .tableBucketCount = static_cast<int32_t>(

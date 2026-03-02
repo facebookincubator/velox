@@ -16,6 +16,7 @@
 
 #include <fcntl.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/system/HardwareConcurrency.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
@@ -168,8 +169,9 @@ TEST(InMemoryFile, preadv) {
   std::vector<std::string> values;
   values.reserve(iobufs.size());
   for (auto& iobuf : iobufs) {
-    values.push_back(std::string{
-        reinterpret_cast<const char*>(iobuf.data()), iobuf.length()});
+    values.push_back(
+        std::string{
+            reinterpret_cast<const char*>(iobuf.data()), iobuf.length()});
   }
 
   EXPECT_EQ(expected, values);
@@ -187,9 +189,7 @@ class LocalFileTest : public ::testing::TestWithParam<bool> {
   const bool useFaultyFs_;
   const std::unique_ptr<folly::CPUThreadPoolExecutor> executor_ =
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::max(
-              1,
-              static_cast<int32_t>(std::thread::hardware_concurrency() / 2)),
+          std::max(1, static_cast<int32_t>(folly::hardware_concurrency() / 2)),
           std::make_shared<folly::NamedThreadFactory>(
               "LocalFileReadAheadTest"));
 };

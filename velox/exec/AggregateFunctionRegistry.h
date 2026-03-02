@@ -22,11 +22,41 @@
 
 namespace facebook::velox::exec {
 
-/// Given a name of aggregate function and argument types, returns a pair of the
-/// return type and intermediate type if the function exists. Returns a pair of
-/// nullptr otherwise.
-std::pair<TypePtr, TypePtr> resolveAggregateFunction(
-    const std::string& functionName,
+/// Given a name of aggregate function and argument types, returns the result
+/// type if the function exists. Throws if function doesn't exist or doesn't
+/// support specified argument types. Since aggregate functions can be
+/// integrated into internal steps of an aggregate operator — rather than
+/// always being used as standalone functions at the SQL level — their result
+/// types may not always be inferable from the intermediate types. As a
+/// result, an exception might be thrown during the type resolution process. In
+/// such cases, the caller should explicitly specify the result type. More
+/// details can be found in
+/// https://github.com/facebookincubator/velox/pull/11999#issuecomment-3274577979
+/// and https://github.com/facebookincubator/velox/issues/12830.
+TypePtr resolveResultType(
+    const std::string& name,
     const std::vector<TypePtr>& argTypes);
+
+/// Like 'resolveResultType', but with support for applying type conversions if
+/// a function signature doesn't match 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve a function successfully. Contains one entry per argument. The entry
+/// is null if no coercion is required for that argument. The entry is not null
+/// if coercion is necessary.
+TypePtr resolveResultTypeWithCoercions(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
+
+/// Given a name of aggregate function and argument types, returns the
+/// intermediate type if the function exists. Throws if function doesn't exist
+/// or doesn't support specified argument types.
+TypePtr resolveIntermediateType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes);
+
+/// Returns all the registered aggregation function names.
+std::vector<std::string> getAggregateFunctionNames();
 
 } // namespace facebook::velox::exec

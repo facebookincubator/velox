@@ -45,11 +45,12 @@ TEST_F(FunctionSignatureBuilderTest, basicTypeTests) {
 
   // Integer variables do not have to be used in the inputs, but in that case
   // must appear in the return.
-  ASSERT_NO_THROW(FunctionSignatureBuilder()
-                      .integerVariable("a")
-                      .returnType("DECIMAL(a, a)")
-                      .argumentType("integer")
-                      .build(););
+  ASSERT_NO_THROW(
+      FunctionSignatureBuilder()
+          .integerVariable("a")
+          .returnType("DECIMAL(a, a)")
+          .argumentType("integer")
+          .build(););
 
   VELOX_ASSERT_THROW(
       FunctionSignatureBuilder()
@@ -124,7 +125,7 @@ TEST_F(FunctionSignatureBuilderTest, typeParamTests) {
           .returnType("integer")
           .argumentType("row(..., varchar)")
           .build(),
-      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected COMMA");
+      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected ELLIPSIS");
 
   // Type params cant have type params.
   VELOX_ASSERT_THROW(
@@ -153,6 +154,60 @@ TEST_F(FunctionSignatureBuilderTest, anyInReturn) {
           .argumentType("T")
           .build(),
       "Type 'Any' cannot appear in return type");
+}
+
+TEST_F(FunctionSignatureBuilderTest, homogeneousRowInReturn) {
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("row(T, ...)")
+          .argumentType("T")
+          .build(),
+      "Homogeneous row cannot appear in return type");
+
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("array(row(bigint, ...))")
+          .argumentType("bigint")
+          .build(),
+      "Homogeneous row cannot appear in return type");
+}
+
+TEST_F(FunctionSignatureBuilderTest, variableArity) {
+  // .variableArity() requires at least one argument.
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .variableArity()
+          .build(),
+      "Variable arity requires at least one argument");
+
+  // .variableArity() can be used only once.
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .variableArity("bigint")
+          .variableArity("integer")
+          .build(),
+      "Cannot add arguments after variable arity argument");
+
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .variableArity()
+          .variableArity()
+          .build(),
+      "Only one variable arity argument is allowed");
+
+  // No arguments can be added after calling .variableArity().
+  VELOX_ASSERT_USER_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .variableArity("bigint")
+          .argumentType("boolean")
+          .build(),
+      "Cannot add arguments after variable arity argument");
 }
 
 TEST_F(FunctionSignatureBuilderTest, scalarConstantFlags) {

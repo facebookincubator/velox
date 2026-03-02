@@ -39,9 +39,9 @@ std::unique_ptr<ByteRleDecoder> createBooleanDecoder(
 
 TEST(ByteRle, simpleTest) {
   const unsigned char buffer[] = {0x61, 0x00, 0xfd, 0x44, 0x45, 0x46};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer))));
   std::vector<char> data(103);
   rle->next(data.data(), data.size(), nullptr);
 
@@ -54,9 +54,9 @@ TEST(ByteRle, simpleTest) {
 }
 
 TEST(ByteRle, nullTest) {
-  char buffer[258];
-  uint64_t nulls[5];
-  char result[266];
+  char buffer[258] = {'\0'};
+  uint64_t nulls[5] = {'\0'};
+  char result[266] = {'\0'};
   buffer[0] = -128;
   buffer[129] = -128;
   for (int32_t i = 0; i < 128; ++i) {
@@ -66,8 +66,8 @@ TEST(ByteRle, nullTest) {
   for (int32_t i = 0; i < 266; ++i) {
     bits::setNull(nulls, i, i < 10);
   }
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
           new SeekableArrayInputStream(buffer, sizeof(buffer))));
   rle->next(result, sizeof(result), nulls);
   for (size_t i = 0; i < sizeof(result); ++i) {
@@ -93,9 +93,9 @@ TEST(ByteRle, literalCrossBuffer) {
       0x09,
       0x07,
       0x10};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 6)));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer), 6)));
   std::vector<char> data(20);
   rle->next(data.data(), data.size(), nullptr);
 
@@ -109,9 +109,9 @@ TEST(ByteRle, literalCrossBuffer) {
 
 TEST(ByteRle, skipLiteralBufferUnderflowTest) {
   const unsigned char buffer[] = {0xf8, 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 4)));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer), 4)));
   std::vector<char> data(8);
   rle->next(data.data(), 3, nullptr);
   EXPECT_EQ(0x0, data[0]);
@@ -127,9 +127,9 @@ TEST(ByteRle, skipLiteralBufferUnderflowTest) {
 
 TEST(ByteRle, simpleRuns) {
   const unsigned char buffer[] = {0x0d, 0xff, 0x0d, 0xfe, 0x0d, 0xfd};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer))));
   std::vector<char> data(16);
   for (size_t i = 0; i < 3; ++i) {
     rle->next(data.data(), data.size(), nullptr);
@@ -145,9 +145,9 @@ TEST(ByteRle, splitHeader) {
       0x00, 0x01, 0xe0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
       0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 1)));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer), 1)));
   std::vector<char> data(35);
   rle->next(data.data(), data.size(), nullptr);
   for (size_t i = 0; i < 3; ++i) {
@@ -179,9 +179,9 @@ TEST(ByteRle, splitRuns) {
       0x0e,
       0x0f,
       0x10};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer))));
   std::vector<char> data(5);
   for (size_t i = 0; i < 3; ++i) {
     rle->next(data.data(), data.size(), nullptr);
@@ -227,9 +227,9 @@ TEST(ByteRle, testNulls) {
       0x0f,
       0x3d,
       0xdc};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 3)));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer), 3)));
   std::vector<char> data(16, -1);
   std::vector<uint64_t> nulls(1);
   for (size_t i = 0; i < data.size(); ++i) {
@@ -276,9 +276,9 @@ TEST(ByteRle, testAllNulls) {
       0x0f,
       0x3d,
       0xdc};
-  std::unique_ptr<ByteRleDecoder> rle =
-      createByteDecoder(std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+  std::unique_ptr<ByteRleDecoder> rle = createByteDecoder(
+      std::unique_ptr<SeekableInputStream>(
+          new SeekableArrayInputStream(buffer, std::size(buffer))));
   std::vector<char> data(16, -1);
   std::vector<uint64_t> allNull(1, bits::kNull64);
   std::vector<uint64_t> noNull(1, bits::kNotNull64);
@@ -413,7 +413,7 @@ TEST(ByteRle, testSkip) {
       0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
   };
   SeekableInputStream* const stream =
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer));
+      new SeekableArrayInputStream(buffer, std::size(buffer));
   std::unique_ptr<ByteRleDecoder> rle =
       createByteDecoder(std::unique_ptr<SeekableInputStream>(stream));
   std::vector<char> data(1);
@@ -570,7 +570,7 @@ TEST(ByteRle, testSeek) {
       0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
   };
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   const uint64_t fileLocs[] = {
       0,    0,    0,    0,    0,    2,    2,    2,    2,    4,    4,    4,
       4,    6,    6,    6,    6,    8,    8,    8,    8,    10,   10,   10,
@@ -907,7 +907,7 @@ TEST(ByteRle, testSeek) {
 
   // Seek to end
   std::vector<uint64_t> position;
-  position.push_back(VELOX_ARRAY_SIZE(buffer));
+  position.push_back(std::size(buffer));
   position.push_back(0);
   PositionProvider pp{position};
   rle->seekToRowGroup(pp);
@@ -916,7 +916,7 @@ TEST(ByteRle, testSeek) {
 
   // Seek to end + 1
   position.clear();
-  position.push_back(VELOX_ARRAY_SIZE(buffer));
+  position.push_back(std::size(buffer));
   position.push_back(1);
   PositionProvider pp2{position};
   rle->seekToRowGroup(pp2);
@@ -926,7 +926,7 @@ TEST(ByteRle, testSeek) {
 TEST(BooleanRle, simpleTest) {
   const unsigned char buffer[] = {0x61, 0xf0, 0xfd, 0x55, 0xAA, 0x55};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   std::vector<char> data(50);
   for (size_t i = 0; i < 16; ++i) {
@@ -951,7 +951,7 @@ TEST(BooleanRle, runsTest) {
   const unsigned char buffer[] = {
       0xf7, 0xff, 0x80, 0x3f, 0xe0, 0x0f, 0xf8, 0x03, 0xfe, 0x00};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   std::vector<char> data(72);
   rle->next(data.data(), data.size(), nullptr);
@@ -973,7 +973,7 @@ TEST(BooleanRle, runsTestWithNull) {
   const unsigned char buffer[] = {
       0xf7, 0xff, 0x80, 0x3f, 0xe0, 0x0f, 0xf8, 0x03, 0xfe, 0x00};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   std::vector<char> data(72);
   std::vector<uint64_t> nulls(bits::nwords(data.size()), bits::kNotNull64);
@@ -1089,7 +1089,7 @@ TEST(BooleanRle, skipTest) {
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   std::vector<char> data(1);
   for (size_t i = 0; i < 16384; i += 5) {
@@ -1200,7 +1200,7 @@ TEST(BooleanRle, skipTestWithNulls) {
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   raw_vector<char> data;
   data.resize(3);
@@ -1365,7 +1365,7 @@ TEST(BooleanRle, seekTest) {
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
 
   // Read all 16384 values and validate them.
@@ -1501,7 +1501,7 @@ TEST(BooleanRle, seekTestWithNulls) {
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71};
-  auto* stream = new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer));
+  auto* stream = new SeekableArrayInputStream(buffer, std::size(buffer));
   auto rle = createBooleanDecoder(std::unique_ptr<SeekableInputStream>(stream));
   ASSERT_EQ(stream->totalRead(), 0);
   auto lastTotalReadBytes = stream->totalRead();
@@ -1519,7 +1519,7 @@ TEST(BooleanRle, seekTestWithNulls) {
     EXPECT_EQ(0, bits::isBitSet(data.data(), i)) << "Output wrong at " << i;
   }
   rle->next(data.data(), data.size(), noNull.data());
-  ASSERT_EQ(getNumReadBytes(), VELOX_ARRAY_SIZE(buffer));
+  ASSERT_EQ(getNumReadBytes(), std::size(buffer));
   for (size_t i = 0; i < data.size(); ++i) {
     EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, bits::isBitSet(data.data(), i))
         << "Output wrong at " << i;
@@ -1573,7 +1573,7 @@ TEST(BooleanRle, seekBoolAndByteRLE) {
       0xf9, 0xf0, 0xf0, 0xf7, 0x1c, 0x71, 0xc1, 0x80};
 
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   std::vector<char> data(sizeof(num) / sizeof(char));
   rle->next(data.data(), data.size(), nullptr);
@@ -1596,7 +1596,7 @@ TEST(BooleanRle, seekBoolAndByteRLE) {
 TEST(BooleanRle, skipToEnd) {
   const unsigned char buffer[] = {0xfe, 0xff, 0xff};
   std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
+      new SeekableArrayInputStream(buffer, std::size(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   char value[1];
   rle->next(value, 1, nullptr);

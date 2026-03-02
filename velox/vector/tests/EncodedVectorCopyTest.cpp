@@ -17,6 +17,7 @@
 #include "velox/vector/EncodedVectorCopy.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/RandomSeed.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -54,8 +55,9 @@ void compareVectors(const VectorPtr& actual, const VectorPtr& expected) {
   }
   switch (actual->encoding()) {
     case VectorEncoding::Simple::DICTIONARY:
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actual->wrapInfo(), *expected->wrapInfo(), actual->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actual->wrapInfo(), *expected->wrapInfo(), actual->size()));
       compareVectors(actual->valueVector(), expected->valueVector());
       break;
     case VectorEncoding::Simple::ROW: {
@@ -69,10 +71,14 @@ void compareVectors(const VectorPtr& actual, const VectorPtr& expected) {
     case VectorEncoding::Simple::MAP: {
       auto* actualMap = actual->asChecked<MapVector>();
       auto* expectedMap = expected->asChecked<MapVector>();
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualMap->offsets(), *expectedMap->offsets(), actualMap->size()));
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualMap->sizes(), *expectedMap->sizes(), actualMap->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualMap->offsets(),
+              *expectedMap->offsets(),
+              actualMap->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualMap->sizes(), *expectedMap->sizes(), actualMap->size()));
       compareVectors(actualMap->mapKeys(), expectedMap->mapKeys());
       compareVectors(actualMap->mapValues(), expectedMap->mapValues());
       break;
@@ -80,12 +86,16 @@ void compareVectors(const VectorPtr& actual, const VectorPtr& expected) {
     case VectorEncoding::Simple::ARRAY: {
       auto* actualArray = actual->asChecked<ArrayVector>();
       auto* expectedArray = expected->asChecked<ArrayVector>();
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualArray->offsets(),
-          *expectedArray->offsets(),
-          actualArray->size()));
-      ASSERT_TRUE(bufferEqual<vector_size_t>(
-          *actualArray->sizes(), *expectedArray->sizes(), actualArray->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualArray->offsets(),
+              *expectedArray->offsets(),
+              actualArray->size()));
+      ASSERT_TRUE(
+          bufferEqual<vector_size_t>(
+              *actualArray->sizes(),
+              *expectedArray->sizes(),
+              actualArray->size()));
       compareVectors(actualArray->elements(), expectedArray->elements());
       break;
     }
@@ -553,8 +563,115 @@ TEST_P(EncodedVectorCopyTest, allNullsMap) {
   VectorPtr target = makeAllNullMapVector(3, BIGINT(), BIGINT());
   BaseVector::CopyRange range = {1, 2, 2};
   auto expected = makeAllNullMapVector(4, BIGINT(), BIGINT());
-  ;
   runTests(source, folly::Range(&range, 1), target, expected);
+}
+
+TEST_P(EncodedVectorCopyTest, flatMapVector) {
+  // Simple case
+  auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{1, 40}, {3, 50}},
+  });
+
+  {
+    SCOPED_TRACE("New full copy");
+    BaseVector::CopyRange range = {0, 0, source->size()};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(source, actual);
+  }
+  {
+    SCOPED_TRACE("New slice copy");
+    BaseVector::CopyRange range = {1, 0, 2};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(
+        source->slice(range.sourceIndex, range.count), actual);
+  }
+
+  // Null case.
+  source = vectorMaker_.flatMapVectorNullable<int64_t, int64_t>({
+      std::nullopt,
+      {{{1, 10}, {2, 20}}},
+      {{{3, std::nullopt}}},
+  });
+
+  {
+    SCOPED_TRACE("New full copy with nulls");
+    BaseVector::CopyRange range = {0, 0, source->size()};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(source, actual);
+  }
+  {
+    SCOPED_TRACE("Copy non-null slice");
+    BaseVector::CopyRange range = {1, 0, 2};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(
+        source->slice(range.sourceIndex, range.count), actual);
+  }
+
+  // Empty maps
+  source = vectorMaker_.flatMapVectorNullable<int64_t, int64_t>({
+      std::vector<std::pair<int64_t, std::optional<int64_t>>>{},
+      {{{1, 10}}},
+      std::vector<std::pair<int64_t, std::optional<int64_t>>>{},
+  });
+
+  {
+    SCOPED_TRACE("Empty maps");
+    BaseVector::CopyRange range = {0, 0, source->size()};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(source, actual);
+  }
+
+  // Copy non-contiguous ranges.
+  source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 20}},
+      {{3, 30}},
+      {{4, 40}},
+  });
+  {
+    SCOPED_TRACE("Non-contiguous ranges");
+    BaseVector::CopyRange ranges[] = {{0, 0, 1}, {2, 1, 2}};
+    VectorPtr actual;
+    copy(source, folly::Range(ranges, 2), actual);
+    test::assertEqualVectors(
+        vectorMaker_.flatMapVector<int64_t, int64_t>({
+            {{1, 10}},
+            {{3, 30}},
+            {{4, 40}},
+        }),
+        actual);
+  }
+
+  // Complex values
+  auto valueType = ROW({{"a", BIGINT()}});
+  auto mapType = MAP(INTEGER(), valueType);
+  auto distinctKeys = makeFlatVector<int32_t>({1, 2});
+  std::vector<VectorPtr> mapValues;
+  mapValues.push_back(makeRowVector({makeFlatVector<int64_t>({10, 20, 30})}));
+  mapValues.push_back(makeRowVector({makeFlatVector<int64_t>({40, 50, 60})}));
+  source = std::make_shared<FlatMapVector>(
+      pool(),
+      mapType,
+      nullptr,
+      3,
+      distinctKeys,
+      std::move(mapValues),
+      std::vector<BufferPtr>{nullptr, nullptr});
+
+  {
+    SCOPED_TRACE("Complex values");
+    BaseVector::CopyRange range = {0, 0, source->size()};
+    VectorPtr actual;
+    copy(source, folly::Range(&range, 1), actual);
+    test::assertEqualVectors(source, actual);
+  }
 }
 
 TEST_P(EncodedVectorCopyTest, flatArray) {
@@ -641,8 +758,10 @@ TEST_P(EncodedVectorCopyTest, fuzzer) {
       test::assertEqualVectors(
           source->slice(range.sourceIndex, range.count), target);
     }
+
     auto target = fuzzer.fuzz(type);
     range.targetIndex = folly::Random::rand32(0, target->size() - 1, rng);
+
     auto makeExpected = [&](auto& expected) {
       if (expected->size() < range.targetIndex + range.count) {
         expected->resize(range.targetIndex + range.count);
@@ -664,6 +783,37 @@ TEST_P(EncodedVectorCopyTest, fuzzer) {
       makeExpected(expected);
       test::assertEqualVectors(expected, target);
     }
+  }
+}
+
+TEST_P(EncodedVectorCopyTest, fuzzerNewCopy) {
+  VectorFuzzer::Options fuzzerOptions;
+  fuzzerOptions.allowFlatMapVector = true;
+  fuzzerOptions.allowLazyVector = reuseSource();
+  fuzzerOptions.nullRatio = 0.05;
+  auto seed = common::testutil::getRandomSeed(42);
+  VectorFuzzer fuzzer(fuzzerOptions, pool(), seed);
+  fuzzer::FuzzerGenerator rng(seed);
+  constexpr int kNumIterations = 10;
+  for (int i = 0; i < kNumIterations; ++i) {
+    auto type = fuzzer.randType();
+    SCOPED_TRACE(fmt::format("i={} type={}", i, type->toString()));
+    auto source = fuzzer.fuzz(type);
+    BaseVector::CopyRange range;
+    range.sourceIndex = folly::Random::rand32(source->size() - 1, rng);
+    range.count =
+        folly::Random::rand32(1, source->size() - range.sourceIndex, rng);
+    {
+      SCOPED_TRACE("Null target");
+      VectorPtr target;
+      range.targetIndex = 0;
+      copy(source, folly::Range(&range, 1), target);
+      test::assertEqualVectors(
+          source->slice(range.sourceIndex, range.count), target);
+    }
+
+    // Copy does not support copyInto non-null for FlatMapVector. Let's avoid
+    // throwing for these particular cases until there is support.
   }
 }
 

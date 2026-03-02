@@ -22,9 +22,7 @@
 #include <string>
 #include <vector>
 
-#include <folly/Range.h>
-
-#include "velox/type/TypeParser.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::type::fbhive {
 
@@ -78,7 +76,7 @@ struct TokenMetadata {
 
 struct Token {
   TokenMetadata* metadata;
-  folly::StringPiece value;
+  std::string_view value;
 
   TokenType tokenType() const;
 
@@ -94,25 +92,23 @@ struct Token {
 };
 
 struct TokenAndRemaining : public Token {
-  folly::StringPiece remaining;
+  std::string_view remaining;
 };
 
 struct Result {
-  std::shared_ptr<const velox::Type> type;
+  TypePtr type;
 };
 
 struct ResultList {
-  std::vector<std::shared_ptr<const velox::Type>> typelist;
+  std::vector<TypePtr> typelist;
   std::vector<std::string> names;
 };
 
-class HiveTypeParser : public type::TypeParser {
+class HiveTypeParser {
  public:
   HiveTypeParser();
 
-  ~HiveTypeParser() override = default;
-
-  std::shared_ptr<const velox::Type> parse(const std::string& ser) override;
+  TypePtr parse(std::string_view input);
 
  private:
   int8_t makeTokenId(TokenType tokenType) const;
@@ -128,12 +124,12 @@ class HiveTypeParser : public type::TypeParser {
   Token nextToken(bool ignorePredefined = false);
 
   TokenAndRemaining nextToken(
-      folly::StringPiece sp,
+      std::string_view sv,
       bool ignorePredefined = false) const;
 
   TokenAndRemaining makeExtendedToken(
       TokenMetadata* tokenMetadata,
-      folly::StringPiece sp,
+      std::string_view sv,
       size_t len) const;
 
   template <TokenType KIND, velox::TypeKind TYPEKIND>
@@ -151,9 +147,8 @@ class HiveTypeParser : public type::TypeParser {
 
   TokenMetadata* getMetadata(TokenType type) const;
 
- private:
   std::vector<std::unique_ptr<TokenMetadata>> metadata_;
-  folly::StringPiece remaining_;
+  std::string_view remaining_;
 };
 
 } // namespace facebook::velox::type::fbhive

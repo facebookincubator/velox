@@ -102,20 +102,18 @@ CompanionSignatures::partialFunctionSignatures(
     const std::vector<AggregateFunctionSignaturePtr>& signatures) {
   std::vector<AggregateFunctionSignaturePtr> partialSignatures;
   for (const auto& signature : signatures) {
-    if (!isResultTypeResolvableGivenIntermediateType(signature)) {
-      continue;
-    }
     std::vector<TypeSignature> usedTypes = signature->argumentTypes();
     usedTypes.push_back(signature->intermediateType());
     auto variables = usedTypeVariables(usedTypes, signature->variables());
 
-    partialSignatures.push_back(std::make_shared<AggregateFunctionSignature>(
-        /*variables*/ variables,
-        /*returnType*/ signature->intermediateType(),
-        /*intermediateType*/ signature->intermediateType(),
-        /*argumentTypes*/ signature->argumentTypes(),
-        /*constantArguments*/ signature->constantArguments(),
-        /*variableArity*/ signature->variableArity()));
+    partialSignatures.push_back(
+        std::make_shared<AggregateFunctionSignature>(
+            /*variables*/ variables,
+            /*returnType*/ signature->intermediateType(),
+            /*intermediateType*/ signature->intermediateType(),
+            /*argumentTypes*/ signature->argumentTypes(),
+            /*constantArguments*/ signature->constantArguments(),
+            /*variableArity*/ signature->variableArity()));
   }
   return partialSignatures;
 }
@@ -126,10 +124,6 @@ std::string CompanionSignatures::partialFunctionName(const std::string& name) {
 
 AggregateFunctionSignaturePtr CompanionSignatures::mergeFunctionSignature(
     const AggregateFunctionSignaturePtr& signature) {
-  if (!isResultTypeResolvableGivenIntermediateType(signature)) {
-    return nullptr;
-  }
-
   std::vector<TypeSignature> usedTypes = {signature->intermediateType()};
   auto variables = usedTypeVariables(usedTypes, signature->variables());
   return std::make_shared<AggregateFunctionSignature>(
@@ -172,10 +166,6 @@ bool CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
 AggregateFunctionSignaturePtr
 CompanionSignatures::mergeExtractFunctionSignature(
     const AggregateFunctionSignaturePtr& signature) {
-  if (!isResultTypeResolvableGivenIntermediateType(signature)) {
-    return nullptr;
-  }
-
   std::vector<TypeSignature> usedTypes = {
       signature->intermediateType(), signature->returnType()};
   auto variables = usedTypeVariables(usedTypes, signature->variables());

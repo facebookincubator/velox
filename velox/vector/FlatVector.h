@@ -37,10 +37,12 @@ class FlatVector final : public SimpleVector<T> {
   FlatVector(const FlatVector&) = delete;
   FlatVector& operator=(const FlatVector&) = delete;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
        std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
+#endif
 
   /// Minimum size of a string buffer. 32 KB value is chosen to ensure that a
   /// single buffer is sufficient for a "typical" vector: 1K rows, medium size
@@ -56,7 +58,7 @@ class FlatVector final : public SimpleVector<T> {
       velox::memory::MemoryPool* pool,
       const TypePtr& type,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       BufferPtr values,
       std::vector<BufferPtr>&& stringBuffers,
       const SimpleVectorStats<T>& stats = {},
@@ -103,28 +105,25 @@ class FlatVector final : public SimpleVector<T> {
       // immutable Buffer.
       values_->setSize(byteSize);
     }
-
-    BaseVector::inMemoryBytes_ += values_->capacity();
-    for (const auto& stringBuffer : stringBuffers_) {
-      BaseVector::inMemoryBytes_ += stringBuffer->capacity();
-    }
   }
 
   virtual ~FlatVector() override = default;
 
-  T valueAtFast(vector_size_t idx) const;
+  typename SimpleVector<T>::TValueAt valueAtFast(vector_size_t idx) const;
 
-  const T valueAt(vector_size_t idx) const override {
+  typename SimpleVector<T>::TValueAt valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
   }
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /// Loads a SIMD vector of data at the virtual byteOffset given
   /// Note this method is implemented on each vector type, but is intentionally
   /// not virtual for performance reasons.
   /// 'index' indicates the byte offset to load from
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+#endif
 
   /// dictionary vector makes internal usehere for SIMD functions
   template <typename X>
@@ -141,23 +140,23 @@ class FlatVector final : public SimpleVector<T> {
     return values_;
   }
 
-  /// Ensures that 'values_' is singly-referenced and has space for 'size'
-  /// elements. Sets elements between the old and new sizes to T() if
-  /// the new size > old size.
+  /// Ensures that 'values_' is singly-referenced and has space for the current
+  /// size of the Vector. Sets any newly added elements to T() if the new size >
+  /// old size.
   ///
   /// If 'values_' is nullptr, read-only, not uniquely-referenced, or doesn't
   /// have capacity for 'size' elements allocates new buffer and copies data to
   /// it. Updates 'rawValues_' to point to element 0 of
   /// values_->as<T>().
-  BufferPtr mutableValues(vector_size_t size) {
-    const auto numNewBytes = BaseVector::byteSize<T>(size);
+  BufferPtr mutableValues(vector_size_t /*ignored*/ = 0) {
+    const auto numNewBytes = BaseVector::byteSize<T>(BaseVector::length_);
     if (values_ && !values_->isView() && values_->unique()) {
       if (values_->size() < numNewBytes) {
-        AlignedBuffer::reallocate<T>(&values_, size, T());
+        AlignedBuffer::reallocate<T>(&values_, BaseVector::length_, T());
       }
     } else {
-      BufferPtr newValues =
-          AlignedBuffer::allocate<T>(size, BaseVector::pool(), T());
+      BufferPtr newValues = AlignedBuffer::allocate<T>(
+          BaseVector::length_, BaseVector::pool(), T());
       if (values_) {
         const auto numCopyBytes =
             std::min<vector_size_t>(values_->size(), numNewBytes);
@@ -182,10 +181,12 @@ class FlatVector final : public SimpleVector<T> {
     return values_;
   }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   /// Returns true if this number of comparison values on this vector should use
   /// simd for equality constraint filtering, false to use standard set
   /// examination filtering.
   bool useSimdEquality(size_t numCmpVals) const;
+#endif
 
   /// Returns the raw values of this vector as a continuous array.
   const T* rawValues() const;
@@ -288,6 +289,8 @@ class FlatVector final : public SimpleVector<T> {
         BaseVector::representedByteCount_,
         BaseVector::storageByteCount_);
   }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override;
 
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
@@ -414,21 +417,22 @@ class FlatVector final : public SimpleVector<T> {
     return this->typeKind() != TypeKind::UNKNOWN;
   }
 
-  uint64_t retainedSize() const override {
-    auto size =
-        BaseVector::retainedSize() + (values_ ? values_->capacity() : 0);
-    for (auto& buffer : stringBuffers_) {
-      size += buffer->capacity();
-    }
-    return size;
-  }
-
   /// Used for vectors of type VARCHAR and VARBINARY to hold data referenced
   /// by StringView's. It is safe to share these among multiple vectors. These
   /// buffers are append only. It is allowed to append data, but it is
   /// prohibited to modify already written data.
   const std::vector<BufferPtr>& stringBuffers() const {
     return stringBuffers_;
+  }
+
+  /// Used for vectors of type VARCHAR and VARBINARY. Returns the total size in
+  /// bytes of string buffers held by this vector.
+  uint64_t stringBufferSize() const {
+    uint64_t size = 0;
+    for (const auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+    }
+    return size;
   }
 
   /// Used for vectors of type VARCHAR and VARBINARY to replace the old data
@@ -555,10 +559,11 @@ class FlatVector final : public SimpleVector<T> {
       const vector_size_t* toSourceRow);
 
   // Ensures that the values buffer has space for 'newSize' elements and is
-  // mutable. Sets elements between the old and new sizes to 'initialValue' if
-  // the new size > old size.
+  // mutable. Sets elements between the previous and new sizes to 'initialValue'
+  // if the new size > previous size.
   void resizeValues(
       vector_size_t newSize,
+      vector_size_t previousSize,
       const std::optional<T>& initialValue);
 
   // Check string buffers. Keep at most one singly-referenced buffer if it is
@@ -576,6 +581,21 @@ class FlatVector final : public SimpleVector<T> {
     } else {
       clearStringBuffers();
     }
+  }
+
+  // Transfer or copy string buffers to 'pool'. Update StringViews in values_ to
+  // reference addresses in the new buffers. Non-StringView-typed FlatVector
+  // should not have string buffers.
+  void transferAndUpdateStringBuffers(velox::memory::MemoryPool* pool);
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    auto size =
+        BaseVector::retainedSizeImpl() + (values_ ? values_->capacity() : 0);
+    for (auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+      totalStringBufferSize += buffer->capacity();
+    }
+    return size;
   }
 
   // Contiguous values.
@@ -599,7 +619,8 @@ class FlatVector final : public SimpleVector<T> {
 };
 
 template <>
-bool FlatVector<bool>::valueAtFast(vector_size_t idx) const;
+SimpleVector<bool>::TValueAt FlatVector<bool>::valueAtFast(
+    vector_size_t idx) const;
 
 template <>
 const bool* FlatVector<bool>::rawValues() const;

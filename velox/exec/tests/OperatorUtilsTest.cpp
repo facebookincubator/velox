@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/MergeTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -48,7 +49,8 @@ class OperatorUtilsTest : public OperatorTestBase {
         std::move(planFragment),
         0,
         core::QueryCtx::create(executor_.get()),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     driver_ = Driver::testingCreate();
     driverCtx_ = std::make_unique<DriverCtx>(task_, 0, 0, 0, 0);
     driverCtx_->driver = driver_.get();
@@ -57,7 +59,8 @@ class OperatorUtilsTest : public OperatorTestBase {
   void gatherCopyTest(
       const std::shared_ptr<const RowType>& targetType,
       const std::shared_ptr<const RowType>& sourceType,
-      int numSources) {
+      int numSources,
+      bool flattenSources = true) {
     folly::Random::DefaultGenerator rng(1);
     const int kNumRows = 500;
     const int kNumColumns = sourceType->size();
@@ -65,8 +68,9 @@ class OperatorUtilsTest : public OperatorTestBase {
     // Build source vectors with nulls.
     std::vector<RowVectorPtr> sources;
     for (int i = 0; i < numSources; ++i) {
-      sources.push_back(std::static_pointer_cast<RowVector>(
-          BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
+      sources.push_back(
+          std::static_pointer_cast<RowVector>(
+              BatchMaker::createBatch(sourceType, kNumRows, *pool_)));
       for (int j = 0; j < kNumColumns; ++j) {
         auto vector = sources.back()->childAt(j);
         int nullRow = (folly::Random::rand32() % kNumRows) / 4;
@@ -75,6 +79,23 @@ class OperatorUtilsTest : public OperatorTestBase {
           nullRow +=
               std::max<int>(1, (folly::Random::rand32() % kNumColumns) / 4);
         }
+      }
+    }
+
+    if (!flattenSources) {
+      for (int i = 0; i < numSources; ++i) {
+        const auto source = sources[i];
+        const auto numRows = source->size();
+        std::vector<vector_size_t> sortIndices(numRows, 0);
+        for (auto i = 0; i < numRows; ++i) {
+          sortIndices[i] = i;
+        }
+        BufferPtr indices = allocateIndices(numRows, pool_.get());
+        auto rawIndices = indices->asMutable<vector_size_t>();
+        for (size_t i = 0; i < numRows; ++i) {
+          rawIndices[i] = sortIndices[i];
+        }
+        sources[i] = wrap(numRows, indices, source);
       }
     }
 
@@ -129,6 +150,61 @@ class OperatorUtilsTest : public OperatorTestBase {
                 source, targetIndex + j, sourceIndices[j]));
           }
         }
+      }
+    }
+  }
+
+  void gatherMergeTest(
+      int32_t numValues,
+      int numMergeWays,
+      int targetSize,
+      bool useRandom) {
+    auto goldenVector = makeRowVector({
+        makeFlatVector<int32_t>(numValues, [&](auto row) { return row; }),
+    });
+    std::vector<std::vector<int32_t>> mergeWays(numMergeWays);
+    for (int32_t value = 0; value < numValues; value++) {
+      int way = useRandom ? folly::Random::rand32() % numMergeWays
+                          : value % numMergeWays;
+      mergeWays[way].push_back(value);
+    }
+    std::vector<RowVectorPtr> sources;
+    std::vector<std::unique_ptr<SpillMergeStream>> streams;
+    std::vector<SpillSortKey> sortKeys = {{0, {true, true}}};
+    for (int way = 0; way < numMergeWays; way++) {
+      auto source = makeRowVector({
+          makeFlatVector<int32_t>(
+              mergeWays[way].size(),
+              [&](auto row) { return mergeWays[way][row]; }),
+      });
+      sources.push_back(source);
+      streams.push_back(
+          std::make_unique<TestingSpillMergeStream>(way, sortKeys, source));
+    }
+    auto mergeTree =
+        std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+    RowVectorPtr targetVector = std::static_pointer_cast<RowVector>(
+        BaseVector::create(sources[0]->type(), targetSize, pool_.get()));
+    std::vector<const RowVector*> bufferSources(targetSize);
+    std::vector<vector_size_t> bufferSourceIndices(targetSize);
+    for (int32_t batch = 0; batch * targetSize < numValues; batch++) {
+      int32_t valueBegin = batch * targetSize;
+      int32_t valueEnd = valueBegin + targetSize;
+      valueEnd = std::min(valueEnd, numValues);
+      VectorPtr tmp = std::move(targetVector);
+      BaseVector::prepareForReuse(tmp, targetSize);
+      targetVector = std::static_pointer_cast<RowVector>(tmp);
+      for (auto& child : targetVector->children()) {
+        child->resize(targetSize);
+      }
+      int count = 0;
+      testingGatherMerge(
+          targetVector, *mergeTree, count, bufferSources, bufferSourceIndices);
+      EXPECT_EQ(count, valueEnd - valueBegin);
+      auto result = targetVector->childAt(0).get();
+      auto golden = goldenVector->childAt(0).get();
+      for (int32_t row = 0; row < valueEnd - valueBegin; row++) {
+        EXPECT_TRUE(result->equalValueAt(golden, row, valueBegin + row));
       }
     }
   }
@@ -373,6 +449,67 @@ TEST_F(OperatorUtilsTest, gatherCopy) {
   }
 }
 
+TEST_F(OperatorUtilsTest, gatherCopyEncoding) {
+  std::shared_ptr<const RowType> rowType;
+  std::shared_ptr<const RowType> reversedRowType;
+  {
+    std::vector<std::string> names = {
+        "bool_val",
+        "tiny_val",
+        "small_val",
+        "int_val",
+        "long_val",
+        "ordinal",
+        "float_val",
+        "double_val",
+        "string_val",
+        "array_val",
+        "struct_val",
+        "map_val"};
+    std::vector<std::string> reversedNames = names;
+    std::reverse(reversedNames.begin(), reversedNames.end());
+
+    std::vector<std::shared_ptr<const Type>> types = {
+        BOOLEAN(),
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        BIGINT(),
+        REAL(),
+        DOUBLE(),
+        VARCHAR(),
+        ARRAY(VARCHAR()),
+        ROW({{"s_int", INTEGER()}, {"s_array", ARRAY(REAL())}}),
+        MAP(VARCHAR(),
+            MAP(BIGINT(),
+                ROW({{"s2_int", INTEGER()}, {"s2_string", VARCHAR()}})))};
+    std::vector<std::shared_ptr<const Type>> reversedTypes = types;
+    std::reverse(reversedTypes.begin(), reversedTypes.end());
+
+    rowType = ROW(std::move(names), std::move(types));
+    reversedRowType = ROW(std::move(reversedNames), std::move(reversedTypes));
+  }
+
+  // Gather copy with identical column mapping.
+  gatherCopyTest(rowType, rowType, 1, false);
+  gatherCopyTest(rowType, rowType, 5, false);
+  // Gather copy with non-identical column mapping.
+  gatherCopyTest(rowType, reversedRowType, 1, false);
+  gatherCopyTest(rowType, reversedRowType, 5, false);
+}
+
+TEST_F(OperatorUtilsTest, gatherMerge) {
+  gatherMergeTest(1234, 2, 10, false);
+  gatherMergeTest(1234, 2, 100, false);
+  gatherMergeTest(1234, 10, 10, false);
+  gatherMergeTest(1234, 10, 100, false);
+  gatherMergeTest(1234, 2, 10, true);
+  gatherMergeTest(1234, 2, 100, true);
+  gatherMergeTest(1234, 10, 10, true);
+  gatherMergeTest(1234, 10, 100, true);
+}
+
 TEST_F(OperatorUtilsTest, makeOperatorSpillPath) {
   EXPECT_EQ("spill/3_1_100", makeOperatorSpillPath("spill", 3, 1, 100));
 }
@@ -445,6 +582,36 @@ TEST_F(OperatorUtilsTest, addOperatorRuntimeStats) {
   ASSERT_EQ(stats[statsName].count, 3);
   ASSERT_EQ(stats[statsName].sum, 500);
   ASSERT_EQ(stats[statsName].max, 200);
+  ASSERT_EQ(stats[statsName].min, 100);
+}
+
+TEST_F(OperatorUtilsTest, setOperatorRuntimeStats) {
+  std::unordered_map<std::string, RuntimeMetric> stats;
+  const std::string statsName("stats");
+  const RuntimeCounter minStatsValue(100, RuntimeCounter::Unit::kBytes);
+  const RuntimeCounter maxStatsValue(200, RuntimeCounter::Unit::kBytes);
+  setOperatorRuntimeStats(statsName, minStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 1);
+  ASSERT_EQ(stats[statsName].sum, 100);
+  ASSERT_EQ(stats[statsName].max, 100);
+  ASSERT_EQ(stats[statsName].min, 100);
+
+  setOperatorRuntimeStats(statsName, maxStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 1);
+  ASSERT_EQ(stats[statsName].sum, 200);
+  ASSERT_EQ(stats[statsName].max, 200);
+  ASSERT_EQ(stats[statsName].min, 200);
+
+  addOperatorRuntimeStats(statsName, maxStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 2);
+  ASSERT_EQ(stats[statsName].sum, 400);
+  ASSERT_EQ(stats[statsName].max, 200);
+  ASSERT_EQ(stats[statsName].min, 200);
+
+  setOperatorRuntimeStats(statsName, minStatsValue, stats);
+  ASSERT_EQ(stats[statsName].count, 1);
+  ASSERT_EQ(stats[statsName].sum, 100);
+  ASSERT_EQ(stats[statsName].max, 100);
   ASSERT_EQ(stats[statsName].min, 100);
 }
 
@@ -527,6 +694,52 @@ TEST_F(OperatorUtilsTest, projectChildren) {
       ASSERT_EQ(
           projectedChildren[projection.outputChannel].get(),
           srcRowVector->childAt(projection.inputChannel).get());
+    }
+  }
+}
+
+TEST_F(OperatorUtilsTest, projectDuplicateChildren) {
+  // Test wrapping an unloaded lazy vector in dictionary vector multiple
+  // times.
+  auto flatVector = makeNullableFlatVector<int64_t>(
+      std::vector<std::optional<int64_t>>{1, std::nullopt, 3, 4, 5});
+  const auto size = flatVector->size();
+
+  auto lazyVector = std::make_shared<LazyVector>(
+      pool(),
+      BIGINT(),
+      size,
+      std::make_unique<SimpleVectorLoader>([&](RowSet /*rows*/) {
+        return makeFlatVector<int64_t>(
+            size,
+            [&](vector_size_t row) { return flatVector->valueAt(row); },
+            [&](vector_size_t row) { return flatVector->isNullAt(row); });
+      }));
+
+  std::vector<VectorPtr> children = {lazyVector};
+  auto rowVector = makeRowVector(std::move(children));
+
+  std::vector<IdentityProjection> identityProjections;
+  identityProjections.emplace_back(0, 0);
+  identityProjections.emplace_back(0, 1);
+
+  auto mapping = makeIndices(size, [](auto row) { return row % 3; });
+
+  std::vector<VectorPtr> projectedChildren(2);
+  projectChildren(
+      projectedChildren, rowVector, identityProjections, size, mapping);
+
+  for (const auto& projection : identityProjections) {
+    auto* result = projectedChildren[projection.outputChannel].get();
+    result->loadedVector();
+    auto* source = rowVector->childAt(projection.inputChannel).get();
+    for (auto i = 0; i < size; ++i) {
+      auto srcIndex = mapping->as<vector_size_t>()[i];
+      if (result->isNullAt(i)) {
+        ASSERT_TRUE(source->isNullAt(srcIndex));
+      } else {
+        ASSERT_TRUE(result->equalValueAt(source, i, srcIndex));
+      }
     }
   }
 }

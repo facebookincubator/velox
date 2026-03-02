@@ -17,6 +17,7 @@
 
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox::exec {
 
@@ -26,18 +27,29 @@ class SignatureBinderBase {
       : signature_{signature} {}
 
   /// Return true if actualType can bind to typeSignature and update bindings_
-  /// accordingly. The number of parameters in typeSignature and actualType must
-  /// match. Return false otherwise.
+  /// accordingly. The number of parameters in typeSignature and actualType
+  /// must match. Return false otherwise.
   bool tryBind(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);
+
+  /// Like 'tryBind', but allows implicit type conversion if actualType
+  /// doesn't match typeSignature exactly.
+  ///
+  /// @param coercion Type coercion necessary to bind actualType to
+  /// typeSignature if there is no exact match. 'coercion.type' is null if
+  /// there is exact match.
+  bool tryBindWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      Coercion& coercion);
 
   // Return the variables of the signature.
   auto& variables() const {
     return signature_.variables();
   }
 
-  /// The funcion signature we are trying to bind.
+  /// The function signature we are trying to bind.
   const exec::FunctionSignature& signature_;
 
   /// Record concrete types that are bound to type variables.
@@ -46,15 +58,44 @@ class SignatureBinderBase {
   /// Record concrete values that are bound to integer variables.
   std::unordered_map<std::string, int> integerVariablesBindings_;
 
+  /// Record concrete values that are bound to LongEnumParameter variables.
+  std::unordered_map<std::string, LongEnumParameter> longEnumVariablesBindings_;
+
+  /// Record concrete values that are bound to VarcharEnumParameter variables.
+  std::unordered_map<std::string, VarcharEnumParameter>
+      varcharEnumVariablesBindings_;
+
  private:
   /// If the integer parameter is set, then it must match with value.
   /// Returns false if values do not match or the parameter does not exist.
   bool checkOrSetIntegerParameter(const std::string& parameterName, int value);
 
+  /// Try to bind the LongEnumParameter from the actualType.
+  bool checkOrSetLongEnumParameter(
+      const std::string& parameterName,
+      const LongEnumParameter& params);
+
+  /// Try to bind the VarcharEnumParameter from the actualType.
+  bool checkOrSetVarcharEnumParameter(
+      const std::string& parameterName,
+      const VarcharEnumParameter& params);
+
+  std::optional<bool> checkSetTypeVariable(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      bool allowCoercion,
+      Coercion& coercion);
+
   /// Try to bind the integer parameter from the actualType.
   bool tryBindIntegerParameters(
       const std::vector<exec::TypeSignature>& parameters,
       const TypePtr& actualType);
+
+  bool tryBind(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType,
+      bool allowCoercion,
+      Coercion& coercion);
 };
 
 /// Resolves generic type names in the function signature using actual input
@@ -76,17 +117,45 @@ class SignatureBinder : private SignatureBinderBase {
   /// Returns true if successfully resolved all generic type names.
   bool tryBind();
 
-  /// Returns concrete return type or null if couldn't fully resolve.
+  /// Like 'tryBind', but allows implicit type conversion if actualTypes don't
+  /// match the signature exactly.
+  /// @param coercions Type coercions necessary to bind actualTypes to the
+  /// signature. There is one entry per argument. Coercion.type is null if no
+  /// coercion is required for that argument.
+  bool tryBindWithCoercions(std::vector<Coercion>& coercions);
+
+  /// Returns concrete return type or nullptr if couldn't fully resolve.
   TypePtr tryResolveReturnType() {
     return tryResolveType(signature_.returnType());
   }
 
+  // Try resolve type for the specified signature. Return nullptr if cannot
+  // resolve.
   TypePtr tryResolveType(const exec::TypeSignature& typeSignature) {
     return tryResolveType(
         typeSignature,
         variables(),
         typeVariablesBindings_,
-        integerVariablesBindings_);
+        integerVariablesBindings_,
+        longEnumVariablesBindings_,
+        varcharEnumVariablesBindings_);
+  }
+
+  // Try resolve types for all specified signatures. Return empty list if some
+  // signatures cannot be resolved.
+  std::vector<TypePtr> tryResolveTypes(
+      const folly::Range<const TypeSignature*>& typeSignatures) {
+    std::vector<TypePtr> types;
+    for (const auto& signature : typeSignatures) {
+      auto type = tryResolveType(signature);
+      if (type == nullptr) {
+        return {};
+      }
+
+      types.push_back(type);
+    }
+
+    return types;
   }
 
   // Given a pre-computed binding for type variables resolve typeSignature if
@@ -95,9 +164,16 @@ class SignatureBinder : private SignatureBinderBase {
       const exec::TypeSignature& typeSignature,
       const std::unordered_map<std::string, SignatureVariable>& variables,
       const std::unordered_map<std::string, TypePtr>& resolvedTypeVariables) {
-    std::unordered_map<std::string, int> dummyEmpty = {};
+    std::unordered_map<std::string, int> dummyEmpty;
+    std::unordered_map<std::string, LongEnumParameter> dummyEmpty2;
+    std::unordered_map<std::string, VarcharEnumParameter> dummyEmpty3;
     return tryResolveType(
-        typeSignature, variables, resolvedTypeVariables, dummyEmpty);
+        typeSignature,
+        variables,
+        resolvedTypeVariables,
+        dummyEmpty,
+        dummyEmpty2,
+        dummyEmpty3);
   }
 
   // Given a pre-computed binding for type variables and integer variables,
@@ -107,9 +183,20 @@ class SignatureBinder : private SignatureBinderBase {
       const exec::TypeSignature& typeSignature,
       const std::unordered_map<std::string, SignatureVariable>& variables,
       const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
-      std::unordered_map<std::string, int>& integerVariablesBindings);
+      std::unordered_map<std::string, int>& integerVariablesBindings,
+      const std::unordered_map<std::string, LongEnumParameter>&
+          bigintEnumVariablesBindings,
+      const std::unordered_map<std::string, VarcharEnumParameter>&
+          varcharEnumVariablesBindings);
 
  private:
+  bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
+
+  bool tryBindVariablesWithCoercion(
+      const exec::TypeSignature& typeSignature,
+      const TypePtr& actualType);
+
   const std::vector<TypePtr>& actualTypes_;
 };
+
 } // namespace facebook::velox::exec

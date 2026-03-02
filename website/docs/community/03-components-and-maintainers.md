@@ -84,11 +84,17 @@ maintainers of that component.
 ### Storage Adapters (S3/HDFS/GCS/ABFS)
 
 * Deepak Majeti - [majetideepak](https://github.com/majetideepak) / deepak.majeti@ibm.com
+* Ke Jia - [JkSelf](https://github.com/jkself) / ke.a.jia@intel.com
+
+### LibcuDF Bindings
+
+* Karthikeyan Natarajan - [karthikeyann](https://github.com/karthikeyann) / knataraj@nvidia.com
 
 ### Builds and CI
 
+* Christian Zentgraf - [czentgr](https://github.com/czentgr) / czentgr@us.ibm.com
 * Deepak Majeti - [majetideepak](https://github.com/majetideepak) / deepak.majeti@ibm.com
-* Jacob Wujciak-Jens - [assignUser](https://github.com/assignUser) / jacob@voltrondata.com
+* Jacob Wujciak-Jens - [assignUser](https://github.com/assignUser) / jacob@wujciak.de
 * Krishna Pai - [kgpai](https://github.com/kgpai) / kpai@meta.com
 
 ### Fuzzers and Test Frameworks

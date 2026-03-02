@@ -22,6 +22,7 @@
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/type/Type.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::functions {
@@ -60,7 +61,7 @@ VectorPtr applyMapTyped(
     bool triggerCaching,
     std::shared_ptr<detail::LookupTableBase>& cachedLookupTablePtr,
     const SelectivityVector& rows,
-    const VectorPtr& mapArg,
+    const DecodedVector& decodedMap,
     const VectorPtr& indexArg,
     exec::EvalCtx& context) {
   static constexpr vector_size_t kMinCachedMapSize = 100;
@@ -85,10 +86,8 @@ VectorPtr applyMapTyped(
 
   // Get base MapVector.
   // TODO: Optimize the case when indices are identity.
-  exec::LocalDecodedVector mapHolder(context, *mapArg, rows);
-  auto decodedMap = mapHolder.get();
-  auto baseMap = decodedMap->base()->as<MapVector>();
-  auto mapIndices = decodedMap->indices();
+  auto baseMap = decodedMap.base()->as<MapVector>();
+  auto mapIndices = decodedMap.indices();
 
   // Get map keys.
   auto mapKeys = baseMap->mapKeys();
@@ -186,9 +185,73 @@ VectorPtr applyMapTyped(
       true /*flattenIfRedundant*/);
 }
 
+/// Applies logic to vectors of FlatMapVector encoding. The implementation is
+/// far simpler than the regular map encoding because FlatMapVector already
+/// supports feature projection. This implementation will serve as a fast-path
+/// execution for now-wrapped vectors.
+VectorPtr applyFlatMap(
+    const SelectivityVector& rows,
+    const DecodedVector& decodedMap,
+    const VectorPtr& elementAt,
+    exec::EvalCtx& context) {
+  // Decode input flat map vector.
+  auto flatMap = decodedMap.base()->as<FlatMapVector>();
+
+  // Optimal use case: unwrapped vector and constant key. We can simply project
+  // the feature using the first value in the arg vector.
+  if (decodedMap.isIdentityMapping() && elementAt->isConstantEncoding()) {
+    if (auto projection = flatMap->projectKey(elementAt, 0)) {
+      return projection;
+    }
+  }
+
+  // Next base case: wrapped vector and constant key. In this scenario we just
+  // need to decode and simply project onto the first index again.
+  else if (elementAt->isConstantEncoding()) {
+    // Define nulls and indices buffers.
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(rows.size(), flatMap->pool());
+    BufferPtr nulls = allocateNulls(rows.size(), flatMap->pool());
+    auto mutableIndices = indices->asMutable<vector_size_t>();
+    auto rawNulls = nulls->asMutable<uint64_t>();
+    for (int i = 0; i < decodedMap.size(); i++) {
+      mutableIndices[i] = decodedMap.indices()[i];
+      if (decodedMap.isNullAt(i)) {
+        bits::setNull(rawNulls, i, true);
+      }
+    }
+
+    if (auto projection = flatMap->projectKey(elementAt, 0)) {
+      // Wrap underlying projected feature stream. This will also help with
+      // memory pressure for large feature element vectors.
+      return BaseVector::wrapInDictionary(
+          std::move(nulls), indices, rows.end(), projection);
+    }
+  }
+
+  // In the case that elementAt is not constant, we will need to stitch together
+  // projected values from across our mapValues list.
+  else {
+    auto result =
+        BaseVector::create(flatMap->valueType(), rows.size(), context.pool());
+    rows.applyToSelected([&](vector_size_t row) {
+      if (auto projection = flatMap->projectKey(elementAt, row)) {
+        result->copy(projection.get(), row, decodedMap.indices()[row], 1);
+      } else {
+        result->setNull(row, true);
+      }
+    });
+    return result;
+  }
+
+  // Key doesn't exist, return null constant vector.
+  return BaseVector::createNullConstant(
+      flatMap->valueType(), rows.end(), context.pool());
+}
+
 VectorPtr applyMapComplexType(
     const SelectivityVector& rows,
-    const VectorPtr& mapArg,
+    const DecodedVector& decodedMap,
     const VectorPtr& indexArg,
     exec::EvalCtx& context,
     bool triggerCaching,
@@ -202,11 +265,9 @@ VectorPtr applyMapComplexType(
   // Create nulls for lazy initialization.
   NullsBuilder nullsBuilder(rows.end(), pool);
 
-  // Get base MapVector.
-  exec::LocalDecodedVector mapHolder(context, *mapArg, rows);
-  auto decodedMap = mapHolder.get();
-  auto baseMap = decodedMap->base()->as<MapVector>();
-  auto mapIndices = decodedMap->indices();
+  // Get base MapVector
+  auto baseMap = decodedMap.base()->as<MapVector>();
+  auto mapIndices = decodedMap.indices();
 
   // Get map keys.
   auto mapKeys = baseMap->mapKeys();
@@ -255,7 +316,9 @@ VectorPtr applyMapComplexType(
       auto numKeys = rawSizes[0];
       hashMapPtr->reserve(numKeys * 1.3);
       for (auto i = 0; i < numKeys; ++i) {
-        hashMapPtr->insert(detail::MapKey{mapKeysBase, mapKeysIndices[i], i});
+        const vector_size_t offset = rawOffsets[0] + i;
+        hashMapPtr->insert(
+            detail::MapKey{mapKeysBase, mapKeysIndices[offset], offset});
       }
     }
 
@@ -328,6 +391,16 @@ VectorPtr MapSubscript::applyMap(
   // Ensure map key type and second argument are the same.
   VELOX_CHECK(mapArg->type()->childAt(0)->equivalent(*indexArg->type()));
 
+  // Short-circuit for FlatMapVector encoding. FlatMapVector doesn't need to
+  // distinguish between primitive and complex types (where the former requires
+  // a type dispatch).
+  exec::LocalDecodedVector mapDecoder(context, *mapArg, rows);
+  auto decodedMap = mapDecoder.get();
+  if (decodedMap->base()->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return applyFlatMap(rows, *decodedMap, indexArg, context);
+  }
+
+  // Regular map encoding with two paths for complex and primitive types.
   bool triggerCaching = shouldTriggerCaching(mapArg);
   if (indexArg->type()->isPrimitiveType() &&
       !indexArg->type()->providesCustomComparison()) {
@@ -337,7 +410,7 @@ VectorPtr MapSubscript::applyMap(
         triggerCaching,
         lookupTable_,
         rows,
-        mapArg,
+        *decodedMap,
         indexArg,
         context);
   } else {
@@ -347,49 +420,8 @@ VectorPtr MapSubscript::applyMap(
     // Vector's equalValueAt method, which calls the Types custom comparison
     // operator internally.
     return applyMapComplexType(
-        rows, mapArg, indexArg, context, triggerCaching, lookupTable_);
+        rows, *decodedMap, indexArg, context, triggerCaching, lookupTable_);
   }
-}
-
-namespace {
-std::exception_ptr makeZeroSubscriptError() {
-  try {
-    VELOX_USER_FAIL("SQL array indices start at 1");
-  } catch (const std::exception&) {
-    return std::current_exception();
-  }
-}
-
-std::exception_ptr makeBadSubscriptError() {
-  try {
-    VELOX_USER_FAIL("Array subscript out of bounds.");
-  } catch (const std::exception&) {
-    return std::current_exception();
-  }
-}
-
-std::exception_ptr makeNegativeSubscriptError() {
-  try {
-    VELOX_USER_FAIL("Array subscript is negative.");
-  } catch (const std::exception&) {
-    return std::current_exception();
-  }
-}
-} // namespace
-
-const std::exception_ptr& zeroSubscriptError() {
-  static std::exception_ptr error = makeZeroSubscriptError();
-  return error;
-}
-
-const std::exception_ptr& badSubscriptError() {
-  static std::exception_ptr error = makeBadSubscriptError();
-  return error;
-}
-
-const std::exception_ptr& negativeSubscriptError() {
-  static std::exception_ptr error = makeNegativeSubscriptError();
-  return error;
 }
 } // namespace detail
 

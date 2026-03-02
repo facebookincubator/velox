@@ -19,16 +19,18 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include "velox/common/geospatial/GeometryConstants.h"
 
 namespace facebook::velox {
 
 namespace {
 folly::Expected<int64_t, std::string> mapSize(uint8_t zoomLevel) {
   if (FOLLY_UNLIKELY(zoomLevel > BingTileType::kBingTileMaxZoomLevel)) {
-    return folly::makeUnexpected(fmt::format(
-        "Zoom level {} is greater than max zoom {}",
-        zoomLevel,
-        BingTileType::kBingTileMaxZoomLevel));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Zoom level {} is greater than max zoom {}",
+            zoomLevel,
+            BingTileType::kBingTileMaxZoomLevel));
   }
   return 256L << zoomLevel;
 }
@@ -44,23 +46,24 @@ int32_t axisToCoordinates(double axis, long mapSize) {
 /**
  * Given longitude in degrees, and the level of detail, the tile X coordinate
  * can be calculated as follows: pixelX = ((longitude + 180) / 360) * 2**level
- * The latitude and longitude are assumed to be on the WGS 84 datum. Even though
- * Bing Maps uses a spherical projection, it’s important to convert all
- * geographic coordinates into a common datum, and WGS 84 was chosen to be that
- * datum. The longitude is assumed to range from -180 to +180 degrees. <p>
- * reference: https://msdn.microsoft.com/en-us/library/bb259689.aspx
+ * The latitude and longitude are assumed to be on the WGS 84 datum. Even
+ * though Bing Maps uses a spherical projection, it’s important to convert all
+ * geographic coordinates into a common datum, and WGS 84 was chosen to be
+ * that datum. The longitude is assumed to range from -180 to +180 degrees.
+ * <p> reference: https://msdn.microsoft.com/en-us/library/bb259689.aspx
  */
 folly::Expected<uint32_t, std::string> longitudeToTileX(
     double longitude,
     uint8_t zoomLevel) {
   if (FOLLY_UNLIKELY(
-          longitude > BingTileType::kMaxLongitude ||
-          longitude < BingTileType::kMinLongitude)) {
-    return folly::makeUnexpected(fmt::format(
-        "Longitude {} is outside of valid range [{}, {}]",
-        longitude,
-        BingTileType::kMinLongitude,
-        BingTileType::kMaxLongitude));
+          longitude > common::geospatial::kMaxLongitude ||
+          longitude < common::geospatial::kMinLongitude)) {
+    return folly::makeUnexpected(
+        fmt::format(
+            "Longitude {} is outside of valid range [{}, {}]",
+            longitude,
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude));
   }
   double x = (longitude + 180) / 360;
 
@@ -73,13 +76,13 @@ folly::Expected<uint32_t, std::string> longitudeToTileX(
 }
 
 /**
- * Given latitude in degrees, and the level of detail, the tile Y coordinate can
- * be calculated as follows: sinLatitude = sin(latitude * pi/180) pixelY = (0.5
- * – log((1 + sinLatitude) / (1 – sinLatitude)) / (4 * pi)) * 2**level The
- * latitude and longitude are assumed to be on the WGS 84 datum. Even though
- * Bing Maps uses a spherical projection, it’s important to convert all
- * geographic coordinates into a common datum, and WGS 84 was chosen to be that
- * datum. The latitude must be clipped to range from -85.05112878
+ * Given latitude in degrees, and the level of detail, the tile Y coordinate
+ * can be calculated as follows: sinLatitude = sin(latitude * pi/180) pixelY =
+ * (0.5 – log((1 + sinLatitude) / (1 – sinLatitude)) / (4 * pi)) * 2**level
+ * The latitude and longitude are assumed to be on the WGS 84 datum. Even
+ * though Bing Maps uses a spherical projection, it’s important to convert all
+ * geographic coordinates into a common datum, and WGS 84 was chosen to be
+ * that datum. The latitude must be clipped to range from -85.05112878
  * to 85.05112878. This avoids a singularity at the poles, and it causes the
  * projected map to be square. <p> reference:
  * https://msdn.microsoft.com/en-us/library/bb259689.aspx
@@ -88,13 +91,14 @@ folly::Expected<uint32_t, std::string> latitudeToTileY(
     double latitude,
     uint8_t zoomLevel) {
   if (FOLLY_UNLIKELY(
-          latitude > BingTileType::kMaxLatitude ||
-          latitude < BingTileType::kMinLatitude)) {
-    return folly::makeUnexpected(fmt::format(
-        "Latitude {} is outside of valid range [{}, {}]",
-        latitude,
-        BingTileType::kMinLatitude,
-        BingTileType::kMaxLatitude));
+          latitude > common::geospatial::kMaxBingTileLatitude ||
+          latitude < common::geospatial::kMinBingTileLatitude)) {
+    return folly::makeUnexpected(
+        fmt::format(
+            "Latitude {} is outside of valid range [{}, {}]",
+            latitude,
+            common::geospatial::kMinBingTileLatitude,
+            common::geospatial::kMaxBingTileLatitude));
   }
   double sinLatitude = sin(latitude * M_PI / 180);
   double y = 0.5 - log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * M_PI);
@@ -130,14 +134,14 @@ double addDistanceToLongitude(
           sin(bearingInRadians) * sin(radiusRatio) * cos(latitudeInRadians),
           cos(radiusRatio) - sin(latitudeInRadians) * sin(latitudeInRadians)));
 
-  if (newLongitude > BingTileType::kMaxLongitude) {
-    return BingTileType::kMinLongitude +
-        (newLongitude - BingTileType::kMaxLongitude);
+  if (newLongitude > common::geospatial::kMaxLongitude) {
+    return common::geospatial::kMinLongitude +
+        (newLongitude - common::geospatial::kMaxLongitude);
   }
 
-  if (newLongitude < BingTileType::kMinLongitude) {
-    return BingTileType::kMaxLongitude +
-        (newLongitude - BingTileType::kMinLongitude);
+  if (newLongitude < common::geospatial::kMinLongitude) {
+    return common::geospatial::kMaxLongitude +
+        (newLongitude - common::geospatial::kMinLongitude);
   }
 
   return newLongitude;
@@ -152,31 +156,13 @@ addDistanceToLatitude(double latitude, double radiusInKm, double bearing) {
   double newLatitude = toDegrees(asin(
       sin(latitudeInRadians) * cos(radiusRatio) +
       cos(latitudeInRadians) * sin(radiusRatio) * cos(bearingInRadians)));
-  if (newLatitude > BingTileType::kMaxLatitude) {
-    return BingTileType::kMaxLatitude;
+  if (newLatitude > common::geospatial::kMaxBingTileLatitude) {
+    return common::geospatial::kMaxBingTileLatitude;
   }
-  if (newLatitude < BingTileType::kMinLatitude) {
-    return BingTileType::kMinLatitude;
+  if (newLatitude < common::geospatial::kMinBingTileLatitude) {
+    return common::geospatial::kMinBingTileLatitude;
   }
   return newLatitude;
-}
-
-/**
- * Return the longitude (in degrees) of the west edge of the tile.
- */
-double tileXToLongitude(uint32_t tileX, uint8_t zoomLevel) {
-  int32_t mapTileSize = 1 << zoomLevel;
-  double x = (std::clamp<double>(tileX, 0, mapTileSize) / mapTileSize) - 0.5;
-  return 360 * x;
-}
-
-/**
- * Return the latitude (in degrees) of the north edge of the tile.
- */
-double tileYToLatitude(uint32_t tileY, uint8_t zoomLevel) {
-  int32_t mapTileSize = 1 << zoomLevel;
-  double y = 0.5 - (std::clamp<double>(tileY, 0, mapTileSize) / mapTileSize);
-  return 90 - 360 * atan(exp(-y * 2 * M_PI)) / M_PI;
 }
 
 struct GreatCircleDistanceToPoint {
@@ -263,8 +249,9 @@ folly::Expected<uint64_t, std::string> BingTileType::bingTileParent(
   uint32_t y = bingTileY(tile);
 
   if (FOLLY_UNLIKELY(tileZoom < parentZoom)) {
-    return folly::makeUnexpected(fmt::format(
-        "Parent zoom {} must be <= tile zoom {}", parentZoom, tileZoom));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Parent zoom {} must be <= tile zoom {}", parentZoom, tileZoom));
   }
   uint8_t shift = tileZoom - parentZoom;
   return bingTileCoordsToInt((x >> shift), (y >> shift), parentZoom);
@@ -283,23 +270,26 @@ BingTileType::bingTileChildren(
   uint32_t y = bingTileY(tile);
 
   if (FOLLY_UNLIKELY(childZoom < tileZoom)) {
-    return folly::makeUnexpected(fmt::format(
-        "Child zoom {} must be >= tile zoom {}", childZoom, tileZoom));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Child zoom {} must be >= tile zoom {}", childZoom, tileZoom));
   }
   if (FOLLY_UNLIKELY(childZoom > kBingTileMaxZoomLevel)) {
-    return folly::makeUnexpected(fmt::format(
-        "Child zoom {} must be <= max zoom {}",
-        childZoom,
-        kBingTileMaxZoomLevel));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Child zoom {} must be <= max zoom {}",
+            childZoom,
+            kBingTileMaxZoomLevel));
   }
 
   uint8_t shift = childZoom - tileZoom;
   if (shift > maxZoomShift) {
-    return folly::makeUnexpected(fmt::format(
-        "Difference between parent zoom ({}) and child zoom ({}) must be <= {}",
-        tileZoom,
-        childZoom,
-        maxZoomShift));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Difference between parent zoom ({}) and child zoom ({}) must be <= {}",
+            tileZoom,
+            childZoom,
+            maxZoomShift));
   }
   uint32_t xBase = (x << shift);
   uint32_t yBase = (y << shift);
@@ -319,10 +309,11 @@ folly::Expected<uint64_t, std::string> BingTileType::bingTileFromQuadKey(
     const std::string_view& quadKey) {
   size_t zoomLevelInt32 = quadKey.size();
   if (FOLLY_UNLIKELY(zoomLevelInt32 > kBingTileMaxZoomLevel)) {
-    return folly::makeUnexpected(fmt::format(
-        "Zoom level {} is greater than max zoom {}",
-        zoomLevelInt32,
-        kBingTileMaxZoomLevel));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Zoom level {} is greater than max zoom {}",
+            zoomLevelInt32,
+            kBingTileMaxZoomLevel));
   }
   uint8_t zoomLevel = static_cast<uint8_t>(zoomLevelInt32);
   uint32_t tileX = 0;
@@ -397,6 +388,18 @@ folly::Expected<uint64_t, std::string> BingTileType::latitudeLongitudeToTile(
   return bingTileCoordsToInt(tileX.value(), tileY.value(), zoomLevel);
 }
 
+double BingTileType::tileXToLongitude(uint32_t tileX, uint8_t zoomLevel) {
+  int32_t mapTileSize = 1 << zoomLevel;
+  double x = (std::clamp<double>(tileX, 0, mapTileSize) / mapTileSize) - 0.5;
+  return 360 * x;
+}
+
+double BingTileType::tileYToLatitude(uint32_t tileY, uint8_t zoomLevel) {
+  int32_t mapTileSize = 1 << zoomLevel;
+  double y = 0.5 - (std::clamp<double>(tileY, 0, mapTileSize) / mapTileSize);
+  return 90 - 360 * atan(exp(-y * 2 * M_PI)) / M_PI;
+}
+
 // Given a (longitude, latitude) point, returns the surrounding Bing tiles at
 // the specified zoom level
 folly::Expected<std::vector<uint64_t>, std::string>
@@ -417,14 +420,14 @@ BingTileType::bingTilesAround(
     return folly::makeUnexpected(mpSize.error());
   }
 
-  int64_t mapTileIndex = (mpSize.value() / kTilePixels) - 1;
+  int64_t maxTileIndex = (mpSize.value() / kTilePixels) - 1;
   std::vector<uint64_t> tiles;
   tiles.reserve(9);
   for (int32_t i = -1; i <= 1; ++i) {
     for (int32_t j = -1; j <= 1; ++j) {
       int32_t x = static_cast<int32_t>(tileX.value()) + i;
       int32_t y = static_cast<int32_t>(tileY.value()) + j;
-      if (x >= 0 && x <= mapTileIndex && y >= 0 && y <= mapTileIndex) {
+      if (x >= 0 && x <= maxTileIndex && y >= 0 && y <= maxTileIndex) {
         tiles.push_back(bingTileCoordsToInt(x, y, zoomLevel));
       }
     }
@@ -439,8 +442,9 @@ BingTileType::bingTilesAround(
     uint8_t zoomLevel,
     double radiusInKm) {
   if (FOLLY_UNLIKELY(radiusInKm < 0 || radiusInKm > 1000)) {
-    return folly::makeUnexpected(fmt::format(
-        "Radius in km must between 0 and 1000, got {}", radiusInKm));
+    return folly::makeUnexpected(
+        fmt::format(
+            "Radius in km must between 0 and 1000, got {}", radiusInKm));
   }
   auto tileX = longitudeToTileX(longitude, zoomLevel);
   if (FOLLY_UNLIKELY(tileX.hasError())) {
@@ -507,9 +511,10 @@ BingTileType::bingTilesAround(
 
   uint32_t totalTileCount = tileCountX * tileCountY;
   if (totalTileCount > 1000000) {
-    return folly::makeUnexpected(fmt::format(
-        "The number of tiles covering input rectangle exceeds the limit of 1M. Number of tiles: {}.",
-        totalTileCount));
+    return folly::makeUnexpected(
+        fmt::format(
+            "The number of tiles covering input rectangle exceeds the limit of 1M. Number of tiles: {}.",
+            totalTileCount));
   }
 
   std::vector<uint64_t> result;
@@ -609,6 +614,15 @@ BingTileType::bingTilesAround(
   }
 
   return result;
+}
+
+double BingTileType::greatCircleDistance(
+    double latitude1,
+    double longitude1,
+    double latitude2,
+    double longitude2) {
+  return GreatCircleDistanceToPoint(latitude1, longitude1)
+      .distance(latitude2, longitude2);
 }
 
 } // namespace facebook::velox

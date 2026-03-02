@@ -1127,25 +1127,24 @@ template <
         typename V,
         bool B1,
         class C,
-        bool compareTypeUsesCustomComparison>
-    class Aggregate,
+        bool compareTypeUsesCustomComparison> class Aggregate,
     bool isMaxFunc,
-    template <typename U, typename V>
-    class NAggregate>
-exec::AggregateRegistrationResult registerMinMaxBy(
-    const std::string& name,
+    template <typename U, typename V> class NAggregate>
+std::vector<exec::AggregateRegistrationResult> registerMinMaxBy(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   // V, C -> row(V, C) -> V.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .typeVariable("V")
-                           .orderableTypeVariable("C")
-                           .returnType("V")
-                           .intermediateType("row(V,C)")
-                           .argumentType("V")
-                           .argumentType("C")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("V")
+          .orderableTypeVariable("C")
+          .returnType("V")
+          .intermediateType("row(V,C)")
+          .argumentType("V")
+          .argumentType("C")
+          .build());
   // Add signatures for 3-arg version of min_by/max_by.
   const std::vector<std::string> supportedCompareTypes = {
       "boolean",
@@ -1163,15 +1162,16 @@ exec::AggregateRegistrationResult registerMinMaxBy(
   // Add support for all value types to 3-arg version of the aggregate.
   for (const auto& compareType : supportedCompareTypes) {
     // V, C, bigint -> row(bigint, array(C), array(V)) -> array(V).
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .typeVariable("V")
-                             .returnType("array(V)")
-                             .intermediateType(fmt::format(
-                                 "row(bigint,array({}),array(V))", compareType))
-                             .argumentType("V")
-                             .argumentType(compareType)
-                             .argumentType("bigint")
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .typeVariable("V")
+            .returnType("array(V)")
+            .intermediateType(
+                fmt::format("row(bigint,array({}),array(V))", compareType))
+            .argumentType("V")
+            .argumentType(compareType)
+            .argumentType("bigint")
+            .build());
   }
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
@@ -1186,9 +1186,9 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           .argumentType("bigint")
           .build());
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -1196,7 +1196,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           -> std::unique_ptr<exec::Aggregate> {
         const std::string errorMessage = fmt::format(
             "Unknown input types for {} ({}) aggregation: {}",
-            name,
+            names.front(),
             mapAggregationStepToName(step),
             toString(argTypes));
 

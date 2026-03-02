@@ -173,8 +173,9 @@ class HashTableBenchmark : public VectorTestBase {
       std::vector<RowVectorPtr> batches;
       std::vector<std::unique_ptr<VectorHasher>> keyHashers;
       for (auto channel = 0; channel < params_.numKeys; ++channel) {
-        keyHashers.emplace_back(std::make_unique<VectorHasher>(
-            params_.buildType->childAt(channel), channel));
+        keyHashers.emplace_back(
+            std::make_unique<VectorHasher>(
+                params_.buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
           std::move(keyHashers),
@@ -198,6 +199,8 @@ class HashTableBenchmark : public VectorTestBase {
     topTable_->prepareJoinTable(
         std::move(otherTables),
         BaseHashTable::kNoSpillInputStartPartitionBit,
+        1'000'000,
+        false,
         executor_.get());
     LOG(INFO) << "Made table " << topTable_->toString();
 
@@ -286,7 +289,7 @@ class HashTableBenchmark : public VectorTestBase {
       int32_t tableOffset,
       BaseHashTable* table) {
     int32_t batchSize = batches[0]->size();
-    raw_vector<uint64_t> dummy(batchSize);
+    raw_vector<uint64_t> dummy(batchSize, pool());
     int32_t batchOffset = 0;
     rowOfKey_.resize(tableOffset + batchSize * batches.size());
     auto rowContainer = table->rows();
@@ -409,8 +412,9 @@ class HashTableBenchmark : public VectorTestBase {
       TypePtr buildType,
       std::vector<RowVectorPtr>& batches) {
     for (auto i = 0; i < numBatches; ++i) {
-      batches.push_back(std::static_pointer_cast<RowVector>(
-          makeVector(buildType, batchSize, sequence)));
+      batches.push_back(
+          std::static_pointer_cast<RowVector>(
+              makeVector(buildType, batchSize, sequence)));
       sequence += batchSize;
     }
   }

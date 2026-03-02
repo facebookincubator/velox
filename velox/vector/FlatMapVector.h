@@ -89,9 +89,9 @@ class FlatMapVector : public BaseVector {
   // in-map buffers may not be present).
   FlatMapVector(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<const Type> type,
+      const TypePtr& type,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       VectorPtr distinctKeys,
       std::vector<VectorPtr> mapValues,
       std::vector<BufferPtr> inMaps,
@@ -101,7 +101,7 @@ class FlatMapVector : public BaseVector {
             pool,
             type,
             VectorEncoding::Simple::FLAT_MAP,
-            nulls,
+            std::move(nulls),
             length,
             std::nullopt,
             nullCount),
@@ -121,7 +121,7 @@ class FlatMapVector : public BaseVector {
         inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
   }
 
-  virtual ~FlatMapVector() override {}
+  ~FlatMapVector() override = default;
 
   /// Overwrites the existing distinct keys vector, resizing map values and
   /// clearing in-map buffers.
@@ -204,6 +204,15 @@ class FlatMapVector : public BaseVector {
     return nullptr;
   }
 
+  /// Same as above but allows for `keysVector` at index `index` (similar
+  /// distinction between getKeyChannel we see above).
+  VectorPtr projectKey(const VectorPtr& keysVector, vector_size_t index) const {
+    if (auto channel = getKeyChannel(keysVector, index)) {
+      return mapValues_[channel.value()];
+    }
+    return nullptr;
+  }
+
   /// Returns the size for the map at position `index`. Size means the number of
   /// logical key value pairs in the map. Note that this is not a particularly
   /// efficient operation in flat maps as it requires accessing the inMap bitmap
@@ -211,8 +220,15 @@ class FlatMapVector : public BaseVector {
   vector_size_t sizeAt(vector_size_t index) const;
 
   bool isInMap(column_index_t keyChannel, vector_size_t index) const {
-    auto* inMap = inMapsAt(keyChannel)->asMutable<uint64_t>();
-    return inMap ? bits::isBitSet(inMap, index) : true;
+    if (inMaps_.size() <= keyChannel) {
+      return true;
+    }
+    if (auto& inMap = inMapsAt(keyChannel)) {
+      return bits::isBitSet(inMap->as<uint64_t>(), index);
+    } else {
+      // If inMap is null, key is present in all rows.
+      return true;
+    }
   }
 
   /// Get the map values vector at a given a map key channel.
@@ -259,6 +275,15 @@ class FlatMapVector : public BaseVector {
     return inMaps_[index];
   }
 
+  const uint64_t* rawInMapsAt(column_index_t index) const {
+    return inMaps_.size() > index ? inMaps_[index]->as<uint64_t>() : nullptr;
+  }
+
+  uint64_t* mutableRawInMapsAt(column_index_t index) {
+    return inMaps_.size() > index ? inMaps_[index]->asMutable<uint64_t>()
+                                  : nullptr;
+  }
+
   using BaseVector::toString;
   std::string toString(vector_size_t index) const override;
 
@@ -286,6 +311,17 @@ class FlatMapVector : public BaseVector {
       vector_size_t otherIndex,
       CompareFlags flags) const override;
 
+  /// Copy the ranges defined by `ranges` from source into `this`.
+  void copyRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges) override;
+
+  void ensureWritable(const SelectivityVector& rows) override;
+
+  bool isWritable() const override {
+    return true;
+  }
+
   /// Returns the hash of the value at the given index in this vector.
   uint64_t hashValueAt(vector_size_t index) const override;
 
@@ -301,6 +337,13 @@ class FlatMapVector : public BaseVector {
   /// testing/validation purposes, and not for performance critical paths.
   MapVectorPtr toMapVector() const;
 
+  void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
+    // TODO: enable this after
+    // https://github.com/facebookincubator/velox/issues/15485 is resolved to
+    // allow proper testing.
+    VELOX_NYI("{} unsupported", __FUNCTION__);
+  }
+
  private:
   void setDistinctKeysImpl(VectorPtr distinctKeys) {
     VELOX_CHECK(distinctKeys != nullptr);
@@ -309,12 +352,68 @@ class FlatMapVector : public BaseVector {
         "Unexpected key type: {}",
         distinctKeys->type()->toString());
 
-    distinctKeys_ = distinctKeys;
+    distinctKeys_ = std::move(distinctKeys);
     keyToChannel_.clear();
 
     for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
-      keyToChannel_.insert({distinctKeys->hashValueAt(i), i});
+      keyToChannel_.insert({distinctKeys_->hashValueAt(i), i});
     }
+  }
+
+  /// Appends a new distinct key to the flat map specified by `sourceChannel` on
+  /// `sourceDistinctKeys`.
+  void appendDistinctKey(
+      const VectorPtr& sourceDistinctKeys,
+      column_index_t sourceChannel) {
+    column_index_t targetChannel = distinctKeys_->size();
+
+    distinctKeys_->resize(targetChannel + 1);
+    distinctKeys_->copy(
+        sourceDistinctKeys.get(), targetChannel, sourceChannel, 1);
+    mapValues_.resize(distinctKeys_->size());
+
+    keyToChannel_.insert(
+        {distinctKeys_->hashValueAt(targetChannel), targetChannel});
+    sortedKeys_ = false;
+  }
+
+  /// Updates the in map buffer from the key defined by `targetChannel` based on
+  /// values from `sourceInMaps`. Updates based on the ranges defined in
+  /// `ranges`.
+  ///
+  /// In case neither targetChannel nor sourceInMaps have in map buffers
+  /// allocated, returns early since this means that key is specified
+  /// everywhere (no update needed).
+  void copyInMapRanges(
+      column_index_t targetChannel,
+      const uint64_t* sourceInMaps,
+      const folly::Range<const BaseVector::CopyRange*>& ranges);
+
+  /// Compares a map in this Vector with a map in a MapVector.
+  std::optional<int32_t> compareToMap(
+      const MapVector* other,
+      vector_size_t index,
+      // The other MapVector may have been encoded, pass the wrappedIndex from
+      // the other Vector here.
+      vector_size_t wrappedOtherIndex,
+      CompareFlags flags) const;
+
+  /// Compares a map in this Vector with a map in another FlatMapVector.
+  std::optional<int32_t> compareToFlatMap(
+      const FlatMapVector* other,
+      vector_size_t index,
+      // The other FlatMapVector may have been encoded, pass the wrappedIndex
+      // from the other Vector here.
+      vector_size_t wrappedOtherIndex,
+      CompareFlags flags) const;
+
+  uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const override {
+    // TODO: since FlatMapVector didn't override BaseVector::retainedSize(),
+    // this override of retainedSizeImpl keeps the original behavior of
+    // FlatMapVector::retainedSize(). We should update this method to reflect
+    // the actual memory usage of FlatMapVector.
+    return BaseVector::retainedSizeImpl();
   }
 
   // Vector containing the distinct map keys.

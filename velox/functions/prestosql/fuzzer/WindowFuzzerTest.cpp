@@ -26,9 +26,14 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/KHyperLogLogResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/NumericHistogramInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/SetDigestResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -75,11 +80,14 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
+      {"tdigest_agg", std::make_shared<TDigestAggregateInputGenerator>()},
       {"qdigest_agg", std::make_shared<QDigestAggInputGenerator>()},
       {"lead", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"nth_value", std::make_shared<WindowOffsetInputGenerator>(1)},
-      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)}};
+      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)},
+      {"numeric_histogram", std::make_shared<NumericHistogramInputGenerator>()},
+  };
 }
 
 } // namespace
@@ -121,9 +129,30 @@ int main(int argc, char** argv) {
       // array_agg requires a flag controlling whether to ignore nulls.
       "array_agg",
       // Skip non-deterministic functions.
+      "noisy_avg_gaussian",
       "noisy_count_if_gaussian",
+      "noisy_count_gaussian",
+      "noisy_sum_gaussian",
+      "noisy_approx_set_sfm",
+      "noisy_approx_distinct_sfm",
+      "noisy_approx_set_sfm_from_index_and_zeros",
+      "reservoir_sample",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
+      // https://github.com/facebookincubator/velox/issues/14423
+      "numeric_histogram",
+      "khyperloglog_agg", // TODO: Remove from skip list once the KHLL result
+      // verifier is added.
+      "convex_hull_agg",
+      "geometry_union_agg",
+      "geometry_union_agg_partial",
+      "geometry_union_agg_merge",
+      "geometry_union_agg_extract",
+      "geometry_union_agg_merge_extract",
+      "convex_hull_agg_partial",
+      "convex_hull_agg_merge",
+      "convex_hull_agg_extract",
+      "convex_hull_agg_merge_extract",
   };
 
   if (!FLAGS_presto_url.empty()) {
@@ -142,7 +171,10 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::AverageResultVerifier;
+  using facebook::velox::exec::test::KHyperLogLogResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
+  using facebook::velox::exec::test::SetDigestResultVerifier;
+  using facebook::velox::exec::test::TDigestAggregateResultVerifier;
 
   static const std::unordered_map<
       std::string,
@@ -154,7 +186,9 @@ int main(int argc, char** argv) {
           {"approx_percentile",
            std::make_shared<ApproxPercentileResultVerifier>()},
           {"approx_most_frequent", nullptr},
+          {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
+          {"khyperloglog_agg", std::make_shared<KHyperLogLogResultVerifier>()},
           {"merge", nullptr},
           // Semantically inconsistent functions
           {"skewness", nullptr},
@@ -164,6 +198,8 @@ int main(int argc, char** argv) {
           {"max_data_size_for_stats", nullptr},
           {"sum_data_size_for_stats", nullptr},
           {"avg", std::make_shared<AverageResultVerifier>()},
+          {"make_set_digest", std::make_shared<SetDigestResultVerifier>()},
+          {"merge_set_digest", std::make_shared<SetDigestResultVerifier>()},
       };
 
   static const std::unordered_set<std::string> orderDependentFunctions = {
@@ -191,6 +227,7 @@ int main(int argc, char** argv) {
       "max_by",
       "min_by",
       "multimap_agg",
+      "tdigest_agg",
       "qdigest_agg",
   };
 

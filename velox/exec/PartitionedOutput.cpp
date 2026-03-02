@@ -15,24 +15,11 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
-namespace {
-std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
-    const core::QueryConfig& queryConfig,
-    VectorSerde::Kind kind) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
-      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
-      : std::make_unique<VectorSerde::Options>();
-  options->compressionKind =
-      common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
-  options->minCompressionRatio = PartitionedOutput::minCompressionRatio();
-  return options;
-}
-} // namespace
 
 namespace detail {
 Destination::Destination(
@@ -145,7 +132,7 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
+      std::make_unique<PrestoSerializedPage>(
           stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
 
@@ -200,11 +187,16 @@ PartitionedOutput::PartitionedOutput(
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
                             .maxPartitionedOutputBufferSize()),
-      eagerFlush_(eagerFlush),
+      eagerFlush_(
+          eagerFlush ||
+          ctx->task->queryCtx()->queryConfig().partitionedOutputEagerFlush()),
       serde_(getNamedVectorSerde(planNode->serdeKind())),
       serdeOptions_(getVectorSerdeOptions(
-          operatorCtx_->driverCtx()->queryConfig(),
-          planNode->serdeKind())) {
+          common::stringToCompressionKind(operatorCtx_->driverCtx()
+                                              ->queryConfig()
+                                              .shuffleCompressionKind()),
+          planNode->serdeKind(),
+          PartitionedOutput::minCompressionRatio())) {
   if (!planNode->isPartitioned()) {
     VELOX_USER_CHECK_EQ(numDestinations_, 1);
   }
@@ -256,17 +248,18 @@ void PartitionedOutput::initializeDestinations() {
   if (destinations_.empty()) {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
-      destinations_.push_back(std::make_unique<detail::Destination>(
-          taskId,
-          i,
-          serde_,
-          serdeOptions_.get(),
-          pool(),
-          eagerFlush_,
-          [&](uint64_t bytes, uint64_t rows) {
-            auto lockedStats = stats_.wlock();
-            lockedStats->addOutputVector(bytes, rows);
-          }));
+      destinations_.push_back(
+          std::make_unique<detail::Destination>(
+              taskId,
+              i,
+              serde_,
+              serdeOptions_.get(),
+              pool(),
+              eagerFlush_,
+              [&](uint64_t bytes, uint64_t rows) {
+                auto lockedStats = stats_.wlock();
+                lockedStats->addOutputVector(bytes, rows);
+              }));
     }
   }
 }
@@ -286,7 +279,7 @@ void PartitionedOutput::initializeSizeBuffers() {
 void PartitionedOutput::estimateRowSizes() {
   const auto numInput = input_->size();
   std::fill(rowSize_.begin(), rowSize_.end(), 0);
-  raw_vector<vector_size_t> storage;
+  raw_vector<vector_size_t> storage(pool());
   const auto numbers = iota(numInput, storage);
   const auto rows = folly::Range(numbers, numInput);
   if (serde_->kind() == VectorSerde::Kind::kCompactRow) {

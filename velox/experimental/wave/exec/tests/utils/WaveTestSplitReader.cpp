@@ -35,8 +35,9 @@ WaveTestSplitReader::WaveTestSplitReader(
   stripe_ = test::Table::getStripe(hiveSplit->filePath);
   if (!stripe_->isLoaded()) {
     try {
+      FileHandleKey key{stripe_->path};
       fileHandle_ = params_.fileHandleFactory->generate(
-          stripe_->path,
+          key,
           hiveSplit->properties.has_value() ? &*hiveSplit->properties
                                             : nullptr);
       VELOX_CHECK_NOT_NULL(fileHandle_.get());
@@ -80,8 +81,9 @@ void WaveTestSplitReader::schedule(WaveStream& waveStream, int32_t maxRows) {
   auto numRows = std::min<int32_t>(maxRows, available());
   scheduledRows_ = numRows;
   auto rowSet = folly::Range<const int32_t*>(iota(numRows, rows_), numRows);
-  std::unique_ptr<ReadStream> exe(reinterpret_cast<ReadStream*>(
-      waveStream.recycleExecutable(nullptr, 0).release()));
+  std::unique_ptr<ReadStream> exe(
+      reinterpret_cast<ReadStream*>(
+          waveStream.recycleExecutable(nullptr, 0).release()));
   if (exe) {
     VELOX_DCHECK_NOT_NULL(
         dynamic_cast<ReadStream*>(reinterpret_cast<Executable*>(exe.get())));
@@ -94,7 +96,7 @@ void WaveTestSplitReader::schedule(WaveStream& waveStream, int32_t maxRows) {
     exe = std::make_unique<ReadStream>(
         reinterpret_cast<StructColumnReader*>(columnReader_.get()),
         waveStream,
-        params_.ioStats.get(),
+        params_.ioStatistics.get(),
         fileInfo_);
   }
   ReadStream::launch(std::move(exe), nextRow_, rowSet);

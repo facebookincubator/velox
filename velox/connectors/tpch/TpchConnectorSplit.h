@@ -32,11 +32,35 @@ struct TpchConnectorSplit : public connector::ConnectorSplit {
       bool cacheable,
       size_t totalParts,
       size_t partNumber)
-      : ConnectorSplit(connectorId, /*splitWeight=*/0, cacheable),
+      : ConnectorSplit(connectorId, /*_splitWeight=*/0, cacheable),
         totalParts(totalParts),
         partNumber(partNumber) {
     VELOX_CHECK_GE(totalParts, 1, "totalParts must be >= 1");
     VELOX_CHECK_GT(totalParts, partNumber, "totalParts must be > partNumber");
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TpchConnectorSplit::getClassName();
+    obj["connectorId"] = connectorId;
+    obj["splitWeight"] = splitWeight;
+    obj["cacheable"] = cacheable;
+    obj["totalParts"] = totalParts;
+    obj["partNumber"] = partNumber;
+    return obj;
+  }
+
+  static std::shared_ptr<TpchConnectorSplit> create(const folly::dynamic& obj) {
+    auto connectorId = obj["connectorId"].asString();
+    auto cacheable = obj["cacheable"].asBool();
+    auto totalParts = static_cast<size_t>(obj["totalParts"].asInt());
+    auto partNumber = static_cast<size_t>(obj["partNumber"].asInt());
+    return std::make_shared<TpchConnectorSplit>(
+        connectorId, cacheable, totalParts, partNumber);
+  }
+
+  static void registerSerDe() {
+    registerDeserializer<TpchConnectorSplit>();
   }
 
   // In how many parts the generated TPC-H table will be segmented, roughly
@@ -45,6 +69,8 @@ struct TpchConnectorSplit : public connector::ConnectorSplit {
 
   // Which of these parts will be read by this split.
   size_t partNumber{0};
+
+  VELOX_DEFINE_CLASS_NAME(TpchConnectorSplit)
 };
 
 } // namespace facebook::velox::connector::tpch

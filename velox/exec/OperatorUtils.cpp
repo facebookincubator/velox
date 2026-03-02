@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::exec {
 
@@ -100,7 +103,11 @@ void gatherCopy(
     const std::vector<const RowVector*>& sources,
     const std::vector<vector_size_t>& sourceIndices,
     column_index_t sourceChannel) {
-  if (target->isScalar()) {
+  const bool flattenSources =
+      std::all_of(sources.begin(), sources.end(), [](const auto& source) {
+        return source->isFlatEncoding();
+      });
+  if (target->isScalar() && flattenSources) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         scalarGatherCopy,
         target->type()->kind(),
@@ -123,7 +130,14 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "dataSourceAddSplitWallNanos",
       "dataSourceLazyWallNanos",
       "queuedWallNanos",
-      "flushTimes"};
+      "flushTimes",
+      "driverCpuTimeNanos",
+      "ioWaitWallNanos",
+      "storageReadWallNanos",
+      "ssdCacheReadWallNanos",
+      "cacheWaitWallNanos",
+      "coalescedSsdLoadWallNanos",
+      "coalescedStorageLoadWallNanos"};
   if (metricNames.contains(name)) {
     return true;
   }
@@ -229,7 +243,7 @@ vector_size_t processEncodedFilterResults(
     const SelectivityVector& rows,
     FilterEvalCtx& filterEvalCtx,
     memory::MemoryPool* pool) {
-  auto size = rows.size();
+  const auto size = rows.size();
 
   DecodedVector& decoded = filterEvalCtx.decodedResult;
   decoded.decode(*filterResult.get(), rows);
@@ -455,6 +469,14 @@ std::string makeOperatorSpillPath(
   return fmt::format("{}/{}_{}_{}", spillDir, pipelineId, driverId, operatorId);
 }
 
+void setOperatorRuntimeStats(
+    const std::string& name,
+    const RuntimeCounter& value,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats[name] = RuntimeMetric(value.unit);
+  stats[name].addValue(value.value);
+}
+
 void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
@@ -504,12 +526,24 @@ void projectChildren(
     const std::vector<IdentityProjection>& projections,
     int32_t size,
     const BufferPtr& mapping) {
+  int maxInputChannel = -1;
+  int maxOutputChannel = -1;
   for (auto [inputChannel, outputChannel] : projections) {
-    if (outputChannel >= projectedChildren.size()) {
-      projectedChildren.resize(outputChannel + 1);
+    maxInputChannel = std::max<int>(maxInputChannel, inputChannel);
+    maxOutputChannel = std::max<int>(maxOutputChannel, outputChannel);
+  }
+  // Cache for already wrapped children to avoid wrapping the same child
+  // multiple times.
+  std::vector<VectorPtr> wrappedChildren(1 + maxInputChannel);
+  if (1 + maxOutputChannel > projectedChildren.size()) {
+    projectedChildren.resize(1 + maxOutputChannel);
+  }
+  for (auto [inputChannel, outputChannel] : projections) {
+    auto& wrapped = wrappedChildren[inputChannel];
+    if (!wrapped) {
+      wrapped = wrapChild(size, mapping, src[inputChannel]);
     }
-    projectedChildren[outputChannel] =
-        wrapChild(size, mapping, src[inputChannel]);
+    projectedChildren[outputChannel] = wrapped;
   }
 }
 
@@ -548,4 +582,20 @@ std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
   }
   return nullptr;
 }
+
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    common::CompressionKind compressionKind,
+    VectorSerde::Kind kind,
+    std::optional<float> minCompressionRatio) {
+  std::unique_ptr<VectorSerde::Options> options =
+      kind == VectorSerde::Kind::kPresto
+      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
+      : std::make_unique<VectorSerde::Options>();
+  options->compressionKind = compressionKind;
+  if (minCompressionRatio.has_value()) {
+    options->minCompressionRatio = minCompressionRatio.value();
+  }
+  return options;
+}
+
 } // namespace facebook::velox::exec

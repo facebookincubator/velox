@@ -156,22 +156,16 @@ common::CompressionKind thriftCodecToCompressionKind(
   switch (codec) {
     case thrift::CompressionCodec::UNCOMPRESSED:
       return common::CompressionKind::CompressionKind_NONE;
-      break;
     case thrift::CompressionCodec::SNAPPY:
       return common::CompressionKind::CompressionKind_SNAPPY;
-      break;
     case thrift::CompressionCodec::GZIP:
       return common::CompressionKind::CompressionKind_GZIP;
-      break;
     case thrift::CompressionCodec::LZO:
       return common::CompressionKind::CompressionKind_LZO;
-      break;
     case thrift::CompressionCodec::LZ4:
       return common::CompressionKind::CompressionKind_LZ4;
-      break;
     case thrift::CompressionCodec::ZSTD:
       return common::CompressionKind::CompressionKind_ZSTD;
-      break;
     case thrift::CompressionCodec::LZ4_RAW:
       return common::CompressionKind::CompressionKind_LZ4;
     default:
@@ -321,8 +315,9 @@ FileMetaDataPtr::FileMetaDataPtr(const void* metadata) : ptr_(metadata) {}
 FileMetaDataPtr::~FileMetaDataPtr() = default;
 
 RowGroupMetaDataPtr FileMetaDataPtr::rowGroup(int i) const {
-  return RowGroupMetaDataPtr(reinterpret_cast<const void*>(
-      &thriftFileMetaDataPtr(ptr_)->row_groups[i]));
+  return RowGroupMetaDataPtr(
+      reinterpret_cast<const void*>(
+          &thriftFileMetaDataPtr(ptr_)->row_groups[i]));
 }
 
 int64_t FileMetaDataPtr::numRows() const {

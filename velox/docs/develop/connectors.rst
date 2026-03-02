@@ -89,7 +89,7 @@ S3 is supported using the `AWS SDK for C++ <https://github.com/aws/aws-sdk-cpp>`
 S3 supported schemes are `s3://` (Amazon S3, Minio), `s3a://` (Hadoop 3.x), `s3n://` (Deprecated in Hadoop 3.x),
 `oss://` (Alibaba cloud storage), and `cos://`, `cosn://` (Tencent cloud storage).
 
-HDFS is supported using the
+HDFS is supported using the `Apache Hadoop libhdfs.so <https://github.com/apache/hadoop>`_ and
 `Apache Hawk libhdfs3 <https://github.com/apache/hawq/tree/master/depends/libhdfs3>`_ library. HDFS supported schemes
 are `hdfs://`.
 
@@ -121,3 +121,8 @@ This is the behavior when the proxy settings are enabled:
 4. The no_proxy/NO_PROXY list is comma separated.
 5. Use . or \*. to indicate domain suffix matching, e.g. `.foobar.com` will
    match `test.foobar.com` or `foo.foobar.com`.
+
+HDFS Storage adapter
+********************
+
+Velox currently supports HDFS by dynamically loading libhdfs.so from the environment's ${HADOOP_HOME}/native/lib directory. If you prefer to use libhdfs3 instead, you can create a symbolic link from libhdfs.so to libhdfs3.so within the same directory.

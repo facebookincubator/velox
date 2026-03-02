@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBufferManager.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -109,13 +110,14 @@ class OutputBufferManagerTest : public testing::Test {
         std::move(planFragment),
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
 
     bufferManager_->initializeTask(task, kind, numDestinations, numDrivers);
     return task;
   }
 
-  std::unique_ptr<SerializedPage> makeSerializedPage(
+  std::unique_ptr<SerializedPageBase> makeSerializedPage(
       RowTypePtr rowType,
       vector_size_t size) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -375,8 +377,9 @@ class OutputBufferManagerTest : public testing::Test {
               std::vector<std::unique_ptr<folly::IOBuf>> pages,
               int64_t inSequence,
               std::vector<int64_t> remainingBytes) {
-            promise.setValue(Response{
-                std::move(pages), inSequence, std::move(remainingBytes)});
+            promise.setValue(
+                Response{
+                    std::move(pages), inSequence, std::move(remainingBytes)});
           });
       future.wait();
       ASSERT_TRUE(future.isReady());
@@ -435,7 +438,7 @@ class OutputBufferManagerTest : public testing::Test {
   const VectorSerde::Kind serdeKind_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
   std::shared_ptr<OutputBufferManager> bufferManager_;
   RowTypePtr rowType_;
@@ -570,21 +573,18 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 
 TEST_F(OutputBufferManagerTest, outputType) {
   ASSERT_EQ(
-      PartitionedOutputNode::kindString(
-          PartitionedOutputNode::Kind::kPartitioned),
+      PartitionedOutputNode::toName(PartitionedOutputNode::Kind::kPartitioned),
       "PARTITIONED");
   ASSERT_EQ(
-      PartitionedOutputNode::kindString(
-          PartitionedOutputNode::Kind::kArbitrary),
+      PartitionedOutputNode::toName(PartitionedOutputNode::Kind::kArbitrary),
       "ARBITRARY");
   ASSERT_EQ(
-      PartitionedOutputNode::kindString(
-          PartitionedOutputNode::Kind::kBroadcast),
+      PartitionedOutputNode::toName(PartitionedOutputNode::Kind::kBroadcast),
       "BROADCAST");
   VELOX_ASSERT_THROW(
-      PartitionedOutputNode::kindString(
+      PartitionedOutputNode::toName(
           static_cast<PartitionedOutputNode::Kind>(100)),
-      "Invalid Output Kind 100");
+      "Invalid enum value: 100");
 }
 
 TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
@@ -1473,7 +1473,7 @@ TEST_P(
   std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
   iobuf->append(payloadSize);
 
-  auto page = std::make_unique<SerializedPage>(std::move(iobuf));
+  auto page = std::make_unique<PrestoSerializedPage>(std::move(iobuf));
 
   auto queue = std::make_shared<ExchangeQueue>(1, 0);
   std::vector<ContinuePromise> promises;

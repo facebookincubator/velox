@@ -362,20 +362,19 @@ void SelectiveStringDirectColumnReader::skipInDecode(
   lengthIndex_ += numValues;
 }
 
-folly::StringPiece SelectiveStringDirectColumnReader::readValue(
-    int32_t length) {
+std::string_view SelectiveStringDirectColumnReader::readValue(int32_t length) {
   skipBytes(bytesToSkip_, blobStream_.get(), bufferStart_, bufferEnd_);
   bytesToSkip_ = 0;
   // bufferStart_ may be null if length is 0 and this is the first string
   // we're reading.
   if (bufferEnd_ - bufferStart_ >= length) {
     bytesToSkip_ = length;
-    return folly::StringPiece(bufferStart_, length);
+    return std::string_view(bufferStart_, length);
   }
   tempString_.resize(length);
   readBytes(
       length, blobStream_.get(), tempString_.data(), bufferStart_, bufferEnd_);
-  return folly::StringPiece(tempString_);
+  return std::string_view(tempString_);
 }
 
 template <bool kHasNulls, typename Visitor>
@@ -474,7 +473,7 @@ void SelectiveStringDirectColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
+  prepareRead<std::string_view>(offset, rows, incomingNulls);
   auto numRows = rows.back() + 1;
   auto numNulls = nullsInReadRange_
       ? BaseVector::countNulls(nullsInReadRange_, 0, numRows)

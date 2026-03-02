@@ -56,15 +56,15 @@ const int SMALL_SIZE = 100;
 const int LARGE_SIZE = 10000;
 // Very large size to test dictionary fallback.
 const int VERY_LARGE_SIZE = 40000;
-// Reduced dictionary page size to use for testing dictionary fallback with
-// valgrind
+// Reduced dictionary page size to use for testing dictionary fallback with.
+// Valgrind.
 const int64_t DICTIONARY_PAGE_SIZE = 1024;
 #else
 // Larger size to test some corner cases, only used in some specific cases.
 const int LARGE_SIZE = 100000;
 // Very large size to test dictionary fallback.
 const int VERY_LARGE_SIZE = 400000;
-// Dictionary page size to use for testing dictionary fallback
+// Dictionary page size to use for testing dictionary fallback.
 const int64_t DICTIONARY_PAGE_SIZE = 1024 * 1024;
 #endif
 
@@ -72,62 +72,62 @@ template <typename TestType>
 class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
  public:
   void SetUp() {
-    this->SetupValuesOut(SMALL_SIZE);
-    writer_properties_ = default_writer_properties();
-    definition_levels_out_.resize(SMALL_SIZE);
-    repetition_levels_out_.resize(SMALL_SIZE);
+    this->setupValuesOut(SMALL_SIZE);
+    writerProperties_ = defaultWriterProperties();
+    definitionLevelsOut_.resize(SMALL_SIZE);
+    repetitionLevelsOut_.resize(SMALL_SIZE);
 
-    this->SetUpSchema(Repetition::REQUIRED);
+    this->setUpSchema(Repetition::kRequired);
 
-    descr_ = this->schema_.Column(0);
+    descr_ = this->schema_.column(0);
   }
 
-  Type::type type_num() {
-    return TestType::type_num;
+  Type::type typeNum() {
+    return TestType::typeNum;
   }
 
-  void BuildReader(
-      int64_t num_rows,
+  void buildReader(
+      int64_t numRows,
       Compression::type compression = Compression::UNCOMPRESSED,
-      bool page_checksum_verify = false) {
+      bool pageChecksumVerify = false) {
     ASSERT_OK_AND_ASSIGN(auto buffer, sink_->Finish());
     auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
     ReaderProperties readerProperties;
-    readerProperties.set_page_checksum_verification(page_checksum_verify);
-    std::unique_ptr<PageReader> page_reader = PageReader::Open(
-        std::move(source), num_rows, compression, readerProperties);
+    readerProperties.setPageChecksumVerification(pageChecksumVerify);
+    std::unique_ptr<PageReader> pageReader = PageReader::open(
+        std::move(source), numRows, compression, readerProperties);
     reader_ = std::static_pointer_cast<TypedColumnReader<TestType>>(
-        ColumnReader::Make(this->descr_, std::move(page_reader)));
+        ColumnReader::make(this->descr_, std::move(pageReader)));
   }
 
-  std::shared_ptr<TypedColumnWriter<TestType>> BuildWriter(
-      int64_t output_size = SMALL_SIZE,
-      const ColumnProperties& column_properties = ColumnProperties(),
+  std::shared_ptr<TypedColumnWriter<TestType>> buildWriter(
+      int64_t outputSize = SMALL_SIZE,
+      const ColumnProperties& columnProps = ColumnProperties(),
       const ParquetVersion::type version = ParquetVersion::PARQUET_1_0,
-      bool enable_checksum = false) {
-    sink_ = CreateOutputStream();
-    WriterProperties::Builder wp_builder;
-    wp_builder.version(version);
-    if (column_properties.encoding() == Encoding::PLAIN_DICTIONARY ||
-        column_properties.encoding() == Encoding::RLE_DICTIONARY) {
-      wp_builder.enable_dictionary();
-      wp_builder.dictionary_pagesize_limit(DICTIONARY_PAGE_SIZE);
+      bool enableChecksum = false) {
+    sink_ = createOutputStream();
+    WriterProperties::Builder wpBuilder;
+    wpBuilder.version(version);
+    if (columnProps.encoding() == Encoding::kPlainDictionary ||
+        columnProps.encoding() == Encoding::kRleDictionary) {
+      wpBuilder.enableDictionary();
+      wpBuilder.dictionaryPagesizeLimit(DICTIONARY_PAGE_SIZE);
     } else {
-      wp_builder.disable_dictionary();
-      wp_builder.encoding(column_properties.encoding());
+      wpBuilder.disableDictionary();
+      wpBuilder.encoding(columnProps.encoding());
     }
-    if (enable_checksum) {
-      wp_builder.enable_page_checksum();
+    if (enableChecksum) {
+      wpBuilder.enablePageChecksum();
     }
-    wp_builder.max_statistics_size(column_properties.max_statistics_size());
-    writer_properties_ = wp_builder.build();
+    wpBuilder.maxStatisticsSize(columnProps.maxStatisticsSize());
+    writerProperties_ = wpBuilder.build();
 
     metadata_ =
-        ColumnChunkMetaDataBuilder::Make(writer_properties_, this->descr_);
-    std::unique_ptr<PageWriter> pager = PageWriter::Open(
+        ColumnChunkMetaDataBuilder::make(writerProperties_, this->descr_);
+    std::unique_ptr<PageWriter> pager = PageWriter::open(
         sink_,
-        column_properties.compression(),
-        Codec::UseDefaultCompressionLevel(),
+        columnProps.compression(),
+        Codec::useDefaultCompressionLevel(),
         metadata_.get(),
         /* row_group_ordinal */ -1,
         /* column_chunk_ordinal*/ -1,
@@ -135,374 +135,366 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
         /* buffered_row_group */ false,
         /* header_encryptor */ NULLPTR,
         /* data_encryptor */ NULLPTR,
-        enable_checksum);
-    std::shared_ptr<ColumnWriter> writer = ColumnWriter::Make(
-        metadata_.get(), std::move(pager), writer_properties_.get());
+        enableChecksum);
+    std::shared_ptr<ColumnWriter> writer = ColumnWriter::make(
+        metadata_.get(), std::move(pager), writerProperties_.get());
     return std::static_pointer_cast<TypedColumnWriter<TestType>>(writer);
   }
 
-  void ReadColumn(
+  void readColumn(
       Compression::type compression = Compression::UNCOMPRESSED,
-      bool page_checksum_verify = false) {
-    BuildReader(
-        static_cast<int64_t>(this->values_out_.size()),
+      bool pageChecksumVerify = false) {
+    buildReader(
+        static_cast<int64_t>(this->valuesOut_.size()),
         compression,
-        page_checksum_verify);
-    reader_->ReadBatch(
-        static_cast<int>(this->values_out_.size()),
-        definition_levels_out_.data(),
-        repetition_levels_out_.data(),
-        this->values_out_ptr_,
-        &values_read_);
-    this->SyncValuesOut();
+        pageChecksumVerify);
+    reader_->readBatch(
+        static_cast<int>(this->valuesOut_.size()),
+        definitionLevelsOut_.data(),
+        repetitionLevelsOut_.data(),
+        this->valuesOutPtr_,
+        &valuesRead_);
+    this->syncValuesOut();
   }
 
-  void ReadColumnFully(
+  void readColumnFully(
       Compression::type compression = Compression::UNCOMPRESSED,
-      bool page_checksum_verify = false);
+      bool pageChecksumVerify = false);
 
-  void TestRequiredWithEncoding(Encoding::type encoding) {
-    return TestRequiredWithSettings(
+  void testRequiredWithEncoding(Encoding::type encoding) {
+    return testRequiredWithSettings(
         encoding, Compression::UNCOMPRESSED, false, false);
   }
 
-  void TestRequiredWithSettings(
+  void testRequiredWithSettings(
       Encoding::type encoding,
       Compression::type compression,
-      bool enable_dictionary,
-      bool enable_statistics,
-      int64_t num_rows = SMALL_SIZE,
-      int compression_level = Codec::UseDefaultCompressionLevel(),
-      bool enable_checksum = false) {
-    this->GenerateData(num_rows);
+      bool enableDictionary,
+      bool enableStatistics,
+      int64_t numRows = SMALL_SIZE,
+      int compressionLevel = Codec::useDefaultCompressionLevel(),
+      bool enableChecksum = false) {
+    this->generateData(numRows);
 
-    this->WriteRequiredWithSettings(
+    this->writeRequiredWithSettings(
         encoding,
         compression,
-        enable_dictionary,
-        enable_statistics,
-        compression_level,
-        num_rows,
-        enable_checksum);
+        enableDictionary,
+        enableStatistics,
+        compressionLevel,
+        numRows,
+        enableChecksum);
     ASSERT_NO_FATAL_FAILURE(
-        this->ReadAndCompare(compression, num_rows, enable_checksum));
+        this->readAndCompare(compression, numRows, enableChecksum));
 
-    this->WriteRequiredWithSettingsSpaced(
+    this->writeRequiredWithSettingsSpaced(
         encoding,
         compression,
-        enable_dictionary,
-        enable_statistics,
-        num_rows,
-        compression_level,
-        enable_checksum);
+        enableDictionary,
+        enableStatistics,
+        numRows,
+        compressionLevel,
+        enableChecksum);
     ASSERT_NO_FATAL_FAILURE(
-        this->ReadAndCompare(compression, num_rows, enable_checksum));
+        this->readAndCompare(compression, numRows, enableChecksum));
   }
 
-  void TestDictionaryFallbackEncoding(ParquetVersion::type version) {
-    this->GenerateData(VERY_LARGE_SIZE);
-    ColumnProperties column_properties;
-    column_properties.set_dictionary_enabled(true);
+  void testDictionaryFallbackEncoding(ParquetVersion::type version) {
+    this->generateData(VERY_LARGE_SIZE);
+    ColumnProperties columnProperties;
+    columnProperties.setDictionaryEnabled(true);
 
     if (version == ParquetVersion::PARQUET_1_0) {
-      column_properties.set_encoding(Encoding::PLAIN_DICTIONARY);
+      columnProperties.setEncoding(Encoding::kPlainDictionary);
     } else {
-      column_properties.set_encoding(Encoding::RLE_DICTIONARY);
+      columnProperties.setEncoding(Encoding::kRleDictionary);
     }
 
-    auto writer =
-        this->BuildWriter(VERY_LARGE_SIZE, column_properties, version);
+    auto writer = this->buildWriter(VERY_LARGE_SIZE, columnProperties, version);
 
-    writer->WriteBatch(
-        this->values_.size(), nullptr, nullptr, this->values_ptr_);
-    writer->Close();
+    writer->writeBatch(
+        this->values_.size(), nullptr, nullptr, this->valuesPtr_);
+    writer->close();
 
-    // Read all rows so we are sure that also the non-dictionary pages are read
-    // correctly
-    this->SetupValuesOut(VERY_LARGE_SIZE);
-    this->ReadColumnFully();
-    ASSERT_EQ(VERY_LARGE_SIZE, this->values_read_);
+    // Read all rows so we are sure that also the non-dictionary pages are read.
+    // Correctly.
+    this->setupValuesOut(VERY_LARGE_SIZE);
+    this->readColumnFully();
+    ASSERT_EQ(VERY_LARGE_SIZE, this->valuesRead_);
     this->values_.resize(VERY_LARGE_SIZE);
-    ASSERT_EQ(this->values_, this->values_out_);
-    std::vector<Encoding::type> encodings_vector = this->metadata_encodings();
+    ASSERT_EQ(this->values_, this->valuesOut_);
+    std::vector<Encoding::type> encodingsVector = this->metadataEncodings();
     std::set<Encoding::type> encodings(
-        encodings_vector.begin(), encodings_vector.end());
+        encodingsVector.cbegin(), encodingsVector.cend());
 
-    if (this->type_num() == Type::BOOLEAN) {
-      // Dictionary encoding is not allowed for boolean type
-      // There are 2 encodings (PLAIN, RLE) in a non dictionary encoding case
-      std::set<Encoding::type> expected({Encoding::PLAIN, Encoding::RLE});
+    if (this->typeNum() == Type::kBoolean) {
+      // Dictionary encoding is not allowed for boolean type.
+      // There are 2 encodings (PLAIN, RLE) in a non dictionary encoding case.
+      std::set<Encoding::type> expected({Encoding::kPlain, Encoding::kRle});
       ASSERT_EQ(encodings, expected);
     } else if (version == ParquetVersion::PARQUET_1_0) {
-      // There are 3 encodings (PLAIN_DICTIONARY, PLAIN, RLE) in a fallback case
-      // for version 1.0
+      // There are 3 encodings (PLAIN_DICTIONARY, PLAIN, RLE) in a fallback
+      // case. For version 1.0.
       std::set<Encoding::type> expected(
-          {Encoding::PLAIN_DICTIONARY, Encoding::PLAIN, Encoding::RLE});
+          {Encoding::kPlainDictionary, Encoding::kPlain, Encoding::kRle});
       ASSERT_EQ(encodings, expected);
     } else {
-      // There are 3 encodings (RLE_DICTIONARY, PLAIN, RLE) in a fallback case
-      // for version 2.0
+      // There are 3 encodings (RLE_DICTIONARY, PLAIN, RLE) in a fallback case.
+      // For version 2.0.
       std::set<Encoding::type> expected(
-          {Encoding::RLE_DICTIONARY, Encoding::PLAIN, Encoding::RLE});
+          {Encoding::kRleDictionary, Encoding::kPlain, Encoding::kRle});
       ASSERT_EQ(encodings, expected);
     }
 
-    std::vector<PageEncodingStats> encoding_stats =
-        this->metadata_encoding_stats();
-    if (this->type_num() == Type::BOOLEAN) {
-      ASSERT_EQ(encoding_stats[0].encoding, Encoding::PLAIN);
-      ASSERT_EQ(encoding_stats[0].page_type, PageType::DATA_PAGE);
+    std::vector<PageEncodingStats> encodingStats =
+        this->metadataEncodingStats();
+    if (this->typeNum() == Type::kBoolean) {
+      ASSERT_EQ(encodingStats[0].encoding, Encoding::kPlain);
+      ASSERT_EQ(encodingStats[0].pageType, PageType::kDataPage);
     } else if (version == ParquetVersion::PARQUET_1_0) {
       std::vector<Encoding::type> expected(
-          {Encoding::PLAIN_DICTIONARY,
-           Encoding::PLAIN,
-           Encoding::PLAIN_DICTIONARY});
-      ASSERT_EQ(encoding_stats[0].encoding, expected[0]);
-      ASSERT_EQ(encoding_stats[0].page_type, PageType::DICTIONARY_PAGE);
-      for (size_t i = 1; i < encoding_stats.size(); i++) {
-        ASSERT_EQ(encoding_stats[i].encoding, expected[i]);
-        ASSERT_EQ(encoding_stats[i].page_type, PageType::DATA_PAGE);
+          {Encoding::kPlainDictionary,
+           Encoding::kPlain,
+           Encoding::kPlainDictionary});
+      ASSERT_EQ(encodingStats[0].encoding, expected[0]);
+      ASSERT_EQ(encodingStats[0].pageType, PageType::kDictionaryPage);
+      for (size_t i = 1; i < encodingStats.size(); i++) {
+        ASSERT_EQ(encodingStats[i].encoding, expected[i]);
+        ASSERT_EQ(encodingStats[i].pageType, PageType::kDataPage);
       }
     } else {
       std::vector<Encoding::type> expected(
-          {Encoding::PLAIN, Encoding::PLAIN, Encoding::RLE_DICTIONARY});
-      ASSERT_EQ(encoding_stats[0].encoding, expected[0]);
-      ASSERT_EQ(encoding_stats[0].page_type, PageType::DICTIONARY_PAGE);
-      for (size_t i = 1; i < encoding_stats.size(); i++) {
-        ASSERT_EQ(encoding_stats[i].encoding, expected[i]);
-        ASSERT_EQ(encoding_stats[i].page_type, PageType::DATA_PAGE);
+          {Encoding::kPlain, Encoding::kPlain, Encoding::kRleDictionary});
+      ASSERT_EQ(encodingStats[0].encoding, expected[0]);
+      ASSERT_EQ(encodingStats[0].pageType, PageType::kDictionaryPage);
+      for (size_t i = 1; i < encodingStats.size(); i++) {
+        ASSERT_EQ(encodingStats[i].encoding, expected[i]);
+        ASSERT_EQ(encodingStats[i].pageType, PageType::kDataPage);
       }
     }
   }
 
-  void WriteRequiredWithSettings(
+  void writeRequiredWithSettings(
       Encoding::type encoding,
       Compression::type compression,
-      bool enable_dictionary,
-      bool enable_statistics,
-      int compression_level,
-      int64_t num_rows,
-      bool enable_checksum) {
-    ColumnProperties column_properties(
-        encoding, compression, enable_dictionary, enable_statistics);
-    column_properties.set_compression_level(compression_level);
-    std::shared_ptr<TypedColumnWriter<TestType>> writer = this->BuildWriter(
-        num_rows,
-        column_properties,
-        ParquetVersion::PARQUET_1_0,
-        enable_checksum);
-    writer->WriteBatch(
-        this->values_.size(), nullptr, nullptr, this->values_ptr_);
-    // The behaviour should be independent from the number of Close() calls
-    writer->Close();
-    writer->Close();
+      bool enableDictionary,
+      bool enableStatistics,
+      int compressionLevel,
+      int64_t numRows,
+      bool enableChecksum) {
+    ColumnProperties columnProperties(
+        encoding, compression, enableDictionary, enableStatistics);
+    columnProperties.setCompressionLevel(compressionLevel);
+    std::shared_ptr<TypedColumnWriter<TestType>> writer = this->buildWriter(
+        numRows, columnProperties, ParquetVersion::PARQUET_1_0, enableChecksum);
+    writer->writeBatch(
+        this->values_.size(), nullptr, nullptr, this->valuesPtr_);
+    // The behaviour should be independent from the number of Close() calls.
+    writer->close();
+    writer->close();
   }
 
-  void WriteRequiredWithSettingsSpaced(
+  void writeRequiredWithSettingsSpaced(
       Encoding::type encoding,
       Compression::type compression,
-      bool enable_dictionary,
-      bool enable_statistics,
-      int64_t num_rows,
-      int compression_level,
-      bool enable_checksum) {
-    std::vector<uint8_t> valid_bits(
+      bool enableDictionary,
+      bool enableStatistics,
+      int64_t numRows,
+      int compressionLevel,
+      bool enableChecksum) {
+    std::vector<uint8_t> validBits(
         ::arrow::bit_util::BytesForBits(
             static_cast<uint32_t>(this->values_.size())) +
             1,
         255);
-    ColumnProperties column_properties(
-        encoding, compression, enable_dictionary, enable_statistics);
-    column_properties.set_compression_level(compression_level);
-    std::shared_ptr<TypedColumnWriter<TestType>> writer = this->BuildWriter(
-        num_rows,
-        column_properties,
-        ParquetVersion::PARQUET_1_0,
-        enable_checksum);
-    writer->WriteBatchSpaced(
+    ColumnProperties columnProperties(
+        encoding, compression, enableDictionary, enableStatistics);
+    columnProperties.setCompressionLevel(compressionLevel);
+    std::shared_ptr<TypedColumnWriter<TestType>> writer = this->buildWriter(
+        numRows, columnProperties, ParquetVersion::PARQUET_1_0, enableChecksum);
+    writer->writeBatchSpaced(
         this->values_.size(),
         nullptr,
         nullptr,
-        valid_bits.data(),
+        validBits.data(),
         0,
-        this->values_ptr_);
-    // The behaviour should be independent from the number of Close() calls
-    writer->Close();
-    writer->Close();
+        this->valuesPtr_);
+    // The behaviour should be independent from the number of Close() calls.
+    writer->close();
+    writer->close();
   }
 
-  void ReadAndCompare(
+  void readAndCompare(
       Compression::type compression,
-      int64_t num_rows,
-      bool page_checksum_verify) {
-    this->SetupValuesOut(num_rows);
-    this->ReadColumnFully(compression, page_checksum_verify);
-    auto comparator = MakeComparator<TestType>(this->descr_);
+      int64_t numRows,
+      bool pageChecksumVerify) {
+    this->setupValuesOut(numRows);
+    this->readColumnFully(compression, pageChecksumVerify);
+    auto Comparator = makeComparator<TestType>(this->descr_);
     for (size_t i = 0; i < this->values_.size(); i++) {
-      if (comparator->Compare(this->values_[i], this->values_out_[i]) ||
-          comparator->Compare(this->values_out_[i], this->values_[i])) {
+      if (Comparator->compare(this->values_[i], this->valuesOut_[i]) ||
+          Comparator->compare(this->valuesOut_[i], this->values_[i])) {
         ARROW_SCOPED_TRACE("i = ", i);
       }
-      ASSERT_FALSE(comparator->Compare(this->values_[i], this->values_out_[i]));
-      ASSERT_FALSE(comparator->Compare(this->values_out_[i], this->values_[i]));
+      ASSERT_FALSE(Comparator->compare(this->values_[i], this->valuesOut_[i]));
+      ASSERT_FALSE(Comparator->compare(this->valuesOut_[i], this->values_[i]));
     }
-    ASSERT_EQ(this->values_, this->values_out_);
+    ASSERT_EQ(this->values_, this->valuesOut_);
   }
 
-  int64_t metadata_num_values() {
+  int64_t metadataNumValues() {
     // Metadata accessor must be created lazily.
-    // This is because the ColumnChunkMetaData semantics dictate the metadata
-    // object is complete (no changes to the metadata buffer can be made after
+    // This is because the ColumnChunkMetaData semantics dictate the metadata.
+    // Object is complete (no changes to the metadata buffer can be made after.
     // instantiation)
-    auto metadata_accessor =
-        ColumnChunkMetaData::Make(metadata_->contents(), this->descr_);
-    return metadata_accessor->num_values();
+    auto metadataAccessor =
+        ColumnChunkMetaData::make(metadata_->Contents(), this->descr_);
+    return metadataAccessor->numValues();
   }
 
-  bool metadata_is_stats_set() {
+  bool metadataIsStatsSet() {
     // Metadata accessor must be created lazily.
-    // This is because the ColumnChunkMetaData semantics dictate the metadata
-    // object is complete (no changes to the metadata buffer can be made after
+    // This is because the ColumnChunkMetaData semantics dictate the metadata.
+    // Object is complete (no changes to the metadata buffer can be made after.
     // instantiation)
-    ApplicationVersion app_version(this->writer_properties_->created_by());
-    auto metadata_accessor = ColumnChunkMetaData::Make(
-        metadata_->contents(),
+    ApplicationVersion appVersion(this->writerProperties_->createdBy());
+    auto metadataAccessor = ColumnChunkMetaData::make(
+        metadata_->Contents(),
         this->descr_,
-        default_reader_properties(),
-        &app_version);
-    return metadata_accessor->is_stats_set();
+        defaultReaderProperties(),
+        &appVersion);
+    return metadataAccessor->isStatsSet();
   }
 
-  std::pair<bool, bool> metadata_stats_has_min_max() {
+  std::pair<bool, bool> metadataStatsHasMinMax() {
     // Metadata accessor must be created lazily.
-    // This is because the ColumnChunkMetaData semantics dictate the metadata
-    // object is complete (no changes to the metadata buffer can be made after
+    // This is because the ColumnChunkMetaData semantics dictate the metadata.
+    // Object is complete (no changes to the metadata buffer can be made after.
     // instantiation)
-    ApplicationVersion app_version(this->writer_properties_->created_by());
-    auto metadata_accessor = ColumnChunkMetaData::Make(
-        metadata_->contents(),
+    ApplicationVersion appVersion(this->writerProperties_->createdBy());
+    auto metadataAccessor = ColumnChunkMetaData::make(
+        metadata_->Contents(),
         this->descr_,
-        default_reader_properties(),
-        &app_version);
-    auto encoded_stats = metadata_accessor->statistics()->Encode();
-    return {encoded_stats.has_min, encoded_stats.has_max};
+        defaultReaderProperties(),
+        &appVersion);
+    auto encodedStats = metadataAccessor->statistics()->encode();
+    return {encodedStats.hasMin, encodedStats.hasMax};
   }
 
-  std::vector<Encoding::type> metadata_encodings() {
+  std::vector<Encoding::type> metadataEncodings() {
     // Metadata accessor must be created lazily.
-    // This is because the ColumnChunkMetaData semantics dictate the metadata
-    // object is complete (no changes to the metadata buffer can be made after
+    // This is because the ColumnChunkMetaData semantics dictate the metadata.
+    // Object is complete (no changes to the metadata buffer can be made after.
     // instantiation)
-    auto metadata_accessor =
-        ColumnChunkMetaData::Make(metadata_->contents(), this->descr_);
-    return metadata_accessor->encodings();
+    auto metadataAccessor =
+        ColumnChunkMetaData::make(metadata_->Contents(), this->descr_);
+    return metadataAccessor->encodings();
   }
 
-  std::vector<PageEncodingStats> metadata_encoding_stats() {
+  std::vector<PageEncodingStats> metadataEncodingStats() {
     // Metadata accessor must be created lazily.
-    // This is because the ColumnChunkMetaData semantics dictate the metadata
-    // object is complete (no changes to the metadata buffer can be made after
+    // This is because the ColumnChunkMetaData semantics dictate the metadata.
+    // Object is complete (no changes to the metadata buffer can be made after.
     // instantiation)
-    auto metadata_accessor =
-        ColumnChunkMetaData::Make(metadata_->contents(), this->descr_);
-    return metadata_accessor->encoding_stats();
+    auto metadataAccessor =
+        ColumnChunkMetaData::make(metadata_->Contents(), this->descr_);
+    return metadataAccessor->encodingStats();
   }
 
  protected:
-  int64_t values_read_;
-  // Keep the reader alive as for ByteArray the lifetime of the ByteArray
-  // content is bound to the reader.
+  int64_t valuesRead_;
+  // Keep the reader alive as for ByteArray the lifetime of the ByteArray.
+  // Content is bound to the reader.
   std::shared_ptr<TypedColumnReader<TestType>> reader_;
 
-  std::vector<int16_t> definition_levels_out_;
-  std::vector<int16_t> repetition_levels_out_;
+  std::vector<int16_t> definitionLevelsOut_;
+  std::vector<int16_t> repetitionLevelsOut_;
 
   const ColumnDescriptor* descr_;
 
  private:
   std::unique_ptr<ColumnChunkMetaDataBuilder> metadata_;
   std::shared_ptr<::arrow::io::BufferOutputStream> sink_;
-  std::shared_ptr<WriterProperties> writer_properties_;
-  std::vector<std::vector<uint8_t>> data_buffer_;
+  std::shared_ptr<WriterProperties> writerProperties_;
+  std::vector<std::vector<uint8_t>> dataBuffer_;
 };
 
 template <typename TestType>
-void TestPrimitiveWriter<TestType>::ReadColumnFully(
+void TestPrimitiveWriter<TestType>::readColumnFully(
     Compression::type compression,
-    bool page_checksum_verify) {
-  int64_t total_values = static_cast<int64_t>(this->values_out_.size());
-  BuildReader(total_values, compression, page_checksum_verify);
-  values_read_ = 0;
-  while (values_read_ < total_values) {
-    int64_t values_read_recently = 0;
-    reader_->ReadBatch(
-        static_cast<int>(this->values_out_.size()) -
-            static_cast<int>(values_read_),
-        definition_levels_out_.data() + values_read_,
-        repetition_levels_out_.data() + values_read_,
-        this->values_out_ptr_ + values_read_,
-        &values_read_recently);
-    values_read_ += values_read_recently;
+    bool pageChecksumVerify) {
+  int64_t totalValues = static_cast<int64_t>(this->valuesOut_.size());
+  buildReader(totalValues, compression, pageChecksumVerify);
+  valuesRead_ = 0;
+  while (valuesRead_ < totalValues) {
+    int64_t valuesReadRecently = 0;
+    reader_->readBatch(
+        static_cast<int>(this->valuesOut_.size()) -
+            static_cast<int>(valuesRead_),
+        definitionLevelsOut_.data() + valuesRead_,
+        repetitionLevelsOut_.data() + valuesRead_,
+        this->valuesOutPtr_ + valuesRead_,
+        &valuesReadRecently);
+    valuesRead_ += valuesReadRecently;
   }
-  this->SyncValuesOut();
+  this->syncValuesOut();
 }
 
 template <>
-void TestPrimitiveWriter<Int96Type>::ReadAndCompare(
+void TestPrimitiveWriter<Int96Type>::readAndCompare(
     Compression::type compression,
-    int64_t num_rows,
-    bool page_checksum_verify) {
-  this->SetupValuesOut(num_rows);
-  this->ReadColumnFully(compression, page_checksum_verify);
+    int64_t numRows,
+    bool pageChecksumVerify) {
+  this->setupValuesOut(numRows);
+  this->readColumnFully(compression, pageChecksumVerify);
 
-  auto comparator = MakeComparator<Int96Type>(Type::INT96, SortOrder::SIGNED);
+  auto Comparator = makeComparator<Int96Type>(Type::kInt96, SortOrder::kSigned);
   for (size_t i = 0; i < this->values_.size(); i++) {
-    if (comparator->Compare(this->values_[i], this->values_out_[i]) ||
-        comparator->Compare(this->values_out_[i], this->values_[i])) {
+    if (Comparator->compare(this->values_[i], this->valuesOut_[i]) ||
+        Comparator->compare(this->valuesOut_[i], this->values_[i])) {
       ARROW_SCOPED_TRACE("i = ", i);
     }
-    ASSERT_FALSE(comparator->Compare(this->values_[i], this->values_out_[i]));
-    ASSERT_FALSE(comparator->Compare(this->values_out_[i], this->values_[i]));
+    ASSERT_FALSE(Comparator->compare(this->values_[i], this->valuesOut_[i]));
+    ASSERT_FALSE(Comparator->compare(this->valuesOut_[i], this->values_[i]));
   }
-  ASSERT_EQ(this->values_, this->values_out_);
+  ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
 template <>
-void TestPrimitiveWriter<FLBAType>::ReadColumnFully(
+void TestPrimitiveWriter<FLBAType>::readColumnFully(
     Compression::type compression,
-    bool page_checksum_verify) {
-  int64_t total_values = static_cast<int64_t>(this->values_out_.size());
-  BuildReader(total_values, compression, page_checksum_verify);
-  this->data_buffer_.clear();
+    bool pageChecksumVerify) {
+  int64_t totalValues = static_cast<int64_t>(this->valuesOut_.size());
+  buildReader(totalValues, compression, pageChecksumVerify);
+  this->dataBuffer_.clear();
 
-  values_read_ = 0;
-  while (values_read_ < total_values) {
-    int64_t values_read_recently = 0;
-    reader_->ReadBatch(
-        static_cast<int>(this->values_out_.size()) -
-            static_cast<int>(values_read_),
-        definition_levels_out_.data() + values_read_,
-        repetition_levels_out_.data() + values_read_,
-        this->values_out_ptr_ + values_read_,
-        &values_read_recently);
+  valuesRead_ = 0;
+  while (valuesRead_ < totalValues) {
+    int64_t valuesReadRecently = 0;
+    reader_->readBatch(
+        static_cast<int>(this->valuesOut_.size()) -
+            static_cast<int>(valuesRead_),
+        definitionLevelsOut_.data() + valuesRead_,
+        repetitionLevelsOut_.data() + valuesRead_,
+        this->valuesOutPtr_ + valuesRead_,
+        &valuesReadRecently);
 
-    // Copy contents of the pointers
-    std::vector<uint8_t> data(
-        values_read_recently * this->descr_->type_length());
-    uint8_t* data_ptr = data.data();
-    for (int64_t i = 0; i < values_read_recently; i++) {
+    // Copy contents of the pointers.
+    std::vector<uint8_t> data(valuesReadRecently * this->descr_->typeLength());
+    uint8_t* dataPtr = data.data();
+    for (int64_t i = 0; i < valuesReadRecently; i++) {
       memcpy(
-          data_ptr + this->descr_->type_length() * i,
-          this->values_out_[i + values_read_].ptr,
-          this->descr_->type_length());
-      this->values_out_[i + values_read_].ptr =
-          data_ptr + this->descr_->type_length() * i;
+          dataPtr + this->descr_->typeLength() * i,
+          this->valuesOut_[i + valuesRead_].ptr,
+          this->descr_->typeLength());
+      this->valuesOut_[i + valuesRead_].ptr =
+          dataPtr + this->descr_->typeLength() * i;
     }
-    data_buffer_.emplace_back(std::move(data));
+    dataBuffer_.emplace_back(std::move(data));
 
-    values_read_ += values_read_recently;
+    valuesRead_ += valuesReadRecently;
   }
-  this->SyncValuesOut();
+  this->syncValuesOut();
 }
 
 typedef ::testing::Types<
@@ -524,11 +516,11 @@ using TestByteArrayValuesWriter = TestPrimitiveWriter<ByteArrayType>;
 using TestFixedLengthByteArrayValuesWriter = TestPrimitiveWriter<FLBAType>;
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlain) {
-  this->TestRequiredWithEncoding(Encoding::PLAIN);
+  this->testRequiredWithEncoding(Encoding::kPlain);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredDictionary) {
-  this->TestRequiredWithEncoding(Encoding::PLAIN_DICTIONARY);
+  this->testRequiredWithEncoding(Encoding::kPlainDictionary);
 }
 
 /*
@@ -542,15 +534,15 @@ TYPED_TEST(TestPrimitiveWriter, RequiredBitPacked) {
 */
 
 TEST_F(TestValuesWriterInt32Type, RequiredDeltaBinaryPacked) {
-  this->TestRequiredWithEncoding(Encoding::DELTA_BINARY_PACKED);
+  this->testRequiredWithEncoding(Encoding::kDeltaBinaryPacked);
 }
 
 TEST_F(TestValuesWriterInt64Type, RequiredDeltaBinaryPacked) {
-  this->TestRequiredWithEncoding(Encoding::DELTA_BINARY_PACKED);
+  this->testRequiredWithEncoding(Encoding::kDeltaBinaryPacked);
 }
 
 TEST_F(TestByteArrayValuesWriter, RequiredDeltaLengthByteArray) {
-  this->TestRequiredWithEncoding(Encoding::DELTA_LENGTH_BYTE_ARRAY);
+  this->testRequiredWithEncoding(Encoding::kDeltaLengthByteArray);
 }
 
 /*
@@ -564,432 +556,423 @@ TEST_F(TestFixedLengthByteArrayValuesWriter, RequiredDeltaByteArray) {
 */
 
 TYPED_TEST(TestPrimitiveWriter, RequiredRLEDictionary) {
-  this->TestRequiredWithEncoding(Encoding::RLE_DICTIONARY);
+  this->testRequiredWithEncoding(Encoding::kRleDictionary);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStats) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::UNCOMPRESSED, false, true, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::UNCOMPRESSED, false, true, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithSnappyCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::SNAPPY, false, false, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::SNAPPY, false, false, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndSnappyCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::SNAPPY, false, true, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::SNAPPY, false, true, LARGE_SIZE);
 }
 
 #ifdef ARROW_WITH_BROTLI
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithBrotliCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::BROTLI, false, false, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::BROTLI, false, false, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithBrotliCompressionAndLevel) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::BROTLI, false, false, LARGE_SIZE, 10);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::BROTLI, false, false, LARGE_SIZE, 10);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndBrotliCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::BROTLI, false, true, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::BROTLI, false, true, LARGE_SIZE);
 }
 
 #endif
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithGzipCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::GZIP, false, false, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::GZIP, false, false, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithGzipCompressionAndLevel) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::GZIP, false, false, LARGE_SIZE, 10);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::GZIP, false, false, LARGE_SIZE, 10);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndGzipCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::GZIP, false, true, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::GZIP, false, true, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithLz4Compression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::LZ4, false, false, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::LZ4, false, false, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndLz4Compression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::LZ4, false, true, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::LZ4, false, true, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithZstdCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::ZSTD, false, false, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::ZSTD, false, false, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithZstdCompressionAndLevel) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::ZSTD, false, false, LARGE_SIZE, 6);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::ZSTD, false, false, LARGE_SIZE, 6);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndZstdCompression) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN, Compression::ZSTD, false, true, LARGE_SIZE);
+  this->testRequiredWithSettings(
+      Encoding::kPlain, Compression::ZSTD, false, true, LARGE_SIZE);
 }
 
 TYPED_TEST(TestPrimitiveWriter, Optional) {
-  // Optional and non-repeated, with definition levels
-  // but no repetition levels
-  this->SetUpSchema(Repetition::OPTIONAL);
+  // Optional and non-repeated, with definition levels.
+  // But no repetition levels.
+  this->setUpSchema(Repetition::kOptional);
 
-  this->GenerateData(SMALL_SIZE);
-  std::vector<int16_t> definition_levels(SMALL_SIZE, 1);
-  definition_levels[1] = 0;
+  this->generateData(SMALL_SIZE);
+  std::vector<int16_t> definitionLevels(SMALL_SIZE, 1);
+  definitionLevels[1] = 0;
 
-  auto writer = this->BuildWriter();
-  writer->WriteBatch(
-      this->values_.size(),
-      definition_levels.data(),
-      nullptr,
-      this->values_ptr_);
-  writer->Close();
+  auto writer = this->buildWriter();
+  writer->writeBatch(
+      this->values_.size(), definitionLevels.data(), nullptr, this->valuesPtr_);
+  writer->close();
 
-  // PARQUET-703
-  ASSERT_EQ(100, this->metadata_num_values());
+  // PARQUET-703.
+  ASSERT_EQ(100, this->metadataNumValues());
 
-  this->ReadColumn();
-  ASSERT_EQ(99, this->values_read_);
-  this->values_out_.resize(99);
+  this->readColumn();
+  ASSERT_EQ(99, this->valuesRead_);
+  this->valuesOut_.resize(99);
   this->values_.resize(99);
-  ASSERT_EQ(this->values_, this->values_out_);
+  ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
 TYPED_TEST(TestPrimitiveWriter, OptionalSpaced) {
-  // Optional and non-repeated, with definition levels
-  // but no repetition levels
-  this->SetUpSchema(Repetition::OPTIONAL);
+  // Optional and non-repeated, with definition levels.
+  // But no repetition levels.
+  this->setUpSchema(Repetition::kOptional);
 
-  this->GenerateData(SMALL_SIZE);
-  std::vector<int16_t> definition_levels(SMALL_SIZE, 1);
-  std::vector<uint8_t> valid_bits(
+  this->generateData(SMALL_SIZE);
+  std::vector<int16_t> definitionLevels(SMALL_SIZE, 1);
+  std::vector<uint8_t> validBits(
       ::arrow::bit_util::BytesForBits(SMALL_SIZE), 255);
 
-  definition_levels[SMALL_SIZE - 1] = 0;
-  ::arrow::bit_util::ClearBit(valid_bits.data(), SMALL_SIZE - 1);
-  definition_levels[1] = 0;
-  ::arrow::bit_util::ClearBit(valid_bits.data(), 1);
+  definitionLevels[SMALL_SIZE - 1] = 0;
+  ::arrow::bit_util::ClearBit(validBits.data(), SMALL_SIZE - 1);
+  definitionLevels[1] = 0;
+  ::arrow::bit_util::ClearBit(validBits.data(), 1);
 
-  auto writer = this->BuildWriter();
-  writer->WriteBatchSpaced(
+  auto writer = this->buildWriter();
+  writer->writeBatchSpaced(
       this->values_.size(),
-      definition_levels.data(),
+      definitionLevels.data(),
       nullptr,
-      valid_bits.data(),
+      validBits.data(),
       0,
-      this->values_ptr_);
-  writer->Close();
+      this->valuesPtr_);
+  writer->close();
 
-  // PARQUET-703
-  ASSERT_EQ(100, this->metadata_num_values());
+  // PARQUET-703.
+  ASSERT_EQ(100, this->metadataNumValues());
 
-  this->ReadColumn();
-  ASSERT_EQ(98, this->values_read_);
-  this->values_out_.resize(98);
+  this->readColumn();
+  ASSERT_EQ(98, this->valuesRead_);
+  this->valuesOut_.resize(98);
   this->values_.resize(99);
   this->values_.erase(this->values_.begin() + 1);
-  ASSERT_EQ(this->values_, this->values_out_);
+  ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
 TYPED_TEST(TestPrimitiveWriter, Repeated) {
-  // Optional and repeated, so definition and repetition levels
-  this->SetUpSchema(Repetition::REPEATED);
+  // Optional and repeated, so definition and repetition levels.
+  this->setUpSchema(Repetition::kRepeated);
 
-  this->GenerateData(SMALL_SIZE);
-  std::vector<int16_t> definition_levels(SMALL_SIZE, 1);
-  definition_levels[1] = 0;
-  std::vector<int16_t> repetition_levels(SMALL_SIZE, 0);
+  this->generateData(SMALL_SIZE);
+  std::vector<int16_t> definitionLevels(SMALL_SIZE, 1);
+  definitionLevels[1] = 0;
+  std::vector<int16_t> repetitionLevels(SMALL_SIZE, 0);
 
-  auto writer = this->BuildWriter();
-  writer->WriteBatch(
+  auto writer = this->buildWriter();
+  writer->writeBatch(
       this->values_.size(),
-      definition_levels.data(),
-      repetition_levels.data(),
-      this->values_ptr_);
-  writer->Close();
+      definitionLevels.data(),
+      repetitionLevels.data(),
+      this->valuesPtr_);
+  writer->close();
 
-  this->ReadColumn();
-  ASSERT_EQ(SMALL_SIZE - 1, this->values_read_);
-  this->values_out_.resize(SMALL_SIZE - 1);
+  this->readColumn();
+  ASSERT_EQ(SMALL_SIZE - 1, this->valuesRead_);
+  this->valuesOut_.resize(SMALL_SIZE - 1);
   this->values_.resize(SMALL_SIZE - 1);
-  ASSERT_EQ(this->values_, this->values_out_);
+  ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredLargeChunk) {
-  this->GenerateData(LARGE_SIZE);
+  this->generateData(LARGE_SIZE);
 
-  // Test case 1: required and non-repeated, so no definition or repetition
-  // levels
-  auto writer = this->BuildWriter(LARGE_SIZE);
-  writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_);
-  writer->Close();
+  // Test case 1: required and non-repeated, so no definition or repetition.
+  // Levels.
+  auto writer = this->buildWriter(LARGE_SIZE);
+  writer->writeBatch(this->values_.size(), nullptr, nullptr, this->valuesPtr_);
+  writer->close();
 
-  // Just read the first SMALL_SIZE rows to ensure we could read it back in
-  this->ReadColumn();
-  ASSERT_EQ(SMALL_SIZE, this->values_read_);
+  // Just read the first SMALL_SIZE rows to ensure we could read it back in.
+  this->readColumn();
+  ASSERT_EQ(SMALL_SIZE, this->valuesRead_);
   this->values_.resize(SMALL_SIZE);
-  ASSERT_EQ(this->values_, this->values_out_);
+  ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
-// Test cases for dictionary fallback encoding
-TYPED_TEST(TestPrimitiveWriter, DictionaryFallbackVersion1_0) {
-  this->TestDictionaryFallbackEncoding(ParquetVersion::PARQUET_1_0);
+// Test cases for dictionary fallback encoding.
+TYPED_TEST(TestPrimitiveWriter, dictionaryfallbackversion10) {
+  this->testDictionaryFallbackEncoding(ParquetVersion::PARQUET_1_0);
 }
 
-TYPED_TEST(TestPrimitiveWriter, DictionaryFallbackVersion2_0) {
-  this->TestDictionaryFallbackEncoding(ParquetVersion::PARQUET_2_4);
-  this->TestDictionaryFallbackEncoding(ParquetVersion::PARQUET_2_6);
+TYPED_TEST(TestPrimitiveWriter, dictionaryfallbackversion20) {
+  this->testDictionaryFallbackEncoding(ParquetVersion::PARQUET_2_4);
+  this->testDictionaryFallbackEncoding(ParquetVersion::PARQUET_2_6);
 }
 
 TEST(TestWriter, NullValuesBuffer) {
-  std::shared_ptr<::arrow::io::BufferOutputStream> sink = CreateOutputStream();
+  std::shared_ptr<::arrow::io::BufferOutputStream> sink = createOutputStream();
 
-  const auto item_node = schema::PrimitiveNode::Make(
-      "item", Repetition::REQUIRED, LogicalType::Int(32, true), Type::INT32);
-  const auto list_node =
-      schema::GroupNode::Make("list", Repetition::REPEATED, {item_node});
-  const auto column_node = schema::GroupNode::Make(
+  const auto itemNode = schema::PrimitiveNode::make(
+      "item",
+      Repetition::kRequired,
+      LogicalType::intType(32, true),
+      Type::kInt32);
+  const auto listNode =
+      schema::GroupNode::make("list", Repetition::kRepeated, {itemNode});
+  const auto columnNode = schema::GroupNode::make(
       "array_of_ints_column",
-      Repetition::OPTIONAL,
-      {list_node},
-      LogicalType::List());
-  const auto schema_node =
-      schema::GroupNode::Make("schema", Repetition::REQUIRED, {column_node});
+      Repetition::kOptional,
+      {listNode},
+      LogicalType::list());
+  const auto schemaNode =
+      schema::GroupNode::make("schema", Repetition::kRequired, {columnNode});
 
-  auto file_writer = ParquetFileWriter::Open(
-      sink, std::dynamic_pointer_cast<schema::GroupNode>(schema_node));
-  auto group_writer = file_writer->AppendRowGroup();
-  auto column_writer = group_writer->NextColumn();
-  auto typed_writer = dynamic_cast<Int32Writer*>(column_writer);
+  auto fileWriter = ParquetFileWriter::open(
+      sink, std::dynamic_pointer_cast<schema::GroupNode>(schemaNode));
+  auto groupWriter = fileWriter->appendRowGroup();
+  auto columnWriter = groupWriter->nextColumn();
+  auto typedWriter = dynamic_cast<Int32Writer*>(columnWriter);
 
-  const int64_t num_values = 1;
-  const int16_t def_levels[] = {0};
-  const int16_t rep_levels[] = {0};
-  const uint8_t valid_bits[] = {0};
-  const int64_t valid_bits_offset = 0;
+  const int64_t numValues = 1;
+  const int16_t defLevels[] = {0};
+  const int16_t repLevels[] = {0};
+  const uint8_t validBits[] = {0};
+  const int64_t validBitsOffset = 0;
   const int32_t* values = nullptr;
 
-  typed_writer->WriteBatchSpaced(
-      num_values,
-      def_levels,
-      rep_levels,
-      valid_bits,
-      valid_bits_offset,
-      values);
+  typedWriter->writeBatchSpaced(
+      numValues, defLevels, repLevels, validBits, validBitsOffset, values);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlainChecksum) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN,
+  this->testRequiredWithSettings(
+      Encoding::kPlain,
       Compression::UNCOMPRESSED,
       /* enable_dictionary */ false,
       false,
       SMALL_SIZE,
-      Codec::UseDefaultCompressionLevel(),
+      Codec::useDefaultCompressionLevel(),
       /* enable_checksum */ true);
 }
 
 TYPED_TEST(TestPrimitiveWriter, RequiredDictChecksum) {
-  this->TestRequiredWithSettings(
-      Encoding::PLAIN,
+  this->testRequiredWithSettings(
+      Encoding::kPlain,
       Compression::UNCOMPRESSED,
       /* enable_dictionary */ true,
       false,
       SMALL_SIZE,
-      Codec::UseDefaultCompressionLevel(),
+      Codec::useDefaultCompressionLevel(),
       /* enable_checksum */ true);
 }
 
-// PARQUET-719
-// Test case for NULL values
+// PARQUET-719.
+// Test case for NULL values.
 TEST_F(TestValuesWriterInt32Type, OptionalNullValueChunk) {
-  this->SetUpSchema(Repetition::OPTIONAL);
+  this->setUpSchema(Repetition::kOptional);
 
-  this->GenerateData(LARGE_SIZE);
+  this->generateData(LARGE_SIZE);
 
-  std::vector<int16_t> definition_levels(LARGE_SIZE, 0);
-  std::vector<int16_t> repetition_levels(LARGE_SIZE, 0);
+  std::vector<int16_t> definitionLevels(LARGE_SIZE, 0);
+  std::vector<int16_t> repetitionLevels(LARGE_SIZE, 0);
 
-  auto writer = this->BuildWriter(LARGE_SIZE);
-  // All values being written are NULL
-  writer->WriteBatch(
+  auto writer = this->buildWriter(LARGE_SIZE);
+  // All values being written are NULL.
+  writer->writeBatch(
       this->values_.size(),
-      definition_levels.data(),
-      repetition_levels.data(),
+      definitionLevels.data(),
+      repetitionLevels.data(),
       nullptr);
-  writer->Close();
+  writer->close();
 
-  // Just read the first SMALL_SIZE rows to ensure we could read it back in
-  this->ReadColumn();
-  ASSERT_EQ(0, this->values_read_);
+  // Just read the first SMALL_SIZE rows to ensure we could read it back in.
+  this->readColumn();
+  ASSERT_EQ(0, this->valuesRead_);
 }
 
-// PARQUET-764
-// Correct bitpacking for boolean write at non-byte boundaries
+// PARQUET-764.
+// Correct bitpacking for boolean write at non-byte boundaries.
 using TestBooleanValuesWriter = TestPrimitiveWriter<BooleanType>;
 TEST_F(TestBooleanValuesWriter, AlternateBooleanValues) {
-  this->SetUpSchema(Repetition::REQUIRED);
-  auto writer = this->BuildWriter();
+  this->setUpSchema(Repetition::kRequired);
+  auto writer = this->buildWriter();
   for (int i = 0; i < SMALL_SIZE; i++) {
     bool value = (i % 2 == 0) ? true : false;
-    writer->WriteBatch(1, nullptr, nullptr, &value);
+    writer->writeBatch(1, nullptr, nullptr, &value);
   }
-  writer->Close();
-  this->ReadColumn();
+  writer->close();
+  this->readColumn();
   for (int i = 0; i < SMALL_SIZE; i++) {
-    ASSERT_EQ((i % 2 == 0) ? true : false, this->values_out_[i]) << i;
+    ASSERT_EQ((i % 2 == 0) ? true : false, this->valuesOut_[i]) << i;
   }
 }
 
-// PARQUET-979
-// Prevent writing large MIN, MAX stats
+// PARQUET-979.
+// Prevent writing large MIN, MAX stats.
 TEST_F(TestByteArrayValuesWriter, OmitStats) {
-  int min_len = 1024 * 4;
-  int max_len = 1024 * 8;
-  this->SetUpSchema(Repetition::REQUIRED);
-  auto writer = this->BuildWriter();
+  int minLen = 1024 * 4;
+  int maxLen = 1024 * 8;
+  this->setUpSchema(Repetition::kRequired);
+  auto writer = this->buildWriter();
 
   values_.resize(SMALL_SIZE);
-  InitWideByteArrayValues(
-      SMALL_SIZE, this->values_, this->buffer_, min_len, max_len);
-  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data());
-  writer->Close();
+  initWideByteArrayValues(
+      SMALL_SIZE, this->values_, this->buffer_, minLen, maxLen);
+  writer->writeBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data());
+  writer->close();
 
-  auto has_min_max = this->metadata_stats_has_min_max();
-  ASSERT_FALSE(has_min_max.first);
-  ASSERT_FALSE(has_min_max.second);
+  auto hasMinMax = this->metadataStatsHasMinMax();
+  ASSERT_FALSE(hasMinMax.first);
+  ASSERT_FALSE(hasMinMax.second);
 }
 
-// PARQUET-1405
-// Prevent writing large stats in the DataPageHeader
+// PARQUET-1405.
+// Prevent writing large stats in the DataPageHeader.
 TEST_F(TestByteArrayValuesWriter, OmitDataPageStats) {
-  int min_len = static_cast<int>(std::pow(10, 7));
-  int max_len = static_cast<int>(std::pow(10, 7));
-  this->SetUpSchema(Repetition::REQUIRED);
-  ColumnProperties column_properties;
-  column_properties.set_statistics_enabled(false);
-  auto writer = this->BuildWriter(SMALL_SIZE, column_properties);
+  int minLen = static_cast<int>(std::pow(10, 7));
+  int maxLen = static_cast<int>(std::pow(10, 7));
+  this->setUpSchema(Repetition::kRequired);
+  ColumnProperties columnProperties;
+  columnProperties.setStatisticsEnabled(false);
+  auto writer = this->buildWriter(SMALL_SIZE, columnProperties);
 
   values_.resize(1);
-  InitWideByteArrayValues(1, this->values_, this->buffer_, min_len, max_len);
-  writer->WriteBatch(1, nullptr, nullptr, this->values_.data());
-  writer->Close();
+  initWideByteArrayValues(1, this->values_, this->buffer_, minLen, maxLen);
+  writer->writeBatch(1, nullptr, nullptr, this->values_.data());
+  writer->close();
 
-  ASSERT_NO_THROW(this->ReadColumn());
+  ASSERT_NO_THROW(this->readColumn());
 }
 
 TEST_F(TestByteArrayValuesWriter, LimitStats) {
-  int min_len = 1024 * 4;
-  int max_len = 1024 * 8;
-  this->SetUpSchema(Repetition::REQUIRED);
-  ColumnProperties column_properties;
-  column_properties.set_max_statistics_size(static_cast<size_t>(max_len));
-  auto writer = this->BuildWriter(SMALL_SIZE, column_properties);
+  int minLen = 1024 * 4;
+  int maxLen = 1024 * 8;
+  this->setUpSchema(Repetition::kRequired);
+  ColumnProperties columnProperties;
+  columnProperties.setMaxStatisticsSize(static_cast<size_t>(maxLen));
+  auto writer = this->buildWriter(SMALL_SIZE, columnProperties);
 
   values_.resize(SMALL_SIZE);
-  InitWideByteArrayValues(
-      SMALL_SIZE, this->values_, this->buffer_, min_len, max_len);
-  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data());
-  writer->Close();
+  initWideByteArrayValues(
+      SMALL_SIZE, this->values_, this->buffer_, minLen, maxLen);
+  writer->writeBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data());
+  writer->close();
 
-  ASSERT_TRUE(this->metadata_is_stats_set());
+  ASSERT_TRUE(this->metadataIsStatsSet());
 }
 
 TEST_F(TestByteArrayValuesWriter, CheckDefaultStats) {
-  this->SetUpSchema(Repetition::REQUIRED);
-  auto writer = this->BuildWriter();
-  this->GenerateData(SMALL_SIZE);
+  this->setUpSchema(Repetition::kRequired);
+  auto writer = this->buildWriter();
+  this->generateData(SMALL_SIZE);
 
-  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_ptr_);
-  writer->Close();
+  writer->writeBatch(SMALL_SIZE, nullptr, nullptr, this->valuesPtr_);
+  writer->close();
 
-  ASSERT_TRUE(this->metadata_is_stats_set());
+  ASSERT_TRUE(this->metadataIsStatsSet());
 }
 
 TEST(TestColumnWriter, RepeatedListsUpdateSpacedBug) {
-  // In ARROW-3930 we discovered a bug when writing from Arrow when we had data
-  // that looks like this:
+  // In ARROW-3930 we discovered a bug when writing from Arrow when we had data.
+  // That looks like this:
   //
-  // [null, [0, 1, null, 2, 3, 4, null]]
+  // [Null, [0, 1, null, 2, 3, 4, null]].
 
-  // Create schema
-  NodePtr item = schema::Int32("item"); // optional item
-  NodePtr list(
-      GroupNode::Make("b", Repetition::REPEATED, {item}, ConvertedType::LIST));
+  // Create schema.
+  NodePtr item = schema::int32("item"); // optional item
+  NodePtr List(
+      GroupNode::make(
+          "b", Repetition::kRepeated, {item}, ConvertedType::kList));
   NodePtr bag(
-      GroupNode::Make("bag", Repetition::OPTIONAL, {list})); // optional list
+      GroupNode::make("bag", Repetition::kOptional, {List})); // optional list
   std::vector<NodePtr> fields = {bag};
-  NodePtr root = GroupNode::Make("schema", Repetition::REPEATED, fields);
+  NodePtr root = GroupNode::make("schema", Repetition::kRepeated, fields);
 
   SchemaDescriptor schema;
-  schema.Init(root);
+  schema.init(root);
 
-  auto sink = CreateOutputStream();
+  auto sink = createOutputStream();
   auto props = WriterProperties::Builder().build();
 
-  auto metadata = ColumnChunkMetaDataBuilder::Make(props, schema.Column(0));
-  std::unique_ptr<PageWriter> pager = PageWriter::Open(
+  auto metadata = ColumnChunkMetaDataBuilder::make(props, schema.column(0));
+  std::unique_ptr<PageWriter> pager = PageWriter::open(
       sink,
       Compression::UNCOMPRESSED,
-      Codec::UseDefaultCompressionLevel(),
+      Codec::useDefaultCompressionLevel(),
       metadata.get());
   std::shared_ptr<ColumnWriter> writer =
-      ColumnWriter::Make(metadata.get(), std::move(pager), props.get());
-  auto typed_writer =
+      ColumnWriter::make(metadata.get(), std::move(pager), props.get());
+  auto typedWriter =
       std::static_pointer_cast<TypedColumnWriter<Int32Type>>(writer);
 
-  std::vector<int16_t> def_levels = {1, 3, 3, 2, 3, 3, 3, 2, 3, 3, 3, 2, 3, 3};
-  std::vector<int16_t> rep_levels = {0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+  std::vector<int16_t> defLevels = {1, 3, 3, 2, 3, 3, 3, 2, 3, 3, 3, 2, 3, 3};
+  std::vector<int16_t> repLevels = {0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
   std::vector<int32_t> values = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
 
-  // Write the values into uninitialized memory
-  ASSERT_OK_AND_ASSIGN(auto values_buffer, ::arrow::AllocateBuffer(64));
-  memcpy(values_buffer->mutable_data(), values.data(), 13 * sizeof(int32_t));
-  auto values_data = reinterpret_cast<const int32_t*>(values_buffer->data());
+  // Write the values into uninitialized memory.
+  ASSERT_OK_AND_ASSIGN(auto valuesBuffer, ::arrow::AllocateBuffer(64));
+  memcpy(valuesBuffer->mutable_data(), values.data(), 13 * sizeof(int32_t));
+  auto valuesData = reinterpret_cast<const int32_t*>(valuesBuffer->data());
 
-  std::shared_ptr<Buffer> valid_bits;
+  std::shared_ptr<Buffer> validBits;
   ASSERT_OK_AND_ASSIGN(
-      valid_bits,
+      validBits,
       ::arrow::internal::BytesToBits({1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1}));
 
-  // valgrind will warn about out of bounds access into def_levels_data
-  typed_writer->WriteBatchSpaced(
-      14,
-      def_levels.data(),
-      rep_levels.data(),
-      valid_bits->data(),
-      0,
-      values_data);
-  writer->Close();
+  // Valgrind will warn about out of bounds access into def_levels_data.
+  typedWriter->writeBatchSpaced(
+      14, defLevels.data(), repLevels.data(), validBits->data(), 0, valuesData);
+  writer->close();
 }
 
-void GenerateLevels(
-    int min_repeat_factor,
-    int max_repeat_factor,
-    int max_level,
-    std::vector<int16_t>& input_levels) {
-  // for each repetition count up to max_repeat_factor
-  for (int repeat = min_repeat_factor; repeat <= max_repeat_factor; repeat++) {
-    // repeat count increases by a factor of 2 for every iteration
-    int repeat_count = (1 << repeat);
-    // generate levels for repetition count up to the maximum level
+void generateLevels(
+    int minRepeatFactor,
+    int maxRepeatFactor,
+    int maxLevel,
+    std::vector<int16_t>& inputLevels) {
+  // For each repetition count up to max_repeat_factor.
+  for (int repeat = minRepeatFactor; repeat <= maxRepeatFactor; repeat++) {
+    // Repeat count increases by a factor of 2 for every iteration.
+    int repeatCount = (1 << repeat);
+    // Generate levels for repetition count up to the maximum level.
     int16_t value = 0;
     int bwidth = 0;
-    while (value <= max_level) {
-      for (int i = 0; i < repeat_count; i++) {
-        input_levels.push_back(value);
+    while (value <= maxLevel) {
+      for (int i = 0; i < repeatCount; i++) {
+        inputLevels.push_back(value);
       }
       value = static_cast<int16_t>((2 << bwidth) - 1);
       bwidth++;
@@ -997,186 +980,185 @@ void GenerateLevels(
   }
 }
 
-void EncodeLevels(
+void encodeLevels(
     Encoding::type encoding,
-    int16_t max_level,
-    int num_levels,
-    const int16_t* input_levels,
+    int16_t maxLevel,
+    int numLevels,
+    const int16_t* inputLevels,
     std::vector<uint8_t>& bytes) {
   LevelEncoder encoder;
-  int levels_count = 0;
-  bytes.resize(2 * num_levels);
-  ASSERT_EQ(2 * num_levels, static_cast<int>(bytes.size()));
-  // encode levels
-  if (encoding == Encoding::RLE) {
-    // leave space to write the rle length value
-    encoder.Init(
+  int levelsCount = 0;
+  bytes.resize(2 * numLevels);
+  ASSERT_EQ(2 * numLevels, static_cast<int>(bytes.size()));
+  // Encode levels.
+  if (encoding == Encoding::kRle) {
+    // Leave space to write the rle length value.
+    encoder.init(
         encoding,
-        max_level,
-        num_levels,
+        maxLevel,
+        numLevels,
         bytes.data() + sizeof(int32_t),
         static_cast<int>(bytes.size()));
 
-    levels_count = encoder.Encode(num_levels, input_levels);
+    levelsCount = encoder.encode(numLevels, inputLevels);
     (reinterpret_cast<int32_t*>(bytes.data()))[0] = encoder.len();
   } else {
-    encoder.Init(
+    encoder.init(
         encoding,
-        max_level,
-        num_levels,
+        maxLevel,
+        numLevels,
         bytes.data(),
         static_cast<int>(bytes.size()));
-    levels_count = encoder.Encode(num_levels, input_levels);
+    levelsCount = encoder.encode(numLevels, inputLevels);
   }
-  ASSERT_EQ(num_levels, levels_count);
+  ASSERT_EQ(numLevels, levelsCount);
 }
 
-void VerifyDecodingLevels(
+void verifyDecodingLevels(
     Encoding::type encoding,
-    int16_t max_level,
-    std::vector<int16_t>& input_levels,
+    int16_t maxLevel,
+    std::vector<int16_t>& inputLevels,
     std::vector<uint8_t>& bytes) {
   LevelDecoder decoder;
-  int levels_count = 0;
-  std::vector<int16_t> output_levels;
-  int num_levels = static_cast<int>(input_levels.size());
+  int levelsCount = 0;
+  std::vector<int16_t> outputLevels;
+  int numLevels = static_cast<int>(inputLevels.size());
 
-  output_levels.resize(num_levels);
-  ASSERT_EQ(num_levels, static_cast<int>(output_levels.size()));
+  outputLevels.resize(numLevels);
+  ASSERT_EQ(numLevels, static_cast<int>(outputLevels.size()));
 
-  // Decode levels and test with multiple decode calls
-  decoder.SetData(
+  // Decode levels and test with multiple decode calls.
+  decoder.setData(
       encoding,
-      max_level,
-      num_levels,
+      maxLevel,
+      numLevels,
       bytes.data(),
       static_cast<int32_t>(bytes.size()));
-  int decode_count = 4;
-  int num_inner_levels = num_levels / decode_count;
-  // Try multiple decoding on a single SetData call
-  for (int ct = 0; ct < decode_count; ct++) {
-    int offset = ct * num_inner_levels;
-    levels_count = decoder.Decode(num_inner_levels, output_levels.data());
-    ASSERT_EQ(num_inner_levels, levels_count);
-    for (int i = 0; i < num_inner_levels; i++) {
-      EXPECT_EQ(input_levels[i + offset], output_levels[i]);
+  int decodeCount = 4;
+  int numInnerLevels = numLevels / decodeCount;
+  // Try multiple decoding on a single SetData call.
+  for (int ct = 0; ct < decodeCount; ct++) {
+    int Offset = ct * numInnerLevels;
+    levelsCount = decoder.decode(numInnerLevels, outputLevels.data());
+    ASSERT_EQ(numInnerLevels, levelsCount);
+    for (int i = 0; i < numInnerLevels; i++) {
+      EXPECT_EQ(inputLevels[i + Offset], outputLevels[i]);
     }
   }
-  // check the remaining levels
-  int num_levels_completed = decode_count * (num_levels / decode_count);
-  int num_remaining_levels = num_levels - num_levels_completed;
-  if (num_remaining_levels > 0) {
-    levels_count = decoder.Decode(num_remaining_levels, output_levels.data());
-    ASSERT_EQ(num_remaining_levels, levels_count);
-    for (int i = 0; i < num_remaining_levels; i++) {
-      EXPECT_EQ(input_levels[i + num_levels_completed], output_levels[i]);
+  // Check the remaining levels.
+  int numLevelsCompleted = decodeCount * (numLevels / decodeCount);
+  int numRemainingLevels = numLevels - numLevelsCompleted;
+  if (numRemainingLevels > 0) {
+    levelsCount = decoder.decode(numRemainingLevels, outputLevels.data());
+    ASSERT_EQ(numRemainingLevels, levelsCount);
+    for (int i = 0; i < numRemainingLevels; i++) {
+      EXPECT_EQ(inputLevels[i + numLevelsCompleted], outputLevels[i]);
     }
   }
-  // Test zero Decode values
-  ASSERT_EQ(0, decoder.Decode(1, output_levels.data()));
+  // Test zero Decode values.
+  ASSERT_EQ(0, decoder.decode(1, outputLevels.data()));
 }
 
-void VerifyDecodingMultipleSetData(
+void verifyDecodingMultipleSetData(
     Encoding::type encoding,
-    int16_t max_level,
-    std::vector<int16_t>& input_levels,
+    int16_t maxLevel,
+    std::vector<int16_t>& inputLevels,
     std::vector<std::vector<uint8_t>>& bytes) {
   LevelDecoder decoder;
-  int levels_count = 0;
-  std::vector<int16_t> output_levels;
+  int levelsCount = 0;
+  std::vector<int16_t> outputLevels;
 
-  // Decode levels and test with multiple SetData calls
-  int setdata_count = static_cast<int>(bytes.size());
-  int num_levels = static_cast<int>(input_levels.size()) / setdata_count;
-  output_levels.resize(num_levels);
-  // Try multiple SetData
-  for (int ct = 0; ct < setdata_count; ct++) {
-    int offset = ct * num_levels;
-    ASSERT_EQ(num_levels, static_cast<int>(output_levels.size()));
-    decoder.SetData(
+  // Decode levels and test with multiple SetData calls.
+  int setdataCount = static_cast<int>(bytes.size());
+  int numLevels = static_cast<int>(inputLevels.size()) / setdataCount;
+  outputLevels.resize(numLevels);
+  // Try multiple SetData.
+  for (int ct = 0; ct < setdataCount; ct++) {
+    int Offset = ct * numLevels;
+    ASSERT_EQ(numLevels, static_cast<int>(outputLevels.size()));
+    decoder.setData(
         encoding,
-        max_level,
-        num_levels,
+        maxLevel,
+        numLevels,
         bytes[ct].data(),
         static_cast<int32_t>(bytes[ct].size()));
-    levels_count = decoder.Decode(num_levels, output_levels.data());
-    ASSERT_EQ(num_levels, levels_count);
-    for (int i = 0; i < num_levels; i++) {
-      EXPECT_EQ(input_levels[i + offset], output_levels[i]);
+    levelsCount = decoder.decode(numLevels, outputLevels.data());
+    ASSERT_EQ(numLevels, levelsCount);
+    for (int i = 0; i < numLevels; i++) {
+      EXPECT_EQ(inputLevels[i + Offset], outputLevels[i]);
     }
   }
 }
 
-// Test levels with maximum bit-width from 1 to 8
-// increase the repetition count for each iteration by a factor of 2
+// Test levels with maximum bit-width from 1 to 8.
+// Increase the repetition count for each iteration by a factor of 2.
 TEST(TestLevels, TestLevelsDecodeMultipleBitWidth) {
-  int min_repeat_factor = 0;
-  int max_repeat_factor = 7; // 128
-  int max_bit_width = 8;
-  std::vector<int16_t> input_levels;
+  int minRepeatFactor = 0;
+  int maxRepeatFactor = 7; // 128
+  int maxBitWidth = 8;
+  std::vector<int16_t> inputLevels;
   std::vector<uint8_t> bytes;
-  Encoding::type encodings[2] = {Encoding::RLE, Encoding::BIT_PACKED};
+  Encoding::type encodings[2] = {Encoding::kRle, Encoding::kBitPacked};
 
-  // for each encoding
+  // For each encoding.
   for (int encode = 0; encode < 2; encode++) {
     Encoding::type encoding = encodings[encode];
-    // BIT_PACKED requires a sequence of at least 8
-    if (encoding == Encoding::BIT_PACKED)
-      min_repeat_factor = 3;
-    // for each maximum bit-width
-    for (int bit_width = 1; bit_width <= max_bit_width; bit_width++) {
-      // find the maximum level for the current bit_width
-      int16_t max_level = static_cast<int16_t>((1 << bit_width) - 1);
-      // Generate levels
-      GenerateLevels(
-          min_repeat_factor, max_repeat_factor, max_level, input_levels);
-      ASSERT_NO_FATAL_FAILURE(EncodeLevels(
+    // BIT_PACKED requires a sequence of at least 8.
+    if (encoding == Encoding::kBitPacked)
+      minRepeatFactor = 3;
+    // For each maximum bit-width.
+    for (int bitWidth = 1; bitWidth <= maxBitWidth; bitWidth++) {
+      // Find the maximum level for the current bit_width.
+      int16_t maxLevel = static_cast<int16_t>((1 << bitWidth) - 1);
+      // Generate levels.
+      generateLevels(minRepeatFactor, maxRepeatFactor, maxLevel, inputLevels);
+      ASSERT_NO_FATAL_FAILURE(encodeLevels(
           encoding,
-          max_level,
-          static_cast<int>(input_levels.size()),
-          input_levels.data(),
+          maxLevel,
+          static_cast<int>(inputLevels.size()),
+          inputLevels.data(),
           bytes));
       ASSERT_NO_FATAL_FAILURE(
-          VerifyDecodingLevels(encoding, max_level, input_levels, bytes));
-      input_levels.clear();
+          verifyDecodingLevels(encoding, maxLevel, inputLevels, bytes));
+      inputLevels.clear();
     }
   }
 }
 
-// Test multiple decoder SetData calls
+// Test multiple decoder SetData calls.
 TEST(TestLevels, TestLevelsDecodeMultipleSetData) {
-  int min_repeat_factor = 3;
-  int max_repeat_factor = 7; // 128
-  int bit_width = 8;
-  int16_t max_level = static_cast<int16_t>((1 << bit_width) - 1);
-  std::vector<int16_t> input_levels;
+  int minRepeatFactor = 3;
+  int maxRepeatFactor = 7; // 128
+  int bitWidth = 8;
+  int16_t maxLevel = static_cast<int16_t>((1 << bitWidth) - 1);
+  std::vector<int16_t> inputLevels;
   std::vector<std::vector<uint8_t>> bytes;
-  Encoding::type encodings[2] = {Encoding::RLE, Encoding::BIT_PACKED};
-  GenerateLevels(min_repeat_factor, max_repeat_factor, max_level, input_levels);
-  int num_levels = static_cast<int>(input_levels.size());
-  int setdata_factor = 8;
-  int split_level_size = num_levels / setdata_factor;
-  bytes.resize(setdata_factor);
+  Encoding::type encodings[2] = {Encoding::kRle, Encoding::kBitPacked};
+  generateLevels(minRepeatFactor, maxRepeatFactor, maxLevel, inputLevels);
+  int numLevels = static_cast<int>(inputLevels.size());
+  int setdataFactor = 8;
+  int splitLevelSize = numLevels / setdataFactor;
+  bytes.resize(setdataFactor);
 
-  // for each encoding
+  // For each encoding.
   for (int encode = 0; encode < 2; encode++) {
     Encoding::type encoding = encodings[encode];
-    for (int rf = 0; rf < setdata_factor; rf++) {
-      int offset = rf * split_level_size;
-      ASSERT_NO_FATAL_FAILURE(EncodeLevels(
+    for (int rf = 0; rf < setdataFactor; rf++) {
+      int Offset = rf * splitLevelSize;
+      ASSERT_NO_FATAL_FAILURE(encodeLevels(
           encoding,
-          max_level,
-          split_level_size,
-          reinterpret_cast<int16_t*>(input_levels.data()) + offset,
+          maxLevel,
+          splitLevelSize,
+          reinterpret_cast<int16_t*>(inputLevels.data()) + Offset,
           bytes[rf]));
     }
-    ASSERT_NO_FATAL_FAILURE(VerifyDecodingMultipleSetData(
-        encoding, max_level, input_levels, bytes));
+    ASSERT_NO_FATAL_FAILURE(
+        verifyDecodingMultipleSetData(encoding, maxLevel, inputLevels, bytes));
   }
 }
 
 TEST(TestLevelEncoder, MinimumBufferSize) {
-  // PARQUET-676, PARQUET-698
+  // PARQUET-676, PARQUET-698.
   const int kNumToEncode = 1024;
 
   std::vector<int16_t> levels;
@@ -1189,23 +1171,23 @@ TEST(TestLevelEncoder, MinimumBufferSize) {
   }
 
   std::vector<uint8_t> output(
-      LevelEncoder::MaxBufferSize(Encoding::RLE, 1, kNumToEncode));
+      LevelEncoder::maxBufferSize(Encoding::kRle, 1, kNumToEncode));
 
   LevelEncoder encoder;
-  encoder.Init(
-      Encoding::RLE,
+  encoder.init(
+      Encoding::kRle,
       1,
       kNumToEncode,
       output.data(),
       static_cast<int>(output.size()));
-  int encode_count = encoder.Encode(kNumToEncode, levels.data());
+  int encodeCount = encoder.encode(kNumToEncode, levels.data());
 
-  ASSERT_EQ(kNumToEncode, encode_count);
+  ASSERT_EQ(kNumToEncode, encodeCount);
 }
 
 TEST(TestLevelEncoder, MinimumBufferSize2) {
-  // PARQUET-708
-  // Test the worst case for bit_width=2 consisting of
+  // PARQUET-708.
+  // Test the worst case for bit_width=2 consisting of.
   // LiteralRun(size=8)
   // RepeatedRun(size=8)
   // LiteralRun(size=8)
@@ -1214,8 +1196,8 @@ TEST(TestLevelEncoder, MinimumBufferSize2) {
 
   std::vector<int16_t> levels;
   for (int i = 0; i < kNumToEncode; ++i) {
-    // This forces a literal run of 00000001
-    // followed by eight 1s
+    // This forces a literal run of 00000001.
+    // Followed by eight 1s.
     if ((i % 16) < 7) {
       levels.push_back(0);
     } else {
@@ -1223,332 +1205,326 @@ TEST(TestLevelEncoder, MinimumBufferSize2) {
     }
   }
 
-  for (int16_t bit_width = 1; bit_width <= 8; bit_width++) {
+  for (int16_t bitWidth = 1; bitWidth <= 8; bitWidth++) {
     std::vector<uint8_t> output(
-        LevelEncoder::MaxBufferSize(Encoding::RLE, bit_width, kNumToEncode));
+        LevelEncoder::maxBufferSize(Encoding::kRle, bitWidth, kNumToEncode));
 
     LevelEncoder encoder;
-    encoder.Init(
-        Encoding::RLE,
-        bit_width,
+    encoder.init(
+        Encoding::kRle,
+        bitWidth,
         kNumToEncode,
         output.data(),
         static_cast<int>(output.size()));
-    int encode_count = encoder.Encode(kNumToEncode, levels.data());
+    int encodeCount = encoder.encode(kNumToEncode, levels.data());
 
-    ASSERT_EQ(kNumToEncode, encode_count);
+    ASSERT_EQ(kNumToEncode, encodeCount);
   }
 }
 
 TEST(TestColumnWriter, WriteDataPageV2Header) {
-  auto sink = CreateOutputStream();
-  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::Make(
+  auto sink = createOutputStream();
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
-      Repetition::REQUIRED,
+      Repetition::kRequired,
       {
-          schema::Int32("required", Repetition::REQUIRED),
-          schema::Int32("optional", Repetition::OPTIONAL),
-          schema::Int32("repeated", Repetition::REPEATED),
+          schema::int32("required", Repetition::kRequired),
+          schema::int32("optional", Repetition::kOptional),
+          schema::int32("repeated", Repetition::kRepeated),
       }));
   auto properties = WriterProperties::Builder()
-                        .disable_dictionary()
-                        ->data_page_version(ParquetDataPageVersion::V2)
+                        .disableDictionary()
+                        ->dataPageVersion(ParquetDataPageVersion::V2)
                         ->build();
-  auto file_writer = ParquetFileWriter::Open(sink, schema, properties);
-  auto rg_writer = file_writer->AppendRowGroup();
+  auto fileWriter = ParquetFileWriter::open(sink, schema, properties);
+  auto rgWriter = fileWriter->appendRowGroup();
 
-  constexpr int32_t num_rows = 100;
+  constexpr int32_t numRows = 100;
 
-  auto required_writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-  for (int32_t i = 0; i < num_rows; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+  auto requiredWriter = static_cast<Int32Writer*>(rgWriter->nextColumn());
+  for (int32_t i = 0; i < numRows; i++) {
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
 
   // Write a null value at every other row.
-  auto optional_writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-  for (int32_t i = 0; i < num_rows; i++) {
-    int16_t definition_level = i % 2 == 0 ? 1 : 0;
-    optional_writer->WriteBatch(1, &definition_level, nullptr, &i);
+  auto optionalWriter = static_cast<Int32Writer*>(rgWriter->nextColumn());
+  for (int32_t i = 0; i < numRows; i++) {
+    int16_t definitionLevel = i % 2 == 0 ? 1 : 0;
+    optionalWriter->writeBatch(1, &definitionLevel, nullptr, &i);
   }
 
   // Each row has repeated twice.
-  auto repeated_writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-  for (int i = 0; i < 2 * num_rows; i++) {
+  auto repeatedWriter = static_cast<Int32Writer*>(rgWriter->nextColumn());
+  for (int i = 0; i < 2 * numRows; i++) {
     int32_t value = i * 1000;
-    int16_t definition_level = 1;
-    int16_t repetition_level = i % 2 == 0 ? 1 : 0;
-    repeated_writer->WriteBatch(
-        1, &definition_level, &repetition_level, &value);
+    int16_t definitionLevel = 1;
+    int16_t repetitionLevel = i % 2 == 0 ? 1 : 0;
+    repeatedWriter->writeBatch(1, &definitionLevel, &repetitionLevel, &value);
   }
 
-  ASSERT_NO_THROW(file_writer->Close());
+  ASSERT_NO_THROW(fileWriter->close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
+  auto fileReader = ParquetFileReader::open(
       std::make_shared<::arrow::io::BufferReader>(buffer),
-      default_reader_properties());
-  auto metadata = file_reader->metadata();
-  ASSERT_EQ(1, metadata->num_row_groups());
-  auto row_group_reader = file_reader->RowGroup(0);
+      defaultReaderProperties());
+  auto metadata = fileReader->metadata();
+  ASSERT_EQ(1, metadata->numRowGroups());
+  auto rowGroupReader = fileReader->rowGroup(0);
 
   // Verify required column.
   {
-    auto page_reader = row_group_reader->GetColumnPageReader(0);
-    auto page = page_reader->NextPage();
+    auto pageReader = rowGroupReader->getColumnPageReader(0);
+    auto page = pageReader->nextPage();
     ASSERT_NE(page, nullptr);
-    auto data_page = std::static_pointer_cast<DataPageV2>(page);
-    EXPECT_EQ(num_rows, data_page->num_rows());
-    EXPECT_EQ(num_rows, data_page->num_values());
-    EXPECT_EQ(0, data_page->num_nulls());
-    EXPECT_EQ(page_reader->NextPage(), nullptr);
+    auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+    EXPECT_EQ(numRows, dataPage->numRows());
+    EXPECT_EQ(numRows, dataPage->numValues());
+    EXPECT_EQ(0, dataPage->numNulls());
+    EXPECT_EQ(pageReader->nextPage(), nullptr);
   }
 
   // Verify optional column.
   {
-    auto page_reader = row_group_reader->GetColumnPageReader(1);
-    auto page = page_reader->NextPage();
+    auto pageReader = rowGroupReader->getColumnPageReader(1);
+    auto page = pageReader->nextPage();
     ASSERT_NE(page, nullptr);
-    auto data_page = std::static_pointer_cast<DataPageV2>(page);
-    EXPECT_EQ(num_rows, data_page->num_rows());
-    EXPECT_EQ(num_rows, data_page->num_values());
-    EXPECT_EQ(num_rows / 2, data_page->num_nulls());
-    EXPECT_EQ(page_reader->NextPage(), nullptr);
+    auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+    EXPECT_EQ(numRows, dataPage->numRows());
+    EXPECT_EQ(numRows, dataPage->numValues());
+    EXPECT_EQ(numRows / 2, dataPage->numNulls());
+    EXPECT_EQ(pageReader->nextPage(), nullptr);
   }
 
   // Verify repeated column.
   {
-    auto page_reader = row_group_reader->GetColumnPageReader(2);
-    auto page = page_reader->NextPage();
+    auto pageReader = rowGroupReader->getColumnPageReader(2);
+    auto page = pageReader->nextPage();
     ASSERT_NE(page, nullptr);
-    auto data_page = std::static_pointer_cast<DataPageV2>(page);
-    EXPECT_EQ(num_rows, data_page->num_rows());
-    EXPECT_EQ(num_rows * 2, data_page->num_values());
-    EXPECT_EQ(0, data_page->num_nulls());
-    EXPECT_EQ(page_reader->NextPage(), nullptr);
+    auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+    EXPECT_EQ(numRows, dataPage->numRows());
+    EXPECT_EQ(numRows * 2, dataPage->numValues());
+    EXPECT_EQ(0, dataPage->numNulls());
+    EXPECT_EQ(pageReader->nextPage(), nullptr);
   }
 }
 
-// The test below checks that data page v2 changes on record boundaries for
+// The test below checks that data page v2 changes on record boundaries for.
 // all repetition types (i.e. required, optional, and repeated)
 TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
-  auto sink = CreateOutputStream();
-  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::Make(
+  auto sink = createOutputStream();
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
-      Repetition::REQUIRED,
-      {schema::Int32("required", Repetition::REQUIRED),
-       schema::Int32("optional", Repetition::OPTIONAL),
-       schema::Int32("repeated", Repetition::REPEATED)}));
+      Repetition::kRequired,
+      {schema::int32("required", Repetition::kRequired),
+       schema::int32("optional", Repetition::kOptional),
+       schema::int32("repeated", Repetition::kRepeated)}));
   // Write at most 11 levels per batch.
-  constexpr int64_t batch_size = 11;
+  constexpr int64_t batchSize = 11;
   auto properties =
       WriterProperties::Builder()
-          .disable_dictionary()
-          ->data_page_version(ParquetDataPageVersion::V2)
-          ->write_batch_size(batch_size)
-          ->data_pagesize(1) /* every page size check creates a new page */
+          .disableDictionary()
+          ->dataPageVersion(ParquetDataPageVersion::V2)
+          ->writeBatchSize(batchSize)
+          ->dataPagesize(1) /* every page size check creates a new page */
           ->build();
-  auto file_writer = ParquetFileWriter::Open(sink, schema, properties);
-  auto rg_writer = file_writer->AppendRowGroup();
+  auto fileWriter = ParquetFileWriter::open(sink, schema, properties);
+  auto rgWriter = fileWriter->appendRowGroup();
 
-  constexpr int32_t num_levels = 100;
-  const std::vector<int32_t> values(num_levels, 1024);
-  std::array<int16_t, num_levels> def_levels;
-  std::array<int16_t, num_levels> rep_levels;
-  for (int32_t i = 0; i < num_levels; i++) {
-    def_levels[i] = i % 2 == 0 ? 1 : 0;
-    rep_levels[i] = i % 2 == 0 ? 0 : 1;
+  constexpr int32_t numLevels = 100;
+  const std::vector<int32_t> values(numLevels, 1024);
+  std::array<int16_t, numLevels> defLevels;
+  std::array<int16_t, numLevels> repLevels;
+  for (int32_t i = 0; i < numLevels; i++) {
+    defLevels[i] = i % 2 == 0 ? 1 : 0;
+    repLevels[i] = i % 2 == 0 ? 0 : 1;
   }
 
-  auto required_writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-  required_writer->WriteBatch(num_levels, nullptr, nullptr, values.data());
+  auto requiredWriter = static_cast<Int32Writer*>(rgWriter->nextColumn());
+  requiredWriter->writeBatch(numLevels, nullptr, nullptr, values.data());
 
   // Write a null value at every other row.
-  auto optional_writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-  optional_writer->WriteBatch(
-      num_levels, def_levels.data(), nullptr, values.data());
+  auto optionalWriter = static_cast<Int32Writer*>(rgWriter->nextColumn());
+  optionalWriter->writeBatch(
+      numLevels, defLevels.data(), nullptr, values.data());
 
   // Each row has repeated twice.
-  auto repeated_writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-  repeated_writer->WriteBatch(
-      num_levels, def_levels.data(), rep_levels.data(), values.data());
-  repeated_writer->WriteBatch(
-      num_levels, def_levels.data(), rep_levels.data(), values.data());
+  auto repeatedWriter = static_cast<Int32Writer*>(rgWriter->nextColumn());
+  repeatedWriter->writeBatch(
+      numLevels, defLevels.data(), repLevels.data(), values.data());
+  repeatedWriter->writeBatch(
+      numLevels, defLevels.data(), repLevels.data(), values.data());
 
-  ASSERT_NO_THROW(file_writer->Close());
+  ASSERT_NO_THROW(fileWriter->close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
+  auto fileReader = ParquetFileReader::open(
       std::make_shared<::arrow::io::BufferReader>(buffer),
-      default_reader_properties());
-  auto metadata = file_reader->metadata();
-  ASSERT_EQ(1, metadata->num_row_groups());
-  auto row_group_reader = file_reader->RowGroup(0);
+      defaultReaderProperties());
+  auto metadata = fileReader->metadata();
+  ASSERT_EQ(1, metadata->numRowGroups());
+  auto rowGroupReader = fileReader->rowGroup(0);
 
   // Check if pages are changed on record boundaries.
-  constexpr int num_columns = 3;
-  const std::array<int64_t, num_columns> expected_num_pages = {10, 10, 19};
-  for (int i = 0; i < num_columns; ++i) {
-    auto page_reader = row_group_reader->GetColumnPageReader(i);
-    int64_t num_rows = 0;
-    int64_t num_pages = 0;
+  constexpr int numColumns = 3;
+  const std::array<int64_t, numColumns> expectedNumPages = {10, 10, 19};
+  for (int i = 0; i < numColumns; ++i) {
+    auto pageReader = rowGroupReader->getColumnPageReader(i);
+    int64_t numRows = 0;
+    int64_t numPages = 0;
     std::shared_ptr<Page> page;
-    while ((page = page_reader->NextPage()) != nullptr) {
-      auto data_page = std::static_pointer_cast<DataPageV2>(page);
+    while ((page = pageReader->nextPage()) != nullptr) {
+      auto dataPage = std::static_pointer_cast<DataPageV2>(page);
       if (i < 2) {
-        EXPECT_EQ(data_page->num_values(), data_page->num_rows());
+        EXPECT_EQ(dataPage->numValues(), dataPage->numRows());
       } else {
-        // Make sure repeated column has 2 values per row and not span multiple
-        // pages.
-        EXPECT_EQ(data_page->num_values(), 2 * data_page->num_rows());
+        // Make sure repeated column has 2 values per row and not span multiple.
+        // Pages.
+        EXPECT_EQ(dataPage->numValues(), 2 * dataPage->numRows());
       }
-      num_rows += data_page->num_rows();
-      num_pages++;
+      numRows += dataPage->numRows();
+      numPages++;
     }
-    EXPECT_EQ(num_levels, num_rows);
-    EXPECT_EQ(expected_num_pages[i], num_pages);
+    EXPECT_EQ(numLevels, numRows);
+    EXPECT_EQ(expectedNumPages[i], numPages);
   }
 }
 
-// The test below checks that data page v2 changes on record boundaries for
-// repeated columns with small batches.
+// The test below checks that data page v2 changes on record boundaries for.
+// Repeated columns with small batches.
 TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundariesWithSmallBatches) {
-  auto sink = CreateOutputStream();
-  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::Make(
+  auto sink = createOutputStream();
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
-      Repetition::REQUIRED,
-      {schema::Int32("tiny_repeat", Repetition::REPEATED),
-       schema::Int32("small_repeat", Repetition::REPEATED),
-       schema::Int32("medium_repeat", Repetition::REPEATED),
-       schema::Int32("large_repeat", Repetition::REPEATED)}));
+      Repetition::kRequired,
+      {schema::int32("tiny_repeat", Repetition::kRepeated),
+       schema::int32("small_repeat", Repetition::kRepeated),
+       schema::int32("medium_repeat", Repetition::kRepeated),
+       schema::int32("large_repeat", Repetition::kRepeated)}));
 
-  // The batch_size is large enough so each WriteBatch call checks page size at
-  // most once.
-  constexpr int64_t batch_size = std::numeric_limits<int64_t>::max();
+  // The batch_size is large enough so each WriteBatch call checks page size at.
+  // Most once.
+  constexpr int64_t batchSize = std::numeric_limits<int64_t>::max();
   auto properties =
       WriterProperties::Builder()
-          .disable_dictionary()
-          ->data_page_version(ParquetDataPageVersion::V2)
-          ->write_batch_size(batch_size)
-          ->data_pagesize(1) /* every page size check creates a new page */
+          .disableDictionary()
+          ->dataPageVersion(ParquetDataPageVersion::V2)
+          ->writeBatchSize(batchSize)
+          ->dataPagesize(1) /* every page size check creates a new page */
           ->build();
-  auto file_writer = ParquetFileWriter::Open(sink, schema, properties);
-  auto rg_writer = file_writer->AppendRowGroup();
+  auto fileWriter = ParquetFileWriter::open(sink, schema, properties);
+  auto rgWriter = fileWriter->appendRowGroup();
 
-  constexpr int32_t num_cols = 4;
-  constexpr int64_t num_rows = 400;
-  constexpr int64_t num_levels = 100;
-  constexpr std::array<int64_t, num_cols> num_levels_per_row_by_col = {
+  constexpr int32_t numCols = 4;
+  constexpr int64_t numRows = 400;
+  constexpr int64_t numLevels = 100;
+  constexpr std::array<int64_t, numCols> numLevelsPerRowByCol = {
       1, 50, 99, 150};
 
   // All values are not null and fixed to 1024 for simplicity.
-  const std::vector<int32_t> values(num_levels, 1024);
-  const std::vector<int16_t> def_levels(num_levels, 1);
-  std::vector<int16_t> rep_levels(num_levels, 0);
+  const std::vector<int32_t> values(numLevels, 1024);
+  const std::vector<int16_t> defLevels(numLevels, 1);
+  std::vector<int16_t> repLevels(numLevels, 0);
 
-  for (int32_t i = 0; i < num_cols; ++i) {
-    auto writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-    const auto num_levels_per_row = num_levels_per_row_by_col[i];
-    int64_t num_rows_written = 0;
-    int64_t num_levels_written_curr_row = 0;
-    while (num_rows_written < num_rows) {
-      int32_t num_levels_to_write = 0;
-      while (num_levels_to_write < num_levels) {
-        if (num_levels_written_curr_row == 0) {
+  for (int32_t i = 0; i < numCols; ++i) {
+    auto writer = static_cast<Int32Writer*>(rgWriter->nextColumn());
+    const auto numLevelsPerRow = numLevelsPerRowByCol[i];
+    int64_t numRowsWritten = 0;
+    int64_t numLevelsWrittenCurrRow = 0;
+    while (numRowsWritten < numRows) {
+      int32_t numLevelsToWrite = 0;
+      while (numLevelsToWrite < numLevels) {
+        if (numLevelsWrittenCurrRow == 0) {
           // A new record.
-          rep_levels[num_levels_to_write++] = 0;
+          repLevels[numLevelsToWrite++] = 0;
         } else {
-          rep_levels[num_levels_to_write++] = 1;
+          repLevels[numLevelsToWrite++] = 1;
         }
 
-        if (++num_levels_written_curr_row == num_levels_per_row) {
+        if (++numLevelsWrittenCurrRow == numLevelsPerRow) {
           // Current row has enough levels.
-          num_levels_written_curr_row = 0;
-          if (++num_rows_written == num_rows) {
+          numLevelsWrittenCurrRow = 0;
+          if (++numRowsWritten == numRows) {
             // Enough rows have been written.
             break;
           }
         }
       }
 
-      writer->WriteBatch(
-          num_levels_to_write,
-          def_levels.data(),
-          rep_levels.data(),
-          values.data());
+      writer->writeBatch(
+          numLevelsToWrite, defLevels.data(), repLevels.data(), values.data());
     }
   }
 
-  ASSERT_NO_THROW(file_writer->Close());
+  ASSERT_NO_THROW(fileWriter->close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
+  auto fileReader = ParquetFileReader::open(
       std::make_shared<::arrow::io::BufferReader>(buffer),
-      default_reader_properties());
-  auto metadata = file_reader->metadata();
-  ASSERT_EQ(1, metadata->num_row_groups());
-  auto row_group_reader = file_reader->RowGroup(0);
+      defaultReaderProperties());
+  auto metadata = fileReader->metadata();
+  ASSERT_EQ(1, metadata->numRowGroups());
+  auto rowGroupReader = fileReader->rowGroup(0);
 
   // Check if pages are changed on record boundaries.
-  const std::array<int64_t, num_cols> expect_num_pages_by_col = {
-      5, 201, 397, 201};
-  const std::array<int64_t, num_cols> expect_num_rows_1st_page_by_col = {
-      99, 1, 1, 1};
-  const std::array<int64_t, num_cols> expect_num_vals_1st_page_by_col = {
+  const std::array<int64_t, numCols> expectNumPagesByCol = {5, 201, 397, 201};
+  const std::array<int64_t, numCols> expectNumRows1stPageByCol = {99, 1, 1, 1};
+  const std::array<int64_t, numCols> expectNumVals1stPageByCol = {
       99, 50, 99, 150};
-  for (int32_t i = 0; i < num_cols; ++i) {
-    auto page_reader = row_group_reader->GetColumnPageReader(i);
-    int64_t num_rows_read = 0;
-    int64_t num_pages_read = 0;
-    int64_t num_values_read = 0;
+  for (int32_t i = 0; i < numCols; ++i) {
+    auto pageReader = rowGroupReader->getColumnPageReader(i);
+    int64_t numRowsRead = 0;
+    int64_t numPagesRead = 0;
+    int64_t numValuesRead = 0;
     std::shared_ptr<Page> page;
-    while ((page = page_reader->NextPage()) != nullptr) {
-      auto data_page = std::static_pointer_cast<DataPageV2>(page);
-      num_values_read += data_page->num_values();
-      num_rows_read += data_page->num_rows();
-      if (num_pages_read++ == 0) {
-        EXPECT_EQ(expect_num_rows_1st_page_by_col[i], data_page->num_rows());
-        EXPECT_EQ(expect_num_vals_1st_page_by_col[i], data_page->num_values());
+    while ((page = pageReader->nextPage()) != nullptr) {
+      auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+      numValuesRead += dataPage->numValues();
+      numRowsRead += dataPage->numRows();
+      if (numPagesRead++ == 0) {
+        EXPECT_EQ(expectNumRows1stPageByCol[i], dataPage->numRows());
+        EXPECT_EQ(expectNumVals1stPageByCol[i], dataPage->numValues());
       }
     }
-    EXPECT_EQ(num_rows, num_rows_read);
-    EXPECT_EQ(expect_num_pages_by_col[i], num_pages_read);
-    EXPECT_EQ(num_levels_per_row_by_col[i] * num_rows, num_values_read);
+    EXPECT_EQ(numRows, numRowsRead);
+    EXPECT_EQ(expectNumPagesByCol[i], numPagesRead);
+    EXPECT_EQ(numLevelsPerRowByCol[i] * numRows, numValuesRead);
   }
 }
 
 class ColumnWriterTestSizeEstimated : public ::testing::Test {
  public:
   void SetUp() {
-    sink_ = CreateOutputStream();
-    node_ = std::static_pointer_cast<GroupNode>(GroupNode::Make(
+    sink_ = createOutputStream();
+    node_ = std::static_pointer_cast<GroupNode>(GroupNode::make(
         "schema",
-        Repetition::REQUIRED,
+        Repetition::kRequired,
         {
-            schema::Int32("required", Repetition::REQUIRED),
+            schema::int32("required", Repetition::kRequired),
         }));
     std::vector<schema::NodePtr> fields;
-    schema_descriptor_ = std::make_unique<SchemaDescriptor>();
-    schema_descriptor_->Init(node_);
+    schemaDescriptor_ = std::make_unique<SchemaDescriptor>();
+    schemaDescriptor_->init(node_);
   }
 
-  std::shared_ptr<Int32Writer> BuildWriter(
+  std::shared_ptr<Int32Writer> buildWriter(
       Compression::type compression,
       bool buffered,
-      bool enable_dictionary = false) {
-    auto builder = WriterProperties::Builder();
-    builder.disable_dictionary()
+      bool enableDictionary = false) {
+    auto Builder = WriterProperties::Builder();
+    Builder.disableDictionary()
         ->compression(compression)
-        ->data_pagesize(100 * sizeof(int));
-    if (enable_dictionary) {
-      builder.enable_dictionary();
+        ->dataPagesize(100 * sizeof(int));
+    if (enableDictionary) {
+      Builder.enableDictionary();
     } else {
-      builder.disable_dictionary();
+      Builder.disableDictionary();
     }
-    writer_properties_ = builder.build();
-    metadata_ = ColumnChunkMetaDataBuilder::Make(
-        writer_properties_, schema_descriptor_->Column(0));
+    writerProperties_ = Builder.build();
+    metadata_ = ColumnChunkMetaDataBuilder::make(
+        writerProperties_, schemaDescriptor_->column(0));
 
-    std::unique_ptr<PageWriter> pager = PageWriter::Open(
+    std::unique_ptr<PageWriter> pager = PageWriter::open(
         sink_,
         compression,
-        Codec::UseDefaultCompressionLevel(),
+        Codec::useDefaultCompressionLevel(),
         metadata_.get(),
         /* row_group_ordinal */ -1,
         /* column_chunk_ordinal*/ -1,
@@ -1557,165 +1533,165 @@ class ColumnWriterTestSizeEstimated : public ::testing::Test {
         /* header_encryptor */ NULLPTR,
         /* data_encryptor */ NULLPTR,
         /* enable_checksum */ false);
-    return std::static_pointer_cast<Int32Writer>(ColumnWriter::Make(
-        metadata_.get(), std::move(pager), writer_properties_.get()));
+    return std::static_pointer_cast<Int32Writer>(ColumnWriter::make(
+        metadata_.get(), std::move(pager), writerProperties_.get()));
   }
 
   std::shared_ptr<::arrow::io::BufferOutputStream> sink_;
   std::shared_ptr<GroupNode> node_;
-  std::unique_ptr<SchemaDescriptor> schema_descriptor_;
+  std::unique_ptr<SchemaDescriptor> schemaDescriptor_;
 
-  std::shared_ptr<WriterProperties> writer_properties_;
+  std::shared_ptr<WriterProperties> writerProperties_;
   std::unique_ptr<ColumnChunkMetaDataBuilder> metadata_;
 };
 
 TEST_F(ColumnWriterTestSizeEstimated, NonBuffered) {
-  auto required_writer =
-      this->BuildWriter(Compression::UNCOMPRESSED, /* buffered*/ false);
-  // Write half page, page will not be flushed after loop
+  auto requiredWriter =
+      this->buildWriter(Compression::UNCOMPRESSED, /* buffered*/ false);
+  // Write half page, page will not be flushed after loop.
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
-  // Page not flushed, check size
-  EXPECT_EQ(0, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes()); // unbuffered
-  EXPECT_EQ(0, required_writer->total_compressed_bytes_written());
-  // Write half page, page be flushed after loop
+  // Page not flushed, check size.
+  EXPECT_EQ(0, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes()); // unbuffered
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytesWritten());
+  // Write half page, page be flushed after loop.
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
-  // Page flushed, check size
-  EXPECT_LT(400, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_LT(400, required_writer->total_compressed_bytes_written());
+  // Page flushed, check size.
+  EXPECT_LT(400, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_LT(400, requiredWriter->totalCompressedBytesWritten());
 
-  // Test after closed
-  int64_t written_size = required_writer->Close();
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_EQ(written_size, required_writer->total_bytes_written());
-  // uncompressed writer should be equal
-  EXPECT_EQ(written_size, required_writer->total_compressed_bytes_written());
+  // Test after closed.
+  int64_t writtenSize = requiredWriter->close();
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_EQ(writtenSize, requiredWriter->totalBytesWritten());
+  // Uncompressed writer should be equal.
+  EXPECT_EQ(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
 TEST_F(ColumnWriterTestSizeEstimated, Buffered) {
-  auto required_writer =
-      this->BuildWriter(Compression::UNCOMPRESSED, /* buffered*/ true);
-  // Write half page, page will not be flushed after loop
+  auto requiredWriter =
+      this->buildWriter(Compression::UNCOMPRESSED, /* buffered*/ true);
+  // Write half page, page will not be flushed after loop.
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
-  // Page not flushed, check size
-  EXPECT_EQ(0, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes()); // buffered
-  EXPECT_EQ(0, required_writer->total_compressed_bytes_written());
-  // Write half page, page be flushed after loop
+  // Page not flushed, check size.
+  EXPECT_EQ(0, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes()); // buffered
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytesWritten());
+  // Write half page, page be flushed after loop.
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
-  // Page flushed, check size
-  EXPECT_LT(400, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_LT(400, required_writer->total_compressed_bytes_written());
+  // Page flushed, check size.
+  EXPECT_LT(400, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_LT(400, requiredWriter->totalCompressedBytesWritten());
 
-  // Test after closed
-  int64_t written_size = required_writer->Close();
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_EQ(written_size, required_writer->total_bytes_written());
-  // uncompressed writer should be equal
-  EXPECT_EQ(written_size, required_writer->total_compressed_bytes_written());
+  // Test after closed.
+  int64_t writtenSize = requiredWriter->close();
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_EQ(writtenSize, requiredWriter->totalBytesWritten());
+  // Uncompressed writer should be equal.
+  EXPECT_EQ(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
 TEST_F(ColumnWriterTestSizeEstimated, NonBufferedDictionary) {
-  auto required_writer =
-      this->BuildWriter(Compression::UNCOMPRESSED, /* buffered*/ false, true);
-  // for dict, keep all values equal
-  int32_t dict_value = 1;
+  auto requiredWriter =
+      this->buildWriter(Compression::UNCOMPRESSED, /* buffered*/ false, true);
+  // For dict, keep all values equal.
+  int32_t dictValue = 1;
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &dict_value);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &dictValue);
   }
-  // Page not flushed, check size
-  EXPECT_EQ(0, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes_written());
-  // write a huge batch to trigger page flush
+  // Page not flushed, check size.
+  EXPECT_EQ(0, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytesWritten());
+  // Write a huge batch to trigger page flush.
   for (int32_t i = 0; i < 50000; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &dict_value);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &dictValue);
   }
-  // Page flushed, check size
-  EXPECT_EQ(0, required_writer->total_bytes_written());
-  EXPECT_LT(400, required_writer->total_compressed_bytes());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes_written());
+  // Page flushed, check size.
+  EXPECT_EQ(0, requiredWriter->totalBytesWritten());
+  EXPECT_LT(400, requiredWriter->totalCompressedBytes());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytesWritten());
 
-  required_writer->Close();
+  requiredWriter->close();
 
-  // Test after closed
-  int64_t written_size = required_writer->Close();
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_EQ(written_size, required_writer->total_bytes_written());
-  // uncompressed writer should be equal
-  EXPECT_EQ(written_size, required_writer->total_compressed_bytes_written());
+  // Test after closed.
+  int64_t writtenSize = requiredWriter->close();
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_EQ(writtenSize, requiredWriter->totalBytesWritten());
+  // Uncompressed writer should be equal.
+  EXPECT_EQ(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
 TEST_F(ColumnWriterTestSizeEstimated, BufferedCompression) {
-  auto required_writer = this->BuildWriter(Compression::SNAPPY, true);
+  auto requiredWriter = this->buildWriter(Compression::SNAPPY, true);
 
-  // Write half page
+  // Write half page.
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
-  // Page not flushed, check size
-  EXPECT_EQ(0, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes()); // buffered
-  EXPECT_EQ(0, required_writer->total_compressed_bytes_written());
+  // Page not flushed, check size.
+  EXPECT_EQ(0, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes()); // buffered
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytesWritten());
   for (int32_t i = 0; i < 50; i++) {
-    required_writer->WriteBatch(1, nullptr, nullptr, &i);
+    requiredWriter->writeBatch(1, nullptr, nullptr, &i);
   }
-  // Page flushed, check size
-  EXPECT_LT(400, required_writer->total_bytes_written());
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
+  // Page flushed, check size.
+  EXPECT_LT(400, requiredWriter->totalBytesWritten());
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
   EXPECT_LT(
-      required_writer->total_compressed_bytes_written(),
-      required_writer->total_bytes_written());
+      requiredWriter->totalCompressedBytesWritten(),
+      requiredWriter->totalBytesWritten());
 
-  // Test after closed
-  int64_t written_size = required_writer->Close();
-  EXPECT_EQ(0, required_writer->total_compressed_bytes());
-  EXPECT_EQ(written_size, required_writer->total_bytes_written());
-  EXPECT_GT(written_size, required_writer->total_compressed_bytes_written());
+  // Test after closed.
+  int64_t writtenSize = requiredWriter->close();
+  EXPECT_EQ(0, requiredWriter->totalCompressedBytes());
+  EXPECT_EQ(writtenSize, requiredWriter->totalBytesWritten());
+  EXPECT_GT(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
 TEST(TestColumnWriter, WriteDataPageV2HeaderNullCount) {
-  auto sink = CreateOutputStream();
-  auto list_type = GroupNode::Make(
+  auto sink = createOutputStream();
+  auto listType = GroupNode::make(
       "list",
-      Repetition::REPEATED,
-      {schema::Int32("elem", Repetition::OPTIONAL)});
-  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::Make(
+      Repetition::kRepeated,
+      {schema::int32("elem", Repetition::kOptional)});
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
-      Repetition::REQUIRED,
+      Repetition::kRequired,
       {
-          schema::Int32("non_null", Repetition::OPTIONAL),
-          schema::Int32("half_null", Repetition::OPTIONAL),
-          schema::Int32("all_null", Repetition::OPTIONAL),
-          GroupNode::Make("half_null_list", Repetition::OPTIONAL, {list_type}),
-          GroupNode::Make("half_empty_list", Repetition::OPTIONAL, {list_type}),
-          GroupNode::Make(
-              "half_list_of_null", Repetition::OPTIONAL, {list_type}),
-          GroupNode::Make("all_single_list", Repetition::OPTIONAL, {list_type}),
+          schema::int32("non_null", Repetition::kOptional),
+          schema::int32("half_null", Repetition::kOptional),
+          schema::int32("all_null", Repetition::kOptional),
+          GroupNode::make("half_null_list", Repetition::kOptional, {listType}),
+          GroupNode::make("half_empty_list", Repetition::kOptional, {listType}),
+          GroupNode::make(
+              "half_list_of_null", Repetition::kOptional, {listType}),
+          GroupNode::make("all_single_list", Repetition::kOptional, {listType}),
       }));
   auto properties = WriterProperties::Builder()
                         /* Use V2 data page to read null_count from header */
-                        .data_page_version(ParquetDataPageVersion::V2)
+                        .dataPageVersion(ParquetDataPageVersion::V2)
                         /* Disable stats to test null_count is properly set */
-                        ->disable_statistics()
-                        ->disable_dictionary()
+                        ->disableStatistics()
+                        ->disableDictionary()
                         ->build();
-  auto file_writer = ParquetFileWriter::Open(sink, schema, properties);
-  auto rg_writer = file_writer->AppendRowGroup();
+  auto fileWriter = ParquetFileWriter::open(sink, schema, properties);
+  auto rgWriter = fileWriter->appendRowGroup();
 
-  constexpr int32_t num_rows = 10;
-  constexpr int32_t num_cols = 7;
-  const std::vector<std::vector<int16_t>> def_levels_by_col = {
+  constexpr int32_t numRows = 10;
+  constexpr int32_t numCols = 7;
+  const std::vector<std::vector<int16_t>> defLevelsByCol = {
       {1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
       {1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
       {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -1724,43 +1700,43 @@ TEST(TestColumnWriter, WriteDataPageV2HeaderNullCount) {
       {2, 3, 2, 3, 2, 3, 2, 3, 2, 3},
       {3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
   };
-  const std::vector<int16_t> ref_levels(num_rows, 0);
-  const std::vector<int32_t> values(num_rows, 123);
-  const std::vector<int64_t> expect_null_count_by_col = {0, 5, 10, 5, 5, 5, 0};
+  const std::vector<int16_t> refLevels(numRows, 0);
+  const std::vector<int32_t> values(numRows, 123);
+  const std::vector<int64_t> expectNullCountByCol = {0, 5, 10, 5, 5, 5, 0};
 
-  for (int32_t i = 0; i < num_cols; ++i) {
-    auto writer = static_cast<Int32Writer*>(rg_writer->NextColumn());
-    writer->WriteBatch(
-        num_rows,
-        def_levels_by_col[i].data(),
-        i >= 3 ? ref_levels.data() : nullptr,
+  for (int32_t i = 0; i < numCols; ++i) {
+    auto writer = static_cast<Int32Writer*>(rgWriter->nextColumn());
+    writer->writeBatch(
+        numRows,
+        defLevelsByCol[i].data(),
+        i >= 3 ? refLevels.data() : nullptr,
         values.data());
   }
 
-  ASSERT_NO_THROW(file_writer->Close());
+  ASSERT_NO_THROW(fileWriter->close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
+  auto fileReader = ParquetFileReader::open(
       std::make_shared<::arrow::io::BufferReader>(buffer),
-      default_reader_properties());
-  auto metadata = file_reader->metadata();
-  ASSERT_EQ(1, metadata->num_row_groups());
-  auto row_group_reader = file_reader->RowGroup(0);
+      defaultReaderProperties());
+  auto metadata = fileReader->metadata();
+  ASSERT_EQ(1, metadata->numRowGroups());
+  auto rowGroupReader = fileReader->rowGroup(0);
 
   std::shared_ptr<Page> page;
-  for (int32_t i = 0; i < num_cols; ++i) {
-    auto page_reader = row_group_reader->GetColumnPageReader(i);
-    int64_t num_nulls_read = 0;
-    int64_t num_rows_read = 0;
-    int64_t num_values_read = 0;
-    while ((page = page_reader->NextPage()) != nullptr) {
-      auto data_page = std::static_pointer_cast<DataPageV2>(page);
-      num_nulls_read += data_page->num_nulls();
-      num_rows_read += data_page->num_rows();
-      num_values_read += data_page->num_values();
+  for (int32_t i = 0; i < numCols; ++i) {
+    auto pageReader = rowGroupReader->getColumnPageReader(i);
+    int64_t numNullsRead = 0;
+    int64_t numRowsRead = 0;
+    int64_t numValuesRead = 0;
+    while ((page = pageReader->nextPage()) != nullptr) {
+      auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+      numNullsRead += dataPage->numNulls();
+      numRowsRead += dataPage->numRows();
+      numValuesRead += dataPage->numValues();
     }
-    EXPECT_EQ(expect_null_count_by_col[i], num_nulls_read);
-    EXPECT_EQ(num_rows, num_rows_read);
-    EXPECT_EQ(num_rows, num_values_read);
+    EXPECT_EQ(expectNullCountByCol[i], numNullsRead);
+    EXPECT_EQ(numRows, numRowsRead);
+    EXPECT_EQ(numRows, numValuesRead);
   }
 }
 

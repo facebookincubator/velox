@@ -22,10 +22,9 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -51,6 +50,14 @@ void enableAbandonPartialAggregation(AssertQueryBuilder& queryBuilder) {
       .maxDrivers(1);
 }
 
+// Companion function names for an aggregate function.
+struct CompanionFunctions {
+  std::string partialFunction;
+  std::string mergeFunction;
+  std::string mergeExtractFunction;
+  std::string extractFunction;
+};
+
 } // namespace
 
 std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
@@ -69,15 +76,11 @@ std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
 void AggregationTestBase::SetUp() {
   OperatorTestBase::SetUp();
   filesystems::registerLocalFileSystem();
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              kHiveConnectorId,
-              std::make_shared<config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()));
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
 }
@@ -85,8 +88,6 @@ void AggregationTestBase::SetUp() {
 void AggregationTestBase::TearDown() {
   dwrf::unregisterDwrfReaderFactory();
   connector::unregisterConnector(kHiveConnectorId);
-  connector::unregisterConnectorFactory(
-      connector::hive::HiveConnectorFactory::kHiveConnectorName);
   OperatorTestBase::TearDown();
 }
 
@@ -206,6 +207,29 @@ std::vector<RowVectorPtr> addExtraGroupingKey(
   return newData;
 }
 
+// Given the name of the original aggregate function and the argument types,
+// return the name of the merge_extract companion function with a suffix of the
+// result type. Merge_extract function names with suffixes should only be used
+// when the original aggregate function has multiple signatures with the same
+// intermediate type.
+std::string getMergeExtractFunctionNameWithSuffix(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  auto signatures = exec::getAggregateFunctionSignatures(name);
+  VELOX_CHECK(signatures.has_value());
+
+  for (const auto& signature : signatures.value()) {
+    exec::SignatureBinder binder{*signature, argTypes};
+    if (binder.tryBind()) {
+      if (auto resolvedType = binder.tryResolveReturnType()) {
+        return exec::CompanionSignatures::mergeExtractFunctionNameWithSuffix(
+            name, signature->returnType());
+      }
+    }
+  }
+  VELOX_UNREACHABLE("Could not find a function bound to argTypes.");
+}
+
 // Given the name of the original aggregation function and the argument types,
 // return the name of the extract companion function with a suffix of the result
 // type. Extract function names with suffixes should only be used when the
@@ -229,12 +253,13 @@ std::string getExtractFunctionNameWithSuffix(
   VELOX_UNREACHABLE("Could not find a function bound to argTypes.");
 }
 
-// Given the `index`-th aggregation expression, e.g., "avg(c0)", return three
-// strings of its partial companion aggregation expression, merge companion
-// aggregation expression, and extract companion expression, e.g.,
-// {"avg_partial(c0)", "avg_merge(a0)", "avg_extract_double(a0)"} when `index`
-// is 0.
-std::tuple<std::string, std::string, std::string> getCompanionAggregates(
+// Given the `index`-th aggregation expression, e.g., "avg(c0)", return the
+// names of its partial companion aggregation expression, merge companion
+// aggregation expression, merge_extract companion expression and extract
+// companion expression, e.g., CompanionFunctions{"avg_partial(c0)",
+// "avg_merge(a0)", "avg_merge_extract_double(a0)", "avg_extract_double(a0)"}
+// when `index` is 0.
+CompanionFunctions getCompanionAggregates(
     column_index_t index,
     const exec::CompanionFunctionSignatureMap& companionFunctions,
     const std::string& functionName,
@@ -248,9 +273,24 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
   auto mergeAggregate = fmt::format(
       "{}(a{})", companionFunctions.merge.front().functionName, index);
 
-  // Construct the extract expression. Rename the result of the extract
-  // expression to be the same as the original aggregation result, so that
-  // post-aggregation projections, if exist, can apply with no change.
+  // Construct the merge_extract expression. Rename the result of the expression
+  // to be the same as the original aggregation result, so that post-aggregation
+  // projections, if exist, can apply with no change.
+  std::string mergeExtractExpression;
+  if (companionFunctions.mergeExtract.size() == 1) {
+    mergeExtractExpression = fmt::format(
+        "{0}(a{1}) as a{1}",
+        companionFunctions.mergeExtract.front().functionName,
+        index);
+  } else {
+    VELOX_CHECK_GT(companionFunctions.mergeExtract.size(), 1);
+    auto mergeExtractFunctionName =
+        getMergeExtractFunctionNameWithSuffix(functionName, argTypes);
+    mergeExtractExpression =
+        fmt::format("{0}(a{1}) as a{1}", mergeExtractFunctionName, index);
+  }
+
+  // Construct the extract expression.
   std::string extractExpression;
   if (companionFunctions.extract.size() == 1) {
     extractExpression = fmt::format(
@@ -264,7 +304,11 @@ std::tuple<std::string, std::string, std::string> getCompanionAggregates(
     extractExpression =
         fmt::format("{0}(a{1}) as a{1}", extractFunctionName, index);
   }
-  return std::make_tuple(partialAggregate, mergeAggregate, extractExpression);
+  return CompanionFunctions{
+      partialAggregate,
+      mergeAggregate,
+      mergeExtractExpression,
+      extractExpression};
 }
 
 // Given a list of aggregation expressions, e.g., {"avg(c0)"}, return a list of
@@ -390,6 +434,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
 
   std::vector<std::string> partialAggregates;
   std::vector<std::string> mergeAggregates;
+  std::vector<std::string> mergeExtractAggregates;
   std::vector<std::string> extractExpressions;
   extractExpressions.insert(
       extractExpressions.end(), groupingKeys.begin(), groupingKeys.end());
@@ -400,16 +445,16 @@ void AggregationTestBase::testAggregationsWithCompanion(
         exec::getCompanionFunctionSignatures(functionNames[i]);
     VELOX_CHECK(companionSignatures.has_value());
 
-    const auto& [partialAggregate, mergeAggregate, extractAggregate] =
-        getCompanionAggregates(
-            i,
-            *companionSignatures,
-            functionNames[i],
-            aggregateArgs[i],
-            aggregatesArgTypes[i]);
-    partialAggregates.push_back(partialAggregate);
-    mergeAggregates.push_back(mergeAggregate);
-    extractExpressions.push_back(extractAggregate);
+    const auto& companionFunctions = getCompanionAggregates(
+        i,
+        *companionSignatures,
+        functionNames[i],
+        aggregateArgs[i],
+        aggregatesArgTypes[i]);
+    partialAggregates.push_back(companionFunctions.partialFunction);
+    mergeAggregates.push_back(companionFunctions.mergeFunction);
+    mergeExtractAggregates.push_back(companionFunctions.mergeExtractFunction);
+    extractExpressions.push_back(companionFunctions.extractFunction);
   }
 
   {
@@ -524,6 +569,28 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .intermediateAggregation()
         .finalAggregation()
         .project(extractExpressions);
+
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.configs(config);
+    assertResults(queryBuilder);
+  }
+
+  {
+    SCOPED_TRACE("Run partial + intermediate + final merge extract");
+    PlanBuilder builder(pool());
+    builder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(builder);
+
+    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .intermediateAggregation()
+        .finalAggregation()
+        .partialAggregation(groupingKeys, mergeExtractAggregates)
+        .intermediateAggregation()
+        .finalAggregation();
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -709,8 +776,9 @@ void AggregationTestBase::testReadFromFiles(
     auto file = exec::test::TempFilePath::create();
     writeToFile(file->getPath(), vector, writerPool.get());
     files.push_back(file);
-    splits.emplace_back(std::make_shared<connector::hive::HiveConnectorSplit>(
-        kHiveConnectorId, file->getPath(), dwio::common::FileFormat::DWRF));
+    splits.emplace_back(
+        std::make_shared<connector::hive::HiveConnectorSplit>(
+            kHiveConnectorId, file->getPath(), dwio::common::FileFormat::DWRF));
   }
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.
@@ -1202,30 +1270,6 @@ void AggregationTestBase::testAggregations(
   }
 }
 
-namespace {
-std::pair<TypePtr, TypePtr> getResultTypes(
-    const std::string& name,
-    const std::vector<TypePtr>& rawInputTypes) {
-  auto signatures = exec::getAggregateFunctionSignatures(name);
-  if (!signatures.has_value()) {
-    VELOX_FAIL("Aggregate {} not registered", name);
-  }
-  for (auto& signature : signatures.value()) {
-    exec::SignatureBinder binder(*signature, rawInputTypes);
-    if (binder.tryBind()) {
-      auto intermediateType =
-          binder.tryResolveType(signature->intermediateType());
-      VELOX_CHECK(
-          intermediateType, "failed to resolve intermediate type for {}", name);
-      auto finalType = binder.tryResolveType(signature->returnType());
-      VELOX_CHECK(finalType, "failed to resolve final type for {}", name);
-      return {intermediateType, finalType};
-    }
-  }
-  VELOX_FAIL("Could not infer intermediate type for aggregate {}", name);
-}
-} // namespace
-
 VectorPtr AggregationTestBase::testStreaming(
     const std::string& functionName,
     bool testGlobal,
@@ -1254,7 +1298,9 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
     const std::vector<TypePtr>& inputTypes,
     HashStringAllocator& allocator,
     const std::unordered_map<std::string, std::string>& config) {
-  auto [intermediateType, finalType] = getResultTypes(functionName, inputTypes);
+  auto finalType = exec::resolveResultType(functionName, inputTypes);
+  auto intermediateType =
+      exec::resolveIntermediateType(functionName, inputTypes);
   core::QueryConfig queryConfig({config});
   auto func = exec::Aggregate::create(
       functionName,
@@ -1264,10 +1310,6 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
       queryConfig);
   func->setAllocator(&allocator);
   func->setOffsets(kOffset, 0, 1, 0, 2, kRowSizeOffset);
-
-  VELOX_CHECK(intermediateType->equivalent(
-      *func->intermediateType(functionName, inputTypes)));
-  VELOX_CHECK(finalType->equivalent(*func->resultType()));
 
   return func;
 }
@@ -1324,10 +1366,13 @@ void AggregationTestBase::testIncrementalAggregation(
     func->addSingleGroupRawInput(
         group.data(), SelectivityVector(inputSize), input, false);
 
+    auto finalType =
+        exec::resolveResultType(functionName, aggregate.rawInputTypes);
+    auto intermediateType =
+        exec::resolveIntermediateType(functionName, aggregate.rawInputTypes);
+
     // Extract intermediate result from the same accumulator twice and expect
     // results to be the same.
-    auto intermediateType =
-        func->intermediateType(functionName, aggregate.rawInputTypes);
     auto intermediateResult1 = BaseVector::create(intermediateType, 1, pool());
     auto intermediateResult2 = BaseVector::create(intermediateType, 1, pool());
     func->extractAccumulators(groups.data(), 1, &intermediateResult1);
@@ -1380,7 +1425,11 @@ VectorPtr AggregationTestBase::testStreaming(
     func->addRawInput(
         groups.data(), SelectivityVector(rawInput1Size), rawInput1, false);
   }
-  auto intermediateType = func->intermediateType(functionName, rawInputTypes);
+
+  auto finalType = exec::resolveResultType(functionName, rawInputTypes);
+  auto intermediateType =
+      exec::resolveIntermediateType(functionName, rawInputTypes);
+
   auto intermediate = BaseVector::create(intermediateType, 1, pool());
   func->extractAccumulators(groups.data(), 1, &intermediate);
   // Destroy accumulators to avoid memory leak.

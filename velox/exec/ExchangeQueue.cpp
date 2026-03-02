@@ -16,42 +16,18 @@
 #include "velox/exec/ExchangeQueue.h"
 #include <algorithm>
 
+#include "velox/common/testutil/TestValue.h"
+
+using facebook::velox::common::testutil::TestValue;
+
 namespace facebook::velox::exec {
-
-SerializedPage::SerializedPage(
-    std::unique_ptr<folly::IOBuf> iobuf,
-    std::function<void(folly::IOBuf&)> onDestructionCb,
-    std::optional<int64_t> numRows)
-    : iobuf_(std::move(iobuf)),
-      iobufBytes_(chainBytes(*iobuf_.get())),
-      numRows_(numRows),
-      onDestructionCb_(onDestructionCb) {
-  VELOX_CHECK_NOT_NULL(iobuf_);
-  for (auto& buf : *iobuf_) {
-    int32_t bufSize = buf.size();
-    ranges_.push_back(ByteRange{
-        const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
-        bufSize,
-        0});
-  }
-}
-
-SerializedPage::~SerializedPage() {
-  if (onDestructionCb_) {
-    onDestructionCb_(*iobuf_.get());
-  }
-}
-
-std::unique_ptr<ByteInputStream> SerializedPage::prepareStreamForDeserialize() {
-  return std::make_unique<BufferInputStream>(std::move(ranges_));
-}
 
 void ExchangeQueue::noMoreSources() {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
     noMoreSources_ = true;
-    promises = checkCompleteLocked();
+    promises = checkNoMoreInput();
   }
   clearPromises(promises);
 }
@@ -66,20 +42,21 @@ void ExchangeQueue::close() {
 }
 
 int64_t ExchangeQueue::minOutputBatchBytesLocked() const {
-  // always allow to unblock when at end
-  if (atEnd_) {
+  // Allow to unblock if no more input.
+  if (noMoreInput_) {
     return 0;
   }
-  // At most 1% of received bytes so far to minimize latency for small exchanges
+  // At most 1% of received bytes so far to minimize latency for small
+  // exchanges.
   return std::min<int64_t>(minOutputBatchBytes_, receivedBytes_ / 100);
 }
 
 void ExchangeQueue::enqueueLocked(
-    std::unique_ptr<SerializedPage>&& page,
+    std::unique_ptr<SerializedPageBase>&& page,
     std::vector<ContinuePromise>& promises) {
   if (page == nullptr) {
     ++numCompleted_;
-    auto completedPromises = checkCompleteLocked();
+    auto completedPromises = checkNoMoreInput();
     promises.reserve(promises.size() + completedPromises.size());
     for (auto& promise : completedPromises) {
       promises.push_back(std::move(promise));
@@ -124,18 +101,20 @@ void ExchangeQueue::addPromiseLocked(
     *stalePromise = std::move(it->second);
     it->second = std::move(promise);
   } else {
-    promises_[consumerId] = std::move(promise);
+    promises_.emplace(consumerId, std::move(promise));
   }
   VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
 }
 
-std::vector<std::unique_ptr<SerializedPage>> ExchangeQueue::dequeueLocked(
+std::vector<std::unique_ptr<SerializedPageBase>> ExchangeQueue::dequeueLocked(
     int consumerId,
     uint32_t maxBytes,
     bool* atEnd,
     ContinueFuture* future,
     ContinuePromise* stalePromise) {
   VELOX_CHECK_NOT_NULL(future);
+  TestValue::adjust(
+      "facebook::velox::exec::ExchangeQueue::dequeueLocked", this);
   if (!error_.empty()) {
     *atEnd = true;
     VELOX_FAIL(error_);
@@ -150,11 +129,11 @@ std::vector<std::unique_ptr<SerializedPage>> ExchangeQueue::dequeueLocked(
     return {};
   }
 
-  std::vector<std::unique_ptr<SerializedPage>> pages;
+  std::vector<std::unique_ptr<SerializedPageBase>> pages;
   uint32_t pageBytes = 0;
   for (;;) {
     if (queue_.empty()) {
-      if (atEnd_) {
+      if (noMoreInput_) {
         *atEnd = true;
       } else if (pages.empty()) {
         addPromiseLocked(consumerId, future, stalePromise);
@@ -183,9 +162,9 @@ void ExchangeQueue::setError(const std::string& error) {
       return;
     }
     error_ = error;
-    atEnd_ = true;
-    // NOTE: clear the serialized page queue as we won't consume from an
-    // errored queue.
+    noMoreInput_ = true;
+    // NOTE: clear the serialized page queue as we won't consume from an errored
+    // queue.
     queue_.clear();
     promises = clearAllPromisesLocked();
   }

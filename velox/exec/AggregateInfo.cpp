@@ -16,6 +16,7 @@
 
 #include "velox/exec/AggregateInfo.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/Operator.h"
 #include "velox/expression/Expr.h"
 
@@ -80,10 +81,10 @@ std::vector<AggregateInfo> toAggregateInfo(
             arg->toString());
       }
     }
+    const auto& name = aggregate.call->name();
 
-    info.distinct = aggregate.distinct;
-    info.intermediateType = Aggregate::intermediateType(
-        aggregate.call->name(), aggregate.rawInputTypes);
+    info.intermediateType =
+        resolveIntermediateType(name, aggregate.rawInputTypes);
 
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
@@ -96,7 +97,7 @@ std::vector<AggregateInfo> toAggregateInfo(
     auto index = numKeys + i;
     const auto& aggResultType = outputType->childAt(index);
     info.function = Aggregate::create(
-        aggregate.call->name(),
+        name,
         isPartialOutput(step) ? core::AggregationNode::Step::kPartial
                               : core::AggregationNode::Step::kSingle,
         aggregate.rawInputTypes,
@@ -112,10 +113,13 @@ std::vector<AggregateInfo> toAggregateInfo(
       info.function->setLambdaExpressions(lambdas, expressionEvaluator);
     }
 
-    // Ignore sorting properties if aggregate function is not sensitive to the
-    // order of inputs.
-    auto* entry = getAggregateFunctionEntry(aggregate.call->name());
+    // 1. Ignore duplicates property
+    //    if aggregate function is not sensitive to duplicates.
+    // 2. Ignore sorting properties
+    //    if aggregate function is not sensitive to the order of inputs.
+    auto* entry = getAggregateFunctionEntry(name);
     const auto& metadata = entry->metadata;
+    info.distinct = !metadata.ignoreDuplicates && aggregate.distinct;
     if (metadata.orderSensitive) {
       // Sorting keys and orders.
       const auto numSortingKeys = aggregate.sortingKeys.size();

@@ -34,40 +34,41 @@ class HiveConnector : public Connector {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor);
 
-  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
-      const override {
-    return hiveConfig_->config();
-  }
-
   bool canAddDynamicFilter() const override {
     return true;
   }
 
-  ConnectorMetadata* metadata() const override {
-    VELOX_CHECK_NOT_NULL(metadata_);
-    return metadata_.get();
-  }
-
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
-  bool supportsSplitPreload() override {
+  bool supportsSplitPreload() const override {
+    return true;
+  }
+
+  bool supportsIndexLookup() const override {
     return true;
   }
 
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
-      std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
 
-  folly::Executor* executor() const override {
-    return executor_;
+  std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
+
+  folly::Executor* ioExecutor() const override {
+    return ioExecutor_;
   }
 
   FileHandleCacheStats fileHandleCacheStats() {
@@ -80,11 +81,12 @@ class HiveConnector : public Connector {
     return fileHandleFactory_.clearCache();
   }
 
+  static void registerSerDe();
+
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* executor_;
-  std::shared_ptr<ConnectorMetadata> metadata_;
+  folly::Executor* ioExecutor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {
@@ -100,7 +102,7 @@ class HiveConnectorFactory : public ConnectorFactory {
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor = nullptr,
-      folly::Executor* cpuExecutor = nullptr) override {
+      [[maybe_unused]] folly::Executor* cpuExecutor = nullptr) override {
     return std::make_shared<HiveConnector>(id, config, ioExecutor);
   }
 };
@@ -147,30 +149,13 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
       const folly::dynamic& obj,
       void* context);
 
+  static void registerSerDe();
+
  private:
   const int numBuckets_;
   const std::vector<int> bucketToPartition_;
   const std::vector<column_index_t> channels_;
   const std::vector<VectorPtr> constValues_;
 };
-
-void registerHivePartitionFunctionSerDe();
-
-/// Hook for connecting metadata functions to a HiveConnector. Each registered
-/// factory is called after initializing a HiveConnector until one of these
-/// returns a ConnectorMetadata instance.
-class HiveConnectorMetadataFactory {
- public:
-  virtual ~HiveConnectorMetadataFactory() = default;
-
-  /// Returns a ConnectorMetadata to complete'hiveConnector' if 'this'
-  /// recognizes a data source, e.g. local file system or remote metadata
-  /// service associated to configs in 'hiveConnector'.
-  virtual std::shared_ptr<ConnectorMetadata> create(
-      HiveConnector* connector) = 0;
-};
-
-bool registerHiveConnectorMetadataFactory(
-    std::unique_ptr<HiveConnectorMetadataFactory>);
 
 } // namespace facebook::velox::connector::hive

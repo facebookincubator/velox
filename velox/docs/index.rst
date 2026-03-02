@@ -9,6 +9,8 @@ Velox Documentation
     monthly-updates
     functions
     spark_functions
+    functions/iceberg/functions
+    functions/delta/functions
     configs
     monitoring
     bindings/python/index

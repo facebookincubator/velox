@@ -43,8 +43,8 @@ TEST(DuckParserTest, constants) {
   EXPECT_EQ("-303.1234", parseExpr("-303.1234")->toString());
 
   // Strings.
-  EXPECT_EQ("\"\"", parseExpr("''")->toString());
-  EXPECT_EQ("\"hello world\"", parseExpr("'hello world'")->toString());
+  EXPECT_EQ("", parseExpr("''")->toString());
+  EXPECT_EQ("hello world", parseExpr("'hello world'")->toString());
 
   // Nulls
   EXPECT_EQ("null", parseExpr("NULL")->toString());
@@ -57,16 +57,15 @@ TEST(DuckParserTest, constants) {
 
 TEST(DuckParserTest, arrays) {
   // Literal arrays with different types.
-  EXPECT_EQ("[1,2,-33]", parseExpr("ARRAY[1, 2, -33]")->toString());
+  EXPECT_EQ("{1, 2, -33}", parseExpr("ARRAY[1, 2, -33]")->toString());
   EXPECT_EQ(
-      "[1.99,-8.3,0.878]", parseExpr("ARRAY[1.99, -8.3, 0.878]")->toString());
+      "{1.99, -8.3, 0.878}", parseExpr("ARRAY[1.99, -8.3, 0.878]")->toString());
   EXPECT_EQ(
-      "[\"asd\",\"qwe\",\"ewqq\"]",
-      parseExpr("ARRAY['asd', 'qwe', 'ewqq']")->toString());
-  EXPECT_EQ("[null,1]", parseExpr("ARRAY[NULL, 1]")->toString());
+      "{asd, qwe, ewqq}", parseExpr("ARRAY['asd', 'qwe', 'ewqq']")->toString());
+  EXPECT_EQ("{null, 1}", parseExpr("ARRAY[NULL, 1]")->toString());
 
   // Empty array.
-  EXPECT_EQ("[]", parseExpr("ARRAY[]")->toString());
+  EXPECT_EQ("<empty>", parseExpr("ARRAY[]")->toString());
 
   // Expressions with variables and without.
   EXPECT_EQ(
@@ -92,8 +91,7 @@ TEST(DuckParserTest, variables) {
 
 TEST(DuckParserTest, functions) {
   EXPECT_EQ("avg(\"col1\")", parseExpr("avg(col1)")->toString());
-  EXPECT_EQ(
-      "func(1,3.4,\"str\")", parseExpr("func(1, 3.4, 'str')")->toString());
+  EXPECT_EQ("func(1,3.4,str)", parseExpr("func(1, 3.4, 'str')")->toString());
 
   // Nested calls.
   EXPECT_EQ(
@@ -101,10 +99,7 @@ TEST(DuckParserTest, functions) {
 }
 
 namespace {
-std::string toString(
-    const std::vector<
-        std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder>>&
-        orderBy) {
+std::string toString(const std::vector<OrderByClause>& orderBy) {
   std::stringstream out;
   if (!orderBy.empty()) {
     out << "ORDER BY ";
@@ -112,8 +107,7 @@ std::string toString(
       if (i > 0) {
         out << ", ";
       }
-      out << orderBy[i].first->toString() << " "
-          << orderBy[i].second.toString();
+      out << orderBy[i].toString();
     }
   }
 
@@ -176,11 +170,10 @@ TEST(DuckParserTest, subscript) {
       "subscript(\"col\",plus(10,99))", parseExpr("col[10 + 99]")->toString());
   EXPECT_EQ("subscript(\"m1\",34)", parseExpr("m1[34]")->toString());
   EXPECT_EQ(
-      "subscript(\"m2\",\"key str\")", parseExpr("m2['key str']")->toString());
+      "subscript(\"m2\",key str)", parseExpr("m2['key str']")->toString());
 
   EXPECT_EQ(
-      "subscript(func(),\"key str\")",
-      parseExpr("func()['key str']")->toString());
+      "subscript(func(),key str)", parseExpr("func()['key str']")->toString());
 }
 
 TEST(DuckParserTest, coalesce) {
@@ -191,50 +184,103 @@ TEST(DuckParserTest, coalesce) {
 }
 
 TEST(DuckParserTest, in) {
-  EXPECT_EQ("in(\"col1\",[1,2,3])", parseExpr("col1 in (1, 2, 3)")->toString());
   EXPECT_EQ(
-      "in(\"col1\",[1,2,null,3])",
+      "in(\"col1\",{1, 2, 3})", parseExpr("col1 in (1, 2, 3)")->toString());
+  EXPECT_EQ(
+      "in(\"col1\",{1, 2, null, 3})",
       parseExpr("col1 in (1, 2, null, 3)")->toString());
   EXPECT_EQ(
-      "in(\"col1\",[\"a\",\"b\",\"c\"])",
+      "in(\"col1\",{a, b, c})",
       parseExpr("col1 in ('a', 'b', 'c')")->toString());
   EXPECT_EQ(
-      "in(\"col1\",[\"a\",null,\"b\",\"c\"])",
+      "in(\"col1\",{a, null, b, c})",
       parseExpr("col1 in ('a', null, 'b', 'c')")->toString());
 }
 
-TEST(DuckParserTest, notin) {
+TEST(DuckParserTest, inListAsArray) {
+  ParseOptions parseOptions{.parseInListAsArray = false, .functionPrefix = ""};
   EXPECT_EQ(
-      "not(in(\"col1\",[1,2,3]))",
+      "in(\"col1\",1,2,3)",
+      parseExpr("col1 in (1, 2, 3)", parseOptions)->toString());
+  EXPECT_EQ(
+      "in(\"col1\",1,2,null,3)",
+      parseExpr("col1 in (1, 2, null, 3)", parseOptions)->toString());
+  EXPECT_EQ(
+      "in(\"col1\",a,b,c)",
+      parseExpr("col1 in ('a', 'b', 'c')", parseOptions)->toString());
+  EXPECT_EQ(
+      "in(\"col1\",a,null,b,c)",
+      parseExpr("col1 in ('a', null, 'b', 'c')", parseOptions)->toString());
+}
+
+TEST(DuckParserTest, notIn) {
+  EXPECT_EQ(
+      "not(in(\"col1\",{1, 2, 3}))",
       parseExpr("col1 not in (1, 2, 3)")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[1,2,3]))",
+      "not(in(\"col1\",{1, 2, 3}))",
       parseExpr("not(col1 in (1, 2, 3))")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[1,2,null,3]))",
+      "not(in(\"col1\",{1, 2, null, 3}))",
       parseExpr("col1 not in (1, 2, null, 3)")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[1,2,null,3]))",
+      "not(in(\"col1\",{1, 2, null, 3}))",
       parseExpr("not(col1 in (1, 2, null, 3))")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[\"a\",\"b\",\"c\"]))",
+      "not(in(\"col1\",{a, b, c}))",
       parseExpr("col1 not in ('a', 'b', 'c')")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[\"a\",\"b\",\"c\"]))",
+      "not(in(\"col1\",{a, b, c}))",
       parseExpr("not(col1 in ('a', 'b', 'c'))")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[\"a\",null,\"b\",\"c\"]))",
+      "not(in(\"col1\",{a, null, b, c}))",
       parseExpr("col1 not in ('a', null, 'b', 'c')")->toString());
 
   EXPECT_EQ(
-      "not(in(\"col1\",[\"a\",null,\"b\",\"c\"]))",
+      "not(in(\"col1\",{a, null, b, c}))",
       parseExpr("not(col1 in ('a', null, 'b', 'c'))")->toString());
+}
+
+TEST(DuckParserTest, notInListAsArray) {
+  ParseOptions parseOptions{.parseInListAsArray = false, .functionPrefix = ""};
+  EXPECT_EQ(
+      "not(in(\"col1\",1,2,3))",
+      parseExpr("col1 not in (1, 2, 3)", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",1,2,3))",
+      parseExpr("not(col1 in (1, 2, 3))", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",1,2,null,3))",
+      parseExpr("col1 not in (1, 2, null, 3)", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",1,2,null,3))",
+      parseExpr("not(col1 in (1, 2, null, 3))", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",a,b,c))",
+      parseExpr("col1 not in ('a', 'b', 'c')", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",a,b,c))",
+      parseExpr("not(col1 in ('a', 'b', 'c'))", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",a,null,b,c))",
+      parseExpr("col1 not in ('a', null, 'b', 'c')", parseOptions)->toString());
+
+  EXPECT_EQ(
+      "not(in(\"col1\",a,null,b,c))",
+      parseExpr("not(col1 in ('a', null, 'b', 'c'))", parseOptions)
+          ->toString());
 }
 
 TEST(DuckParserTest, expressions) {
@@ -338,76 +384,75 @@ TEST(DuckParserTest, intervalYearMonth) {
 }
 
 TEST(DuckParserTest, cast) {
+  EXPECT_EQ("cast(1 as BIGINT)", parseExpr("cast('1' as bigint)")->toString());
   EXPECT_EQ(
-      "cast(\"1\", BIGINT)", parseExpr("cast('1' as bigint)")->toString());
+      "cast(0.99 as INTEGER)", parseExpr("cast(0.99 as integer)")->toString());
   EXPECT_EQ(
-      "cast(0.99, INTEGER)", parseExpr("cast(0.99 as integer)")->toString());
+      "cast(0.99 as SMALLINT)",
+      parseExpr("cast(0.99 as smallint)")->toString());
   EXPECT_EQ(
-      "cast(0.99, SMALLINT)", parseExpr("cast(0.99 as smallint)")->toString());
+      "cast(0.99 as TINYINT)", parseExpr("cast(0.99 as tinyint)")->toString());
+  EXPECT_EQ("cast(1 as DOUBLE)", parseExpr("cast(1 as double)")->toString());
   EXPECT_EQ(
-      "cast(0.99, TINYINT)", parseExpr("cast(0.99 as tinyint)")->toString());
-  EXPECT_EQ("cast(1, DOUBLE)", parseExpr("cast(1 as double)")->toString());
+      "cast(\"col1\" as REAL)", parseExpr("cast(col1 as real)")->toString());
   EXPECT_EQ(
-      "cast(\"col1\", REAL)", parseExpr("cast(col1 as real)")->toString());
+      "cast(\"col1\" as REAL)", parseExpr("cast(col1 as float)")->toString());
   EXPECT_EQ(
-      "cast(\"col1\", REAL)", parseExpr("cast(col1 as float)")->toString());
+      "cast(0.99 as VARCHAR)", parseExpr("cast(0.99 as string)")->toString());
   EXPECT_EQ(
-      "cast(0.99, VARCHAR)", parseExpr("cast(0.99 as string)")->toString());
+      "cast(0.99 as VARCHAR)", parseExpr("cast(0.99 as varchar)")->toString());
+  EXPECT_EQ("abc", parseExpr("cast('abc' as varbinary)")->toString());
   EXPECT_EQ(
-      "cast(0.99, VARCHAR)", parseExpr("cast(0.99 as varchar)")->toString());
-  // Cast varchar to varbinary produces a varbinary value which is serialized
-  // using base64 encoding.
-  EXPECT_EQ("\"YWJj\"", parseExpr("cast('abc' as varbinary)")->toString());
-  EXPECT_EQ(
-      "cast(\"str_col\", TIMESTAMP)",
+      "cast(\"str_col\" as TIMESTAMP)",
       parseExpr("cast(str_col as timestamp)")->toString());
 
   EXPECT_EQ(
-      "cast(\"str_col\", DATE)",
+      "cast(\"str_col\" as DATE)",
       parseExpr("cast(str_col as date)")->toString());
 
   EXPECT_EQ(
-      "cast(\"str_col\", INTERVAL DAY TO SECOND)",
+      "cast(\"str_col\" as INTERVAL DAY TO SECOND)",
       parseExpr("cast(str_col as interval day to second)")->toString());
 
-  // Unsupported casts for now.
-  EXPECT_THROW(parseExpr("cast('2020-01-01' as TIME)"), std::runtime_error);
+  EXPECT_EQ(
+      "cast(2020-01-01 as TIME)",
+      parseExpr("cast('2020-01-01' as TIME)")->toString());
 
   // Complex types.
   EXPECT_EQ(
-      "cast(\"c0\", ARRAY<BIGINT>)", parseExpr("c0::bigint[]")->toString());
+      "cast(\"c0\" as ARRAY<BIGINT>)", parseExpr("c0::bigint[]")->toString());
   EXPECT_EQ(
-      "cast(\"c0\", ARRAY<BIGINT>)",
+      "cast(\"c0\" as ARRAY<BIGINT>)",
       parseExpr("cast(c0 as bigint[])")->toString());
 
   EXPECT_EQ(
-      "cast(\"c0\", MAP<VARCHAR,BIGINT>)",
+      "cast(\"c0\" as MAP<VARCHAR,BIGINT>)",
       parseExpr("c0::map(varchar, bigint)")->toString());
   EXPECT_EQ(
-      "cast(\"c0\", MAP<VARCHAR,BIGINT>)",
+      "cast(\"c0\" as MAP<VARCHAR,BIGINT>)",
       parseExpr("cast(c0 as map(varchar, bigint))")->toString());
 
   EXPECT_EQ(
-      "cast(\"c0\", ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
+      "cast(\"c0\" as ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
       parseExpr("c0::struct(a bigint, b real, c varchar)")->toString());
   EXPECT_EQ(
-      "cast(\"c0\", ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
+      "cast(\"c0\" as ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
       parseExpr("cast(c0 as struct(a bigint, b real, c varchar))")->toString());
 }
 
 TEST(DuckParserTest, castToJson) {
   registerJsonType();
-  EXPECT_EQ("cast(\"c0\", JSON)", parseExpr("cast(c0 as json)")->toString());
-  EXPECT_EQ("cast(\"c0\", JSON)", parseExpr("cast(c0 as JSON)")->toString());
+  EXPECT_EQ("cast(\"c0\" as JSON)", parseExpr("cast(c0 as json)")->toString());
+  EXPECT_EQ("cast(\"c0\" as JSON)", parseExpr("cast(c0 as JSON)")->toString());
 }
 
 TEST(DuckParserTest, castToTimestampWithTimeZone) {
   registerTimestampWithTimeZoneType();
   EXPECT_EQ(
-      "cast(\"c0\", TIMESTAMP WITH TIME ZONE)",
+      "cast(\"c0\" as TIMESTAMP WITH TIME ZONE)",
       parseExpr("cast(c0 as timestamp with time zone)")->toString());
   EXPECT_EQ(
-      "cast(\"c0\", TIMESTAMP WITH TIME ZONE)",
+      "cast(\"c0\" as TIMESTAMP WITH TIME ZONE)",
       parseExpr("cast(c0 as TIMESTAMP WITH TIME ZONE)")->toString());
 }
 
@@ -416,6 +461,8 @@ TEST(DuckParserTest, ifCase) {
   EXPECT_EQ(
       "if(\"a\",plus(\"b\",\"c\"),g(\"d\"))",
       parseExpr("if(a, b + c, g(d))")->toString());
+
+  EXPECT_EQ("if(gt(\"a\",0),10)", parseExpr("if(a > 0, 10, null)")->toString());
 
   // CASE statements.
   EXPECT_EQ(
@@ -438,7 +485,7 @@ TEST(DuckParserTest, switchCase) {
       parseExpr("case when a > 0 then 1 when a < 0 then -1end")->toString());
 
   EXPECT_EQ(
-      "switch(eq(\"a\",1),\"x\",eq(\"a\",5),\"y\",\"z\")",
+      "switch(eq(\"a\",1),x,eq(\"a\",5),y,z)",
       parseExpr("case a when 1 then 'x' when 5 then 'y' else 'z' end")
           ->toString());
 }
@@ -479,24 +526,23 @@ TEST(DuckParserTest, alias) {
       "gt(\"a\",\"b\") AS result", parseExpr("a > b AS result")->toString());
   EXPECT_EQ("2 AS multiplier", parseExpr("2 AS multiplier")->toString());
   EXPECT_EQ(
-      "cast(\"a\", DOUBLE) AS a_double",
+      "cast(\"a\" as DOUBLE) AS a_double",
       parseExpr("cast(a AS DOUBLE) AS a_double")->toString());
   EXPECT_EQ("\"a\" AS b", parseExpr("a AS b")->toString());
 }
 
 TEST(DuckParserTest, like) {
-  EXPECT_EQ("like(\"name\",\"%b%\")", parseExpr("name LIKE '%b%'")->toString());
+  EXPECT_EQ("like(\"name\",%b%)", parseExpr("name LIKE '%b%'")->toString());
   EXPECT_EQ(
-      "like(\"name\",\"%#_%\",\"#\")",
+      "like(\"name\",%#_%,#)",
       parseExpr("name LIKE '%#_%' ESCAPE '#'")->toString());
 }
 
 TEST(DuckParserTest, notLike) {
   EXPECT_EQ(
-      "not(like(\"name\",\"%b%\"))",
-      parseExpr("name NOT LIKE '%b%'")->toString());
+      "not(like(\"name\",%b%))", parseExpr("name NOT LIKE '%b%'")->toString());
   EXPECT_EQ(
-      "not(like(\"name\",\"%#_%\",\"#\"))",
+      "not(like(\"name\",%#_%,#))",
       parseExpr("name NOT LIKE '%#_%' ESCAPE '#'")->toString());
 }
 
@@ -509,9 +555,7 @@ TEST(DuckParserTest, count) {
 
 TEST(DuckParserTest, orderBy) {
   auto parse = [](const auto& expr) {
-    auto orderBy = parseOrderByExpr(expr);
-    return fmt::format(
-        "{} {}", orderBy.first->toString(), orderBy.second.toString());
+    return parseOrderByExpr(expr).toString();
   };
 
   EXPECT_EQ("\"c1\" ASC NULLS LAST", parse("c1"));
@@ -612,8 +656,9 @@ TEST(DuckParserTest, window) {
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
-      parseWindow("row_number() over (partition by a order by b "
-                  "rows between a + 10 preceding and 10 following)"));
+      parseWindow(
+          "row_number() over (partition by a order by b "
+          "rows between a + 10 preceding and 10 following)"));
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" DESC NULLS FIRST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
@@ -645,8 +690,8 @@ TEST(DuckParserTest, windowWithIntegerConstant) {
       std::dynamic_pointer_cast<const core::CallExpr>(windowExpr.functionCall);
   ASSERT_TRUE(func != nullptr)
       << windowExpr.functionCall->toString() << " is not a call expr";
-  EXPECT_EQ(func->getInputs().size(), 2);
-  auto param = func->getInputs()[1];
+  EXPECT_EQ(func->inputs().size(), 2);
+  auto param = func->inputs()[1];
   auto constant = std::dynamic_pointer_cast<const core::ConstantExpr>(param);
   ASSERT_TRUE(constant != nullptr) << param->toString() << " is not a constant";
   EXPECT_EQ(*constant->type(), *INTEGER());
@@ -686,13 +731,13 @@ TEST(DuckParserTest, parseWithPrefix) {
   ParseOptions options;
   options.functionPrefix = "prefix.";
   EXPECT_EQ(
-      "prefix.in(\"col1\",[1,2,3])",
+      "prefix.in(\"col1\",{1, 2, 3})",
       parseExpr("col1 in (1, 2, 3)", options)->toString());
   EXPECT_EQ(
-      "prefix.like(\"name\",\"%b%\")",
+      "prefix.like(\"name\",%b%)",
       parseExpr("name LIKE '%b%'", options)->toString());
   EXPECT_EQ(
-      "prefix.not(prefix.like(\"name\",\"%b%\"))",
+      "prefix.not(prefix.like(\"name\",%b%))",
       parseExpr("name NOT LIKE '%b%'", options)->toString());
 
   // Arithmetic operators.
@@ -748,7 +793,7 @@ TEST(DuckParserTest, parseWithPrefix) {
   EXPECT_EQ(
       "coalesce(null,0)", parseExpr("coalesce(NULL, 0)", options)->toString());
   EXPECT_EQ(
-      "cast(\"1\", BIGINT)",
+      "cast(1 as BIGINT)",
       parseExpr("cast('1' as bigint)", options)->toString());
   EXPECT_EQ(
       "try(prefix.plus(\"c0\",\"c1\"))",

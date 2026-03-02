@@ -62,7 +62,6 @@ namespace {
 
 void* GetLibrarySymbol(LibraryHandle handle, const char* symbol) {
   if (handle == NULL) {
-    printf("handle is null\n");
     return NULL;
   }
 
@@ -72,7 +71,6 @@ void* GetLibrarySymbol(LibraryHandle handle, const char* symbol) {
 
   void* ret = reinterpret_cast<void*>(GetProcAddress(, symbol));
   if (ret == NULL) {
-    printf("ret  is null\n");
     // logstream(LOG_INFO) << "GetProcAddress error: "
     //                     << get_last_err_str(GetLastError()) << std::endl;
   }

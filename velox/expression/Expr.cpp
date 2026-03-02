@@ -16,14 +16,12 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <fstream>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/Expressions.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -33,6 +31,7 @@
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -42,6 +41,27 @@ DECLARE_bool(force_eval_simplified);
 DECLARE_bool(velox_experimental_save_input_on_fatal_signal);
 
 namespace facebook::velox::exec {
+
+namespace {
+const auto& specialFormNames() {
+  static const folly::F14FastMap<SpecialFormKind, std::string_view> kNames = {
+      {SpecialFormKind::kFieldAccess, "FIELD"},
+      {SpecialFormKind::kConstant, "CONSTANT"},
+      {SpecialFormKind::kCast, "CAST"},
+      {SpecialFormKind::kCoalesce, "COALESCE"},
+      {SpecialFormKind::kSwitch, "SWITCH"},
+      {SpecialFormKind::kLambda, "LAMBDA"},
+      {SpecialFormKind::kTry, "TRY"},
+      {SpecialFormKind::kAnd, "AND"},
+      {SpecialFormKind::kOr, "OR"},
+      {SpecialFormKind::kCustom, "CUSTOM"},
+  };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(SpecialFormKind, specialFormNames);
+
 folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>&
 exprSetListeners() {
   static folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>
@@ -122,7 +142,7 @@ Expr::Expr(
       name_(std::move(name)),
       vectorFunction_(std::move(vectorFunction)),
       vectorFunctionMetadata_{std::move(metadata)},
-      specialForm_{false},
+      specialFormKind_{std::nullopt},
       supportsFlatNoNullsFastPath_{
           vectorFunction_->supportsFlatNoNullsFastPath() &&
           type_->isPrimitiveType() && type_->isFixedWidth() &&
@@ -675,16 +695,35 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
   if (strlen(basePath) == 0 && exceptionType == VeloxException::Type::kSystem) {
     basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
   }
+
+  const auto& owner = context->expr()->vectorFunctionMetadata().owner;
   if (strlen(basePath) == 0) {
-    return fmt::format("Top-level Expression: {}", context->expr()->toString());
+    if (owner.empty()) {
+      return fmt::format(
+          "Top-level Expression: {}", context->expr()->toString());
+    }
+    return fmt::format(
+        "Owner: {}. Top-level Expression: {}",
+        owner,
+        context->expr()->toString());
   }
 
   // Save input vector to a file.
   context->persistDataAndSql(basePath);
 
+  if (owner.empty()) {
+    return fmt::format(
+        "Top-level Expression: {}. Input data: {}. SQL expression: {}."
+        " All SQL expressions: {}. ",
+        context->expr()->toString(),
+        context->dataPath(),
+        context->sqlPath(),
+        context->allExprSqlPath());
+  }
   return fmt::format(
-      "Top-level Expression: {}. Input data: {}. SQL expression: {}."
+      "Owner: {}. Top-level Expression: {}. Input data: {}. SQL expression: {}."
       " All SQL expressions: {}. ",
+      owner,
       context->expr()->toString(),
       context->dataPath(),
       context->sqlPath(),
@@ -695,7 +734,12 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
 /// sub-expression. Returns the output of Expr::toString() for the
 /// sub-expression.
 std::string onException(VeloxException::Type /*exceptionType*/, void* arg) {
-  return static_cast<Expr*>(arg)->toString();
+  auto* expr = static_cast<Expr*>(arg);
+  const auto& owner = expr->vectorFunctionMetadata().owner;
+  if (owner.empty()) {
+    return static_cast<Expr*>(arg)->toString();
+  }
+  return fmt::format("Owner: {}. Expression: {}", owner, expr->toString());
 }
 } // namespace
 
@@ -815,7 +859,10 @@ void Expr::eval(
   // different subset.
   //
   // TODO: Re-work the logic of deciding when to load which field.
-  if (!hasConditionals_ || distinctFields_.size() == 1 ||
+  if (context.lazyDereference()) {
+    // Do not load any lazy.
+  } else if (
+      !hasConditionals_ || distinctFields_.size() == 1 ||
       shouldEvaluateSharedSubexp(context) ||
       !context.deferredLazyLoadingEnabled()) {
     // Load lazy vectors if any.
@@ -1682,7 +1729,7 @@ void Expr::appendInputsSql(
   }
 }
 
-bool Expr::isConstant() const {
+bool Expr::isConstantExpr() const {
   return isDeterministic() && distinctFields_.empty();
 }
 
@@ -1726,24 +1773,29 @@ common::Subfield extractSubfield(
     }
     switch (index->value()->typeKind()) {
       case TypeKind::TINYINT:
-        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
-            index->value()->as<ConstantVector<int8_t>>()->value()));
+        path.push_back(
+            std::make_unique<common::Subfield::LongSubscript>(
+                index->value()->as<ConstantVector<int8_t>>()->value()));
         break;
       case TypeKind::SMALLINT:
-        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
-            index->value()->as<ConstantVector<int16_t>>()->value()));
+        path.push_back(
+            std::make_unique<common::Subfield::LongSubscript>(
+                index->value()->as<ConstantVector<int16_t>>()->value()));
         break;
       case TypeKind::INTEGER:
-        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
-            index->value()->as<ConstantVector<int32_t>>()->value()));
+        path.push_back(
+            std::make_unique<common::Subfield::LongSubscript>(
+                index->value()->as<ConstantVector<int32_t>>()->value()));
         break;
       case TypeKind::BIGINT:
-        path.push_back(std::make_unique<common::Subfield::LongSubscript>(
-            index->value()->as<ConstantVector<int64_t>>()->value()));
+        path.push_back(
+            std::make_unique<common::Subfield::LongSubscript>(
+                index->value()->as<ConstantVector<int64_t>>()->value()));
         break;
       case TypeKind::VARCHAR:
-        path.push_back(std::make_unique<common::Subfield::StringSubscript>(
-            index->value()->as<ConstantVector<StringView>>()->value()));
+        path.push_back(
+            std::make_unique<common::Subfield::StringSubscript>(std::string(
+                index->value()->as<ConstantVector<StringView>>()->value())));
         break;
       default:
         return {};
@@ -1774,12 +1826,57 @@ std::vector<common::Subfield> Expr::extractSubfields() const {
   return subfields;
 }
 
+namespace {
+
+// Make sure there are only FieldReferences, and there is no overlap between the
+// output of expressions.
+void validateLazyDereference(const std::vector<std::shared_ptr<Expr>>& exprs) {
+#ifndef NDEBUG
+  std::vector<std::vector<std::string>> paths;
+  for (auto& expr : exprs) {
+    std::vector<std::string> path;
+    auto* fieldRef = dynamic_cast<const FieldReference*>(expr.get());
+    VELOX_CHECK_NOT_NULL(fieldRef);
+    path.push_back(fieldRef->field());
+    while (!fieldRef->inputs().empty()) {
+      VELOX_CHECK_EQ(fieldRef->inputs().size(), 1);
+      fieldRef =
+          dynamic_cast<const FieldReference*>(fieldRef->inputs()[0].get());
+      VELOX_CHECK_NOT_NULL(fieldRef);
+      path.push_back(fieldRef->field());
+    }
+    std::reverse(path.begin(), path.end());
+    paths.push_back(std::move(path));
+  }
+  std::sort(paths.begin(), paths.end());
+  for (int i = 1; i < paths.size(); ++i) {
+    if (paths[i - 1].size() > paths[i].size()) {
+      continue;
+    }
+    bool isPrefix = true;
+    for (int j = 0; j < paths[i - 1].size(); ++j) {
+      if (paths[i - 1][j] != paths[i][j]) {
+        isPrefix = false;
+        break;
+      }
+    }
+    VELOX_CHECK(!isPrefix);
+  }
+#endif
+}
+
+} // namespace
+
 ExprSet::ExprSet(
     const std::vector<core::TypedExprPtr>& sources,
     core::ExecCtx* execCtx,
-    bool enableConstantFolding)
-    : execCtx_(execCtx) {
+    bool enableConstantFolding,
+    bool lazyDereference)
+    : execCtx_(execCtx), lazyDereference_(lazyDereference) {
   exprs_ = compileExpressions(sources, execCtx, this, enableConstantFolding);
+  if (lazyDereference_) {
+    validateLazyDereference(exprs_);
+  }
   std::vector<FieldReference*> allDistinctFields;
   for (auto& expr : exprs_) {
     Expr::mergeFields(
@@ -1791,7 +1888,8 @@ namespace {
 void addStats(
     const exec::Expr& expr,
     std::unordered_map<std::string, exec::ExprStats>& stats,
-    std::unordered_set<const exec::Expr*>& uniqueExprs) {
+    std::unordered_set<const exec::Expr*>& uniqueExprs,
+    bool excludeSpecialForm) {
   auto it = uniqueExprs.find(&expr);
   if (it != uniqueExprs.end()) {
     // Common sub-expression. Skip to avoid double counting.
@@ -1800,13 +1898,16 @@ void addStats(
 
   uniqueExprs.insert(&expr);
 
+  bool excludeSplFormExpr = excludeSpecialForm && expr.isSpecialForm();
   // Do not aggregate empty stats.
-  if (expr.stats().numProcessedRows || expr.stats().defaultNullRowsSkipped) {
+  bool emptyStats =
+      !expr.stats().numProcessedRows && !expr.stats().defaultNullRowsSkipped;
+  if (!emptyStats && !excludeSplFormExpr) {
     stats[expr.name()].add(expr.stats());
   }
 
   for (const auto& input : expr.inputs()) {
-    addStats(*input, stats, uniqueExprs);
+    addStats(*input, stats, uniqueExprs, excludeSpecialForm);
   }
 }
 
@@ -1815,11 +1916,12 @@ std::string makeUuid() {
 }
 } // namespace
 
-std::unordered_map<std::string, exec::ExprStats> ExprSet::stats() const {
+std::unordered_map<std::string, exec::ExprStats> ExprSet::stats(
+    bool excludeSpecialForm) const {
   std::unordered_map<std::string, exec::ExprStats> stats;
   std::unordered_set<const exec::Expr*> uniqueExprs;
   for (const auto& expr : exprs()) {
-    addStats(*expr, stats, uniqueExprs);
+    addStats(*expr, stats, uniqueExprs, excludeSpecialForm);
   }
 
   return stats;
@@ -1920,20 +2022,23 @@ void ExprSet::eval(
     const SelectivityVector& rows,
     EvalCtx& context,
     std::vector<VectorPtr>& result) {
+  VELOX_CHECK_EQ(lazyDereference_, context.lazyDereference());
   result.resize(exprs_.size());
   if (initialize) {
     clearSharedSubexprs();
   }
 
-  // Make sure LazyVectors, referenced by multiple expressions, are loaded
-  // for all the "rows".
-  //
-  // Consider projection with 2 expressions: f(a) AND g(b), h(b)
-  // If b is a LazyVector and f(a) AND g(b) expression is evaluated first, it
-  // will load b only for rows where f(a) is true. However, h(b) projection
-  // needs all rows for "b".
-  for (const auto& field : multiplyReferencedFields_) {
-    context.ensureFieldLoaded(field->index(context), rows);
+  if (!lazyDereference_) {
+    // Make sure LazyVectors, referenced by multiple expressions, are loaded for
+    // all the "rows".
+    //
+    // Consider projection with 2 expressions: f(a) AND g(b), h(b) If b is a
+    // LazyVector and f(a) AND g(b) expression is evaluated first, it will load
+    // b only for rows where f(a) is true. However, h(b) projection needs all
+    // rows for "b".
+    for (const auto& field : multiplyReferencedFields_) {
+      context.ensureFieldLoaded(field->index(context), rows);
+    }
   }
 
   if (FLAGS_velox_experimental_save_input_on_fatal_signal) {
@@ -1970,8 +2075,7 @@ void ExprSet::clear() {
   for (auto* memo : memoizingExprs_) {
     memo->clearMemo();
   }
-  distinctFields_.clear();
-  multiplyReferencedFields_.clear();
+  memoizingExprs_.clear();
 }
 
 void ExprSet::clearCache() {
@@ -1998,12 +2102,14 @@ void ExprSetSimplified::eval(
 
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
-    core::ExecCtx* execCtx) {
+    core::ExecCtx* execCtx,
+    bool lazyDereference) {
   if (execCtx->queryCtx()->queryConfig().exprEvalSimplified() ||
       FLAGS_force_eval_simplified) {
     return std::make_unique<ExprSetSimplified>(std::move(source), execCtx);
   }
-  return std::make_unique<ExprSet>(std::move(source), execCtx);
+  return std::make_unique<ExprSet>(
+      std::move(source), execCtx, true, lazyDereference);
 }
 
 std::string printExprWithStats(const exec::ExprSet& exprSet) {
@@ -2030,6 +2136,15 @@ void SimpleExpressionEvaluator::evaluate(
   result = results[0];
 }
 
+void SimpleExpressionEvaluator::evaluate(
+    exec::ExprSet* exprSet,
+    const SelectivityVector& rows,
+    const RowVector& input,
+    std::vector<VectorPtr>& results) {
+  EvalCtx context(ensureExecCtx(), exprSet, &input);
+  exprSet->eval(0, exprSet->size(), true, rows, context, results);
+}
+
 core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
   if (!execCtx_) {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
@@ -2037,13 +2152,16 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
   return execCtx_.get();
 }
 
-VectorPtr tryEvaluateConstantExpression(
+namespace {
+VectorPtr tryEvaluateConstantExpressionInternal(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
-    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    core::ExecCtx* execCtx,
     bool suppressEvaluationFailures) {
-  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
-  velox::exec::ExprSet exprSet({expr}, &execCtx);
+  // Disable constant folding to avoid an infinite loop between ExprOptimizer
+  // and ExprCompiler.
+  velox::exec::ExprSet exprSet(
+      {expr}, execCtx, /*enableConstantFolding*/ false);
 
   // The construction of ExprSet involves compiling and constant folding the
   // expression. If constant folding succeeded, then we get a ConstantExpr.
@@ -2052,11 +2170,11 @@ VectorPtr tryEvaluateConstantExpression(
   // If constant folding didn't succeed, but suppressEvaluationFailures is
   // false, we need to re-evaluate the expression to propagate the failure.
   const bool doEvaluate = exprSet.expr(0)->is<ConstantExpr>() ||
-      (!suppressEvaluationFailures && exprSet.expr(0)->isConstant());
+      (!suppressEvaluationFailures && exprSet.expr(0)->isConstantExpr());
 
   if (doEvaluate) {
     auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);
-    velox::exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
+    velox::exec::EvalCtx evalCtx(execCtx, &exprSet, data.get());
     velox::SelectivityVector singleRow(1);
     std::vector<velox::VectorPtr> results(1);
     exprSet.eval(singleRow, evalCtx, results);
@@ -2064,6 +2182,27 @@ VectorPtr tryEvaluateConstantExpression(
   }
 
   return nullptr;
+}
+} // namespace
+
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool suppressEvaluationFailures) {
+  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
+  return tryEvaluateConstantExpressionInternal(
+      expr, pool, &execCtx, suppressEvaluationFailures);
+}
+
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
+    core::QueryCtx* queryCtx,
+    bool suppressEvaluationFailures) {
+  velox::core::ExecCtx execCtx{pool, queryCtx};
+  return tryEvaluateConstantExpressionInternal(
+      expr, pool, &execCtx, suppressEvaluationFailures);
 }
 
 } // namespace facebook::velox::exec

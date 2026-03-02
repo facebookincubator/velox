@@ -62,9 +62,10 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
     const std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>&
         argValuesGenerators)
     : options_(options),
-      queryCtx_(core::QueryCtx::create(
-          nullptr,
-          core::QueryConfig(options_.queryConfigs))),
+      queryCtx_(
+          core::QueryCtx::create(
+              nullptr,
+              core::QueryConfig(options_.queryConfigs))),
       execCtx_({pool_.get(), queryCtx_.get()}),
       verifier_(
           &execCtx_,
@@ -72,9 +73,10 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
            options_.reproPersistPath,
            options_.persistAndRunOnce},
           options_.expressionFuzzerOptions.referenceQueryRunner),
-      vectorFuzzer_(std::make_shared<VectorFuzzer>(
-          options_.vectorFuzzerOptions,
-          execCtx_.pool())),
+      vectorFuzzer_(
+          std::make_shared<VectorFuzzer>(
+              options_.vectorFuzzerOptions,
+              execCtx_.pool())),
       expressionFuzzer_(
           signatureMap,
           initialSeed,
@@ -86,8 +88,6 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
           options_.expressionFuzzerOptions.referenceQueryRunner} {
   parse::registerTypeResolver();
   filesystems::registerLocalFileSystem();
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
   exec::test::registerHiveConnector({});
   dwrf::registerDwrfWriterFactory();
 
@@ -290,8 +290,8 @@ void ExpressionFuzzerVerifier::retryWithTry(
   // Wrap each expression tree with 'try'.
   std::vector<core::TypedExprPtr> tryPlans;
   for (auto& plan : plans) {
-    tryPlans.push_back(std::make_shared<core::CallTypedExpr>(
-        plan->type(), std::vector<core::TypedExprPtr>{plan}, "try"));
+    tryPlans.push_back(
+        std::make_shared<core::CallTypedExpr>(plan->type(), "try", plan));
   }
 
   std::vector<ResultOrError> tryResults;

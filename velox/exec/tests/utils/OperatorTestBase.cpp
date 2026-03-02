@@ -24,7 +24,6 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/CompactRowSerializer.h"
@@ -154,6 +153,7 @@ void OperatorTestBase::SetUp() {
 void OperatorTestBase::TearDown() {
   waitForAllTasksToBeDeleted();
   stopPeriodicStatsReporter();
+  executor_.reset();
   // There might be lingering exchange source on executor even after all tasks
   // are deleted. This can cause memory leak because exchange source holds
   // reference to memory pool. We need to make sure they are properly cleaned.
@@ -244,7 +244,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
     const std::string& text,
     RowTypePtr rowType,
     const parse::ParseOptions& options) {
-  auto untyped = parse::parseExpr(text, options);
+  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
 }
 

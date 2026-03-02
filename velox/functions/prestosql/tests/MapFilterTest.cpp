@@ -70,24 +70,49 @@ class MapFilterTest : public functions::test::FunctionBaseTest {
 };
 
 TEST_F(MapFilterTest, filter) {
-  auto rowType =
-      ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});
-  auto data = std::static_pointer_cast<RowVector>(
-      BatchMaker::createBatch(rowType, 1'000, *execCtx_.pool()));
+  {
+    auto rowType =
+        ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});
+    auto data = std::static_pointer_cast<RowVector>(
+        BatchMaker::createBatch(rowType, 1'000, *execCtx_.pool()));
 
-  auto result = evaluate("map_filter(map_val, (k, v) -> (k > long_val))", data);
-  auto* cutoff = data->childAt(0)->as<SimpleVector<int64_t>>();
-  checkMapFilter<SimpleVector<int64_t>, SimpleVector<int32_t>>(
-      data->childAt(1).get(),
-      *result,
-      [&](SimpleVector<int64_t>* keys,
-          SimpleVector<int32_t>* values,
-          vector_size_t elementRow,
-          vector_size_t row) {
-        return cutoff->isNullAt(row) || keys->isNullAt(elementRow)
-            ? false
-            : keys->valueAt(elementRow) > cutoff->valueAt(row);
-      });
+    auto result =
+        evaluate("map_filter(map_val, (k, v) -> (k > long_val))", data);
+    auto* cutoff = data->childAt(0)->as<SimpleVector<int64_t>>();
+    checkMapFilter<SimpleVector<int64_t>, SimpleVector<int32_t>>(
+        data->childAt(1).get(),
+        *result,
+        [&](SimpleVector<int64_t>* keys,
+            SimpleVector<int32_t>* values,
+            vector_size_t elementRow,
+            vector_size_t row) {
+          return cutoff->isNullAt(row) || keys->isNullAt(elementRow)
+              ? false
+              : keys->valueAt(elementRow) > cutoff->valueAt(row);
+        });
+  }
+  {
+    const auto rowType = ROW({"map_val"}, {MAP(BIGINT(), INTEGER())});
+    const auto map = makeMapVectorFromJson<int64_t, int32_t>(
+        {"{1: \"1\", 2: \"2\", 5: \"5\"}",
+         "{3: \"3\", 7: \"7\"}",
+         "{4: \"4\", 5: \"5\"}",
+         "{6: \"6\", 7: \"7\"}",
+         "{1: \"1\", 8: \"8\"}",
+         "{4: \"4\", 9: \"9\"}"});
+    const auto data = makeRowVector({"map_val"}, {map});
+    const auto result = evaluate(
+        "map_filter(map_val, (k, v) -> (contains(ARRAY[1,2,7], k))) as map_val",
+        data);
+    const auto expectedMap = makeMapVectorFromJson<int64_t, int32_t>(
+        {"{1: \"1\", 2: \"2\"}",
+         "{7: \"7\"}",
+         "{}",
+         "{7: \"7\"}",
+         "{1: \"1\"}",
+         "{}"});
+    assertEqualVectors(expectedMap, result);
+  }
 }
 
 TEST_F(MapFilterTest, empty) {
@@ -249,6 +274,324 @@ TEST_F(MapFilterTest, lambdaSelectivityVector) {
   auto expectedValues = makeFlatVector<int64_t>({10, 10, 10});
   auto expected = makeMapVector({0}, expectedKeys, expectedValues);
   assertEqualVectors(expected, result[0]);
+}
+
+TEST_F(MapFilterTest, fuzzFlatMap) {
+  auto options = VectorFuzzer::Options();
+  options.allowFlatMapVector = true;
+  VectorFuzzer fuzzer(options, execCtx_.pool());
+  constexpr vector_size_t size = 100;
+  auto num_iterations = 100;
+  while (num_iterations--) {
+    auto flatMap = fuzzer.fuzzFlatMap(INTEGER(), INTEGER(), size);
+
+    // Convert to a regular map vector.
+    auto map = flatMap->as<FlatMapVector>()->toMapVector();
+
+    // Wrap in a row vector for evaluation.
+    auto dataFlat = makeRowVector({"c0"}, {flatMap});
+    auto dataMap = makeRowVector({"c0"}, {map});
+
+    // Try a few different filters.
+    std::vector<std::string> filters = {
+        "(k, v) -> (v IS NOT NULL)",
+        "(k, v) -> (k % 2 = 0)",
+        "(k, v) -> (v > 50)",
+        "(k, v) -> (k < 5 OR v IS NULL)",
+    };
+
+    for (const auto& filter : filters) {
+      auto expr = fmt::format("map_filter(c0, {})", filter);
+      auto resultFlat = evaluate(expr, dataFlat);
+      auto resultMap = evaluate(expr, dataMap);
+      assertEqualVectors(resultMap, resultFlat);
+    }
+  }
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodings) {
+  // Case 1: Verify value filter
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 4:40, 5:50, 6:60}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50, 6:60}",
+              }),
+          })));
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 4:40}",
+          "{}",
+          "{2:20}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+                  "{1:10, 2:null, 4:40, 5:null}",
+                  "{}",
+                  "{2:20, 4:null, 6:null}",
+              }),
+          })));
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{4:40, 5:50}",
+          "{4:40}",
+          "{}",
+          "{}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (v > 30))",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+                  "{1:10, 2:null, 4:40, 5:null}",
+                  "{}",
+                  "{2:20, 4:null, 6:null}",
+              }),
+          })));
+
+  // Case 2: Verify key filter
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{4:40, 5:50, 6:null}",
+          "{4:40, 5:null}",
+          "{}",
+          "{4:null, 6:null}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (k > 3))",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+                  "{1:10, 2:null, 4:40, 5:null}",
+                  "{}",
+                  "{2:20, 4:null, 6:null}",
+              }),
+          })));
+
+  // Case 3: Verify key and value filter
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{4:40, 5:50}",
+          "{4:40}",
+          "{}",
+          "{}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (k > 3 AND v is NOT NULL))",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+                  "{1:10, 2:null, 4:40, 5:null}",
+                  "{}",
+                  "{2:20, 4:null, 6:null}",
+              }),
+          })));
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{}",
+          "{}",
+          "{}",
+          "{}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (k > 3 AND v < 30))",
+          makeRowVector({
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50, 6:null}",
+                  "{1:10, 2:null, 4:40, 5:null}",
+                  "{}",
+                  "{2:20, 4:null, 6:null}",
+              }),
+          })));
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodingsWrappedInDictionary) {
+  auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 3:null, 4:40, 5:50}",
+      "{1:10, 2:20, 3:null, 4:40, 5:50}",
+      "{1:10, 2:null, 4:40, 5:null}",
+      "{}",
+      "{2:20, 4:null, 5:null}",
+      "{2:20, 4:null, 5:50}",
+      "{1:10, 4:null, 5:null}",
+      "{2:20, 3:30, 5:null}",
+      "{}",
+      "{1:10, 2:20, 3:30, 4:40, 5:50}",
+  });
+  auto expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 2:20, 4:40, 5:50}",
+      "{1:10, 4:40}",
+      "{}",
+      "{2:20}",
+      "{2:20, 5:50}",
+      "{1:10}",
+      "{2:20, 3:30}",
+      "{}",
+      "{1:10, 2:20, 3:30, 4:40, 5:50}",
+  });
+
+  auto same = [](vector_size_t row) { return row; };
+  auto scattered = [](auto row) { return (row * 17 + 3) % 10; };
+
+  // Flattening handled by preprocessing peeling logic
+  assertEqualVectors(
+      expected,
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({BaseVector::wrapInDictionary(
+              nullptr,
+              makeIndices(input->size(), same),
+              input->size(),
+              input)})));
+
+  // Flattened internally by our filter function. This will test our ability to
+  // filter wrapped flat maps and preserve their indices. We will use our
+  // scattered function above to produce shuffled indices. The second assert
+  // uses the same function but half the indices to verify our logic on length
+  // mismatched dictionary indices
+  assertEqualVectors(
+      wrapInDictionary(
+          makeIndices(expected->size(), scattered), expected->size(), expected),
+      evaluate(
+          "map_filter(c1, (k, v) -> (v IS NOT NULL and c0 is not null))",
+          makeRowVector(
+              {makeFlatVector<int32_t>(input->size(), same),
+               wrapInDictionary(
+                   makeIndices(input->size(), scattered),
+                   input->size(),
+                   input)})));
+  assertEqualVectors(
+      wrapInDictionary(
+          makeIndices(expected->size() / 2, scattered),
+          expected->size() / 2,
+          expected),
+      evaluate(
+          "map_filter(c1, (k, v) -> (v IS NOT NULL and c0 is not null))",
+          makeRowVector(
+              {makeFlatVector<int32_t>(input->size() / 2, same),
+               wrapInDictionary(
+                   makeIndices(input->size() / 2, scattered),
+                   input->size() / 2,
+                   input)})));
+  assertEqualVectors(
+      wrapInDictionary(
+          makeIndices(expected->size() / 2, scattered),
+          expected->size() / 2,
+          makeFlatMapVectorFromJson<int64_t, int32_t>({
+              "{4:40, 5:50}",
+              "{4:40, 5:50}",
+              "{4:40}",
+              "{}",
+              "{}",
+              "{5:50}",
+              "{}",
+              "{}",
+              "{}",
+              "{4:40, 5:50}",
+          })),
+      evaluate(
+          "map_filter(c1, (k, v) -> (v IS NOT NULL and v > 30 and c0 is not null))",
+          makeRowVector(
+              {makeFlatVector<int32_t>(input->size() / 2, same),
+               wrapInDictionary(
+                   makeIndices(input->size() / 2, scattered),
+                   input->size() / 2,
+                   input)})));
+  assertEqualVectors(
+      wrapInDictionary(
+          makeIndices(expected->size() / 2, scattered),
+          expected->size() / 2,
+          makeFlatMapVectorFromJson<int64_t, int32_t>({
+              "{5:50}",
+              "{5:50}",
+              "{}",
+              "{}",
+              "{}",
+              "{5:50}",
+              "{}",
+              "{}",
+              "{}",
+              "{5:50}",
+          })),
+      evaluate(
+          "map_filter(c1, (k, v) -> (v IS NOT NULL and v > 30 and k > 4 and c0 is not null))",
+          makeRowVector(
+              {makeFlatVector<int32_t>(input->size() / 2, same),
+               wrapInDictionary(
+                   makeIndices(input->size() / 2, scattered),
+                   input->size() / 2,
+                   input)})));
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodingsWrappedInConstant) {
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+          "{1:10, 2:20, 4:40, 5:50}",
+      }),
+      evaluate(
+          "map_filter(c0, (k, v) -> (v IS NOT NULL))",
+          makeRowVector({BaseVector::wrapInConstant(
+              10,
+              0,
+              makeFlatMapVectorFromJson<int64_t, int32_t>({
+                  "{1:10, 2:20, 3:null, 4:40, 5:50}",
+                  "{1:10, 2:20, 3:null, 4:40, 5:50}",
+                  "{1:10, 2:null, 4:40, 5:null}",
+                  "{}",
+                  "{2:20, 4:null, 5:null}",
+                  "{2:20, 4:null, 5:50}",
+                  "{1:10, 4:null, 5:null}",
+                  "{2:20, 3:30, 5:null}",
+                  "{}",
+                  "{1:10, 2:20, 3:30, 4:40, 5:50}",
+              }))})));
+}
+
+TEST_F(MapFilterTest, fromFlatMapEncodingsWithNullInMaps) {
+  auto distinctKeys = makeFlatVector<int32_t>({1, 2, 3});
+  std::vector<VectorPtr> mapValues(distinctKeys->size());
+  mapValues[0] = makeFlatVector<int32_t>({10, 10, 10});
+  mapValues[1] = makeFlatVector<int32_t>({20, 20, 20});
+  mapValues[2] = makeFlatVector<int32_t>({30, 30, 30});
+  std::vector<BufferPtr> inMaps(distinctKeys->size());
+  inMaps[1] =
+      AlignedBuffer::allocate<bool>(distinctKeys->size(), pool_.get(), 0);
+  FlatMapVectorPtr flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      distinctKeys->size(),
+      distinctKeys,
+      mapValues,
+      inMaps);
+
+  // Will fail without inMap null check during
+  // MapFilterFunction::buildInMapSelectivityVector
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int32_t, int32_t>({
+          "{1:10, 3:30}",
+          "{1:10, 3:30}",
+          "{1:10, 3:30}",
+      }),
+      evaluate("map_filter(c0, (k, v) -> true)", makeRowVector({flatMap})));
 }
 
 TEST_F(MapFilterTest, try) {

@@ -16,15 +16,20 @@ velox_add_library(velox_type_signature OBJECT TypeSignature.cpp)
 
 velox_link_libraries(velox_type_signature velox_common_base)
 
-velox_add_library(velox_expression_functions FunctionSignature.cpp
-                  SignatureBinder.cpp ReverseSignatureBinder.cpp)
+velox_add_library(
+  velox_expression_functions
+  FunctionSignature.cpp
+  SignatureBinder.cpp
+  ReverseSignatureBinder.cpp
+)
 
 velox_link_libraries(
   velox_expression_functions
   velox_common_base
   velox_type_calculation
   velox_type_signature
-  velox_signature_parser)
+  velox_signature_parser
+)
 
 velox_add_library(
   velox_expression
@@ -37,7 +42,10 @@ velox_add_library(
   EvalCtx.cpp
   Expr.cpp
   ExprCompiler.cpp
+  ExprRewriteRegistry.cpp
+  ExprOptimizer.cpp
   ExprToSubfieldFilter.cpp
+  ExprUtils.cpp
   FieldReference.cpp
   FunctionCallToSpecialForm.cpp
   GenericWriter.cpp
@@ -48,9 +56,13 @@ velox_add_library(
   RowConstructor.cpp
   SimpleFunctionRegistry.cpp
   SpecialFormRegistry.cpp
+  CoalesceRewrite.cpp
+  ConjunctRewrite.cpp
   SwitchExpr.cpp
+  SwitchRewrite.cpp
   TryExpr.cpp
-  VectorFunction.cpp)
+  VectorFunction.cpp
+)
 
 velox_link_libraries(
   velox_expression
@@ -61,7 +73,8 @@ velox_link_libraries(
   velox_functions_util
   velox_type_tz
   double-conversion::double-conversion
-  Folly::folly)
+  Folly::folly
+)
 
 add_subdirectory(type_calculation)
 add_subdirectory(signature_parser)

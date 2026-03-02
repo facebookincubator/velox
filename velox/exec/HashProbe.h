@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/exec/HashBuild.h"
-#include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ProbeOperatorState.h"
@@ -63,8 +62,6 @@ class HashProbe : public Operator {
       override;
 
   void close() override;
-
-  void clearDynamicFilters() override;
 
   bool canReclaim() const override;
 
@@ -129,6 +126,8 @@ class HashProbe : public Operator {
   // probe side. This is not a reliable signal, but rather a best effort signal.
   // Applies only for mixed grouped execution mode.
   bool allProbeGroupFinished() const;
+
+  void pushdownDynamicFilters();
 
   // Invoked to wait for the hash table to be built by the hash build operators
   // asynchronously. The function also sets up the internal state for
@@ -379,6 +378,14 @@ class HashProbe : public Operator {
 
   const RowTypePtr probeType_;
 
+  // Flag to indicate whether this hash probe operator can output build-side
+  // rows in parallel with the peer operators for the current hash table.
+  // Outputing build-side rows in parallel is currently not allowed in either of
+  // the following cases:
+  // 1. QueryConfig::kParallelOutputJoinBuildRowsEnabled is false.
+  // 2. Spill is enabled.
+  const bool canOutputBuildRowsInParallel_;
+
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
@@ -413,11 +420,7 @@ class HashProbe : public Operator {
   // Channel of probe keys in 'input_'.
   std::vector<column_index_t> keyChannels_;
 
-  // True if we have generated dynamic filters from the hash build join keys.
-  //
-  // NOTE: 'dynamicFilters_' might have been cleared once they have been pushed
-  // down to the upstream operators.
-  tsan_atomic<bool> hasGeneratedDynamicFilters_{false};
+  folly::F14FastSet<column_index_t> dynamicFiltersProducedOnChannels_;
 
   // True if the join can become a no-op starting with the next batch of input.
   bool canReplaceWithDynamicFilter_{false};
@@ -635,7 +638,7 @@ class HashProbe : public Operator {
     std::optional<bool> currentRowPassed;
   };
 
-  BaseHashTable::RowsIterator lastProbeIterator_;
+  RowContainerIterator lastProbeIterator_;
 
   // For left and anti join with filter, tracks the probe side rows which had
   // matches on the build side but didn't pass the filter.
@@ -733,6 +736,10 @@ class HashProbe : public Operator {
 
   // Input vector used for listing rows with null keys.
   VectorPtr nullKeyProbeInput_;
+
+  // The index of the row container in the current hash table that this hash
+  // probe oprator is processing to output build-side rows.
+  int buildSideOutputRowContainerId_{-1};
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {

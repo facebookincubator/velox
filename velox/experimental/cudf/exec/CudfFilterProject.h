@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
@@ -33,10 +33,11 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   CudfFilterProject(
       int32_t operatorId,
       velox::exec::DriverCtx* driverCtx,
-      const velox::exec::FilterProject::Export& info,
-      std::vector<velox::exec::IdentityProjection> identityProjections,
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project);
+
+  // Some is copied from operator FilterProject.
+  void initialize() override;
 
   bool needsInput() const override {
     return !input_;
@@ -62,23 +63,30 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   void close() override {
     Operator::close();
-    projectEvaluator_.close();
-    filterEvaluator_.close();
+    projectEvaluators_.clear();
+    filterEvaluator_.reset();
   }
 
  private:
   bool allInputProcessed();
+
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
+
   // Cached filter and project node for lazy initialization. After
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
-  ExpressionEvaluator projectEvaluator_;
-  ExpressionEvaluator filterEvaluator_;
+
+  std::vector<CudfExpressionPtr> projectEvaluators_;
+  CudfExpressionPtr filterEvaluator_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
 };
+
+bool canBeEvaluatedByCudf(
+    const std::vector<core::TypedExprPtr>& exprs,
+    core::QueryCtx* queryCtx);
 
 } // namespace facebook::velox::cudf_velox

@@ -16,14 +16,19 @@
 
 #include "velox/dwio/dwrf/writer/LayoutPlanner.h"
 
+#include "velox/dwio/common/Arena.h"
+
 namespace facebook::velox::dwrf {
+
+using dwio::common::ArenaCreate;
 
 StreamList getStreamList(WriterContext& context) {
   StreamList streams;
   streams.reserve(context.getStreamCount());
   context.iterateUnSuppressedStreams([&](auto& pair) {
-    streams.push_back(std::make_pair(
-        std::addressof(pair.first), std::addressof(pair.second)));
+    streams.push_back(
+        std::make_pair(
+            std::addressof(pair.first), std::addressof(pair.second)));
   });
   return streams;
 }
@@ -114,10 +119,6 @@ bool EncodingIter::operator==(const EncodingIter& other) const {
   return current_ == other.current_;
 }
 
-bool EncodingIter::operator!=(const EncodingIter& other) const {
-  return current_ != other.current_;
-}
-
 EncodingIter::reference EncodingIter::operator*() const {
   return *current_;
 }
@@ -128,49 +129,54 @@ EncodingIter::pointer EncodingIter::operator->() const {
 
 EncodingManager::EncodingManager(
     const encryption::EncryptionHandler& encryptionHandler)
-    : encryptionHandler_{encryptionHandler} {
+    : encryptionHandler_{encryptionHandler},
+      arena_{std::make_unique<google::protobuf::Arena>()} {
   initEncryptionGroups();
+  auto dwrfStripeFooter = ArenaCreate<proto::StripeFooter>(arena_.get());
+  footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
 }
 
-proto::ColumnEncoding& EncodingManager::addEncodingToFooter(uint32_t nodeId) {
+ColumnEncodingWriteWrapper EncodingManager::addEncodingToFooter(
+    uint32_t nodeId) {
   if (encryptionHandler_.isEncrypted(nodeId)) {
     auto index = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return *encryptionGroups_.at(index).add_encoding();
+    return ColumnEncodingWriteWrapper(
+        encryptionGroups_.at(index).add_encoding());
   } else {
-    return *footer_.add_encoding();
+    return footer_->addEncoding();
   }
 }
 
-proto::Stream* EncodingManager::addStreamToFooter(
+StreamWriteWrapper EncodingManager::addStreamToFooter(
     uint32_t nodeId,
     uint32_t& currentIndex) {
   if (encryptionHandler_.isEncrypted(nodeId)) {
     currentIndex = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return encryptionGroups_.at(currentIndex).add_streams();
+    return StreamWriteWrapper(encryptionGroups_.at(currentIndex).add_streams());
   } else {
     currentIndex = std::numeric_limits<uint32_t>::max();
-    return footer_.add_streams();
+    return footer_->addStreams();
   }
 }
 
 std::string* EncodingManager::addEncryptionGroupToFooter() {
-  return footer_.add_encryptiongroups();
+  return footer_->addEncryptionGroups();
 }
 
 proto::StripeEncryptionGroup EncodingManager::getEncryptionGroup(uint32_t i) {
   return encryptionGroups_.at(i);
 }
 
-const proto::StripeFooter& EncodingManager::getFooter() const {
-  return footer_;
+const StripeFooterWriteWrapper& EncodingManager::getFooter() const {
+  return *footer_;
 }
 
 EncodingIter EncodingManager::begin() const {
-  return EncodingIter::begin(footer_, encryptionGroups_);
+  return EncodingIter::begin(*footer_->dwrfPtr(), encryptionGroups_);
 }
 
 EncodingIter EncodingManager::end() const {
-  return EncodingIter::end(footer_, encryptionGroups_);
+  return EncodingIter::end(*footer_->dwrfPtr(), encryptionGroups_);
 }
 
 void EncodingManager::initEncryptionGroups() {

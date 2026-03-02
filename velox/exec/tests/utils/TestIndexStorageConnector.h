@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/exec/HashTable.h"
-#include "velox/exec/OperatorUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
@@ -38,6 +37,13 @@ struct TestIndexTable {
       : keyType(std::move(_keyType)),
         dataType(std::move(_dataType)),
         table(std::move(_table)) {}
+
+  // Create index table with the given key and value inputs.
+  static std::shared_ptr<TestIndexTable> create(
+      size_t numEqualJoinKeys,
+      const RowVectorPtr& keyData,
+      const RowVectorPtr& valueData,
+      velox::memory::MemoryPool& pool);
 };
 
 // The index table handle which provides the index table for index lookup.
@@ -46,18 +52,21 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   explicit TestIndexTableHandle(
       std::string connectorId,
       std::shared_ptr<TestIndexTable> indexTable,
-      bool asyncLookup)
+      bool asyncLookup,
+      bool needsIndexSplit = false)
       : ConnectorTableHandle(std::move(connectorId)),
         indexTable_(std::move(indexTable)),
-        asyncLookup_(asyncLookup) {}
+        asyncLookup_(asyncLookup),
+        needsIndexSplit_(needsIndexSplit) {}
 
   ~TestIndexTableHandle() override = default;
 
   std::string toString() const override {
     return fmt::format(
-        "IndexTableHandle: num of rows: {}, asyncLookup: {}",
+        "IndexTableHandle: num of rows: {}, asyncLookup: {}, needsIndexSplit: {}",
         indexTable_ ? indexTable_->table->rows()->numRows() : 0,
-        asyncLookup_);
+        asyncLookup_,
+        needsIndexSplit_);
   }
 
   const std::string& name() const override {
@@ -74,23 +83,25 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
     obj["name"] = name();
     obj["connectorId"] = connectorId();
     obj["asyncLookup"] = asyncLookup_;
+    obj["needsIndexSplit"] = needsIndexSplit_;
     // For testing purpose only, we serialize the index table pointer as an
     // long integer.
     obj["indexTable"] = reinterpret_cast<int64_t>(indexTable_.get());
     return obj;
   }
 
-  static std::shared_ptr<TestIndexTableHandle> create(
+  static std::shared_ptr<const TestIndexTableHandle> create(
       const folly::dynamic& obj,
       void* context) {
     // NOTE: this is only for testing purpose so we don't support to serialize
     // the table.
-    auto ptr_value = obj["indexTable"].asInt();
-    auto indexTablePtr = reinterpret_cast<TestIndexTable*>(ptr_value);
+    auto ptr = obj["indexTable"].asInt();
+    auto indexTablePtr = reinterpret_cast<TestIndexTable*>(ptr);
     return std::make_shared<TestIndexTableHandle>(
         obj["connectorId"].getString(),
         std::shared_ptr<TestIndexTable>(indexTablePtr, [](TestIndexTable*) {}),
-        obj["asyncLookup"].asBool());
+        obj["asyncLookup"].asBool(),
+        obj["needsIndexSplit"].asBool());
   }
 
   static void registerSerDe() {
@@ -107,10 +118,63 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
     return asyncLookup_;
   }
 
+  /// If true, the index source requires a split to perform lookup. This is for
+  /// testing the split collection logic in the IndexLookupJoin operator.
+  bool needsIndexSplit() const override {
+    return needsIndexSplit_;
+  }
+
  private:
   const std::shared_ptr<TestIndexTable> indexTable_;
   const bool asyncLookup_;
+  const bool needsIndexSplit_;
 };
+
+using TestIndexTableHandlePtr = std::shared_ptr<const TestIndexTableHandle>;
+
+/// A fake split class for testing the split collection logic in the
+/// IndexLookupJoin operator. The test index source doesn't actually use splits,
+/// but this is used to verify the split passing mechanism works correctly.
+class TestIndexConnectorSplit : public connector::ConnectorSplit {
+ public:
+  explicit TestIndexConnectorSplit(std::string connectorId)
+      : ConnectorSplit(std::move(connectorId)) {}
+
+  std::string toString() const override {
+    return "TestIndexConnectorSplit";
+  }
+};
+
+class TestIndexColumnHandle : public connector::ColumnHandle {
+ public:
+  explicit TestIndexColumnHandle(std::string name) : name_{std::move(name)} {}
+
+  const std::string& name() const override {
+    return name_;
+  }
+
+  folly::dynamic serialize() const override {
+    auto obj = serializeBase("TestIndexColumnHandle");
+    obj["columnName"] = name_;
+    return obj;
+  }
+
+  static connector::ColumnHandlePtr create(const folly::dynamic& obj) {
+    auto name = obj["columnName"].asString();
+
+    return std::make_shared<TestIndexColumnHandle>(name);
+  }
+
+  static void registerSerDe() {
+    auto& registry = DeserializationRegistryForSharedPtr();
+    registry.Register("TestIndexColumnHandle", TestIndexColumnHandle::create);
+  }
+
+ private:
+  const std::string name_;
+};
+
+using TestIndexColumnHandlePtr = std::shared_ptr<const TestIndexColumnHandle>;
 
 class TestIndexSource : public connector::IndexSource,
                         public std::enable_shared_from_this<TestIndexSource> {
@@ -120,12 +184,21 @@ class TestIndexSource : public connector::IndexSource,
       const RowTypePtr& outputType,
       size_t numEqualJoinKeys,
       const core::TypedExprPtr& joinConditionExpr,
-      const std::shared_ptr<TestIndexTableHandle>& tableHandle,
+      const TestIndexTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, TestIndexColumnHandlePtr>&
+          columnHandles,
       connector::ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor);
 
-  std::shared_ptr<LookupResultIterator> lookup(
-      const LookupRequest& request) override;
+  void addSplits(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits) override {
+    VELOX_CHECK(tableHandle_->needsIndexSplit());
+    VELOX_CHECK(!splits.empty());
+    VELOX_CHECK(splits_.empty());
+    splits_ = std::move(splits);
+  }
+
+  std::shared_ptr<ResultIterator> lookup(const Request& request) override;
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
@@ -145,19 +218,23 @@ class TestIndexSource : public connector::IndexSource,
     return lookupOutputProjections_;
   }
 
-  class ResultIterator : public LookupResultIterator {
+  class ResultIterator : public connector::IndexSource::ResultIterator {
    public:
     ResultIterator(
         std::shared_ptr<TestIndexSource> source,
-        const LookupRequest& request,
+        const Request& request,
         std::unique_ptr<HashLookup> lookupResult,
         folly::Executor* executor);
 
-    std::optional<std::unique_ptr<LookupResult>> next(
+    bool hasNext() override;
+
+    std::optional<std::unique_ptr<connector::IndexSource::Result>> next(
         vector_size_t size,
         ContinueFuture& future) override;
 
    private:
+    static constexpr vector_size_t kMaxLookupSize = 8192;
+
     // Initializes the buffer used to store row pointers or indices for output
     // match result processing.
     template <typename T>
@@ -193,16 +270,17 @@ class TestIndexSource : public connector::IndexSource,
 
     // Synchronously lookup the index table and return up to 'size' number of
     // output rows in result.
-    std::unique_ptr<LookupResult> syncLookup(vector_size_t size);
+    std::unique_ptr<connector::IndexSource::Result> syncLookup(
+        vector_size_t size);
 
     const std::shared_ptr<TestIndexSource> source_;
-    const LookupRequest request_;
+    const Request request_;
     const std::unique_ptr<HashLookup> lookupResult_;
     folly::Executor* const executor_{nullptr};
 
     std::atomic_bool hasPendingRequest_{false};
     std::unique_ptr<BaseHashTable::JoinResultIterator> lookupResultIter_;
-    std::optional<std::unique_ptr<LookupResult>> asyncResult_;
+    std::optional<std::unique_ptr<connector::IndexSource::Result>> asyncResult_;
 
     // The reusable buffers for lookup result processing.
     // The input row number in lookup request for each matched result which is
@@ -231,14 +309,16 @@ class TestIndexSource : public connector::IndexSource,
   void checkNotFailed();
 
   // Initialize the output projections for lookup result processing.
-  void initOutputProjections();
+  void initOutputProjections(
+      const std::unordered_map<std::string, TestIndexColumnHandlePtr>&
+          columnHandles);
 
   // Initialize the condition filter input type and projections if configured.
   void initConditionProjections();
 
   void recordCpuTiming(const CpuWallTiming& timing);
 
-  const std::shared_ptr<TestIndexTableHandle> tableHandle_;
+  const TestIndexTableHandlePtr tableHandle_;
   const RowTypePtr inputType_;
   const RowTypePtr outputType_;
   const RowTypePtr keyType_;
@@ -266,6 +346,11 @@ class TestIndexSource : public connector::IndexSource,
   std::vector<IdentityProjection> conditionTableProjections_;
   std::vector<IdentityProjection> lookupOutputProjections_;
   std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
+
+  // Collected splits for the index source (if tableHandle_->needsIndexSplit()
+  // returns true). This is only used for testing the split interface but not
+  // actually used in the lookup.
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits_;
 };
 
 class TestIndexConnector : public connector::Connector {
@@ -281,27 +366,23 @@ class TestIndexConnector : public connector::Connector {
 
   std::unique_ptr<connector::DataSource> createDataSource(
       const RowTypePtr&,
-      const std::shared_ptr<connector::ConnectorTableHandle>&,
-      const std::
-          unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>&,
+      const connector::ConnectorTableHandlePtr&,
+      const connector::ColumnHandleMap&,
       connector::ConnectorQueryCtx*) override {
     VELOX_UNSUPPORTED("{} not implemented", __FUNCTION__);
   }
 
   std::shared_ptr<connector::IndexSource> createIndexSource(
       const RowTypePtr& inputType,
-      size_t numJoinKeys,
       const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const connector::ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
       connector::ConnectorQueryCtx* connectorQueryCtx) override;
 
   std::unique_ptr<connector::DataSink> createDataSink(
       RowTypePtr,
-      std::shared_ptr<connector::ConnectorInsertTableHandle>,
+      connector::ConnectorInsertTableHandlePtr,
       connector::ConnectorQueryCtx*,
       connector::CommitStrategy) override {
     VELOX_UNSUPPORTED("{} not implemented", __FUNCTION__);
@@ -322,6 +403,13 @@ class TestIndexConnectorFactory : public connector::ConnectorFactory {
       folly::Executor* /*unused*/,
       folly::Executor* cpuExecutor) override {
     return std::make_shared<TestIndexConnector>(id, properties, cpuExecutor);
+  }
+
+  static void registerConnector(folly::CPUThreadPoolExecutor* cpuExecutor) {
+    TestIndexConnectorFactory factory;
+    std::shared_ptr<connector::Connector> connector =
+        factory.newConnector(kTestIndexConnectorName, {}, nullptr, cpuExecutor);
+    connector::registerConnector(connector);
   }
 };
 } // namespace facebook::velox::exec::test

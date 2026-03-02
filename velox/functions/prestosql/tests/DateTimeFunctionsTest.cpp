@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -81,6 +82,13 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   void disableAdjustTimestampToTimezone() {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+    });
+  }
+
+  void setQuerySessionStartTime(int64_t sessionStartTime) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionStartTime,
+         std::to_string(sessionStartTime)},
     });
   }
 
@@ -147,12 +155,13 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   int32_t getCurrentDate(const std::optional<std::string>& timeZone) {
-    return parseDate(date::format(
-        "%Y-%m-%d",
-        timeZone.has_value()
-            ? tzdb::zoned_time(
-                  timeZone.value(), std::chrono::system_clock::now())
-            : tzdb::zoned_time(std::chrono::system_clock::now())));
+    return parseDate(
+        date::format(
+            "%Y-%m-%d",
+            timeZone.has_value()
+                ? tzdb::zoned_time(
+                      timeZone.value(), std::chrono::system_clock::now())
+                : tzdb::zoned_time(std::chrono::system_clock::now())));
   }
 };
 
@@ -165,7 +174,7 @@ bool operator==(
 
 TEST_F(DateTimeFunctionsTest, dateTruncSignatures) {
   auto signatures = getSignatureStrings("date_trunc");
-  ASSERT_EQ(3, signatures.size());
+  ASSERT_EQ(4, signatures.size());
 
   ASSERT_EQ(
       1,
@@ -173,6 +182,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncSignatures) {
           "(varchar,timestamp with time zone) -> timestamp with time zone"));
   ASSERT_EQ(1, signatures.count("(varchar,date) -> date"));
   ASSERT_EQ(1, signatures.count("(varchar,timestamp) -> timestamp"));
+  ASSERT_EQ(1, signatures.count("(varchar,time) -> time"));
 }
 
 TEST_F(DateTimeFunctionsTest, parseDatetimeSignatures) {
@@ -269,8 +279,9 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeRountTrip) {
 TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
   const auto fromUnixtime = [&](std::optional<double> timestamp,
                                 std::optional<std::string> timezoneName) {
-    return TimestampWithTimezone::unpack(evaluateOnce<int64_t>(
-        "from_unixtime(c0, c1)", timestamp, timezoneName));
+    return TimestampWithTimezone::unpack(
+        evaluateOnce<int64_t>(
+            "from_unixtime(c0, c1)", timestamp, timezoneName));
   };
 
   // Check null behavior.
@@ -745,6 +756,42 @@ TEST_F(DateTimeFunctionsTest, hourDate) {
   EXPECT_EQ(0, hour(-18262));
 }
 
+TEST_F(DateTimeFunctionsTest, hourTime) {
+  const auto hour = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("hour(c0)", TIME(), time);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+
+  // boundary tests - core optimization: simple integer division by
+  // kMillisInHour (3600000) lower boundary: 0 <= time < 86400000
+  EXPECT_EQ(0, hour(0)); // exactly midnight
+  EXPECT_EQ(0, hour(3599999)); // 00:59:59.999 - last millisecond of hour 0
+  EXPECT_EQ(1, hour(3600000)); // 01:00:00.000 - first millisecond of hour 1
+  EXPECT_EQ(23, hour(82800000)); // 23:00:00.000 - first millisecond of hour 23
+  EXPECT_EQ(23, hour(86399999)); // 23:59:59.999 - upper boundary exclusive
+
+  // representative samples across all hours
+  EXPECT_EQ(12, hour(43200000)); // noon exactly
+  EXPECT_EQ(18, hour(64800000)); // 18:00:00.000
+
+  // verify optimization correctness: hour = time / kMillisInHour
+  // random test cases to ensure division behaves correctly
+  EXPECT_EQ(5, hour(19800000)); // 05:30:00.000
+  EXPECT_EQ(10, hour(37800000)); // 10:30:00.000
+  EXPECT_EQ(15, hour(54000000)); // 15:00:00.000
+
+  // error conditions - invalid range validation
+  EXPECT_THROW(hour(-1), VeloxUserError); // negative time
+  EXPECT_THROW(
+      hour(86400000),
+      VeloxUserError); // exactly 24:00:00.000 (exclusive upper bound)
+  EXPECT_THROW(
+      hour(std::numeric_limits<int64_t>::max()),
+      VeloxUserError); // overflow case
+}
+
 TEST_F(DateTimeFunctionsTest, dayOfMonth) {
   const auto day = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int64_t>("day_of_month(c0)", date);
@@ -1110,6 +1157,337 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
       "Could not convert Timestamp(-9223372036854776, 0) to milliseconds");
 }
 
+TEST_F(DateTimeFunctionsTest, timeIntervalDayTime) {
+  // Test TIME + IntervalDayTime and IntervalDayTime + TIME arithmetic
+
+  // Helper for Time + IntervalDayTime (also tests commutativity)
+  const auto testTimePlusIntervalCommutative =
+      [&](int64_t time, int64_t interval) -> std::optional<int64_t> {
+    auto result1 = evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+        }));
+
+    auto result2 = evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+        }));
+
+    EXPECT_EQ(result1, result2);
+    return result1;
+  };
+
+  // Basic hour addition: 03:04:05.321 + 3 hours = 06:04:05.321
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  // 3 hours = 3*60*60*1000 = 10800000 ms
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  const int64_t time1 = 11045321; // 03:04:05.321
+  const int64_t threeHours = 3 * kMillisInHour; // 3 hours
+  EXPECT_EQ(21845321, testTimePlusIntervalCommutative(time1, threeHours));
+
+  // Test 24-hour wraparound: 22:00:00 + 3 hours = 01:00:00
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time2 = 22 * kMillisInHour; // 22:00:00
+  EXPECT_EQ(3600000, testTimePlusIntervalCommutative(time2, threeHours));
+
+  // Test minute addition: 03:04:05.321 + 90 minutes = 04:34:05.321
+  // 90 minutes = 90*60*1000 = 5400000 ms
+  // 04:34:05.321 = (4*3600 + 34*60 + 5)*1000 + 321 = 16445321 ms
+  const int64_t ninetyMinutes = 90 * kMillisInMinute;
+  EXPECT_EQ(16445321, testTimePlusIntervalCommutative(time1, ninetyMinutes));
+
+  // Test negative intervals: 03:04:05.321 - 2 hours = 01:04:05.321
+  // 01:04:05.321 = (1*3600 + 4*60 + 5)*1000 + 321 = 3845321 ms
+  const int64_t twoHours = 2 * kMillisInHour;
+  EXPECT_EQ(3845321, testTimePlusIntervalCommutative(time1, -twoHours));
+
+  // Test negative wraparound: 01:00:00 - 3 hours = 22:00:00 (previous day)
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time3 = kMillisInHour; // 01:00:00
+  EXPECT_EQ(79200000, testTimePlusIntervalCommutative(time3, -threeHours));
+
+  // Test millisecond precision: 03:04:05.321 + 679 milliseconds = 03:04:06.000
+  EXPECT_EQ(11046000, testTimePlusIntervalCommutative(time1, 679));
+
+  // Test day intervals (should not change time of day per Presto behavior)
+  // 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time4 = 45045123; // 12:30:45.123
+  const int64_t oneDay = kMillisInDay;
+  EXPECT_EQ(45045123, testTimePlusIntervalCommutative(time4, oneDay));
+}
+
+TEST_F(DateTimeFunctionsTest, timeMinusIntervalDayTime) {
+  // Test TIME - IntervalDayTime arithmetic (does not support Interval - Time)
+
+  const auto timeMinusInterval =
+      [&](int64_t time, int64_t interval) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time}, TIME()),
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+        }));
+  };
+
+  // Basic hour subtraction: 06:04:05.321 - 3 hours = 03:04:05.321
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  // 3 hours = 3*60*60*1000 = 10800000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time1 = 21845321; // 06:04:05.321
+  const int64_t threeHours = 3 * kMillisInHour;
+  EXPECT_EQ(11045321, timeMinusInterval(time1, threeHours));
+
+  // Test 24-hour wraparound: 01:00:00 - 3 hours = 22:00:00 (previous day)
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  const int64_t time2 = kMillisInHour; // 01:00:00
+  EXPECT_EQ(79200000, timeMinusInterval(time2, threeHours));
+
+  // Test minute subtraction: 04:34:05.321 - 90 minutes = 03:04:05.321
+  // 04:34:05.321 = (4*3600 + 34*60 + 5)*1000 + 321 = 16445321 ms
+  // 90 minutes = 90*60*1000 = 5400000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time3 = 16445321; // 04:34:05.321
+  const int64_t ninetyMinutes = 90 * kMillisInMinute;
+  EXPECT_EQ(11045321, timeMinusInterval(time3, ninetyMinutes));
+
+  // Test millisecond precision: 03:04:06.000 - 679 milliseconds = 03:04:05.321
+  // 03:04:06.000 = (3*3600 + 4*60 + 6)*1000 = 11046000 ms
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time4 = 11046000; // 03:04:06.000
+  EXPECT_EQ(11045321, timeMinusInterval(time4, 679));
+
+  // Test day intervals (should not change time of day per Presto behavior)
+  // 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time5 = 45045123; // 12:30:45.123
+  const int64_t oneDay = kMillisInDay;
+  EXPECT_EQ(45045123, timeMinusInterval(time5, oneDay));
+
+  // Test subtracting negative intervals (double negative = addition)
+  // 03:04:05.321 - (-3 hours) = 03:04:05.321 + 3 hours = 06:04:05.321
+  // 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  // 06:04:05.321 = (6*3600 + 4*60 + 5)*1000 + 321 = 21845321 ms
+  const int64_t time6 = 11045321; // 03:04:05.321
+  EXPECT_EQ(21845321, timeMinusInterval(time6, -threeHours));
+
+  // Test negative interval with wraparound: 22:00:00 - (-3 hours) = 01:00:00
+  // 22:00:00 = 22*3600*1000 = 79200000 ms
+  // 01:00:00 = 1*3600*1000 = 3600000 ms
+  const int64_t time7 = 22 * kMillisInHour; // 22:00:00
+  EXPECT_EQ(3600000, timeMinusInterval(time7, -threeHours));
+}
+
+TEST_F(DateTimeFunctionsTest, timeMinusTime) {
+  // Test TIME - TIME arithmetic returning INTERVAL_DAY_TIME
+
+  const auto timeMinusTime = [&](int64_t time1,
+                                 int64_t time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time1}, TIME()),
+            makeNullableFlatVector<int64_t>({time2}, TIME()),
+        }));
+  };
+
+  // Test basic subtraction: 10:00:00 - 08:00:00 = 2 hours = 7200000 ms
+  const int64_t tenAM = 10 * kMillisInHour; // 36000000 ms
+  const int64_t eightAM = 8 * kMillisInHour; // 28800000 ms
+  const int64_t twoHours = 2 * kMillisInHour; // 7200000 ms
+  EXPECT_EQ(twoHours, timeMinusTime(tenAM, eightAM));
+
+  // Test reverse (negative result): 08:00:00 - 10:00:00 = -2 hours
+  EXPECT_EQ(-twoHours, timeMinusTime(eightAM, tenAM));
+
+  // Test same time: 10:00:00 - 10:00:00 = 0
+  EXPECT_EQ(0, timeMinusTime(tenAM, tenAM));
+
+  // Test with millisecond precision
+  // 12:30:45.123 - 06:04:05.321 = 23199802 ms
+  const int64_t time1 = 12 * kMillisInHour + 30 * kMillisInMinute +
+      45 * kMillisInSecond + 123; // 45045123
+  const int64_t time2 = 6 * kMillisInHour + 4 * kMillisInMinute +
+      5 * kMillisInSecond + 321; // 21845321
+  EXPECT_EQ(23199802, timeMinusTime(time1, time2));
+
+  // Test midnight cases
+  // 23:59:59.999 - 00:00:00.000 = 86399999 ms (almost full day)
+  const int64_t almostMidnight = kMillisInDay - 1; // 86399999
+  const int64_t midnight = 0;
+  EXPECT_EQ(86399999, timeMinusTime(almostMidnight, midnight));
+
+  // 00:00:00.000 - 23:59:59.999 = -86399999 ms (negative almost full day)
+  EXPECT_EQ(-86399999, timeMinusTime(midnight, almostMidnight));
+
+  // Test with NULL values
+  const auto timeMinusTimeWithNull =
+      [&](std::optional<int64_t> time1,
+          std::optional<int64_t> time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({time1}, TIME()),
+            makeNullableFlatVector<int64_t>({time2}, TIME()),
+        }));
+  };
+
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(tenAM, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, eightAM));
+}
+
+// Comprehensive tests for TimePlusIntervalYearMonthVectorFunction optimizations
+// and IntervalYearMonthPlusTimeVectorFunction optimizations
+TEST_F(DateTimeFunctionsTest, timeIntervalYearMonthVectorOptimizations) {
+  // Helper to create interval year-month values (in months)
+  auto months = [](int32_t value) { return value; };
+
+  // Helper to create time values (milliseconds since midnight)
+  auto timeMs = [](int32_t hours,
+                   int32_t minutes = 0,
+                   int32_t seconds = 0,
+                   int32_t millis = 0) {
+    return static_cast<int64_t>(hours) * 3600000 +
+        static_cast<int64_t>(minutes) * 60000 +
+        static_cast<int64_t>(seconds) * 1000 + static_cast<int64_t>(millis);
+  };
+
+  // Helper to verify time +/- interval results (should be identity function)
+  // Tests commutativity for plus: interval + time gives the same result
+  // Tests minus: time - interval (only this ordering supported for minus)
+  auto testTimePlusMinusIntervalYearMonth =
+      [&](const VectorPtr& timeVector,
+          const VectorPtr& intervalVector,
+          const VectorPtr& expectedResult) {
+        // Test: Time + Interval
+        auto resultPlus1 = evaluate(
+            "plus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+        assertEqualVectors(expectedResult, resultPlus1);
+
+        // Test: Interval + Time (commutative for plus)
+        auto resultPlus2 = evaluate(
+            "plus(c0, c1)", makeRowVector({intervalVector, timeVector}));
+        assertEqualVectors(expectedResult, resultPlus2);
+
+        // Test: Time - Interval (identity function, only this ordering)
+        auto resultMinus = evaluate(
+            "minus(c0, c1)", makeRowVector({timeVector, intervalVector}));
+        assertEqualVectors(expectedResult, resultMinus);
+      };
+
+  // TEST 1: Constant Vector Optimization - Non-null constant
+  {
+    const auto timeValue = timeMs(14, 30, 15, 123); // 14:30:15.123
+    const auto intervalValue = months(6); // 6 months
+
+    // Create constant vectors
+    auto constantTime =
+        BaseVector::createConstant(TIME(), timeValue, 1000, pool());
+    auto constantInterval = BaseVector::createConstant(
+        INTERVAL_YEAR_MONTH(), intervalValue, 1000, pool());
+
+    // Expected result should be same constant time (identity function)
+    auto expectedResult =
+        BaseVector::createConstant(TIME(), timeValue, 1000, pool());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        constantTime, constantInterval, expectedResult);
+
+    // Verify the result is also constant encoded for efficiency
+    auto result = evaluate(
+        "plus(c0, c1)", makeRowVector({constantTime, constantInterval}));
+
+    EXPECT_TRUE(result->isConstantEncoding());
+    EXPECT_EQ(result->size(), 1000);
+    EXPECT_EQ(result->as<ConstantVector<int64_t>>()->valueAt(0), timeValue);
+  }
+
+  // TEST 2: Constant Vector Optimization - mixed null and non-null values
+  {
+    const auto intervalValue = months(12); // 12 months
+
+    // Create time vector with mixed null and non-null values to test null
+    // handling
+    auto timeVector = makeNullableFlatVector<int64_t>(
+        {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
+
+    auto intervalVector = makeFlatVector<int32_t>(
+        {intervalValue, intervalValue, intervalValue}, INTERVAL_YEAR_MONTH());
+
+    // Expected result: null, non-null, null
+    auto expectedResult = makeNullableFlatVector<int64_t>(
+        {std::nullopt, timeMs(17, 30, 0), std::nullopt}, TIME());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        timeVector, intervalVector, expectedResult);
+  }
+
+  // TEST 3: Flat Vector with Nulls
+  {
+    const std::vector<std::optional<int64_t>> timeValues = {
+        timeMs(10, 30, 0), // 10:30:00
+        std::nullopt, // null
+        timeMs(16, 45, 30), // 16:45:30
+        std::nullopt, // null
+        timeMs(20, 0, 0) // 20:00:00
+    };
+
+    const std::vector<int32_t> intervalValues = {
+        months(3), months(6), months(9), months(12), months(18)};
+
+    auto timeVector = makeNullableFlatVector<int64_t>(timeValues, TIME());
+    auto intervalVector =
+        makeFlatVector<int32_t>(intervalValues, INTERVAL_YEAR_MONTH());
+
+    // Expected result should preserve nulls and non-null values identically
+    auto expectedResult = makeNullableFlatVector<int64_t>(timeValues, TIME());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        timeVector, intervalVector, expectedResult);
+  }
+
+  // TEST 4: Dictionary Vector (Fallback Path)
+  {
+    // Create base values for dictionary
+    const std::vector<int64_t> baseTimeValues = {
+        timeMs(9, 0, 0), // 09:00:00
+        timeMs(17, 30, 0), // 17:30:00
+        timeMs(12, 0, 0) // 12:00:00
+    };
+
+    // Create indices that repeat base values
+    const std::vector<vector_size_t> indices = {0, 1, 2, 0, 1, 2, 1, 0};
+
+    auto baseVector = makeFlatVector<int64_t>(baseTimeValues, TIME());
+
+    auto dictionaryTimeVector = wrapInDictionary(
+        makeIndices(indices), (vector_size_t)indices.size(), baseVector);
+
+    auto intervalVector = makeFlatVector<int32_t>(
+        std::vector<int32_t>(indices.size(), months(6)), INTERVAL_YEAR_MONTH());
+
+    // Expected result should decode dictionary and preserve values
+    std::vector<int64_t> expectedValues;
+    expectedValues.reserve(indices.size());
+    for (auto idx : indices) {
+      expectedValues.push_back(baseTimeValues[idx]);
+    }
+    auto expectedResult = makeFlatVector<int64_t>(expectedValues, TIME());
+
+    // Test: Time + Interval, Interval + Time, and Time - Interval
+    testTimePlusMinusIntervalYearMonth(
+        dictionaryTimeVector, intervalVector, expectedResult);
+  }
+}
+
 TEST_F(DateTimeFunctionsTest, minusTimestampWithTimezone) {
   auto minus = [&](const std::string& a, const std::string& b) {
     const auto sql =
@@ -1466,6 +1844,127 @@ TEST_F(DateTimeFunctionsTest, minuteTimestampWithTimezone) {
       29, minuteTimestampWithTimezone(TimestampWithTimezone(-1000, "+05:30")));
 }
 
+TEST_F(DateTimeFunctionsTest, minuteTime) {
+  const auto minute = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)",
+        makeRowVector({makeNullableFlatVector<int64_t>({time}, TIME())}));
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, minute(std::nullopt));
+
+  // edge cases: beginning and end of valid range
+  EXPECT_EQ(0, minute(0)); // 00:00:00.000
+  EXPECT_EQ(59, minute(86399999)); // 23:59:59.999
+
+  // boundary values for optimization testing
+  EXPECT_EQ(0, minute(59999)); // 00:00:59.999 - last second of first minute
+  EXPECT_EQ(1, minute(60000)); // 00:01:00.000 - first second of second minute
+  EXPECT_EQ(59, minute(3599999)); // 00:59:59.999 - last second of first hour
+  EXPECT_EQ(0, minute(3600000)); // 01:00:00.000 - first second of second hour
+
+  // time values spanning different hours to test optimization
+  EXPECT_EQ(
+      15,
+      minute(
+          15 * kMillisInMinute + 30 * kMillisInSecond + 123)); // 00:15:30.123
+  EXPECT_EQ(
+      30,
+      minute(5 * kMillisInHour + 30 * kMillisInMinute + 45000)); // 05:30:45.000
+  EXPECT_EQ(
+      45, minute(12 * kMillisInHour + 45 * kMillisInMinute)); // 12:45:00.000
+  EXPECT_EQ(0, minute(23 * kMillisInHour)); // 23:00:00.000
+
+  // comprehensive minute coverage for edge case testing
+  for (int m = 0; m < 60; ++m) {
+    EXPECT_EQ(m, minute(m * kMillisInMinute)); // exact minute boundaries
+    EXPECT_EQ(m, minute(m * kMillisInMinute + 500)); // mid-second
+    EXPECT_EQ(m, minute(m * kMillisInMinute + 59999)); // end of minute
+  }
+
+  // hour boundaries with different minute values
+  for (int h = 0; h < 24; ++h) {
+    EXPECT_EQ(0, minute(h * kMillisInHour)); // start of each hour
+    EXPECT_EQ(
+        30,
+        minute(
+            h * kMillisInHour + 30 * kMillisInMinute)); // 30 minutes into hour
+    EXPECT_EQ(
+        59,
+        minute(
+            h * kMillisInHour + 59 * kMillisInMinute +
+            59999)); // last moment of hour
+  }
+
+  // comprehensive data type coverage - test various millisecond precision
+  // values
+  EXPECT_EQ(
+      42,
+      minute(13 * kMillisInHour + 42 * kMillisInMinute + 1)); // precision: 1ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 10)); // precision: 10ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 100)); // precision: 100ms
+  EXPECT_EQ(
+      42,
+      minute(
+          13 * kMillisInHour + 42 * kMillisInMinute + 999)); // precision: 999ms
+
+  // performance critical values for optimization validation
+  int64_t performanceTestValues[] = {
+      0, // midnight
+      kMillisInHour / 2, // 30 minutes
+      kMillisInHour - 1, // 59:59.999
+      kMillisInHour, // 01:00:00.000
+      12 * kMillisInHour + 30 * kMillisInMinute, // 12:30:00.000 (noon+)
+      86399999 // 23:59:59.999 (end of day)
+  };
+
+  int64_t expectedMinutes[] = {0, 30, 59, 0, 30, 59};
+
+  for (size_t i = 0;
+       i < sizeof(performanceTestValues) / sizeof(performanceTestValues[0]);
+       ++i) {
+    EXPECT_EQ(expectedMinutes[i], minute(performanceTestValues[i]));
+  }
+}
+
+TEST_F(DateTimeFunctionsTest, minuteTimeInvalidRange) {
+  const auto minute = [&](int64_t time) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)", makeRowVector({makeFlatVector<int64_t>({time}, TIME())}));
+  };
+
+  // test out-of-range values that should throw errors
+  VELOX_ASSERT_THROW(
+      minute(-1), "TIME value -1 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(86400000),
+      "TIME value 86400000 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(-86400000),
+      "TIME value -86400000 is out of valid range [0, 86399999]");
+
+  VELOX_ASSERT_THROW(
+      minute(std::numeric_limits<int64_t>::max()),
+      fmt::format(
+          "TIME value {} is out of valid range [0, 86399999]",
+          std::numeric_limits<int64_t>::max()));
+
+  VELOX_ASSERT_THROW(
+      minute(std::numeric_limits<int64_t>::min()),
+      fmt::format(
+          "TIME value {} is out of valid range [0, 86399999]",
+          std::numeric_limits<int64_t>::min()));
+}
+
 TEST_F(DateTimeFunctionsTest, second) {
   const auto second = [&](std::optional<Timestamp> timestamp) {
     return evaluateOnce<int64_t>("second(c0)", timestamp);
@@ -1513,6 +2012,52 @@ TEST_F(DateTimeFunctionsTest, secondTimestampWithTimezone) {
       59, secondTimestampWithTimezone(TimestampWithTimezone(-1000, "+00:00")));
   EXPECT_EQ(
       59, secondTimestampWithTimezone(TimestampWithTimezone(-1000, "+05:30")));
+}
+
+TEST_F(DateTimeFunctionsTest, secondTime) {
+  const auto second = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("second(c0)", TIME(), time);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, second(std::nullopt));
+
+  // boundary tests - optimization: (time / 1000) % 60
+  // lower boundary: 0 <= time < 86400000
+  EXPECT_EQ(0, second(0)); // exactly midnight - 00:00:00.000
+  EXPECT_EQ(0, second(999)); // 00:00:00.999 - last millisecond of second 0
+  EXPECT_EQ(1, second(1000)); // 00:00:01.000 - first millisecond of second 1
+  EXPECT_EQ(59, second(59000)); // 00:00:59.000 - first millisecond of second 59
+  EXPECT_EQ(0, second(60000)); // 00:01:00.000 - first second of next minute
+  EXPECT_EQ(59, second(86399000)); // 23:59:59.000
+  EXPECT_EQ(59, second(86399999)); // 23:59:59.999 - upper boundary exclusive
+
+  // representative test cases across different times
+  EXPECT_EQ(30, second(30000)); // 00:00:30.000
+  EXPECT_EQ(15, second(75000)); // 00:01:15.000
+  // 01:01:25 = 3600000 + 60000 + 25000 = 3685000
+  EXPECT_EQ(25, second(3685000)); // 01:01:25.000
+  EXPECT_EQ(3, second(3723123)); // 01:02:03.123
+
+  // verify optimization correctness with modulo boundary conditions
+  // seconds should cycle every 60 seconds regardless of hours/minutes
+  EXPECT_EQ(0, second(3600000)); // 01:00:00.000
+  EXPECT_EQ(30, second(3630000)); // 01:00:30.000
+  EXPECT_EQ(0, second(7200000)); // 02:00:00.000
+  EXPECT_EQ(45, second(43245000)); // 12:00:45.000
+
+  // test millisecond precision is correctly truncated
+  EXPECT_EQ(15, second(15123)); // 00:00:15.123
+  EXPECT_EQ(15, second(15999)); // 00:00:15.999
+
+  // error conditions - invalid range validation
+  EXPECT_THROW(second(-1), VeloxUserError); // negative time
+  EXPECT_THROW(
+      second(86400000),
+      VeloxUserError); // exactly 24:00:00.000 (exclusive upper bound)
+  EXPECT_THROW(
+      second(std::numeric_limits<int64_t>::max()),
+      VeloxUserError); // overflow case
 }
 
 TEST_F(DateTimeFunctionsTest, millisecond) {
@@ -1566,6 +2111,111 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
   EXPECT_EQ(
       20,
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
+}
+
+TEST_F(DateTimeFunctionsTest, millisecondTime) {
+  const auto millisecond = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("millisecond(c0)", TIME(), time);
+  };
+
+  // Null handling
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+
+  // Basic cases
+  EXPECT_EQ(0, millisecond(0)); // 00:00:00.000
+  EXPECT_EQ(0, millisecond(1000)); // 00:00:01.000
+  EXPECT_EQ(123, millisecond(1123)); // 00:00:01.123
+  EXPECT_EQ(456, millisecond(2456)); // 00:00:02.456
+  EXPECT_EQ(999, millisecond(999)); // 00:00:00.999
+  EXPECT_EQ(123, millisecond(3661123)); // 01:01:01.123
+
+  // Boundary values
+  EXPECT_EQ(0, millisecond(86399000)); // 23:59:59.000
+  EXPECT_EQ(999, millisecond(86399999)); // 23:59:59.999 (max valid TIME)
+
+  // Different time components to verify only millisecond part matters
+  EXPECT_EQ(500, millisecond(3600500)); // 01:00:00.500
+  EXPECT_EQ(500, millisecond(7200500)); // 02:00:00.500
+  EXPECT_EQ(500, millisecond(43200500)); // 12:00:00.500
+
+  // Second boundaries
+  EXPECT_EQ(0, millisecond(60000)); // 00:01:00.000
+  EXPECT_EQ(999, millisecond(60999)); // 00:01:00.999
+  EXPECT_EQ(1, millisecond(60001)); // 00:01:00.001
+
+  // Comprehensive modulo testing - verify millisecond() == time % 1000
+  for (int64_t base : {0, 1000, 60000, 3600000, 86399000}) {
+    for (int64_t ms = 0; ms < 1000; ms += 100) {
+      int64_t timeValue = base + ms;
+      if (timeValue <= 86399999) { // Ensure within valid range
+        EXPECT_EQ(ms, millisecond(timeValue));
+      }
+    }
+  }
+
+  // Test all possible millisecond values (0-999) in first second
+  for (int64_t ms = 0; ms < 1000; ++ms) {
+    EXPECT_EQ(ms, millisecond(ms));
+  }
+
+  // Test across all hours to ensure hour component doesn't affect result
+  for (int hour = 0; hour < 24; ++hour) {
+    int64_t baseTime = hour * 3600000; // Convert hour to milliseconds
+    EXPECT_EQ(0, millisecond(baseTime)); // .000
+    EXPECT_EQ(1, millisecond(baseTime + 1)); // .001
+    EXPECT_EQ(500, millisecond(baseTime + 500)); // .500
+    EXPECT_EQ(999, millisecond(baseTime + 999)); // .999
+  }
+
+  // Test edge cases just before and after boundaries
+  EXPECT_EQ(998, millisecond(86399998)); // 23:59:59.998
+  EXPECT_EQ(1, millisecond(1001)); // 00:00:01.001
+  EXPECT_EQ(999, millisecond(1999)); // 00:00:01.999
+  EXPECT_EQ(0, millisecond(2000)); // 00:00:02.000
+
+  // Error cases - values outside valid TIME range [0, 86399999]
+  VELOX_ASSERT_THROW(
+      millisecond(-1), "TIME value -1 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(-1000), "TIME value -1000 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(86400000),
+      "TIME value 86400000 is out of range [0, 86400000)");
+  VELOX_ASSERT_THROW(
+      millisecond(100000000),
+      "TIME value 100000000 is out of range [0, 86400000)");
+
+  // Test vectorized execution with mixed valid values
+  auto timeVector = makeFlatVector<int64_t>(
+      {0, // 00:00:00.000
+       1123, // 00:00:01.123
+       60999, // 00:01:00.999
+       3661456, // 01:01:01.456
+       43200789, // 12:00:00.789
+       86399999}, // 23:59:59.999
+      TIME());
+
+  auto result = evaluate<FlatVector<int64_t>>(
+      "millisecond(c0)", makeRowVector({timeVector}));
+
+  auto expected = makeFlatVector<int64_t>({0, 123, 999, 456, 789, 999});
+  assertEqualVectors(expected, result);
+
+  // Test vectorized execution with nulls
+  auto timeVectorWithNulls = makeNullableFlatVector<int64_t>(
+      {0, // 00:00:00.000
+       std::nullopt, // null
+       1123, // 00:00:01.123
+       std::nullopt, // null
+       86399999}, // 23:59:59.999
+      TIME());
+
+  auto resultWithNulls = evaluate<FlatVector<int64_t>>(
+      "millisecond(c0)", makeRowVector({timeVectorWithNulls}));
+
+  auto expectedWithNulls = makeNullableFlatVector<int64_t>(
+      {0, std::nullopt, 123, std::nullopt, 999});
+  assertEqualVectors(expectedWithNulls, resultWithNulls);
 }
 
 TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {
@@ -2608,6 +3258,115 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
           "day", -45, "2023-04-26 02:30:00.000 America/Los_Angeles"));
 }
 
+TEST_F(DateTimeFunctionsTest, dateAddTime) {
+  const auto dateAdd = [&](const std::string& unit,
+                           std::optional<int32_t> value,
+                           std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        fmt::format("date_add('{}', c0, c1)", unit),
+        {INTEGER(), TIME()},
+        value,
+        time);
+  };
+
+  // basic time additions
+  // add milliseconds
+  EXPECT_EQ(1000, dateAdd("millisecond", 1000, 0)); // 00:00:00.000 + 1s
+  EXPECT_EQ(500, dateAdd("millisecond", -500, 1000)); // 00:00:01.000 - 500ms
+  EXPECT_EQ(2000, dateAdd("millisecond", 1000, 1000)); // 00:00:01.000 + 1s
+
+  // add seconds
+  EXPECT_EQ(1000, dateAdd("second", 1, 0)); // 00:00:00 + 1s
+  EXPECT_EQ(0, dateAdd("second", -1, 1000)); // 00:00:01 - 1s
+  EXPECT_EQ(3661000, dateAdd("second", 3661, 0)); // 1 hour 1 minute 1 second
+
+  // add minutes
+  EXPECT_EQ(60000, dateAdd("minute", 1, 0)); // 00:00:00 + 1 minute
+  EXPECT_EQ(0, dateAdd("minute", -1, 60000)); // 00:01:00 - 1 minute
+  EXPECT_EQ(300000, dateAdd("minute", 5, 0)); // 00:00:00 + 5 minutes
+
+  // add hours
+  EXPECT_EQ(3600000, dateAdd("hour", 1, 0)); // 00:00:00 + 1 hour
+  EXPECT_EQ(0, dateAdd("hour", -1, 3600000)); // 01:00:00 - 1 hour
+  EXPECT_EQ(43200000, dateAdd("hour", 12, 0)); // 00:00:00 + 12 hours
+
+  // test wraparound behavior (24-hour modulo)
+  EXPECT_EQ(
+      3600000,
+      dateAdd("hour", 25, 0)); // 00:00:00 + 25 hours = 01:00:00 (wraps)
+  EXPECT_EQ(
+      82800000, dateAdd("hour", -1, 0)); // 00:00:00 - 1 hour = 23:00:00 (wraps)
+  EXPECT_EQ(
+      0, dateAdd("hour", 24, 0)); // 00:00:00 + 24 hours = 00:00:00 (wraps)
+  EXPECT_EQ(
+      0, dateAdd("hour", -24, 0)); // 00:00:00 - 24 hours = 00:00:00 (wraps)
+
+  // test real-world scenario: 09:30:15.500 + various units
+  int64_t morning = 9 * 3600000 + 30 * 60000 + 15 * 1000 + 500; // 34215500ms
+  EXPECT_EQ(34215750, dateAdd("millisecond", 250, morning)); // +250ms
+  EXPECT_EQ(34245500, dateAdd("second", 30, morning)); // +30s
+  EXPECT_EQ(35415500, dateAdd("minute", 20, morning)); // +20 minutes
+  EXPECT_EQ(48615500, dateAdd("hour", 4, morning)); // +4 hours
+
+  // test boundary values for TIME type (0 to 86399999 ms in a day)
+  EXPECT_EQ(0, dateAdd("millisecond", 0, 0)); // 00:00:00.000 + 0ms
+  EXPECT_EQ(
+      86399999, dateAdd("millisecond", 86399999, 0)); // 00:00:00.000 + max time
+  EXPECT_EQ(
+      0, dateAdd("millisecond", -86399999, 86399999)); // max time - max time
+
+  // test wraparound with large values
+  EXPECT_EQ(
+      1000,
+      dateAdd(
+          "millisecond",
+          86401000,
+          0)); // 00:00:00 + (24h + 1s) wraps to 00:00:01
+  EXPECT_EQ(
+      86398000,
+      dateAdd(
+          "millisecond",
+          -2000,
+          0)); // 00:00:00 - 2s wraps to 23:59:58
+
+  // negative additions
+  EXPECT_EQ(0, dateAdd("second", -60, 60000)); // 00:01:00 - 60s
+  EXPECT_EQ(0, dateAdd("minute", -60, 3600000)); // 01:00:00 - 60min
+  EXPECT_EQ(75600000, dateAdd("hour", -2, 82800000)); // 23:00:00 - 2h = 21:00
+
+  // test null handling
+  EXPECT_EQ(std::nullopt, dateAdd("second", 1, std::nullopt));
+  EXPECT_EQ(std::nullopt, dateAdd("second", std::nullopt, 1000));
+  EXPECT_EQ(std::nullopt, dateAdd("second", std::nullopt, std::nullopt));
+
+  // test invalid units (TIME only supports time-related units, not
+  // date-related, and not microsecond which is not supported in Presto)
+  VELOX_ASSERT_THROW(
+      dateAdd("microsecond", 1, 0), "microsecond is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("day", 1, 0), "day is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("week", 1, 0), "week is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("month", 1, 0), "month is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateAdd("quarter", 1, 0), "quarter is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateAdd("year", 1, 0), "year is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateAdd("invalid", 1, 0), "invalid is not a valid TIME field");
+
+  // edge cases: multiple full day additions
+  EXPECT_EQ(
+      7200000,
+      dateAdd("hour", 50, 0)); // 00:00:00 + 50 hours = 02:00:00 (wraps twice)
+  EXPECT_EQ(
+      0,
+      dateAdd("hour", 72, 0)); // 00:00:00 + 72 hours = 00:00:00 (wraps 3 times)
+
+  // test midnight transitions
+  EXPECT_EQ(
+      1000, dateAdd("millisecond", 2000, 86399000)); // 23:59:59 + 2s wraps
+  EXPECT_EQ(
+      86399000, dateAdd("millisecond", -1000, 0)); // 00:00:00 - 1s = 23:59:59
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int32_t> date1,
@@ -3490,29 +4249,19 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   for (int i = 0; i < 31; i++) {
     std::string date("2022-08-" + std::to_string(i + 1));
     EXPECT_EQ(
-        std::to_string(i % 7 + 1),
-        formatDatetime(parseTimestamp(StringView{date}), "e"));
+        std::to_string(i % 7 + 1), formatDatetime(parseTimestamp(date), "e"));
   }
   EXPECT_EQ("000001", formatDatetime(parseTimestamp("2022-08-01"), "eeeeee"));
 
   // Day of week text - 'E'
   for (int i = 0; i < 31; i++) {
     std::string date("2022-08-" + std::to_string(i + 1));
+    EXPECT_EQ(daysShort[i % 7], formatDatetime(parseTimestamp(date), "E"));
+    EXPECT_EQ(daysShort[i % 7], formatDatetime(parseTimestamp(date), "EE"));
+    EXPECT_EQ(daysShort[i % 7], formatDatetime(parseTimestamp(date), "EEE"));
+    EXPECT_EQ(daysLong[i % 7], formatDatetime(parseTimestamp(date), "EEEE"));
     EXPECT_EQ(
-        daysShort[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "E"));
-    EXPECT_EQ(
-        daysShort[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EE"));
-    EXPECT_EQ(
-        daysShort[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EEE"));
-    EXPECT_EQ(
-        daysLong[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EEEE"));
-    EXPECT_EQ(
-        daysLong[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EEEEEEEE"));
+        daysLong[i % 7], formatDatetime(parseTimestamp(date), "EEEEEEEE"));
   }
 
   // Year test cases - 'y'
@@ -3550,21 +4299,11 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   for (int i = 0; i < 12; i++) {
     auto month = i + 1;
     std::string date("2022-" + std::to_string(month) + "-01");
-    EXPECT_EQ(
-        std::to_string(month),
-        formatDatetime(parseTimestamp(StringView{date}), "M"));
-    EXPECT_EQ(
-        padNumber(month),
-        formatDatetime(parseTimestamp(StringView{date}), "MM"));
-    EXPECT_EQ(
-        monthsShort[i],
-        formatDatetime(parseTimestamp(StringView{date}), "MMM"));
-    EXPECT_EQ(
-        monthsLong[i],
-        formatDatetime(parseTimestamp(StringView{date}), "MMMM"));
-    EXPECT_EQ(
-        monthsLong[i],
-        formatDatetime(parseTimestamp(StringView{date}), "MMMMMMMM"));
+    EXPECT_EQ(std::to_string(month), formatDatetime(parseTimestamp(date), "M"));
+    EXPECT_EQ(padNumber(month), formatDatetime(parseTimestamp(date), "MM"));
+    EXPECT_EQ(monthsShort[i], formatDatetime(parseTimestamp(date), "MMM"));
+    EXPECT_EQ(monthsLong[i], formatDatetime(parseTimestamp(date), "MMMM"));
+    EXPECT_EQ(monthsLong[i], formatDatetime(parseTimestamp(date), "MMMMMMMM"));
   }
 
   // Day of month test cases - 'd'
@@ -3725,6 +4464,8 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ("+05:30", formatDatetime(parseTimestamp("1970-01-01"), "ZZ"));
   EXPECT_EQ("+0530", formatDatetime(parseTimestamp("1970-01-01"), "Z"));
 
+  // Time zone test cases - 'z'
+  // Timezone that has an abbreviation
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "zzz"));
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "zz"));
   EXPECT_EQ("IST", formatDatetime(parseTimestamp("1970-01-01"), "z"));
@@ -3733,6 +4474,18 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       formatDatetime(parseTimestamp("1970-01-01"), "zzzz"));
   EXPECT_EQ(
       "India Standard Time",
+      formatDatetime(parseTimestamp("1970-01-01"), "zzzzzzzzzzzzzzzzzzzzzz"));
+
+  // Timezone that has no abbreviations so uses GMT offset
+  setQueryTimeZone("Asia/Atyrau");
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "zzz"));
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "zz"));
+  EXPECT_EQ("GMT+05:00", formatDatetime(parseTimestamp("1970-01-01"), "z"));
+  EXPECT_EQ(
+      "West Kazakhstan Time",
+      formatDatetime(parseTimestamp("1970-01-01"), "zzzz"));
+  EXPECT_EQ(
+      "West Kazakhstan Time",
       formatDatetime(parseTimestamp("1970-01-01"), "zzzzzzzzzzzzzzzzzzzzzz"));
 
   // Test daylight savings.
@@ -3983,11 +4736,9 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   for (int i = 0; i < 8; i++) {
     std::string date("1996-01-0" + std::to_string(i + 1));
     // Full length name.
-    EXPECT_EQ(
-        daysLong[i % 7], dateFormat(parseTimestamp(StringView{date}), "%W"));
+    EXPECT_EQ(daysLong[i % 7], dateFormat(parseTimestamp(date), "%W"));
     // Abbreviated name.
-    EXPECT_EQ(
-        daysShort[i % 7], dateFormat(parseTimestamp(StringView{date}), "%a"));
+    EXPECT_EQ(daysShort[i % 7], dateFormat(parseTimestamp(date), "%a"));
   }
 
   // Month cases.
@@ -3996,23 +4747,19 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
     std::string monthNum = std::to_string(i + 1);
 
     // Full length name.
-    EXPECT_EQ(
-        monthsLong[i % 12], dateFormat(parseTimestamp(StringView{date}), "%M"));
+    EXPECT_EQ(monthsLong[i % 12], dateFormat(parseTimestamp(date), "%M"));
 
     // Abbreviated name.
-    EXPECT_EQ(
-        monthsShort[i % 12],
-        dateFormat(parseTimestamp(StringView{date}), "%b"));
+    EXPECT_EQ(monthsShort[i % 12], dateFormat(parseTimestamp(date), "%b"));
 
     // Numeric.
-    EXPECT_EQ(monthNum, dateFormat(parseTimestamp(StringView{date}), "%c"));
+    EXPECT_EQ(monthNum, dateFormat(parseTimestamp(date), "%c"));
 
     // Numeric 0-padded.
     if (i + 1 < 10) {
-      EXPECT_EQ(
-          "0" + monthNum, dateFormat(parseTimestamp(StringView{date}), "%m"));
+      EXPECT_EQ("0" + monthNum, dateFormat(parseTimestamp(date), "%m"));
     } else {
-      EXPECT_EQ(monthNum, dateFormat(parseTimestamp(StringView{date}), "%m"));
+      EXPECT_EQ(monthNum, dateFormat(parseTimestamp(date), "%m"));
     }
   }
 
@@ -4020,12 +4767,11 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   for (int i = 1; i <= 31; i++) {
     std::string dayOfMonth = std::to_string(i);
     std::string date("1970-01-" + dayOfMonth);
-    EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(StringView{date}), "%e"));
+    EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(date), "%e"));
     if (i < 10) {
-      EXPECT_EQ(
-          "0" + dayOfMonth, dateFormat(parseTimestamp(StringView{date}), "%d"));
+      EXPECT_EQ("0" + dayOfMonth, dateFormat(parseTimestamp(date), "%d"));
     } else {
-      EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(StringView{date}), "%d"));
+      EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(date), "%d"));
     }
   }
 
@@ -5036,6 +5782,230 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
   runAndCompare("c0 between c0 and c1", inputs, expectedBetween);
 }
 
+TEST_F(DateTimeFunctionsTest, timeComparisons) {
+  const auto eq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 = c1", {TIME(), TIME()}, a, b);
+  };
+  const auto neq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 != c1", {TIME(), TIME()}, a, b);
+  };
+  const auto lt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 < c1", {TIME(), TIME()}, a, b);
+  };
+  const auto lte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 <= c1", {TIME(), TIME()}, a, b);
+  };
+  const auto gt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 > c1", {TIME(), TIME()}, a, b);
+  };
+  const auto gte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>("c0 >= c1", {TIME(), TIME()}, a, b);
+  };
+  const auto between = [&](std::optional<int64_t> value,
+                           std::optional<int64_t> lower,
+                           std::optional<int64_t> upper) {
+    return evaluateOnce<bool>(
+        "c0 between c1 and c2", {TIME(), TIME(), TIME()}, value, lower, upper);
+  };
+
+  // test equality
+  EXPECT_EQ(true, eq(0, 0));
+  EXPECT_EQ(false, eq(0, 1000));
+  EXPECT_EQ(true, eq(3600000, 3600000)); // 01:00:00
+  EXPECT_EQ(std::nullopt, eq(std::nullopt, 0));
+  EXPECT_EQ(std::nullopt, eq(0, std::nullopt));
+
+  // test inequality
+  EXPECT_EQ(false, neq(0, 0));
+  EXPECT_EQ(true, neq(0, 1000));
+  EXPECT_EQ(false, neq(3600000, 3600000));
+
+  // test less than
+  EXPECT_EQ(false, lt(0, 0));
+  EXPECT_EQ(true, lt(0, 1000));
+  EXPECT_EQ(false, lt(1000, 0));
+  EXPECT_EQ(true, lt(3600000, 7200000)); // 01:00:00 < 02:00:00
+
+  // test less than or equal
+  EXPECT_EQ(true, lte(0, 0));
+  EXPECT_EQ(true, lte(0, 1000));
+  EXPECT_EQ(false, lte(1000, 0));
+
+  // test greater than
+  EXPECT_EQ(false, gt(0, 0));
+  EXPECT_EQ(false, gt(0, 1000));
+  EXPECT_EQ(true, gt(1000, 0));
+  EXPECT_EQ(true, gt(7200000, 3600000)); // 02:00:00 > 01:00:00
+
+  // test greater than or equal
+  EXPECT_EQ(true, gte(0, 0));
+  EXPECT_EQ(false, gte(0, 1000));
+  EXPECT_EQ(true, gte(1000, 0));
+
+  // test between
+  EXPECT_EQ(true, between(1000, 0, 2000));
+  EXPECT_EQ(true, between(0, 0, 2000)); // inclusive lower
+  EXPECT_EQ(true, between(2000, 0, 2000)); // inclusive upper
+  EXPECT_EQ(false, between(3000, 0, 2000));
+  EXPECT_EQ(false, between(0, 1000, 2000));
+  EXPECT_EQ(
+      true,
+      between(
+          3600000, 3600000, 7200000)); // 01:00:00 between 01:00:00 and 02:00:00
+  EXPECT_EQ(std::nullopt, between(std::nullopt, 0, 1000));
+  EXPECT_EQ(std::nullopt, between(500, std::nullopt, 1000));
+  EXPECT_EQ(std::nullopt, between(500, 0, std::nullopt));
+}
+
+TEST_F(DateTimeFunctionsTest, timeWithTimezoneComparisons) {
+  const auto eq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 = c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto neq = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 != c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto lt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 < c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto lte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 <= c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto gt = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 > c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto gte = [&](std::optional<int64_t> a, std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 >= c1", {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()}, a, b);
+  };
+  const auto between = [&](std::optional<int64_t> value,
+                           std::optional<int64_t> lower,
+                           std::optional<int64_t> upper) {
+    return evaluateOnce<bool>(
+        "c0 between c1 and c2",
+        {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()},
+        value,
+        lower,
+        upper);
+  };
+
+  // test distinct_from - unlike regular comparison operators,
+  // distinct_from treats NULLs as values that can be compared
+  const auto distinctFrom = [&](std::optional<int64_t> a,
+                                std::optional<int64_t> b) {
+    return evaluateOnce<bool>(
+        "c0 is distinct from c1",
+        {TIME_WITH_TIME_ZONE(), TIME_WITH_TIME_ZONE()},
+        a,
+        b);
+  };
+
+  // Helper to parse TIME WITH TIME ZONE from string
+  const auto parse = [](const std::string& timeStr) -> std::optional<int64_t> {
+    auto result =
+        util::fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // test equality - same UTC time in different timezones should be equal
+  EXPECT_EQ(true, eq(parse("00:00:00.000+00:00"), parse("01:00:00.000+01:00")));
+  EXPECT_EQ(true, eq(parse("12:30:45.123+00:00"), parse("20:30:45.123+08:00")));
+  EXPECT_EQ(
+      false, eq(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(std::nullopt, eq(std::nullopt, parse("00:00:00.000+00:00")));
+
+  // test inequality
+  EXPECT_EQ(
+      true, neq(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      true, neq(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      true, neq(parse("01:00:00.000+01:00"), parse("01:00:00.000+03:00")));
+
+  // test less than
+  EXPECT_EQ(
+      false, lt(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(true, lt(parse("00:00:01.000+01:00"), parse("00:00:00.000+00:00")));
+  EXPECT_EQ(
+      false, lt(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, lt(parse("01:00:00.000+01:00"), parse("02:00:00.000+03:00")));
+
+  // test less than or equal
+  EXPECT_EQ(
+      false, lte(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, lte(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+
+  // test greater than
+  EXPECT_EQ(true, gt(parse("00:00:00.000+00:00"), parse("00:00:00.000+01:00")));
+  EXPECT_EQ(
+      false, gt(parse("01:00:00.000+03:00"), parse("02:00:00.000+01:00")));
+
+  // test greater than or equal
+  EXPECT_EQ(
+      true, gte(parse("00:00:00.000+00:00"), parse("00:00:00.000+00:00")));
+  EXPECT_EQ(
+      true, gte(parse("00:00:00.000+00:00"), parse("00:00:01.000+01:00")));
+  EXPECT_EQ(
+      true, gte(parse("00:00:01.000+00:00"), parse("00:00:00.000+01:00")));
+
+  // test between
+  EXPECT_EQ(
+      true,
+      between(
+          parse("02:00:00.000+02:00"),
+          parse("00:00:00.000+01:00"),
+          parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      std::nullopt,
+      between(
+          parse("00:00:00.500+00:00"),
+          parse("00:00:00.000+01:00"),
+          std::nullopt));
+
+  // test distinct from
+  // Same UTC time in different timezones should not be distinct
+  EXPECT_EQ(
+      false,
+      distinctFrom(parse("01:00:00.000+01:00"), parse("02:00:00.000+02:00")));
+
+  // Different times should be distinct
+  EXPECT_EQ(
+      true,
+      distinctFrom(parse("00:00:00.000+00:00"), parse("00:00:01.000+00:00")));
+  EXPECT_EQ(
+      true,
+      distinctFrom(parse("01:00:00.000+01:00"), parse("02:00:00.000+03:00")));
+
+  // NULL handling: NULL is distinct from non-NULL
+  EXPECT_EQ(true, distinctFrom(std::nullopt, parse("00:00:00.000+00:00")));
+
+  // NULL is NOT distinct from NULL
+  EXPECT_EQ(false, distinctFrom(std::nullopt, std::nullopt));
+
+  // Test edge cases with day wrap-around (normalization logic)
+  EXPECT_EQ(
+      false, eq(parse("01:00:00.000+08:00"), parse("02:00:00.000+00:00")));
+  EXPECT_EQ(
+      false, gt(parse("01:00:00.000+08:00"), parse("02:00:00.000+00:00")));
+
+  EXPECT_EQ(
+      false, eq(parse("23:00:00.000-08:00"), parse("16:00:00.000+08:00")));
+  EXPECT_EQ(true, lt(parse("23:00:00.000-08:00"), parse("18:00:00.000-14:00")));
+
+  EXPECT_EQ(
+      false, eq(parse("00:30:00.000-02:00"), parse("00:30:00.000+02:00")));
+  EXPECT_EQ(true, gt(parse("00:30:00.000-02:00"), parse("00:30:00.000+02:00")));
+}
+
 TEST_F(DateTimeFunctionsTest, castDateToTimestamp) {
   const int64_t kSecondsInDay = kMillisInDay / 1'000;
   const auto castDateToTimestamp = [&](const std::optional<int32_t> date) {
@@ -5361,6 +6331,99 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
   EXPECT_EQ(at_timezone(std::nullopt, "Pacific/Fiji"), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, atTimezoneTimeWithTimezoneTest) {
+  using namespace facebook::velox::util;
+
+  const auto at_timezone = [&](std::optional<int64_t> timeWithTimezone,
+                               std::optional<std::string> targetTimezone) {
+    return evaluateOnce<int64_t>(
+        "at_timezone(c0, c1)",
+        {TIME_WITH_TIME_ZONE(), VARCHAR()},
+        timeWithTimezone,
+        targetTimezone);
+  };
+
+  // Helper to create TIME WITH TIME ZONE values
+  const auto makeTimeWithTz = [](const std::string& timeStr) -> int64_t {
+    auto result = fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    if (result.hasError()) {
+      throw std::runtime_error("Parse error: " + result.error().message());
+    }
+    return result.value();
+  };
+
+  // Test 1: Change from +05:30 to +08:00
+  // Input: 10:30:00+05:30 (which is 05:00:00 UTC)
+  // Output: Same UTC time (05:00:00 UTC) with +08:00 offset
+  auto input1 = makeTimeWithTz("10:30:00+05:30");
+  auto expected1 = makeTimeWithTz("13:00:00+08:00"); // Same UTC moment
+  EXPECT_EQ(at_timezone(input1, "+08:00"), expected1);
+
+  // Test 2: Change from -08:00 to +00:00 (UTC)
+  // Input: 14:00:00-08:00 (which is 22:00:00 UTC)
+  // Output: Same UTC time with +00:00 offset
+  auto input2 = makeTimeWithTz("14:00:00-08:00");
+  auto expected2 = makeTimeWithTz("22:00:00+00:00");
+  EXPECT_EQ(at_timezone(input2, "+00:00"), expected2);
+
+  // Test 3: Change from +00:00 to -05:00
+  // Input: 12:00:00+00:00 (which is 12:00:00 UTC)
+  // Output: Same UTC time with -05:00 offset
+  auto input3 = makeTimeWithTz("12:00:00+00:00");
+  auto expected3 = makeTimeWithTz("07:00:00-05:00");
+  EXPECT_EQ(at_timezone(input3, "-05:00"), expected3);
+
+  // Test 4: Change from +01:00 to -11:00
+  // Input: 23:30:00+01:00 (which is 22:30:00 UTC)
+  // Output: Same UTC time with -11:00 offset
+  auto input4 = makeTimeWithTz("23:30:00+01:00");
+  auto expected4 = makeTimeWithTz("11:30:00-11:00");
+  EXPECT_EQ(at_timezone(input4, "-11:00"), expected4);
+
+  // Test 5: With milliseconds - +05:30 to -08:00
+  // Input: 10:30:45.123+05:30 (which is 05:00:45.123 UTC)
+  // Output: Same UTC time with -08:00 offset
+  auto input5 = makeTimeWithTz("10:30:45.123+05:30");
+  auto expected5 = makeTimeWithTz("21:00:45.123-08:00");
+  EXPECT_EQ(at_timezone(input5, "-08:00"), expected5);
+
+  // Test 6: Different offset format - using +HH format
+  auto input6 = makeTimeWithTz("15:00:00+02:00");
+  auto expected6 = makeTimeWithTz("08:00:00-05:00");
+  EXPECT_EQ(at_timezone(input6, "-05"), expected6);
+
+  // Test 7: Different offset format - using +HH:mm format (Presto-compatible)
+  // Note: at_timezone uses allowCompactFormat=false to match Presto behavior,
+  // so we must use +HH:mm format, not +HHmm
+  auto input7 = makeTimeWithTz("08:15:30+00:00");
+  auto expected7 = makeTimeWithTz("13:45:30+05:30");
+  EXPECT_EQ(at_timezone(input7, "+05:30"), expected7);
+
+  // Test 8: Null input time
+  EXPECT_EQ(at_timezone(std::nullopt, "+05:00"), std::nullopt);
+
+  // Test 9: Null target timezone
+  EXPECT_EQ(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), std::nullopt),
+      std::nullopt);
+
+  // Test 10: Invalid timezone offset format should throw
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "invalid"), VeloxUserError);
+
+  // Test 11: Timezone offset out of valid range should throw
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "+15:00"), VeloxUserError);
+
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "-15:00"), VeloxUserError);
+
+  // Test 12: timezone IANA Names should throw
+  EXPECT_THROW(
+      at_timezone(makeTimeWithTz("12:00:00+00:00"), "America/Los_Angeles"),
+      VeloxUserError);
+}
+
 TEST_F(DateTimeFunctionsTest, toMilliseconds) {
   EXPECT_EQ(
       123,
@@ -5493,4 +6556,444 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTimestamp) {
   // Past time
   EXPECT_EQ(
       7585368295023641328, xxhash64(parseTimestamp("1900-01-01 00:00:00.000")));
+}
+
+TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
+  const auto xxhash64 = [&](std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>("xxhash64_internal(c0)", TIME(), time);
+  };
+
+  // Test NULL handling
+  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
+
+  // Test determinism - same input should give same output
+  auto result1 = xxhash64(43200000);
+  auto result2 = xxhash64(43200000);
+  EXPECT_EQ(result1, result2);
+
+  // Test that different inputs give different outputs
+  auto hash0 = xxhash64(0);
+  auto hash1 = xxhash64(1);
+  auto hashNoon = xxhash64(43200000);
+  auto hashEnd = xxhash64(86399999);
+
+  EXPECT_NE(hash0, hash1);
+  EXPECT_NE(hash0, hashNoon);
+  EXPECT_NE(hash0, hashEnd);
+  EXPECT_NE(hashNoon, hashEnd);
+
+  // Test boundary values don't crash
+  EXPECT_TRUE(xxhash64(0).has_value());
+  EXPECT_TRUE(xxhash64(86399999).has_value());
+
+  // Test known hash values validated against Presto xxhash64
+  // Query: SELECT from_big_endian_64(xxhash64(to_big_endian_64(value)))
+  EXPECT_EQ(3803688792395291579, xxhash64(0)); // Midnight
+  EXPECT_EQ(-6980583299780818982, xxhash64(1)); // 1 millisecond after midnight
+  EXPECT_EQ(7848233046982034517, xxhash64(43200000)); // Noon (12:00:00.000)
+  EXPECT_EQ(
+      5892092673475229733, xxhash64(86399999)); // End of day (23:59:59.999)
+  EXPECT_EQ(-3599997350390034763, xxhash64(1234)); // Arbitrary value
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+  const auto callCurrentTimestamp =
+      [&](int64_t sessionStartTime,
+          const std::optional<std::string>& timeZone) {
+        if (timeZone.has_value()) {
+          setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+        } else {
+          setQuerySessionStartTime(sessionStartTime);
+        }
+
+        auto rowVector = makeRowVector({});
+        rowVector->resize(1);
+
+        auto result = evaluate("current_timestamp()", rowVector);
+        DecodedVector decoded(*result);
+        return decoded.valueAt<int64_t>(0);
+      };
+
+  // Test without timezone
+  EXPECT_THROW(
+      {
+        try {
+          callCurrentTimestamp(0, std::nullopt);
+        } catch (const VeloxException& e) {
+          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
+          throw;
+        }
+      },
+      VeloxException);
+
+  // Test with timezone America/Los_Angeles
+  auto laPacked = callCurrentTimestamp(1758499200000, "America/Los_Angeles");
+  auto la = TimestampWithTimezone::unpack(laPacked);
+  ASSERT_TRUE(la.has_value());
+
+  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
+  EXPECT_EQ(la->milliSeconds_, 1758499200000);
+}
+
+TEST_F(DateTimeFunctionsTest, localtime) {
+  const auto localtime = [&](int64_t sessionStartTime,
+                             const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    auto rowVector = makeRowVector({});
+    rowVector->resize(1);
+    auto result = evaluate("localtime()", rowVector);
+    DecodedVector decoded(*result);
+    return decoded.valueAt<int64_t>(0);
+  };
+
+  auto utcVal = localtime(0, std::nullopt);
+  EXPECT_EQ(utcVal, 0);
+
+  auto localVal =
+      localtime(1758499200000, "America/Los_Angeles"); // Midnight UTC
+  EXPECT_EQ(localVal, 0);
+
+  // Test during daylight saving time
+  localVal = localtime(1710061200000, "America/Los_Angeles");
+  EXPECT_EQ(localVal, 32400000); // 9 AM UTC
+}
+
+TEST_F(DateTimeFunctionsTest, dateDiffTime) {
+  const auto dateDiff = [&](const std::string& unit,
+                            std::optional<int64_t> time1,
+                            std::optional<int64_t> time2) {
+    return evaluateOnce<int64_t>(
+        fmt::format("date_diff('{}', c0, c1)", unit),
+        {TIME(), TIME()},
+        time1,
+        time2);
+  };
+
+  // Basic time differences - following Presto's date_diff(unit, x1, x2) = x2 -
+  // x1 pattern
+
+  // Test millisecond differences
+  EXPECT_EQ(
+      1000, dateDiff("millisecond", 0, 1000)); // 00:00:00.000 to 00:00:01.000
+  EXPECT_EQ(
+      -1000,
+      dateDiff(
+          "millisecond", 1000, 0)); // 00:00:01.000 to 00:00:00.000 (negative)
+  EXPECT_EQ(0, dateDiff("millisecond", 1000, 1000)); // Same time
+  EXPECT_EQ(
+      500, dateDiff("millisecond", 500, 1000)); // 00:00:00.500 to 00:00:01.000
+
+  // Test second differences
+  EXPECT_EQ(1, dateDiff("second", 0, 1000)); // 1 second difference
+  EXPECT_EQ(-1, dateDiff("second", 1000, 0)); // Negative 1 second
+  EXPECT_EQ(0, dateDiff("second", 1000, 1000)); // Same time
+  EXPECT_EQ(30, dateDiff("second", 15000, 45000)); // 30 seconds (15s to 45s)
+  EXPECT_EQ(3661, dateDiff("second", 0, 3661000)); // 1 hour 1 minute 1 second
+
+  // Test minute differences
+  EXPECT_EQ(1, dateDiff("minute", 0, 60000)); // 1 minute (00:00 to 00:01)
+  EXPECT_EQ(-1, dateDiff("minute", 60000, 0)); // Negative 1 minute
+  EXPECT_EQ(0, dateDiff("minute", 60000, 60000)); // Same time
+  EXPECT_EQ(5, dateDiff("minute", 0, 300000)); // 5 minutes (00:00 to 00:05)
+  EXPECT_EQ(61, dateDiff("minute", 0, 3660000)); // 1 hour 1 minute
+
+  // Test hour differences
+  EXPECT_EQ(1, dateDiff("hour", 0, 3600000)); // 1 hour (00:00 to 01:00)
+  EXPECT_EQ(-1, dateDiff("hour", 3600000, 0)); // Negative 1 hour
+  EXPECT_EQ(0, dateDiff("hour", 3600000, 3600000)); // Same time
+  EXPECT_EQ(12, dateDiff("hour", 0, 43200000)); // 12 hours (00:00 to 12:00)
+  EXPECT_EQ(23, dateDiff("hour", 0, 82800000)); // 23 hours (00:00 to 23:00)
+
+  // Test boundary values for TIME type (0 to 86399999 ms in a day)
+  EXPECT_EQ(0, dateDiff("millisecond", 0, 0)); // 00:00:00.000 to 00:00:00.000
+  EXPECT_EQ(
+      86399999,
+      dateDiff("millisecond", 0, 86399999)); // 00:00:00.000 to 23:59:59.999
+  EXPECT_EQ(
+      -86399999,
+      dateDiff("millisecond", 86399999, 0)); // 23:59:59.999 to 00:00:00.000
+  EXPECT_EQ(
+      86399, dateDiff("second", 0, 86399999)); // Full day minus 1ms in seconds
+  EXPECT_EQ(
+      1439, dateDiff("minute", 0, 86399999)); // Full day minus 1ms in minutes
+  EXPECT_EQ(23, dateDiff("hour", 0, 86399999)); // Full day minus 1ms in hours
+
+  // Test fractional truncation behavior (consistent with Presto integer
+  // division)
+  EXPECT_EQ(0, dateDiff("second", 0, 999)); // 999ms < 1000ms, truncates to 0
+  EXPECT_EQ(
+      59, dateDiff("minute", 0, 3599999)); // 59.99999 minutes truncates to 59
+  EXPECT_EQ(0, dateDiff("hour", 0, 3599999)); // 0.99999 hours truncates to 0
+
+  // Test real-world scenario: 09:30:15.500 to 14:45:30.750
+  int64_t morning = 9 * 3600000 + 30 * 60000 + 15 * 1000 + 500; // 34215500ms
+  int64_t afternoon = 14 * 3600000 + 45 * 60000 + 30 * 1000 + 750; // 53130750ms
+
+  EXPECT_EQ(18915250, dateDiff("millisecond", morning, afternoon));
+  EXPECT_EQ(
+      18915,
+      dateDiff("second", morning, afternoon)); // 18915.25s truncated to 18915
+  EXPECT_EQ(
+      315,
+      dateDiff(
+          "minute", morning, afternoon)); // 315.254... minutes truncated to 315
+  EXPECT_EQ(
+      5, dateDiff("hour", morning, afternoon)); // 5.254... hours truncated to 5
+  EXPECT_EQ(
+      315,
+      dateDiff(
+          "minute", morning, afternoon)); // 315.254... minutes truncated to 315
+  EXPECT_EQ(
+      5, dateDiff("hour", morning, afternoon)); // 5.254... hours truncated to 5
+
+  // Test null handling (consistent with Presto null propagation)
+  EXPECT_EQ(std::nullopt, dateDiff("second", 1000, std::nullopt));
+  EXPECT_EQ(std::nullopt, dateDiff("second", std::nullopt, 1000));
+  EXPECT_EQ(std::nullopt, dateDiff("second", std::nullopt, std::nullopt));
+
+  // Test invalid units (TIME only supports millisecond, second, minute, and
+  // hour - microsecond is not supported in Presto)
+  VELOX_ASSERT_THROW(
+      dateDiff("microsecond", 0, 1000),
+      "microsecond is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateDiff("day", 0, 1000), "day is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("week", 0, 1000), "week is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("month", 0, 1000), "month is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("quarter", 0, 1000), "quarter is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("year", 0, 1000), "year is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateDiff("invalid", 0, 1000), "invalid is not a valid TIME field");
+
+  // Additional edge cases
+  // Note: This represents going from 23:59:59.999 to 00:00:00.000 of next day,
+  // but since TIME type represents time within a single day, this results in
+  // negative difference
+  EXPECT_EQ(
+      -86399999,
+      dateDiff(
+          "millisecond",
+          86399999,
+          0)); // 23:59:59.999 to 00:00:00.000 (negative)
+}
+
+TEST_F(DateTimeFunctionsTest, dateDiffTimeVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), the function correctly processes
+  // each row with its own unit value rather than incorrectly caching a single
+  // unit. This tests batch processing with varying units in a single
+  // evaluation.
+  auto data = makeRowVector({
+      makeFlatVector<std::string>(
+          {"millisecond", "second", "minute", "hour", "millisecond"}),
+      makeFlatVector<int64_t>({0, 0, 0, 0, 1000}, TIME()),
+      makeFlatVector<int64_t>({1000, 1000, 60000, 3600000, 2000}, TIME()),
+  });
+
+  auto result = evaluate("date_diff(c0, c1, c2)", data);
+  auto expected = makeFlatVector<int64_t>({
+      1000, // millisecond: 0 to 1000
+      1, // second: 0 to 1000
+      1, // minute: 0 to 60000
+      1, // hour: 0 to 3600000
+      1000, // millisecond: 1000 to 2000
+  });
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncTimestampVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_trunc correctly processes each
+  // row with its own unit value rather than incorrectly caching a single unit.
+  auto timestamps = makeFlatVector<Timestamp>({
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+      Timestamp(998474645, 321001234), // 2001-08-22 03:04:05.321001234
+  });
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"second", "minute", "hour", "day", "month"}),
+      timestamps,
+  });
+
+  auto result = evaluate("date_trunc(c0, c1)", data);
+
+  auto expected = makeFlatVector<Timestamp>({
+      Timestamp(998474645, 0), // second: 2001-08-22 03:04:05.000
+      Timestamp(998474640, 0), // minute: 2001-08-22 03:04:00.000
+      Timestamp(998474400, 0), // hour: 2001-08-22 03:00:00.000
+      Timestamp(998438400, 0), // day: 2001-08-22 00:00:00.000
+      Timestamp(996624000, 0), // month: 2001-08-01 00:00:00.000
+  });
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncDateVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_trunc correctly processes each
+  // row with its own unit value for DATE type.
+  auto dates = makeFlatVector<int32_t>(
+      {parseDate("2020-02-29"),
+       parseDate("2020-02-29"),
+       parseDate("2020-02-29"),
+       parseDate("2020-02-29")},
+      DATE());
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"day", "week", "month", "quarter"}),
+      dates,
+  });
+
+  auto result = evaluate("date_trunc(c0, c1)", data);
+
+  auto expected = makeFlatVector<int32_t>(
+      {parseDate("2020-02-29"), // day: same
+       parseDate("2020-02-24"), // week: Monday of that week
+       parseDate("2020-02-01"), // month: first day of month
+       parseDate("2020-01-01")}, // quarter: first day of quarter
+      DATE());
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncTime) {
+  const auto dateTrunc = [&](const std::string& unit,
+                             std::optional<int64_t> time) {
+    return evaluateOnce<int64_t>(
+        fmt::format("date_trunc('{}', c0)", unit), TIME(), time);
+  };
+
+  EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
+
+  // TIME value: 03:04:05.321 = (3*3600 + 4*60 + 5)*1000 + 321 = 11045321 ms
+  const int64_t time1 = 11045321;
+
+  EXPECT_EQ(11045321, dateTrunc("millisecond", time1)); // no change
+  EXPECT_EQ(11045000, dateTrunc("second", time1)); // 03:04:05.000
+  EXPECT_EQ(11040000, dateTrunc("minute", time1)); // 03:04:00.000
+  EXPECT_EQ(10800000, dateTrunc("hour", time1)); // 03:00:00.000
+
+  // TIME value: 00:00:00.000 = 0 ms (midnight)
+  EXPECT_EQ(0, dateTrunc("millisecond", 0));
+  EXPECT_EQ(0, dateTrunc("second", 0));
+  EXPECT_EQ(0, dateTrunc("minute", 0));
+  EXPECT_EQ(0, dateTrunc("hour", 0));
+
+  // TIME value: 23:59:59.999 = (23*3600 + 59*60 + 59)*1000 + 999 = 86399999 ms
+  const int64_t time2 = 86399999;
+  EXPECT_EQ(86399999, dateTrunc("millisecond", time2)); // no change
+  EXPECT_EQ(86399000, dateTrunc("second", time2)); // 23:59:59.000
+  EXPECT_EQ(86340000, dateTrunc("minute", time2)); // 23:59:00.000
+  EXPECT_EQ(82800000, dateTrunc("hour", time2)); // 23:00:00.000
+
+  // TIME value: 12:30:45.123 = (12*3600 + 30*60 + 45)*1000 + 123 = 45045123 ms
+  const int64_t time3 = 45045123;
+  EXPECT_EQ(45045123, dateTrunc("millisecond", time3)); // no change
+  EXPECT_EQ(45045000, dateTrunc("second", time3)); // 12:30:45.000
+  EXPECT_EQ(45000000, dateTrunc("minute", time3)); // 12:30:00.000
+  EXPECT_EQ(43200000, dateTrunc("hour", time3)); // 12:00:00.000
+
+  // Invalid unit tests - TIME only supports millisecond, second, minute, and
+  // hour (microsecond is not supported in Presto)
+  VELOX_ASSERT_THROW(
+      dateTrunc("microsecond", time1), "microsecond is not a valid TIME field");
+  VELOX_ASSERT_THROW(dateTrunc("day", time1), "day is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("week", time1), "week is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("month", time1), "month is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("quarter", time1), "quarter is not a valid TIME field");
+  VELOX_ASSERT_THROW(
+      dateTrunc("year", time1), "year is not a valid TIME field");
+}
+
+TEST_F(DateTimeFunctionsTest, dateAddTimestampVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_add correctly processes each
+  // row with its own unit value.
+  auto timestamps = makeFlatVector<Timestamp>({
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+      Timestamp(0, 0), // 1970-01-01 00:00:00.000
+  });
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"second", "minute", "hour", "day", "month"}),
+      makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+      timestamps,
+  });
+
+  auto result = evaluate("date_add(c0, c1, c2)", data);
+
+  auto expected = makeFlatVector<Timestamp>({
+      Timestamp(1, 0), // second: 1970-01-01 00:00:01.000
+      Timestamp(60, 0), // minute: 1970-01-01 00:01:00.000
+      Timestamp(3600, 0), // hour: 1970-01-01 01:00:00.000
+      Timestamp(86400, 0), // day: 1970-01-02 00:00:00.000
+      Timestamp(2678400, 0), // month: 1970-02-01 00:00:00.000
+  });
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
+  // This test validates that when the unit parameter is variable (passed as a
+  // column with different values per row), date_add correctly processes each
+  // row with its own unit value for DATE type.
+  auto dates = makeFlatVector<int32_t>(
+      {parseDate("2020-01-31"),
+       parseDate("2020-01-31"),
+       parseDate("2020-01-31"),
+       parseDate("2020-01-31")},
+      DATE());
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"day", "week", "month", "year"}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+      dates,
+  });
+
+  auto result = evaluate("date_add(c0, c1, c2)", data);
+
+  auto expected = makeFlatVector<int32_t>(
+      {parseDate("2020-02-01"), // day: 2020-01-31 + 1 day
+       parseDate("2020-02-07"), // week: 2020-01-31 + 7 days
+       parseDate("2020-02-29"), // month: 2020-01-31 + 1 month (leap year)
+       parseDate("2021-01-31")}, // year: 2020-01-31 + 1 year
+      DATE());
+
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimezone) {
+  {
+    setQueryTimeZone("Asia/Kolkata");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "Asia/Kolkata");
+  }
+
+  {
+    setQueryTimeZone("America/New_York");
+    auto tz = evaluateOnce<std::string>(
+        "current_timezone()", makeRowVector(ROW({}), 1));
+    ASSERT_TRUE(tz.has_value());
+    EXPECT_EQ(tz.value(), "America/New_York");
+  }
 }

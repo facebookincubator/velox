@@ -128,12 +128,12 @@ TEST_F(LayoutPlannerTest, Basic) {
                          uint32_t seq,
                          proto::ColumnEncoding_Kind kind,
                          std::optional<int64_t> key = std::nullopt) {
-    auto& encoding = encodingManager.addEncodingToFooter(node);
-    encoding.set_node(node);
-    encoding.set_sequence(seq);
-    encoding.set_kind(kind);
+    auto encoding = encodingManager.addEncodingToFooter(node);
+    encoding.setNode(node);
+    encoding.setSequence(seq);
+    encoding.setKind(ColumnEncodingKindWrapper(&kind));
     if (key.has_value()) {
-      encoding.mutable_key()->set_intkey(*key);
+      encoding.mutableKey()->set_intkey(*key);
     }
   };
 

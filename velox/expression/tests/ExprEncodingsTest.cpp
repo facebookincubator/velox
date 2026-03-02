@@ -177,7 +177,7 @@ class ExprEncodingsTest
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
@@ -490,7 +490,7 @@ class ExprEncodingsTest
         execCtx_->pool(),
         vector->type(),
         vector->size(),
-        std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+        std::make_unique<SimpleVectorLoader>([=, this](RowSet /*rows*/) {
           auto indices =
               makeIndices(vector->size(), [](auto row) { return row; });
           return wrapInDictionary(indices, vector->size(), vector);

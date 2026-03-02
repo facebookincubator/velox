@@ -16,7 +16,6 @@
 
 #include "velox/parse/QueryPlanner.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
-#include "velox/expression/ScopedVarSetter.h"
 #include "velox/parse/DuckLogicalOperator.h"
 
 #include <duckdb.hpp> // @manual
@@ -59,8 +58,9 @@ struct QueryContext {
   MakeTableScan makeTableScan;
   bool isInDelimJoin{false};
 
-  QueryContext(const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
-                   _inMemoryTables)
+  QueryContext(
+      const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
+          _inMemoryTables)
       : inMemoryTables{_inMemoryTables} {}
 
   std::string nextNodeId() {
@@ -141,7 +141,8 @@ PlanNodePtr toVeloxPlan(
                 sources[0]->outputType()->childAt(0),
                 sources[0]->outputType()->asRow().nameOf(0))},
         std::vector<std::string>{"a"},
-        std::nullopt, // ordinalityName
+        /*ordinalityName=*/std::nullopt,
+        /*emptyUnnestValueName=*/std::nullopt,
         std::move(sources[0]));
   }
 
@@ -182,8 +183,9 @@ PlanNodePtr toVeloxPlan(
         children.push_back(rowVector->childAt(columnIds[i]));
       }
     }
-    data.push_back(std::make_shared<RowVector>(
-        pool, rowType, nullptr, rowVector->size(), children));
+    data.push_back(
+        std::make_shared<RowVector>(
+            pool, rowType, nullptr, rowVector->size(), children));
   }
 
   return std::make_shared<ValuesNode>(queryContext.nextNodeId(), data);
@@ -314,8 +316,7 @@ TypedExprPtr toVeloxExpression(
           std::move(children),
           name);
       if (negate) {
-        return std::make_shared<CallTypedExpr>(
-            BOOLEAN(), std::vector<TypedExprPtr>{call}, "not");
+        return std::make_shared<CallTypedExpr>(BOOLEAN(), "not", call);
       }
       return call;
     }
@@ -360,7 +361,7 @@ PlanNodePtr toVeloxPlan(
       veloxFilter = conjunct;
     } else {
       veloxFilter = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), std::vector<TypedExprPtr>{veloxFilter, conjunct}, "and");
+          BOOLEAN(), "and", veloxFilter, conjunct);
     }
   }
   return std::make_shared<FilterNode>(
@@ -382,6 +383,7 @@ PlanNodePtr toVeloxPlan(
   auto columnBindings = logicalProjection.GetColumnBindings();
 
   std::vector<std::string> names;
+  names.reserve(projections.size());
   for (auto i = 0; i < projections.size(); ++i) {
     names.push_back(queryContext.nextColumnName("_p"));
   }
@@ -436,8 +438,9 @@ PlanNodePtr toVeloxPlan(
       } else {
         identityProjection = false;
         projectNames.push_back(queryContext.nextColumnName("_p"));
-        fieldInputs.push_back(std::make_shared<FieldAccessTypedExpr>(
-            input->type(), projectNames.back()));
+        fieldInputs.push_back(
+            std::make_shared<FieldAccessTypedExpr>(
+                input->type(), projectNames.back()));
       }
     }
 
@@ -463,8 +466,9 @@ PlanNodePtr toVeloxPlan(
     } else {
       identityProjection = false;
       projectNames.push_back(queryContext.nextColumnName("_p"));
-      groupingKeys.push_back(std::make_shared<FieldAccessTypedExpr>(
-          groupingExpr->type(), projectNames.back()));
+      groupingKeys.push_back(
+          std::make_shared<FieldAccessTypedExpr>(
+              groupingExpr->type(), projectNames.back()));
     }
   }
 
@@ -479,6 +483,7 @@ PlanNodePtr toVeloxPlan(
   }
 
   std::vector<std::string> names;
+  names.reserve(aggregates.size());
   for (auto i = 0; i < aggregates.size(); ++i) {
     names.push_back(queryContext.nextColumnName("_a"));
   }
@@ -490,7 +495,8 @@ PlanNodePtr toVeloxPlan(
       std::vector<FieldAccessTypedExprPtr>{}, // preGroupedKeys
       names,
       std::move(aggregates),
-      false, // ignoreNullKeys
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
       source);
 }
 
@@ -502,7 +508,7 @@ PlanNodePtr toVeloxPlan(
   VeloxColumnProjections projections(queryContext);
   std::vector<FieldAccessTypedExprPtr> keys;
   std::vector<SortOrder> sortOrder;
-  auto source = sources[0];
+  const auto& source = sources[0];
   for (auto& order : logicalOrder.orders) {
     keys.push_back(
         projections.toFieldAccess(*order.expression, source->outputType()));
@@ -707,8 +713,6 @@ PlanNodePtr toVeloxPlan(
     QueryContext& queryContext) {
   std::vector<PlanNodePtr> sources;
 
-  ScopedVarSetter isDelim(
-      &queryContext.isInDelimJoin, queryContext.isInDelimJoin);
   if (plan.type == ::duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
     queryContext.isInDelimJoin = true;
   }
@@ -837,8 +841,9 @@ PlanNodePtr processDelimGetJoin(
     names.push_back(queryContext.nextColumnName("_delim"));
     auto rightIndex = delimAlias[i];
     auto type = rightType->childAt(rightIndex);
-    exprs.push_back(std::make_shared<FieldAccessTypedExpr>(
-        type, rightType->nameOf(rightIndex)));
+    exprs.push_back(
+        std::make_shared<FieldAccessTypedExpr>(
+            type, rightType->nameOf(rightIndex)));
   }
   for (auto i = 0; i < rightType->size(); ++i) {
     names.push_back(rightType->nameOf(i));
@@ -857,7 +862,7 @@ PlanNodePtr processDelimGetJoin(
       veloxFilter = conjunct;
     } else {
       veloxFilter = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), std::vector<TypedExprPtr>{veloxFilter, conjunct}, "and");
+          BOOLEAN(), "and", veloxFilter, conjunct);
     }
   }
   return std::make_shared<FilterNode>(
@@ -888,8 +893,9 @@ PlanNodePtr processDelimGetJoin(
     names.push_back(queryContext.nextColumnName("_delim"));
     auto rightIndex = delimAlias[i];
     auto type = rightType->childAt(rightIndex);
-    exprs.push_back(std::make_shared<FieldAccessTypedExpr>(
-        type, rightType->nameOf(rightIndex)));
+    exprs.push_back(
+        std::make_shared<FieldAccessTypedExpr>(
+            type, rightType->nameOf(rightIndex)));
   }
   for (auto i = 0; i < rightType->size(); ++i) {
     names.push_back(rightType->nameOf(i));

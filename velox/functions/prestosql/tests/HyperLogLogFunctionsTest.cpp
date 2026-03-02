@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-using facebook::velox::common::hll::DenseHll;
-using facebook::velox::common::hll::SparseHll;
+using namespace facebook::velox::common::hll;
 
 namespace facebook::velox {
 namespace {
@@ -32,20 +32,44 @@ uint64_t hashOne(T value) {
 
 class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
  protected:
+  template <typename TAllocator>
   static std::string serialize(
       int8_t indexBitLength,
-      const SparseHll& sparseHll) {
+      const SparseHll<TAllocator>& sparseHll) {
     std::string serialized;
     serialized.resize(sparseHll.serializedSize());
     sparseHll.serialize(indexBitLength, serialized.data());
     return serialized;
   }
 
-  static std::string serialize(DenseHll& denseHll) {
+  template <typename TAllocator>
+  static std::string serialize(DenseHll<TAllocator>& denseHll) {
     std::string serialized;
     serialized.resize(denseHll.serializedSize());
     denseHll.serialize(serialized.data());
     return serialized;
+  }
+
+  // Creates sparse HLL with values from start (inclusive) to end (exclusive).
+  // modValue applies modulo operation if non-zero.
+  std::string
+  createSparse(int8_t indexBitLength, int start, int end, int modValue = 0) {
+    SparseHll<> hll{&allocator_};
+    for (int i = start; i < end; i++) {
+      hll.insertHash(hashOne(modValue ? (i % modValue) : i));
+    }
+    return serialize(indexBitLength, hll);
+  }
+
+  // Creates dense HLL with values from start (inclusive) to end (exclusive).
+  // modValue applies modulo operation if non-zero.
+  std::string
+  createDense(int8_t indexBitLength, int start, int end, int modValue = 0) {
+    DenseHll<> hll{indexBitLength, &allocator_};
+    for (int i = start; i < end; i++) {
+      hll.insertHash(hashOne(modValue ? (i % modValue) : i));
+    }
+    return serialize(hll);
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{
@@ -55,7 +79,7 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
 
 TEST_F(HyperLogLogFunctionsTest, cardinalitySignatures) {
   auto signatures = getSignatureStrings("cardinality");
-  ASSERT_EQ(3, signatures.size());
+  ASSERT_LE(3, signatures.size());
 
   ASSERT_EQ(1, signatures.count("(map(__user_T1,__user_T2)) -> bigint"));
   ASSERT_EQ(1, signatures.count("(array(__user_T1)) -> bigint"));
@@ -75,12 +99,7 @@ TEST_F(HyperLogLogFunctionsTest, cardinalitySparse) {
     return evaluateOnce<int64_t>("cardinality(c0)", HYPERLOGLOG(), input);
   };
 
-  SparseHll sparseHll{&allocator_};
-  for (int i = 0; i < 1'000; i++) {
-    sparseHll.insertHash(hashOne(i % 17));
-  }
-
-  auto serialized = serialize(11, sparseHll);
+  auto serialized = createSparse(11, 0, 1000, 17);
   EXPECT_EQ(17, cardinality(serialized));
 }
 
@@ -89,13 +108,14 @@ TEST_F(HyperLogLogFunctionsTest, cardinalityDense) {
     return evaluateOnce<int64_t>("cardinality(c0)", HYPERLOGLOG(), input);
   };
 
-  DenseHll denseHll{12, &allocator_};
+  DenseHll<> expectedHll{12, &allocator_};
   for (int i = 0; i < 10'000'000; i++) {
-    denseHll.insertHash(hashOne(i));
+    expectedHll.insertHash(hashOne(i));
   }
+  auto expectedCardinality = expectedHll.cardinality();
 
-  auto serialized = serialize(denseHll);
-  EXPECT_EQ(denseHll.cardinality(), cardinality(serialized));
+  auto serialized = createDense(12, 0, 10'000'000);
+  EXPECT_EQ(expectedCardinality, cardinality(serialized));
 }
 
 TEST_F(HyperLogLogFunctionsTest, emptyApproxSet) {
@@ -108,6 +128,181 @@ TEST_F(HyperLogLogFunctionsTest, emptyApproxSet) {
       0,
       evaluateOnce<int64_t>(
           "cardinality(empty_approx_set(0.1))", makeRowVector(ROW({}), 1)));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHll) {
+  // Test merging two HLL instances with different value ranges.
+  const int8_t indexBitLength = 12;
+
+  std::vector<std::string> serializedHlls = {
+      createSparse(indexBitLength, 0, 10),
+      createSparse(indexBitLength, 10, 20)};
+
+  auto elements = makeFlatVector(serializedHlls, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 2}, elements);
+
+  auto cardinality = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+
+  EXPECT_EQ(20, cardinality);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllMixedSparseAndDense) {
+  // Test merging sparse and dense HLL instances.
+  const int8_t indexBitLength = 12;
+
+  std::vector<std::string> serializedHlls = {
+      createSparse(indexBitLength, 0, 50),
+      createDense(indexBitLength, 50, 2000)};
+
+  auto elements = makeFlatVector(serializedHlls, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 2}, elements);
+
+  auto cardinality = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+
+  EXPECT_EQ(1978, cardinality);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllWithNull) {
+  auto serialized = createSparse(12, 0, 10);
+  auto elements = makeNullableFlatVector<std::string>(
+      {serialized, std::nullopt, serialized}, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 3}, elements);
+
+  auto cardinality = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+  EXPECT_EQ(10, cardinality);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllEmpty) {
+  auto input = makeRowVector(
+      {makeArrayVectorFromJson<std::string>({"null"}, ARRAY(HYPERLOGLOG()))});
+  auto result = evaluate("merge_hll(c0)", input);
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllNullArray) {
+  auto input = makeRowVector({makeNullableArrayVector<std::string>(
+      {std::nullopt}, ARRAY(HYPERLOGLOG()))});
+  auto result = evaluate("merge_hll(c0)", input);
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllAllNulls) {
+  auto input = makeRowVector({makeArrayVectorFromJson<std::string>(
+      {"[null, null, null]"}, ARRAY(HYPERLOGLOG()))});
+  auto result = evaluate("merge_hll(c0)", input);
+  ASSERT_TRUE(result->isNullAt(0));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllInvalidData) {
+  // Test with invalid HLL data format.
+  std::string invalidData = "invalid_hll_data";
+  auto elements = makeFlatVector<std::string>({invalidData}, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 1}, elements);
+
+  VELOX_ASSERT_THROW(
+      evaluate("merge_hll(c0)", makeRowVector({arrayVector})),
+      "Invalid HLL data format");
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllMismatchedIndexBitLength) {
+  const int8_t indexBitLength1 = 11;
+  const int8_t indexBitLength2 = 12;
+
+  std::vector<std::string> serializedHlls = {
+      createSparse(indexBitLength1, 0, 5),
+      createSparse(indexBitLength2, 5, 10)};
+
+  auto elements = makeFlatVector(serializedHlls, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 2}, elements);
+
+  VELOX_ASSERT_THROW(
+      evaluate("merge_hll(c0)", makeRowVector({arrayVector})),
+      "Cannot merge HLLs with different indexBitLength");
+}
+
+TEST_F(
+    HyperLogLogFunctionsTest,
+    mergeHllMismatchedIndexBitLengthDenseVsSparse) {
+  const int8_t indexBitLength1 = 11;
+  const int8_t indexBitLength2 = 12;
+
+  std::vector<std::string> serializedHlls = {
+      createSparse(indexBitLength1, 0, 50),
+      createDense(indexBitLength2, 50, 2000)};
+
+  auto elements = makeFlatVector(serializedHlls, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 2}, elements);
+
+  VELOX_ASSERT_THROW(
+      evaluate("merge_hll(c0)", makeRowVector({arrayVector})),
+      "Cannot merge HLLs with different indexBitLength");
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllDenseFirstThenSparse) {
+  const int8_t indexBitLength = 12;
+
+  std::vector<std::string> serializedHlls = {
+      createDense(indexBitLength, 0, 2000),
+      createSparse(indexBitLength, 2000, 2050)};
+
+  auto elements = makeFlatVector(serializedHlls, HYPERLOGLOG());
+  auto arrayVector = makeArrayVector({0, 2}, elements);
+
+  auto cardinality = evaluateOnce<int64_t>(
+      "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+
+  EXPECT_EQ(2035, cardinality);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllDictionaryEncoded) {
+  // Test merge_hll can handle encoded array elements.
+  const int8_t indexBitLength = 12;
+
+  auto baseElements = makeFlatVector(
+      {createSparse(indexBitLength, 0, 10),
+       createSparse(indexBitLength, 10, 20)},
+      HYPERLOGLOG());
+
+  struct TestCase {
+    std::vector<vector_size_t> indices;
+    std::optional<std::vector<bool>> nulls;
+    int64_t expectedCardinality;
+  };
+
+  std::vector<TestCase> testCases = {
+      // Dictionary indices without nulls.
+      {{0, 1}, std::nullopt, 20},
+      {{1, 0}, std::nullopt, 20},
+      {{1, 1, 1}, std::nullopt, 10},
+      {{0, 0, 0, 0}, std::nullopt, 10},
+      {{1, 1, 0, 0, 1, 0}, std::nullopt, 20},
+      // Dictionary adds nulls: [1, null]
+      {{1, 0}, {{false, true}}, 10},
+      // Dictionary adds nulls: [null, 0, null]
+      {{0, 0, 0}, {{true, false, true}}, 10},
+      // Dictionary adds nulls: [null, null, 1, 1, null, 0]
+      {{0, 0, 1, 1, 0, 0}, {{true, true, false, false, true, false}}, 20},
+  };
+
+  for (const auto& testCase : testCases) {
+    auto indices = makeIndices(testCase.indices);
+    VectorPtr encodedElements;
+    if (testCase.nulls.has_value()) {
+      auto nulls = makeNulls(testCase.nulls.value());
+      encodedElements = BaseVector::wrapInDictionary(
+          nulls, indices, testCase.indices.size(), baseElements);
+    } else {
+      encodedElements = wrapInDictionary(indices, baseElements);
+    }
+    auto arrayVector = makeArrayVector(
+        {0, static_cast<int>(testCase.indices.size())}, encodedElements);
+    auto cardinality = evaluateOnce<int64_t>(
+        "cardinality(merge_hll(c0))", makeRowVector({arrayVector}));
+    EXPECT_EQ(testCase.expectedCardinality, cardinality);
+  }
 }
 
 } // namespace

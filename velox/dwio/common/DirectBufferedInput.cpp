@@ -55,7 +55,7 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::enqueue(
   }
   auto stream = std::make_unique<DirectInputStream>(
       this,
-      ioStats_.get(),
+      ioStatistics_.get(),
       region,
       input_,
       fileNum_.id(),
@@ -187,8 +187,8 @@ void DirectBufferedInput::readRegion(
   }
   auto load = std::make_shared<DirectCoalescedLoad>(
       input_,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       groupId_.id(),
       requests,
       pool_,
@@ -235,13 +235,23 @@ std::shared_ptr<DirectCoalescedLoad> DirectBufferedInput::coalescedLoad(
   return streamToCoalescedLoad_.withWLock(
       [&](auto& loads) -> std::shared_ptr<DirectCoalescedLoad> {
         auto it = loads.find(stream);
-        if (it == loads.end()) {
+        if (it == loads.cend()) {
           return nullptr;
         }
         auto load = std::move(it->second);
         loads.erase(it);
         return load;
       });
+}
+
+void DirectBufferedInput::reset() {
+  BufferedInput::reset();
+  for (auto& load : coalescedLoads_) {
+    load->cancel();
+  }
+  coalescedLoads_.clear();
+  streamToCoalescedLoad_.wlock()->clear();
+  requests_.clear();
 }
 
 std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
@@ -251,7 +261,7 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
   VELOX_CHECK_LE(offset + length, fileSize_);
   return std::make_unique<DirectInputStream>(
       const_cast<DirectBufferedInput*>(this),
-      ioStats_.get(),
+      ioStatistics_.get(),
       Region{offset, length},
       input_,
       fileNum_.id(),
@@ -286,10 +296,11 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   for (auto& request : requests_) {
     const auto& region = request.region;
     if (region.offset > lastEnd) {
-      buffers.push_back(folly::Range<char*>(
-          nullptr,
-          reinterpret_cast<char*>(
-              static_cast<uint64_t>(region.offset - lastEnd))));
+      buffers.push_back(
+          folly::Range<char*>(
+              nullptr,
+              reinterpret_cast<char*>(
+                  static_cast<uint64_t>(region.offset - lastEnd))));
       overread += buffers.back().size();
     }
 
@@ -321,13 +332,14 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
     input_->read(buffers, requests_[0].region.offset, LogType::FILE);
   }
 
-  ioStats_->read().increment(size + overread);
-  ioStats_->incRawBytesRead(size);
-  ioStats_->incTotalScanTime(usecs * 1'000);
-  ioStats_->queryThreadIoLatency().increment(usecs);
-  ioStats_->incRawOverreadBytes(overread);
+  ioStatistics_->read().increment(size + overread);
+  ioStatistics_->incRawBytesRead(size);
+  ioStatistics_->incTotalScanTime(usecs * 1'000);
+  ioStatistics_->queryThreadIoLatencyUs().increment(usecs);
+  ioStatistics_->storageReadLatencyUs().increment(usecs);
+  ioStatistics_->incRawOverreadBytes(overread);
   if (prefetch) {
-    ioStats_->prefetch().increment(size + overread);
+    ioStatistics_->prefetch().increment(size + overread);
   }
   TestValue::adjust(
       "facebook::velox::cache::DirectCoalescedLoad::loadData", this);
@@ -342,7 +354,7 @@ int32_t DirectCoalescedLoad::getData(
       requests_.begin(), requests_.end(), offset, [](auto& x, auto offset) {
         return x.region.offset < offset;
       });
-  if (it == requests_.end() || it->region.offset != offset) {
+  if (it == requests_.cend() || it->region.offset != offset) {
     return 0;
   }
   data = std::move(it->data);

@@ -319,14 +319,7 @@ std::string FilterGenerator::specsToString(
       out << ", ";
     }
     first = false;
-    out << spec.field;
-    if (spec.filterKind == FilterKind::kIsNull) {
-      out << " is null";
-    } else if (spec.filterKind == FilterKind::kIsNotNull) {
-      out << " is not null";
-    } else {
-      out << ":" << spec.selectPct << "," << spec.startPct << " ";
-    }
+    out << spec.toString();
   }
   return out.str();
 }
@@ -447,7 +440,9 @@ void FilterGenerator::addToScanSpec(
     const SubfieldFilters& filters,
     ScanSpec& spec) {
   for (auto& pair : filters) {
-    spec.getOrCreateChild(pair.first)->addFilter(*pair.second);
+    auto* child = spec.getOrCreateChild(pair.first);
+    VELOX_CHECK_NULL(child->filter());
+    child->setFilter(pair.second);
   }
 }
 
@@ -661,7 +656,7 @@ void pruneRandomSubfield(
                 break;
               case TypeKind::VARCHAR:
               case TypeKind::VARBINARY:
-                stringKeys.push_back(
+                stringKeys.emplace_back(
                     keys->asUnchecked<SimpleVector<StringView>>()->valueAt(jj));
                 break;
               default:

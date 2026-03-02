@@ -21,9 +21,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -137,6 +137,29 @@ TEST_F(TraceUtilTest, traceDirectoryLayoutUtilities) {
   ASSERT_EQ(
       getOpTraceSplitFilePath(opTraceDir),
       "/traceRoot/queryId/taskId/1/1/1/op_split_trace.split");
+}
+
+TEST_F(TraceUtilTest, traceDirectoryTrailingSlashHandling) {
+  const std::string queryId = "queryId";
+  const std::string taskId = "taskId";
+
+  const std::string expectedPath = "/traceRoot/queryId";
+  const std::string expectedTaskPath = "/traceRoot/queryId/taskId";
+
+  // Test with trailing slash
+  const std::string traceDirWithSlash = "/traceRoot/";
+  ASSERT_EQ(getQueryTraceDirectory(traceDirWithSlash, queryId), expectedPath);
+  ASSERT_EQ(
+      getTaskTraceDirectory(traceDirWithSlash, queryId, taskId),
+      expectedTaskPath);
+
+  // Test without trailing slash
+  const std::string traceDirWithoutSlash = "/traceRoot";
+  ASSERT_EQ(
+      getQueryTraceDirectory(traceDirWithoutSlash, queryId), expectedPath);
+  ASSERT_EQ(
+      getTaskTraceDirectory(traceDirWithoutSlash, queryId, taskId),
+      expectedTaskPath);
 }
 
 TEST_F(TraceUtilTest, getTaskIds) {

@@ -56,7 +56,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
-  registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
+  registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
   registerFunction<DateFromUnixDateFunction, Date, int32_t>(
       {prefix + "date_from_unix_date"});
@@ -65,12 +65,13 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
   registerFunction<DayFunction, int32_t, Date>(
       {prefix + "day", prefix + "dayofmonth"});
-  registerFunction<DayOfYearFunction, int32_t, Date>(
-      {prefix + "doy", prefix + "dayofyear"});
+  registerFunction<DayNameFunction, Varchar, Date>({prefix + "dayname"});
+  registerFunction<DayOfYearFunction, int32_t, Date>({prefix + "dayofyear"});
   registerFunction<DayOfWeekFunction, int32_t, Date>({prefix + "dayofweek"});
   registerFunction<WeekdayFunction, int32_t, Date>({prefix + "weekday"});
   registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
   registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+  registerFunction<MonthNameFunction, Varchar, Date>({prefix + "monthname"});
   registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
   registerFunction<GetTimestampFunction, Timestamp, Varchar, Varchar>(
       {prefix + "get_timestamp"});
@@ -92,9 +93,33 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "unix_millis"});
   registerUnaryIntegralWithTReturn<MillisToTimestampFunction, Timestamp>(
       {prefix + "timestamp_millis"});
+  registerUnaryIntegralWithTReturn<SecondsToTimestampFunction, Timestamp>(
+      {prefix + "timestamp_seconds"});
+  registerUnaryFloatingPointWithTReturn<SecondsToTimestampFunction, Timestamp>(
+      {prefix + "timestamp_seconds"});
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {prefix + "date_trunc"});
   registerFunction<TruncFunction, Date, Date, Varchar>({prefix + "trunc"});
+  registerFunction<
+      TimestampDiffFunction,
+      int64_t,
+      Varchar,
+      Timestamp,
+      Timestamp>({prefix + "timestampdiff"});
+  registerFunction<
+      TimestampAddFunction,
+      Timestamp,
+      Varchar,
+      int32_t,
+      Timestamp>({prefix + "timestampadd"});
+  registerFunction<
+      TimestampAddFunction,
+      Timestamp,
+      Varchar,
+      int64_t,
+      Timestamp>({prefix + "timestampadd"});
+  registerFunction<MonthsBetweenFunction, double, Timestamp, Timestamp, bool>(
+      {prefix + "months_between"});
 }
 
 } // namespace facebook::velox::functions::sparksql

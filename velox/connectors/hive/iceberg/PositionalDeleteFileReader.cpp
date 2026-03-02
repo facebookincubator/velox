@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -31,8 +32,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
-    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
+    const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStatistics& runtimeStats,
     uint64_t splitOffset,
     const std::string& connectorId)
@@ -42,8 +43,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
+      ioStatistics_(ioStatistics),
       ioStats_(ioStats),
-      fsStats_(fsStats),
       pool_(connectorQueryCtx->memoryPool()),
       filePathColumn_(IcebergMetadataColumn::icebergDeleteFilePathColumn()),
       posColumn_(IcebergMetadataColumn::icebergDeletePosColumn()),
@@ -63,8 +64,9 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   scanSpec->addField(posColumn_->name, 0);
   auto* pathSpec = scanSpec->getOrCreateChild(filePathColumn_->name);
-  pathSpec->setFilter(std::make_unique<common::BytesValues>(
-      std::vector<std::string>({baseFilePath_}), false));
+  pathSpec->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>({baseFilePath_}), false));
 
   // Create the file schema (in RowType) and split that will be used by readers
   std::vector<std::string> deleteColumnNames(
@@ -92,14 +94,16 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       /*tableParameters=*/{},
       deleteReaderOpts);
 
-  auto deleteFileHandleCachePtr =
-      fileHandleFactory_->generate(deleteFile_.filePath);
-  auto deleteFileInput = createBufferedInput(
+  const FileHandleKey fileHandleKey{
+      .filename = deleteFile_.filePath,
+      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+  auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
+  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
+      ioStatistics_,
       ioStats_,
-      fsStats_,
       executor_);
 
   auto deleteReader =
@@ -133,6 +137,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       nullptr,
       deleteFileSchema,
       deleteSplit_,
+      nullptr,
       nullptr,
       nullptr,
       deleteRowReaderOpts);
@@ -249,15 +254,17 @@ void PositionalDeleteFileReader::updateDeleteBitmap(
     deletePositionsOffset_++;
   }
 
-  deleteBitmapBuffer->setSize(std::max(
-      static_cast<uint64_t>(deleteBitmapBuffer->size()),
-      deletePositionsOffset_ == 0 ||
-              (deletePositionsOffset_ < deletePositionsVector->size() &&
-               deletePositions[deletePositionsOffset_] >= rowNumberUpperBound)
-          ? 0
-          : bits::nbytes(
-                deletePositions[deletePositionsOffset_ - 1] + 1 -
-                rowNumberLowerBound)));
+  deleteBitmapBuffer->setSize(
+      std::max(
+          static_cast<uint64_t>(deleteBitmapBuffer->size()),
+          deletePositionsOffset_ == 0 ||
+                  (deletePositionsOffset_ < deletePositionsVector->size() &&
+                   deletePositions[deletePositionsOffset_] >=
+                       rowNumberUpperBound)
+              ? 0
+              : bits::nbytes(
+                    deletePositions[deletePositionsOffset_ - 1] + 1 -
+                    rowNumberLowerBound)));
 }
 
 bool PositionalDeleteFileReader::readFinishedForBatch(

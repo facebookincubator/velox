@@ -21,7 +21,7 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::dwio::common {
 
-void DataBufferHolder::take(const std::vector<folly::StringPiece>& buffers) {
+void DataBufferHolder::take(const std::vector<std::string_view>& buffers) {
   // compute size
   uint64_t totalSize = 0;
   for (auto& buf : buffers) {
@@ -38,7 +38,7 @@ void DataBufferHolder::take(const std::vector<folly::StringPiece>& buffers) {
   auto* data = buf.data();
   for (auto& buffer : buffers) {
     const auto size = buffer.size();
-    ::memcpy(data, buffer.begin(), size);
+    ::memcpy(data, buffer.cbegin(), size);
     data += size;
   }
   // If possibly, write content of the data to output immediately. Otherwise,

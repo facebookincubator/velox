@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/compile.h>
 #include <folly/Conv.h>
 #include <folly/Expected.h>
 #include <cctype>
@@ -24,6 +25,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/type/CppToType.h"
+#include "velox/type/StringView.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
@@ -42,6 +44,12 @@ struct PrestoCastPolicy {
 
 struct SparkCastPolicy {
   static constexpr bool truncate = true;
+  static constexpr bool legacyCast = false;
+  static constexpr bool throwOnUnicode = false;
+};
+
+struct SparkTryCastPolicy {
+  static constexpr bool truncate = false;
   static constexpr bool legacyCast = false;
   static constexpr bool throwOnUnicode = false;
 };
@@ -82,7 +90,9 @@ Expected<bool> castToBoolean(const char* data, size_t len) {
     if (character == 'F' || character == '0') {
       return false;
     }
-    if constexpr (std::is_same_v<TPolicy, SparkCastPolicy>) {
+    if constexpr (
+        std::is_same_v<TPolicy, SparkCastPolicy> ||
+        std::is_same_v<TPolicy, SparkTryCastPolicy>) {
       if (character == 'Y') {
         return true;
       }
@@ -104,7 +114,9 @@ Expected<bool> castToBoolean(const char* data, size_t len) {
     return false;
   }
 
-  if constexpr (std::is_same_v<TPolicy, SparkCastPolicy>) {
+  if constexpr (
+      std::is_same_v<TPolicy, SparkCastPolicy> ||
+      std::is_same_v<TPolicy, SparkTryCastPolicy>) {
     // Case-insensitive 'yes'.
     if ((len == 3) && (TU(data[0]) == 'Y') && (TU(data[1]) == 'E') &&
         (TU(data[2]) == 'S')) {
@@ -117,8 +129,9 @@ Expected<bool> castToBoolean(const char* data, size_t len) {
     }
   }
 
-  return folly::makeUnexpected(Status::UserError(
-      "Cannot cast {} to BOOLEAN", std::string_view(data, len)));
+  return folly::makeUnexpected(
+      Status::UserError(
+          "Cannot cast {} to BOOLEAN", std::string_view(data, len)));
 }
 
 namespace detail {
@@ -130,8 +143,9 @@ Expected<T> callFollyTo(const F& v) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
     }
-    return folly::makeUnexpected(Status::UserError(
-        "{}", folly::makeConversionError(result.error(), "").what()));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "{}", folly::makeConversionError(result.error(), "").what()));
   }
 
   return result.value();
@@ -154,7 +168,7 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
     return detail::callFollyTo<T>(v);
   }
 
-  static Expected<T> tryCast(folly::StringPiece v) {
+  static Expected<T> tryCast(std::string_view v) {
     return castToBoolean<TPolicy>(v.data(), v.size());
   }
 
@@ -225,8 +239,9 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   }
 
   static Expected<T> tryCast(const Timestamp&) {
-    return folly::makeUnexpected(Status::UserError(
-        "Conversion of Timestamp to Boolean is not supported"));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Conversion of Timestamp to Boolean is not supported"));
   }
 };
 
@@ -255,14 +270,15 @@ struct Converter<
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
   }
 
-  static Expected<T> convertStringToInt(const folly::StringPiece v) {
+  static Expected<T> convertStringToInt(const std::string_view v) {
     // Handling integer target cases
     T result = 0;
     int index = 0;
     int len = v.size();
     if (len == 0) {
-      return folly::makeUnexpected(Status::UserError(
-          "Cannot cast an empty string to an integral value."));
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Cannot cast an empty string to an integral value."));
     }
 
     // Setting negative flag
@@ -271,8 +287,9 @@ struct Converter<
     bool decimalPoint = false;
     if (v[0] == '-' || v[0] == '+') {
       if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(
-            "Cannot cast an '{}' string to an integral value.", v[0]));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Cannot cast an '{}' string to an integral value.", v[0]));
       }
       negative = v[0] == '-';
       index = 1;
@@ -318,7 +335,7 @@ struct Converter<
     return result;
   }
 
-  static Expected<T> tryCast(folly::StringPiece v) {
+  static Expected<T> tryCast(std::string_view v) {
     if constexpr (TPolicy::truncate) {
       return convertStringToInt(v);
     } else {
@@ -329,7 +346,7 @@ struct Converter<
 
   static Expected<T> tryCast(const StringView& v) {
     if constexpr (TPolicy::truncate) {
-      return convertStringToInt(folly::StringPiece(v));
+      return convertStringToInt(std::string_view(v));
     } else {
       auto trimmed = trimWhiteSpace(v.data(), v.size());
       return detail::callFollyTo<T>(trimmed);
@@ -410,6 +427,9 @@ struct Converter<
         return folly::makeUnexpected(
             Status::UserError("Cannot cast NaN to an integral value."));
       }
+      if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
+        return detail::callFollyTo<T>(std::trunc(v));
+      }
       return detail::callFollyTo<T>(std::round(v));
     }
   }
@@ -433,6 +453,9 @@ struct Converter<
       if (std::isnan(v)) {
         return folly::makeUnexpected(
             Status::UserError("Cannot cast NaN to an integral value."));
+      }
+      if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
+        return detail::callFollyTo<T>(std::trunc(v));
       }
       return detail::callFollyTo<T>(std::round(v));
     }
@@ -484,12 +507,12 @@ struct Converter<
     return detail::callFollyTo<T>(v);
   }
 
-  static Expected<T> tryCast(folly::StringPiece v) {
-    return tryCast<folly::StringPiece>(v);
+  static Expected<T> tryCast(std::string_view v) {
+    return tryCast<std::string_view>(v);
   }
 
   static Expected<T> tryCast(const StringView& v) {
-    return tryCast<folly::StringPiece>(folly::StringPiece(v));
+    return tryCast<std::string_view>(std::string_view(v));
   }
 
   static Expected<T> tryCast(const std::string& v) {
@@ -539,8 +562,9 @@ struct Converter<
   }
 
   static Expected<T> tryCast(const Timestamp&) {
-    return folly::makeUnexpected(Status::UserError(
-        "Conversion of Timestamp to Real or Double is not supported"));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Conversion of Timestamp to Real or Double is not supported"));
   }
 };
 
@@ -574,14 +598,18 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
       }
       if ((val > -10'000'000 && val <= -0.001) ||
           (val >= 0.001 && val < 10'000'000) || val == 0.0) {
-        auto str = fmt::format("{}", val);
+        auto str = fmt::format(FMT_COMPILE("{}"), val);
         normalizeStandardNotation(str);
         return str;
       }
       // Precision of float is at most 8 significant decimal digits. Precision
       // of double is at most 17 significant decimal digits.
-      auto str =
-          fmt::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
+      std::string str;
+      if constexpr (std::is_same_v<T, float>) {
+        str = fmt::format(FMT_COMPILE("{:.7E}"), val);
+      } else {
+        str = fmt::format(FMT_COMPILE("{:.16E}"), val);
+      }
       normalizeScientificNotation(str);
       return str;
     }
@@ -637,7 +665,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
     }
     str[pos++] = 'E';
 
-    int startExp = idxE + 1;
+    size_t startExp = idxE + 1;
     if (str[startExp] == '-') {
       str[pos++] = '-';
       startExp++;
@@ -664,7 +692,7 @@ struct Converter<TypeKind::TIMESTAMP, void, TPolicy> {
         Status::UserError("Conversion to Timestamp is not supported"));
   }
 
-  static Expected<Timestamp> tryCast(folly::StringPiece v) {
+  static Expected<Timestamp> tryCast(std::string_view v) {
     return fromTimestampString(
         v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }

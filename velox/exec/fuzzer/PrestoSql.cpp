@@ -19,6 +19,7 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::exec::test {
 
@@ -339,7 +340,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
 
 std::string toCastSql(const core::CastTypedExpr& cast) {
   std::stringstream sql;
-  if (cast.nullOnFailure()) {
+  if (cast.isTryCast()) {
     sql << "try_cast(";
   } else {
     sql << "cast(";
@@ -393,6 +394,10 @@ std::string toConstantSql(const core::ConstantTypedExpr& constant) {
       sql << typeSql << " ";
     }
     sql << std::quoted(getConstantValue<std::string>(constant), '\'', '\'');
+  } else if (type->isIntervalYearMonth()) {
+    sql << fmt::format("INTERVAL '{}' YEAR TO MONTH", constant.toString());
+  } else if (type->isIntervalDayTime()) {
+    sql << fmt::format("INTERVAL '{}' DAY TO SECOND", constant.toString());
   } else if (type->isBigint()) {
     sql << getConstantValue<int64_t>(constant);
   } else if (type->isPrimitiveType()) {
@@ -591,6 +596,12 @@ void PrestoSqlPlanNodeVisitor::visit(
           "Unknown join type: {}", static_cast<int>(node.joinType()));
   }
   visitorContext.sql = sql.str();
+}
+
+void PrestoSqlPlanNodeVisitor::visit(
+    const core::SpatialJoinNode& node,
+    core::PlanNodeVisitorContext& ctx) const {
+  VELOX_NYI("SpatialJoinNode is not yet supported in SQL conversion");
 }
 
 std::optional<std::string> PrestoSqlPlanNodeVisitor::toSql(

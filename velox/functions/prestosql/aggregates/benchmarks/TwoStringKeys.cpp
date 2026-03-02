@@ -113,7 +113,8 @@ class TwoStringKeysBenchmark : public HiveConnectorTestBase {
         std::move(plan),
         0,
         core::QueryCtx::create(executor_.get()),
-        exec::Task::ExecutionMode::kSerial);
+        exec::Task::ExecutionMode::kSerial,
+        exec::Consumer{});
 
     task->addSplit(
         "0", exec::Split(makeHiveConnectorSplit((filePath_->getPath()))));

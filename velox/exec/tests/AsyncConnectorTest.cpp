@@ -32,11 +32,16 @@ const std::string kTestConnectorId = "test";
 
 class TestTableHandle : public connector::ConnectorTableHandle {
  public:
-  TestTableHandle() : connector::ConnectorTableHandle(kTestConnectorId) {}
+  TestTableHandle(std::string name)
+      : connector::ConnectorTableHandle(kTestConnectorId),
+        name_{std::move(name)} {}
 
-  std::string toString() const override {
-    VELOX_NYI();
+  const std::string& name() const override {
+    return name_;
   }
+
+ private:
+  const std::string name_;
 };
 
 class TestSplit : public connector::ConnectorSplit {
@@ -55,7 +60,8 @@ class TestSplit : public connector::ConnectorSplit {
       return ContinueFuture::makeEmpty();
     }
 
-    auto [promise, future] = makeVeloxContinuePromiseContract();
+    auto [promise, future] =
+        makeVeloxContinuePromiseContract("TestSplit::touch");
 
     promise_ = std::move(promise);
     scheduler_.addFunction(
@@ -121,7 +127,7 @@ class TestDataSource : public connector::DataSource {
     return 0;
   }
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override {
     return {};
   }
 
@@ -137,18 +143,17 @@ class TestConnector : public connector::Connector {
 
   std::unique_ptr<connector::DataSource> createDataSource(
       const RowTypePtr& /* outputType */,
-      const std::shared_ptr<ConnectorTableHandle>& /* tableHandle */,
+      const ConnectorTableHandlePtr& /* tableHandle */,
       const std::unordered_map<
           std::string,
-          std::shared_ptr<connector::ColumnHandle>>& /* columnHandles */,
+          connector::ColumnHandlePtr>& /* columnHandles */,
       connector::ConnectorQueryCtx* connectorQueryCtx) override {
     return std::make_unique<TestDataSource>(connectorQueryCtx->memoryPool());
   }
 
   std::unique_ptr<connector::DataSink> createDataSink(
       RowTypePtr /*inputType*/,
-      std::shared_ptr<
-          ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
+      ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI();
@@ -175,15 +180,13 @@ class AsyncConnectorTest : public OperatorTestBase {
  public:
   void SetUp() override {
     OperatorTestBase::SetUp();
-    connector::registerConnectorFactory(
-        std::make_shared<TestConnectorFactory>());
-    auto testConnector =
-        connector::getConnectorFactory(TestConnectorFactory::kTestConnectorName)
-            ->newConnector(
-                kTestConnectorId,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()),
-                nullptr);
+    TestConnectorFactory factory;
+    auto testConnector = factory.newConnector(
+        kTestConnectorId,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()),
+        nullptr,
+        nullptr);
     connector::registerConnector(testConnector);
   }
 
@@ -194,7 +197,7 @@ class AsyncConnectorTest : public OperatorTestBase {
 };
 
 TEST_F(AsyncConnectorTest, basic) {
-  auto tableHandle = std::make_shared<TestTableHandle>();
+  auto tableHandle = std::make_shared<TestTableHandle>("test");
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
                   .startTableScan()

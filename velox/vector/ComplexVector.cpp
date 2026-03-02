@@ -21,43 +21,12 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
-
-// Up to # of elements to show as debug string for `toString()`.
-constexpr vector_size_t kMaxElementsInToString = 5;
-
-std::string stringifyTruncatedElementList(
-    vector_size_t start,
-    vector_size_t size,
-    vector_size_t limit,
-    std::string_view delimiter,
-    const std::function<void(std::stringstream&, vector_size_t)>&
-        stringifyElementCB) {
-  std::stringstream out;
-  if (size == 0) {
-    return "<empty>";
-  }
-  out << size << " elements starting at " << start << " {";
-
-  const vector_size_t limitedSize = std::min(size, limit);
-  for (vector_size_t i = 0; i < limitedSize; ++i) {
-    if (i > 0) {
-      out << delimiter;
-    }
-    stringifyElementCB(out, start + i);
-  }
-
-  if (size > limitedSize) {
-    if (limitedSize) {
-      out << delimiter;
-    }
-    out << "...";
-  }
-  out << "}";
-  return out.str();
-}
 
 // static
 std::shared_ptr<RowVector> RowVector::createEmpty(
@@ -65,7 +34,7 @@ std::shared_ptr<RowVector> RowVector::createEmpty(
     velox::memory::MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(type, "Vector creation requires a non-null type.");
   VELOX_CHECK(type->isRow());
-  return std::static_pointer_cast<RowVector>(BaseVector::create(type, 0, pool));
+  return BaseVector::create<RowVector>(type, 0, pool);
 }
 
 bool RowVector::containsNullAt(vector_size_t idx) const {
@@ -280,7 +249,10 @@ void RowVector::copy(
 void RowVector::setType(const TypePtr& type) {
   BaseVector::setType(type);
   for (auto i = 0; i < childrenSize_; i++) {
-    children_[i]->setType(type_->asRow().childAt(i));
+    auto& child = children_[i];
+    if (child) {
+      child->setType(type_->asRow().childAt(i));
+    }
   }
 }
 
@@ -378,10 +350,12 @@ void RowVector::copyRanges(
 }
 
 uint64_t RowVector::hashValueAt(vector_size_t index) const {
-  if (isNullAt(index)) {
-    return BaseVector::kNullHash;
-  }
   uint64_t hash = BaseVector::kNullHash;
+
+  if (isNullAt(index)) {
+    return hash;
+  }
+
   bool isFirst = true;
   for (auto i = 0; i < childrenSize(); ++i) {
     auto& child = children_[i];
@@ -399,20 +373,26 @@ std::unique_ptr<SimpleVector<uint64_t>> RowVector::hashAll() const {
 }
 
 std::string RowVector::toString(vector_size_t index) const {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  return deprecatedToString(index, 5 /* limit */);
+#pragma GCC diagnostic pop
+}
+
+std::string RowVector::deprecatedToString(
+    vector_size_t index,
+    vector_size_t limit) const {
   VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
-    return "null";
+    return std::string(BaseVector::kNullValueString);
   }
-  std::stringstream out;
-  out << "{";
-  for (int32_t i = 0; i < children_.size(); ++i) {
-    if (i > 0) {
-      out << ", ";
-    }
-    out << (children_[i] ? children_[i]->toString(index) : "<not set>");
-  }
-  out << "}";
-  return out.str();
+
+  return stringifyTruncatedElementList(
+      children_.size(),
+      [&](auto& out, auto i) {
+        out << (children_[i] ? children_[i]->toString(index) : "<not set>");
+      },
+      limit);
 }
 
 void RowVector::ensureWritable(const SelectivityVector& rows) {
@@ -437,8 +417,18 @@ bool RowVector::isWritable() const {
   return isNullsWritable();
 }
 
+void RowVector::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  BaseVector::transferOrCopyTo(pool);
+  for (auto& child : children_) {
+    child->transferOrCopyTo(pool);
+  }
+  if (rawVectorForBatchReader_) {
+    rawVectorForBatchReader_->transferOrCopyTo(pool);
+  }
+}
+
 uint64_t RowVector::estimateFlatSize() const {
-  uint64_t total = BaseVector::retainedSize();
+  uint64_t total = BaseVector::retainedSizeImpl();
   for (const auto& child : children_) {
     if (child) {
       total += child->estimateFlatSize();
@@ -941,6 +931,18 @@ bool ArrayVectorBase::hasOverlappingRanges(
   return false;
 }
 
+void ArrayVectorBase::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  BaseVector::transferOrCopyTo(pool);
+  if (!offsets_->transferTo(pool)) {
+    offsets_ = AlignedBuffer::copy<vector_size_t>(offsets_, pool);
+    rawOffsets_ = offsets_->as<vector_size_t>();
+  }
+  if (!sizes_->transferTo(pool)) {
+    sizes_ = AlignedBuffer::copy<vector_size_t>(sizes_, pool);
+    rawSizes_ = sizes_->as<vector_size_t>();
+  }
+}
+
 void ArrayVectorBase::ensureNullRowsEmpty() {
   if (!rawNulls_) {
     return;
@@ -1123,26 +1125,22 @@ void ArrayVector::setType(const TypePtr& type) {
   elements_->setType(type_->asArray().elementType());
 }
 
-namespace {
-uint64_t hashArray(
-    uint64_t hash,
-    const BaseVector& elements,
-    vector_size_t offset,
-    vector_size_t size) {
-  for (auto i = 0; i < size; ++i) {
-    auto elementHash = elements.hashValueAt(offset + i);
-    hash = bits::commutativeHashMix(hash, elementHash);
-  }
-  return hash;
-}
-} // namespace
-
 uint64_t ArrayVector::hashValueAt(vector_size_t index) const {
+  uint64_t hash = kNullHash;
+
   if (isNullAt(index)) {
-    return BaseVector::kNullHash;
+    return hash;
   }
-  return hashArray(
-      BaseVector::kNullHash, *elements_, rawOffsets_[index], rawSizes_[index]);
+
+  const auto offset = rawOffsets_[index];
+  const auto size = rawSizes_[index];
+
+  for (auto i = 0; i < size; ++i) {
+    auto elementHash = elements_->hashValueAt(offset + i);
+    hash = bits::hashMix(hash, elementHash);
+  }
+
+  return hash;
 }
 
 std::unique_ptr<SimpleVector<uint64_t>> ArrayVector::hashAll() const {
@@ -1152,22 +1150,20 @@ std::unique_ptr<SimpleVector<uint64_t>> ArrayVector::hashAll() const {
 std::string ArrayVector::toString(vector_size_t index) const {
   VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
-    return "null";
+    return std::string(BaseVector::kNullValueString);
   }
 
+  const auto offset = rawOffsets_[index];
+
   return stringifyTruncatedElementList(
-      rawOffsets_[index],
-      rawSizes_[index],
-      kMaxElementsInToString,
-      ", ",
-      [this](std::stringstream& ss, vector_size_t index) {
-        ss << elements_->toString(index);
+      rawSizes_[index], [&](std::stringstream& ss, vector_size_t index) {
+        ss << elements_->toString(offset + index);
       });
 }
 
 void ArrayVector::ensureWritable(const SelectivityVector& rows) {
   auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
-  if (offsets_ && !offsets_->unique()) {
+  if (offsets_ && !offsets_->isMutable()) {
     BufferPtr newOffsets =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
     auto rawNewOffsets = newOffsets->asMutable<vector_size_t>();
@@ -1186,7 +1182,7 @@ void ArrayVector::ensureWritable(const SelectivityVector& rows) {
     rawOffsets_ = offsets_->as<vector_size_t>();
   }
 
-  if (sizes_ && !sizes_->unique()) {
+  if (sizes_ && !sizes_->isMutable()) {
     BufferPtr newSizes =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
     auto rawNewSizes = newSizes->asMutable<vector_size_t>();
@@ -1219,8 +1215,13 @@ bool ArrayVector::isWritable() const {
   return isNullsWritable() && BaseVector::isVectorWritable(elements_);
 }
 
+void ArrayVector::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  ArrayVectorBase::transferOrCopyTo(pool);
+  elements_->transferOrCopyTo(pool);
+}
+
 uint64_t ArrayVector::estimateFlatSize() const {
-  return BaseVector::retainedSize() + offsets_->capacity() +
+  return BaseVector::retainedSizeImpl() + offsets_->capacity() +
       sizes_->capacity() + elements_->estimateFlatSize();
 }
 
@@ -1308,55 +1309,71 @@ std::optional<int32_t> MapVector::compare(
 
   auto otherValue = other->wrappedVector();
   auto wrappedOtherIndex = other->wrappedIndex(otherIndex);
-  VELOX_CHECK_EQ(
-      VectorEncoding::Simple::MAP,
-      otherValue->encoding(),
-      "Compare of MAP and non-MAP: {} and {}",
-      BaseVector::toString(),
-      otherValue->BaseVector::toString());
-  auto otherMap = otherValue->as<MapVector>();
 
-  if (keys_->typeKind() != otherMap->keys_->typeKind() ||
-      values_->typeKind() != otherMap->values_->typeKind()) {
+  if (otherValue->encoding() == VectorEncoding::Simple::MAP) {
+    auto otherMap = otherValue->as<MapVector>();
+
+    if (keys_->typeKind() != otherMap->keys_->typeKind() ||
+        values_->typeKind() != otherMap->values_->typeKind()) {
+      VELOX_FAIL(
+          "Compare of maps of different key/value types: {} and {}",
+          BaseVector::toString(),
+          otherMap->BaseVector::toString());
+    }
+
+    if (flags.equalsOnly &&
+        rawSizes_[index] != otherMap->rawSizes_[wrappedOtherIndex]) {
+      return 1;
+    }
+
+    auto leftIndices = sortedKeyIndices(index);
+    auto rightIndices = otherMap->sortedKeyIndices(wrappedOtherIndex);
+
+    auto result = compareArrays(
+        *keys_, *otherMap->keys_, leftIndices, rightIndices, flags);
+    VELOX_DCHECK(result.has_value(), "Keys may not have nulls or nested nulls");
+
+    // Keys are not the same, values not compared.
+    if (result.value()) {
+      return result;
+    }
+
+    return compareArrays(
+        *values_, *otherMap->values_, leftIndices, rightIndices, flags);
+  } else if (otherValue->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    auto otherFlatMap = otherValue->as<FlatMapVector>();
+
+    // Reverse the order and compare the flat map to the map, this way we can
+    // reuse the implementation in FlatMapVector.
+    return otherFlatMap->compare(
+        this, wrappedOtherIndex, index, CompareFlags::reverseDirection(flags));
+  } else {
     VELOX_FAIL(
-        "Compare of maps of different key/value types: {} and {}",
+        "Compare of MAP and non-MAP: {} and {}",
         BaseVector::toString(),
-        otherMap->BaseVector::toString());
+        otherValue->BaseVector::toString());
   }
-
-  if (flags.equalsOnly &&
-      rawSizes_[index] != otherMap->rawSizes_[wrappedOtherIndex]) {
-    return 1;
-  }
-
-  auto leftIndices = sortedKeyIndices(index);
-  auto rightIndices = otherMap->sortedKeyIndices(wrappedOtherIndex);
-
-  auto result =
-      compareArrays(*keys_, *otherMap->keys_, leftIndices, rightIndices, flags);
-  VELOX_DCHECK(result.has_value(), "Keys may not have nulls or nested nulls");
-
-  // Keys are not the same, values not compared.
-  if (result.value()) {
-    return result;
-  }
-
-  return compareArrays(
-      *values_, *otherMap->values_, leftIndices, rightIndices, flags);
 }
 
 uint64_t MapVector::hashValueAt(vector_size_t index) const {
+  uint64_t hash = BaseVector::kNullHash;
+
   if (isNullAt(index)) {
-    return BaseVector::kNullHash;
+    return hash;
   }
+
+  // We use a commutative hash mix, thus we do not sort first.
   auto offset = rawOffsets_[index];
   auto size = rawSizes_[index];
-  // We use a commutative hash mix, thus we do not sort first.
-  return hashArray(
-      hashArray(BaseVector::kNullHash, *keys_, offset, size),
-      *values_,
-      offset,
-      size);
+
+  for (auto i = 0; i < size; ++i) {
+    auto elementHash = bits::hashMix(
+        keys_->hashValueAt(offset + i), values_->hashValueAt(offset + i));
+
+    hash = bits::commutativeHashMix(hash, elementHash);
+  }
+
+  return hash;
 }
 
 std::unique_ptr<SimpleVector<uint64_t>> MapVector::hashAll() const {
@@ -1454,21 +1471,21 @@ BufferPtr MapVector::elementIndices() const {
 std::string MapVector::toString(vector_size_t index) const {
   VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
-    return "null";
+    return std::string(BaseVector::kNullValueString);
   }
+
+  const auto offset = rawOffsets_[index];
+
   return stringifyTruncatedElementList(
-      rawOffsets_[index],
-      rawSizes_[index],
-      kMaxElementsInToString,
-      ", ",
-      [this](std::stringstream& ss, vector_size_t index) {
-        ss << keys_->toString(index) << " => " << values_->toString(index);
+      rawSizes_[index], [&](std::stringstream& ss, vector_size_t index) {
+        ss << keys_->toString(offset + index) << " => "
+           << values_->toString(offset + index);
       });
 }
 
 void MapVector::ensureWritable(const SelectivityVector& rows) {
   auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
-  if (offsets_ && !offsets_->unique()) {
+  if (offsets_ && !offsets_->isMutable()) {
     BufferPtr newOffsets =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
     auto rawNewOffsets = newOffsets->asMutable<vector_size_t>();
@@ -1487,7 +1504,7 @@ void MapVector::ensureWritable(const SelectivityVector& rows) {
     rawOffsets_ = offsets_->as<vector_size_t>();
   }
 
-  if (sizes_ && !sizes_->unique()) {
+  if (sizes_ && !sizes_->isMutable()) {
     BufferPtr newSizes =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
     auto rawNewSizes = newSizes->asMutable<vector_size_t>();
@@ -1523,8 +1540,14 @@ bool MapVector::isWritable() const {
       BaseVector::isVectorWritable(values_);
 }
 
+void MapVector::transferOrCopyTo(velox::memory::MemoryPool* pool) {
+  ArrayVectorBase::transferOrCopyTo(pool);
+  keys_->transferOrCopyTo(pool);
+  values_->transferOrCopyTo(pool);
+}
+
 uint64_t MapVector::estimateFlatSize() const {
-  return BaseVector::retainedSize() + offsets_->capacity() +
+  return BaseVector::retainedSizeImpl() + offsets_->capacity() +
       sizes_->capacity() + keys_->estimateFlatSize() +
       values_->estimateFlatSize();
 }
@@ -1660,12 +1683,17 @@ MapVectorPtr MapVector::updateImpl(
     }
     if (newNulls.get() == nulls().get()) {
       newNulls = allocateNulls(size(), pool());
-      bits::andBits(
-          newNulls->asMutable<uint64_t>(),
-          rawNulls(),
-          other.nulls(),
-          0,
-          size());
+      if (!rawNulls()) {
+        bits::copyBits(
+            other.nulls(), 0, newNulls->asMutable<uint64_t>(), 0, size());
+      } else {
+        bits::andBits(
+            newNulls->asMutable<uint64_t>(),
+            rawNulls(),
+            other.nulls(),
+            0,
+            size());
+      }
     } else {
       bits::andBits(newNulls->asMutable<uint64_t>(), other.nulls(), 0, size());
     }

@@ -40,15 +40,15 @@ TEST_F(CheckNestedNullsTest, array) {
 
   for (bool throwOnNestedNulls : {true, false}) {
     ASSERT_TRUE(
-        checkNestedNulls(decodedVector, indices, 0, throwOnNestedNulls));
+        checkNestedNulls(decodedVector, 0, indices[0], throwOnNestedNulls));
     ASSERT_FALSE(
-        checkNestedNulls(decodedVector, indices, 1, throwOnNestedNulls));
+        checkNestedNulls(decodedVector, 1, indices[1], throwOnNestedNulls));
   }
 
   VELOX_ASSERT_THROW(
-      checkNestedNulls(decodedVector, indices, 2, true),
+      checkNestedNulls(decodedVector, 2, indices[2], true),
       "ARRAY comparison not supported for values that contain nulls");
-  ASSERT_FALSE(checkNestedNulls(decodedVector, indices, 2, false));
+  ASSERT_FALSE(checkNestedNulls(decodedVector, 2, indices[2], false));
 }
 
 TEST_F(CheckNestedNullsTest, map) {
@@ -62,15 +62,15 @@ TEST_F(CheckNestedNullsTest, map) {
 
   for (bool throwOnNestedNulls : {true, false}) {
     ASSERT_TRUE(
-        checkNestedNulls(decodedVector, indices, 0, throwOnNestedNulls));
+        checkNestedNulls(decodedVector, 0, indices[0], throwOnNestedNulls));
     ASSERT_FALSE(
-        checkNestedNulls(decodedVector, indices, 1, throwOnNestedNulls));
+        checkNestedNulls(decodedVector, 1, indices[1], throwOnNestedNulls));
   }
 
   VELOX_ASSERT_THROW(
-      checkNestedNulls(decodedVector, indices, 2, true),
+      checkNestedNulls(decodedVector, 2, indices[2], true),
       "MAP comparison not supported for values that contain nulls");
-  ASSERT_FALSE(checkNestedNulls(decodedVector, indices, 2, false));
+  ASSERT_FALSE(checkNestedNulls(decodedVector, 2, indices[2], false));
 }
 
 TEST_F(CheckNestedNullsTest, row) {
@@ -93,14 +93,14 @@ TEST_F(CheckNestedNullsTest, row) {
 
   for (bool throwOnNestedNulls : {true, false}) {
     ASSERT_TRUE(
-        checkNestedNulls(decodedVector, indices, 0, throwOnNestedNulls));
+        checkNestedNulls(decodedVector, 0, indices[0], throwOnNestedNulls));
     ASSERT_FALSE(
-        checkNestedNulls(decodedVector, indices, 1, throwOnNestedNulls));
+        checkNestedNulls(decodedVector, 1, indices[1], throwOnNestedNulls));
   }
 
   VELOX_ASSERT_THROW(
-      checkNestedNulls(decodedVector, indices, 2, true),
+      checkNestedNulls(decodedVector, 2, indices[2], true),
       "ROW comparison not supported for values that contain nulls");
-  ASSERT_FALSE(checkNestedNulls(decodedVector, indices, 2, false));
+  ASSERT_FALSE(checkNestedNulls(decodedVector, 2, indices[2], false));
 }
 } // namespace facebook::velox::functions::test

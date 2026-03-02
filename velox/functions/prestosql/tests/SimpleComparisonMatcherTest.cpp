@@ -16,9 +16,8 @@
 #include <gtest/gtest.h>
 
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/SimpleComparisonMatcher.h"
+#include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -43,7 +42,7 @@ class SimpleComparisonMatcherTest : public testing::Test,
       const RowTypePtr& rowType) {
     parse::ParseOptions options;
     options.functionPrefix = prefix_;
-    auto untyped = parse::parseExpr(text, options);
+    auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
@@ -83,6 +82,8 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
   const auto inputType =
       ROW({"a"}, {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()}))});
 
+  auto checker = std::make_unique<SimpleComparisonChecker>();
+
   auto testMatcher = [&](const std::string& expr,
                          std::optional<bool> lessThan) {
     SCOPED_TRACE(expr);
@@ -92,8 +93,7 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
     auto lambdaExpr = std::dynamic_pointer_cast<const core::LambdaTypedExpr>(
         parsedExpr->inputs()[1]);
 
-    auto comparison =
-        functions::prestosql::isSimpleComparison(prefix_, *lambdaExpr);
+    auto comparison = checker->isSimpleComparison(prefix_, *lambdaExpr);
 
     ASSERT_EQ(lessThan.has_value(), comparison.has_value());
     if (lessThan.has_value()) {

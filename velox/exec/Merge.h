@@ -15,11 +15,11 @@
  */
 #pragma once
 
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
-#include "velox/exec/TreeOfLosers.h"
 
 namespace facebook::velox::exec {
 
@@ -43,6 +43,8 @@ class Merge : public SourceOperator {
       const std::string& operatorType,
       const std::optional<common::SpillConfig>& spillConfig = std::nullopt);
 
+  void initialize() override;
+
   BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
@@ -55,6 +57,18 @@ class Merge : public SourceOperator {
     return outputType_;
   }
 
+  /// The name of runtime stats specific to merge.
+  /// The running wall time of the merge operator reading from the streaming
+  /// source. If spilling is enabled for local merge, this also includes the
+  /// time that writes to the spilled source.
+  static inline const std::string kStreamingSourceReadWallNanos{
+      "streamingSourceReadWallNanos"};
+  /// The running wall time of the merge operator reading from the spilled
+  /// source to produce the final output. This only applies when spilling is
+  /// enabled for local merge.
+  static inline const std::string kSpilledSourceReadWallNanos{
+      "spilledSourceReadWallNanos"};
+
  protected:
   virtual BlockingReason addMergeSources(ContinueFuture* future) = 0;
 
@@ -64,6 +78,21 @@ class Merge : public SourceOperator {
   uint32_t maxNumMergeSources_{std::numeric_limits<uint32_t>::max()};
 
  private:
+  // Tracks the internal execution stats for a merge operator.
+  struct Stats {
+    // The time point that a merge operator starts reading from the streaming
+    // source.
+    uint64_t streamingSourceReadStartTimeUs{0};
+    // The time point that a merge operator finishes read from the streaming
+    // source. This includes the time that writes to the spilled source for
+    // recursive merge when spilling is enabled for local merge.
+    uint64_t streamingSourceReadEndTimeUs{0};
+    // The time point that a merge operator finishes read from the spilled
+    // source. This only applies when spilling is enabled for local merge.
+    uint64_t spilledSourceReadEndTimeUs{0};
+  };
+  void recordMergeStats();
+
   // Start sources for this merge run, it may start either all the sources at
   // once or a portion of the sources at a time to cap the memory usage.
   void maybeStartNextMergeSourceGroup();
@@ -90,9 +119,13 @@ class Merge : public SourceOperator {
 
   RowVectorPtr getOutputFromSource();
 
-  /// Maximum number of rows in the output batch.
-  const vector_size_t outputBatchSize_;
+  // Maximum number of rows in the output batch.
+  const vector_size_t maxOutputBatchRows_;
+  // Maximum number of bytes in the output batch.
+  const uint64_t maxOutputBatchBytes_;
   const std::vector<SpillSortKey> sortingKeys_;
+
+  Stats mergeStats_;
 
   RowVectorPtr output_;
   /// Number of rows accumulated in 'output_' so far.
@@ -104,7 +137,7 @@ class Merge : public SourceOperator {
   std::vector<ContinueFuture> sourceBlockingFutures_;
 
   std::unique_ptr<SourceMerger> sourceMerger_;
-  std::unique_ptr<SpillMerger> spillMerger_;
+  std::shared_ptr<SpillMerger> spillMerger_;
   std::unique_ptr<MergeSpiller> mergeOutputSpiller_;
   // Number of total spilled rows, it must be equal to the input rows.
   uint64_t numSpilledRows_{0};
@@ -120,8 +153,9 @@ class SourceMerger {
  public:
   SourceMerger(
       const RowTypePtr& type,
-      vector_size_t outputBatchSize,
       std::vector<std::unique_ptr<SourceStream>> sourceStreams,
+      vector_size_t maxOutputBatchRows,
+      uint64_t maxOutputBatchBytes,
       velox::memory::MemoryPool* pool);
 
   void isBlocked(std::vector<ContinueFuture>& sourceBlockingFutures) const;
@@ -131,45 +165,24 @@ class SourceMerger {
       bool& atEnd);
 
  private:
+  void setOutputBatchSize();
+
   const RowTypePtr type_;
-  const vector_size_t outputBatchSize_;
+  const vector_size_t maxOutputBatchRows_;
+  const uint64_t maxOutputBatchBytes_;
   const std::vector<SourceStream*> streams_;
   const std::unique_ptr<TreeOfLosers<SourceStream>> merger_;
   velox::memory::MemoryPool* const pool_;
 
+  // The max number of rows in an output vector which is determined by
+  // 'setOutputBatchSize'. The calculation is based on the actual estimated row
+  // size and capped by 'maxOutputBatchRows_' and 'maxOutputBatchBytes_'.
+  vector_size_t outputBatchRows_{0};
+
   // Reusable output vector.
   RowVectorPtr output_;
-  uint64_t outputSize_{0};
-};
-
-/// A utility class for sort-merging data from data spilled by the `LocalMerge`
-/// operator.
-class SpillMerger {
- public:
-  SpillMerger(
-      const RowTypePtr& type,
-      uint64_t numSpilledRows,
-      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
-          spillReadFilesGroup,
-      velox::memory::MemoryPool* pool);
-
-  RowVectorPtr getOutput(vector_size_t maxOutputRows);
-
- private:
-  const RowTypePtr type_;
-  // The number of spilled input rows.
-  const uint64_t numSpilledRows_;
-  // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
-  const std::unique_ptr<TreeOfLosers<SpillMergeStream>> merger_;
-  velox::memory::MemoryPool* const pool_;
-
-  // Records the source rows to copy to 'output_' in order.
-  std::vector<const RowVector*> spillSources_;
-  std::vector<vector_size_t> spillSourceRows_;
-  // Reusable output vector.
-  RowVectorPtr output_;
-  // The number of output rows.
-  uint64_t numOutputRows_{0};
+  // The number of rows in 'output_' vector.
+  uint64_t outputRows_{0};
 };
 
 class SourceStream final : public MergeStream {
@@ -196,6 +209,15 @@ class SourceStream final : public MergeStream {
 
   bool hasData() const override {
     return !atEnd_;
+  }
+
+  // Returns the estimated row size based on the vector received from the
+  // merge source.
+  std::optional<int64_t> estimateRowSize() const {
+    if (data_ == nullptr || data_->size() == 0) {
+      return std::nullopt;
+    }
+    return data_->estimateFlatSize() / data_->size();
   }
 
   /// Returns true if current source row is less then current source row in
@@ -255,6 +277,75 @@ class SourceStream final : public MergeStream {
 
   /// Reusable memory.
   std::vector<vector_size_t> sourceRows_;
+};
+
+/// A utility class for sort-merging data from data spilled by the `LocalMerge`
+/// operator.
+class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
+ public:
+  SpillMerger(
+      const std::vector<SpillSortKey>& sortingKeys,
+      const RowTypePtr& type,
+      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+          spillReadFilesGroup,
+      vector_size_t maxOutputBatchRows,
+      uint64_t maxOutputBatchBytes,
+      int mergeSourceQueueSize,
+      const common::SpillConfig* spillConfig,
+      const std::shared_ptr<exec::SpillStats>& spillStats,
+      velox::memory::MemoryPool* pool);
+
+  ~SpillMerger();
+
+  void start();
+
+  RowVectorPtr getOutput(
+      std::vector<ContinueFuture>& sourceBlockingFutures,
+      bool& atEnd);
+
+ private:
+  static std::vector<std::shared_ptr<MergeSource>> createMergeSources(
+      size_t numSpillSources,
+      int queueSize);
+
+  static std::vector<std::unique_ptr<BatchStream>> createBatchStreams(
+      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+          spillReadFilesGroup);
+
+  static std::unique_ptr<SourceMerger> createSourceMerger(
+      const std::vector<SpillSortKey>& sortingKeys,
+      const RowTypePtr& type,
+      const std::vector<std::shared_ptr<MergeSource>>& sources,
+      vector_size_t maxOutputBatchRows,
+      uint64_t maxOutputBatchBytes,
+      velox::memory::MemoryPool* pool);
+
+  void finishSource(size_t streamIdx) const;
+
+  void readFromSpillFileStream(
+      const std::weak_ptr<SpillMerger>& mergeHolder,
+      size_t streamIdx);
+
+  void scheduleAsyncSpillFileStreamReads();
+
+  // Sets 'exception_' when an async reader throws.
+  void setError(const std::exception_ptr& exception);
+
+  // Returns true if any async reader has thrown an exception.
+  bool hasError() const;
+
+  // If any async reader has thrown an exception, rethrows it.
+  void checkError();
+
+  folly::Executor* const executor_;
+  const std::shared_ptr<exec::SpillStats> spillStats_;
+  const std::shared_ptr<memory::MemoryPool> pool_;
+
+  std::vector<std::shared_ptr<MergeSource>> sources_;
+  std::vector<std::unique_ptr<BatchStream>> batchStreams_;
+  std::unique_ptr<SourceMerger> sourceMerger_;
+  mutable std::timed_mutex mutex_;
+  std::exception_ptr exception_ = nullptr;
 };
 
 // LocalMerge merges its source's output into a single stream of

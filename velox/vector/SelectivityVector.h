@@ -338,9 +338,6 @@ class SelectivityVector {
                  return bits_[index] == other.bits_[index];
                });
   }
-  bool operator!=(const SelectivityVector& other) const {
-    return !(*this == other);
-  }
 
   /// Invokes a function on each selected row. The function must take a single
   /// "row" argument of type vector_size_t and return void.
@@ -364,7 +361,7 @@ class SelectivityVector {
 
     // Intentionally going from zero to avoid surprises debugging if begin() and
     // end() not correct
-    for (size_t i = 0; i < selectivityVector.size(); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(selectivityVector.size()); ++i) {
       if (selectivityVector.isValid(i)) {
         if (!firstValidEncountered) {
           os << ", ";
@@ -441,6 +438,8 @@ class SelectivityIterator {
 template <typename Callable>
 inline void SelectivityVector::applyToSelected(Callable func) const {
   if (isAllSelected()) {
+    // IMPORTANT: Do not remove this line.  Without it the compiler would not be
+    // able to vectorize or unroll the loop.
     const auto end = end_;
     for (vector_size_t row = begin_; row < end; ++row) {
       func(row);

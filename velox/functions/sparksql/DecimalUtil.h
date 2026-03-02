@@ -186,8 +186,7 @@ class DecimalUtil {
         return R(-1);
       }
       int256_t aLarge = a;
-      int256_t aLargeScaledUp =
-          aLarge * velox::DecimalUtil::kPowersOfTen[aRescale];
+      int256_t aLargeScaledUp = aLarge * getPowersOfTen(aRescale);
       int256_t bLarge = b;
       int256_t resultLarge = aLargeScaledUp / bLarge;
       int256_t remainderLarge = aLargeScaledUp % bLarge;
@@ -211,6 +210,33 @@ class DecimalUtil {
     }
   }
 
+  /// When allowing precision loss, computes the result precision and scale
+  /// following Hive's formulas. When denying precision loss, calculates the
+  /// number of whole digits and fraction digits. If the total number of digits
+  /// exceed 38, we reduce both the number of fraction digits and whole digits
+  /// to fit within this limit.
+  template <bool allowPrecisionLoss>
+  static std::pair<uint8_t, uint8_t> computeDivideResultPrecisionScale(
+      uint8_t aPrecision,
+      uint8_t aScale,
+      uint8_t bPrecision,
+      uint8_t bScale) {
+    if constexpr (allowPrecisionLoss) {
+      auto scale = std::max(6, aScale + bPrecision + 1);
+      auto precision = aPrecision - aScale + bScale + scale;
+      return adjustPrecisionScale(precision, scale);
+    } else {
+      auto wholeDigits = std::min(38, aPrecision - aScale + bScale);
+      auto fractionDigits = std::min(38, std::max(6, aScale + bPrecision + 1));
+      auto diff = (wholeDigits + fractionDigits) - 38;
+      if (diff > 0) {
+        fractionDigits -= diff / 2 + 1;
+        wholeDigits = 38 - fractionDigits;
+      }
+      return bounded(wholeDigits + fractionDigits, fractionDigits);
+    }
+  }
+
   /// This method is used when the function is registered with
   /// ``allowPrecisionLoss`` being false. Caps precision and scale at 38.
   static std::pair<uint8_t, uint8_t> bounded(
@@ -219,6 +245,15 @@ class DecimalUtil {
     return {
         std::min(rPrecision, DecimalType<TypeKind::HUGEINT>::kMaxPrecision),
         std::min(rScale, DecimalType<TypeKind::HUGEINT>::kMaxPrecision)};
+  }
+
+  /// Returns 10^scale as int256_t. The input scale should be in range
+  /// [0, 76].
+  static int256_t getPowersOfTen(int32_t scale) {
+    VELOX_CHECK_GE(scale, 0);
+    VELOX_CHECK_LE(scale, kMaxLargeScale);
+
+    return kLargeScalePowersOfTen[scale];
   }
 
  private:
@@ -241,5 +276,21 @@ class DecimalUtil {
     int32_t numOccupied = sizeof(A) * 8 - bits::countLeadingZeros(valueAbs);
     return numOccupied + kMaxBitsRequiredIncreaseAfterScaling[aRescale];
   }
+
+  static constexpr int32_t kMaxLargeScale = 2 * LongDecimalType::kMaxPrecision;
+
+  // Pre-compute the powers of ten for large scales. The maximum scale is
+  // 2 * LongDecimalType::kMaxPrecision, which is 76. The
+  // DecimalUtil::kPowersOfTen array is not large enough to hold these values.
+  static constexpr std::array<int256_t, kMaxLargeScale + 1>
+      kLargeScalePowersOfTen =
+          ([]() -> std::array<int256_t, kMaxLargeScale + 1> {
+            std::array<int256_t, kMaxLargeScale + 1> values;
+            values[0] = 1;
+            for (int32_t idx = 1; idx <= kMaxLargeScale; idx++) {
+              values[idx] = values[idx - 1] * 10;
+            }
+            return values;
+          })();
 };
 } // namespace facebook::velox::functions::sparksql

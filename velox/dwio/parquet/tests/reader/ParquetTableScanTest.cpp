@@ -48,45 +48,46 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   void assertSelect(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
       std::vector<std::string>&& outputColumnNames,
       const std::string& sql) {
     auto rowType = getRowType(std::move(outputColumnNames));
 
     auto plan = PlanBuilder().tableScan(rowType).planNode();
 
-    assertQuery(plan, splits_, sql);
+    assertQuery(plan, splits, sql);
   }
 
   void assertSelectWithDataColumns(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
       std::vector<std::string>&& outputColumnNames,
       const RowTypePtr& dataColumns,
       const std::string& sql) {
     auto rowType = getRowType(std::move(outputColumnNames));
     auto plan =
         PlanBuilder().tableScan(rowType, {}, "", dataColumns).planNode();
-    assertQuery(plan, splits_, sql);
+    assertQuery(plan, splits, sql);
   }
 
   void assertSelectWithAssignments(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
       std::vector<std::string>&& outputColumnNames,
-      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>&
-          assignments,
+      const connector::ColumnHandleMap& assignments,
       const std::string& sql) {
     auto rowType = getRowType(std::move(outputColumnNames));
     auto plan = PlanBuilder()
                     .tableScan(rowType, {}, "", nullptr, assignments)
                     .planNode();
-    assertQuery(plan, splits_, sql);
+    assertQuery(plan, splits, sql);
   }
 
   void assertSelectWithFilter(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& subfieldFilters,
       const std::string& remainingFilter,
       const std::string& sql,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments = {}) {
+      const connector::ColumnHandleMap& assignments = {}) {
     auto rowType = getRowType(std::move(outputColumnNames));
     parse::ParseOptions options;
     options.parseDecimalAsDouble = false;
@@ -103,11 +104,12 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
             kHiveConnectorId,
             HiveConfig::kReadTimestampUnitSession,
             std::to_string(static_cast<int>(timestampPrecision_)))
-        .splits(splits_)
+        .splits(splits)
         .assertResults(sql);
   }
 
   void assertSelectWithAgg(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& groupingKeys,
@@ -119,10 +121,11 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
                     .singleAggregation(groupingKeys, aggregates)
                     .planNode();
 
-    assertQuery(plan, splits_, sql);
+    assertQuery(plan, splits, sql);
   }
 
   void assertSelectWithFilterAndAgg(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& filters,
       const std::vector<std::string>& aggregates,
@@ -135,18 +138,19 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
                     .singleAggregation(groupingKeys, aggregates)
                     .planNode();
 
-    assertQuery(plan, splits_, sql);
+    assertQuery(plan, splits, sql);
   }
 
   void assertSelectWithTimezone(
+      std::vector<std::shared_ptr<connector::ConnectorSplit>> connectorSplits,
       std::vector<std::string>&& outputColumnNames,
       const std::string& sql,
       const std::string& sessionTimezone) {
     auto rowType = getRowType(std::move(outputColumnNames));
     auto plan = PlanBuilder().tableScan(rowType).planNode();
     std::vector<exec::Split> splits;
-    splits.reserve(splits_.size());
-    for (const auto& connectorSplit : splits_) {
+    splits.reserve(connectorSplits.size());
+    for (const auto& connectorSplit : connectorSplits) {
       splits.emplace_back(folly::copy(connectorSplit), -1);
     }
 
@@ -156,22 +160,12 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
         .assertResults(sql);
   }
 
-  void loadData(
-      const std::string& filePath,
-      RowTypePtr rowType,
-      RowVectorPtr data,
-      const std::optional<
-          std::unordered_map<std::string, std::optional<std::string>>>&
-          partitionKeys = std::nullopt,
-      const std::optional<std::unordered_map<std::string, std::string>>&
-          infoColumns = std::nullopt) {
-    splits_ = {makeSplit(filePath, partitionKeys, infoColumns)};
+  void loadData(RowTypePtr rowType, RowVectorPtr data) {
     rowType_ = rowType;
     createDuckDbTable({data});
   }
 
   void loadDataWithRowType(const std::string& filePath, RowVectorPtr data) {
-    splits_ = {makeSplit(filePath)};
     auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
     dwio::common::ReaderOptions readerOpts{pool.get()};
     auto reader = std::make_unique<ParquetReader>(
@@ -265,35 +259,42 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     auto schema = asRowType(vector->type());
     auto file = TempFilePath::create();
     writeToParquetFile(file->getPath(), {vector}, options);
-    loadData(file->getPath(), schema, vector);
+    loadData(schema, vector);
 
-    assertSelectWithFilter({"t"}, {}, "", "SELECT t from tmp");
     assertSelectWithFilter(
+        {makeSplit(file->getPath())}, {"t"}, {}, "", "SELECT t from tmp");
+    assertSelectWithFilter(
+        {makeSplit(file->getPath())},
         {"t"},
         {},
         "t < TIMESTAMP '2000-09-12 22:36:29'",
         "SELECT t from tmp where t < TIMESTAMP '2000-09-12 22:36:29'");
     assertSelectWithFilter(
+        {makeSplit(file->getPath())},
         {"t"},
         {},
         "t <= TIMESTAMP '2000-09-12 22:36:29'",
         "SELECT t from tmp where t <= TIMESTAMP '2000-09-12 22:36:29'");
     assertSelectWithFilter(
+        {makeSplit(file->getPath())},
         {"t"},
         {},
         "t > TIMESTAMP '1980-01-24 00:23:07'",
         "SELECT t from tmp where t > TIMESTAMP '1980-01-24 00:23:07'");
     assertSelectWithFilter(
+        {makeSplit(file->getPath())},
         {"t"},
         {},
         "t >= TIMESTAMP '1980-01-24 00:23:07'",
         "SELECT t from tmp where t >= TIMESTAMP '1980-01-24 00:23:07'");
     assertSelectWithFilter(
+        {makeSplit(file->getPath())},
         {"t"},
         {},
         "t == TIMESTAMP '2022-12-23 03:56:01'",
         "SELECT t from tmp where t == TIMESTAMP '2022-12-23 03:56:01'");
     assertSelectWithFilter(
+        {makeSplit(file->getPath())},
         {"t"},
         {},
         "not(eq(t, TIMESTAMP '2000-09-12 22:36:29'))",
@@ -311,13 +312,11 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   RowTypePtr rowType_;
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits_;
   TimestampPrecision timestampPrecision_ = TimestampPrecision::kMicroseconds;
 };
 
 TEST_F(ParquetTableScanTest, basic) {
   loadData(
-      getExampleFilePath("sample.parquet"),
       ROW({"a", "b"}, {BIGINT(), DOUBLE()}),
       makeRowVector(
           {"a", "b"},
@@ -327,64 +326,111 @@ TEST_F(ParquetTableScanTest, basic) {
           }));
 
   // Plain select.
-  assertSelect({"a"}, "SELECT a FROM tmp");
-  assertSelect({"b"}, "SELECT b FROM tmp");
-  assertSelect({"a", "b"}, "SELECT a, b FROM tmp");
-  assertSelect({"b", "a"}, "SELECT b, a FROM tmp");
+  const auto filePath = getExampleFilePath("sample.parquet");
+  assertSelect({makeSplit(filePath)}, {"a"}, "SELECT a FROM tmp");
+  assertSelect({makeSplit(filePath)}, {"b"}, "SELECT b FROM tmp");
+  assertSelect({makeSplit(filePath)}, {"a", "b"}, "SELECT a, b FROM tmp");
+  assertSelect({makeSplit(filePath)}, {"b", "a"}, "SELECT b, a FROM tmp");
 
   // With filters.
-  assertSelectWithFilter({"a"}, {"a < 3"}, "", "SELECT a FROM tmp WHERE a < 3");
   assertSelectWithFilter(
-      {"a", "b"}, {"a < 3"}, "", "SELECT a, b FROM tmp WHERE a < 3");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a < 3"},
+      "",
+      "SELECT a FROM tmp WHERE a < 3");
   assertSelectWithFilter(
-      {"b", "a"}, {"a < 3"}, "", "SELECT b, a FROM tmp WHERE a < 3");
+      {makeSplit(filePath)},
+      {"a", "b"},
+      {"a < 3"},
+      "",
+      "SELECT a, b FROM tmp WHERE a < 3");
   assertSelectWithFilter(
-      {"a", "b"}, {"a < 0"}, "", "SELECT a, b FROM tmp WHERE a < 0");
+      {makeSplit(filePath)},
+      {"b", "a"},
+      {"a < 3"},
+      "",
+      "SELECT b, a FROM tmp WHERE a < 3");
+  assertSelectWithFilter(
+      {makeSplit(filePath)},
+      {"a", "b"},
+      {"a < 0"},
+      "",
+      "SELECT a, b FROM tmp WHERE a < 0");
 
   assertSelectWithFilter(
-      {"b"}, {"b < DOUBLE '2.0'"}, "", "SELECT b FROM tmp WHERE b < 2.0");
+      {makeSplit(filePath)},
+      {"b"},
+      {"b < DOUBLE '2.0'"},
+      "",
+      "SELECT b FROM tmp WHERE b < 2.0");
   assertSelectWithFilter(
+      {makeSplit(filePath)},
       {"a", "b"},
       {"b >= DOUBLE '2.0'"},
       "",
       "SELECT a, b FROM tmp WHERE b >= 2.0");
   assertSelectWithFilter(
+      {makeSplit(filePath)},
       {"b", "a"},
       {"b <= DOUBLE '2.0'"},
       "",
       "SELECT b, a FROM tmp WHERE b <= 2.0");
   assertSelectWithFilter(
+      {makeSplit(filePath)},
       {"a", "b"},
       {"b < DOUBLE '0.0'"},
       "",
       "SELECT a, b FROM tmp WHERE b < 0.0");
 
   // With aggregations.
-  assertSelectWithAgg({"a"}, {"sum(a)"}, {}, "SELECT sum(a) FROM tmp");
-  assertSelectWithAgg({"b"}, {"max(b)"}, {}, "SELECT max(b) FROM tmp");
   assertSelectWithAgg(
-      {"a", "b"}, {"min(a)", "max(b)"}, {}, "SELECT min(a), max(b) FROM tmp");
+      {makeSplit(filePath)}, {"a"}, {"sum(a)"}, {}, "SELECT sum(a) FROM tmp");
   assertSelectWithAgg(
-      {"b", "a"}, {"max(b)"}, {"a"}, "SELECT max(b), a FROM tmp GROUP BY a");
+      {makeSplit(filePath)}, {"b"}, {"max(b)"}, {}, "SELECT max(b) FROM tmp");
   assertSelectWithAgg(
-      {"a", "b"}, {"max(a)"}, {"b"}, "SELECT max(a), b FROM tmp GROUP BY b");
+      {makeSplit(filePath)},
+      {"a", "b"},
+      {"min(a)", "max(b)"},
+      {},
+      "SELECT min(a), max(b) FROM tmp");
+  assertSelectWithAgg(
+      {makeSplit(filePath)},
+      {"b", "a"},
+      {"max(b)"},
+      {"a"},
+      "SELECT max(b), a FROM tmp GROUP BY a");
+  assertSelectWithAgg(
+      {makeSplit(filePath)},
+      {"a", "b"},
+      {"max(a)"},
+      {"b"},
+      "SELECT max(a), b FROM tmp GROUP BY b");
 
   // With filter and aggregation.
   assertSelectWithFilterAndAgg(
-      {"a"}, {"a < 3"}, {"sum(a)"}, {}, "SELECT sum(a) FROM tmp WHERE a < 3");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a < 3"},
+      {"sum(a)"},
+      {},
+      "SELECT sum(a) FROM tmp WHERE a < 3");
   assertSelectWithFilterAndAgg(
+      {makeSplit(filePath)},
       {"a", "b"},
       {"a < 3"},
       {"sum(b)"},
       {},
       "SELECT sum(b) FROM tmp WHERE a < 3");
   assertSelectWithFilterAndAgg(
+      {makeSplit(filePath)},
       {"a", "b"},
       {"a < 3"},
       {"min(a)", "max(b)"},
       {},
       "SELECT min(a), max(b) FROM tmp WHERE a < 3");
   assertSelectWithFilterAndAgg(
+      {makeSplit(filePath)},
       {"b", "a"},
       {"a < 3"},
       {"max(b)"},
@@ -431,6 +477,39 @@ TEST_F(ParquetTableScanTest, aggregatePushdown) {
   assertEqualVectors(rows->childAt(1), valuesVector);
 }
 
+TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
+  const std::vector<std::string> columnNames = {"a", "b", "c"};
+  const auto expectedRowVector = makeRowVector(
+      {makeFlatVector<int16_t>({1, 2, 4}),
+       makeFlatVector<int64_t>({7, 9, 13})});
+  const auto outputType = ROW(columnNames, {SMALLINT(), SMALLINT(), VARCHAR()});
+  std::vector<RowVectorPtr> data;
+  for (auto row = 0; row < 10; ++row) {
+    data.emplace_back(makeRowVector(
+        columnNames,
+        {
+            makeFlatVector<int16_t>({static_cast<int16_t>(row % 5)}),
+            makeFlatVector<int16_t>({static_cast<int16_t>(row)}),
+            makeFlatVector<std::string>({std::to_string(row)}),
+        }));
+  }
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  options.dataPageSize = 1;
+  writeToParquetFile(filePath->getPath(), data, options);
+  const auto plan =
+      PlanBuilder(pool())
+          .tableScan(
+              outputType,
+              {},
+              "c <> '' AND a in (1::smallint, 2::smallint, 4::smallint)")
+          .singleAggregation({"a"}, {"sum(b) as s"})
+          .planNode();
+  AssertQueryBuilder(plan)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(expectedRowVector);
+}
+
 TEST_F(ParquetTableScanTest, countStar) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
   // 20 rows.
@@ -455,7 +534,6 @@ TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
   std::vector<int64_t> unscaledShortValues(20);
   std::iota(unscaledShortValues.begin(), unscaledShortValues.end(), 10001);
   loadData(
-      getExampleFilePath("decimal.parquet"),
       ROW({"a"}, {DECIMAL(5, 2)}),
       makeRowVector(
           {"a"},
@@ -463,17 +541,39 @@ TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
               makeFlatVector(unscaledShortValues, DECIMAL(5, 2)),
           }));
 
+  const auto filePath = getExampleFilePath("decimal.parquet");
   assertSelectWithFilter(
-      {"a"}, {"a < 100.07"}, "", "SELECT a FROM tmp WHERE a < 100.07");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a < 100.07"},
+      "",
+      "SELECT a FROM tmp WHERE a < 100.07");
   assertSelectWithFilter(
-      {"a"}, {"a <= 100.07"}, "", "SELECT a FROM tmp WHERE a <= 100.07");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a <= 100.07"},
+      "",
+      "SELECT a FROM tmp WHERE a <= 100.07");
   assertSelectWithFilter(
-      {"a"}, {"a > 100.07"}, "", "SELECT a FROM tmp WHERE a > 100.07");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a > 100.07"},
+      "",
+      "SELECT a FROM tmp WHERE a > 100.07");
   assertSelectWithFilter(
-      {"a"}, {"a >= 100.07"}, "", "SELECT a FROM tmp WHERE a >= 100.07");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a >= 100.07"},
+      "",
+      "SELECT a FROM tmp WHERE a >= 100.07");
   assertSelectWithFilter(
-      {"a"}, {"a = 100.07"}, "", "SELECT a FROM tmp WHERE a = 100.07");
+      {makeSplit(filePath)},
+      {"a"},
+      {"a = 100.07"},
+      "",
+      "SELECT a FROM tmp WHERE a = 100.07");
   assertSelectWithFilter(
+      {makeSplit(filePath)},
       {"a"},
       {"a BETWEEN 100.07 AND 100.12"},
       "",
@@ -481,11 +581,19 @@ TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
 
   VELOX_ASSERT_THROW(
       assertSelectWithFilter(
-          {"a"}, {"a < 1000.7"}, "", "SELECT a FROM tmp WHERE a < 1000.7"),
+          {makeSplit(filePath)},
+          {"a"},
+          {"a < 1000.7"},
+          "",
+          "SELECT a FROM tmp WHERE a < 1000.7"),
       "Scalar function signature is not supported: lt(DECIMAL(5, 2), DECIMAL(5, 1))");
   VELOX_ASSERT_THROW(
       assertSelectWithFilter(
-          {"a"}, {"a = 1000.7"}, "", "SELECT a FROM tmp WHERE a = 1000.7"),
+          {makeSplit(filePath)},
+          {"a"},
+          {"a = 1000.7"},
+          "",
+          "SELECT a FROM tmp WHERE a = 1000.7"),
       "Scalar function signature is not supported: eq(DECIMAL(5, 2), DECIMAL(5, 1))");
 }
 
@@ -493,7 +601,6 @@ TEST_F(ParquetTableScanTest, map) {
   auto vector = makeMapVector<StringView, StringView>({{{"name", "gluten"}}});
 
   loadData(
-      getExampleFilePath("types.parquet"),
       ROW({"map"}, {MAP(VARCHAR(), VARCHAR())}),
       makeRowVector(
           {"map"},
@@ -501,40 +608,50 @@ TEST_F(ParquetTableScanTest, map) {
               vector,
           }));
 
-  assertSelectWithFilter({"map"}, {}, "", "SELECT map FROM tmp");
+  assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("types.parquet"))},
+      {"map"},
+      {},
+      "",
+      "SELECT map FROM tmp");
 }
 
 TEST_F(ParquetTableScanTest, nullMap) {
-  auto path = getExampleFilePath("null_map.parquet");
   loadData(
-      path,
       ROW({"i", "c"}, {VARCHAR(), MAP(VARCHAR(), VARCHAR())}),
       makeRowVector(
           {"i", "c"},
           {makeConstant<std::string>("1", 1),
            makeNullableMapVector<std::string, std::string>({std::nullopt})}));
 
-  assertSelectWithFilter({"i", "c"}, {}, "", "SELECT i, c FROM tmp");
+  assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("null_map.parquet"))},
+      {"i", "c"},
+      {},
+      "",
+      "SELECT i, c FROM tmp");
 }
 
 TEST_F(ParquetTableScanTest, singleRowStruct) {
   auto vector = makeArrayVector<int32_t>({{}});
   loadData(
-      getExampleFilePath("single_row_struct.parquet"),
       ROW({"s"}, {ROW({"a", "b"}, {BIGINT(), BIGINT()})}),
       makeRowVector(
           {"s"},
           {
               vector,
           }));
-
-  assertSelectWithFilter({"s"}, {}, "", "SELECT (0, 1)");
+  assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("single_row_struct.parquet"))},
+      {"s"},
+      {},
+      "",
+      "SELECT (0, 1)");
 }
 
 TEST_F(ParquetTableScanTest, array) {
   auto vector = makeArrayVector<int32_t>({});
   loadData(
-      getExampleFilePath("old_repeated_int.parquet"),
       ROW({"repeatedInt"}, {ARRAY(INTEGER())}),
       makeRowVector(
           {"repeatedInt"},
@@ -542,8 +659,79 @@ TEST_F(ParquetTableScanTest, array) {
               vector,
           }));
 
+  const auto filePath = getExampleFilePath("old_repeated_int.parquet");
   assertSelectWithFilter(
-      {"repeatedInt"}, {}, "", "SELECT UNNEST(array[array[1,2,3]])");
+      {makeSplit(filePath)}, {"repeatedInt"}, {}, "", "SELECT [1,2,3]");
+
+  // Set the requested type for unannotated array.
+  auto rowType = ROW({"repeatedInt"}, {ARRAY(INTEGER())});
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .splits({makeSplit(filePath)})
+      .assertResults("SELECT [1,2,3]");
+
+  // Throws when reading repeated values as scalar type.
+  rowType = ROW({"repeatedInt"}, {INTEGER()});
+  plan = PlanBuilder(pool_.get())
+             .tableScan(rowType, {}, "", rowType, {})
+             .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .splits({makeSplit(filePath)})
+          .assertResults(""),
+      "Requested type must be array");
+
+  rowType = ROW({"mystring"}, {ARRAY(VARCHAR())});
+  plan = PlanBuilder(pool_.get())
+             .tableScan(rowType, {}, "", rowType, {})
+             .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .splits({makeSplit(getExampleFilePath("proto_repeated_string.parquet"))})
+      .assertResults(
+          "SELECT UNNEST(array[array['hello', 'world'], array['good','bye'], array['one', 'two', 'three']])");
+
+  rowType =
+      ROW({"primitive", "myComplex"},
+          {INTEGER(),
+           ARRAY(
+               ROW({"id", "repeatedMessage"},
+                   {INTEGER(), ARRAY(ROW({"someId"}, {INTEGER()}))}))});
+  plan = PlanBuilder(pool_.get())
+             .tableScan(rowType, {}, "", rowType, {})
+             .planNode();
+
+  // Construct the expected vector.
+  auto someIdVector = makeArrayOfRowVector(
+      ROW({"someId"}, {INTEGER()}),
+      {
+          {variant::row({3})},
+          {variant::row({6})},
+          {variant::row({9})},
+      });
+  auto rowVector = makeRowVector(
+      {"id", "repeatedMessage"},
+      {
+          makeFlatVector<int32_t>({1, 4, 7}),
+          someIdVector,
+      });
+  auto expected = makeRowVector(
+      {"primitive", "myComplex"},
+      {
+          makeFlatVector<int32_t>({2, 5, 8}),
+          makeArrayVector({0, 1, 2}, rowVector),
+      });
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::kParquetUseColumnNamesSession,
+          "true")
+      .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
+      .assertResults(expected);
 }
 
 // Optional array with required elements.
@@ -551,7 +739,6 @@ TEST_F(ParquetTableScanTest, optArrayReqEle) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(
-      getExampleFilePath("array_0.parquet"),
       ROW({"_1"}, {ARRAY(VARCHAR())}),
       makeRowVector(
           {"_1"},
@@ -560,6 +747,7 @@ TEST_F(ParquetTableScanTest, optArrayReqEle) {
           }));
 
   assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("array_0.parquet"))},
       {"_1"},
       {},
       "",
@@ -571,7 +759,6 @@ TEST_F(ParquetTableScanTest, reqArrayReqEle) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(
-      getExampleFilePath("array_1.parquet"),
       ROW({"_1"}, {ARRAY(VARCHAR())}),
       makeRowVector(
           {"_1"},
@@ -580,6 +767,7 @@ TEST_F(ParquetTableScanTest, reqArrayReqEle) {
           }));
 
   assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("array_1.parquet"))},
       {"_1"},
       {},
       "",
@@ -591,7 +779,6 @@ TEST_F(ParquetTableScanTest, reqArrayOptEle) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(
-      getExampleFilePath("array_2.parquet"),
       ROW({"_1"}, {ARRAY(VARCHAR())}),
       makeRowVector(
           {"_1"},
@@ -600,6 +787,7 @@ TEST_F(ParquetTableScanTest, reqArrayOptEle) {
           }));
 
   assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("array_2.parquet"))},
       {"_1"},
       {},
       "",
@@ -618,6 +806,7 @@ TEST_F(ParquetTableScanTest, arrayOfArrayTest) {
           }));
 
   assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("array_of_array1.parquet"))},
       {"_1"},
       {},
       "",
@@ -629,7 +818,6 @@ TEST_F(ParquetTableScanTest, reqArrayLegacy) {
   auto vector = makeArrayVector<StringView>({});
 
   loadData(
-      getExampleFilePath("array_3.parquet"),
       ROW({"element"}, {ARRAY(VARCHAR())}),
       makeRowVector(
           {"element"},
@@ -638,6 +826,7 @@ TEST_F(ParquetTableScanTest, reqArrayLegacy) {
           }));
 
   assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("array_3.parquet"))},
       {"element"},
       {},
       "",
@@ -646,7 +835,6 @@ TEST_F(ParquetTableScanTest, reqArrayLegacy) {
 
 TEST_F(ParquetTableScanTest, filterOnNestedArray) {
   loadData(
-      getExampleFilePath("struct_of_array.parquet"),
       ROW({"struct"},
           {ROW({"a0", "a1"}, {ARRAY(VARCHAR()), ARRAY(INTEGER())})}),
       makeRowVector(
@@ -656,7 +844,11 @@ TEST_F(ParquetTableScanTest, filterOnNestedArray) {
           }));
 
   assertSelectWithFilter(
-      {"struct"}, {}, "struct.a0 is null", "SELECT ROW(NULL, NULL)");
+      {makeSplit(getExampleFilePath("struct_of_array.parquet"))},
+      {"struct"},
+      {},
+      "struct.a0 is null",
+      "SELECT ROW(NULL, NULL)");
 }
 
 TEST_F(ParquetTableScanTest, readAsLowerCase) {
@@ -672,14 +864,13 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
   createDuckDbTable(vectors);
 
   auto plan = PlanBuilder().tableScan(ROW({"a"}, {BIGINT()})).planNode();
-  auto split = makeSplit(filePath->getPath());
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
           kHiveConnectorId,
           connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
           "true")
-      .split(split)
+      .split(makeSplit(filePath->getPath()))
       .assertResults("SELECT A FROM tmp");
 
   // Test reading table with non-ascii names.
@@ -700,14 +891,13 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
                  ROW({"товары", "国ⅵ", "\uFF41", "\uFF42"},
                      {BIGINT(), DOUBLE(), REAL(), INTEGER()}))
              .planNode();
-  split = makeSplit(filePath->getPath());
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
           kHiveConnectorId,
           connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
           "true")
-      .split(split)
+      .split(makeSplit(filePath->getPath()))
       .assertResults("SELECT * FROM tmp");
 }
 
@@ -716,7 +906,6 @@ TEST_F(ParquetTableScanTest, rowIndex) {
   // case 1: file not have `_tmp_metadata_row_index`, scan generate it for user.
   auto filePath = getExampleFilePath("sample.parquet");
   loadData(
-      filePath,
       ROW({"a", "b", "_tmp_metadata_row_index", kPath},
           {BIGINT(), DOUBLE(), BIGINT(), VARCHAR()}),
       makeRowVector(
@@ -727,11 +916,8 @@ TEST_F(ParquetTableScanTest, rowIndex) {
               makeFlatVector<int64_t>(20, [](auto row) { return row; }),
               makeFlatVector<std::string>(
                   20, [filePath](auto row) { return filePath; }),
-          }),
-      std::nullopt,
-      std::unordered_map<std::string, std::string>{{kPath, filePath}});
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments;
+          }));
+  connector::ColumnHandleMap assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "a",
       connector::hive::HiveColumnHandle::ColumnType::kRegular,
@@ -750,20 +936,42 @@ TEST_F(ParquetTableScanTest, rowIndex) {
           BIGINT(),
           BIGINT());
 
-  assertSelect({"a"}, "SELECT a FROM tmp");
+  assertSelect(
+      {makeSplit(
+          filePath,
+          std::nullopt,
+          std::unordered_map<std::string, std::string>{{kPath, filePath}})},
+      {"a"},
+      "SELECT a FROM tmp");
   assertSelectWithAssignments(
+      {makeSplit(
+          filePath,
+          std::nullopt,
+          std::unordered_map<std::string, std::string>{{kPath, filePath}})},
       {"a", "_tmp_metadata_row_index"},
       assignments,
       "SELECT a, _tmp_metadata_row_index FROM tmp");
   assertSelectWithAssignments(
+      {makeSplit(
+          filePath,
+          std::nullopt,
+          std::unordered_map<std::string, std::string>{{kPath, filePath}})},
       {"_tmp_metadata_row_index", "a"},
       assignments,
       "SELECT _tmp_metadata_row_index, a FROM tmp");
   assertSelectWithAssignments(
+      {makeSplit(
+          filePath,
+          std::nullopt,
+          std::unordered_map<std::string, std::string>{{kPath, filePath}})},
       {"_tmp_metadata_row_index"},
       assignments,
       "SELECT _tmp_metadata_row_index FROM tmp");
   assertSelectWithAssignments(
+      {makeSplit(
+          filePath,
+          std::nullopt,
+          std::unordered_map<std::string, std::string>{{kPath, filePath}})},
       {kPath, "_tmp_metadata_row_index"},
       assignments,
       fmt::format("SELECT {}, _tmp_metadata_row_index FROM tmp", kPath));
@@ -771,7 +979,6 @@ TEST_F(ParquetTableScanTest, rowIndex) {
   // case 2: file has `_tmp_metadata_row_index` column, then use user data
   // insteads of generating it.
   loadData(
-      getExampleFilePath("sample_with_rowindex.parquet"),
       ROW({"a", "b", "_tmp_metadata_row_index"},
           {BIGINT(), DOUBLE(), BIGINT()}),
       makeRowVector(
@@ -782,8 +989,10 @@ TEST_F(ParquetTableScanTest, rowIndex) {
               makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
           }));
 
-  assertSelect({"a"}, "SELECT a FROM tmp");
+  filePath = getExampleFilePath("sample_with_rowindex.parquet");
+  assertSelect({makeSplit(filePath)}, {"a"}, "SELECT a FROM tmp");
   assertSelect(
+      {makeSplit(filePath)},
       {"a", "_tmp_metadata_row_index"},
       "SELECT a, _tmp_metadata_row_index FROM tmp");
 }
@@ -803,16 +1012,13 @@ TEST_F(ParquetTableScanTest, rowIndex) {
 // VALUES (1, 1), (2, null),(3, null);
 TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
   loadData(
-      getExampleFilePath("icebergNullIcebergPartition.parquet"),
       ROW({"c0", "c1"}, {BIGINT(), BIGINT()}),
       makeRowVector(
           {"c0", "c1"},
           {
               makeFlatVector<int64_t>(std::vector<int64_t>{2, 3}),
               makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
-          }),
-      std::unordered_map<std::string, std::optional<std::string>>{
-          {"c1", std::nullopt}});
+          }));
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
       "c0", BIGINT(), BIGINT(), {}, HiveColumnHandle::ColumnType::kRegular);
@@ -823,21 +1029,29 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
       {},
       HiveColumnHandle::ColumnType::kPartitionKey);
 
+  const auto filePath =
+      getExampleFilePath("icebergNullIcebergPartition.parquet");
   assertSelectWithFilter(
+      {makeSplit(
+          filePath,
+          std::unordered_map<std::string, std::optional<std::string>>{
+              {"c1", std::nullopt}})},
       {"c0", "c1"},
       {"c1 IS NOT NULL"},
       "",
       "SELECT c0, c1 FROM tmp WHERE c1 IS NOT NULL",
-      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>{
-          {"c0", c0}, {"c1", c1}});
+      connector::ColumnHandleMap{{"c0", c0}, {"c1", c1}});
 
   assertSelectWithFilter(
+      {makeSplit(
+          filePath,
+          std::unordered_map<std::string, std::optional<std::string>>{
+              {"c1", std::nullopt}})},
       {"c0", "c1"},
       {"c1 IS NULL"},
       "",
       "SELECT c0, c1 FROM tmp WHERE c1 IS NULL",
-      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>{
-          {"c0", c0}, {"c1", c1}});
+      connector::ColumnHandleMap{{"c0", c0}, {"c1", c1}});
 }
 
 TEST_F(ParquetTableScanTest, sessionTimezone) {
@@ -850,7 +1064,6 @@ TEST_F(ParquetTableScanTest, sessionTimezone) {
   // Read sample.parquet to verify if the sessionTimezone in the PageReader
   // meets expectations.
   loadData(
-      getExampleFilePath("sample.parquet"),
       ROW({"a", "b"}, {BIGINT(), DOUBLE()}),
       makeRowVector(
           {"a", "b"},
@@ -859,7 +1072,11 @@ TEST_F(ParquetTableScanTest, sessionTimezone) {
               makeFlatVector<double>(20, [](auto row) { return row + 1; }),
           }));
 
-  assertSelectWithTimezone({"a"}, "SELECT a FROM tmp", "Asia/Shanghai");
+  assertSelectWithTimezone(
+      {makeSplit(getExampleFilePath("sample.parquet"))},
+      {"a"},
+      "SELECT a FROM tmp",
+      "Asia/Shanghai");
 }
 
 TEST_F(ParquetTableScanTest, timestampInt64Dictionary) {
@@ -919,10 +1136,14 @@ TEST_F(ParquetTableScanTest, timestampConvertedType) {
           makeFlatVector<Timestamp>(values),
       });
   const auto schema = asRowType(vector->type());
-  const auto path = getExampleFilePath("tmmillis_i64.parquet");
-  loadData(path, schema, vector);
+  loadData(schema, vector);
 
-  assertSelectWithFilter({"time"}, {}, "", "SELECT time from tmp");
+  assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("tmmillis_i64.parquet"))},
+      {"time"},
+      {},
+      "",
+      "SELECT time from tmp");
 }
 
 TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
@@ -969,7 +1190,6 @@ TEST_F(ParquetTableScanTest, testColumnNotExists) {
   //  optional double b;
   // }
   loadData(
-      getExampleFilePath("sample.parquet"),
       rowType,
       makeRowVector(
           {"a", "b"},
@@ -979,6 +1199,7 @@ TEST_F(ParquetTableScanTest, testColumnNotExists) {
           }));
 
   assertSelectWithDataColumns(
+      {makeSplit(getExampleFilePath("sample.parquet"))},
       {"a", "b", "not_exists", "not_exists_array", "not_exists_map"},
       rowType,
       "SELECT a, b, NULL, NULL, NULL FROM tmp");
@@ -1028,8 +1249,8 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
           .project({"p1", "m1[0].aa1", "m1[1].bb1", "a1[1].aa1", "a1[2].bb1"})
           .planNode();
 
-  auto split = makeSplit(filePath);
-  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  auto result =
+      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
 
   ASSERT_EQ(result->size(), kSize);
   auto rows = result->as<RowVector>();
@@ -1055,7 +1276,7 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
                    kHiveConnectorId,
                    connector::hive::HiveConfig::kParquetUseColumnNamesSession,
                    "true")
-               .split(split)
+               .split(makeSplit(filePath))
                .copyResults(pool());
   rows = result->as<RowVector>();
   // check for rest of the selected columns
@@ -1095,8 +1316,8 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
                 .endTableScan()
                 .planNode();
 
-  auto split = makeSplit(filePath);
-  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  auto result =
+      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
   auto rows = result->as<RowVector>();
 
   assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
@@ -1112,7 +1333,7 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
            .endTableScan()
            .planNode();
   EXPECT_THROW(
-      AssertQueryBuilder(op).split(split).copyResults(pool()),
+      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool()),
       VeloxRuntimeError);
 
   // Now run query with column mapping using names, now c2 columns will match in
@@ -1129,7 +1350,7 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
                    kHiveConnectorId,
                    connector::hive::HiveConfig::kParquetUseColumnNamesSession,
                    "true")
-               .split(split)
+               .split(makeSplit(filePath))
                .copyResults(pool());
 
   rows = result->as<RowVector>();
@@ -1149,7 +1370,7 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
            .planNode();
 
   EXPECT_THROW(
-      AssertQueryBuilder(op).split(split).copyResults(pool()),
+      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool()),
       VeloxRuntimeError);
 
   // Schema evolution remove column.
@@ -1162,7 +1383,8 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
            .project({"c1"})
            .planNode();
 
-  result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  result =
+      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
   rows = result->as<RowVector>();
   assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
 
@@ -1176,7 +1398,8 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
            .project({"c1", "c2", "c3"})
            .planNode();
 
-  result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  result =
+      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
   rows = result->as<RowVector>();
   assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
   assertEqualVectors(rows->childAt(1), dataFileVectors->childAt(1));
@@ -1189,17 +1412,17 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
   createDuckDbTable("expected", {expected});
 
   auto vector = makeFlatVector<StringView>({{}});
-  loadData(
-      getExampleFilePath("delta_byte_array.parquet"),
-      ROW({"a"}, {VARCHAR()}),
-      makeRowVector({"a"}, {vector}));
-  assertSelect({"a"}, "SELECT a from expected");
+  loadData(ROW({"a"}, {VARCHAR()}), makeRowVector({"a"}, {vector}));
+  assertSelect(
+      {makeSplit(getExampleFilePath("delta_byte_array.parquet"))},
+      {"a"},
+      "SELECT a from expected");
 }
 
 TEST_F(ParquetTableScanTest, booleanRle) {
   WriterOptions options;
   options.enableDictionary = false;
-  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
 
   auto allTrue = [](vector_size_t row) -> bool { return true; };
@@ -1224,7 +1447,7 @@ TEST_F(ParquetTableScanTest, booleanRle) {
   auto schema = asRowType(vector->type());
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
-  loadData(file->getPath(), schema, vector);
+  loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
       "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
@@ -1237,17 +1460,17 @@ TEST_F(ParquetTableScanTest, booleanRle) {
   std::shared_ptr<connector::ColumnHandle> c4 = makeColumnHandle(
       "c4", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
 
-  assertSelect({"c0"}, "SELECT c0 FROM tmp");
-  assertSelect({"c1"}, "SELECT c1 FROM tmp");
-  assertSelect({"c2"}, "SELECT c2 FROM tmp");
-  assertSelect({"c3"}, "SELECT c3 FROM tmp");
-  assertSelect({"c4"}, "SELECT c4 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c2"}, "SELECT c2 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c3"}, "SELECT c3 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c4"}, "SELECT c4 FROM tmp");
 }
 
 TEST_F(ParquetTableScanTest, singleBooleanRle) {
   WriterOptions options;
   options.enableDictionary = false;
-  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
 
   auto vector = makeRowVector(
@@ -1260,7 +1483,7 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
   auto schema = asRowType(vector->type());
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
-  loadData(file->getPath(), schema, vector);
+  loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
       "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
@@ -1269,9 +1492,9 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
       "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
 
-  assertSelect({"c0"}, "SELECT c0 FROM tmp");
-  assertSelect({"c1"}, "SELECT c1 FROM tmp");
-  assertSelect({"c2"}, "SELECT c2 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
+  assertSelect({makeSplit(file->getPath())}, {"c2"}, "SELECT c2 FROM tmp");
 }
 
 TEST_F(ParquetTableScanTest, intToBigintRead) {
@@ -1348,6 +1571,73 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
 
   assertEqualVectors(expectedDecimalVectors->childAt(0), rows->childAt(0));
   assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
+}
+
+TEST_F(ParquetTableScanTest, inFilter) {
+  auto vectors = {makeRowVector(
+      {"name"},
+      {
+          makeNullableFlatVector<std::string>(
+              {"mary", "martin", "lucy", "alex", std::nullopt, "mary", "dan"}),
+      })};
+  auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), vectors, options);
+  createDuckDbTable(vectors);
+
+  // Test in.
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(
+                      ROW({"name"}, {VARCHAR()}),
+                      {"name in ('alex', 'leo', 'mary', null, 'victor')"},
+                      "")
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(
+          "SELECT name FROM tmp where name in ('alex', 'leo', 'mary', null, 'victor')");
+
+  // Test not in.
+  plan = PlanBuilder(pool_.get())
+             .tableScan(
+                 ROW({"name"}, {VARCHAR()}),
+                 {"name not in ('alex', 'leo', 'mary', null, 'victor')"},
+                 "")
+             .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(
+          "SELECT name FROM tmp where name not in ('alex', 'leo', 'mary', null, 'victor')");
+}
+
+TEST_F(ParquetTableScanTest, reusedLazyVectors) {
+  const std::vector<std::string> columnNames = {"a", "b"};
+  std::vector<RowVectorPtr> data;
+  for (auto row = 0; row < 10; ++row) {
+    data.emplace_back(makeRowVector(
+        columnNames,
+        {
+            makeFlatVector<int64_t>({static_cast<int64_t>(row % 5)}),
+            makeFlatVector<int64_t>({static_cast<int64_t>(row)}),
+        }));
+  }
+  const auto expectedRowVector = makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13}),
+       makeFlatVector<int64_t>({5, 7, 9, 11, 13})});
+
+  const auto filePath = TempFilePath::create();
+  WriterOptions options;
+  writeToParquetFile(filePath->getPath(), data, options);
+
+  const auto plan = PlanBuilder()
+                        .tableScan(ROW(columnNames, {BIGINT(), BIGINT()}))
+                        .project({"a as c1", "b as c2", "b as c3"})
+                        .singleAggregation({"c1"}, {"sum(c2)", "sum(c3)"})
+                        .planNode();
+  AssertQueryBuilder(plan)
+      .split(makeSplit(filePath->getPath()))
+      .assertResults(expectedRowVector);
 }
 
 int main(int argc, char** argv) {

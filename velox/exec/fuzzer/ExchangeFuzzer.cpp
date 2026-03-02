@@ -409,9 +409,11 @@ class ExchangeFuzzer : public VectorTestBase {
         LOG(INFO) << "Terminating with error";
         exit(1);
       }
-      LOG(INFO) << "Memory after run="
-                << succinctBytes(memory::AllocationTraits::pageBytes(
-                       memory::memoryManager()->allocator()->numAllocated()));
+      LOG(INFO)
+          << "Memory after run="
+          << succinctBytes(
+                 memory::AllocationTraits::pageBytes(
+                     memory::memoryManager()->allocator()->numAllocated()));
 
       if (FLAGS_duration_sec == 0 && FLAGS_steps &&
           counter + 1 >= FLAGS_steps) {

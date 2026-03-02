@@ -23,32 +23,35 @@
 
 namespace facebook::velox::exec {
 
-#define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)             \
-  [&]() {                                                                \
-    switch (typeKind) {                                                  \
-      case TypeKind::BOOLEAN: {                                          \
-        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::TINYINT: {                                          \
-        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::SMALLINT: {                                         \
-        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);           \
-      }                                                                  \
-      case TypeKind::INTEGER: {                                          \
-        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);            \
-      }                                                                  \
-      case TypeKind::BIGINT: {                                           \
-        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);             \
-      }                                                                  \
-      case TypeKind::VARCHAR:                                            \
-      case TypeKind::VARBINARY: {                                        \
-        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
-      }                                                                  \
-      default:                                                           \
-        VELOX_UNREACHABLE(                                               \
-            "Unsupported value ID type: ", mapTypeKindToName(typeKind)); \
-    }                                                                    \
+#define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
+  [&]() {                                                                   \
+    switch (typeKind) {                                                     \
+      case TypeKind::BOOLEAN: {                                             \
+        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::TINYINT: {                                             \
+        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::SMALLINT: {                                            \
+        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);              \
+      }                                                                     \
+      case TypeKind::INTEGER: {                                             \
+        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::BIGINT: {                                              \
+        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);                \
+      }                                                                     \
+      case TypeKind::VARCHAR:                                               \
+      case TypeKind::VARBINARY: {                                           \
+        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);               \
+      }                                                                     \
+      case TypeKind::TIMESTAMP: {                                           \
+        return TEMPLATE_FUNC<TypeKind::TIMESTAMP>(__VA_ARGS__);             \
+      }                                                                     \
+      default:                                                              \
+        VELOX_UNREACHABLE(                                                  \
+            "Unsupported value ID type: ", TypeKindName::toName(typeKind)); \
+    }                                                                       \
   }()
 
 namespace {
@@ -82,7 +85,6 @@ void VectorHasher::hashValues(
     const SelectivityVector& rows,
     bool mix,
     uint64_t* result) {
-  using T = typename TypeTraits<Kind>::NativeType;
   if (decoded_.isConstantMapping()) {
     auto hash = decoded_.isNullAt(rows.begin())
         ? kNullHash
@@ -349,6 +351,8 @@ bool VectorHasher::makeValueIdsDecoded<bool, false>(
 bool VectorHasher::computeValueIds(
     const SelectivityVector& rows,
     raw_vector<uint64_t>& result) {
+  checkTypeSupportsValueIds();
+
   return VALUE_ID_TYPE_DISPATCH(makeValueIds, typeKind_, rows, result.data());
 }
 
@@ -359,6 +363,8 @@ bool VectorHasher::computeValueIdsForRows(
     int32_t nullByte,
     uint8_t nullMask,
     raw_vector<uint64_t>& result) {
+  checkTypeSupportsValueIds();
+
   return VALUE_ID_TYPE_DISPATCH(
       makeValueIdsForRows,
       typeKind_,
@@ -531,6 +537,8 @@ void VectorHasher::lookupValueIds(
     SelectivityVector& rows,
     ScratchMemory& scratchMemory,
     raw_vector<uint64_t>& result) const {
+  checkTypeSupportsValueIds();
+
   scratchMemory.decoded.decode(values, rows);
   VALUE_ID_TYPE_DISPATCH(
       lookupValueIdsTyped,
@@ -550,7 +558,7 @@ void VectorHasher::hash(
       result[row] = mix ? bits::hashMix(result[row], kNullHash) : kNullHash;
     });
   } else {
-    if (type_->providesCustomComparison()) {
+    if (typeProvidesCustomComparison_) {
       VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
           hashValues, true, typeKind_, rows, mix, result.data());
     } else {
@@ -579,7 +587,7 @@ void VectorHasher::precompute(const BaseVector& value) {
   const SelectivityVector rows(1, true);
   decoded_.decode(value, rows);
 
-  if (type_->providesCustomComparison()) {
+  if (typeProvidesCustomComparison_) {
     precomputedHash_ = VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
         hashOne, true, typeKind_, decoded_, 0);
   } else {
@@ -594,6 +602,8 @@ void VectorHasher::analyze(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask) {
+  checkTypeSupportsValueIds();
+
   VALUE_ID_TYPE_DISPATCH(
       analyzeTyped, typeKind_, groups, numGroups, offset, nullByte, nullMask);
 }
@@ -666,6 +676,10 @@ void VectorHasher::setRangeOverflow() {
 
 std::unique_ptr<common::Filter> VectorHasher::getFilter(
     bool nullAllowed) const {
+  if (typeProvidesCustomComparison_) {
+    return nullptr;
+  }
+
   switch (typeKind_) {
     case TypeKind::TINYINT:
       [[fallthrough]];
@@ -736,6 +750,7 @@ void extendRange(
     case TypeKind::BIGINT:
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
       extendRange<int64_t>(reserve, min, max);
       break;
 
@@ -764,6 +779,12 @@ void VectorHasher::cardinality(
     int32_t reservePct,
     uint64_t& asRange,
     uint64_t& asDistincts) {
+  if (!typeSupportsValueIds()) {
+    asRange = kRangeTooLarge;
+    asDistincts = kRangeTooLarge;
+    return;
+  }
+
   if (typeKind_ == TypeKind::BOOLEAN) {
     hasRange_ = true;
     asRange = 3;
@@ -805,6 +826,8 @@ uint64_t VectorHasher::enableValueIds(uint64_t multiplier, int32_t reservePct) {
       typeKind_,
       TypeKind::BOOLEAN,
       "A boolean VectorHasher should  always be by range");
+  checkTypeSupportsValueIds();
+
   multiplier_ = multiplier;
   rangeSize_ = addIdReserve(uniqueValues_.size(), reservePct) + 1;
   isRange_ = false;
@@ -818,6 +841,8 @@ uint64_t VectorHasher::enableValueIds(uint64_t multiplier, int32_t reservePct) {
 uint64_t VectorHasher::enableValueRange(
     uint64_t multiplier,
     int32_t reservePct) {
+  checkTypeSupportsValueIds();
+
   multiplier_ = multiplier;
   VELOX_CHECK_LE(0, reservePct);
   VELOX_CHECK(hasRange_);
@@ -846,7 +871,7 @@ void VectorHasher::copyStatsFrom(const VectorHasher& other) {
   uniqueValues_ = other.uniqueValues_;
 }
 
-void VectorHasher::merge(const VectorHasher& other) {
+void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
   if (typeKind_ == TypeKind::BOOLEAN) {
     return;
   }
@@ -864,18 +889,25 @@ void VectorHasher::merge(const VectorHasher& other) {
   } else {
     setRangeOverflow();
   }
-  if (!distinctOverflow_ && !other.distinctOverflow_) {
-    // Unique values can be merged without dispatch on type. All the
-    // merged hashers must stay live for string type columns.
-    for (UniqueValue value : other.uniqueValues_) {
-      // Assign a new id at end of range for the case 'value' is not
-      // in 'uniqueValues_'. We do not set overflow here because the
-      // memory is already allocated and there is a known cap on size.
-      value.setId(uniqueValues_.size() + 1);
-      uniqueValues_.insert(value);
-    }
-  } else {
+  if (distinctOverflow_) {
+    return;
+  }
+  if (other.distinctOverflow_) {
     setDistinctOverflow();
+    return;
+  }
+  // Unique values can be merged without dispatch on type. All the
+  // merged hashers must stay live for string type columns.
+  for (UniqueValue value : other.uniqueValues_) {
+    // Assign a new id at end of range for the case 'value' is not
+    // in 'uniqueValues_'. We do not set overflow here because the
+    // memory is already allocated and there is a known cap on size.
+    value.setId(uniqueValues_.size() + 1);
+    if (uniqueValues_.insert(value).second &&
+        uniqueValues_.size() > maxNumDistinct) {
+      setDistinctOverflow();
+      break;
+    }
   }
 }
 

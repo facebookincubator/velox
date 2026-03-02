@@ -15,20 +15,15 @@
  */
 
 #include "velox/expression/RowConstructor.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::exec {
 
 TypePtr RowConstructorCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& argTypes) {
-  auto numInput = argTypes.size();
-  std::vector<std::string> names(numInput);
-  std::vector<TypePtr> types(numInput);
-  for (auto i = 0; i < numInput; i++) {
-    types[i] = argTypes[i];
-    names[i] = fmt::format("c{}", i + 1);
-  }
-  return ROW(std::move(names), std::move(types));
+  std::vector<std::string> names(argTypes.size(), "");
+  return ROW(std::move(names), folly::copy(argTypes));
 }
 
 ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
@@ -40,13 +35,15 @@ ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
       [&config](auto& functionMap) -> std::pair<
                                        std::shared_ptr<VectorFunction>,
                                        VectorFunctionMetadata> {
-        auto functionIterator = functionMap.find(kRowConstructor);
+        auto functionIterator = functionMap.find(expression::kRowConstructor);
         if (functionIterator != functionMap.end()) {
           return {
-              functionIterator->second.factory(kRowConstructor, {}, config),
+              functionIterator->second.factory(
+                  expression::kRowConstructor, {}, config),
               functionIterator->second.metadata};
         } else {
-          VELOX_FAIL("Function {} is not registered.", kRowConstructor);
+          VELOX_FAIL(
+              "Function {} is not registered.", expression::kRowConstructor);
         }
       });
 
@@ -55,7 +52,7 @@ ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren),
       function,
       metadata,
-      kRowConstructor,
+      expression::kRowConstructor,
       trackCpuUsage);
 }
 } // namespace facebook::velox::exec

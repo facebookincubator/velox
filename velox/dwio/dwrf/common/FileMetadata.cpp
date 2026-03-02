@@ -37,6 +37,29 @@ CompressionKind orcCompressionToCompressionKind(
   }
   VELOX_FAIL("Unknown compression kind: {}", CompressionKind_Name(compression));
 }
+
+static proto::orc::CompressionKind compressionKindToOrcCompression(
+    CompressionKind compressionKind) {
+  switch (compressionKind) {
+    case CompressionKind::CompressionKind_NONE:
+      return proto::orc::CompressionKind::NONE;
+    case CompressionKind::CompressionKind_ZLIB:
+      return proto::orc::CompressionKind::ZLIB;
+    case CompressionKind::CompressionKind_SNAPPY:
+      return proto::orc::CompressionKind::SNAPPY;
+    case CompressionKind::CompressionKind_LZO:
+      return proto::orc::CompressionKind::LZO;
+    case CompressionKind::CompressionKind_ZSTD:
+      return proto::orc::CompressionKind::ZSTD;
+    case CompressionKind::CompressionKind_LZ4:
+      return proto::orc::CompressionKind::LZ4;
+    case CompressionKind::CompressionKind_GZIP:
+    default:
+      VELOX_FAIL(
+          "Unknown compression kind: {}",
+          compressionKindToString(compressionKind));
+  }
+}
 } // namespace detail
 
 TypeKind TypeWrapper::kind() const {
@@ -102,9 +125,10 @@ TypeKind TypeWrapper::kind() const {
     }
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
-      VELOX_FAIL(fmt::format(
-          "{} not supported yet.",
-          proto::orc::Type_Kind_Name(orcPtr()->kind())));
+      VELOX_FAIL(
+          fmt::format(
+              "{} not supported yet.",
+              proto::orc::Type_Kind_Name(orcPtr()->kind())));
     default:
       VELOX_FAIL("Unknown type kind: {}", Type_Kind_Name(orcPtr()->kind()));
   }
@@ -114,6 +138,15 @@ common::CompressionKind PostScript::compression() const {
   return format_ == DwrfFormat::kDwrf
       ? static_cast<common::CompressionKind>(dwrfPtr()->compression())
       : detail::orcCompressionToCompressionKind(orcPtr()->compression());
+}
+
+void PostScriptWriteWrapper::setCompression(
+    common::CompressionKind compressionKind) {
+  format_ == DwrfFormat::kDwrf
+      ? dwrfPtr()->set_compression(
+            static_cast<proto::CompressionKind>(compressionKind))
+      : orcPtr()->set_compression(
+            detail::compressionKindToOrcCompression(compressionKind));
 }
 
 } // namespace facebook::velox::dwrf

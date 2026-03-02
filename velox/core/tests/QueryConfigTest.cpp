@@ -33,6 +33,7 @@ TEST_F(QueryConfigTest, emptyConfig) {
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_FALSE(config.isLegacyCast());
+  EXPECT_EQ(config.maxNumSplitsListenedTo(), 0);
 }
 
 TEST_F(QueryConfigTest, setConfig) {
@@ -202,6 +203,131 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
   testConfig(createConfig(false, true, false, false));
   testConfig(createConfig(false, false, true, false));
   testConfig(createConfig(false, false, false, true));
+}
+
+TEST_F(QueryConfigTest, sessionStartTime) {
+  // Test with no session start time set
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+
+    EXPECT_EQ(config.sessionStartTimeMs(), 0);
+  }
+
+  // Test with session start time set
+  {
+    int64_t startTimeMs = 1674123456789; // Some timestamp in milliseconds
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSessionStartTime, std::to_string(startTimeMs)}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+
+    EXPECT_EQ(config.sessionStartTimeMs(), startTimeMs);
+  }
+
+  // Test with negative session start time (should be valid)
+  {
+    int64_t negativeStartTime = -1000;
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSessionStartTime, std::to_string(negativeStartTime)}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+
+    EXPECT_EQ(config.sessionStartTimeMs(), negativeStartTime);
+  }
+
+  // Test with maximum int64_t value
+  {
+    int64_t maxTime = std::numeric_limits<int64_t>::max();
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSessionStartTime, std::to_string(maxTime)}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+
+    EXPECT_EQ(config.sessionStartTimeMs(), maxTime);
+  }
+}
+
+TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
+  // Test default value (should be false)
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.singleSourceExchangeOptimizationEnabled());
+  }
+
+  // Test with optimization enabled
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSkipRequestDataSizeWithSingleSourceEnabled, "true"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.singleSourceExchangeOptimizationEnabled());
+  }
+
+  // Test with optimization explicitly disabled
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kSkipRequestDataSizeWithSingleSourceEnabled, "false"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.singleSourceExchangeOptimizationEnabled());
+  }
+}
+
+TEST_F(QueryConfigTest, operatorSpillFileCreateConfig) {
+  // Test default values (empty strings)
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(config.aggregationSpillFileCreateConfig(), "");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "");
+  }
+
+  // Test with aggregation spill file create config set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kAggregationSpillFileCreateConfig,
+          "aggregation_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(
+        config.aggregationSpillFileCreateConfig(), "aggregation_config_value");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "");
+  }
+
+  // Test with hash join spill file create config set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kHashJoinSpillFileCreateConfig,
+          "hashjoin_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(config.aggregationSpillFileCreateConfig(), "");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "hashjoin_config_value");
+  }
+
+  // Test with both configs set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kAggregationSpillFileCreateConfig,
+          "aggregation_config_value"},
+         {QueryConfig::kHashJoinSpillFileCreateConfig,
+          "hashjoin_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(
+        config.aggregationSpillFileCreateConfig(), "aggregation_config_value");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "hashjoin_config_value");
+  }
 }
 
 } // namespace facebook::velox::core::test

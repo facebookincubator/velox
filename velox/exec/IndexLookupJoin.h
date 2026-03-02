@@ -15,6 +15,7 @@
  */
 #pragma once
 #include "velox/exec/Operator.h"
+#include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
 
@@ -77,29 +78,52 @@ class IndexLookupJoin : public Operator {
   /// the raw data received from the remote storage lookup.
   static inline const std::string kClientLookupResultSize{
       "clientLookupResultSize"};
-  /// The number of lazy decoded result batches.
-  static inline const std::string kClientNumLazyDecodedResultBatches{
-      "clientNumLazyDecodedResultBatches"};
+  /// The number of lookup results received from remote storage with error.
+  static inline const std::string kClientNumErrorResults{
+      "clientNumErrorResults"};
 
  private:
-  using LookupResultIter = connector::IndexSource::LookupResultIterator;
-  using LookupResult = connector::IndexSource::LookupResult;
+  using ResultIterator = connector::IndexSource::ResultIterator;
+  using Result = connector::IndexSource::Result;
 
   // Contains the state of an input batch processing.
   struct InputBatchState {
     // The input batch to process.
     RowVectorPtr input;
+
+    // If true, it indicates that the probe input has null join keys.
+    bool lookupInputHasNullKeys{false};
+    // Select input rows with non-null join keys.
+    SelectivityVector nonNullInputRows;
+    // The map from lookup input row to the corresponding probe input row. It is
+    // used to handle the case that probe input has null keys.
+    BufferPtr nonNullInputMappings;
+    vector_size_t* rawNonNullInputMappings{nullptr};
+
     // The reusable vector projected from 'input' as index lookup input.
     RowVectorPtr lookupInput;
     // Used to fetch lookup results for an input batch.
-    std::shared_ptr<LookupResultIter> lookupResultIter;
+    std::shared_ptr<ResultIterator> lookupResultIter;
     // Used for synchronization with the async fetch result from index source
     // through 'lookupResultIter'.
     ContinueFuture lookupFuture;
     // Used to store the lookup result fetched from 'lookupResultIter' for
     // output processing. We might split the output result into multiple output
     // batches based on the operator's output batch size limit.
-    std::unique_ptr<LookupResult> lookupResult;
+    std::unique_ptr<Result> lookupResult;
+    // Specifies the indices of input row in 'input' that have matches in
+    // 'output' from 'lookupResult'. This is only used in case
+    // 'lookupInputHasNullKeys' is true in which 'inputHits' in 'lookupResult'
+    // points to rows in 'lookupInput' which might be different from 'input'.
+    // To ease the rest of index lookup join result processing, we need to
+    // redirect the lookup input hit row from 'lookupInput' to the corresponding
+    // row in 'input' through the mapping specified by 'nonNullInputMappings'.
+    // The redirect input hit indices are stored in 'resultInputHitIndices'.
+    BufferPtr resultInputHitIndices;
+    // When splitOutput_ is false, this tracks partially accumulated results
+    // that are waiting for async operations to complete before continuing
+    // accumulation.
+    std::vector<std::unique_ptr<Result>> partialOutputs;
 
     InputBatchState() : lookupFuture(ContinueFuture::makeEmpty()) {}
 
@@ -108,12 +132,20 @@ class IndexLookupJoin : public Operator {
       lookupResultIter = nullptr;
       lookupFuture = ContinueFuture::makeEmpty();
       lookupResult = nullptr;
+      partialOutputs.clear();
     }
 
     // Indicates if this input batch is empty.
     bool empty() const {
       return input == nullptr;
     }
+
+    // Ensures that the lookup result's inputHits buffer is writable and returns
+    // a mutable pointer. If the buffer is already mutable, returns it directly.
+    // Otherwise, creates a new writable buffer by copying the existing data and
+    // returns a pointer to the new buffer. This is needed when filters or null
+    // key handling requires modifying the input hit indices.
+    vector_size_t* ensureInputHitsWritable(memory::MemoryPool* pool);
   };
 
   void initInputBatches();
@@ -121,10 +153,33 @@ class IndexLookupJoin : public Operator {
   void initLookupInput();
   void initLookupOutput();
   void initOutputProjections();
+  void initFilter();
+
+  // Collects splits for the index source until no more splits signal is
+  // received. Returns true if all splits have been collected and the index
+  // source is ready. Returns false if we are still waiting for splits.
+  bool collectIndexSplits(ContinueFuture* future);
+
+  // Applies the join filter directly on the lookup result, updating the
+  // lookup result to only include rows that pass the filter. Returns true if
+  // some rows passed the filter, otherwise false.
+  bool applyFilterOnLookupResult(InputBatchState& batch);
+
   void ensureInputLoaded(const InputBatchState& batch);
   // Prepare index source lookup for a given 'input_'.
   void prepareLookup(InputBatchState& batch);
   void startLookup(InputBatchState& batch);
+
+  // Helper function to merge batch.partialOutputs into a single
+  // batch.lookupResult. This is used when splitOutput_ is false to ensure all
+  // results from an iterator are combined into one output batch.
+  void mergeLookupResults(InputBatchState& batch);
+  // Helper function to get all lookup results. Fetches the first result if not
+  // already fetched, and when splitOutput_ is false, accumulates all remaining
+  // results into a single batch. Handles both initial lookup and resuming
+  // accumulation after async interruption. Returns true if results are ready,
+  // false if an async operation is pending.
+  bool getLookupResults(InputBatchState& batch);
 
   void startLookupBlockWait();
   void endLookupBlockWait();
@@ -132,6 +187,11 @@ class IndexLookupJoin : public Operator {
   RowVectorPtr getOutputFromLookupResult(InputBatchState& batch);
   RowVectorPtr produceOutputForInnerJoin(const InputBatchState& batch);
   RowVectorPtr produceOutputForLeftJoin(const InputBatchState& batch);
+  // Handles production of remaining output after lookup result processing is
+  // complete. For left joins, this ensures unmatched rows from the probe side
+  // are included in the output with null values for lookup columns. For inner
+  // joins, this simply finishes the input batch.
+  RowVectorPtr produceRemainingOutput(InputBatchState& batch);
   // Produces output for the remaining input rows that has no matches from the
   // lookup at the end of current input batch processing.
   RowVectorPtr produceRemainingOutputForLeftJoin(const InputBatchState& batch);
@@ -143,8 +203,10 @@ class IndexLookupJoin : public Operator {
   bool hasRemainingOutputForLeftJoin(const InputBatchState& batch) const;
 
   // Checks if we have finished processing the current 'lookupResult_'. If so,
-  // we reset 'lookupResult_' and corresponding processing state.
+  // call 'finishLookupResult' to reset 'lookupResult_' and corresponding
+  // processing state.
   void maybeFinishLookupResult(InputBatchState& batch);
+  void finishLookupResult(InputBatchState& batch);
 
   // Invoked after finished processing the current 'input_' batch. The function
   // resets the input batch and the lookup result states.
@@ -154,8 +216,30 @@ class IndexLookupJoin : public Operator {
   // 'outputBatchSize'. This is only used by left join which needs to fill nulls
   // for output rows without lookup matches.
   void prepareOutputRowMappings(size_t outputBatchSize);
+
   // Prepare 'output_' for the next output batch with size of 'numOutputRows'.
   void prepareOutput(vector_size_t numOutputRows);
+
+  // Invoked to ensure the match column is created to store the output match
+  // result for the left join.
+  void ensureMatchColumn(vector_size_t maxOutputRows);
+
+  // Invoked to fill the match column and output nulls with the match result for
+  // the left join.
+  void
+  fillOutputMatchRows(vector_size_t offset, vector_size_t size, bool match);
+
+  // Invoked to set the match column with the actual output size.
+  void setMatchColumnSize(vector_size_t numOutputRows);
+
+  // Invoked to decode the probe input keys to detect if there are any null
+  // keys.
+  void decodeAndDetectNonNullKeys(InputBatchState& batch);
+
+  // Invoked to prepare the lookup result for processing. If the probe input has
+  // null keys, it maps the hit rows in lookup result to the corresponding probe
+  // input rows.
+  void prepareLookupResult(InputBatchState& batch);
 
   // Invoked at operator close to record the lookup stats.
   void recordConnectorStats();
@@ -164,6 +248,12 @@ class IndexLookupJoin : public Operator {
   // lookup prefetch.
   bool lookupPrefetchEnabled() const {
     return maxNumInputBatches_ > 1;
+  }
+
+  // Returns true if the index source needs splits and we haven't received the
+  // no-more-splits signal yet.
+  bool needsIndexSplits() const {
+    return lookupTableHandle_->needsIndexSplit() && !noMoreIndexSplits_;
   }
 
   // Returns the number of input batches to process.
@@ -189,17 +279,21 @@ class IndexLookupJoin : public Operator {
     return inputBatches_[startBatchIndex_ % maxNumInputBatches_];
   }
 
+  // If true, allows one input row to produce multiple output rows.
+  // If false, enforces one-to-one mapping.
+  const bool splitOutput_;
   // Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
   // Type of join.
   const core::JoinType joinType_;
-  const size_t numKeys_;
+  const bool hasMarker_;
   const RowTypePtr probeType_;
   const RowTypePtr lookupType_;
-  const std::shared_ptr<connector::ConnectorTableHandle> lookupTableHandle_;
-  const std::vector<core::IndexLookupConditionPtr> lookupConditions_;
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      lookupColumnHandles_;
+  // The plan node id of the lookup source (index source).
+  const core::PlanNodeId indexSourceNodeId_;
+  const connector::ConnectorTableHandlePtr lookupTableHandle_;
+  const std::vector<core::IndexLookupConditionPtr> joinConditions_;
+  const connector::ColumnHandleMap lookupColumnHandles_;
   const std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   const std::shared_ptr<connector::Connector> connector_;
   const size_t maxNumInputBatches_;
@@ -213,6 +307,10 @@ class IndexLookupJoin : public Operator {
   RowTypePtr lookupInputType_;
   // The column channels in probe 'input_' referenced by 'lookupInputType_'.
   std::vector<column_index_t> lookupInputChannels_;
+
+  // Used to decode and check if any probe-side input key or condition columns
+  // have nulls.
+  std::vector<std::unique_ptr<VectorHasher>> lookupKeyOrConditionHashers_;
 
   // The input batches to process with ranges pointed by 'startBatchIndex_' and
   // 'endBatchIndex_'.
@@ -230,6 +328,7 @@ class IndexLookupJoin : public Operator {
   // Used to project output columns from the probe input and lookup output.
   std::vector<IdentityProjection> probeOutputProjections_;
   std::vector<IdentityProjection> lookupOutputProjections_;
+  std::optional<column_index_t> matchOutputChannel_;
 
   std::shared_ptr<connector::IndexSource> indexSource_;
 
@@ -256,11 +355,41 @@ class IndexLookupJoin : public Operator {
   BufferPtr lookupOutputNulls_;
   uint64_t* rawLookupOutputNulls_{nullptr};
 
+  // Join filter.
+  std::unique_ptr<ExprSet> filter_;
+
+  // Join filter input type.
+  RowTypePtr filterInputType_;
+
+  // Maps probe-side input channels to channels in 'filterInputType_'.
+  std::vector<IdentityProjection> filterProbeInputProjections_;
+  // Maps lookup-side input channels to channels in 'filterInputType_',
+  std::vector<IdentityProjection> filterLookupInputProjections_;
+
+  // Reusable memory for filter evaluations.
+  RowVectorPtr filterInput_;
+  SelectivityVector filterRows_;
+  std::vector<VectorPtr> filterResult_;
+  DecodedVector decodedFilterResult_;
+  BufferPtr filteredIndices_;
+
   // The reusable output vector for the join output.
   RowVectorPtr output_;
+  FlatVectorPtr<bool> matchColumn_{nullptr};
+  uint64_t* rawMatchValues_{nullptr};
 
   // The start time of the current lookup driver block wait, and reset after the
   // driver wait completes.
   std::optional<size_t> blockWaitStartNs_;
+
+  // Split collection state for index sources that require splits.
+  // True if we have received the no-more-splits signal for the index source.
+  bool noMoreIndexSplits_{false};
+  // The future to wait for the next index split.
+  ContinueFuture indexSplitFuture_;
+  // The collected splits for the index source. It is passed to index source
+  // after the no-more-splits signal is received (i.e., 'noMoreIndexSplits_' is
+  // true).
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> indexSplits_;
 };
 } // namespace facebook::velox::exec

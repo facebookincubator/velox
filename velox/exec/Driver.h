@@ -24,10 +24,10 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
-#include "velox/common/base/TraceConfig.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
-#include "velox/core/QueryCtx.h"
+#include "velox/exec/BlockingReason.h"
+#include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec {
 
@@ -61,14 +61,6 @@ std::string stopReasonString(StopReason reason);
 
 std::ostream& operator<<(std::ostream& out, const StopReason& reason);
 
-struct DriverStats {
-  static constexpr const char* kTotalPauseTime = "totalDriverPauseWallNanos";
-  static constexpr const char* kTotalOffThreadTime =
-      "totalDriverOffThreadWallNanos";
-
-  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-};
-
 /// Represents a Driver's state. This is used for cancellation, forcing
 /// release of and for waiting for memory. The fields are serialized on
 /// the mutex of the Driver's Task.
@@ -94,7 +86,7 @@ struct DriverStats {
 ///  Terminated - 'isTerminated' is set. The Driver cannot run after this and
 /// the state is final.
 ///
-/// CancelPool  allows terminating or pausing a set of Drivers. The Task API
+/// Task allows terminating or pausing a set of Drivers. The Task API
 /// allows starting or resuming Drivers. When terminate is requested the request
 /// is successful when all Drivers are off thread, blocked or suspended. When
 /// pause is requested, we have success when all Drivers are either enqueued,
@@ -182,45 +174,6 @@ struct ThreadState {
   }
 };
 
-enum class BlockingReason {
-  kNotBlocked,
-  kWaitForConsumer,
-  kWaitForSplit,
-  /// Some operators can get blocked due to the producer(s) (they are
-  /// currently waiting data from) not having anything produced. Used by
-  /// LocalExchange, LocalMergeExchange, Exchange and MergeExchange operators.
-  kWaitForProducer,
-  kWaitForJoinBuild,
-  /// For a build operator, it is blocked waiting for the probe operators to
-  /// finish probing before build the next hash table from one of the
-  /// previously spilled partition data. For a probe operator, it is blocked
-  /// waiting for all its peer probe operators to finish probing before
-  /// notifying the build operators to build the next hash table from the
-  /// previously spilled data.
-  kWaitForJoinProbe,
-  /// Used by MergeJoin operator, indicating that it was blocked by the right
-  /// side input being unavailable.
-  kWaitForMergeJoinRightSide,
-  kWaitForMemory,
-  kWaitForConnector,
-  /// Some operators (like Table Scan) may run long loops and can 'voluntarily'
-  /// exit them because Task requested to yield or stop or after a certain time.
-  /// This is the blocking reason used in such cases.
-  kYield,
-  /// Operator is blocked waiting for its associated query memory arbitration to
-  /// finish.
-  kWaitForArbitration,
-  /// For a table scan operator, it is blocked waiting for the scan controller
-  /// to increase the number of table scan processing threads to start
-  /// processing.
-  kWaitForScanScaleUp,
-  /// Used by IndexLookupJoin operator, indicating that it was blocked by the
-  /// async index lookup.
-  kWaitForIndexLookup,
-};
-
-std::string blockingReasonToString(BlockingReason reason);
-
 class BlockingState {
  public:
   BlockingState(
@@ -271,9 +224,11 @@ constexpr uint32_t kUngroupedGroupId{std::numeric_limits<uint32_t>::max()};
 struct DriverCtx {
   const int driverId;
   const int pipelineId;
+
   /// Id of the split group this driver should process in case of grouped
   /// execution, kUngroupedGroupId otherwise.
   const uint32_t splitGroupId;
+
   /// Id of the partition to use by this driver. For local exchange, for
   /// instance.
   const uint32_t partitionId;
@@ -281,6 +236,7 @@ struct DriverCtx {
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
+
   /// Tracks the traced operator ids. It is also used to avoid tracing the
   /// auxiliary operator such as the aggregation operator used by the table
   /// writer to generate the columns stats.
@@ -295,14 +251,17 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  const std::optional<TraceConfig>& traceConfig() const;
+  const trace::TraceCtx* traceCtx() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
       const std::string& operatorType);
 
-  /// Builds the spill config for the operator with specified 'operatorId'.
-  std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
+  /// Builds the spill config for the operator with specified 'operatorId' and
+  /// 'operatorType'.
+  std::optional<common::SpillConfig> makeSpillConfig(
+      int32_t operatorId,
+      const std::string& operatorType) const;
 
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{
@@ -363,6 +322,26 @@ struct OpCallStatus {
   std::atomic<const char*> method{kOpMethodNone};
 };
 
+struct PushdownFilters {
+  /// Keep a single instance across drivers so that we do not need to repeatedly
+  /// merge them in different drivers.
+  folly::F14FastMap<column_index_t, common::FilterPtr> filters;
+
+  /// Indices added here will never be removed.
+  folly::F14FastSet<column_index_t> dynamicFilteredColumns;
+
+  /// Whether static filters has been added to filters.  This only needs to be
+  /// done once per node by the first driver.
+  bool staticFiltersInitialized = false;
+};
+
+/// Pushdown filters on nodes in the pipeline.  Locks must be acquired in the
+/// order from downstream to upstream (i.e. it's forbidden that we acquire the
+/// upstream node lock first, and then acquire the downstream node lock while we
+/// hold the upstream lock).
+using PipelinePushdownFilters =
+    std::vector<folly::Synchronized<PushdownFilters>>;
+
 class Driver : public std::enable_shared_from_this<Driver> {
  public:
   static void enqueue(std::shared_ptr<Driver> instance);
@@ -411,6 +390,11 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// time slice limit if set.
   bool shouldYield() const;
 
+  /// Inline function to check if operator batch size stats are enabled.
+  inline bool enableOperatorBatchSizeStats() const {
+    return enableOperatorBatchSizeStats_;
+  }
+
   /// Checks if the associated query is under memory arbitration or not. The
   /// function returns true if it is and set future which is fulfilled when the
   /// memory arbitration finishes.
@@ -430,6 +414,30 @@ class Driver : public std::enable_shared_from_this<Driver> {
   std::unordered_set<column_index_t> canPushdownFilters(
       const Operator* filterSource,
       const std::vector<column_index_t>& channels) const;
+
+  /// Try to add new dynamic filters from `filterSource' to its upstream
+  /// operator which accept dynamic filters.  `channels' are the inputs for
+  /// `filterSource'.
+  ///
+  /// `makeFilter' is called with a lock held on the node of `filterSource' in
+  /// `pushdownFilters_'.  It should return whether a filter should be added,
+  /// and set the FilterPtr output parameter with a new filter if one is
+  /// generated.  If `makeFilter' returns true but FilterPtr is not set, it
+  /// means a filter is already generated by another operator on the same node,
+  /// and we just need to set the new merged filter on the accepting operator.
+  ///
+  /// Return the number of filters produced.
+  int pushdownFilters(
+      Operator* filterSource,
+      const std::vector<column_index_t>& channels,
+      const std::function<bool(column_index_t, common::FilterPtr&)>&
+          makeFilter);
+
+  int operatorIndex(const Operator* op) const;
+
+  const std::shared_ptr<PipelinePushdownFilters>& pushdownFilters() const {
+    return pushdownFilters_;
+  }
 
   /// Returns the Operator with 'planNodeId' or nullptr if not found. For
   /// example, hash join probe accesses the corresponding build by id.
@@ -600,10 +608,6 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void close();
 
-  // Push down dynamic filters produced by the operator at the specified
-  // position in the pipeline.
-  void pushdownFilters(int operatorIndex);
-
   using TimingMemberPtr = CpuWallTiming OperatorStats::*;
   template <typename Func>
   void withDeltaCpuWallTimer(
@@ -629,7 +633,20 @@ class Driver : public std::enable_shared_from_this<Driver> {
       std::shared_ptr<BlockingState>& blockingState,
       CancelGuard& guard);
 
+  // Returns the operator to start from. The Driver always start the driver
+  // pipeline from the consumer (leaf), then walk backwards to the root based on
+  // whether they are ready to consume data, and the previous is ready to
+  // produce data.
+  //
+  // The only exception is when resuming from a trace, in which case the Driver
+  // must resume at the operator where it was blocked.
+  int32_t getStartingOperator() const;
+
   std::unique_ptr<DriverCtx> ctx_;
+
+  // If set, the operator output batch size stats will be collected during
+  // driver execution.
+  bool enableOperatorBatchSizeStats_{false};
 
   // If not zero, specifies the driver cpu time slice.
   size_t cpuSliceMs_{0};
@@ -648,6 +665,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartUs_{0};
+
   // Id (index in the vector) of the current operator to run (or the 1st one if
   // we haven't started yet). Used to determine which operator's queueTime we
   // should update.
@@ -656,13 +674,26 @@ class Driver : public std::enable_shared_from_this<Driver> {
   std::vector<std::unique_ptr<Operator>> operators_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+
+  // Stores the operator where the driver was last blocked. Note that the driver
+  // always resumes at the leaf (consumer) to prioritize getting data out of the
+  // task. The only exception is when resuming from a trace.
   size_t blockedOperatorId_{0};
+
+  // If this driver is being traced, store a pointer to the current data. Once
+  // the trace client unblocks the driver, we will feed this vector to the next
+  // operator in the pipeline.
+  RowVectorPtr traceInput_;
 
   bool trackOperatorCpuUsage_;
 
   // Indicates that a DriverAdapter can rearrange Operators. Set to false at end
   // of DriverFactory::createDriver().
   bool isAdaptable_{true};
+
+  // Pushdown filters on the pipeline.  This is generated per split group per
+  // pipeline.
+  std::shared_ptr<PipelinePushdownFilters> pushdownFilters_;
 
   friend struct DriverFactory;
 };
@@ -728,6 +759,7 @@ struct DriverFactory {
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
       std::shared_ptr<ExchangeClient> exchangeClient,
+      std::shared_ptr<PipelinePushdownFilters> filters,
       std::function<int(int pipelineId)> numDrivers);
 
   /// Replaces operators at indices 'begin' to 'end - 1' with
@@ -811,6 +843,10 @@ struct DriverFactory {
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsNestedLoopJoinBridges() const;
 
+  /// Returns plan node IDs for which Spatial Join Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsSpatialJoinBridges() const;
+
   static std::vector<DriverAdapter> adapters;
 };
 
@@ -849,16 +885,6 @@ class ScopedDriverThreadContext {
 DriverThreadContext* driverThreadContext();
 
 } // namespace facebook::velox::exec
-
-template <>
-struct fmt::formatter<facebook::velox::exec::BlockingReason>
-    : formatter<std::string> {
-  auto format(facebook::velox::exec::BlockingReason b, format_context& ctx)
-      const {
-    return formatter<std::string>::format(
-        facebook::velox::exec::blockingReasonToString(b), ctx);
-  }
-};
 
 template <>
 struct fmt::formatter<facebook::velox::exec::StopReason>

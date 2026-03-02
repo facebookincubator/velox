@@ -131,8 +131,15 @@ class VectorHasher {
   static constexpr int32_t kNoLimit = -1;
 
   VectorHasher(TypePtr type, column_index_t channel)
-      : channel_(channel), type_(std::move(type)), typeKind_(type_->kind()) {
-    if (typeKind_ == TypeKind::BOOLEAN) {
+      : channel_(channel),
+        type_(std::move(type)),
+        typeKind_(type_->kind()),
+        typeProvidesCustomComparison_(type_->providesCustomComparison()) {
+    if (!typeSupportsValueIds()) {
+      // Ensure any range or unique value based hashing is disabled.
+      setRangeOverflow();
+      setDistinctOverflow();
+    } else if (typeKind_ == TypeKind::BOOLEAN) {
       // We do not need samples to know the cardinality or limits of a bool
       // vector.
       hasRange_ = true;
@@ -235,14 +242,38 @@ class VectorHasher {
       ScratchMemory& scratchMemory,
       raw_vector<uint64_t>& result) const;
 
-  // Returns true if either range or distinct values have not overflowed.
+  // Returns true if either range or distinct values have not overflowed and the
+  // type doesn't support custom comparison.
   bool mayUseValueIds() const {
-    return hasRange_ || !distinctOverflow_;
+    return typeSupportsValueIds() && (hasRange_ || !distinctOverflow_);
   }
 
   // Returns an instance of the filter corresponding to a set of unique values.
   // Returns null if distinctOverflow_ is true.
   std::unique_ptr<common::Filter> getFilter(bool nullAllowed) const;
+
+  bool supportsBloomFilter() const {
+    if (typeProvidesCustomComparison_) {
+      return false;
+    }
+    switch (typeKind_) {
+      // Smaller integers would never overflow 100'000 distinct values.
+      case TypeKind::INTEGER:
+      case TypeKind::BIGINT:
+        return distinctOverflow_;
+      default:
+        return false;
+    }
+  }
+
+  void setBloomFilter(common::FilterPtr filter) {
+    VELOX_DCHECK(supportsBloomFilter());
+    bloomFilter_ = std::move(filter);
+  }
+
+  const common::FilterPtr& getBloomFilter() const {
+    return bloomFilter_;
+  }
 
   void resetStats() {
     uniqueValues_.clear();
@@ -284,8 +315,12 @@ class VectorHasher {
     return isRange_;
   }
 
-  static bool typeKindSupportsValueIds(TypeKind kind) {
-    switch (kind) {
+  bool typeSupportsValueIds() const {
+    if (typeProvidesCustomComparison_) {
+      return false;
+    }
+
+    switch (typeKind_) {
       case TypeKind::BOOLEAN:
       case TypeKind::TINYINT:
       case TypeKind::SMALLINT:
@@ -293,6 +328,7 @@ class VectorHasher {
       case TypeKind::BIGINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
+      case TypeKind::TIMESTAMP:
         return true;
       default:
         return false;
@@ -301,7 +337,7 @@ class VectorHasher {
 
   // Merges the value ids information of 'other' into 'this'. Ranges
   // and distinct values are unioned.
-  void merge(const VectorHasher& other);
+  void merge(const VectorHasher& other, size_t maxNumDistinct);
 
   // true if no values have been added.
   bool empty() const {
@@ -330,6 +366,10 @@ class VectorHasher {
   template <typename T>
   inline int64_t toInt64(T value) const {
     return value;
+  }
+
+  inline int64_t toInt64(Timestamp timestamp) const {
+    return timestamp.toMillis();
   }
 
   // Sets the data statistics from 'other'. Does not set the mapping mode.
@@ -530,6 +570,13 @@ class VectorHasher {
 
   void setRangeOverflow();
 
+  inline void checkTypeSupportsValueIds() const {
+    VELOX_DCHECK(
+        typeSupportsValueIds(),
+        "Value IDs cannot be used, the type {} is not supported.",
+        type_->toString());
+  }
+
   static inline bool
   isNullAt(const char* group, int32_t nullByte, uint8_t nullMask) {
     return (group[nullByte] & nullMask) != 0;
@@ -546,6 +593,7 @@ class VectorHasher {
   const column_index_t channel_;
   const TypePtr type_;
   const TypeKind typeKind_;
+  const bool typeProvidesCustomComparison_;
 
   DecodedVector decoded_;
   raw_vector<uint64_t> cachedHashes_;
@@ -582,6 +630,8 @@ class VectorHasher {
   // Memory for unique string values.
   std::vector<std::string> uniqueValuesStorage_;
   uint64_t distinctStringsBytes_ = 0;
+
+  common::FilterPtr bloomFilter_;
 };
 
 template <>
@@ -662,8 +712,27 @@ inline uint64_t VectorHasher::lookupValueId(StringView value) const {
 }
 
 template <>
+inline uint64_t VectorHasher::lookupValueId(Timestamp timestamp) const {
+  return timestamp.getNanos() % 1'000'000 != 0
+      ? kUnmappable
+      : lookupValueId(timestamp.toMillis());
+}
+
+template <>
 inline uint64_t VectorHasher::valueId(bool value) {
   return value ? 2 : 1;
+}
+template <>
+inline uint64_t VectorHasher::valueId(Timestamp value) {
+  if (FOLLY_UNLIKELY(
+          value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
+    // The timestamp is in nanosecond or microsecond precision. The values are
+    // not mappable to milliseconds without precision loss.
+    setRangeOverflow();
+    setDistinctOverflow();
+    return kUnmappable;
+  }
+  return valueId(value.toMillis());
 }
 
 template <>

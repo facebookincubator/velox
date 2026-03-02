@@ -25,6 +25,18 @@
 
 namespace facebook::velox::functions {
 
+/// Utility function that takes a padded string and determines whether
+/// the json is valid or not.
+/// @returns simdjson::SUCCESS if passed json is valid else returns a
+/// failure code.
+simdjson::error_code jsonParsingError(const simdjson::padded_string& json);
+
+/// Utility function that takes a parsed json document and determines whether
+/// the json is valid or not.
+/// @returns simdjson::SUCCESS if passed json is valid else returns a
+/// failure code.
+simdjson::error_code jsonParsingError(simdjson::ondemand::document& doc);
+
 template <typename T>
 struct IsJsonScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -33,7 +45,8 @@ struct IsJsonScalarFunction {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
-    if (auto errorCode = simdjsonParse(paddedJson).get(jsonDoc)) {
+    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    if (errorCode || jsonParsingError(jsonDoc)) {
       if (threadSkipErrorDetails()) {
         return Status::UserError();
       }
@@ -68,9 +81,11 @@ struct JsonArrayContainsFunction {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
-    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    if (errorCode || jsonParsingError(jsonDoc)) {
       return false;
     }
+
     if (jsonDoc.type().error()) {
       return false;
     }
@@ -133,7 +148,8 @@ struct JsonArrayGetFunction {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(jsonArray.data(), jsonArray.size());
-    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    if (errorCode || jsonParsingError(jsonDoc)) {
       return false;
     }
     if (jsonDoc.type().error()) {
@@ -225,20 +241,19 @@ struct JsonExtractScalarFunction {
       return simdjson::SUCCESS;
     };
 
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+    // TODO: Remove explicit std::string_view cast.
+    auto& extractor =
+        SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
 
     // Check for valid json
     simdjson::padded_string paddedJson(json.data(), json.size());
-    {
-      SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
-      simdjson::ondemand::document parsedDoc;
-      if (simdjsonParse(paddedJson).get(parsedDoc)) {
-        return simdjson::TAPE_ERROR;
-      }
+    SIMDJSON_ASSIGN_OR_RAISE(auto doc, simdjsonParse(paddedJson));
+    if (auto val = jsonParsingError(doc)) {
+      return val;
     }
 
     bool isDefinitePath = true;
-    SIMDJSON_TRY(extractor.extract(paddedJson, consumer, isDefinitePath));
+    SIMDJSON_TRY(extractor.extract(doc, consumer, isDefinitePath));
 
     if (resultStr.has_value()) {
       result.copy_from(*resultStr);
@@ -290,12 +305,17 @@ struct JsonSizeFunction {
           case simdjson::ondemand::json_type::null:
             singleResultSize = 0;
             break;
+          case simdjson::ondemand::json_type::unknown: {
+            return simdjson::INCORRECT_TYPE;
+          }
         }
       }
       return simdjson::SUCCESS;
     };
 
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+    // TODO: Remove explicit std::string_view cast.
+    auto& extractor =
+        SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
     bool isDefinitePath = true;
     simdjson::padded_string paddedJson(json.data(), json.size());
     SIMDJSON_TRY(extractor.extract(paddedJson, consumer, isDefinitePath));
@@ -328,7 +348,9 @@ struct JsonArrayLengthFunction {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
-    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    // Check for valid json
+    if (errorCode || jsonParsingError(jsonDoc)) {
       return false;
     }
     if (jsonDoc.type().error()) {

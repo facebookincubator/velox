@@ -17,6 +17,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/TokenProvider.h"
 #include "velox/common/memory/MemoryPool.h"
 
 #include <functional>
@@ -27,11 +28,9 @@ namespace facebook::velox {
 namespace config {
 class ConfigBase;
 }
+class IoStats;
 class ReadFile;
 class WriteFile;
-namespace filesystems::File {
-class IoStats;
-}
 } // namespace facebook::velox
 
 namespace facebook::velox::filesystems {
@@ -47,10 +46,10 @@ struct FileOptions {
   /// etc.
   static constexpr folly::StringPiece kFileCreateConfig{"file-create-config"};
 
-  std::unordered_map<std::string, std::string> values;
+  std::unordered_map<std::string, std::string> values{};
   memory::MemoryPool* pool{nullptr};
   /// If specified then can be trusted to be the file size.
-  std::optional<int64_t> fileSize;
+  std::optional<int64_t> fileSize{};
 
   /// Whether to create parent directories if they don't exist.
   ///
@@ -73,7 +72,7 @@ struct FileOptions {
   std::optional<std::unordered_map<std::string, std::string>> properties{
       std::nullopt};
 
-  File::IoStats* stats{nullptr};
+  IoStats* stats{nullptr};
 
   /// A raw string that client can encode as anything they want to describe the
   /// file. For example, extraFileInfo can contain serialized file descriptors
@@ -84,6 +83,13 @@ struct FileOptions {
   /// A hint to the file system for which region size of the file should be
   /// read. Specifically, the read length.
   std::optional<int64_t> readRangeHint{std::nullopt};
+
+  /// A token provider that can be used to get tokens for accessing the file.
+  std::shared_ptr<TokenProvider> tokenProvider{nullptr};
+
+  /// File read operations metadata that can be passed to the underlying file
+  /// system for tracking and logging purposes.
+  folly::F14FastMap<std::string, std::string> fileReadOps{};
 };
 
 /// Defines directory options
@@ -105,49 +111,6 @@ struct FileSystemOptions {
   /// native async read-ahead support.
   bool readAheadEnabled{false};
 };
-
-/// Free form statistics for a file system. The keys are arbitrary strings, and
-/// values are RuntimeMetric. The underlying filesystem implementation can use
-/// this class to record observability about filesystem operations.
-namespace File {
-class IoStats {
- public:
-  IoStats() = default;
-
-  void addCounter(const std::string& name, RuntimeCounter counter) {
-    auto locked = stats_.wlock();
-    auto it = locked->find(name);
-    if (it == locked->end()) {
-      auto [ptr, inserted] = locked->emplace(name, RuntimeMetric(counter.unit));
-      VELOX_CHECK(inserted);
-      ptr->second.addValue(counter.value);
-    } else {
-      VELOX_CHECK_EQ(it->second.unit, counter.unit);
-      it->second.addValue(counter.value);
-    }
-  }
-
-  void merge(const IoStats& other) {
-    auto otherStats = other.stats();
-    auto locked = stats_.wlock();
-    for (const auto& [name, metric] : otherStats) {
-      auto it = locked->find(name);
-      if (it == locked->end()) {
-        locked->emplace(name, metric);
-      } else {
-        it->second.merge(metric);
-      }
-    }
-  }
-
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const {
-    return stats_.copy();
-  }
-
- private:
-  folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
-};
-} // namespace File
 
 /// An abstract FileSystem
 class FileSystem {

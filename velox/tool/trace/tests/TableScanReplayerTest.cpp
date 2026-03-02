@@ -17,25 +17,22 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <memory>
 #include <string>
 
 #include "folly/dynamic.h"
-#include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TraceReplayRunner.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;
@@ -49,6 +46,7 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::common::hll;
 
 namespace facebook::velox::tool::trace::test {
+
 class TableScanReplayerTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -60,12 +58,7 @@ class TableScanReplayerTest : public HiveConnectorTestBase {
     }
     Type::registerSerDe();
     common::Filter::registerSerDe();
-    connector::hive::HiveTableHandle::registerSerDe();
-    connector::hive::LocationHandle::registerSerDe();
-    connector::hive::HiveColumnHandle::registerSerDe();
-    connector::hive::HiveInsertTableHandle::registerSerDe();
-    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
-    connector::hive::HiveConnectorSplit::registerSerDe();
+    connector::hive::HiveConnector::registerSerDe();
     core::PlanNode::registerSerDe();
     velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
@@ -129,8 +122,8 @@ TEST_F(TableScanReplayerTest, runner) {
           .splits(makeHiveConnectorSplits(splitFiles))
           .copyResults(pool(), task);
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto taskTraceReader =
       exec::trace::TaskTraceMetadataReader(taskTraceDir, pool());
   const auto connectorId = taskTraceReader.connectorId(traceNodeId_);
@@ -301,8 +294,7 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
   writeToFile(filePath->getPath(), vectors);
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.emplace_back("e.c");
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments;
+  connector::ColumnHandleMap assignments;
   assignments["e"] = std::make_shared<HiveColumnHandle>(
       "e",
       HiveColumnHandle::ColumnType::kRegular,
@@ -316,9 +308,9 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
                         .endTableScan()
                         .capturePlanNodeId(traceNodeId_)
                         .planNode();
-  const auto split = makeHiveConnectorSplit(filePath->getPath());
-  const auto results =
-      AssertQueryBuilder(plan).split(split).copyResults(pool());
+  const auto results = AssertQueryBuilder(plan)
+                           .split(makeHiveConnectorSplit(filePath->getPath()))
+                           .copyResults(pool());
 
   const auto testDir = TempDirectoryPath::create();
   const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
@@ -330,7 +322,7 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
           .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
           .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
           .config(core::QueryConfig::kQueryTraceNodeId, traceNodeId_)
-          .split(split)
+          .split(makeHiveConnectorSplit(filePath->getPath()))
           .copyResults(pool(), task);
 
   assertEqualResults({results}, {traceResult});

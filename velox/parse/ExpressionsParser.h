@@ -15,10 +15,8 @@
  */
 #pragma once
 
-#include <set>
-#include "velox/core/PlanNode.h"
-#include "velox/core/QueryCtx.h"
-#include "velox/parse/IExpr.h"
+#include "velox/duckdb/conversion/DuckParser.h"
+#include "velox/parse/SqlExpressionsParser.h"
 
 namespace facebook::velox::parse {
 
@@ -27,6 +25,9 @@ struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
   bool parseIntegerAsBigint = true;
+  // Controls whether to parse the values in an IN list as separate arguments or
+  // as a single array argument.
+  bool parseInListAsArray = true;
 
   /// SQL functions could be registered with different prefixes by the user.
   /// This parameter is the registered prefix of presto or spark functions,
@@ -34,15 +35,20 @@ struct ParseOptions {
   std::string functionPrefix;
 };
 
-std::shared_ptr<const core::IExpr> parseExpr(
-    const std::string& expr,
-    const ParseOptions& options);
+/// Parses SQL expressions using DuckDB SQL dialect:
+/// https://duckdb.org/docs/stable/sql/dialect/overview
+class DuckSqlExpressionsParser : public SqlExpressionsParser {
+ public:
+  DuckSqlExpressionsParser(const ParseOptions& options = {});
 
-std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
-    const std::string& expr);
+  core::ExprPtr parseExpr(const std::string& expr) override;
 
-std::vector<std::shared_ptr<const core::IExpr>> parseMultipleExpressions(
-    const std::string& expr,
-    const ParseOptions& options);
+  std::vector<core::ExprPtr> parseExprs(const std::string& expr) override;
+
+  OrderByClause parseOrderByExpr(const std::string& expr) override;
+
+ private:
+  const facebook::velox::duckdb::ParseOptions options_;
+};
 
 } // namespace facebook::velox::parse

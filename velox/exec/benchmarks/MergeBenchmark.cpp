@@ -19,7 +19,7 @@
 
 #include <gflags/gflags.h>
 
-#include "velox/exec/TreeOfLosers.h"
+#include "velox/common/base/TreeOfLosers.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
 
 using namespace facebook::velox;

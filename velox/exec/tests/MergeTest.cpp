@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/exec/Merge.h"
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -166,10 +168,10 @@ class MergeTest : public OperatorTestBase {
       CursorParameters params;
       params.planNode = plan;
       params.maxDrivers = 2;
-      params.queryConfigs = {
-          {"spill_enabled", "true"},
-          {"local_merge_enabled", "true"},
-          {"local_merge_max_num_merge_sources", "2"}};
+      params.queryCtx = createQueryCtx(
+          {{"spill_enabled", "true"},
+           {"local_merge_spill_enabled", "true"},
+           {"local_merge_max_num_merge_sources", "2"}});
       params.spillDirectory = spillDirectory->getPath();
       auto task = assertQueryOrdered(
           params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
@@ -225,10 +227,10 @@ class MergeTest : public OperatorTestBase {
         CursorParameters params;
         params.planNode = plan;
         params.maxDrivers = 2;
-        params.queryConfigs = {
-            {"spill_enabled", "true"},
-            {"local_merge_enabled", "true"},
-            {"local_merge_max_num_merge_sources", "2"}};
+        params.queryCtx = createQueryCtx(
+            {{"spill_enabled", "true"},
+             {"local_merge_spill_enabled", "true"},
+             {"local_merge_max_num_merge_sources", "2"}});
         params.spillDirectory = spillDirectory->getPath();
         auto task = assertQueryOrdered(
             params, "SELECT * FROM tmp " + orderBySql, sortingKeys);
@@ -245,22 +247,105 @@ class MergeTest : public OperatorTestBase {
     }
   }
 
-  void testLocalMergeSpill(
-      const uint32_t batchSize,
-      const uint32_t numMaxMergeSources) {
+  void testLocalMerge(
+      int numInputSources,
+      int numInputBatches,
+      int inputBatchSize,
+      int maxBatchRows,
+      int maxBatchBytes,
+      int expectedOuputBatches) {
     std::vector<std::vector<RowVectorPtr>> inputVectors;
-    for (int32_t i = 0; i < 9; ++i) {
+    for (int32_t i = 0; i < numInputSources; ++i) {
       std::vector<RowVectorPtr> vectors;
-      for (int32_t i = 0; i < 3; ++i) {
+      for (int32_t j = 0; j < numInputBatches; ++j) {
         auto c0 = makeFlatVector<int64_t>(
-            batchSize,
-            [&](auto row) { return batchSize * i + row; },
+            inputBatchSize,
+            [&](auto row) { return inputBatchSize * j + row; },
             nullEvery(5));
         auto c1 = makeFlatVector<int64_t>(
-            batchSize, [&](auto row) { return row; }, nullEvery(5));
+            inputBatchSize, [&](auto row) { return row; }, nullEvery(5));
         auto c2 = makeFlatVector<double>(
-            batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
-        auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+            inputBatchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+        auto c3 = makeFlatVector<StringView>(inputBatchSize, [](auto row) {
+          return StringView::makeInline(std::to_string(row));
+        });
+        vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+      }
+      inputVectors.push_back(std::move(vectors));
+    }
+    std::vector<RowVectorPtr> duckInputs;
+    for (const auto& input : inputVectors) {
+      for (const auto& vector : input) {
+        duckInputs.push_back(vector);
+      }
+    }
+    createDuckDbTable(duckInputs);
+    auto keyIndex = inputVectors[0][0]->type()->asRow().getChildIdx("c0");
+
+    const auto orderByClause = fmt::format("{}", "c0");
+    const auto planNodeIdGenerator =
+        std::make_shared<core::PlanNodeIdGenerator>();
+    const std::shared_ptr<TempDirectoryPath> spillDirectory =
+        TempDirectoryPath::create();
+    std::vector<std::shared_ptr<const core::PlanNode>> sources;
+    sources.reserve(inputVectors.size());
+    for (const auto& vectors : inputVectors) {
+      sources.push_back(PlanBuilder(planNodeIdGenerator)
+                            .values(vectors)
+                            .orderBy({orderByClause}, true)
+                            .planNode());
+    }
+    core::PlanNodeId localMergeNodeId;
+    const auto plan = PlanBuilder(planNodeIdGenerator)
+                          .localMerge({orderByClause}, std::move(sources))
+                          .capturePlanNodeId(localMergeNodeId)
+                          .planNode();
+    CursorParameters params;
+    params.planNode = plan;
+    params.maxDrivers = numInputSources;
+    params.queryCtx = createQueryCtx(
+        {{"spill_enabled", "false"},
+         {"local_merge_spill_enabled", "false"},
+         {"preferred_output_batch_bytes", std::to_string(maxBatchBytes)},
+         {"preferred_output_batch_rows", std::to_string(maxBatchRows)}},
+        false);
+    auto task = assertQueryOrdered(
+        params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+
+    auto taskStats = toPlanStats(task->taskStats());
+    const auto& mergeStats = taskStats.at(localMergeNodeId);
+    ASSERT_EQ(mergeStats.spilledBytes, 0);
+    ASSERT_EQ(mergeStats.spilledPartitions, 0);
+    ASSERT_EQ(mergeStats.spilledFiles, 0);
+    ASSERT_EQ(mergeStats.spilledRows, 0);
+    ASSERT_EQ(
+        mergeStats.outputRows,
+        numInputSources * numInputBatches * inputBatchSize);
+    ASSERT_EQ(mergeStats.outputVectors, expectedOuputBatches);
+  }
+
+  void testLocalMergeSpill(
+      int numInputSources,
+      int numInputBatches,
+      int inputBatchSize,
+      int maxBatchRows,
+      int maxBatchBytes,
+      int numMaxMergeSources,
+      bool hasSpillExecutor,
+      int expectedOuputBatches) {
+    std::vector<std::vector<RowVectorPtr>> inputVectors;
+    for (int32_t i = 0; i < numInputSources; ++i) {
+      std::vector<RowVectorPtr> vectors;
+      for (int32_t j = 0; j < numInputBatches; ++j) {
+        auto c0 = makeFlatVector<int64_t>(
+            inputBatchSize,
+            [&](auto row) { return inputBatchSize * j + row; },
+            nullEvery(5));
+        auto c1 = makeFlatVector<int64_t>(
+            inputBatchSize, [&](auto row) { return row; }, nullEvery(5));
+        auto c2 = makeFlatVector<double>(
+            inputBatchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+        auto c3 = makeFlatVector<StringView>(inputBatchSize, [](auto row) {
           return StringView::makeInline(std::to_string(row));
         });
         vectors.push_back(makeRowVector({c0, c1, c2, c3}));
@@ -297,31 +382,59 @@ class MergeTest : public OperatorTestBase {
     CursorParameters params;
     params.planNode = plan;
     params.maxDrivers = 2;
-    params.queryConfigs = {
-        {"spill_enabled", "true"},
-        {"local_merge_enabled", "true"},
-        {"local_merge_max_num_merge_sources",
-         std::to_string(numMaxMergeSources)}};
+    params.queryCtx = createQueryCtx(
+        {{"spill_enabled", "true"},
+         {"local_merge_spill_enabled", "true"},
+         {"local_merge_max_num_merge_sources",
+          std::to_string(numMaxMergeSources)},
+         {"preferred_output_batch_bytes", std::to_string(maxBatchBytes)},
+         {"preferred_output_batch_rows", std::to_string(maxBatchRows)}},
+        hasSpillExecutor);
     params.spillDirectory = spillDirectory->getPath();
     auto task = assertQueryOrdered(
         params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
 
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(nodeId);
-    if (batchSize == 0 || numMaxMergeSources >= inputVectors.size()) {
+    if (inputBatchSize == 0 || numMaxMergeSources >= numInputSources ||
+        !hasSpillExecutor) {
       ASSERT_EQ(planStats.spilledBytes, 0);
       ASSERT_EQ(planStats.spilledPartitions, 0);
       ASSERT_EQ(planStats.spilledFiles, 0);
       ASSERT_EQ(planStats.spilledRows, 0);
+      ASSERT_EQ(
+          planStats.customStats.count(Merge::kSpilledSourceReadWallNanos), 0);
+      ASSERT_GE(
+          planStats.customStats.count(Merge::kStreamingSourceReadWallNanos), 0);
     } else {
       const auto expectedFiles =
           (inputVectors.size() + numMaxMergeSources - 1) / numMaxMergeSources;
-      const auto expectedSpillRows = batchSize * duckInputs.size();
+      const auto expectedSpillRows = inputBatchSize * duckInputs.size();
       ASSERT_GT(planStats.spilledBytes, 0);
       ASSERT_EQ(planStats.spilledPartitions, expectedFiles);
       ASSERT_EQ(planStats.spilledFiles, expectedFiles);
       ASSERT_EQ(planStats.spilledRows, expectedSpillRows);
+      ASSERT_GE(
+          planStats.customStats.count(Merge::kSpilledSourceReadWallNanos), 0);
+      ASSERT_GE(
+          planStats.customStats.count(Merge::kStreamingSourceReadWallNanos), 0);
     }
+    ASSERT_EQ(
+        planStats.outputRows,
+        numInputSources * numInputBatches * inputBatchSize);
+    ASSERT_EQ(planStats.outputVectors, expectedOuputBatches);
+  }
+
+  std::shared_ptr<core::QueryCtx> createQueryCtx(
+      std::unordered_map<std::string, std::string> queryConfigs = {},
+      bool hasSpillExecutor = true) const {
+    return core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{std::move(queryConfigs)},
+        {},
+        nullptr,
+        nullptr,
+        hasSpillExecutor ? spillExecutor_.get() : nullptr);
   }
 };
 
@@ -351,24 +464,81 @@ TEST_F(MergeTest, localMergeSpillBasic) {
 
 TEST_F(MergeTest, localMergeSpill) {
   struct TestParam {
-    uint32_t maxNumMergeSources;
-    uint32_t batchSize;
+    int numInputSources;
+    int numInputBatches;
+    int inputBatchSize;
+    int maxNumMergeSources;
+    int maxOutputBatchRows;
+    int maxOutputBatchBytes;
+    int numExpectedOutputBatches;
+    bool hasSpillExecutor;
 
     std::string debugString() const {
       return fmt::format(
-          "maxNumMergeSources {}, batchSize {}", maxNumMergeSources, batchSize);
+          "numInputSources {}, numInputBatches {}, inputBatchSize {}, maxNumMergeSources {}, maxOutputBatchRows {}, maxOutputBatchBytes {}, numExpectedOutputBatches {}, hasSpillExecutor {}",
+          numInputSources,
+          numInputBatches,
+          inputBatchSize,
+          maxNumMergeSources,
+          maxOutputBatchRows,
+          maxOutputBatchBytes,
+          numExpectedOutputBatches,
+          hasSpillExecutor);
     }
   } testSettings[]{
-      {1, 0},
-      {10, 0},
-      {1, 30},
-      {3, 30},
-      {8, 30},
-      {9, 30},
-      {std::numeric_limits<uint32_t>::max(), 30}};
+      {1, 1, 1, 1, 1, std::numeric_limits<int>::max(), 1, true},
+      {1, 1, 1, 1, 1, std::numeric_limits<int>::max(), 1, false},
+      {1, 4, 1, 1, 1, std::numeric_limits<int>::max(), 4, true},
+      {1, 4, 1, 1, 1, std::numeric_limits<int>::max(), 4, false},
+      {1, 4, 32, 1, 1, std::numeric_limits<int>::max(), 4 * 32, true},
+      {1, 4, 32, 1, 1, std::numeric_limits<int>::max(), 4 * 32, false},
+      {3, 4, 32, 1, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, true},
+      {3, 4, 32, 1, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, false},
+      {3, 4, 32, 2, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, true},
+      {3, 4, 32, 2, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, false},
+      {3, 4, 32, 3, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, true},
+      {3, 4, 32, 3, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, false},
+      {3, 4, 32, 4, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, true},
+      {3, 4, 32, 4, 1, std::numeric_limits<int>::max(), 3 * 4 * 32, false},
+      {1, 1, 1, 1, 1024, std::numeric_limits<int>::max(), 1, true},
+      {1, 1, 1, 1, 1024, std::numeric_limits<int>::max(), 1, false},
+      {1, 4, 1, 1, 1024, std::numeric_limits<int>::max(), 1, true},
+      {1, 4, 1, 1, 1024, std::numeric_limits<int>::max(), 1, false},
+      {1, 4, 32, 1, 1024, std::numeric_limits<int>::max(), 1, true},
+      {1, 4, 32, 1, 1024, std::numeric_limits<int>::max(), 1, false},
+      {3, 4, 32, 1, 1024, std::numeric_limits<int>::max(), 1, true},
+      {3, 4, 32, 1, 1024, std::numeric_limits<int>::max(), 1, false},
+      {3, 4, 32, 2, 1024, std::numeric_limits<int>::max(), 1, true},
+      {3, 4, 32, 2, 1024, std::numeric_limits<int>::max(), 1, false},
+      {3, 4, 32, 3, 1024, std::numeric_limits<int>::max(), 1, true},
+      {3, 4, 32, 3, 1024, std::numeric_limits<int>::max(), 1, false},
+      {3, 4, 32, 4, 1024, std::numeric_limits<int>::max(), 1, true},
+      {3, 4, 32, 4, 1024, std::numeric_limits<int>::max(), 1, false},
+      {1, 1, 1, 1, 1024, 1, 1, true},
+      {1, 1, 1, 1, 1024, 1, 1, false},
+      {1, 4, 1, 1, 1024, 1, 4, true},
+      {1, 4, 1, 1, 1024, 1, 4, false},
+      {1, 4, 32, 1, 1024, 1, 4 * 32, true},
+      {1, 4, 32, 1, 1024, 1, 4 * 32, false},
+      {3, 4, 32, 1, 1024, 1, 3 * 4 * 32, true},
+      {3, 4, 32, 1, 1024, 1, 3 * 4 * 32, false},
+      {3, 4, 32, 2, 1024, 1, 3 * 4 * 32, true},
+      {3, 4, 32, 2, 1024, 1, 3 * 4 * 32, false},
+      {3, 4, 32, 3, 1024, 1, 3 * 4 * 32, true},
+      {3, 4, 32, 3, 1024, 1, 3 * 4 * 32, false},
+      {3, 4, 32, 4, 1024, 1, 3 * 4 * 32, true},
+      {3, 4, 32, 4, 1024, 1, 3 * 4 * 32, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    testLocalMergeSpill(testData.batchSize, testData.maxNumMergeSources);
+    testLocalMergeSpill(
+        testData.numInputSources,
+        testData.numInputBatches,
+        testData.inputBatchSize,
+        testData.maxOutputBatchRows,
+        testData.maxOutputBatchBytes,
+        testData.maxNumMergeSources,
+        testData.hasSpillExecutor,
+        testData.numExpectedOutputBatches);
   }
 }
 
@@ -415,10 +585,10 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
   CursorParameters params;
   params.planNode = plan;
   params.maxDrivers = 2;
-  params.queryConfigs = {
-      {"spill_enabled", "true"},
-      {"local_merge_enabled", "true"},
-      {"local_merge_max_num_merge_sources", "2"}};
+  params.queryCtx = createQueryCtx(
+      {{"spill_enabled", "true"},
+       {"local_merge_spill_enabled", "true"},
+       {"local_merge_max_num_merge_sources", "2"}});
   params.spillDirectory = spillDirectory->getPath();
   auto task = assertQueryOrdered(
       params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
@@ -429,6 +599,38 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
   ASSERT_EQ(planStats.spilledPartitions, 4);
   ASSERT_EQ(planStats.spilledFiles, 4);
   ASSERT_EQ(planStats.spilledRows, 120);
+}
+
+DEBUG_ONLY_TEST_F(MergeTest, localMergeSpillWithException) {
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 9; ++i) {
+    constexpr vector_size_t batchSize = 137;
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
+    auto c1 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return row; }, nullEvery(5));
+    auto c2 = makeFlatVector<double>(
+        batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+      return StringView::makeInline(std::to_string(row));
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+  }
+  createDuckDbTable(vectors);
+
+  for (auto i = 0; i < 11; ++i) {
+    std::atomic_int cnt{0};
+    const auto errorMessage = "ConcatFilesSpillBatchStream::nextBatch fail";
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::ConcatFilesSpillBatchStream::nextBatch",
+        std::function<void(void*)>([&](void* /*unused*/) {
+          if (cnt++ == i) {
+            VELOX_FAIL("ConcatFilesSpillBatchStream::nextBatch fail");
+          }
+        }));
+
+    VELOX_ASSERT_THROW(testSingleKeyWithSpill(vectors, "c0"), errorMessage);
+  }
 }
 
 DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
@@ -504,6 +706,91 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
   ASSERT_EQ(taskStats[nodeId].outputRows, 30);
   ASSERT_EQ(taskStats[nodeId].outputVectors, 1);
   promiseThread.join();
+}
+
+DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
+  std::vector<std::vector<RowVectorPtr>> inputVectors;
+  for (int32_t i = 0; i < 4; ++i) {
+    std::vector<RowVectorPtr> vectors;
+    for (int32_t j = 0; j < 13; ++j) {
+      constexpr auto batchSize = 5000;
+      auto c0 = makeFlatVector<int64_t>(
+          batchSize,
+          [&](auto row) { return batchSize * j + row; },
+          nullEvery(5));
+      auto c1 = makeFlatVector<int64_t>(
+          batchSize, [&](auto row) { return row; }, nullEvery(5));
+      auto c2 = makeFlatVector<double>(
+          batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+      auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+        return StringView::makeInline(std::to_string(row));
+      });
+      vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+    }
+    inputVectors.push_back(std::move(vectors));
+  }
+
+  const auto orderByClause = fmt::format("{}", "c0");
+  const auto planNodeIdGenerator =
+      std::make_shared<core::PlanNodeIdGenerator>();
+  const std::shared_ptr<TempDirectoryPath> spillDirectory =
+      TempDirectoryPath::create();
+  std::vector<std::shared_ptr<const core::PlanNode>> sources;
+  sources.reserve(inputVectors.size());
+  for (const auto& vectors : inputVectors) {
+    sources.push_back(PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .orderBy({orderByClause}, true)
+                          .planNode());
+  }
+  core::PlanNodeId nodeId;
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .localMerge({orderByClause}, std::move(sources))
+                        .capturePlanNodeId(nodeId)
+                        .planNode();
+  std::atomic_int cnt{0};
+  std::atomic_bool blocked{false};
+  folly::EventCount callWait;
+  std::atomic_bool callWaitFlag{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::SpillMerger::getOutput",
+      std::function<void(std::vector<ContinueFuture>*)>(
+          [&](std::vector<ContinueFuture>* /*unused*/) {
+            if (blocked) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(1'000)); // NOLINT
+              blocked = false;
+              callWaitFlag = false;
+              callWait.notifyAll();
+              VELOX_USER_FAIL("Abort merge");
+            }
+          }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+      std::function<void(void*)>([&](void* /*unused*/) {
+        if (cnt++ == 2) {
+          blocked = true;
+          callWait.await([&]() { return callWaitFlag.load(); });
+          std::this_thread::sleep_for(
+              std::chrono::milliseconds(1'000)); // NOLINT
+        }
+      }));
+
+  auto queryCtx = createQueryCtx();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->getPath())
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kLocalMergeSpillEnabled, true)
+          .config(core::QueryConfig::kLocalMergeMaxNumMergeSources, 2)
+          .config(core::QueryConfig::kMaxOutputBatchRows, 10)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
+          .copyResults(pool()),
+      "Abort merge");
+  std::dynamic_pointer_cast<folly::CPUThreadPoolExecutor>(spillExecutor_)
+      ->join();
 }
 
 TEST_F(MergeTest, localMerge) {
@@ -612,4 +899,90 @@ TEST_F(MergeTest, offByOne) {
   params.queryCtx->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchRows, "6"}});
   assertQueryOrdered(params, "VALUES (0), (1), (2), (3), (4), (5), (10)", {0});
+}
+
+TEST_F(MergeTest, localMergeOutputSizeWithoutSpill) {
+  struct TestParam {
+    int numSources;
+    int numInputBatches;
+    int inputBatchSize;
+    int maxOutputBatchRows;
+    int maxOutputBatchBytes;
+    int numExpectedOutputBatches;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numSources {}, numInputBatches {}, inputBatchSize {}, maxOutputBatchRows {}, maxOutputBatchBytes {}, numExpectedOutputBatches {}",
+          numSources,
+          numInputBatches,
+          inputBatchSize,
+          maxOutputBatchRows,
+          maxOutputBatchBytes,
+          numExpectedOutputBatches);
+    }
+  } testSettings[]{
+      {1, 1, 1, 1, 1'000'000'000, 1},
+      {3, 1, 1, 1, 1'000'000'000, 3},
+      {3, 4, 1, 1, 1'000'000'000, 3 * 4},
+      {3, 4, 32, 1, 1'000'000'000, 3 * 4 * 32},
+      {1, 1, 1, 1024, 1'000'000'000, 1},
+      {3, 1, 1, 1024, 1'000'000'000, 1},
+      {3, 4, 32, 1024, 1'000'000'000, 1},
+      {1, 1, 1, 1, 1, 1},
+      {3, 1, 1, 1, 1, 3},
+      {3, 4, 1, 1, 1, 3 * 4},
+      {3, 4, 32, 1, 1, 3 * 4 * 32},
+      {1, 1, 1, 1024, 1, 1},
+      {3, 1, 1, 1024, 1, 3},
+      {3, 4, 1, 1024, 1, 3 * 4},
+      {3, 4, 32, 1024, 1, 3 * 4 * 32}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    testLocalMerge(
+        testData.numSources,
+        testData.numInputBatches,
+        testData.inputBatchSize,
+        testData.maxOutputBatchRows,
+        testData.maxOutputBatchBytes,
+        testData.numExpectedOutputBatches);
+  }
+}
+
+/// Tests that MultiThreadedTaskCursor correctly preserves FlatMapVector
+/// encoding when reading data directly without a merge step.
+TEST_F(MergeTest, preserveVectorEncoding) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      vectorMaker_.flatMapVector<int64_t, int64_t>({
+          {{1, 10}, {2, 20}},
+          {{1, 30}},
+          {{2, 40}, {3, 50}},
+      }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  params.maxDrivers = 2;
+
+  auto result = readCursor(params);
+  ASSERT_EQ(result.second.size(), 1);
+
+  auto output = result.second[0];
+  ASSERT_EQ(output->size(), 3);
+
+  auto mapColumn = output->childAt(1);
+  EXPECT_EQ(mapColumn->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  auto flatMapVector = mapColumn->as<FlatMapVector>();
+  EXPECT_EQ(flatMapVector->distinctKeys()->size(), 3);
+
+  auto verifier = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+      {{2, 40}, {3, 50}},
+  });
+  facebook::velox::test::assertEqualVectors(mapColumn, verifier);
 }

@@ -18,7 +18,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox::functions::aggregate;
@@ -186,33 +185,35 @@ class SumDataSizeForStatsAggregate
 } // namespace
 
 void registerSumDataSizeForStatsAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .typeVariable("T")
-                           .returnType("bigint")
-                           .intermediateType("bigint")
-                           .argumentType("T")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("T")
+          .build());
 
-  auto name = prefix + kSumDataSizeForStats;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
+        VELOX_CHECK_EQ(
+            argTypes.size(), 1, "{} takes only one argument", names.front());
         auto inputType = argTypes[0];
 
         return std::make_unique<SumDataSizeForStatsAggregate>(resultType);
       },
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

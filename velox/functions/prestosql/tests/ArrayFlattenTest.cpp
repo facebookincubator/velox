@@ -25,19 +25,20 @@ namespace {
 
 class ArrayFlattenTest : public FunctionBaseTest {
  protected:
-  void testExpression(
+  VectorPtr testExpression(
       const std::string& expression,
       const std::vector<VectorPtr>& input,
       const VectorPtr& expected) {
     auto result = evaluate(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
+    return result;
   }
 };
 
 /// Flatten integer arrays.
 TEST_F(ArrayFlattenTest, intArrays) {
-  const auto baseVector = makeArrayVector<int64_t>(
-      {{1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}});
+  const auto baseVector = makeArrayVectorFromJson<int64_t>(
+      {"[1, 1]", "[2,2]", "[3, 3]", "[4,4]", "[5, 5]", "[6, 6]"});
 
   // Create arrays of array vector using above base vector.
   // [[1, 1], [2, 2], [3, 3]]
@@ -55,7 +56,7 @@ TEST_F(ArrayFlattenTest, intArrays) {
 }
 
 /// Flatten arrays with null.
-TEST_F(ArrayFlattenTest, nullArray) {
+TEST_F(ArrayFlattenTest, nullArrayWithConsecutiveBaseElements) {
   const auto baseVector = makeNullableArrayVector<int64_t>(
       {{{1, 1}},
        std::nullopt,
@@ -76,5 +77,97 @@ TEST_F(ArrayFlattenTest, nullArray) {
       {{{1, 1, 3, 3}}, std::nullopt, {{5, std::nullopt, std::nullopt, 6}}});
 
   testExpression("flatten(c0)", {arrayOfArrays}, expected);
+}
+
+TEST_F(ArrayFlattenTest, nullArrayWithoutConsecutiveBaseElements) {
+  const auto baseVector = makeArrayVectorFromJson<int64_t>(
+      {"[1, 1]", "null", "[3, 3]", "[]", "[5, null]", "[null, 6]"});
+
+  // Create arrays of array vector using above base vector.
+  const auto reversedIndices = makeIndicesInReverse(6);
+  const auto mappedVector = wrapInDictionary(reversedIndices, baseVector);
+
+  // Create arrays of array vector using above mapped vector.
+  // [[null, 6], [5, null]]
+  // null
+  // [[3, 3], null, [1, 1]]
+  const auto arrayOfArrays = makeArrayVector({0, 3, 3}, mappedVector, {1});
+
+  // [[null, 6, 5, null]]
+  // null
+  // [[3, 3, 1, 1]]
+  const auto expected = makeNullableArrayVector<int64_t>(
+      {{{std::nullopt, 6, 5, std::nullopt}}, std::nullopt, {{3, 3, 1, 1}}});
+
+  testExpression("flatten(c0)", {arrayOfArrays}, expected);
+}
+
+TEST_F(ArrayFlattenTest, constantArrayWithConsecutiveBaseElements) {
+  const auto baseVector = makeArrayVectorFromJson<int64_t>(
+      {"[1, 1]", "null", "[3, 3]", "[]", "[5, null]", "[null, 6]"});
+  // Create arrays of array vector using above base vector.
+  // [[1, 1], null, [3, 3]]
+  // null
+  // [[], [5, null], [null, 6]]
+  const auto arrayOfArrays = makeArrayVector({0, 3, 3}, baseVector, {1});
+
+  // Create three element constant array by referencing the first element in
+  // 'arrayOfArrays'.
+  const auto constArrayOfArrays =
+      BaseVector::wrapInConstant(3, 0, arrayOfArrays);
+  // [[1, 1, 3, 3]]
+  // [[1, 1, 3, 3]]
+  // [[1, 1, 3, 3]]
+  const auto expected = makeArrayVector<int64_t>(
+      {{{1, 1, 3, 3}}, {{1, 1, 3, 3}}, {{1, 1, 3, 3}}});
+
+  // Enforce the constant encoding flatten path to trigger.
+  testExpression("flatten(c0)", {constArrayOfArrays}, expected);
+}
+
+TEST_F(ArrayFlattenTest, constantArrayWithoutConsecutiveBaseElements) {
+  const auto baseVector = makeArrayVectorFromJson<int64_t>(
+      {"[1, 1]", "null", "[3, 3]", "[]", "[5, null]", "[null, 6]"});
+  // Create arrays of array vector using above base vector.
+  const auto reversedIndices = makeIndicesInReverse(6);
+  const auto mappedVector = wrapInDictionary(reversedIndices, baseVector);
+  // Create arrays of array vector using above base vector.
+  // [[null, 6], [5, null], []]
+  // null
+  // [[3, 3], null, [1, 1]]
+  const auto arrayOfArrays = makeArrayVector({0, 3, 3}, mappedVector, {1});
+
+  // Create three element constant array by referencing the first element in
+  // 'arrayOfArrays'.
+  const auto constArrayOfArrays =
+      BaseVector::wrapInConstant(3, 0, arrayOfArrays);
+  // [[null, 6, 5, null]
+  // [[null, 6, 5, null]
+  // [[null, 6, 5, null]
+  const auto expected = makeNullableArrayVector<int64_t>(
+      std::vector<std::vector<std::optional<int64_t>>>{
+          {std::nullopt, 6, 5, std::nullopt},
+          {std::nullopt, 6, 5, std::nullopt},
+          {std::nullopt, 6, 5, std::nullopt}});
+  testExpression("flatten(c0)", {constArrayOfArrays}, expected);
+}
+
+TEST_F(ArrayFlattenTest, arrayOfConstantArrayWithConsecutiveIndices) {
+  const auto baseVector = makeArrayVector<int64_t>({{1, 1}});
+  const auto constVector = BaseVector::wrapInConstant(3, 0, baseVector);
+
+  // Create arrays of array vector using above constant vector.
+  // [[1, 1]]
+  // [[1, 1]]
+  // [[1, 1]]
+  const auto arrayOfArrays = makeArrayVector({0, 1, 2}, constVector);
+
+  // [1, 1]
+  // [1, 1]
+  // [1, 1]
+  const auto expected = makeArrayVector<int64_t>({{1, 1}, {1, 1}, {1, 1}});
+
+  const auto actual = testExpression("flatten(c0)", {arrayOfArrays}, expected);
+  ASSERT_FALSE(actual->as<ArrayVector>()->hasOverlappingRanges());
 }
 } // namespace

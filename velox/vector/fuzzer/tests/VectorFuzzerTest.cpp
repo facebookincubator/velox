@@ -22,6 +22,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/type/TypeEncodingUtil.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -39,6 +41,7 @@ class VectorFuzzerTest : public testing::Test {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     registerJsonType();
+    registerQDigestType();
   }
 
   memory::MemoryPool* pool() const {
@@ -91,6 +94,16 @@ class VectorFuzzerTest : public testing::Test {
 
   void validateMaxSizes(VectorPtr vector, size_t maxSize);
 
+  void assertTimeValuesInRange(const SimpleVector<int64_t>* timeVector) {
+    for (size_t i = 0; i < timeVector->size(); ++i) {
+      if (!timeVector->isNullAt(i)) {
+        auto timeValue = timeVector->valueAt(i);
+        ASSERT_GE(timeValue, TimeType::kMin);
+        ASSERT_LE(timeValue, TimeType::kMax);
+      }
+    }
+  }
+
  private:
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
@@ -110,6 +123,7 @@ TEST_F(VectorFuzzerTest, flatPrimitive) {
       VARCHAR(),
       VARBINARY(),
       DATE(),
+      TIME(),
       TIMESTAMP(),
       INTERVAL_DAY_TIME(),
       UNKNOWN(),
@@ -672,6 +686,47 @@ TEST_F(VectorFuzzerTest, timestamp) {
   ASSERT_TRUE(nanosFound);
 }
 
+TEST_F(VectorFuzzerTest, time) {
+  constexpr size_t vectorSize = 1'000;
+  VectorFuzzer::Options opts;
+  opts.vectorSize = vectorSize;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Test flat TIME vector.
+  auto timeVector = fuzzer.fuzzFlat(TIME());
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, timeVector->encoding());
+  ASSERT_TRUE(timeVector->type()->isTime());
+  ASSERT_EQ(vectorSize, timeVector->size());
+
+  auto flatTimeVector = timeVector->as<FlatVector<int64_t>>();
+  assertTimeValuesInRange(flatTimeVector);
+
+  // Test constant TIME vector.
+  auto constTimeVector = fuzzer.fuzzConstant(TIME(), vectorSize);
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, constTimeVector->encoding());
+  ASSERT_TRUE(constTimeVector->type()->isTime());
+  ASSERT_EQ(vectorSize, constTimeVector->size());
+
+  // Verify constant TIME value is in valid range.
+  auto constVector = constTimeVector->as<ConstantVector<int64_t>>();
+  if (!constVector->isNullAt(0)) {
+    auto timeValue = constVector->valueAt(0);
+    ASSERT_GE(timeValue, TimeType::kMin);
+    ASSERT_LE(timeValue, TimeType::kMax);
+  }
+
+  // Test dictionary TIME vector.
+  auto dictTimeVector =
+      fuzzer.fuzzDictionary(fuzzer.fuzzFlat(TIME(), 100), 500);
+  ASSERT_EQ(VectorEncoding::Simple::DICTIONARY, dictTimeVector->encoding());
+  ASSERT_TRUE(dictTimeVector->type()->isTime());
+
+  // Verify all TIME values in dictionary are in valid range.
+  auto dictVector = dictTimeVector->as<DictionaryVector<int64_t>>();
+  auto baseVector = dictVector->valueVector()->as<FlatVector<int64_t>>();
+  assertTimeValuesInRange(baseVector);
+}
+
 TEST_F(VectorFuzzerTest, assorted) {
   VectorFuzzer::Options opts;
   VectorFuzzer fuzzer(opts, pool());
@@ -993,14 +1048,14 @@ TEST_F(VectorFuzzerTest, randTypeByWidth) {
       {INTEGER(), ARRAY(BIGINT()), MAP(VARCHAR(), DOUBLE()), ROW({TINYINT()})});
   ASSERT_EQ(approximateTypeEncodingwidth(type), 7);
 
-  // Test randType by width. Results should be at least a RowType with one
-  // field, so the minimal type width is 2.
+  // Test randType by width. Results should has at least one field, so the
+  // minimal type width is 1.
   type = fuzzer.randRowTypeByWidth(-1);
-  ASSERT_GE(approximateTypeEncodingwidth(type), 2);
+  ASSERT_GE(approximateTypeEncodingwidth(type), 1);
   type = fuzzer.randRowTypeByWidth(0);
-  ASSERT_GE(approximateTypeEncodingwidth(type), 2);
+  ASSERT_GE(approximateTypeEncodingwidth(type), 1);
   type = fuzzer.randRowTypeByWidth(1);
-  ASSERT_GE(approximateTypeEncodingwidth(type), 2);
+  ASSERT_GE(approximateTypeEncodingwidth(type), 1);
 
   folly::Random::DefaultGenerator rng;
   rng.seed(0);
@@ -1033,9 +1088,9 @@ TEST_F(VectorFuzzerTest, customTypeGenerator) {
       if (decoded.isNullAt(j)) {
         continue;
       }
-      std::string value = decoded.valueAt<StringView>(j);
       try {
-        json = folly::parseJson(value, opts);
+        auto stringView = decoded.valueAt<StringView>(j);
+        json = folly::parseJson(std::string_view(stringView), opts);
       } catch (...) {
         EXPECT_TRUE(false);
       }
@@ -1075,9 +1130,10 @@ TEST_F(VectorFuzzerTest, jsonConstrained) {
       if (decoded.isNullAt(j)) {
         continue;
       }
-      std::string value = decoded.valueAt<StringView>(j);
       folly::dynamic json;
-      EXPECT_NO_THROW(json = folly::parseJson(value, jsonOpts));
+      auto stringView = decoded.valueAt<StringView>(j);
+      EXPECT_NO_THROW(
+          json = folly::parseJson(std::string_view(stringView), jsonOpts));
       EXPECT_TRUE(json.isNull() || json.isArray());
     }
   }
@@ -1095,8 +1151,105 @@ TEST_F(VectorFuzzerTest, setConstrained) {
 
   DecodedVector decoded(*vector, SelectivityVector(kSize));
   for (auto i = 0; i < kSize; ++i) {
-    std::string value = decoded.valueAt<StringView>(i);
+    auto value = decoded.valueAt<StringView>(i);
     EXPECT_TRUE(value == "a" || value == "b");
   }
+}
+
+TEST_F(VectorFuzzerTest, qdigestTypeGeneration) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.2;
+  opts.vectorSize = 10;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const auto qdigestRealType = QDIGEST(REAL());
+  const auto qdigestDoulbeType = QDIGEST(DOUBLE());
+  const auto qdigestBigIntType = QDIGEST(BIGINT());
+
+  // Test QDigest with BIGINT parameter
+  {
+    auto vector = fuzzer.fuzz(QDIGEST(BIGINT()));
+    ASSERT_NE(vector, nullptr);
+    EXPECT_TRUE(vector->type()->equivalent(*qdigestBigIntType));
+    EXPECT_EQ(vector->size(), opts.vectorSize);
+  }
+
+  // Test QDigest with REAL parameter
+  {
+    auto vector = fuzzer.fuzz(QDIGEST(REAL()));
+    ASSERT_NE(vector, nullptr);
+    EXPECT_TRUE(vector->type()->equivalent(*qdigestRealType));
+    EXPECT_EQ(vector->size(), opts.vectorSize);
+  }
+
+  // Test QDigest with DOUBLE parameter
+  {
+    auto vector = fuzzer.fuzz(QDIGEST(BIGINT()));
+    ASSERT_NE(vector, nullptr);
+    EXPECT_TRUE(vector->type()->equivalent(*qdigestBigIntType));
+    EXPECT_EQ(vector->size(), opts.vectorSize);
+  }
+}
+
+TEST_F(VectorFuzzerTest, nullRatioPatternVariety) {
+  // Test that we get variety in NULL patterns when feature is enabled
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 100;
+  opts.nullRatio = 0.2;
+  opts.useRandomNullPattern = true; // Enable random NULL pattern selection
+
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Track different null patterns we see
+  bool seenAllAtStart = false;
+  bool seenAllAtEnd = false;
+  bool seenScattered = false;
+
+  for (size_t iter = 0; iter < 200; ++iter) {
+    auto vector = fuzzer.fuzzFlat(INTEGER());
+    ASSERT_EQ(vector->size(), 100);
+
+    size_t nullCount = 0;
+    size_t firstNull = 0;
+    size_t lastNull = 0;
+    bool foundFirst = false;
+
+    for (size_t i = 0; i < vector->size(); ++i) {
+      if (vector->isNullAt(i)) {
+        nullCount++;
+        if (!foundFirst) {
+          firstNull = i;
+          foundFirst = true;
+        }
+        lastNull = i;
+      }
+    }
+
+    if (nullCount == 0) {
+      continue; // Skip empty vectors
+    }
+
+    // Detect patterns:
+    // HeadOnly: all nulls at start (firstNull < 5)
+    if (firstNull < 5 && lastNull < nullCount + 5) {
+      seenAllAtStart = true;
+    }
+    // TailOnly: all nulls at end (firstNull > 100 - nullCount - 5)
+    if (firstNull > 100 - nullCount - 5 && lastNull > 95) {
+      seenAllAtEnd = true;
+    }
+    // Scattered (Random or HeadAndTail with gaps)
+    size_t gapSize = lastNull - firstNull - nullCount + 1;
+    if (gapSize > 10) {
+      seenScattered = true;
+    }
+  }
+
+  // We should see all different patterns across 200 iterations
+  int patternsObserved = (seenAllAtStart ? 1 : 0) + (seenAllAtEnd ? 1 : 0) +
+      (seenScattered ? 1 : 0);
+  EXPECT_EQ(patternsObserved, 3)
+      << "Expected to observe multiple NULL patterns, but only saw "
+      << patternsObserved;
 }
 } // namespace

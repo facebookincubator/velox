@@ -42,8 +42,7 @@ static int32_t typeKindSize(TypeKind kind) {
 __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-inline void
-setBit(char* bits, uint32_t idx) {
+inline void setBit(char* bits, uint32_t idx) {
   auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
   bitsAs8Bit[idx / 8] |= (1 << (idx % 8));
 }
@@ -137,14 +136,17 @@ RowContainer::RowContainer(
     bool isJoinBuild,
     bool hasProbedFlag,
     bool hasNormalizedKeys,
+    bool useListRowIndex,
     memory::MemoryPool* pool)
     : keyTypes_(keyTypes),
       nullableKeys_(nullableKeys),
       isJoinBuild_(isJoinBuild),
       hasNormalizedKeys_(hasNormalizedKeys),
+      useListRowIndex_(useListRowIndex),
       stringAllocator_(std::make_unique<HashStringAllocator>(pool)),
       accumulators_(accumulators),
-      rows_(pool) {
+      rows_(pool),
+      rowPointers_(StlAllocator<char*>(stringAllocator_.get())) {
   // Compute the layout of the payload row.  The row has keys, null flags,
   // accumulators, dependent fields. All fields are fixed width. If variable
   // width data is referenced, this is done with StringView(for VARCHAR) and
@@ -174,17 +176,17 @@ RowContainer::RowContainer(
   // bits. 'numRowsWithNormalizedKey_' gives the number of rows with
   // the extra field.
   int32_t offset = 0;
-  int32_t nullOffset = 0;
+  int32_t flagOffset = 0;
   bool isVariableWidth = false;
   for (auto& type : keyTypes_) {
     typeKinds_.push_back(type->kind());
     types_.push_back(type);
     offsets_.push_back(offset);
     offset += typeKindSize(type->kind());
-    nullOffsets_.push_back(nullOffset);
+    nullOffsets_.push_back(flagOffset);
     isVariableWidth |= !type->isFixedWidth();
     if (nullableKeys_) {
-      ++nullOffset;
+      ++flagOffset;
     }
   }
   // Make offset at least sizeof pointer so that there is space for a
@@ -192,18 +194,16 @@ RowContainer::RowContainer(
   offset = std::max<int32_t>(offset, sizeof(void*));
   const int32_t firstAggregateOffset = offset;
   if (!accumulators.empty()) {
-    // This moves nullOffset to the start of the next byte.
+    // This moves flagOffset to the start of the next byte.
     // This is to guarantee the null and initialized bits for an aggregate
     // always appear in the same byte.
-    nullOffset = (nullOffset + 7) & -8;
+    flagOffset = (flagOffset + 7) & -8;
   }
   for (const auto& accumulator : accumulators) {
-    // Initialized bit.  Set when the accumulator is initialized.
-    nullOffsets_.push_back(nullOffset);
-    ++nullOffset;
     // Null bit.
-    nullOffsets_.push_back(nullOffset);
-    ++nullOffset;
+    nullOffsets_.push_back(flagOffset);
+    // Increment for two bits: null bit and following initialized bit.
+    flagOffset += kNumAccumulatorFlags;
     isVariableWidth |= !accumulator.isFixedSize();
     usesExternalMemory_ |= accumulator.usesExternalMemory();
     alignment_ = combineAlignments(accumulator.alignment(), alignment_);
@@ -211,21 +211,19 @@ RowContainer::RowContainer(
   for (auto& type : dependentTypes) {
     types_.push_back(type);
     typeKinds_.push_back(type->kind());
-    nullOffsets_.push_back(nullOffset);
-    ++nullOffset;
+    nullOffsets_.push_back(flagOffset);
+    ++flagOffset;
     isVariableWidth |= !type->isFixedWidth();
   }
   if (hasProbedFlag) {
-    nullOffsets_.push_back(nullOffset);
-    probedFlagOffset_ = nullOffset + firstAggregateOffset * 8;
-    ++nullOffset;
+    probedFlagOffset_ = flagOffset + firstAggregateOffset * 8;
+    ++flagOffset;
   }
   // Free flag.
-  nullOffsets_.push_back(nullOffset);
-  freeFlagOffset_ = nullOffset + firstAggregateOffset * 8;
-  ++nullOffset;
+  freeFlagOffset_ = flagOffset + firstAggregateOffset * 8;
+  ++flagOffset;
   // Add 1 to the last null offset to get the number of bits.
-  flagBytes_ = bits::nbytes(nullOffsets_.back() + 1);
+  flagBytes_ = bits::nbytes(flagOffset);
   // Fixup 'nullOffsets_' to be the bit number from the start of the row.
   for (int32_t i = 0; i < nullOffsets_.size(); ++i) {
     nullOffsets_[i] += firstAggregateOffset * 8;
@@ -250,14 +248,6 @@ RowContainer::RowContainer(
     offset += sizeof(void*);
   }
   fixedRowSize_ = bits::roundUp(offset, alignment_);
-  // A distinct hash table has no aggregates and if the hash table has
-  // no nulls, it may be that there are no null flags.
-  if (!nullOffsets_.empty()) {
-    // All flags like free and probed flags and null flags for keys and non-keys
-    // start as 0. This is also used to mark aggregates as uninitialized on row
-    // creation.
-    initialNulls_.resize(flagBytes_, 0x0);
-  }
   originalNormalizedKeySize_ = hasNormalizedKeys_
       ? bits::roundUp(sizeof(normalized_key_t), alignment_)
       : 0;
@@ -268,16 +258,7 @@ RowContainer::RowContainer(
         offsets_[i],
         (nullableKeys_ || i >= keyTypes_.size()) ? nullOffsets_[nullOffsetsPos]
                                                  : RowColumn::kNotNullOffset);
-
-    // offsets_ contains the offsets for keys, then accumulators, then dependent
-    // columns.  This captures the case where i is the index of an accumulator.
-    if (!accumulators.empty() && i >= keyTypes_.size() &&
-        i < keyTypes_.size() + accumulators.size()) {
-      // Aggregates have null flags and initialized flags.
-      nullOffsetsPos += kNumAccumulatorFlags;
-    } else {
-      ++nullOffsetsPos;
-    }
+    ++nullOffsetsPos;
   }
   rowColumnsStats_.resize(types_.size());
 }
@@ -301,8 +282,22 @@ char* RowContainer::newRow() {
     if (normalizedKeySize_) {
       ++numRowsWithNormalizedKey_;
     }
+
+    if (useListRowIndex_) {
+      rowPointers_.push_back(row);
+    }
   }
   return initializeRow(row, false /* reuse */);
+}
+
+void RowContainer::setAllNull(char* row) {
+  VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_));
+  removeOrUpdateRowColumnStats(row, /*setToNull=*/true);
+  if (!nullOffsets_.empty()) {
+    for (auto i : nullOffsets_) {
+      row[nullByte(i)] |= nullMask(i);
+    }
+  }
 }
 
 char* RowContainer::initializeRow(char* row, bool reuse) {
@@ -317,10 +312,9 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
     ::memset(row, 0, fixedRowSize_);
   }
   if (!nullOffsets_.empty()) {
-    ::memcpy(
-        row + nullByte(nullOffsets_[0]),
-        initialNulls_.data(),
-        initialNulls_.size());
+    // Sets all null and initialized bits to 0 (for each accumulator,
+    // initialized bit follows the null bit).
+    ::memset(row + nullByte(nullOffsets_[0]), 0x0, flagBytes_);
   }
   if (rowSizeOffset_) {
     variableRowSize(row) = 0;
@@ -361,7 +355,7 @@ void RowContainer::eraseRows(folly::Range<char**> rows) {
 }
 
 int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) const {
-  raw_vector<folly::Range<char*>> ranges;
+  raw_vector<folly::Range<char*>> ranges(pool());
   ranges.resize(rows_.numRanges());
   for (auto i = 0; i < rows_.numRanges(); ++i) {
     ranges[i] = rows_.rangeAt(i);
@@ -370,8 +364,8 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) const {
       ranges.begin(), ranges.end(), [](const auto& left, const auto& right) {
         return left.data() < right.data();
       });
-  raw_vector<uint64_t> starts;
-  raw_vector<uint64_t> sizes;
+  raw_vector<uint64_t> starts(pool());
+  raw_vector<uint64_t> sizes(pool());
   starts.reserve(ranges.size());
   sizes.reserve(ranges.size());
   for (const auto& range : ranges) {
@@ -599,7 +593,7 @@ int32_t RowContainer::variableSizeAt(const char* row, column_index_t column)
   }
 
   const auto typeKind = typeKinds_[column];
-  if (typeKind == TypeKind::VARCHAR || typeKind == TypeKind::VARBINARY) {
+  if (is_string_kind(typeKind)) {
     return reinterpret_cast<const StringView*>(row + rowColumn.offset())
         ->size();
   } else {
@@ -625,7 +619,7 @@ int32_t RowContainer::extractVariableSizeAt(
   }
 
   const auto typeKind = typeKinds_[column];
-  if (typeKind == TypeKind::VARCHAR || typeKind == TypeKind::VARBINARY) {
+  if (is_string_kind(typeKind)) {
     const auto value = valueAt<StringView>(row, rowColumn.offset());
     const auto size = value.size();
     ::memcpy(output, &size, 4);
@@ -663,7 +657,7 @@ int32_t RowContainer::storeVariableSizeAt(
   // First 4 bytes is the size of the data.
   const auto size = *reinterpret_cast<const int32_t*>(data);
 
-  if (typeKind == TypeKind::VARCHAR || typeKind == TypeKind::VARBINARY) {
+  if (is_string_kind(typeKind)) {
     if (size > 0) {
       stringAllocator_->copyMultipart(
           StringView(data + 4, size), row, rowColumn.offset());
@@ -901,13 +895,11 @@ void RowContainer::hashTyped(
                       : BaseVector::kNullHash;
     } else {
       uint64_t hash;
-      if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+      if constexpr (is_string_kind(Kind)) {
         hash =
             folly::hasher<StringView>()(HashStringAllocator::contiguousString(
                 valueAt<StringView>(row, offset), storage));
-      } else if constexpr (
-          Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
-          Kind == TypeKind::MAP) {
+      } else if constexpr (is_nested_kind(Kind)) {
         auto in = prepareRead(row, offset);
         hash = ContainerRowSerde::hash(in, type);
       } else if constexpr (typeProvidesCustomComparison) {
@@ -977,6 +969,8 @@ void RowContainer::clear() {
   hasDuplicateRows_ = false;
 
   rows_.clear();
+  rowPointers_.clear();
+  rowPointers_.shrink_to_fit();
   stringAllocator_->clear();
   numRows_ = 0;
   numRowsWithNormalizedKey_ = 0;
@@ -1038,7 +1032,8 @@ std::optional<int64_t> RowContainer::estimateRowSize() const {
   }
   int64_t freeBytes = rows_.freeBytes() + fixedRowSize_ * numFreeRows_;
   int64_t usedSize = rows_.allocatedBytes() - freeBytes +
-      stringAllocator_->retainedSize() - stringAllocator_->freeSpace();
+      stringAllocator_->retainedSize() - stringAllocator_->freeSpace() -
+      rowPointers_.capacity() * sizeof(char*);
   int64_t rowSize = usedSize / numRows_;
   VELOX_CHECK_GT(
       rowSize, 0, "Estimated row size of the RowContainer must be positive.");

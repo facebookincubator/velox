@@ -68,6 +68,8 @@ class StringImplTest : public testing::Test {
         {"\u1E87", "\u1E86"},
         {"\u1E8B", "\u1E8A"},
         {"\u1E8F", "\u1E8E"},
+        {"πας", "ΠΑΣ"},
+        {"παςa", "ΠΑΣA"},
     };
   }
 
@@ -109,7 +111,121 @@ class StringImplTest : public testing::Test {
         {"\u1E6A", "\u1E6B"},
         {"\u1E86", "\u1E87"},
         {"\u1E8A", "\u1E8B"},
-        {"\u1E8E", "\u1E8F"}};
+        {"\u1E8E", "\u1E8F"},
+        {"ΠΑΣ", "πασ"},
+        {"ΠΑΣA", "πασa"},
+    };
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapUnicodePrestoTestData() {
+    return {
+        {"BİLGİ", "Bilgi"},
+        {"\u0130\u0130", "\u0130\u0069"},
+        {"foo\u0020bar", "Foo\u0020Bar"},
+        {"foo\u0009bar", "Foo\u0009Bar"},
+        {"foo\u000Abar", "Foo\u000ABar"},
+        {"foo\u000Dbar", "Foo\u000DBar"},
+        {"foo\u000Bbar", "Foo\u000BBar"},
+        {"foo\u000Cbar", "Foo\u000CBar"},
+        {"foo\u0009\u000A\u000D\u000B\u000Cbar",
+         "Foo\u0009\u000A\u000D\u000B\u000CBar"},
+        {"foo\u0020\u0009\u000Abar", "Foo\u0020\u0009\u000ABar"},
+        {"foo\u1680bar", "Foo\u1680Bar"},
+        {"foo\u2000bar", "Foo\u2000Bar"},
+        {"foo\u2001bar", "Foo\u2001Bar"},
+        {"foo\u2002bar", "Foo\u2002Bar"},
+        {"foo\u2003bar", "Foo\u2003Bar"},
+        {"foo\u2004bar", "Foo\u2004Bar"},
+        {"foo\u2005bar", "Foo\u2005Bar"},
+        {"foo\u2006bar", "Foo\u2006Bar"},
+        {"foo\u2008bar", "Foo\u2008Bar"},
+        {"foo\u2009bar", "Foo\u2009Bar"},
+        {"foo\u200Abar", "Foo\u200ABar"},
+        {"foo\u2028bar", "Foo\u2028Bar"},
+        {"foo\u2029bar", "Foo\u2029Bar"},
+        {"foo\u205Fbar", "Foo\u205FBar"},
+        {"foo\u3000bar", "Foo\u3000Bar"},
+        {"foo\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200Abar",
+         "Foo\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200ABar"},
+        {"\u00E9l\u00E8ve\u000Atr\u00E8s-intelligent",
+         "\u00C9l\u00E8ve\u000ATr\u00E8s-intelligent"},
+        // Below whitespaces are not considered as whitespace in presto
+        {"foo\u0085Bar", "Foo\u0085bar"},
+        {"foo\u00A0Bar", "Foo\u00A0bar"},
+        {"foo\u2007Bar", "Foo\u2007bar"},
+    };
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapAsciiPrestoTestData() {
+    return {
+        {"foo bar", "Foo Bar"},
+        {"foo\nbar", "Foo\nBar"},
+        {"foo \t\nbar", "Foo \t\nBar"}};
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapUnicodeSparkTestData() {
+    return {
+        {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
+        {"αβγδεζηθικλμνξοπρςστυφχψ", "Αβγδεζηθικλμνξοπρςστυφχψ"},
+        {"абвгдежзийклмнопрстуфхцчшщъыьэюя",
+         "Абвгдежзийклмнопрстуфхцчшщъыьэюя"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"1234", "1234"},
+        {"", ""},
+        {"élève très-intelligent", "Élève Très-intelligent"},
+        {"mañana-por_la_tarde!", "Mañana-por_la_tarde!"},
+        {"добро-пожаловать.тест", "Добро-пожаловать.тест"},
+        {"çalışkan öğrenci@üniversite.tr", "Çalışkan Öğrenci@üniversite.tr"},
+        {"emoji😊test🚀case", "Emoji😊test🚀case"},
+        {"тест@пример.рф", "Тест@пример.рф"},
+        {"BİLGİ", "Bi̇lgi̇"},
+        {"\u0130\u0130", "\u0130\u0069\u0307"},
+        {"İstanbul", "İstanbul"}};
+  }
+
+  static std::vector<std::pair<std::string, std::string>>
+  getInitcapAsciiSparkTestData() {
+    return {
+        {"abcdefg", "Abcdefg"},
+        {" abcdefg", " Abcdefg"},
+        {" abc defg", " Abc Defg"},
+        {"ABCDEFG", "Abcdefg"},
+        {"a B c D e F g", "A B C D E F G"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""},
+        {"urna.Ut@egetdictumplacerat.edu", "Urna.ut@egetdictumplacerat.edu"},
+        {"nibh.enim@egestas.ca", "Nibh.enim@egestas.ca"},
+        {"in@Donecat.ca", "In@donecat.ca"},
+        {"sodales@blanditviverraDonec.ca", "Sodales@blanditviverradonec.ca"},
+        {"sociis.natoque.penatibus@vitae.org",
+         "Sociis.natoque.penatibus@vitae.org"},
+        {"john_doe-123@example-site.com", "John_doe-123@example-site.com"},
+        {"MIXED.case-EMAIL_42@domain.NET", "Mixed.case-email_42@domain.net"},
+        {"...weird..case@@", "...weird..case@@"},
+        {"user-name+filter@sub.mail.org", "User-name+filter@sub.mail.org"},
+        {"CAPS_LOCK@DOMAIN.COM", "Caps_lock@domain.com"},
+        {"__init__.py@example.dev", "__init__.py@example.dev"}};
+  }
+
+  static void testTruncate(
+      const std::string& input,
+      int32_t numCodePoints,
+      const std::string& expected) {
+    EXPECT_EQ(truncateUtf8(input, numCodePoints), expected);
+  }
+
+  static void testRoundUp(
+      const std::string& input,
+      int32_t numCodePoints,
+      const std::optional<std::string>& expected) {
+    EXPECT_EQ(roundUpUtf8(input, numCodePoints), expected);
   }
 };
 
@@ -364,15 +480,11 @@ TEST_F(StringImplTest, badUnicodeLength) {
 TEST_F(StringImplTest, codePointToString) {
   auto testValidInput = [](const int64_t codePoint,
                            const std::string& expectedString) {
-    core::StringWriter output;
-    codePointToString(output, codePoint);
-    ASSERT_EQ(
-        StringView(expectedString), StringView(output.data(), output.size()));
+    ASSERT_EQ(StringView(expectedString), codePointToString(codePoint));
   };
 
   auto testInvalidCodePoint = [](const int64_t codePoint) {
-    core::StringWriter output;
-    EXPECT_THROW(codePointToString(output, codePoint), VeloxUserError)
+    EXPECT_THROW(codePointToString(codePoint), VeloxUserError)
         << "codePoint " << codePoint;
   };
 
@@ -392,9 +504,8 @@ TEST_F(StringImplTest, charToCodePoint) {
   };
 
   auto testValidInputRoundTrip = [](const int64_t codePoint) {
-    core::StringWriter string;
-    codePointToString(string, codePoint);
-    ASSERT_EQ(charToCodePoint(string), codePoint) << "codePoint " << codePoint;
+    ASSERT_EQ(charToCodePoint(codePointToString(codePoint)), codePoint)
+        << "codePoint " << codePoint;
   };
 
   auto testExpectDeath = [](const std::string& charString) {
@@ -889,4 +1000,145 @@ TEST_F(StringImplTest, isAscii) {
   memcpy(&s[0], alpha, strlen(alpha));
   ASSERT_FALSE(isAscii(s.data(), strlen(alpha)));
   ASSERT_FALSE(isAscii(s.data(), s.size()));
+}
+
+TEST_F(StringImplTest, initcapUnicodePresto) {
+  for (const auto& [input, expected] : getInitcapUnicodePrestoTestData()) {
+    std::string output;
+    initcap<
+        /*strictSpace=*/false,
+        /*isAscii=*/false,
+        /*turkishCasing=*/false,
+        /*greekFinalSigma=*/false>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+
+TEST_F(StringImplTest, initcapAsciiPresto) {
+  for (const auto& [input, expected] : getInitcapAsciiPrestoTestData()) {
+    std::string output;
+    initcap<
+        /*strictSpace=*/false,
+        /*isAscii=*/true,
+        /*turkishCasing=*/false,
+        /*greekFinalSigma=*/false>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+TEST_F(StringImplTest, initcapUnicodeSpark) {
+  for (const auto& [input, expected] : getInitcapUnicodeSparkTestData()) {
+    std::string output;
+    initcap<
+        /*strictSpace=*/true,
+        /*isAscii=*/false,
+        /*turkishCasing=*/true,
+        /*greekFinalSigma=*/true>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+
+TEST_F(StringImplTest, initcapAsciiSpark) {
+  for (const auto& [input, expected] : getInitcapAsciiSparkTestData()) {
+    std::string output;
+    initcap<
+        /*strictSpace=*/true,
+        /*isAscii=*/true,
+        /*turkishCasing=*/true,
+        /*greekFinalSigma=*/true>(output, input);
+    ASSERT_EQ(output, expected);
+  }
+}
+
+TEST_F(StringImplTest, truncate) {
+  // ASCII string.
+  std::string ascii = "Hello, world!";
+  testTruncate(ascii, 0, "");
+  testTruncate(ascii, 1, "H");
+  testTruncate(ascii, 5, "Hello");
+  testTruncate(ascii, 13, ascii);
+  testTruncate(ascii, 20, ascii);
+
+  // String with multi-bytes characters.
+  std::string unicode = "Hello, 世界!";
+  testTruncate(unicode, 7, "Hello, ");
+  testTruncate(unicode, 8, "Hello, 世");
+  testTruncate(unicode, 9, "Hello, 世界");
+  testTruncate(unicode, 10, unicode);
+  testTruncate(unicode, 20, unicode);
+
+  // String with emoji (surrogate pairs).
+  std::string emoji = "Hello 🌍!";
+  testTruncate(emoji, 6, "Hello ");
+  testTruncate(emoji, 7, "Hello 🌍");
+  testTruncate(emoji, 8, emoji);
+  testTruncate(emoji, 10, emoji);
+
+  std::string empty = "";
+  testTruncate(empty, 0, "");
+  testTruncate(empty, 5, "");
+
+  std::string mixed = "café世界🌍";
+  testTruncate(mixed, 3, "caf");
+  testTruncate(mixed, 4, "café");
+  testTruncate(mixed, 5, "café世");
+  testTruncate(mixed, 6, "café世界");
+  testTruncate(mixed, 7, mixed);
+}
+
+TEST_F(StringImplTest, roundUp) {
+  std::string ascii = "Hello, world!";
+  // Empty truncation returns nullopt.
+  testRoundUp(ascii, 0, std::nullopt);
+  // 'o' -> 'p'.
+  testRoundUp(ascii, 5, "Hellp");
+  testRoundUp(ascii, ascii.length(), ascii);
+
+  ascii = "Customer#000001500";
+  // '5' -> '6'.
+  testRoundUp(ascii, 16, "Customer#0000016");
+
+  std::string unicode = "Hello, 世界!";
+  testRoundUp(unicode, 8, "Hello, 丗");
+
+  // No truncation needed.
+  std::string shortString = "Hi";
+  testRoundUp(shortString, 2, shortString);
+  testRoundUp(shortString, 20, shortString);
+
+  // Last character is already at maximum value, returns nullopt.
+  std::string maxChar = "Hello\U0010FFFF";
+  testRoundUp(maxChar, 6, maxChar);
+
+  std::string empty = "";
+  testRoundUp(empty, 0, "");
+  testRoundUp(empty, 5, "");
+
+  std::string single = "a";
+  // No truncation needed.
+  testRoundUp(single, 1, "a");
+
+  std::string zChar = "zz";
+  // 'z' -> '{'.
+  testRoundUp(zChar, 1, "{");
+
+  std::string emojiTest = "🌍!!";
+  // U1F30D (🌍) -> U1F30E.
+  testRoundUp(emojiTest, 1, "\U0001F30E");
+
+  std::string multiByteTest = "café+";
+  // 'f' -> 'g'.
+  testRoundUp(multiByteTest, 3, "cag");
+  // 'é' -> 'ê'.
+  testRoundUp(multiByteTest, 4, "cafê");
+
+  // Test surrogate boundary: U+D7FF should increment to U+E000 (skipping
+  // surrogate range U+D800-U+DFFF).
+  // U+D7FF followed by "!!"
+  std::string surrogateTest = "\xED\x9F\xBF!!";
+  // U+E000
+  testRoundUp(surrogateTest, 1, "\xEE\x80\x80");
+
+  // Test all max code points - should return nullopt.
+  std::string allMax = "\U0010FFFF\U0010FFFF";
+  testRoundUp(allMax, 1, std::nullopt);
 }

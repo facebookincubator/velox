@@ -17,12 +17,9 @@
 #include "velox/functions/prestosql/json/SIMDJsonExtractor.h"
 
 namespace facebook::velox::functions {
-namespace {
-using JsonVector = std::vector<simdjson::ondemand::value>;
-}
 
 /* static */ SIMDJsonExtractor& SIMDJsonExtractor::getInstance(
-    folly::StringPiece path) {
+    std::string_view path) {
   // Cache tokenize operations in JsonExtractor across invocations in the same
   // thread for the same JsonPath.
   thread_local static std::
@@ -104,7 +101,7 @@ simdjson::error_code extractArray(
     }
     auto val = jsonArray.at(i);
     if (!val.error()) {
-      ret.emplace(std::move(val));
+      ret.emplace(std::move(val.value()));
     }
   }
   return simdjson::SUCCESS;

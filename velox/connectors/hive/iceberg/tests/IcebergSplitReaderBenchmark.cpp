@@ -99,8 +99,6 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
     const std::string& dataFilePath,
     const std::vector<IcebergDeleteFile>& deleteFiles) {
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  std::unordered_map<std::string, std::string> customSplitInfo;
-  customSplitInfo["table_format"] = "hive-iceberg";
 
   auto readFile = std::make_shared<LocalReadFile>(dataFilePath);
   const int64_t fileSize = readFile->size();
@@ -113,7 +111,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
       fileSize,
       partitionKeys,
       std::nullopt,
-      customSplitInfo,
+      std::unordered_map<std::string, std::string>{},
       nullptr,
       /*cacheable=*/true,
       deleteFiles);
@@ -215,7 +213,7 @@ std::shared_ptr<ScanSpec> IcebergSplitReaderBenchmark::createScanSpec(
     RowTypePtr& rowType,
     const std::vector<FilterSpec>& filterSpecs,
     std::vector<uint64_t>& hitRows,
-    std::unordered_map<Subfield, std::unique_ptr<Filter>>& filters) {
+    SubfieldFilters& filters) {
   std::unique_ptr<FilterGenerator> filterGenerator =
       std::make_unique<FilterGenerator>(rowType, 0);
   filters = filterGenerator->makeSubfieldFilters(
@@ -271,7 +269,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
       createFilterSpec(columnName, startPct, selectPct, rowType, false, false));
 
   std::vector<uint64_t> hitRows;
-  std::unordered_map<Subfield, std::unique_ptr<Filter>> filters;
+  SubfieldFilters filters;
   auto scanSpec =
       createScanSpec(*batches, rowType, filterSpecs, hitRows, filters);
 
@@ -293,10 +291,9 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
       std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>(), true));
   const RowTypePtr readerOutputType;
-  const std::shared_ptr<io::IoStatistics> ioStats =
+  const std::shared_ptr<io::IoStatistics> ioStatistics =
       std::make_shared<io::IoStatistics>();
-  const std::shared_ptr<filesystems::File::IoStats> fsStats =
-      std::make_shared<filesystems::File::IoStats>();
+  const std::shared_ptr<IoStats> ioStats = std::make_shared<IoStats>();
 
   std::shared_ptr<memory::MemoryPool> root =
       memory::memoryManager()->addRootPool(
@@ -324,7 +321,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           "");
 
   FileHandleFactory fileHandleFactory(
-      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(
+      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
           hiveConfig->numCacheFileHandles()),
       std::make_unique<FileHandleGenerator>(connectorSessionProperties_));
 
@@ -341,8 +338,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             connectorQueryCtx_.get(),
             hiveConfig,
             rowType,
+            ioStatistics,
             ioStats,
-            fsStats,
             &fileHandleFactory,
             nullptr,
             scanSpec);

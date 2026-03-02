@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <string>
+
+#include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+
+namespace facebook::velox::core {
+
+/// Defines table writer output related config properties that are shared
+/// between TableWriter and TableWriteMerger.
+///
+/// TODO: the table write output processing is Prestissimo specific. Consider
+/// move these part logic to Prestissimo and pass to Velox through a customized
+/// output processing callback.
+class TableWriteTraits {
+ public:
+  /// Defines the column names/types in table write output.
+  static std::string rowCountColumnName();
+  static std::string fragmentColumnName();
+  static std::string contextColumnName();
+
+  static const TypePtr& rowCountColumnType();
+  static const TypePtr& fragmentColumnType();
+  static const TypePtr& contextColumnType();
+
+  /// Defines the column channels in table write output.
+  /// Both the statistics and the row_count + fragments are transferred over the
+  /// same communication link between the TableWriter and TableFinish. Thus the
+  /// multiplexing is needed.
+  ///
+  ///  The transferred page layout looks like:
+  /// [row_count_channel], [fragment_channel], [context_channel],
+  /// [statistic_channel_1] ... [statistic_channel_N]]
+  ///
+  /// [row_count_channel] - contains number of rows processed by a TableWriter
+  /// [fragment_channel] - contains data provided by the DataSink#finish
+  /// [statistic_channel_1] ...[statistic_channel_N] -
+  /// contain aggregated statistics computed by the statistics aggregation
+  /// within the TableWriter
+  ///
+  /// For convenience, we never set both: [row_count_channel] +
+  /// [fragment_channel] and the [statistic_channel_1] ...
+  /// [statistic_channel_N].
+  ///
+  /// If this is a row that holds statistics - the [row_count_channel] +
+  /// [fragment_channel] will be NULL.
+  ///
+  /// If this is a row that holds the row count
+  /// or the fragment - all the statistics channels will be set to NULL.
+  static constexpr int32_t kRowCountChannel = 0;
+  static constexpr int32_t kFragmentChannel = 1;
+  static constexpr int32_t kContextChannel = 2;
+  static constexpr int32_t kStatsChannel = 3;
+
+  /// Defines the names of metadata in commit context in table writer output.
+  static constexpr std::string_view kLifeSpanContextKey = "lifespan";
+  static constexpr std::string_view kTaskIdContextKey = "taskId";
+  static constexpr std::string_view kCommitStrategyContextKey =
+      "pageSinkCommitStrategy";
+  static constexpr std::string_view klastPageContextKey = "lastPage";
+
+  static RowTypePtr outputType(
+      const std::optional<core::ColumnStatsSpec>& columnStatsSpec);
+
+  /// Returns the parsed commit context from table writer 'output'.
+  static folly::dynamic getTableCommitContext(const RowVectorPtr& output);
+
+  /// Returns the sum of row counts from table writer 'output'.
+  static int64_t getRowCount(const RowVectorPtr& output);
+
+  /// Creates the statistics output.
+  /// Statistics page layout (aggregate by partition):
+  /// row     fragments     context     [partition]   stats1     stats2 ...
+  /// null       null          X          [X]            X          X
+  /// null       null          X          [X]            X          X
+  static RowVectorPtr createAggregationStatsOutput(
+      RowTypePtr outputType,
+      RowVectorPtr aggregationOutput,
+      StringView tableCommitContext,
+      velox::memory::MemoryPool* pool);
+};
+
+} // namespace facebook::velox::core

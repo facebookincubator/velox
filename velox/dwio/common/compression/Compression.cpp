@@ -35,6 +35,8 @@ using memory::MemoryPool;
 
 namespace {
 
+constexpr int kGzipCodec = 16;
+
 class ZstdCompressor : public Compressor {
  public:
   explicit ZstdCompressor(int32_t level) : Compressor{level} {}
@@ -57,7 +59,7 @@ ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
 
 class ZlibCompressor : public Compressor {
  public:
-  explicit ZlibCompressor(int32_t level);
+  explicit ZlibCompressor(int32_t level, int32_t windowBits, bool isGzip);
 
   ~ZlibCompressor() override;
 
@@ -68,13 +70,17 @@ class ZlibCompressor : public Compressor {
   z_stream stream_;
 };
 
-ZlibCompressor::ZlibCompressor(int32_t level)
+ZlibCompressor::ZlibCompressor(int32_t level, int32_t windowBits, bool isGzip)
     : Compressor{level}, isCompressCalled_{false} {
   stream_.zalloc = Z_NULL;
   stream_.zfree = Z_NULL;
   stream_.opaque = Z_NULL;
+  if (isGzip) {
+    windowBits = (windowBits < 0 ? -windowBits : windowBits) | kGzipCodec;
+  }
   DWIO_ENSURE_EQ(
-      deflateInit2(&stream_, level_, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY),
+      deflateInit2(
+          &stream_, level_, Z_DEFLATED, windowBits, 8, Z_DEFAULT_STRATEGY),
       Z_OK,
       "Error while calling deflateInit2() for zlib.");
 }
@@ -150,9 +156,9 @@ ZlibDecompressor::ZlibDecompressor(
   zstream_.next_out = Z_NULL;
   zstream_.avail_out = folly::to<uInt>(blockSize);
   int zlibWindowBits = windowBits;
-  constexpr int GZIP_DETECT_CODE = 32;
   if (isGzip) {
-    zlibWindowBits = zlibWindowBits | GZIP_DETECT_CODE;
+    zlibWindowBits =
+        (zlibWindowBits < 0 ? -zlibWindowBits : zlibWindowBits) | kGzipCodec;
   }
   const auto result = inflateInit2(&zstream_, zlibWindowBits);
   DWIO_ENSURE_EQ(
@@ -392,9 +398,6 @@ uint64_t Lz4Decompressor::decompressInternal(
   return static_cast<uint64_t>(result);
 }
 
-// NOTE: We do not keep `ZSTD_DCtx' around on purpose, because if we keep it
-// around, in flat map column reader we have hundreds of thousands of
-// decompressors at same time and causing OOM.
 class ZstdDecompressor : public Decompressor {
  public:
   explicit ZstdDecompressor(
@@ -418,7 +421,10 @@ uint64_t ZstdDecompressor::decompress(
     uint64_t srcLength,
     char* dest,
     uint64_t destLength) {
-  auto ret = ZSTD_decompress(dest, destLength, src, srcLength);
+  // Reuse 'ZSTD_DCtx' per-thread to avoid repeated allocations.
+  thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> ctx{
+      ZSTD_createDCtx(), ZSTD_freeDCtx};
+  auto ret = ZSTD_decompressDCtx(ctx.get(), dest, destLength, src, srcLength);
   DWIO_ENSURE(
       !ZSTD_isError(ret),
       "ZSTD returned an error: ",
@@ -549,6 +555,8 @@ bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
     *size = static_cast<int32_t>(availSize);
     outputBufferPtr_ = inputBufferPtr_ + availSize;
     outputBufferLength_ = 0;
+    inputBufferPtr_ += availSize;
+    remainingLength_ -= availSize;
   } else {
     DWIO_ENSURE_EQ(
         state_,
@@ -561,42 +569,49 @@ bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
         getDecompressedLength(inputBufferPtr_, availSize).first);
 
     reset();
-    zstream_.next_in =
-        reinterpret_cast<Bytef*>(const_cast<char*>(inputBufferPtr_));
-    zstream_.avail_in = folly::to<uInt>(availSize);
-    outputBufferPtr_ = outputBuffer_->data();
-    zstream_.next_out =
-        reinterpret_cast<Bytef*>(const_cast<char*>(outputBufferPtr_));
-    zstream_.avail_out = folly::to<uInt>(blockSize_);
     int32_t result;
+    *size = 0;
     do {
-      result = inflate(
-          &zstream_, availSize == remainingLength_ ? Z_FINISH : Z_SYNC_FLUSH);
-      switch (result) {
-        case Z_OK:
-          remainingLength_ -= availSize;
-          inputBufferPtr_ += availSize;
-          readBuffer(true);
-          availSize = std::min(
-              static_cast<size_t>(inputBufferPtrEnd_ - inputBufferPtr_),
-              remainingLength_);
-          zstream_.next_in =
-              reinterpret_cast<Bytef*>(const_cast<char*>(inputBufferPtr_));
-          zstream_.avail_in = static_cast<uInt>(availSize);
-          break;
-        case Z_STREAM_END:
-          break;
-        default:
-          DWIO_RAISE(
-              "Error in ZlibDecompressionStream::Next in ",
-              getName(),
-              ". error: ",
-              result,
-              " Info: ",
-              ZlibDecompressor::streamDebugInfo_);
+      if (inputBufferPtr_ == inputBufferPtrEnd_) {
+        readBuffer(true);
       }
+      zstream_.next_in =
+          reinterpret_cast<Bytef*>(const_cast<char*>(inputBufferPtr_));
+      zstream_.avail_in =
+          static_cast<size_t>(inputBufferPtrEnd_ - inputBufferPtr_);
+
+      do {
+        // size_ of outputBuffer_ is not updated in inflate, so *size is used
+        // here to ensure enough capacity for the output data.
+        outputBuffer_->extend(*size);
+        outputBufferPtr_ = outputBuffer_->data();
+        zstream_.next_out = reinterpret_cast<Bytef*>(
+            const_cast<char*>(outputBufferPtr_ + *size));
+        zstream_.avail_out = folly::to<uInt>(blockSize_);
+        result = inflate(&zstream_, Z_SYNC_FLUSH);
+        // Result handling adapted from https://zlib.net/zlib_how.html
+        switch (result) {
+          case Z_NEED_DICT:
+            result = Z_DATA_ERROR;
+            [[fallthrough]];
+          case Z_DATA_ERROR:
+            [[fallthrough]];
+          case Z_MEM_ERROR:
+            [[fallthrough]];
+          case Z_STREAM_ERROR:
+            DWIO_RAISE("Failed to inflate input data. error: ", result);
+          default:
+            *size += static_cast<int32_t>(
+                blockSize_ - static_cast<int64_t>(zstream_.avail_out));
+            const size_t inputConsumed =
+                reinterpret_cast<const char*>(zstream_.next_in) -
+                inputBufferPtr_;
+            remainingLength_ -= inputConsumed;
+            inputBufferPtr_ += inputConsumed;
+        }
+      } while (zstream_.avail_out == 0);
     } while (result != Z_STREAM_END);
-    *size = static_cast<int32_t>(blockSize_ - zstream_.avail_out);
+
     if (data) {
       *data = outputBufferPtr_;
     }
@@ -604,8 +619,6 @@ bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
     outputBufferPtr_ += *size;
   }
 
-  inputBufferPtr_ += availSize;
-  remainingLength_ -= availSize;
   bytesReturned_ += *size;
   return true;
 }
@@ -623,7 +636,18 @@ std::unique_ptr<Compressor> createCompressor(
           "Initialized zlib compressor with compression level {}",
           options.format.zlib.compressionLevel);
       return std::make_unique<ZlibCompressor>(
+          options.format.zlib.compressionLevel,
+          options.format.zlib.windowBits,
+          false);
+    }
+    case CompressionKind::CompressionKind_GZIP: {
+      XLOG_FIRST_N(INFO, 1) << fmt::format(
+          "Initialized zlib compressor with compression level {}",
           options.format.zlib.compressionLevel);
+      return std::make_unique<ZlibCompressor>(
+          options.format.zlib.compressionLevel,
+          options.format.zlib.windowBits,
+          true);
     }
     case CompressionKind::CompressionKind_ZSTD: {
       XLOG_FIRST_N(INFO, 1) << fmt::format(

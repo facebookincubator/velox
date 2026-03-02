@@ -169,20 +169,22 @@ TEST_F(
   test(vectorMaker_.rowVector({field1, field2, field3}));
 
   // Test row vector some nulls.
-  test(std::make_shared<RowVector>(
-      pool_.get(),
-      rowType,
-      makeNulls(size, [](vector_size_t row) { return row % 10 == 0; }),
-      size,
-      std::vector<VectorPtr>{field1, field2, field3}));
+  test(
+      std::make_shared<RowVector>(
+          pool_.get(),
+          rowType,
+          makeNulls(size, [](vector_size_t row) { return row % 10 == 0; }),
+          size,
+          std::vector<VectorPtr>{field1, field2, field3}));
 
   // Test row vector all nulls.
-  test(std::make_shared<RowVector>(
-      pool_.get(),
-      rowType,
-      makeNulls(size, [](vector_size_t) { return true; }),
-      size,
-      std::vector<VectorPtr>{field1, field2, field3}));
+  test(
+      std::make_shared<RowVector>(
+          pool_.get(),
+          rowType,
+          makeNulls(size, [](vector_size_t) { return true; }),
+          size,
+          std::vector<VectorPtr>{field1, field2, field3}));
 
   const auto base = vectorMaker_.rowVector({field1, field2, field3});
   testDictionary(base);

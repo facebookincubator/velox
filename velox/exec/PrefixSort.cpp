@@ -101,7 +101,7 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     default:
       VELOX_UNSUPPORTED(
           "prefix-sort does not support type kind: {}",
-          mapTypeKindToName(typeKind));
+          TypeKindName::toName(typeKind));
   }
 }
 
@@ -310,7 +310,7 @@ void PrefixSort::extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer) {
 }
 
 // static.
-uint32_t PrefixSort::maxRequiredBytes(
+uint64_t PrefixSort::maxRequiredBytes(
     const RowContainer* rowContainer,
     const std::vector<CompareFlags>& compareFlags,
     const velox::common::PrefixSortConfig& config,
@@ -345,14 +345,15 @@ void PrefixSort::stdSort(
       });
 }
 
-uint32_t PrefixSort::maxRequiredBytes() const {
+uint64_t PrefixSort::maxRequiredBytes() const {
   const auto numRows = rowContainer_->numRows();
   const auto numPages =
       memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);
   // Prefix data size + swap buffer size.
   return memory::AllocationTraits::pageBytes(numPages) +
-      pool_->preferredSize(checkedPlus<size_t>(
-          sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
+      pool_->preferredSize(
+          checkedPlus<size_t>(
+              sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
       2 * pool_->alignment();
 }
 

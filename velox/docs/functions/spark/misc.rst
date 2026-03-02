@@ -1,6 +1,6 @@
-====================================
+=======================
 Miscellaneous Functions
-====================================
+=======================
 
 .. spark:function:: at_least_n_non_nulls(n, value1, value2, ..., valueN) -> bool
 
@@ -14,6 +14,16 @@ Miscellaneous Functions
         SELECT at_least_n_non_nulls(2, 0, NAN, NULL);  -- false
         SELECT at_least_n_non_nulls(2, 0, 1.0, NULL);  -- true
         SELECT at_least_n_non_nulls(2, 0, array(NULL), NULL);  -- true
+
+.. spark:function:: get_array_struct_fields(array, ordinal) -> array(T)
+
+    Extracts the ``ordinal``-th fields of all array elements, and returns them as a new array.
+    The first input must be of array(strcut) type and nested complex type is allowed.
+    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or no less than
+    the children size of strcut, exception is thrown. ::
+
+        SELECT items.col1 FROM VALUES (array(struct(100,'foo'), struct(200,'bar'))) AS t(items); -- array(100, 200)
+        SELECT items.col2 FROM VALUES (array(struct(100,'foo'), struct(200,'bar'))) AS t(items); -- array('foo', 'bar')
 
 .. spark:function:: get_struct_field(struct, ordinal) -> T
 

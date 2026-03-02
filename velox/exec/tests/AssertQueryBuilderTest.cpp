@@ -94,8 +94,11 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
 
   // Single leaf node with two splits.
   auto makeSplits = [](const std::string& path, size_t numRepeats = 1) {
-    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits(
-        numRepeats, makeHiveConnectorSplit(path));
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    splits.reserve(numRepeats);
+    for (size_t i = 0; i < numRepeats; ++i) {
+      splits.emplace_back(makeHiveConnectorSplit(path));
+    }
     return splits;
   };
 
@@ -125,7 +128,7 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
   }
 
   // Split with partition key.
-  ColumnHandleMap assignments = {
+  connector::ColumnHandleMap assignments = {
       {"ds", partitionKey("ds", VARCHAR())},
       {"c0", regularColumn("c0", BIGINT())}};
 

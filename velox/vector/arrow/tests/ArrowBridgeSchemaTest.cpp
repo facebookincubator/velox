@@ -487,8 +487,6 @@ TEST_F(ArrowBridgeSchemaImportTest, unsupported) {
   EXPECT_THROW(testSchemaImport("w:42"), VeloxUserError);
 
   EXPECT_THROW(testSchemaImport("tdm"), VeloxUserError);
-  EXPECT_THROW(testSchemaImport("tts"), VeloxUserError);
-  EXPECT_THROW(testSchemaImport("ttm"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("tDs"), VeloxUserError);
 
   EXPECT_THROW(testSchemaImport("+"), VeloxUserError);

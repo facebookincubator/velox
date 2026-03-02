@@ -713,12 +713,16 @@ TEST_F(MemoryReclaimerTest, scopedReclaimedBytesRecorder) {
   auto childPool = root->addLeafChild("memoryReclaimRecorder", true);
   ASSERT_EQ(childPool->reservedBytes(), 0);
   int64_t reclaimedBytes{0};
-  { ScopedReclaimedBytesRecorder recorder(childPool.get(), &reclaimedBytes); }
+  {
+    ScopedReclaimedBytesRecorder recorder(childPool.get(), &reclaimedBytes);
+  }
   ASSERT_EQ(reclaimedBytes, 0);
 
   void* buffer = childPool->allocate(1 << 20);
   ASSERT_EQ(childPool->reservedBytes(), 1 << 20);
-  { ScopedReclaimedBytesRecorder recorder(childPool.get(), &reclaimedBytes); }
+  {
+    ScopedReclaimedBytesRecorder recorder(childPool.get(), &reclaimedBytes);
+  }
   ASSERT_EQ(reclaimedBytes, 0);
 
   reclaimedBytes = 0;

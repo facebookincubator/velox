@@ -15,27 +15,35 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
+#include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-class TypeOfTest : public functions::test::FunctionBaseTest {};
-
-TEST_F(TypeOfTest, basic) {
-  const auto typeOf = [&](const TypePtr& type) {
+class TypeOfTest : public functions::test::FunctionBaseTest {
+ public:
+  std::string typeOf(const TypePtr& type) {
     auto data = makeRowVector({
         BaseVector::createNullConstant(type, 1, pool()),
     });
     return evaluateOnce<std::string>("typeof(c0)", data).value();
-  };
+  }
+};
 
+TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("boolean", typeOf(BOOLEAN()));
 
   EXPECT_EQ("tinyint", typeOf(TINYINT()));
@@ -53,21 +61,8 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("varbinary", typeOf(VARBINARY()));
 
   EXPECT_EQ("timestamp", typeOf(TIMESTAMP()));
-  EXPECT_EQ("timestamp with time zone", typeOf(TIMESTAMP_WITH_TIME_ZONE()));
   EXPECT_EQ("date", typeOf(DATE()));
-
-  EXPECT_EQ("bingtile", typeOf(BINGTILE()));
-  EXPECT_EQ("geometry", typeOf(GEOMETRY()));
-
-  EXPECT_EQ("json", typeOf(JSON()));
-
-  EXPECT_EQ("HyperLogLog", typeOf(HYPERLOGLOG()));
-
-  EXPECT_EQ("tdigest(double)", typeOf(TDIGEST(DOUBLE())));
-
-  EXPECT_EQ("qdigest(bigint)", typeOf(QDIGEST(BIGINT())));
-  EXPECT_EQ("qdigest(real)", typeOf(QDIGEST(REAL())));
-  EXPECT_EQ("qdigest(double)", typeOf(QDIGEST(DOUBLE())));
+  EXPECT_EQ("time", typeOf(TIME()));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 
@@ -83,5 +78,39 @@ TEST_F(TypeOfTest, basic) {
   VELOX_ASSERT_THROW(typeOf(OPAQUE<int>()), "Unsupported type: OPAQUE<int>");
 }
 
+TEST_F(TypeOfTest, customTypes) {
+  EXPECT_EQ("timestamp with time zone", typeOf(TIMESTAMP_WITH_TIME_ZONE()));
+  EXPECT_EQ("time with time zone", typeOf(TIME_WITH_TIME_ZONE()));
+  EXPECT_EQ("bingtile", typeOf(BINGTILE()));
+  EXPECT_EQ("geometry", typeOf(GEOMETRY()));
+  EXPECT_EQ("sphericalgeography", typeOf(SPHERICAL_GEOGRAPHY()));
+
+  EXPECT_EQ("json", typeOf(JSON()));
+
+  EXPECT_EQ("HyperLogLog", typeOf(HYPERLOGLOG()));
+  EXPECT_EQ("KHyperLogLog", typeOf(KHYPERLOGLOG()));
+  EXPECT_EQ("P4HyperLogLog", typeOf(P4HYPERLOGLOG()));
+  EXPECT_EQ("SetDigest", typeOf(SETDIGEST()));
+
+  EXPECT_EQ("tdigest(double)", typeOf(TDIGEST(DOUBLE())));
+
+  EXPECT_EQ("qdigest(bigint)", typeOf(QDIGEST(BIGINT())));
+  EXPECT_EQ("qdigest(real)", typeOf(QDIGEST(REAL())));
+  EXPECT_EQ("qdigest(double)", typeOf(QDIGEST(DOUBLE())));
+
+  std::unordered_map<std::string, int64_t> enumMap = {
+      {"CURIOUS", -2}, {"HAPPY", 0}};
+  LongEnumParameter moodInfo("test.enum.mood", enumMap);
+  LongEnumParameter otherInfo("someEnumType", enumMap);
+  EXPECT_EQ("test.enum.mood", typeOf(BIGINT_ENUM(moodInfo)));
+  EXPECT_EQ("someEnumType", typeOf(BIGINT_ENUM(otherInfo)));
+
+  std::unordered_map<std::string, std::string> varcharEnumMap = {
+      {"RED", "red"}, {"BLUE", "blue"}};
+  VarcharEnumParameter colorInfo("test.enum.color", varcharEnumMap);
+  VarcharEnumParameter otherColorInfo("someColorType", varcharEnumMap);
+  EXPECT_EQ("test.enum.color", typeOf(VARCHAR_ENUM(colorInfo)));
+  EXPECT_EQ("someColorType", typeOf(VARCHAR_ENUM(otherColorInfo)));
+}
 } // namespace
 } // namespace facebook::velox::functions

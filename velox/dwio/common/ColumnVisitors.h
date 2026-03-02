@@ -21,7 +21,6 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/TypeUtil.h"
-
 namespace facebook::velox::dwio::common {
 
 // structs for extractValues in ColumnVisitor.
@@ -164,7 +163,7 @@ class ColumnVisitor {
   static constexpr bool kFilterOnly = std::is_same_v<Extract, DropValues>;
 
   ColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       const RowSet& rows,
       ExtractValues values)
@@ -409,7 +408,7 @@ class ColumnVisitor {
   inline void addNull();
   inline void addOutputRow(vector_size_t row);
 
-  TFilter& filter() {
+  const TFilter& filter() {
     return filter_;
   }
 
@@ -491,8 +490,8 @@ class ColumnVisitor {
   }
 
  protected:
-  TFilter& filter_;
-  SelectiveColumnReader* reader_;
+  const TFilter& filter_;
+  SelectiveColumnReader* const reader_;
   const bool allowNulls_;
   const vector_size_t* rows_;
   vector_size_t numRows_;
@@ -724,7 +723,15 @@ inline xsimd::batch<int64_t> cvtU32toI64(
     xsimd::batch<int32_t, xsimd::sse2> values) {
   return _mm256_cvtepu32_epi64(values);
 }
-#elif XSIMD_WITH_SSE2 || XSIMD_WITH_NEON
+#elif (XSIMD_WITH_SVE && SVE_BITS == 256)
+inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch128<int32_t> values) {
+  int64_t element_1 = static_cast<uint32_t>(values.data[0]);
+  int64_t element_2 = static_cast<uint32_t>(values.data[1]);
+  int64_t element_3 = static_cast<uint32_t>(values.data[2]);
+  int64_t element_4 = static_cast<uint32_t>(values.data[3]);
+  return xsimd::batch<int64_t>(element_1, element_2, element_3, element_4);
+}
+#elif XSIMD_WITH_SSE2 || XSIMD_WITH_NEON || (XSIMD_WITH_SVE && SVE_BITS == 128)
 inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch64<int32_t> values) {
   int64_t lo = static_cast<uint32_t>(values.data[0]);
   int64_t hi = static_cast<uint32_t>(values.data[1]);
@@ -741,7 +748,7 @@ class DictionaryColumnVisitor
 
  public:
   DictionaryColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       const RowSet& rows,
       ExtractValues values)
@@ -913,10 +920,20 @@ class DictionaryColumnVisitor
           dictMask,
           reinterpret_cast<const int32_t*>(filterCache() - 3),
           indices);
-      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+#ifdef SVE_BITS
+      auto unknowns = simd::toBitMask(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
+          xsimd::batch<uint32_t>(0));
+      auto passed = simd::toBitMask(
+          (simd::reinterpretBatch<uint32_t>(cache) &
+           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
+#else
+      auto unknowns = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
+              (cache & (kUnknown << 24)) << 1)));
       auto passed = simd::toBitMask(
           xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
+#endif
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         // Ranges only over inputs that are in dictionary, the not in dictionary
@@ -1159,7 +1176,7 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::
   }
   auto result = DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>(
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
-  result.numValuesBias_ = numValuesBias_;
+  result.setNumValuesBias(numValuesBias_);
   return result;
 }
 
@@ -1192,7 +1209,7 @@ class StringDictionaryColumnVisitor
 
  public:
   StringDictionaryColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       RowSet rows,
       ExtractValues values)
@@ -1305,10 +1322,20 @@ class StringDictionaryColumnVisitor
       } else {
         cache = simd::gather<int32_t, int32_t, 1>(base, indices);
       }
-      auto unknowns = simd::toBitMask(xsimd::batch_bool<int32_t>(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
+#ifdef SVE_BITS
+      auto unknowns = simd::toBitMask(
+          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
+          xsimd::batch<uint32_t>(0));
+      auto passed = simd::toBitMask(
+          (simd::reinterpretBatch<uint32_t>(cache) &
+           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
+#else
+      auto unknowns = simd::toBitMask(
+          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
+              (cache & (kUnknown << 24)) << 1)));
       auto passed = simd::toBitMask(
           xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
+#endif
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         while (bits) {
@@ -1394,7 +1421,7 @@ class StringDictionaryColumnVisitor
     }
   }
 
-  folly::StringPiece valueInDictionary(int64_t index) {
+  StringView valueInDictionary(int64_t index) {
     auto stripeDictSize = DictSuper::state_.dictionary.numValues;
     if (index < stripeDictSize) {
       return reinterpret_cast<const StringView*>(
@@ -1412,7 +1439,7 @@ class DirectRleColumnVisitor
 
  public:
   DirectRleColumnVisitor(
-      TFilter& filter,
+      const TFilter& filter,
       SelectiveColumnReader* reader,
       RowSet rows,
       ExtractValues values)
@@ -1547,12 +1574,15 @@ class StringColumnReadWithVisitorHelper {
  private:
   template <typename TFilter, bool kIsDense, typename ExtractValues, typename F>
   void readHelper(
-      velox::common::Filter* filter,
+      const velox::common::Filter* filter,
       ExtractValues extractValues,
       F readWithVisitor) {
     readWithVisitor(
-        ColumnVisitor<folly::StringPiece, TFilter, ExtractValues, kIsDense>(
-            *static_cast<TFilter*>(filter), &reader_, rows_, extractValues));
+        ColumnVisitor<std::string_view, TFilter, ExtractValues, kIsDense>(
+            *static_cast<const TFilter*>(filter),
+            &reader_,
+            rows_,
+            extractValues));
   }
 
   template <bool kIsDense, typename ExtractValues, typename F>

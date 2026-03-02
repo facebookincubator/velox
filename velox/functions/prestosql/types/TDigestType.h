@@ -20,16 +20,14 @@
 
 namespace facebook::velox {
 
-class TDigestType : public VarbinaryType {
+class TDigestType final : public VarbinaryType {
  public:
-  static const std::shared_ptr<const TDigestType>& get(
-      const TypePtr& dataType) {
+  static std::shared_ptr<const TDigestType> get(const TypePtr& dataType) {
     // Only TDIGEST(DOUBLE) exists in Presto so we use a singleton to improve
     // performance.
     VELOX_CHECK(dataType->isDouble());
-    static const auto instance =
-        std::shared_ptr<const TDigestType>(new TDigestType(DOUBLE()));
-    return instance;
+    static const TDigestType kInstance{DOUBLE()};
+    return {std::shared_ptr<const TDigestType>{}, &kInstance};
   }
 
   bool equivalent(const Type& other) const override {
@@ -41,12 +39,12 @@ class TDigestType : public VarbinaryType {
     return "TDIGEST";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+  std::span<const TypeParameter> parameters() const override {
+    return {&parameter_, 1};
   }
 
   std::string toString() const override {
-    return fmt::format("TDIGEST({})", parameters_[0].type->toString());
+    return fmt::format("TDIGEST({})", parameter_.type->toString());
   }
 
   folly::dynamic serialize() const override {
@@ -54,18 +52,19 @@ class TDigestType : public VarbinaryType {
     obj["name"] = "Type";
     obj["type"] = name();
     folly::dynamic children = folly::dynamic::array;
-    for (auto& param : parameters_) {
-      children.push_back(param.type->serialize());
-    }
+    children.push_back(parameter_.type->serialize());
     obj["cTypes"] = children;
     return obj;
   }
 
- private:
-  explicit TDigestType(const TypePtr& dataType)
-      : parameters_({TypeParameter(dataType)}) {}
+  bool isOrderable() const override {
+    return false;
+  }
 
-  const std::vector<TypeParameter> parameters_;
+ private:
+  explicit TDigestType(const TypePtr& dataType) : parameter_(dataType) {}
+
+  const TypeParameter parameter_;
 };
 
 inline bool isTDigestType(const TypePtr& type) {

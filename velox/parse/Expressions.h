@@ -16,202 +16,137 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/core/Expressions.h"
 #include "velox/parse/IExpr.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::core {
 
-class CallExpr;
-class LambdaExpr;
-class FieldAccessExpr;
-
-class Expressions {
+class InputExpr : public IExpr {
  public:
-  using TypeResolverHook = std::function<TypePtr(
-      const std::vector<core::TypedExprPtr>& inputs,
-      const std::shared_ptr<const core::CallExpr>& expr,
-      bool nullOnFailure)>;
-
-  using FieldAccessHook = std::function<core::TypedExprPtr(
-      std::shared_ptr<const FieldAccessExpr> fae,
-      std::vector<core::TypedExprPtr>& children)>;
-
-  static TypedExprPtr inferTypes(
-      const std::shared_ptr<const IExpr>& expr,
-      const TypePtr& input,
-      memory::MemoryPool* pool,
-      const VectorPtr& complexConstants = nullptr);
-
-  static TypePtr getInputRowType(const TypedExprPtr& expr);
-
-  static void setTypeResolverHook(TypeResolverHook hook) {
-    resolverHook_ = hook;
-  }
-
-  static TypeResolverHook getResolverHook() {
-    return resolverHook_;
-  }
-
-  static void setFieldAccessHook(FieldAccessHook hook) {
-    fieldAccessHook_ = hook;
-  }
-
-  static FieldAccessHook getFieldAccessHook() {
-    return fieldAccessHook_;
-  }
-
-  static TypedExprPtr inferTypes(
-      const std::shared_ptr<const IExpr>& expr,
-      const TypePtr& input,
-      const std::vector<TypePtr>& lambdaInputTypes,
-      memory::MemoryPool* pool,
-      const VectorPtr& complexConstants = nullptr);
-
- private:
-  static TypedExprPtr resolveLambdaExpr(
-      const std::shared_ptr<const core::LambdaExpr>& lambdaExpr,
-      const TypePtr& inputRow,
-      const std::vector<TypePtr>& lambdaInputTypes,
-      memory::MemoryPool* pool,
-      const VectorPtr& complexConstants = nullptr);
-
-  static TypedExprPtr tryResolveCallWithLambdas(
-      const std::shared_ptr<const CallExpr>& expr,
-      const TypePtr& input,
-      memory::MemoryPool* pool,
-      const VectorPtr& complexConstants = nullptr);
-
-  static TypeResolverHook resolverHook_;
-  static FieldAccessHook fieldAccessHook_;
-};
-
-class InputExpr : public core::IExpr {
- public:
-  InputExpr() {}
+  InputExpr() : IExpr(IExpr::Kind::kInput, {}) {}
 
   std::string toString() const override {
     return "ROW";
   }
 
-  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
-    return EMPTY();
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    return std::make_shared<InputExpr>();
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<InputExpr>();
+  }
+
+  bool operator==(const IExpr& other) const override {
+    return other.is(Kind::kInput);
+  }
+
+  size_t localHash() const override {
+    return 0;
   }
 
   VELOX_DEFINE_CLASS_NAME(InputExpr)
 };
 
-class FieldAccessExpr : public core::IExpr {
+class FieldAccessExpr : public IExpr {
  public:
-  explicit FieldAccessExpr(
-      const std::string& name,
+  FieldAccessExpr(
+      std::string name,
       std::optional<std::string> alias,
-      std::vector<std::shared_ptr<const IExpr>>&& inputs =
-          std::vector<std::shared_ptr<const IExpr>>{
-              std::make_shared<const InputExpr>()})
-      : IExpr{std::move(alias)}, name_{name}, inputs_{std::move(inputs)} {
-    CHECK_EQ(inputs_.size(), 1);
+      std::vector<ExprPtr> inputs)
+      : IExpr{IExpr::Kind::kFieldAccess, std::move(inputs), std::move(alias)},
+        name_{std::move(name)} {
+    VELOX_USER_CHECK_EQ(IExpr::inputs().size(), 1);
   }
 
-  const std::string& getFieldName() const {
+  FieldAccessExpr(std::string name, std::optional<std::string> alias)
+      : IExpr{IExpr::Kind::kFieldAccess, {std::make_shared<const InputExpr>()}, std::move(alias)},
+        name_{std::move(name)} {}
+
+  const std::string& name() const {
     return name_;
   }
 
   bool isRootColumn() const {
-    if (UNLIKELY(inputs_.empty())) {
-      return false;
-    }
-    return dynamic_cast<const core::InputExpr*>(inputs_.front().get()) !=
-        nullptr;
+    return input()->is(Kind::kInput);
   }
 
-  std::string toString() const override {
-    if (UNLIKELY(inputs_.empty())) {
-      return appendAliasIfExists(toStringForRootColumn());
-    }
-    return appendAliasIfExists(
-        isRootColumn() ? toStringForRootColumn() : toStringForMemberAccess());
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_USER_CHECK_EQ(newInputs.size(), 1);
+    return std::make_shared<FieldAccessExpr>(
+        name_, alias(), std::move(newInputs));
   }
 
-  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
-    return inputs_;
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<FieldAccessExpr>(name_, alias, inputs());
   }
 
- private:
-  std::string toStringForRootColumn() const {
-    return "\"" + getEscapedName() + "\"";
+  ExprPtr dropAlias() const override {
+    return std::make_shared<FieldAccessExpr>(name_, std::nullopt, inputs());
   }
 
-  std::string toStringForMemberAccess() const {
-    return "dot(" + inputs_.front()->toString() + ",\"" + getEscapedName() +
-        "\")";
-  }
+  bool operator==(const IExpr& other) const override;
 
-  std::string getEscapedName() const {
-    return folly::cEscape<std::string>(name_);
-  }
-
-  const std::string name_;
-  const std::vector<std::shared_ptr<const IExpr>> inputs_;
+  size_t localHash() const override;
 
   VELOX_DEFINE_CLASS_NAME(FieldAccessExpr)
+
+ private:
+  const std::string name_;
 };
 
-class CallExpr : public core::IExpr {
+class CallExpr : public IExpr {
  public:
   CallExpr(
-      std::string&& funcName,
-      std::vector<std::shared_ptr<const IExpr>>&& inputs,
+      std::string name,
+      std::vector<ExprPtr> inputs,
       std::optional<std::string> alias)
-      : core::IExpr{std::move(alias)},
-        name_{std::move(funcName)},
-        inputs_{std::move(inputs)} {
-    VELOX_CHECK(!name_.empty());
+      : IExpr{IExpr::Kind::kCall, std::move(inputs), std::move(alias)},
+        name_{std::move(name)} {
+    VELOX_USER_CHECK(!name_.empty());
   }
 
-  const std::string& getFunctionName() const {
+  const std::string& name() const {
     return name_;
   }
 
-  std::string toString() const override {
-    std::string buf{name_ + "("};
-    bool first = true;
-    for (auto& f : getInputs()) {
-      if (!first) {
-        buf += ",";
-      }
-      buf += f->toString();
-      first = false;
-    }
-    buf += ")";
-    return appendAliasIfExists(buf);
+  std::string toString() const override;
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_EQ(newInputs.size(), inputs().size());
+    return std::make_shared<CallExpr>(
+        folly::copy(name()), std::move(newInputs), alias());
   }
 
-  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
-    return inputs_;
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<CallExpr>(name(), inputs(), alias);
   }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<CallExpr>(name(), inputs(), std::nullopt);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
+
+  VELOX_DEFINE_CLASS_NAME(CallExpr)
 
  private:
   const std::string name_;
-  const std::vector<std::shared_ptr<const IExpr>> inputs_;
-
-  VELOX_DEFINE_CLASS_NAME(CallExpr)
 };
 
 class ConstantExpr : public IExpr,
                      public std::enable_shared_from_this<ConstantExpr> {
  public:
-  explicit ConstantExpr(
-      TypePtr type,
-      variant value,
-      std::optional<std::string> alias)
-      : IExpr{std::move(alias)},
+  ConstantExpr(TypePtr type, variant value, std::optional<std::string> alias)
+      : IExpr{IExpr::Kind::kConstant, {}, std::move(alias)},
         type_{std::move(type)},
         value_{std::move(value)} {}
 
-  std::string toString() const override {
-    return appendAliasIfExists(variant{value_}.toJson(type_));
-  }
+  std::string toString() const override;
 
   const variant& value() const {
     return value_;
@@ -221,9 +156,22 @@ class ConstantExpr : public IExpr,
     return type_;
   }
 
-  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
-    return EMPTY();
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_EQ(newInputs.size(), 0);
+    return std::make_shared<ConstantExpr>(type(), value(), alias());
   }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<ConstantExpr>(type(), value(), alias);
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<ConstantExpr>(type(), value(), std::nullopt);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
 
   VELOX_DEFINE_CLASS_NAME(ConstantExpr)
 
@@ -233,46 +181,50 @@ class ConstantExpr : public IExpr,
 };
 
 class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
- private:
-  const TypePtr type_;
-  const std::shared_ptr<const IExpr> expr_;
-  const std::vector<std::shared_ptr<const IExpr>> inputs_;
-  bool nullOnFailure_;
-
  public:
-  explicit CastExpr(
+  CastExpr(
       const TypePtr& type,
-      const std::shared_ptr<const IExpr>& expr,
-      bool nullOnFailure,
+      const ExprPtr& expr,
+      bool isTryCast,
       std::optional<std::string> alias)
-      : IExpr{std::move(alias)},
+      : IExpr{IExpr::Kind::kCast, {expr}, std::move(alias)},
         type_(type),
-        expr_(expr),
-        inputs_({expr}),
-        nullOnFailure_(nullOnFailure) {}
+        isTryCast_(isTryCast) {}
 
-  std::string toString() const override {
-    return appendAliasIfExists(
-        "cast(" + expr_->toString() + ", " + type_->toString() + ")");
-  }
-
-  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
-    return inputs_;
-  }
+  std::string toString() const override;
 
   const TypePtr& type() const {
     return type_;
   }
 
-  const std::shared_ptr<const IExpr>& expr() const {
-    return expr_;
+  bool isTryCast() const {
+    return isTryCast_;
   }
 
-  bool nullOnFailure() const {
-    return nullOnFailure_;
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_EQ(newInputs.size(), 1);
+    return std::make_shared<CastExpr>(
+        type(), newInputs[0], isTryCast_, alias());
   }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<CastExpr>(type(), input(), isTryCast_, alias);
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<CastExpr>(
+        type(), input(), isTryCast_, std::nullopt);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
 
   VELOX_DEFINE_CLASS_NAME(CastExpr)
+
+ private:
+  const TypePtr type_;
+  const bool isTryCast_;
 };
 
 /// Represents lambda expression as a list of inputs and the body expression.
@@ -282,45 +234,41 @@ class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
 class LambdaExpr : public IExpr,
                    public std::enable_shared_from_this<LambdaExpr> {
  public:
-  LambdaExpr(
-      std::vector<std::string> inputNames,
-      std::shared_ptr<const IExpr> body)
-      : inputNames_{std::move(inputNames)}, body_{{std::move(body)}} {
-    VELOX_CHECK(!inputNames_.empty());
+  LambdaExpr(std::vector<std::string> arguments, ExprPtr body)
+      : IExpr(IExpr::Kind::kLambda, {}),
+        arguments_{std::move(arguments)},
+        body_{std::move(body)} {
+    VELOX_USER_CHECK(!arguments_.empty());
   }
 
-  const std::vector<std::string>& inputNames() const {
-    return inputNames_;
+  const std::vector<std::string>& arguments() const {
+    return arguments_;
   }
 
-  const std::shared_ptr<const IExpr>& body() const {
-    return body_[0];
-  }
-
-  std::string toString() const override {
-    std::ostringstream out;
-    if (inputNames_.size() > 1) {
-      out << "(";
-      for (auto i = 0; i < inputNames_.size(); ++i) {
-        if (i > 0) {
-          out << ", ";
-        }
-        out << inputNames_[i];
-      }
-      out << ")";
-    } else {
-      out << inputNames_[0];
-    }
-    out << " -> " << body_[0]->toString();
-    return out.str();
-  }
-
-  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
+  const ExprPtr& body() const {
     return body_;
   }
 
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_EQ(newInputs.size(), 0);
+    return std::make_shared<LambdaExpr>(arguments(), body());
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<LambdaExpr>(arguments(), body());
+  }
+
+  std::string toString() const override;
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
+
+  VELOX_DEFINE_CLASS_NAME(LambdaExpr)
+
  private:
-  std::vector<std::string> inputNames_;
-  std::vector<std::shared_ptr<const IExpr>> body_;
+  const std::vector<std::string> arguments_;
+  const ExprPtr body_;
 };
+
 } // namespace facebook::velox::core

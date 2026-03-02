@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -34,14 +35,16 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
       if (castScale) {
         // It is a common case in Spark for the second argument to be cast from
         // bigint to integer.
-        inputs.emplace_back(std::make_shared<core::CastTypedExpr>(
-            INTEGER(),
-            std::make_shared<core::ConstantTypedExpr>(
-                BIGINT(), variant((int64_t)scale)),
-            true /*nullOnFailure*/));
+        inputs.emplace_back(
+            std::make_shared<core::CastTypedExpr>(
+                INTEGER(),
+                std::make_shared<core::ConstantTypedExpr>(
+                    BIGINT(), variant((int64_t)scale)),
+                true /*nullOnFailure*/));
       } else {
-        inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
-            INTEGER(), variant(scale)));
+        inputs.emplace_back(
+            std::make_shared<core::ConstantTypedExpr>(
+                INTEGER(), variant(scale)));
       }
     }
 

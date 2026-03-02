@@ -20,12 +20,7 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
-namespace encryption {
-namespace test {
+namespace facebook::velox::dwio::common::encryption::test {
 
 class TestEncryption {
  public:
@@ -37,18 +32,19 @@ class TestEncryption {
     return key_;
   }
 
-  std::unique_ptr<folly::IOBuf> encrypt(folly::StringPiece input) const {
+  std::unique_ptr<folly::IOBuf> encrypt(std::string_view input) const {
     ++count_;
     auto encoded = velox::encoding::Base64::encodeUrl(input);
     return folly::IOBuf::copyBuffer(key_ + encoded);
   }
 
-  std::unique_ptr<folly::IOBuf> decrypt(folly::StringPiece input) const {
+  std::unique_ptr<folly::IOBuf> decrypt(std::string_view input) const {
     ++count_;
-    std::string key{input.begin(), key_.size()};
+    std::string key{input.cbegin(), key_.size()};
     DWIO_ENSURE_EQ(key_, key);
-    auto decoded = velox::encoding::Base64::decodeUrl(folly::StringPiece{
-        input.begin() + key_.size(), input.size() - key_.size()});
+    auto decoded = velox::encoding::Base64::decodeUrl(
+        std::string_view{
+            input.begin() + key_.size(), input.size() - key_.size()});
     return folly::IOBuf::copyBuffer(decoded);
   }
 
@@ -67,8 +63,7 @@ class TestEncrypter : public TestEncryption, public Encrypter {
     return TestEncryption::getKey();
   }
 
-  std::unique_ptr<folly::IOBuf> encrypt(
-      folly::StringPiece input) const override {
+  std::unique_ptr<folly::IOBuf> encrypt(std::string_view input) const override {
     return TestEncryption::encrypt(input);
   }
 
@@ -89,8 +84,7 @@ class TestDecrypter : public TestEncryption, public Decrypter {
     return !getKey().empty();
   }
 
-  std::unique_ptr<folly::IOBuf> decrypt(
-      folly::StringPiece input) const override {
+  std::unique_ptr<folly::IOBuf> decrypt(std::string_view input) const override {
     return TestEncryption::decrypt(input);
   }
 
@@ -144,9 +138,4 @@ class TestDecrypterFactory : public DecrypterFactory {
   }
 };
 
-} // namespace test
-} // namespace encryption
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::encryption::test

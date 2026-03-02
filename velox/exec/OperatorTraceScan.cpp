@@ -15,8 +15,7 @@
  */
 
 #include "velox/exec/OperatorTraceScan.h"
-
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 namespace facebook::velox::exec::trace {
 

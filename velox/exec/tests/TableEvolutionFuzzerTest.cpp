@@ -18,13 +18,16 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include "velox/parse/TypeResolver.h"
 
 DEFINE_uint32(seed, 0, "");
-DEFINE_int32(duration_sec, 30, "");
+DEFINE_int32(table_evolution_fuzzer_duration_sec, 30, "");
 DEFINE_int32(column_count, 5, "");
 DEFINE_int32(evolution_count, 5, "");
 
@@ -34,16 +37,12 @@ namespace {
 
 void registerFactories(folly::Executor* ioExecutor) {
   filesystems::registerLocalFileSystem();
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              TableEvolutionFuzzer::connectorId(),
-              std::make_shared<config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor);
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      TableEvolutionFuzzer::connectorId(),
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor);
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
@@ -61,7 +60,8 @@ TEST(TableEvolutionFuzzerTest, run) {
   exec::test::TableEvolutionFuzzer fuzzer(config);
   fuzzer.setSeed(FLAGS_seed);
   const auto startTime = std::chrono::system_clock::now();
-  const auto deadline = startTime + std::chrono::seconds(FLAGS_duration_sec);
+  const auto deadline = startTime +
+      std::chrono::seconds(FLAGS_table_evolution_fuzzer_duration_sec);
   for (int i = 0; std::chrono::system_clock::now() < deadline; ++i) {
     LOG(INFO) << "Starting iteration " << i << ", seed=" << fuzzer.seed();
     fuzzer.run();
@@ -84,5 +84,8 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
   auto ioExecutor = folly::getGlobalIOExecutor();
   facebook::velox::exec::test::registerFactories(ioExecutor.get());
+  facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
+  facebook::velox::parse::registerTypeResolver();
   return RUN_ALL_TESTS();
 }

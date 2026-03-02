@@ -455,7 +455,7 @@ int32_t CompactRow::variableWidthRowSize(vector_size_t index) const {
       return rowRowSize(index);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected type kind: {}", mapTypeKindToName(typeKind_));
+          "Unexpected type kind: {}", TypeKindName::toName(typeKind_));
   };
 }
 
@@ -718,7 +718,7 @@ int32_t CompactRow::serializeVariableWidth(vector_size_t index, char* buffer)
       return serializeRow(index, buffer);
     default:
       VELOX_UNREACHABLE(
-          "Unexpected type kind: {}", mapTypeKindToName(typeKind_));
+          "Unexpected type kind: {}", TypeKindName::toName(typeKind_));
   };
 }
 
@@ -1051,7 +1051,7 @@ ArrayVectorPtr deserializeArrays(
 
   VectorPtr elements;
   const auto& elementType = type->childAt(0);
-  if (elementType->isUnKnown()) {
+  if (elementType->isUnknown()) {
     elements =
         deserializeUnknownArrays(elementType, data, arraySizes, offsets, pool);
   } else if (elementType->isFixedWidth()) {
@@ -1145,16 +1145,12 @@ VectorPtr deserialize(
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
       return deserializeStrings(type, data, nulls, offsets, pool);
-      break;
     case TypeKind::ARRAY:
       return deserializeArrays(type, data, nulls, offsets, pool);
-      break;
     case TypeKind::MAP:
       return deserializeMaps(type, data, nulls, offsets, pool);
-      break;
     case TypeKind::ROW:
       return deserializeRows(type, data, nulls, offsets, pool);
-      break;
     default:
       VELOX_UNREACHABLE("{}", type->toString());
   }

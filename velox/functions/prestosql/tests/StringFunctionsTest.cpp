@@ -315,6 +315,10 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& left,
       const std::string& right);
 
+  double jaroWinklerSimilarity(
+      const std::string& left,
+      const std::string& right);
+
   using replace_input_test_t = std::vector<std::pair<
       std::tuple<std::string, std::string, std::string>,
       std::string>>;
@@ -1048,6 +1052,44 @@ TEST_F(StringFunctionsTest, length) {
   }
 }
 
+TEST_F(StringFunctionsTest, bitLength) {
+  const auto bitLength = [&](std::optional<std::string> arg) {
+    return evaluateOnce<int64_t>("bit_length(c0)", std::move(arg));
+  };
+
+  // Test basic cases
+  EXPECT_EQ(bitLength(""), 0);
+  EXPECT_EQ(bitLength("hello"), 40);
+
+  // Test non-ASCII characters
+  EXPECT_EQ(bitLength("hell o\u00EF"), 64);
+  EXPECT_EQ(bitLength("中123"), 48);
+
+  // Single byte characters
+  EXPECT_EQ(bitLength("a"), 8);
+  EXPECT_EQ(bitLength("ab"), 16);
+  EXPECT_EQ(bitLength("abc"), 24);
+
+  // Multi-byte UTF-8 characters
+  EXPECT_EQ(bitLength("é"), 16);
+  EXPECT_EQ(bitLength("€"), 24);
+  EXPECT_EQ(bitLength("\U0001F408"), 32);
+
+  // Mixed ASCII and Unicode
+  EXPECT_EQ(bitLength("hello世界"), 88);
+
+  // Test with null input
+  EXPECT_EQ(bitLength(std::nullopt), std::nullopt);
+
+  // Test constant vectors
+  auto rows = makeRowVector({makeRowVector(
+      {makeFlatVector<int32_t>(5, [](vector_size_t row) { return row; })})});
+  auto result = evaluate<SimpleVector<int64_t>>("bit_length('test')", rows);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(result->valueAt(i), 32);
+  }
+}
+
 TEST_F(StringFunctionsTest, startsWith) {
   auto startsWith = [&](const std::string& x, const std::string& y) {
     return evaluateOnce<bool>(
@@ -1415,6 +1457,122 @@ TEST_F(StringFunctionsTest, invalidLevenshteinDistance) {
       "The combined inputs size exceeded max Levenshtein distance combined input size");
 }
 
+double StringFunctionsTest::jaroWinklerSimilarity(
+    const std::string& left,
+    const std::string& right) {
+  return evaluateOnce<double>(
+             "jarowinkler_similarity(c0, c1)",
+             std::optional(left),
+             std::optional(right))
+      .value();
+}
+
+TEST_F(StringFunctionsTest, asciiJaroWinklerSimilarity) {
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("", ""), 1.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRACE", "TRACE"), 1.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRATE", "TRACE"), 0.91);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRACE", "TRATE"), 0.91);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("arnab", "aranb"), 0.95);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("DwAyNE", "DuANE"), 0.84);
+
+  // Test edge cases with empty strings
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("abc", ""), 0.0);
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("", "xyz"), 0.0);
+}
+
+TEST_F(StringFunctionsTest, unicodeJaroWinklerSimilarity) {
+  // Test for non-ASCII
+  EXPECT_DOUBLE_EQ(jaroWinklerSimilarity("TRA\u00EFE", "TRACE"), 0.91);
+  EXPECT_DOUBLE_EQ(
+      jaroWinklerSimilarity(
+          "\u4FE1\u5FF5\u7231\u00EF\u671B", "\u4FE1\u5FF5\u7231\u5E0C\u671B"),
+      0.91);
+  EXPECT_DOUBLE_EQ(
+      jaroWinklerSimilarity(
+          "\u4FE1\u00EF\u7231y\u5E0C\u671B", "\u4FE1\u5FF5\u7231\u5E0C\u671B"),
+      0.84);
+}
+
+TEST_F(StringFunctionsTest, invalidJaroWinklerSimilarity) {
+  // Test for invalid utf-8 characters
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello world", "a\xA9ü"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello world", "Ψ\xFF\xFFΣΓΔA"),
+      "Invalid UTF-8 encoding in characters");
+
+  // Test for maximum length
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity(std::string(1001, 'x'), std::string(1001, 'x')),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity("hello", std::string(500000, 'x')),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+  VELOX_ASSERT_THROW(
+      jaroWinklerSimilarity(std::string(500000, 'x'), "hello"),
+      "The combined inputs for Jaro-Winkler similarity are too large");
+}
+
+TEST_F(StringFunctionsTest, longestCommonPrefix) {
+  const auto longestCommonPrefix = [&](std::optional<std::string> left,
+                                       std::optional<std::string> right) {
+    return evaluateOnce<std::string>(
+        "longest_common_prefix(c0, c1)", std::move(left), std::move(right));
+  };
+
+  // Test basic cases.
+  EXPECT_EQ(longestCommonPrefix("", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", "hello"), "");
+  EXPECT_EQ(longestCommonPrefix("hello", ""), "");
+  EXPECT_EQ(longestCommonPrefix("hello", "hello"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello world", "hello"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello", "hello world"), "hello");
+  EXPECT_EQ(longestCommonPrefix("hello world", "hel wold"), "hel");
+  EXPECT_EQ(longestCommonPrefix("hel wold", "hello world"), "hel");
+
+  // Test for non-ASCII.
+  EXPECT_EQ(longestCommonPrefix("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", ""), "");
+  EXPECT_EQ(longestCommonPrefix("", "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"), "");
+  EXPECT_EQ(
+      longestCommonPrefix(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B");
+  EXPECT_EQ(
+      longestCommonPrefix(
+          "\u4FE1\u5FF5,\u7221,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      "\u4FE1\u5FF5,");
+  EXPECT_EQ(
+      longestCommonPrefix("hello na\u00EFve world", "hello na\u00EFve"),
+      "hello na\u00EFve");
+
+  // Test null cases.
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, "hello"), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix("hello", std::nullopt), std::nullopt);
+  EXPECT_EQ(longestCommonPrefix(std::nullopt, std::nullopt), std::nullopt);
+
+  // Test different lengths.
+  EXPECT_EQ(longestCommonPrefix("a", "abcdef"), "a");
+  EXPECT_EQ(longestCommonPrefix("abcdef", "a"), "a");
+
+  // Additional Unicode tests.
+  EXPECT_EQ(longestCommonPrefix("café", "cat"), "ca");
+  EXPECT_EQ(longestCommonPrefix("préfix", "prefix"), "pr");
+  EXPECT_EQ(longestCommonPrefix("🚀🌟", "🚀🔥"), "🚀");
+  EXPECT_EQ(longestCommonPrefix("Ψ", "Ψmore"), "Ψ");
+  EXPECT_EQ(longestCommonPrefix("hellö", "hell"), "hell");
+
+  // Test for invalid UTF-8 characters.
+  VELOX_ASSERT_THROW(
+      longestCommonPrefix("hello world", "\x81"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      longestCommonPrefix("hello world", "2\x81"),
+      "Invalid UTF-8 encoding in characters");
+}
+
 void StringFunctionsTest::testReplaceFlatVector(
     const replace_input_test_t& tests,
     bool withReplaceArgument,
@@ -1737,10 +1895,11 @@ TEST_F(StringFunctionsTest, toUtf8) {
   // during execution) to a vector of size 2 and passed on to to_utf8(). Here,
   // if the intermediate flat vector is created for a size > 2 then the function
   // throws.
-  EXPECT_NO_THROW(evaluateSimplified<FlatVector<bool>>(
-      "to_utf8(c0) = to_utf8('this')",
-      makeRowVector({makeNullableFlatVector<StringView>(
-          {std::nullopt, "test"_sv, std::nullopt})})));
+  EXPECT_NO_THROW(
+      evaluateSimplified<FlatVector<bool>>(
+          "to_utf8(c0) = to_utf8('this')",
+          makeRowVector({makeNullableFlatVector<StringView>(
+              {std::nullopt, "test"_sv, std::nullopt})})));
 }
 
 namespace {

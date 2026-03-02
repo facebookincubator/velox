@@ -64,8 +64,10 @@ ReadFileInputStream::ReadFileInputStream(
     std::shared_ptr<velox::ReadFile> readFile,
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats,
-    filesystems::File::IoStats* fsStats)
-    : InputStream(readFile->getName(), metricsLog, stats, fsStats),
+    velox::IoStats* ioStats,
+    folly::F14FastMap<std::string, std::string> fileOpts)
+    : InputStream(readFile->getName(), metricsLog, stats, ioStats),
+      fileIoContext_(ioStats, std::move(fileOpts)),
       readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(
@@ -79,7 +81,7 @@ void ReadFileInputStream::read(
   std::string_view readData;
   {
     MicrosecondTimer timer(&readTimeUs);
-    readData = readFile_->pread(offset, length, buf, fsStats_);
+    readData = readFile_->pread(offset, length, buf, fileIoContext_);
   }
   if (stats_) {
     stats_->incRawBytesRead(length);
@@ -102,7 +104,7 @@ void ReadFileInputStream::read(
     LogType logType) {
   const int64_t bufferSize = totalBufferSize(buffers);
   logRead(offset, bufferSize, logType);
-  const auto size = readFile_->preadv(offset, buffers, fsStats_);
+  const auto size = readFile_->preadv(offset, buffers, fileIoContext_);
   VELOX_CHECK_EQ(
       size,
       bufferSize,
@@ -119,7 +121,7 @@ folly::SemiFuture<uint64_t> ReadFileInputStream::readAsync(
     LogType logType) {
   const int64_t bufferSize = totalBufferSize(buffers);
   logRead(offset, bufferSize, logType);
-  return readFile_->preadvAsync(offset, buffers, fsStats_);
+  return readFile_->preadvAsync(offset, buffers, fileIoContext_);
 }
 
 bool ReadFileInputStream::hasReadAsync() const {
@@ -138,7 +140,7 @@ void ReadFileInputStream::vread(
       [&](size_t acc, const auto& r) { return acc + r.length; });
   logRead(regions[0].offset, length, purpose);
   auto readStartMicros = getCurrentTimeMicro();
-  readFile_->preadv(regions, iobufs, fsStats_);
+  readFile_->preadv(regions, iobufs, fileIoContext_);
   if (stats_) {
     stats_->incRawBytesRead(length);
     stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);

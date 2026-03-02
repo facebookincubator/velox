@@ -19,13 +19,15 @@
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/CompactDoubleList.h"
-#include "velox/common/memory/Memory.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/type/StringView.h"
 
 #include <folly/container/F14Map.h>
 
 namespace facebook::velox {
+
+template <class T>
+struct StlAllocator;
 
 /// Implements an arena backed by memory::Allocation. This is for backing
 /// ByteOutputStream or for allocating single blocks. Blocks can be individually
@@ -41,6 +43,9 @@ namespace facebook::velox {
 /// backing a HashStringAllocator is set to kArenaEnd.
 class HashStringAllocator : public StreamArena {
  public:
+  template <typename T>
+  using TStlAllocator = StlAllocator<T>;
+
   /// The minimum allocation must have space after the header for the free list
   /// pointers and the trailing length.
   static constexpr int32_t kMinAlloc =
@@ -659,8 +664,8 @@ class RowSizeTracker {
         counter_(counter) {}
 
   ~RowSizeTracker() {
-    auto delta = allocator_->currentBytes() - size_;
-    if (delta) {
+    const auto delta = allocator_->currentBytes() - size_;
+    if (delta != 0) {
       saturatingIncrement(&counter_, delta);
     }
   }
@@ -668,7 +673,7 @@ class RowSizeTracker {
  private:
   // Increments T at *pointer without wrapping around at overflow.
   void saturatingIncrement(T* pointer, int64_t delta) {
-    auto value = *reinterpret_cast<TCounter*>(pointer) + delta;
+    const auto value = *reinterpret_cast<TCounter*>(pointer) + delta;
     *reinterpret_cast<TCounter*>(pointer) =
         std::min<uint64_t>(value, std::numeric_limits<TCounter>::max());
   }
@@ -688,8 +693,12 @@ struct StlAllocator {
     VELOX_CHECK_NOT_NULL(allocator);
   }
 
+  // We can use "explicit" here based on the C++ standard. But
+  // libstdc++ 12 or older doesn't work for std::vector<bool> and
+  // "explicit". We can avoid it by not using "explicit" here.
+  // See also: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=115854
   template <class U>
-  explicit StlAllocator(const StlAllocator<U>& allocator)
+  StlAllocator(const StlAllocator<U>& allocator)
       : allocator_{allocator.allocator()} {
     VELOX_CHECK_NOT_NULL(allocator_);
   }
@@ -713,13 +722,7 @@ struct StlAllocator {
     return allocator_;
   }
 
-  friend bool operator==(const StlAllocator& lhs, const StlAllocator& rhs) {
-    return lhs.allocator_ == rhs.allocator_;
-  }
-
-  friend bool operator!=(const StlAllocator& lhs, const StlAllocator& rhs) {
-    return !(lhs == rhs);
-  }
+  bool operator==(const StlAllocator& other) const = default;
 
  private:
   HashStringAllocator* const allocator_;
@@ -801,12 +804,6 @@ struct AlignedStlAllocator {
       const AlignedStlAllocator& lhs,
       const AlignedStlAllocator& rhs) {
     return lhs.allocator_ == rhs.allocator_;
-  }
-
-  friend bool operator!=(
-      const AlignedStlAllocator& lhs,
-      const AlignedStlAllocator& rhs) {
-    return !(lhs == rhs);
   }
 
  private:

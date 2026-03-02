@@ -293,8 +293,7 @@ distribute/*
 *.bin
 cmake_build
 .cmake_build
-cmake-build-debug
-cmake-build-release
+cmake-build-*
 
 # tests
 test/test.sql
@@ -325,5 +324,6 @@ src/amalgamation/
 velox/docs/sphinx/source/README_generated_*
 velox/docs/bindings/python/_generate/*
 scripts/bm-report/report.html
+scripts/bm-report/result
 dist/
 wheelhouse/

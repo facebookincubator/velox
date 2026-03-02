@@ -21,6 +21,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/GeneratorSpec.h"
 #include "velox/vector/fuzzer/Utils.h"
 
@@ -78,9 +79,21 @@ class VectorFuzzer {
   struct Options {
     size_t vectorSize{100};
 
-    /// Chance of generating a null value in the output vector (`nullRatio` is a
-    /// double between 0 and 1).
+    /// Controls NULL generation in vectors. This is a probability (0.0-1.0)
+    /// or fraction used by NULL patterns:
+    /// - When useRandomNullPattern=false (default): Uses kRandom pattern only
+    ///   - nullRatio is the probability that each element is NULL
+    /// - When useRandomNullPattern=true: Randomly selects pattern, then:
+    ///   - Random (70%): Probability that each element is NULL
+    ///   - HeadOnly (10%): Fraction of vector that's NULL at beginning
+    ///   - TailOnly (10%): Fraction of vector that's NULL at end
+    ///   - HeadAndTail (10%): Half the fraction at head, half at tail
     double nullRatio{0};
+
+    /// If true, randomly selects NULL patterns (kRandom 70%, kHeadOnly 10%,
+    /// kTailOnly 10%, kHeadAndTail 10%). If false, uses only kRandom pattern.
+    /// Default is false to preserve backward compatibility.
+    bool useRandomNullPattern{false};
 
     /// If false, fuzzer will not generate nulls for elements within containers
     /// (arrays/maps/rows). It might still generate null for the container
@@ -143,6 +156,22 @@ class VectorFuzzer {
 
     /// Data spec for randomly generated data.
     fuzzer::DataSpec dataSpec{false, false};
+
+    /// FlatMap options:
+    ///
+    /// Toggle for functions that support flat map vector encodings.
+    bool allowFlatMapVector{false};
+
+    /// Flat map vs regular map generation ratio.
+    double flatMapRatio{.5};
+
+    /// Probability of a particular inMap BufferPtr bit being set, signifying
+    /// whether or not the corresponding key is present in that row's map.
+    double inMapRatio{.25};
+
+    /// Probability of a inMap buffer being null (suggesting key is present in
+    /// all rows).
+    double inMapNullRatio{.1};
   };
 
   // Suppress spurious warnings in GCC 12.4 and later
@@ -154,15 +183,13 @@ class VectorFuzzer {
       const VectorFuzzer::Options& options,
       memory::MemoryPool* pool,
       size_t seed = 123456)
-      : opts_(options),
-        pool_(pool),
-        rng_(seed){}
+      : opts_(options), pool_(pool), rng_(seed) {}
 #if defined(__GNUC__) && \
     ((__GNUC__ > 12) || (__GNUC__ == 12 && __GNUC_MINOR__ >= 4))
-        VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
+  VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
 #endif
 
-        void setOptions(const VectorFuzzer::Options& options) {
+  void setOptions(const VectorFuzzer::Options& options) {
     opts_ = options;
   }
 
@@ -215,6 +242,9 @@ class VectorFuzzer {
   VectorPtr fuzzFlatNotNull(const TypePtr& type);
   VectorPtr fuzzFlatNotNull(const TypePtr& type, vector_size_t size);
 
+  /// Generate a distinct vector of non-null values of type type.
+  VectorPtr fuzzUniqueFlatNotNull(const TypePtr& type, vector_size_t size);
+
   /// Returns a map vector with randomized values and nulls. Returns a vector
   /// containing `opts_.vectorSize` or `size` elements.
   VectorPtr
@@ -261,6 +291,18 @@ class VectorFuzzer {
   /// this method throws if the keys vector has nulls.
   MapVectorPtr
   fuzzMap(const VectorPtr& keys, const VectorPtr& values, vector_size_t size);
+
+  /// Generates a fuzzed flat map vector using the given key and value types.
+  ///
+  /// This function will fuzz keys values and use them to generate the distinct
+  /// keys for the flat map. Subsequent inMaps and mapValues buffers and vectors
+  /// (respectively) are generated per channel. The result is a flatMapVectorPtr
+  /// generated from the ground up. This can be used with
+  /// FlatMapVector::toMapVector for encoding testing.
+  FlatMapVectorPtr fuzzFlatMap(
+      const TypePtr& keyType,
+      const TypePtr& valueType,
+      vector_size_t size);
 
   /// Returns a "fuzzed" row vector with randomized data and nulls.
   RowVectorPtr fuzzRow(const RowTypePtr& rowType);
@@ -382,11 +424,19 @@ class VectorFuzzer {
   /// pointing to (baseVectorSize-1).
   BufferPtr fuzzIndices(vector_size_t size, vector_size_t baseVectorSize);
 
+  /// Generate a random inMap buffer (for use with flat map vectors) of 'size'
+  /// number of rows. This should randomize the keys per row in the map.
+  BufferPtr fuzzFlatMapInMap(vector_size_t size);
+
   template <typename Class>
   void registerOpaqueTypeGenerator(
       std::function<std::shared_ptr<Class>(FuzzerGenerator& rng)> generator) {
     opaqueTypeGenerators_[std::type_index(typeid(Class))] = generator;
   }
+
+  // Maximum values allowed values by Presto for interval types.
+  static const int64_t kMaxAllowedIntervalDayTime = 2147483647;
+  static const int32_t kMaxAllowedIntervalYearMonth = 178956970;
 
  private:
   // Generates a flat vector for primitive types.

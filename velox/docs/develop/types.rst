@@ -115,6 +115,7 @@ DATE                    INTEGER
 DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
 INTERVAL DAY TO SECOND  BIGINT
 INTERVAL YEAR TO MONTH  INTEGER
+TIME                    BIGINT
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -129,6 +130,9 @@ upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
+
+TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
+TIME type is backed by BIGINT physical type.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -168,13 +172,34 @@ The table below shows the supported Presto types.
 Presto Type               Physical Type
 ========================  =====================
 HYPERLOGLOG               VARBINARY
+KHYPERLOGLOG              VARBINARY
+P4HYPERLOGLOG             VARBINARY
 JSON                      VARCHAR
 TIMESTAMP WITH TIME ZONE  BIGINT
 UUID                      HUGEINT
 IPADDRESS                 HUGEINT
 IPPREFIX                  ROW(HUGEINT,TINYINT)
+BINGTILE                  BIGINT
 GEOMETRY                  VARBINARY
+SPHERICALGEOGRAPHY        VARBINARY
+SETDIGEST                 VARBINARY
+TDIGEST                   VARBINARY
+QDIGEST                   VARBINARY
+BIGINT_ENUM               BIGINT
+VARCHAR_ENUM              VARCHAR
+TIME WITH TIME ZONE       BIGINT
 ========================  =====================
+
+KHYPERLOGLOG is a data sketch for estimating reidentifiability and joinability within a dataset.
+Based on the `KHyperLogLog paper <https://research.google/pubs/khyperloglog-estimating-reidentifiability-and-joinability-of-large-data-at-scale/>`_,
+it maintains a map of K number of HyperLogLog structures, where each entry corresponds to a unique key from one column,
+and the HLL estimates the cardinality of the associated unique identifiers from another column.
+For storage and retrieval it may be cast to/from VARBINARY.
+
+P4HYPERLOGLOG is a data sketch for cardinality estimation that uses only the dense HyperLogLog
+representation. Unlike standard HYPERLOGLOG which supports both sparse and dense formats,
+P4HYPERLOGLOG always uses dense format. It may be cast to/from HYPERLOGLOG and to/from VARBINARY
+for storage and retrieval.
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
 from UNIX epoch with timezone information. Its physical type is BIGINT.
@@ -208,6 +233,57 @@ As a result the IPPREFIX object stores *FFFF:FFFF::* and the length 32 for both 
 
    IPPREFIX 'FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
    IPPREFIX 'FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+
+SETDIGEST is a data sketch for estimating set cardinality and performing set operations
+like intersection cardinality and Jaccard index. It combines HyperLogLog with MinHash.
+SetDigests may be merged, and for storage and retrieval they may be cast to/from VARBINARY.
+
+TDIGEST(DOUBLE) is a data sketch for estimating rank-based metrics.
+T-digests may be merged without losing precision, and for storage and retrieval
+they may be cast to/from VARBINARY. The T-digest accepts a parameter of type
+DOUBLE which represents the set of numbers to be ingested by the T-digest.
+
+QDIGEST(BIGINT), QDIGEST(REAL), QDIGEST(DOUBLE) are data sketches for
+estimating rank-based metrics. A quantile digest captures the approximate distribution of
+data for a given input set, and can be queried to retrieve approximate quantile values from the
+distribution. They may be merged without losing precision, and for storage and retrieval they may
+be cast to/from VARBINARY. The parameter type (BIGINT, REAL, or DOUBLE) represents
+the set of numbers that may be ingested by the quantile digest.
+
+BIGINT_ENUM(LongEnumParameter) type represents an enumerated value where the physical type is BIGINT.
+It takes one LongEnumParameter as parameter, which consists of a string name and a mapping of
+string keys to BIGINT values.
+There is a static cache which stores instances of different BIGINT_ENUM types. This is to treat each
+different enum type as a singleton. The LongEnumParameter is used as the key to retrieve the cached instance,
+and a new instance is only created if it has not been created with the given LongEnumParameter.
+Casting is permitted from any integer type to an enum type. Casting is only permitted from an enum type
+to a BIGINT type. Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
+VARCHAR_ENUM(VarcharEnumParameter) type represents an enumerated value where the physical type is VARCHAR.
+It takes one VarcharEnumParameter as parameter, which consists of a string name and a mapping of
+string keys to VARCHAR values.
+Similar to BIGINT_ENUM, there is a static cache which stores instances of different VARCHAR_ENUM types, with the
+VarcharEnumParameter as the key.
+Casting is only permitted to and from VARCHAR type, and is case-sensitive. Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
+TIME WITH TIME ZONE represents time from midnight in milliseconds precision at a particular timezone.
+Its physical type is BIGINT. The high 52 bits of bigint store signed integer for milliseconds in UTC.
+The lower 12 bits store the time zone offsets minutes. This allows the time to be converted at any point of
+time without ambiguity of daylight savings time. Time zone offsets range from -14:00 hours to +14:00 hours.
+
+BINGTILE represents a `Bing tile <https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system>`_.
+It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixels. Its physical type is BIGINT.
+
+GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
+Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
+are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+
+SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
+way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
+as opposed to the units of the coordinate space.
 
 Spark Types
 ~~~~~~~~~~~~

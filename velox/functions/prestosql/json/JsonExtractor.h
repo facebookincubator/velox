@@ -18,57 +18,46 @@
 
 #include <string>
 
-#include "folly/Range.h"
 #include "folly/dynamic.h"
 
 namespace facebook::velox::functions {
 
-/**
- * Extract a json object from path
- * @param json: A json object
- * @param path: Path to locate a json object. Following operators are supported
- *              "$"      Root member of a json structure no matter it's an
- *                       object or an array
- *              "./[]"   Child operator to get a children object
- *              "[]"     Subscript operator for array and map
- *              "*"      Wildcard for [], get all the elements of an array
- * @return Return json string object on success.
- *         On invalid json path, returns folly::none (not json null) value
- *         On non-json value, returns the original value.
- * Example:
- * For the following example: ,
- * "{\"store\":,
- *   {\"fruit\":\\[{\"weight\":8,\"type\":\"apple\"},
- *                 {\"weight\":9,\"type\":\"pear\"}],
- *    \"bicycle\":{\"price\":19.95,\"color\":\"red\"}
- *   },
- *  \"email\":\"amy@only_for_json_udf_test.net\",
- *  \"owner\":\"amy\",
- * }",
- * jsonExtract(json, "$.owner") = "amy",
- * jsonExtract(json, "$.store.fruit[0]") =
- *    "{\"weight\":8,\"type\":\"apple\"}",
- * jsonExtract(json, "$.non_exist_key") = NULL
- * jsonExtract(json, "$.store.fruit[*].type") = "[\"apple\", \"pear\"]"
- */
-folly::Optional<folly::dynamic> jsonExtract(
-    folly::StringPiece json,
-    folly::StringPiece path);
+/// Extract a json object from path
+/// @param json: A json object
+/// @param path: Path to locate a json object. Following operators are supported
+///              "$"      Root member of a json structure no matter it's an
+///                       object or an array
+///              "./[]"   Child operator to get a children object
+///              "[]"     Subscript operator for array and map
+///              "*"      Wildcard for [], get all the elements of an array
+/// @return Return json string object on success.
+///         On invalid json path, returns std::nullopt (not json null) value
+///         On non-json value, returns the original value.
+/// Example:
+/// For the following example: ,
+/// "{\"store\":,
+///   {\"fruit\":\\[{\"weight\":8,\"type\":\"apple\"},
+///                 {\"weight\":9,\"type\":\"pear\"}],
+///    \"bicycle\":{\"price\":19.95,\"color\":\"red\"}
+///   },
+///  \"email\":\"amy@only_for_json_udf_test.net\",
+///  \"owner\":\"amy\",
+/// }",
+/// jsonExtract(json, "$.owner") = "amy",
+/// jsonExtract(json, "$.store.fruit[0]") =
+///    "{\"weight\":8,\"type\":\"apple\"}",
+/// jsonExtract(json, "$.non_exist_key") = NULL
+/// jsonExtract(json, "$.store.fruit[*].type") = "[\"apple\", \"pear\"]"
+std::optional<folly::dynamic> jsonExtract(
+    std::string_view json,
+    std::string_view path);
 
-folly::Optional<folly::dynamic> jsonExtract(
+std::optional<folly::dynamic> jsonExtractFromDynamic(
     const folly::dynamic& json,
-    folly::StringPiece path);
+    std::string_view path);
 
-folly::Optional<std::string> jsonExtractScalar(
-    folly::StringPiece json,
-    folly::StringPiece path);
-
-folly::Optional<folly::dynamic> jsonExtract(
-    const std::string& json,
-    const std::string& path);
-
-folly::Optional<std::string> jsonExtractScalar(
-    const std::string& json,
-    const std::string& path);
+std::optional<std::string> jsonExtractScalar(
+    std::string_view json,
+    std::string_view path);
 
 } // namespace facebook::velox::functions

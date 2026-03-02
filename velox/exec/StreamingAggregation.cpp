@@ -41,8 +41,11 @@ StreamingAggregation::StreamingAggregation(
                         ->queryConfig()
                         .streamingAggregationMinOutputBatchRows())
               : maxOutputBatchSize_},
+      maxOutputBatchBytes_{
+          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes()},
       aggregationNode_{aggregationNode},
-      step_{aggregationNode->step()} {
+      step_{aggregationNode->step()},
+      noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()} {
   if (aggregationNode_->ignoreNullKeys()) {
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
@@ -200,12 +203,13 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
   return output;
 }
 
-void StreamingAggregation::assignGroups() {
+bool StreamingAggregation::assignGroups() {
   const auto numInput = input_->size();
   VELOX_CHECK_GT(numInput, 0);
 
   inputGroups_.resize(numInput);
 
+  bool prevGroupAssigned{false};
   // Look for the end of the last group.
   vector_size_t index = 0;
   if (prevInput_ != nullptr) {
@@ -213,6 +217,7 @@ void StreamingAggregation::assignGroups() {
     auto* prevGroup = groups_[numGroups_ - 1];
     for (; index < numInput; ++index) {
       if (equalKeys(groupingKeys_, prevInput_, prevIndex, input_, index)) {
+        prevGroupAssigned = true;
         inputGroups_[index] = prevGroup;
       } else {
         break;
@@ -246,6 +251,7 @@ void StreamingAggregation::assignGroups() {
     }
   }
   groupBoundaries_.push_back(numInput);
+  return prevGroupAssigned;
 }
 
 const SelectivityVector& StreamingAggregation::getSelectivityVector(
@@ -280,7 +286,8 @@ void StreamingAggregation::evaluateAggregates() {
     std::vector<VectorPtr> args;
     for (auto j = 0; j < inputs.size(); ++j) {
       if (inputs[j] == kConstantChannel) {
-        args.push_back(constantInputs[j]);
+        args.push_back(
+            BaseVector::wrapInConstant(input_->size(), 0, constantInputs[j]));
       } else {
         args.push_back(input_->childAt(inputs[j]));
       }
@@ -326,13 +333,20 @@ bool StreamingAggregation::isFinished() {
 
 RowVectorPtr StreamingAggregation::getOutput() {
   if (!input_) {
+    SCOPE_EXIT {
+      outputFirstGroup_ = false;
+    };
     if ((noMoreInput_ || isDraining()) && numGroups_ > 0) {
-      return createOutput(
-          std::min(numGroups_, static_cast<size_t>(maxOutputBatchSize_)));
+      return createOutput(numGroups_);
+    }
+    if (outputFirstGroup_) {
+      VELOX_CHECK_GT(numGroups_, 1);
+      return createOutput(1);
     }
     maybeFinishDrain();
     return nullptr;
   }
+  VELOX_CHECK(!outputFirstGroup_);
 
   const auto numInput = input_->size();
   inputRows_.resize(numInput);
@@ -341,17 +355,46 @@ RowVectorPtr StreamingAggregation::getOutput() {
   masks_->addInput(input_, inputRows_);
 
   const auto numPrevGroups = numGroups_;
-
-  assignGroups();
+  const bool prevGroupAssigned = assignGroups();
   initializeNewGroups(numPrevGroups);
   evaluateAggregates();
 
+  const auto estimatedRowBytes = rows_->estimateRowSize();
+  const auto estimatedBatchBytes =
+      estimatedRowBytes.value_or(0) * rows_->numRows();
+
   RowVectorPtr output;
-  if (numGroups_ > minOutputBatchSize_) {
-    output = createOutput(
-        std::min(numGroups_ - 1, static_cast<size_t>(maxOutputBatchSize_)));
+
+  // we do not respect minOutputBatchRows or outputDueToBatchBytes
+  // when noGroupsSpanBatches is set
+  const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
+  const bool outputDueToBatchBytes =
+      numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
+  if (noGroupsSpanBatches_ ||
+      (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes))) {
+    size_t numOutputGroups{0};
+    if (noGroupsSpanBatches_) {
+      numOutputGroups = numGroups_;
+    } else {
+      // NOTE: we only want to apply the single group output optimization if
+      // 'minOutputBatchSize_' is set to one for eagerly streaming output
+      // producing.
+      if (!prevGroupAssigned || numPrevGroups == 1 ||
+          minOutputBatchSize_ != 1) {
+        numOutputGroups = std::min(numGroups_ - 1, numPrevGroups);
+      } else {
+        numOutputGroups = std::min(numGroups_ - 1, numPrevGroups - 1);
+        outputFirstGroup_ = (numGroups_ - numOutputGroups) > 1;
+      }
+    }
+    VELOX_CHECK_GT(numOutputGroups, 0);
+    output = createOutput(numOutputGroups);
   }
   prevInput_ = input_;
+  if (numGroups_ == 0) {
+    VELOX_CHECK(noGroupsSpanBatches_);
+    prevInput_ = nullptr;
+  }
   input_ = nullptr;
   return output;
 }
@@ -380,6 +423,7 @@ std::unique_ptr<RowContainer> StreamingAggregation::makeRowContainer(
       !aggregationNode_->ignoreNullKeys(),
       accumulators,
       std::vector<TypePtr>{},
+      false,
       false,
       false,
       false,

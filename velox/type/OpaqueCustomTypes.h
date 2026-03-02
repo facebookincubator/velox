@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
@@ -34,14 +35,19 @@ class CastOperator;
 template <typename T, const char* customTypeName>
 class OpaqueCustomTypeRegister {
  public:
-  static bool registerType() {
-    return facebook::velox::registerCustomType(
-        customTypeName, std::make_unique<const TypeFactory>());
-  }
+  using SerializeValueFunc = OpaqueType::SerializeFunc<T>;
+  using DeserializeValueFunc = OpaqueType::DeserializeFunc<T>;
 
-  static bool unregisterType() {
-    return facebook::velox::unregisterCustomType(customTypeName);
-  }
+  // @param serializeValueFunc Optional serialization function for values of
+  // type T.
+  // @param deserializeValueFunc Optional deserialization function for values of
+  // type T. Both serializeValueFunc and deserializeValueFunc must be specified
+  // or not together.
+  static bool registerType(
+      SerializeValueFunc serializeValueFunc = nullptr,
+      DeserializeValueFunc deserializeValueFunc = nullptr);
+
+  static bool unregisterType();
 
   // Type used in the simple function interface as CustomType<TypeT>.
   struct TypeT {
@@ -51,13 +57,17 @@ class OpaqueCustomTypeRegister {
 
   using SimpleType = CustomType<TypeT>;
 
+  class VeloxType;
+  using VeloxTypePtr = std::shared_ptr<const VeloxType>;
+
   class VeloxType : public OpaqueType {
    public:
     VeloxType() : OpaqueType(std::type_index(typeid(T))) {}
 
-    static const TypePtr& get() {
-      static const TypePtr instance{new VeloxType()};
-      return instance;
+    static const VeloxTypePtr& get() {
+      static const VeloxType kInstance;
+      static const VeloxTypePtr kInstancePtr{TypePtr{}, &kInstance};
+      return kInstancePtr;
     }
 
     static const std::shared_ptr<const exec::CastOperator>& getCastOperator() {
@@ -76,18 +86,25 @@ class OpaqueCustomTypeRegister {
     std::string toString() const override {
       return customTypeName;
     }
+
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["name"] = "Type";
+      obj["type"] = customTypeName;
+      return obj;
+    }
   };
 
-  static const TypePtr& singletonTypePtr() {
+  static const VeloxTypePtr& singletonTypePtr() {
     return VeloxType::get();
   }
 
-  static const TypePtr& get() {
+  static const VeloxTypePtr& get() {
     return VeloxType::get();
   }
 
  private:
-  class TypeFactory : public CustomTypeFactories {
+  class TypeFactory : public CustomTypeFactory {
    public:
     TypeFactory() = default;
 
@@ -107,4 +124,34 @@ class OpaqueCustomTypeRegister {
     }
   };
 };
+
+template <typename T, const char* customTypeName>
+bool OpaqueCustomTypeRegister<T, customTypeName>::registerType(
+    SerializeValueFunc serializeValueFunc,
+    DeserializeValueFunc deserializeValueFunc) {
+  VELOX_USER_CHECK(
+      ((serializeValueFunc && deserializeValueFunc) ||
+       (!serializeValueFunc && !deserializeValueFunc)),
+      "Both serialization and deserialization functions need to be registered for custom type {}",
+      customTypeName);
+  if (registerCustomType(
+          customTypeName, std::make_unique<const TypeFactory>())) {
+    if (serializeValueFunc && deserializeValueFunc) {
+      OpaqueType::registerSerialization<T>(
+          customTypeName, serializeValueFunc, deserializeValueFunc);
+    }
+    return true;
+  }
+  return false;
+}
+
+template <typename T, const char* customTypeName>
+bool OpaqueCustomTypeRegister<T, customTypeName>::unregisterType() {
+  if (unregisterCustomType(customTypeName)) {
+    OpaqueType::unregisterSerialization(singletonTypePtr(), customTypeName);
+    return true;
+  }
+  return false;
+}
+
 } // namespace facebook::velox

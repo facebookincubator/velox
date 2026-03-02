@@ -20,23 +20,18 @@
 
 namespace facebook::velox {
 
-class QDigestType : public VarbinaryType {
+class QDigestType final : public VarbinaryType {
  public:
-  static const std::shared_ptr<const QDigestType>& get(
-      const TypePtr& dataType) {
-    static const auto bigintInstance =
-        std::shared_ptr<const QDigestType>(new QDigestType(BIGINT()));
-    static const auto realInstance =
-        std::shared_ptr<const QDigestType>(new QDigestType(REAL()));
-    static const auto doubleInstance =
-        std::shared_ptr<const QDigestType>(new QDigestType(DOUBLE()));
-
+  static std::shared_ptr<const QDigestType> get(const TypePtr& dataType) {
     if (dataType->isBigint()) {
-      return bigintInstance;
+      static const QDigestType kInstance{BIGINT()};
+      return {std::shared_ptr<const QDigestType>{}, &kInstance};
     } else if (dataType->isReal()) {
-      return realInstance;
+      static const QDigestType kInstance{REAL()};
+      return {std::shared_ptr<const QDigestType>{}, &kInstance};
     } else if (dataType->isDouble()) {
-      return doubleInstance;
+      static const QDigestType kInstance{DOUBLE()};
+      return {std::shared_ptr<const QDigestType>{}, &kInstance};
     } else {
       VELOX_UNREACHABLE(
           "Only QDIGEST(BIGINT), QDIGEST(REAL), and QDIGEST(DOUBLE) are supported: QDIGEST({})",
@@ -53,12 +48,12 @@ class QDigestType : public VarbinaryType {
     return "QDIGEST";
   }
 
-  const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+  std::span<const TypeParameter> parameters() const override {
+    return {&parameter_, 1};
   }
 
   std::string toString() const override {
-    return fmt::format("QDIGEST({})", parameters_[0].type->toString());
+    return fmt::format("QDIGEST({})", parameter_.type->toString());
   }
 
   folly::dynamic serialize() const override {
@@ -66,18 +61,19 @@ class QDigestType : public VarbinaryType {
     obj["name"] = "Type";
     obj["type"] = name();
     folly::dynamic children = folly::dynamic::array;
-    for (auto& param : parameters_) {
-      children.push_back(param.type->serialize());
-    }
+    children.push_back(parameter_.type->serialize());
     obj["cTypes"] = children;
     return obj;
   }
 
- private:
-  explicit QDigestType(const TypePtr& dataType)
-      : parameters_({TypeParameter(dataType)}) {}
+  bool isOrderable() const override {
+    return false;
+  }
 
-  const std::vector<TypeParameter> parameters_;
+ private:
+  explicit QDigestType(const TypePtr& dataType) : parameter_(dataType) {}
+
+  const TypeParameter parameter_;
 };
 
 inline std::shared_ptr<const QDigestType> QDIGEST(const TypePtr& dataType) {

@@ -20,7 +20,7 @@ namespace facebook::velox::common::testutil {
 
 std::mutex TestValue::mutex_;
 bool TestValue::enabled_ = false;
-std::unordered_map<std::string, TestValue::Callback> TestValue::injectionMap_;
+folly::F14FastMap<std::string, TestValue::Callback> TestValue::injectionMap_;
 
 #ifndef NDEBUG
 void TestValue::enable() {
@@ -38,12 +38,12 @@ bool TestValue::enabled() {
   return enabled_;
 }
 
-void TestValue::clear(const std::string& injectionPoint) {
+void TestValue::clear(std::string_view injectionPoint) {
   std::lock_guard<std::mutex> l(mutex_);
   injectionMap_.erase(injectionPoint);
 }
 
-void TestValue::adjust(const std::string& injectionPoint, void* testData) {
+void TestValue::adjust(std::string_view injectionPoint, void* testData) {
   Callback injectionCb;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -60,7 +60,7 @@ void TestValue::disable() {}
 bool TestValue::enabled() {
   return false;
 }
-void TestValue::clear(const std::string& injectionPoint) {}
+void TestValue::clear(std::string_view injectionPoint) {}
 #endif
 
 } // namespace facebook::velox::common::testutil

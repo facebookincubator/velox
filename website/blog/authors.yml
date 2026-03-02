@@ -26,7 +26,7 @@ mbasmanova:
 
 majetideepak:
   name: Deepak Majeti
-  title: Principal Engineer @ Ahana
+  title: Software Engineer @ IBM
   url: https://github.com/majetideepak
   image_url: https://github.com/majetideepak.png
 
@@ -83,3 +83,21 @@ oerling:
   title: Software Engineer @ Meta
   url: https://github.com/oerling
   image_url: https://github.com/oerling.png
+
+czentgr:
+  name: Christian Zentgraf
+  title: Software Engineer @ IBM
+  url: https://github.com/czentgr
+  image_url: https://github.com/czentgr.png
+
+GregoryKimball:
+  name: Gregory Kimball
+  title: Software Engineer @ NVIDIA
+  url: https://github.com/GregoryKimball
+  image_url: https://github.com/GregoryKimball.png
+
+yuhta:
+  name: Yuhta
+  title: Software Engineer @ Meta
+  url: https://github.com/Yuhta
+  image_url: https://github.com/Yuhta.png

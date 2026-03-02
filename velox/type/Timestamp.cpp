@@ -202,7 +202,7 @@ StringView Timestamp::tmToStringView(
     uint64_t nanos,
     const TimestampToStringOptions& options,
     char* const startPosition) {
-  VELOX_DCHECK_LT(nanos, 1'000'000'000);
+  VELOX_CHECK_LT(nanos, 1'000'000'000);
 
   const auto appendDigits = [](const int value,
                                const std::optional<uint32_t> minWidth,
@@ -350,10 +350,6 @@ std::string::size_type getMaxStringLength(
     default:
       VELOX_UNREACHABLE();
   }
-}
-
-void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out) {
-  // TODO Implement
 }
 
 } // namespace facebook::velox

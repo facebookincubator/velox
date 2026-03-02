@@ -45,6 +45,9 @@ void registerVeloxMetrics() {
   DEFINE_HISTOGRAM_METRIC(
       kMetricTaskBarrierProcessTimeMs, 1'000, 0, 30'000, 50, 90, 99, 100);
 
+  // Tracks the total number of splits received by all tasks.
+  DEFINE_METRIC(kMetricTaskSplitsCount, facebook::velox::StatType::COUNT);
+
   /// ================== Cache Counters =================
 
   // Tracks hive handle generation latency in range of [0, 100s] and reports
@@ -107,8 +110,13 @@ void registerVeloxMetrics() {
   // was opened to load the cache.
   DEFINE_METRIC(kMetricCacheMaxAgeSecs, facebook::velox::StatType::AVG);
 
-  // Total number of cache entries.
-  DEFINE_METRIC(kMetricMemoryCacheNumEntries, facebook::velox::StatType::AVG);
+  // Total number of tiny cache entries.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumTinyEntries, facebook::velox::StatType::AVG);
+
+  // Total number of large cache entries.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumLargeEntries, facebook::velox::StatType::AVG);
 
   // Total number of cache entries that do not cache anything.
   DEFINE_METRIC(
@@ -249,12 +257,20 @@ void registerVeloxMetrics() {
   // Total number of error while writing to SSD cache files.
   DEFINE_METRIC(kMetricSsdCacheWriteSsdErrors, facebook::velox::StatType::SUM);
 
+  // Total number of errors due to SSD no space for writes.
+  DEFINE_METRIC(
+      kMetricSsdCacheWriteNoSpaceErrors, facebook::velox::StatType::SUM);
+
   // Total number of errors while writing SSD checkpoint file.
   DEFINE_METRIC(
       kMetricSsdCacheWriteCheckpointErrors, facebook::velox::StatType::SUM);
 
   // Total number of writes dropped due to no cache space.
   DEFINE_METRIC(kMetricSsdCacheWriteSsdDropped, facebook::velox::StatType::SUM);
+
+  // Total number of writes dropped due to entry limit exceeded.
+  DEFINE_METRIC(
+      kMetricSsdCacheWriteExceedEntryLimit, facebook::velox::StatType::SUM);
 
   // Total number of errors while reading from SSD cache files.
   DEFINE_METRIC(kMetricSsdCacheReadSsdErrors, facebook::velox::StatType::SUM);
@@ -364,9 +380,6 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricTaskMemoryReclaimWaitTimeoutCount,
       facebook::velox::StatType::COUNT);
-
-  // Tracks the total number of splits received by all tasks.
-  DEFINE_METRIC(kMetricTaskSplitsCount, facebook::velox::StatType::COUNT);
 
   // The number of times that the memory reclaim fails because the operator is
   // executing a non-reclaimable section where it is expected to have reserved
@@ -643,6 +656,10 @@ void registerVeloxMetrics() {
   // of [0, 16s] with 512 buckets and reports P50, P90, P99, and P100.
   DEFINE_HISTOGRAM_METRIC(
       kMetricIndexLookupBlockedWaitTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  // The number of index lookup results with error.
+  DEFINE_METRIC(
+      kMetricIndexLookupErrorResultCount, facebook::velox::StatType::COUNT);
 
   /// ================== Table Scan Counters =================
   // Tracks the averaged table scan batch processing time in milliseconds.

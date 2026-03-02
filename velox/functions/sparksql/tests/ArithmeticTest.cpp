@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -190,6 +191,13 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
+  std::optional<int64_t> div(
+      std::optional<T> numerator,
+      std::optional<T> denominator) {
+    return evaluateOnce<int64_t>("div(c0, c1)", numerator, denominator);
+  }
+
+  template <typename T>
   std::optional<T> checkedAdd(
       const std::optional<T> a,
       const std::optional<T> b) {
@@ -215,6 +223,18 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       const std::optional<T> a,
       const std::optional<T> b) {
     return evaluateOnce<T>("checked_subtract(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<int64_t> checkedDiv(
+      std::optional<T> numerator,
+      std::optional<T> denominator) {
+    return evaluateOnce<int64_t>("checked_div(c0, c1)", numerator, denominator);
+  }
+
+  template <typename T>
+  std::optional<T> abs(const std::optional<T> input) {
+    return evaluateOnce<T>("abs(c0)", input);
   }
 
   template <typename T>
@@ -259,11 +279,19 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  void assertErrorForcheckedSubtract(
+  void assertErrorForCheckedSubtract(
       const std::optional<T> a,
       const std::optional<T> b,
       const std::string& errorMessage) {
     assertErrorForCheckedArithmetic("checked_subtract", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedDiv(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_div", a, b, errorMessage);
   }
 
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
@@ -317,6 +345,23 @@ TEST_F(ArithmeticTest, Divide) {
   EXPECT_TRUE(std::isnan(divide(kInf, kInf).value_or(0)));
   EXPECT_TRUE(std::isnan(divide(-kInf, kInf).value_or(0)));
   EXPECT_TRUE(std::isnan(divide(kInf, -kInf).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, div) {
+  // Division by zero is always null.
+  EXPECT_EQ(div<int64_t>(1, 0), std::nullopt);
+  EXPECT_EQ(div<int64_t>(0, 0), std::nullopt);
+  EXPECT_EQ(div<int64_t>(INT64_MIN, 0), std::nullopt);
+
+  EXPECT_EQ(div<int64_t>(INT64_MIN, -1), INT64_MIN);
+
+  EXPECT_EQ(div<int8_t>(INT8_MAX, INT8_MIN), 0);
+  EXPECT_EQ(div<int16_t>(INT16_MIN, INT16_MAX), -1);
+  EXPECT_EQ(div<int32_t>(INT32_MAX, INT32_MIN), 0);
+  EXPECT_EQ(div<int64_t>(INT64_MIN, INT64_MAX), -1);
+
+  EXPECT_EQ(div<int64_t>(2, 3), 0);
+  EXPECT_EQ(div<int64_t>(3, 2), 1);
 }
 
 TEST_F(ArithmeticTest, acosh) {
@@ -690,13 +735,13 @@ TEST_F(ArithmeticTest, checkedAdd) {
 }
 
 TEST_F(ArithmeticTest, checkedSubtract) {
-  assertErrorForcheckedSubtract<int8_t>(
+  assertErrorForCheckedSubtract<int8_t>(
       INT8_MIN, 1, "Arithmetic overflow: -128 - 1");
-  assertErrorForcheckedSubtract<int16_t>(
+  assertErrorForCheckedSubtract<int16_t>(
       INT16_MIN, 1, "Arithmetic overflow: -32768 - 1");
-  assertErrorForcheckedSubtract<int32_t>(
+  assertErrorForCheckedSubtract<int32_t>(
       INT32_MIN, 1, "Arithmetic overflow: -2147483648 - 1");
-  assertErrorForcheckedSubtract<int64_t>(
+  assertErrorForCheckedSubtract<int64_t>(
       INT64_MIN, 1, "Arithmetic overflow: -9223372036854775808 - 1");
   EXPECT_EQ(checkedSubtract<float>(kInf, 1), kInf);
   EXPECT_EQ(checkedSubtract<double>(kInfDouble, 1), kInfDouble);
@@ -727,6 +772,74 @@ TEST_F(ArithmeticTest, checkedDivide) {
       INT64_MIN, -1, "Arithmetic overflow: -9223372036854775808 / -1");
   EXPECT_EQ(checkedDivide<float>(kInf, 1), kInf);
   EXPECT_EQ(checkedDivide<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedDiv) {
+  EXPECT_EQ(checkedDiv<int8_t>(INT8_MAX, INT8_MIN), 0);
+  EXPECT_EQ(checkedDiv<int16_t>(INT16_MIN, INT16_MAX), -1);
+  EXPECT_EQ(checkedDiv<int32_t>(INT32_MAX, INT32_MIN), 0);
+  EXPECT_EQ(checkedDiv<int64_t>(INT64_MIN, INT64_MAX), -1);
+
+  EXPECT_EQ(checkedDiv<int64_t>(2, 3), 0);
+  EXPECT_EQ(checkedDiv<int64_t>(3, 2), 1);
+  // Division by zero is always null.
+  assertErrorForCheckedDiv<int64_t>(1, 0, "Division by zero");
+  // Division overflow.
+  assertErrorForCheckedDiv<int64_t>(
+      INT64_MIN, -1, "Overflow in integral divide");
+}
+
+TEST_F(ArithmeticTest, abs) {
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    EXPECT_EQ(abs<int8_t>(-127), 127);
+    EXPECT_EQ(abs<int16_t>(-32767), 32767);
+    EXPECT_EQ(abs<int32_t>(-2147483647), 2147483647);
+    EXPECT_EQ(abs<int64_t>(-9223372036854775807), 9223372036854775807);
+
+    EXPECT_EQ(abs<float>(-99999.9999f), 99999.9999f);
+    EXPECT_EQ(
+        abs<float>(std::numeric_limits<float>::lowest()),
+        std::numeric_limits<float>::max());
+    EXPECT_EQ(abs<double>(-99999.9999), 99999.9999);
+    EXPECT_EQ(
+        abs<double>(std::numeric_limits<double>::lowest()),
+        std::numeric_limits<double>::max());
+  }
+}
+
+TEST_F(ArithmeticTest, absMinValueOverflow) {
+  // Test abs with ANSI off.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      abs<int8_t>(std::numeric_limits<int8_t>::min()),
+      std::numeric_limits<int8_t>::min());
+  EXPECT_EQ(
+      abs<int16_t>(std::numeric_limits<int16_t>::min()),
+      std::numeric_limits<int16_t>::min());
+  EXPECT_EQ(
+      abs<int32_t>(std::numeric_limits<int32_t>::min()),
+      std::numeric_limits<int32_t>::min());
+  EXPECT_EQ(
+      abs<int64_t>(std::numeric_limits<int64_t>::min()),
+      std::numeric_limits<int64_t>::min());
+
+  // Test abs with ANSI on.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(
+      abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int16_t>(std::numeric_limits<int16_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int32_t>(std::numeric_limits<int32_t>::min()), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
 }
 
 class LogNTest : public SparkFunctionBaseTest {

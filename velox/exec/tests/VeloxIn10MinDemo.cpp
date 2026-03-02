@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include <folly/init/Init.h>
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
-#include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/Expr.h"
@@ -47,33 +47,24 @@ class VeloxIn10MinDemo : public VectorTestBase {
     // Register type resolver with DuckDB SQL parser.
     parse::registerTypeResolver();
 
-    // Register the TPC-H Connector Factory.
-    connector::registerConnectorFactory(
-        std::make_shared<connector::tpch::TpchConnectorFactory>());
-
     // Create and register a TPC-H connector.
-    auto tpchConnector =
-        connector::getConnectorFactory(
-            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(
-                kTpchConnectorId,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
+    connector::tpch::TpchConnectorFactory factory;
+    auto tpchConnector = factory.newConnector(
+        kTpchConnectorId,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(tpchConnector);
   }
 
   ~VeloxIn10MinDemo() {
     connector::unregisterConnector(kTpchConnectorId);
-    connector::unregisterConnectorFactory(
-        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
   }
 
   /// Parse SQL expression into a typed expression tree using DuckDB SQL parser.
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    parse::ParseOptions options;
-    auto untyped = parse::parseExpr(text, options);
+    auto untyped = parse::DuckSqlExpressionsParser().parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
@@ -99,8 +90,9 @@ class VeloxIn10MinDemo : public VectorTestBase {
 
   /// Make TPC-H split to add to TableScan node.
   exec::Split makeTpchSplit() const {
-    return exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-        kTpchConnectorId, /*cacheable=*/true, 1, 0));
+    return exec::Split(
+        std::make_shared<connector::tpch::TpchConnectorSplit>(
+            kTpchConnectorId, /*cacheable=*/true, 1, 0));
   }
 
   /// Run the demo.
@@ -108,7 +100,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
 
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
   std::shared_ptr<core::QueryCtx> queryCtx_{
       core::QueryCtx::create(executor_.get())};
   std::unique_ptr<core::ExecCtx> execCtx_{

@@ -81,8 +81,21 @@ class TestSplitListenerFactory : public SplitListenerFactory {
 
   std::unique_ptr<SplitListener> create(
       const std::string& taskId,
-      const std::string& taskUuid) override {
+      const std::string& taskUuid,
+      const core::QueryConfig& /*config*/) override {
     return std::make_unique<T>(taskId, taskUuid);
+  }
+};
+
+class DummyListenerFactory : public SplitListenerFactory {
+ public:
+  ~DummyListenerFactory() override = default;
+
+  std::unique_ptr<SplitListener> create(
+      const std::string& /*taskId*/,
+      const std::string& /*taskUuid*/,
+      const core::QueryConfig& /*config*/) override {
+    return nullptr;
   }
 };
 
@@ -93,6 +106,7 @@ class SplitListenerTest : public HiveConnectorTestBase {
         std::make_shared<TestSplitListenerFactory<CountSplitListener>>();
     countAgainSplitListenerFactory_ =
         std::make_shared<TestSplitListenerFactory<CountAgainSplitListener>>();
+    dummyListenerFactory_ = std::make_shared<DummyListenerFactory>();
   }
 
  protected:
@@ -117,10 +131,11 @@ class SplitListenerTest : public HiveConnectorTestBase {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
     splits.reserve(filePaths_.size());
     for (const auto& filePath : filePaths_) {
-      splits.emplace_back(connector::hive::HiveConnectorSplitBuilder(filePath)
-                              .connectorId(kHiveConnectorId)
-                              .fileFormat(dwio::common::FileFormat::DWRF)
-                              .build());
+      splits.emplace_back(
+          connector::hive::HiveConnectorSplitBuilder(filePath)
+              .connectorId(kHiveConnectorId)
+              .fileFormat(dwio::common::FileFormat::DWRF)
+              .build());
     }
     return splits;
   }
@@ -133,6 +148,7 @@ class SplitListenerTest : public HiveConnectorTestBase {
       countSplitListenerFactory_;
   std::shared_ptr<TestSplitListenerFactory<CountAgainSplitListener>>
       countAgainSplitListenerFactory_;
+  std::shared_ptr<DummyListenerFactory> dummyListenerFactory_;
 };
 
 } // namespace
@@ -144,6 +160,7 @@ TEST_F(SplitListenerTest, basic) {
   ASSERT_TRUE(exec::registerSplitListenerFactory(countSplitListenerFactory_));
   // Not allowing register the same split listener factory twice.
   ASSERT_FALSE(exec::registerSplitListenerFactory(countSplitListenerFactory_));
+  ASSERT_TRUE(exec::registerSplitListenerFactory(dummyListenerFactory_));
 
   makeTable();
 
@@ -175,6 +192,7 @@ TEST_F(SplitListenerTest, basic) {
   }
 
   ASSERT_TRUE(exec::unregisterSplitListenerFactory(countSplitListenerFactory_));
+  ASSERT_TRUE(exec::unregisterSplitListenerFactory(dummyListenerFactory_));
 }
 
 TEST_F(SplitListenerTest, multipleListeners) {

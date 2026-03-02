@@ -27,6 +27,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/NullsBuilder.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/fuzzer/ConstrainedVectorGenerator.h"
@@ -38,6 +39,7 @@ namespace {
 
 using fuzzer::rand;
 using fuzzer::randDate;
+using fuzzer::randTime;
 
 // Structure to help temporary changes to Options. This objects saves the
 // current state of the Options object, and restores it when it's destructed.
@@ -138,6 +140,9 @@ VectorPtr fuzzConstantPrimitiveImpl(
   } else if (type->isLongDecimal()) {
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
+  } else if (type->isTime()) {
+    return std::make_shared<ConstantVector<int64_t>>(
+        pool, size, false, type, randTime(rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
@@ -162,8 +167,17 @@ void fuzzFlatPrimitiveImpl(
     } else if constexpr (std::is_same_v<TCpp, Timestamp>) {
       flatVector->set(i, randTimestamp(rng, opts.timestampPrecision));
     } else if constexpr (std::is_same_v<TCpp, int64_t>) {
-      if (vector->type()->isShortDecimal()) {
+      if (vector->type()->isIntervalDayTime()) {
+        flatVector->set(
+            i,
+            rand<TCpp>(
+                rng,
+                -VectorFuzzer::kMaxAllowedIntervalDayTime,
+                VectorFuzzer::kMaxAllowedIntervalDayTime));
+      } else if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
+      } else if (vector->type()->isTime()) {
+        flatVector->set(i, randTime(rng));
       } else {
         flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
@@ -176,7 +190,14 @@ void fuzzFlatPrimitiveImpl(
         VELOX_NYI();
       }
     } else if constexpr (std::is_same_v<TCpp, int32_t>) {
-      if (vector->type()->isDate()) {
+      if (vector->type()->isIntervalYearMonth()) {
+        flatVector->set(
+            i,
+            rand<TCpp>(
+                rng,
+                -VectorFuzzer::kMaxAllowedIntervalYearMonth,
+                VectorFuzzer::kMaxAllowedIntervalYearMonth));
+      } else if (vector->type()->isDate()) {
         flatVector->set(i, randDate(rng));
       } else {
         flatVector->set(i, rand<TCpp>(rng));
@@ -185,6 +206,51 @@ void fuzzFlatPrimitiveImpl(
       flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
     }
   }
+}
+
+bool containsFlatMapVector(const BaseVector* vector) {
+  if (!vector) {
+    return false;
+  }
+
+  // Unwrap any dictionary/constant encoding to get to the base.
+  while (VectorEncoding::isDictionary(vector->encoding()) ||
+         vector->encoding() == VectorEncoding::Simple::CONSTANT) {
+    vector = vector->valueVector().get();
+    if (!vector) {
+      return false;
+    }
+  }
+
+  if (vector->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return true;
+  }
+
+  // Check children for complex types.
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::ROW: {
+      auto* row = vector->asUnchecked<RowVector>();
+      for (const auto& child : row->children()) {
+        if (containsFlatMapVector(child.get())) {
+          return true;
+        }
+      }
+      break;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* array = vector->asUnchecked<ArrayVector>();
+      return containsFlatMapVector(array->elements().get());
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* map = vector->asUnchecked<MapVector>();
+      return containsFlatMapVector(map->mapKeys().get()) ||
+          containsFlatMapVector(map->mapValues().get());
+    }
+    default:
+      break;
+  }
+
+  return false;
 }
 
 // Servers as a wrapper around a vector that will be used to load a lazyVector.
@@ -233,12 +299,42 @@ AbstractInputGeneratorPtr maybeGetCustomTypeInputGenerator(
     FuzzerGenerator& rng,
     memory::MemoryPool* pool) {
   if (customTypeExists(type->name())) {
-    InputGeneratorConfig config{rand<uint32_t>(rng), nullRatio, pool};
+    InputGeneratorConfig config{rand<uint32_t>(rng), nullRatio, pool, type};
     return getCustomTypeInputGenerator(type->name(), config);
   }
 
   return nullptr;
 }
+
+template <TypeKind kind>
+VectorPtr extractDistinctKeys(VectorPtr allKeys, memory::MemoryPool* pool) {
+  using TCpp = typename TypeTraits<kind>::NativeType;
+
+  std::vector<TCpp> distinctKeys;
+  std::unordered_set<TCpp> keySet;
+  auto flatKeys = allKeys->asFlatVector<TCpp>();
+  auto result = BaseVector::create<FlatVector<TCpp>>(
+      allKeys->type(), allKeys->size(), pool);
+
+  auto index = 0;
+  for (int i = 0; i < flatKeys->size(); ++i) {
+    auto key = flatKeys->valueAt(i);
+    if (keySet.find(key) == keySet.end()) {
+      keySet.insert(key);
+      distinctKeys.push_back(key);
+      result->set(index++, key);
+    }
+  }
+
+  result->resize(index);
+  if (allKeys->getDistinctValueCount().has_value())
+    VELOX_CHECK_EQ(
+        result->size(),
+        allKeys->getDistinctValueCount().value(),
+        "extracted distinct keys size should match input distinct value count");
+  return result;
+}
+
 } // namespace
 
 VectorPtr VectorFuzzer::fuzzNotNull(
@@ -343,7 +439,7 @@ VectorPtr VectorFuzzer::fuzzConstant(
     if (coinToss(opts_.nullRatio)) {
       return BaseVector::createNullConstant(type, size, pool_);
     }
-    if (type->isUnKnown()) {
+    if (type->isUnknown()) {
       return BaseVector::createNullConstant(type, size, pool_);
     } else {
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -451,6 +547,17 @@ VectorPtr VectorFuzzer::fuzzFlat(
   }
 }
 
+VectorPtr VectorFuzzer::fuzzUniqueFlatNotNull(
+    const TypePtr& type,
+    vector_size_t size) {
+  // Generate a random vector of non-null keys.
+  auto allKeys = fuzzFlatNotNull(type, getElementsVectorLength(opts_, size));
+
+  // Extract and return the distinct keys.
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      extractDistinctKeys, type->kind(), allKeys, pool_);
+}
+
 VectorPtr VectorFuzzer::fuzzMap(
     const TypePtr& keyType,
     const TypePtr& valueType,
@@ -471,7 +578,7 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
   VELOX_CHECK(type->isPrimitiveType());
   auto vector = BaseVector::create(type, size, pool_);
 
-  if (type->isUnKnown()) {
+  if (type->isUnknown()) {
     auto* rawNulls = vector->mutableRawNulls();
     bits::fillBits(rawNulls, 0, size, bits::kNull);
   } else {
@@ -481,11 +588,10 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
 
-    // Second, generate a random null vector.
-    for (size_t i = 0; i < vector->size(); ++i) {
-      if (coinToss(opts_.nullRatio)) {
-        vector->setNull(i, true);
-      }
+    // Second, generate nulls using the configured null pattern.
+    auto nulls = fuzzNulls(size);
+    if (nulls) {
+      vector->setNulls(nulls);
     }
   }
   return vector;
@@ -516,19 +622,24 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
     }
 
     case TypeKind::MAP: {
-      // Do not initialize keys and values inline in the fuzzMap call as C++
-      // does not specify the order they'll be called in, leading to
-      // inconsistent results across platforms.
-      const auto& keyType = type->asMap().keyType();
-      const auto& valueType = type->asMap().valueType();
-      auto length = getElementsVectorLength(opts_, size);
+      if (opts_.allowFlatMapVector && coinToss(opts_.flatMapRatio)) {
+        return fuzzFlatMap(
+            type->asMap().keyType(), type->asMap().valueType(), size);
+      } else {
+        // Do not initialize keys and values inline in the fuzzMap call as C++
+        // does not specify the order they'll be called in, leading to
+        // inconsistent results across platforms.
+        const auto& keyType = type->asMap().keyType();
+        const auto& valueType = type->asMap().valueType();
+        auto length = getElementsVectorLength(opts_, size);
 
-      auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
-          ? fuzzNotNull(keyType, length)
-          : fuzz(keyType, length);
-      auto values = opts_.containerHasNulls ? fuzz(valueType, length)
-                                            : fuzzNotNull(valueType, length);
-      return fuzzMap(keys, values, size);
+        auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
+            ? fuzzNotNull(keyType, length)
+            : fuzz(keyType, length);
+        auto values = opts_.containerHasNulls ? fuzz(valueType, length)
+                                              : fuzzNotNull(valueType, length);
+        return fuzzMap(keys, values, size);
+      }
     }
 
     default:
@@ -698,6 +809,32 @@ MapVectorPtr VectorFuzzer::fuzzMap(
       values);
 }
 
+FlatMapVectorPtr VectorFuzzer::fuzzFlatMap(
+    const TypePtr& keyType,
+    const TypePtr& valueType,
+    vector_size_t size) {
+  // All keys present in the entirety of the FlatMap column.
+  VectorPtr distinctKeys =
+      fuzzUniqueFlatNotNull(keyType, opts_.containerLength);
+
+  // inMaps buffer and mapValues vector should be the same size.
+  std::vector<VectorPtr> mapValues(distinctKeys->size());
+  std::vector<BufferPtr> inMaps(distinctKeys->size());
+  for (int i = 0; i < mapValues.size(); ++i) {
+    mapValues[i] = fuzz(valueType, size);
+    inMaps[i] = fuzzFlatMapInMap(size);
+  }
+
+  return std::make_shared<FlatMapVector>(
+      pool_,
+      MAP(keyType, valueType),
+      fuzzNulls(size),
+      size,
+      distinctKeys,
+      mapValues,
+      inMaps);
+}
+
 RowVectorPtr VectorFuzzer::fuzzInputRow(
     const RowTypePtr& rowType,
     const std::vector<AbstractInputGeneratorPtr>& inputGenerators) {
@@ -783,11 +920,71 @@ RowVectorPtr VectorFuzzer::fuzzRow(
 
 BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
   NullsBuilder builder{size, pool_};
-  for (size_t i = 0; i < size; ++i) {
-    if (coinToss(opts_.nullRatio)) {
-      builder.setNull(i);
+
+  // Randomly select a pattern with weighted distribution:
+  // 70% kRandom, 30% split equally among kHeadOnly, kTailOnly, kHeadAndTail
+  // (each gets 10%)
+
+  // default to kRandom pattern
+  int patternChoice = 0;
+
+  if (opts_.useRandomNullPattern) {
+    auto randValue = fuzzer::rand<uint32_t>(rng_) % 100;
+    if (randValue < 70) {
+      patternChoice = 0; // kRandom - 70%
+    } else if (randValue < 80) {
+      patternChoice = 1; // kHeadOnly - 10%
+    } else if (randValue < 90) {
+      patternChoice = 2; // kTailOnly - 10%
+    } else {
+      patternChoice = 3; // kHeadAndTail - 10%
     }
   }
+
+  switch (patternChoice) {
+    case 0: // kRandom pattern
+      for (size_t i = 0; i < size; ++i) {
+        if (coinToss(opts_.nullRatio)) {
+          builder.setNull(i);
+        }
+      }
+      break;
+
+    case 1: { // kHeadOnly pattern
+      auto headNulls =
+          std::min<size_t>(static_cast<size_t>(size * opts_.nullRatio), size);
+      for (size_t i = 0; i < headNulls; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+
+    case 2: { // kTailOnly pattern
+      auto tailNulls =
+          std::min<size_t>(static_cast<size_t>(size * opts_.nullRatio), size);
+      auto startIdx = size > tailNulls ? size - tailNulls : 0;
+      for (size_t i = startIdx; i < size; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+
+    case 3: { // kHeadAndTail pattern
+      // Split nullRatio between head and tail to match total nulls of other
+      // patterns
+      auto edgeNulls = std::min<size_t>(
+          static_cast<size_t>(size * opts_.nullRatio / 2.0), size / 2);
+      for (size_t i = 0; i < edgeNulls; ++i) {
+        builder.setNull(i);
+      }
+      auto tailStart = size > edgeNulls ? size - edgeNulls : 0;
+      for (size_t i = tailStart; i < size; ++i) {
+        builder.setNull(i);
+      }
+      break;
+    }
+  }
+
   return builder.build();
 }
 
@@ -802,6 +999,26 @@ BufferPtr VectorFuzzer::fuzzIndices(
     rawIndices[i] = rand<vector_size_t>(rng_) % baseVectorSize;
   }
   return indices;
+}
+
+BufferPtr VectorFuzzer::fuzzFlatMapInMap(vector_size_t size) {
+  VELOX_CHECK_GE(size, 0);
+
+  // When inMap buffer is null, key is present in all rows.
+  if (size == 0 || coinToss(opts_.inMapNullRatio)) {
+    return nullptr;
+  }
+
+  auto inMap = AlignedBuffer::allocate<bool>(size, pool_, 0);
+  auto* mutableInMap = inMap->asMutable<uint64_t>();
+
+  for (auto row = 0; row < size; ++row) {
+    if (coinToss(opts_.inMapRatio)) {
+      bits::setBit(mutableInMap, row);
+    }
+  }
+
+  return inMap;
 }
 
 std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(
@@ -991,6 +1208,12 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
   DecodedVector decoded;
   decoded.decode(*vector_, rows, false);
 
+  // FlatMapVector copy into MapVector vector is not supported. Let's preserve
+  // encodings to avoid runtime checks.
+  if (containsFlatMapVector(decoded.base())) {
+    return vector_->testingCopyPreserveEncodings(vector_->pool());
+  }
+
   if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
     VectorPtr result;
     BaseVector::ensureWritable(rows, vector_->type(), vector_->pool(), result);
@@ -1058,6 +1281,7 @@ const std::vector<TypePtr>& defaultScalarTypes() {
       VARBINARY(),
       TIMESTAMP(),
       DATE(),
+      TIME(),
       INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;

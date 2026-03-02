@@ -16,11 +16,14 @@ add_executable(
   velox_core_test
   ConstantTypedExprTest.cpp
   PlanFragmentTest.cpp
+  PlanNodeBuilderTest.cpp
   PlanNodeTest.cpp
   QueryConfigTest.cpp
+  QueryCtxTest.cpp
   StringTest.cpp
   TypeAnalysisTest.cpp
-  TypedExprSerdeTest.cpp)
+  TypedExprSerdeTest.cpp
+)
 
 add_test(velox_core_test velox_core_test)
 
@@ -34,4 +37,14 @@ target_link_libraries(
     velox_type
     velox_vector_test_lib
     GTest::gtest
-    GTest::gtest_main)
+    GTest::gtest_main
+)
+
+add_executable(velox_core_plan_consistency_checker_test PlanConsistencyCheckerTest.cpp)
+
+add_test(velox_core_plan_consistency_checker_test velox_core_plan_consistency_checker_test)
+
+target_link_libraries(
+  velox_core_plan_consistency_checker_test
+  PRIVATE velox_core GTest::gtest GTest::gtest_main
+)

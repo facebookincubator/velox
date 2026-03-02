@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -26,6 +27,7 @@
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/SimpleComparisonMatcher.h"
 
 namespace facebook::velox::functions {
 
@@ -33,7 +35,6 @@ namespace facebook::velox::functions {
 // vector function definition.
 // Higher order functions.
 void registerSparkArrayFunctions(const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, prefix + "transform");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "aggregate");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
@@ -50,6 +51,7 @@ void registerSparkArrayFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+
 template <typename T>
 inline void registerArrayConcatFunction(const std::string& prefix) {
   registerFunction<
@@ -214,11 +216,21 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions(prefix);
   registerArrayPrependFunctions(prefix);
   registerSparkArrayFunctions(prefix);
+  // Register Spark-specific transform with index support.
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_transform, prefix + "transform");
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
-      prefix + "array_sort", arraySortSignatures(), makeArraySort);
+      prefix + "array_sort", arraySortSignatures(true), makeArraySortAsc);
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort_desc", arraySortDescSignatures(), makeArraySortDesc);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
+
+  auto checker = std::make_shared<SparkSimpleComparisonChecker>();
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [prefix, checker](const auto& expr) {
+        return rewriteArraySortCall(prefix, expr, checker);
+      });
   exec::registerStatefulVectorFunction(
       prefix + "array_repeat",
       repeatSignatures(),

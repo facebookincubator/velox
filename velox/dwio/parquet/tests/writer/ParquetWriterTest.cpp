@@ -22,6 +22,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
@@ -45,17 +46,17 @@ class ParquetWriterTest : public ParquetTestBase {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     testutil::TestValue::enable();
     filesystems::registerLocalFileSystem();
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
-    auto hiveConnector =
-        connector::getConnectorFactory(
-            connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(
-                kHiveConnectorId,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
+    connector::hive::HiveConnectorFactory factory;
+    auto hiveConnector = factory.newConnector(
+        kHiveConnectorId,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
     parquet::registerParquetWriterFactory();
+  }
+
+  void TearDown() override {
+    writers_.clear();
   }
 
   std::unique_ptr<RowReader> createRowReaderWithSchema(
@@ -66,20 +67,109 @@ class ParquetWriterTest : public ParquetTestBase {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     return rowReader;
-  };
+  }
 
-  std::unique_ptr<facebook::velox::parquet::ParquetReader> createReaderInMemory(
-      const dwio::common::MemorySink& sink,
-      const dwio::common::ReaderOptions& opts) {
-    std::string data(sink.data(), sink.size());
-    return std::make_unique<facebook::velox::parquet::ParquetReader>(
-        std::make_unique<dwio::common::BufferedInput>(
-            std::make_shared<InMemoryReadFile>(std::move(data)),
-            opts.memoryPool()),
-        opts);
-  };
+  RowVectorPtr makeSmallintTestData(int64_t rows) {
+    auto data = makeRowVector({
+        makeFlatVector<int16_t>(rows, [](auto row) { return row + 1; }),
+    });
+    return data;
+  }
+
+  RowVectorPtr makeTimestampTestData(int64_t rows) {
+    auto data = makeRowVector({makeFlatVector<Timestamp>(
+        rows, [](auto row) { return Timestamp(row, row); })});
+    return data;
+  }
+
+  thrift::PageHeader readPageHeader(
+      MemorySink* sinkPtr,
+      int64_t offsetFromDataPage) {
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+    auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
+    std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+
+    auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+    auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+
+    auto inputStream = std::make_unique<SeekableFileInputStream>(
+        std::move(file),
+        colChunkPtr.dataPageOffset() + offsetFromDataPage,
+        150,
+        *leafPool_,
+        LogType::TEST);
+    auto pageReader = std::make_unique<PageReader>(
+        std::move(inputStream),
+        *leafPool_,
+        colChunkPtr.compression(),
+        colChunkPtr.totalCompressedSize(),
+        stats);
+    return pageReader->readPageHeader();
+  }
 
   inline static const std::string kHiveConnectorId = "test-hive";
+  dwio::common::ColumnReaderStatistics stats;
+};
+
+class ArrowMemoryPool final : public ::arrow::MemoryPool {
+ public:
+  explicit ArrowMemoryPool() : allocated_(0) {}
+
+  ~ArrowMemoryPool() = default;
+
+  ::arrow::Status Allocate(int64_t size, int64_t alignment, uint8_t** out)
+      override {
+    *out = reinterpret_cast<uint8_t*>(malloc(size));
+    VELOX_CHECK_NOT_NULL(*out, "Failed to allocate memory in ArrowMemoryPool.");
+
+    allocated_ += size;
+    return ::arrow::Status::OK();
+  }
+
+  ::arrow::Status Reallocate(
+      int64_t oldSize,
+      int64_t newSize,
+      int64_t alignment,
+      uint8_t** ptr) override {
+    uint8_t* newBuffer = reinterpret_cast<uint8_t*>(realloc(*ptr, newSize));
+    VELOX_CHECK_NOT_NULL(
+        newBuffer, "Failed to reallocate memory in ArrowMemoryPool.");
+
+    *ptr = newBuffer;
+    allocated_ = allocated_ - oldSize + newSize;
+    return ::arrow::Status::OK();
+  }
+
+  void Free(uint8_t* buffer, int64_t size, int64_t alignment) override {
+    free(buffer);
+    allocated_ -= size;
+  }
+
+  int64_t bytes_allocated() const override {
+    return allocated_;
+    ;
+  }
+
+  int64_t max_memory() const override {
+    VELOX_UNSUPPORTED("ArrowMemoryPool#max_memory() unsupported");
+  }
+
+  int64_t total_bytes_allocated() const override {
+    VELOX_UNSUPPORTED("ArrowMemoryPool#total_bytes_allocated() unsupported");
+  }
+
+  int64_t num_allocations() const override {
+    VELOX_UNSUPPORTED("ArrowMemoryPool#num_allocations() unsupported");
+  }
+
+  std::string backend_name() const override {
+    return "arrow memory pool";
+  }
+
+ private:
+  int64_t allocated_;
 };
 
 std::vector<CompressionKind> params = {
@@ -91,76 +181,24 @@ std::vector<CompressionKind> params = {
 };
 
 TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
-  const auto schema = ROW({"c0"}, {SMALLINT()});
   constexpr int64_t kRows = 10'000;
-  const auto data = makeRowVector({
-      makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
-  });
+  const auto data = makeSmallintTestData(kRows);
 
   // Write Parquet test data, then read and return the DataPage
   // (thrift::PageType::type) used.
   const auto testEnableDictionaryAndDictionaryPageSizeToGetPageHeader =
       [&](std::unordered_map<std::string, std::string> configFromFile,
           std::unordered_map<std::string, std::string> sessionProperties,
-          bool isFirstPageOrSecondPage) {
-        // Create an in-memory writer.
-        auto sink = std::make_unique<MemorySink>(
-            200 * 1024 * 1024,
-            dwio::common::FileSink::Options{.pool = leafPool_.get()});
-        auto sinkPtr = sink.get();
-        parquet::WriterOptions writerOptions;
-        writerOptions.memoryPool = leafPool_.get();
-
-        auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-        auto connectorSessionProperties =
-            config::ConfigBase(std::move(sessionProperties));
-
-        writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
-        auto writer = std::make_unique<parquet::Writer>(
-            std::move(sink), writerOptions, rootPool_, schema);
-        writer->write(data);
-        writer->close();
-
-        // Read to identify DataPage used.
-        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
-
-        auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
-        std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
-
-        auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
-        auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
-
-        if (isFirstPageOrSecondPage) {
-          auto inputStream = std::make_unique<SeekableFileInputStream>(
-              std::move(file),
-              colChunkPtr.dataPageOffset(),
-              150,
-              *leafPool_,
-              LogType::TEST);
-          auto pageReader = std::make_unique<PageReader>(
-              std::move(inputStream),
-              *leafPool_,
-              colChunkPtr.compression(),
-              colChunkPtr.totalCompressedSize());
-          return pageReader->readPageHeader();
+          bool isFirstPage) {
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+        if (isFirstPage) {
+          return readPageHeader(sinkPtr, 0);
         }
         constexpr int64_t kFirstDataPageCompressedSize = 1291;
         constexpr int64_t kFirstDataPageHeaderSize = 48;
-        auto inputStream = std::make_unique<SeekableFileInputStream>(
-            std::move(file),
-            colChunkPtr.dataPageOffset() + kFirstDataPageCompressedSize +
-                kFirstDataPageHeaderSize,
-            150,
-            *leafPool_,
-            LogType::TEST);
-        auto pageReader = std::make_unique<PageReader>(
-            std::move(inputStream),
-            *leafPool_,
-            colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
-        return pageReader->readPageHeader();
+        return readPageHeader(
+            sinkPtr, kFirstDataPageCompressedSize + kFirstDataPageHeaderSize);
       };
 
   // Test default config (i.e., no explicit config)
@@ -261,58 +299,17 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
 }
 
 TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
-  const auto schema = ROW({"c0"}, {SMALLINT()});
   constexpr int64_t kRows = 10'000;
-  const auto data = makeRowVector({
-      makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
-  });
+  const auto data = makeSmallintTestData(kRows);
 
   // Write Parquet test data, then read and return the DataPage
   // (thrift::PageType::type) used.
   const auto testEnableDictionaryAndDictionaryPageSizeToGetPageHeader =
       [&](std::unordered_map<std::string, std::string> configFromFile,
           std::unordered_map<std::string, std::string> sessionProperties) {
-        // Create an in-memory writer.
-        auto sink = std::make_unique<MemorySink>(
-            200 * 1024 * 1024,
-            dwio::common::FileSink::Options{.pool = leafPool_.get()});
-        auto sinkPtr = sink.get();
-        parquet::WriterOptions writerOptions;
-        writerOptions.memoryPool = leafPool_.get();
-
-        auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-        auto connectorSessionProperties =
-            config::ConfigBase(std::move(sessionProperties));
-
-        writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
-        auto writer = std::make_unique<parquet::Writer>(
-            std::move(sink), writerOptions, rootPool_, schema);
-        writer->write(data);
-        writer->close();
-
-        // Read to identify DataPage used.
-        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
-
-        auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
-        std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
-
-        auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
-        auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
-
-        auto inputStream = std::make_unique<SeekableFileInputStream>(
-            std::move(file),
-            colChunkPtr.dataPageOffset(),
-            150,
-            *leafPool_,
-            LogType::TEST);
-        auto pageReader = std::make_unique<PageReader>(
-            std::move(inputStream),
-            *leafPool_,
-            colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
-        return pageReader->readPageHeader();
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+        return readPageHeader(sinkPtr, 0);
       };
 
   // Test only dictionary off without dictionary page size configured
@@ -390,25 +387,16 @@ TEST_F(ParquetWriterTest, compression) {
       makeFlatVector<double>(kRows, [](auto row) { return row - 25; }),
   });
 
-  // Create an in-memory writer
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024,
-      dwio::common::FileSink::Options{.pool = leafPool_.get()});
-  auto sinkPtr = sink.get();
-  facebook::velox::parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
   writerOptions.compressionKind = CompressionKind::CompressionKind_SNAPPY;
 
   const auto& fieldNames = schema->names();
-
   for (int i = 0; i < params.size(); i++) {
     writerOptions.columnCompressionsMap[fieldNames[i]] = params[i];
   }
 
-  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, schema);
-  writer->write(data);
-  writer->close();
+  auto* sinkPtr = write(data, writerOptions);
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReaderInMemory(*sinkPtr, readerOptions);
@@ -425,61 +413,20 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
-};
+}
 
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
-  const auto schema = ROW({"c0"}, {SMALLINT()});
   constexpr int64_t kRows = 10'000;
-  const auto data = makeRowVector({
-      makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
-  });
+  const auto data = makeSmallintTestData(kRows);
 
   // Write Parquet test data, then read and return the DataPage
   // (thrift::PageType::type) used.
   const auto testPageSizeAndBatchSizeToGetPageHeader =
       [&](std::unordered_map<std::string, std::string> configFromFile,
           std::unordered_map<std::string, std::string> sessionProperties) {
-        // Create an in-memory writer.
-        auto sink = std::make_unique<MemorySink>(
-            200 * 1024 * 1024,
-            dwio::common::FileSink::Options{.pool = leafPool_.get()});
-        auto sinkPtr = sink.get();
-        parquet::WriterOptions writerOptions;
-        writerOptions.memoryPool = leafPool_.get();
-
-        auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-        auto connectorSessionProperties =
-            config::ConfigBase(std::move(sessionProperties));
-
-        writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
-        auto writer = std::make_unique<parquet::Writer>(
-            std::move(sink), writerOptions, rootPool_, schema);
-        writer->write(data);
-        writer->close();
-
-        // Read to identify DataPage used.
-        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
-
-        auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
-        std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
-
-        auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
-        auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
-
-        auto inputStream = std::make_unique<SeekableFileInputStream>(
-            std::move(file),
-            colChunkPtr.dataPageOffset(),
-            150,
-            *leafPool_,
-            LogType::TEST);
-        auto pageReader = std::make_unique<PageReader>(
-            std::move(inputStream),
-            *leafPool_,
-            colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
-        return pageReader->readPageHeader();
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+        return readPageHeader(sinkPtr, 0);
       };
 
   // Test default config (i.e., no explicit config)
@@ -573,7 +520,6 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
 }
 
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {
-  auto schema = ROW({"c0"}, {INTEGER()});
   const int64_t kRows = 1;
   const auto data = makeRowVector({
       makeFlatVector<int32_t>(kRows, [](auto row) { return 987; }),
@@ -584,50 +530,9 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   const auto testDataPageVersion =
       [&](std::unordered_map<std::string, std::string> configFromFile,
           std::unordered_map<std::string, std::string> sessionProperties) {
-        // Create an in-memory writer.
-        auto sink = std::make_unique<MemorySink>(
-            200 * 1024 * 1024,
-            dwio::common::FileSink::Options{.pool = leafPool_.get()});
-        auto sinkPtr = sink.get();
-        parquet::WriterOptions writerOptions;
-        writerOptions.memoryPool = leafPool_.get();
-
-        // Simulate setting of Hive config & connector session properties, then
-        // write test data.
-        auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-        auto connectorSessionProperties =
-            config::ConfigBase(std::move(sessionProperties));
-
-        writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
-        auto writer = std::make_unique<parquet::Writer>(
-            std::move(sink), writerOptions, rootPool_, schema);
-        writer->write(data);
-        writer->close();
-
-        // Read to identify DataPage used.
-        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
-
-        auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
-        std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
-
-        auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
-        auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
-
-        auto inputStream = std::make_unique<SeekableFileInputStream>(
-            std::move(file),
-            colChunkPtr.dataPageOffset(),
-            150,
-            *leafPool_,
-            LogType::TEST);
-        auto pageReader = std::make_unique<PageReader>(
-            std::move(inputStream),
-            *leafPool_,
-            colChunkPtr.compression(),
-            colChunkPtr.totalCompressedSize());
-
-        return pageReader->readPageHeader().type;
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+        return readPageHeader(sinkPtr, 0).type;
       };
 
   // Test default behavior - DataPage should be V1.
@@ -702,24 +607,16 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
             ASSERT_EQ(tsType->timezone(), "America/Los_Angeles");
           })));
 
-  const auto data = makeRowVector({makeFlatVector<Timestamp>(
-      10'000, [](auto row) { return Timestamp(row, row); })});
+  const auto data = makeTimestampTestData(10'000);
   parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
+  writerOptions.memoryPool = rootPool_.get();
   writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
   writerOptions.parquetWriteTimestampTimeZone = "America/Los_Angeles";
 
-  // Create an in-memory writer.
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024,
-      dwio::common::FileSink::Options{.pool = leafPool_.get()});
-  auto writer = std::make_unique<parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, ROW({"c0"}, {TIMESTAMP()}));
-  writer->write(data);
-  writer->close();
-};
+  write(data, writerOptions);
+}
 
-TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
+DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::parquet::Writer::write",
       std::function<void(const ::arrow::Schema*)>(
@@ -731,25 +628,26 @@ TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
             ASSERT_EQ(tsType->timezone(), "");
           })));
 
-  const auto data = makeRowVector({makeFlatVector<Timestamp>(
-      10'000, [](auto row) { return Timestamp(row, row); })});
+  const auto data = makeTimestampTestData(10'000);
   parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
+  writerOptions.memoryPool = rootPool_.get();
   writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
 
-  // Create an in-memory writer.
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024,
-      dwio::common::FileSink::Options{.pool = leafPool_.get()});
-  auto writer = std::make_unique<parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, ROW({"c0"}, {TIMESTAMP()}));
-  writer->write(data);
-  writer->close();
-};
+  write(data, writerOptions);
+}
+
+TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
+  const auto data = makeTimestampTestData(10'000);
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.arrowMemoryPool = std::make_shared<ArrowMemoryPool>();
+
+  write(data, writerOptions);
+}
 
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {parquet::WriterOptions::kParquetSessionWriteTimestampUnit, "3"}};
+      {parquet::WriterOptions::kParquetHiveConnectorWriteTimestampUnit, "3"}};
   const config::ConfigBase connectorConfig(std::move(configFromFile));
   const config::ConfigBase connectorSessionProperties({});
 
@@ -803,6 +701,91 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
       .copyResults(pool_.get());
 }
 #endif
+
+TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
+  const auto randomIndices = [this](vector_size_t size) {
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(size, leafPool_.get());
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    for (int32_t i = 0; i < size; i++) {
+      rawIndices[i] = folly::Random::rand32(size);
+    }
+    return indices;
+  };
+
+  const auto wrapDictionaryVectors =
+      [&](const std::vector<VectorPtr>& vectors) {
+        std::vector<VectorPtr> wrappedVectors;
+        wrappedVectors.reserve(vectors.size());
+
+        for (const auto& vector : vectors) {
+          auto wrappedVector = BaseVector::wrapInDictionary(
+              BufferPtr(nullptr),
+              randomIndices(vector->size()),
+              vector->size(),
+              vector);
+          EXPECT_EQ(
+              wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+          wrappedVectors.emplace_back(wrappedVector);
+        }
+        return wrappedVectors;
+      };
+
+  // Dictionary encoded vectors with complex type.
+  const auto size = 10'000;
+  auto wrappedVectors = wrapDictionaryVectors({
+      facebook::velox::test::BatchMaker::createVector<TypeKind::MAP>(
+          MAP(VARCHAR(), INTEGER()), size, *leafPool_),
+      facebook::velox::test::BatchMaker::createVector<TypeKind::ARRAY>(
+          ARRAY(VARCHAR()), size, *leafPool_),
+      facebook::velox::test::BatchMaker::createVector<TypeKind::ROW>(
+          ROW({"c0", "c1"},
+              {BIGINT(), ROW({"id", "name"}, {INTEGER(), VARCHAR()})}),
+          size,
+          *leafPool_),
+  });
+
+  auto data = makeRowVector(wrappedVectors);
+  write(data);
+
+  // Dictionary encoded constant vector of scalar type.
+  const auto constantVector = makeConstant(static_cast<int64_t>(123'456), size);
+  const auto wrappedVector = std::make_shared<DictionaryVector<int64_t>>(
+      leafPool_.get(), nullptr, size, constantVector, randomIndices(size));
+  EXPECT_EQ(wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+  VELOX_CHECK_NOT_NULL(wrappedVector->valueVector());
+  EXPECT_FALSE(wrappedVector->wrappedVector()->isFlatEncoding());
+
+  data = makeRowVector({wrappedVector});
+  write(data);
+}
+
+TEST_F(ParquetWriterTest, allNulls) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  const int64_t kRows = 4096;
+  // Create a column with all elements being null.
+  auto nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
+  auto flatVector = std::make_shared<FlatVector<int32_t>>(
+      pool_.get(),
+      schema->childAt(0),
+      nulls,
+      kRows,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>());
+  auto data = std::make_shared<RowVector>(
+      pool_.get(), schema, nullptr, kRows, std::vector<VectorPtr>{flatVector});
+
+  auto* sinkPtr = write(data);
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+  ASSERT_EQ(reader->numberOfRows(), kRows);
+  ASSERT_EQ(*reader->rowType(), *schema);
+
+  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+}
 
 } // namespace
 

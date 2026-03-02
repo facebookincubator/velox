@@ -21,6 +21,7 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
@@ -36,6 +37,9 @@ using filesystems::arrow::io::internal::LibHdfsShim;
 
 constexpr int kOneMB = 1 << 20;
 static const std::string kDestinationPath = "/test_file.txt";
+static const std::string kRenamePath = "/rename_file.txt";
+static const std::string kRenameNewPath = "/rename_new_file.txt";
+static const std::string kDeletedPath = "/delete_file.txt";
 static const std::string kSimpleDestinationPath = "hdfs://" + kDestinationPath;
 static const std::string kViewfsDestinationPath =
     "viewfs://" + kDestinationPath;
@@ -50,6 +54,8 @@ class HdfsFileSystemTest : public testing::Test {
       miniCluster->start();
       auto tempFile = createFile();
       miniCluster->addFile(tempFile->getPath(), kDestinationPath);
+      miniCluster->addFile(tempFile->getPath(), kRenamePath);
+      miniCluster->addFile(tempFile->getPath(), kDeletedPath);
     }
     configurationValues.insert(
         {"hive.hdfs.host", std::string(miniCluster->host())});
@@ -67,6 +73,11 @@ class HdfsFileSystemTest : public testing::Test {
   }
 
   static void TearDownTestSuite() {
+    for (const auto& [_, filesystem] :
+         facebook::velox::filesystems::registeredFilesystems) {
+      filesystem->close();
+    }
+
     miniCluster->stop();
   }
 
@@ -212,6 +223,29 @@ TEST_F(HdfsFileSystemTest, read) {
   readData(&readFile);
 }
 
+TEST_F(HdfsFileSystemTest, rename) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+
+  ASSERT_TRUE(hdfsFileSystem->exists(kRenamePath));
+  hdfsFileSystem->rename(kRenamePath, kRenameNewPath);
+  ASSERT_FALSE(hdfsFileSystem->exists(kRenamePath));
+  ASSERT_TRUE(hdfsFileSystem->exists(kRenameNewPath));
+}
+
+TEST_F(HdfsFileSystemTest, delete) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+
+  ASSERT_TRUE(hdfsFileSystem->exists(kDeletedPath));
+  hdfsFileSystem->remove(kDeletedPath);
+  ASSERT_FALSE(hdfsFileSystem->exists(kDeletedPath));
+}
+
 TEST_F(HdfsFileSystemTest, viaFileSystem) {
   auto config = std::make_shared<const config::ConfigBase>(
       std::unordered_map<std::string, std::string>(configurationValues));
@@ -219,6 +253,31 @@ TEST_F(HdfsFileSystemTest, viaFileSystem) {
       filesystems::getFileSystem(fullDestinationPath_, config);
   auto readFile = hdfsFileSystem->openFileForRead(fullDestinationPath_);
   readData(readFile.get());
+}
+
+TEST_F(HdfsFileSystemTest, exists) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+  ASSERT_TRUE(hdfsFileSystem->exists(fullDestinationPath_));
+
+  const std::string_view notExistFilePath =
+      "hdfs://localhost:7777//path/that/does/not/exist";
+  ASSERT_FALSE(hdfsFileSystem->exists(notExistFilePath));
+}
+
+TEST_F(HdfsFileSystemTest, mkdirAndRmdir) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+  const std::string newDir = "/new_directory";
+  ASSERT_FALSE(hdfsFileSystem->exists(newDir));
+  hdfsFileSystem->mkdir(newDir);
+  ASSERT_TRUE(hdfsFileSystem->exists(newDir));
+  hdfsFileSystem->rmdir(newDir);
+  ASSERT_FALSE(hdfsFileSystem->exists(newDir));
 }
 
 TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
@@ -326,16 +385,6 @@ TEST_F(HdfsFileSystemTest, writeSupported) {
   auto hdfsFileSystem =
       filesystems::getFileSystem(fullDestinationPath_, config);
   hdfsFileSystem->openFileForWrite("/path");
-}
-
-TEST_F(HdfsFileSystemTest, removeNotSupported) {
-  auto config = std::make_shared<const config::ConfigBase>(
-      std::unordered_map<std::string, std::string>(configurationValues));
-  auto hdfsFileSystem =
-      filesystems::getFileSystem(fullDestinationPath_, config);
-  VELOX_ASSERT_THROW(
-      hdfsFileSystem->remove("/path"),
-      "Does not support removing files from hdfs");
 }
 
 TEST_F(HdfsFileSystemTest, multipleThreadsWithReadFile) {
@@ -457,6 +506,18 @@ TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
   ASSERT_EQ(writeFile->size(), data.size() * 3);
 }
 
+TEST_F(HdfsFileSystemTest, list) {
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>(configurationValues));
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath_, config);
+
+  auto result = hdfsFileSystem->list(fullDestinationPath_);
+
+  ASSERT_EQ(result.size(), 1);
+  ASSERT_TRUE(result[0].find(kDestinationPath) != std::string::npos);
+}
+
 TEST_F(HdfsFileSystemTest, readFailures) {
   filesystems::arrow::io::internal::LibHdfsShim* driver;
   auto hdfs = connectHdfsDriver(
@@ -464,4 +525,35 @@ TEST_F(HdfsFileSystemTest, readFailures) {
       std::string(miniCluster->host()),
       std::string(miniCluster->nameNodePort()));
   verifyFailures(driver, hdfs);
+}
+
+DEBUG_ONLY_TEST_F(HdfsFileSystemTest, writeFilePreventsDoubleClose) {
+  common::testutil::TestValue::enable();
+
+  int closeCallCount = 0;
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::connectors::hive::HdfsWriteFile::close",
+      std::function<void(int*)>([&closeCallCount](int* success) {
+        ++closeCallCount;
+        if (closeCallCount == 1) {
+          *success = -1;
+        }
+      }));
+
+  auto writeFile = openFileForWrite("/test_double_close.txt");
+
+  writeFile->append("test data");
+  writeFile->flush();
+
+  VELOX_ASSERT_THROW(writeFile->close(), "Failed to close hdfs file:");
+
+  EXPECT_EQ(closeCallCount, 1);
+
+  // Destructor should not call close() again because hdfsFile_ is nullptr
+  // The closeCallCount should remain 1.
+  writeFile.reset();
+  EXPECT_EQ(closeCallCount, 1);
+
+  common::testutil::TestValue::disable();
 }

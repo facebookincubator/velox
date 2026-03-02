@@ -16,13 +16,11 @@
 #pragma once
 
 #include "velox/common/base/SelectivityInfo.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
-
-constexpr const char* kAnd = "and";
-constexpr const char* kOr = "or";
 
 class ConjunctExpr : public SpecialForm {
  public:
@@ -32,9 +30,10 @@ class ConjunctExpr : public SpecialForm {
       bool isAnd,
       bool inputsSupportFlatNoNullsFastPath)
       : SpecialForm(
+            isAnd ? SpecialFormKind::kAnd : SpecialFormKind::kOr,
             std::move(type),
             std::move(inputs),
-            isAnd ? kAnd : kOr,
+            isAnd ? expression::kAnd : expression::kOr,
             inputsSupportFlatNoNullsFastPath,
             false /* trackCpuUsage */),
         isAnd_(isAnd) {
@@ -123,7 +122,7 @@ class ConjunctCallToSpecialForm : public FunctionCallToSpecialForm {
       const core::QueryConfig& config) override;
 
  private:
-  bool isAnd_;
+  const bool isAnd_;
 };
 
 } // namespace facebook::velox::exec

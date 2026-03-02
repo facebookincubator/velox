@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 #include <queue>
 
@@ -449,19 +450,20 @@ struct ArraySumFunction {
 template <typename TExecCtx, typename T>
 struct ArrayCumSumFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx)
+  using NativeType = typename SimpleTypeTrait<T>::NativeType;
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<velox::Array<T>>& out,
       const arg_type<velox::Array<T>>& in) {
-    T sum = 0;
+    NativeType sum = 0;
     auto len = in.size();
 
     for (auto i = 0; i < len; ++i) {
       if (in[i].has_value()) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_floating_point_v<NativeType>) {
           sum += in[i].value();
         } else {
-          sum = checkedPlus<T>(sum, in[i].value());
+          sum = checkedPlus<NativeType>(sum, in[i].value());
         }
         out.add_item() = sum;
       } else {
@@ -477,13 +479,13 @@ struct ArrayCumSumFunction {
   FOLLY_ALWAYS_INLINE void callNullFree(
       out_type<velox::Array<T>>& out,
       const null_free_arg_type<velox::Array<T>>& in) {
-    T sum = 0;
+    NativeType sum = 0;
 
     for (const auto& item : in) {
-      if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+      if constexpr (std::is_floating_point_v<NativeType>) {
         sum += item;
       } else {
-        sum = checkedPlus<T>(sum, item);
+        sum = checkedPlus<NativeType>(sum, item);
       }
       out.add_item() = sum;
     }
@@ -684,24 +686,22 @@ template <typename TExec, typename T>
 struct ArrayConcatFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec)
 
-  static constexpr int32_t kMinArity = 2;
-  static constexpr int32_t kMaxArity = 254;
+  static constexpr int32_t kMaxArity = 252;
 
   void call(
       out_type<Array<T>>& out,
+      const arg_type<Array<T>>& array1,
+      const arg_type<Array<T>>& array2,
       const arg_type<Variadic<Array<T>>>& arrays) {
-    VELOX_USER_CHECK_GE(
-        arrays.size(),
-        kMinArity,
-        "There must be {} or more arguments to concat",
-        kMinArity);
     VELOX_USER_CHECK_LE(
         arrays.size(), kMaxArity, "Too many arguments for concat function");
-    int64_t elementCount = 0;
+    int64_t elementCount = array1.size() + array2.size();
     for (const auto& array : arrays) {
       elementCount += array.value().size();
     }
     out.reserve(elementCount);
+    out.add_items(array1);
+    out.add_items(array2);
     for (const auto& array : arrays) {
       out.add_items(array.value());
     }
@@ -1028,34 +1028,6 @@ struct ArrayNGramsFunctionString {
   }
 };
 
-/// This class implements the array flatten function.
-///
-/// DEFINITION:
-/// flatten(x) → array
-/// Flattens an array(array(T)) to an array(T) by concatenating the contained
-/// arrays.
-template <typename T>
-struct ArrayFlattenFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T)
-
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Array<Generic<T1>>>& out,
-      const arg_type<Array<Array<Generic<T1>>>>& arrays) {
-    int64_t elementCount = 0;
-    for (const auto& array : arrays) {
-      if (array.has_value()) {
-        elementCount += array.value().size();
-      }
-    }
-    out.reserve(elementCount);
-    for (const auto& array : arrays) {
-      if (array.has_value()) {
-        out.add_items(array.value());
-      }
-    }
-  }
-};
-
 /// This class implements the array union function.
 ///
 /// DEFINITION:
@@ -1161,7 +1133,7 @@ struct ArrayRemoveFunctionString {
       if (item.has_value()) {
         auto result = element.compare(item.value());
         if (result) {
-          out.push_back(item.value());
+          out.add_item().setNoCopy(item.value());
         }
       } else {
         out.add_null();

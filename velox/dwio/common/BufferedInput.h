@@ -35,15 +35,17 @@ class BufferedInput {
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
-      filesystems::File::IoStats* fsStats = nullptr,
+      velox::IoStats* ioStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
-      std::optional<bool> wsVRLoad = std::nullopt)
+      std::optional<bool> wsVRLoad = std::nullopt,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {})
       : BufferedInput(
             std::make_shared<ReadFileInputStream>(
                 std::move(readFile),
                 metricsLog,
                 stats,
-                fsStats),
+                ioStats,
+                std::move(fileReadOps)),
             pool,
             maxMergeDistance,
             wsVRLoad) {}
@@ -150,6 +152,12 @@ class BufferedInput {
   }
 
   virtual uint64_t nextFetchSize() const;
+
+  /// Resets the buffered input for reuse. This is used by index lookup which
+  /// reuses the same BufferedInput across different index lookups. For
+  /// instance, Nimble file format with cluster index supports index lookup and
+  /// needs to reset the buffered input state between lookups.
+  virtual void reset();
 
  protected:
   static int adjustedReadPct(const cache::TrackingData& trackingData) {

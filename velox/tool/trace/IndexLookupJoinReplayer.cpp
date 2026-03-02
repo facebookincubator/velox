@@ -15,8 +15,8 @@
  */
 
 #include "velox/tool/trace/IndexLookupJoinReplayer.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -36,6 +36,8 @@ core::PlanNodePtr IndexLookupJoinReplayer::createPlanNode(
       indexLookupJoinNode->leftKeys(),
       indexLookupJoinNode->rightKeys(),
       indexLookupJoinNode->joinConditions(),
+      indexLookupJoinNode->filter(),
+      indexLookupJoinNode->hasMarker(),
       source, // Probe side
       indexLookupJoinNode->lookupSource(), // Index side
       indexLookupJoinNode->outputType());

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "arrow/memory_pool.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -24,6 +25,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/ParquetFieldId.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -93,7 +95,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
   double bufferGrowRatio = 1.5;
 
-  arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
+  arrow::Encoding::type encoding = arrow::Encoding::kPlain;
 
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>
@@ -112,6 +114,14 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<bool> enableDictionary;
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
+
+  std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
+
+  /// Optional field IDs to assign to columns in the Parquet schema.
+  /// If provided, the writer will use these IDs for the schema fields.
+  /// If not provided, the field_id will be -1.
+  /// The structure should match the schema hierarchy with nested children.
+  std::vector<ParquetFieldId> parquetFieldIds;
 
   // Parsing session and hive configs.
 
@@ -143,6 +153,15 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch-size";
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
+
+  // Serde parameter keys for timestamp settings. These can be set via
+  // serdeParameters map to override the default timestamp behavior.
+  // The timezone key accepts a timezone string or empty string to disable
+  // timezone conversion.
+  static constexpr const char* kParquetSerdeTimestampUnit =
+      "parquet.writer.timestamp.unit";
+  static constexpr const char* kParquetSerdeTimestampTimezone =
+      "parquet.writer.timestamp.timezone";
 
   // Process hive connector and session configs.
   void processConfigs(
@@ -196,14 +215,22 @@ class Writer : public dwio::common::Writer {
   // Sets the memory reclaimers for all the memory pools used by this writer.
   void setMemoryReclaimers();
 
+  // Checks if the input data contains a nested wrapped vector or complex
+  // vector. If so, flatten the input to make it compatible with
+  // 'exportFlattenedVector' in Arrow export.
+  bool needFlatten(const VectorPtr& data) const;
+
   // Pool for 'stream_'.
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<memory::MemoryPool> generalPool_;
+  std::shared_ptr<arrow::MemoryPool> arrowMemoryPool_;
 
   // Temporary Arrow stream for capturing the output.
   std::shared_ptr<ArrowDataBufferSink> stream_;
 
   std::shared_ptr<ArrowContext> arrowContext_;
+
+  std::vector<ParquetFieldId> parquetFieldIds_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
 

@@ -61,13 +61,15 @@
       facebook::velox::VeloxRuntimeError, _expression, _errorMessage)
 
 #define VELOX_ASSERT_ERROR_STATUS(_expression, _statusCode, _errorMessage) \
-  const auto status = (_expression);                                       \
-  ASSERT_TRUE(status.code() == _statusCode)                                \
-      << "Expected error code to be '" << toString(_statusCode)            \
-      << "', but received '" << toString(status.code()) << "'.";           \
-  ASSERT_TRUE(status.message().find(_errorMessage) != std::string::npos)   \
-      << "Expected error message to contain '" << (_errorMessage)          \
-      << "', but received '" << status.message() << "'."
+  {                                                                        \
+    const auto status = (_expression);                                     \
+    ASSERT_TRUE(status.code() == _statusCode)                              \
+        << "Expected error code to be '" << toString(_statusCode)          \
+        << "', but received '" << toString(status.code()) << "'.";         \
+    ASSERT_TRUE(status.message().find(_errorMessage) != std::string::npos) \
+        << "Expected error message to contain '" << (_errorMessage)        \
+        << "', but received '" << status.message() << "'.";                \
+  }
 
 #define VELOX_ASSERT_ERROR_CODE_IMPL(                                         \
     _type, _expression, _errorCode, _errorMessage)                            \
@@ -99,12 +101,46 @@
       _errorCode,                           \
       _errorMessage)
 
+#define VELOX_EXPECT_EQ_TYPES(actual, expected)                         \
+  {                                                                     \
+    auto _actualType = (actual);                                        \
+    auto _expectedType = (expected);                                    \
+    if (_expectedType != nullptr) {                                     \
+      ASSERT_TRUE(_actualType != nullptr)                               \
+          << "Expected: " << _expectedType->toString() << ", got null"; \
+      EXPECT_EQ(*_actualType, *_expectedType)                           \
+          << "Expected: " << _expectedType->toString() << ", got "      \
+          << _actualType->toString();                                   \
+    } else {                                                            \
+      EXPECT_EQ(_actualType, nullptr)                                   \
+          << "Expected null, got " << _actualType->toString();          \
+    }                                                                   \
+  }
+
+#define VELOX_ASSERT_EQ_TYPES(actual, expected)                         \
+  {                                                                     \
+    auto _actualType = (actual);                                        \
+    auto _expectedType = (expected);                                    \
+    if (_expectedType != nullptr) {                                     \
+      ASSERT_TRUE(_actualType != nullptr)                               \
+          << "Expected: " << _expectedType->toString() << ", got null"; \
+      ASSERT_EQ(*_actualType, *_expectedType)                           \
+          << "Expected: " << _expectedType->toString() << ", got "      \
+          << _actualType->toString();                                   \
+    } else {                                                            \
+      ASSERT_EQ(_actualType, nullptr)                                   \
+          << "Expected null, got " << _actualType->toString();          \
+    }                                                                   \
+  }
+
 #ifndef NDEBUG
 #define DEBUG_ONLY_TEST(test_fixture, test_name) TEST(test_fixture, test_name)
 #define DEBUG_ONLY_TEST_F(test_fixture, test_name) \
   TEST_F(test_fixture, test_name)
 #define DEBUG_ONLY_TEST_P(test_fixture, test_name) \
   TEST_P(test_fixture, test_name)
+#define DEBUG_ONLY_CO_TEST_F(test_fixture, test_name) \
+  CO_TEST_F(test_fixture, test_name)
 #else
 #define DEBUG_ONLY_TEST(test_fixture, test_name) \
   TEST(test_fixture, DISABLED_##test_name)
@@ -112,4 +148,6 @@
   TEST_F(test_fixture, DISABLED_##test_name)
 #define DEBUG_ONLY_TEST_P(test_fixture, test_name) \
   TEST_P(test_fixture, DISABLED_##test_name)
+#define DEBUG_ONLY_CO_TEST_F(test_fixture, test_name) \
+  CO_TEST_F(test_fixture, DISABLED_test_name)
 #endif

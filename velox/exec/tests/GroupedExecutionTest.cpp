@@ -341,7 +341,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
       return fmt::format(
           "mode {}, joinType {}, supported {}",
           modeToString(mode),
-          core::joinTypeName(joinType),
+          core::JoinTypeName::toName(joinType),
           supported);
     }
   };
@@ -449,7 +449,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
             task->start(3, 1),
             fmt::format(
                 "Hash join currently does not support mixed grouped execution for join type {}",
-                core::joinTypeName(testData.joinType)));
+                core::JoinTypeName::toName(testData.joinType)));
         continue;
       }
 
@@ -675,16 +675,25 @@ DEBUG_ONLY_TEST_F(
           }
         }));
 
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    std::optional<common::SpillDiskOptions> spillOpts;
+    if (testData.enableSpill) {
+      spillOpts = common::SpillDiskOptions{
+          .spillDirPath = spillDirectory->getPath(),
+          .spillDirCreated = true,
+          .spillDirCreateCb = nullptr};
+    }
+
     auto task = exec::Task::create(
         "0",
         std::move(planFragment),
         0,
         std::move(queryCtx),
-        Task::ExecutionMode::kParallel);
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    if (testData.enableSpill) {
-      task->setSpillDirectory(spillDirectory->getPath());
-    }
+        Task::ExecutionMode::kParallel,
+        /*consumer=*/Consumer{},
+        /*memoryArbitrationPriority=*/0,
+        spillOpts,
+        /*onError=*/nullptr);
 
     // 'numDriversPerGroup' drivers max to execute one group at a time.
     task->start(numDriversPerGroup, testData.groupConcurrency);
@@ -817,15 +826,21 @@ DEBUG_ONLY_TEST_F(
         memory::testingRunArbitration(op->pool());
       }));
 
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  common::SpillDiskOptions spillOpts{
+      .spillDirPath = spillDirectory->getPath(),
+      .spillDirCreated = true,
+      .spillDirCreateCb = nullptr};
+
   auto task = exec::Task::create(
       "0",
       std::move(planFragment),
       0,
       std::move(queryCtx),
-      Task::ExecutionMode::kParallel);
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
-
-  task->setSpillDirectory(spillDirectory->getPath());
+      Task::ExecutionMode::kParallel,
+      Consumer{},
+      /*memoryArbitrationPriority=*/0,
+      spillOpts);
 
   // 'numDriversPerGroup' drivers max to execute one group at a time.
   task->start(numDriversPerGroup, 1);
@@ -848,8 +863,8 @@ DEBUG_ONLY_TEST_F(
   }
 
   // Total drivers should be numDriversPerGroup * (numGroups + 1), but since
-  // probe does not receive termination signal, it cannot signal the build side
-  // to finish. we expect only build's numDriversPerGroup finished.
+  // probe does not receive termination signal, it cannot signal the build
+  // side to finish. we expect only build's numDriversPerGroup finished.
   waitForFinishedDrivers(task, numDriversPerGroup);
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
@@ -1025,8 +1040,8 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
       const std::unordered_set<int32_t> expectedSplitGroupIds({1, 5, 8});
       int numSplitGroupJoinNodes{0};
       task->pool()->visitChildren([&](memory::MemoryPool* childPool) -> bool {
-        if (folly::StringPiece(childPool->name())
-                .startsWith(fmt::format("node.{}[", joinNodeId))) {
+        if (childPool->name().starts_with(
+                fmt::format("node.{}[", joinNodeId))) {
           ++numSplitGroupJoinNodes;
           std::vector<std::string> parts;
           folly::split(".", childPool->name(), parts);

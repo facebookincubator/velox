@@ -21,12 +21,14 @@
 #include <optional>
 #include <string>
 
+#include "velox/connectors/Connector.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/serializers/KeyEncoder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -43,6 +45,16 @@ namespace facebook::velox::dwio::common {
 class RowReader {
  public:
   static constexpr int64_t kAtEnd = -1;
+
+  /// Runtime stat names.
+  /// Tracks the number of index columns that were converted from ScanSpec
+  /// filters to index bounds for index-based filtering (e.g., cluster index
+  /// pruning in Nimble).
+  static inline const std::string kNumIndexFilterConversions =
+      "numIndexFilterConversions";
+
+  /// Tracks the number of times a stripe has been loaded during index lookup.
+  static inline const std::string kNumStripeLoads = "numStripeLoads";
 
   virtual ~RowReader() = default;
 
@@ -157,6 +169,96 @@ class RowReader {
       VectorPtr& result);
 };
 
+/// Represents a row range within a stripe [startRow, endRow).
+struct RowRange {
+  vector_size_t startRow{0}; // Inclusive
+  vector_size_t endRow{0}; // Exclusive
+
+  RowRange() = default;
+  RowRange(vector_size_t _startRow, vector_size_t _endRow)
+      : startRow(_startRow), endRow(_endRow) {}
+
+  /// Returns true if this row range is empty (no rows to read).
+  bool empty() const {
+    return startRow >= endRow;
+  }
+};
+
+/**
+ * Abstract index reader interface for index-based lookups.
+ *
+ * IndexReader provides a batch lookup API that takes a vector of index bounds
+ * and returns results via an iterator pattern. This interface is used by
+ * HiveIndexReader to perform efficient key-based lookups on indexed files.
+ *
+ * Usage pattern:
+ *   1. Call startLookup() with a vector of index bounds to start a new batch
+ * lookup
+ *   2. Call next() repeatedly to get results until it returns nullptr
+ *   3. Each next() call returns results for one or more request indices
+ *
+ * The implementation is responsible for:
+ *   - Encoding index bounds into format-specific keys
+ *   - Looking up stripes and row ranges
+ *   - Managing stripe iteration and data reading
+ *   - Returning results in the correct order
+ */
+class IndexReader {
+ public:
+  /// Runtime stat names for index reader.
+
+  /// Tracks the number of index lookup requests submitted in startLookup().
+  /// Each request corresponds to one set of index bounds and may match rows
+  /// across multiple stripes.
+  static inline const std::string kNumIndexLookupRequests =
+      "numIndexLookupRequests";
+
+  /// Tracks the total number of stripes that need to be read for all requests.
+  /// Multiple requests may share the same stripe, and each shared stripe is
+  /// counted once per request that needs it.
+  static inline const std::string kNumIndexLookupStripes =
+      "numIndexLookupStripes";
+
+  /// Tracks the total number of read segments across all stripes. A read
+  /// segment is a contiguous row range within a stripe that needs to be read.
+  /// When filters are present, overlapping request ranges are split at
+  /// boundaries to enable per-request output tracking. Without filters,
+  /// overlapping ranges are merged to minimize I/O.
+  static inline const std::string kNumIndexLookupReadSegments =
+      "numIndexLookupReadSegments";
+
+  virtual ~IndexReader() = default;
+
+  /// Starts a new batch lookup with the given index bounds.
+  /// Each index bound in the vector represents a separate lookup request.
+  /// After calling startLookup(), call next() repeatedly to get results.
+  ///
+  /// @param indexBounds Index bounds for the lookup request. Contains
+  ///        column names and lower/upper bound values.
+  /// @throws if lookup is not supported by the implementation or if any
+  ///         index bound is invalid.
+  virtual void startLookup(
+      const velox::serializer::IndexBounds& indexBounds) = 0;
+
+  /// Returns true if there are more results to fetch from the current lookup.
+  virtual bool hasNext() const = 0;
+
+  /// Returns the next batch of results from the current lookup.
+  /// Results are returned in request order - all results for request N are
+  /// returned before any results for request N+1.
+  ///
+  /// The Result contains:
+  /// - inputHits: Buffer of request indices for each output row
+  /// - output: RowVector of matching data rows
+  ///
+  /// @param maxOutputRows Maximum number of output rows to return in this
+  ///        batch. The actual number may be less if fewer rows are available.
+  /// @return Result containing inputHits and output rows, or nullptr if no
+  ///         more results are available.
+  virtual std::unique_ptr<connector::IndexSource::Result> next(
+      vector_size_t maxOutputRows) = 0;
+};
+
 /**
  * Abstract reader class.
  *
@@ -206,6 +308,17 @@ class Reader {
    */
   virtual std::unique_ptr<RowReader> createRowReader(
       const RowReaderOptions& options = {}) const = 0;
+
+  /**
+   * Create index reader object for index-based lookups.
+   * @param options Row reader options describing the data to fetch
+   * @return Index reader for efficient key-based lookups
+   * @throws if index reading is not supported by the implementation
+   */
+  virtual std::unique_ptr<IndexReader> createIndexReader(
+      const RowReaderOptions& options = {}) const {
+    VELOX_UNSUPPORTED("Reader::createIndexReader() is not supported");
+  }
 
   static TypePtr updateColumnNames(
       const TypePtr& fileType,

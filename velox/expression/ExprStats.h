@@ -35,6 +35,8 @@ struct ExprStats {
   /// evaluation of rows.
   bool defaultNullRowsSkipped{false};
 
+  auto operator<=>(const ExprStats&) const = default;
+
   void add(const ExprStats& other) {
     timing.add(other.timing);
     numProcessedRows += other.numProcessedRows;

@@ -46,7 +46,7 @@ std::string typeToBaseName(const TypePtr& type) {
 
 std::optional<TypeKind> baseNameToTypeKind(const std::string& typeName) {
   auto kindName = boost::algorithm::to_upper_copy(typeName);
-  return tryMapNameToTypeKind(kindName);
+  return TypeKindName::tryToTypeKind(kindName);
 }
 
 namespace {
@@ -105,6 +105,51 @@ void ArgumentTypeFuzzer::determineUnboundedIntegerVariables(
 
     integerBindings_[precision] = p.value();
     integerBindings_[scale] = s.value();
+  }
+}
+
+void ArgumentTypeFuzzer::determineUnboundedEnumVariables(
+    const exec::TypeSignature& type) {
+  const auto typeName = boost::algorithm::to_lower_copy(type.baseName());
+  if (typeName != "bigint_enum" && typeName != "varchar_enum") {
+    return;
+  }
+
+  for (const auto& param : type.parameters()) {
+    const auto paramName = param.baseName();
+
+    auto it = variables().find(paramName);
+    if (it != variables().end() && it->second.isEnumParameter()) {
+      // Generate a random Long/Varchar EnumParameter with a random name and
+      // random values.
+      // TODO: Revisit when implementing custom input generator for enum type,
+      // and when enum_key function is removed from the fuzzer skip list.
+      int numValues = rand32(0, 20);
+      std::string enumName =
+          fmt::format("test.enum.{}{}", paramName, numValues);
+      if (typeName == "bigint_enum" &&
+          longEnumParameterBindings_.find(paramName) ==
+              longEnumParameterBindings_.end()) {
+        std::unordered_map<std::string, int64_t> enumValues;
+        for (int i = 0; i < numValues; i++) {
+          std::string key = fmt::format("VALUE{}", i);
+          enumValues[key] = i;
+        }
+        LongEnumParameter enumParam(enumName, enumValues);
+        longEnumParameterBindings_[paramName] = enumParam;
+      } else if (
+          typeName == "varchar_enum" &&
+          varcharEnumParameterBindings_.find(paramName) ==
+              varcharEnumParameterBindings_.end()) {
+        std::unordered_map<std::string, std::string> enumValues;
+        for (int i = 0; i < numValues; i++) {
+          std::string key = fmt::format("VALUE{}", i);
+          enumValues[key] = key;
+        }
+        VarcharEnumParameter enumParam(enumName, enumValues);
+        varcharEnumParameterBindings_[paramName] = enumParam;
+      }
+    }
   }
 }
 
@@ -180,6 +225,8 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
 
     bindings_ = binder.bindings();
     integerBindings_ = binder.integerBindings();
+    longEnumParameterBindings_ = binder.longEnumParameterBindings();
+    varcharEnumParameterBindings_ = binder.varcharEnumParameterBindings();
   }
 
   const auto& formalArgs = signature_.argumentTypes();
@@ -188,6 +235,7 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
   determineUnboundedTypeVariables();
   for (const auto& argType : formalArgs) {
     determineUnboundedIntegerVariables(argType);
+    determineUnboundedEnumVariables(argType);
   }
   for (auto i = 0; i < formalArgsCnt; i++) {
     TypePtr actualArg;
@@ -195,7 +243,12 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
       actualArg = randType();
     } else {
       actualArg = sanitizeTryResolveType(
-          formalArgs[i], variables(), bindings_, integerBindings_);
+          formalArgs[i],
+          variables(),
+          bindings_,
+          integerBindings_,
+          longEnumParameterBindings_,
+          varcharEnumParameterBindings_);
       VELOX_CHECK(actualArg != nullptr);
     }
     argumentTypes_.push_back(actualArg);
@@ -223,6 +276,7 @@ TypePtr ArgumentTypeFuzzer::fuzzReturnType() {
 
   determineUnboundedTypeVariables();
   determineUnboundedIntegerVariables(signature_.returnType());
+  determineUnboundedEnumVariables(signature_.returnType());
 
   const auto& returnType = signature_.returnType();
 
@@ -230,7 +284,12 @@ TypePtr ArgumentTypeFuzzer::fuzzReturnType() {
     returnType_ = randType();
   } else {
     returnType_ = sanitizeTryResolveType(
-        returnType, variables(), bindings_, integerBindings_);
+        returnType,
+        variables(),
+        bindings_,
+        integerBindings_,
+        longEnumParameterBindings_,
+        varcharEnumParameterBindings_);
   }
 
   VELOX_CHECK_NOT_NULL(returnType_);

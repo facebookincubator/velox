@@ -82,12 +82,13 @@ class FilterProject : public Operator {
   /// tracking is enabled via query config.
   OperatorStats stats(bool clear) override;
 
- private:
-  // Tests if 'numProcessedRows_' equals to the length of input_ and clears
-  // outstanding references to input_ if done. Returns true if getOutput
-  // should return nullptr.
-  bool allInputProcessed();
+  /// Returns the filterNode, call this function before initialize the operator,
+  /// this field is reset in function initialize.
+  const std::shared_ptr<const core::FilterNode>& filterNode() const {
+    return filter_;
+  }
 
+ private:
   // Evaluate filter on all rows. Return number of rows that passed the filter.
   // Populate filterEvalCtx_.selectedBits and selectedIndices with the indices
   // of the passing rows if only some rows pass the filter. If all or no rows
@@ -104,6 +105,8 @@ class FilterProject : public Operator {
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
 
+  const bool lazyDereference_;
+
   // Cached filter and project node for lazy initialization. After
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
@@ -114,8 +117,6 @@ class FilterProject : public Operator {
   int32_t numExprs_;
 
   FilterEvalCtx filterEvalCtx_;
-
-  vector_size_t numProcessedInputRows_{0};
 
   // Indices for fields/input columns that are both an identity projection and
   // are referenced by either a filter or project expression. This is used to

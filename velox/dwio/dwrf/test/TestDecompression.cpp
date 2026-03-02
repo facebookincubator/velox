@@ -336,7 +336,7 @@ TEST_F(DecompressionTest, testLzoSmall) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_LZO,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))),
+          new SeekableArrayInputStream(buffer, std::size(buffer))),
       128 * 1024);
   const void* ptr;
   int32_t length;
@@ -353,7 +353,7 @@ TEST_F(DecompressionTest, testLzoSmall) {
 TEST_F(DecompressionTest, testLzoLong) {
   // set up a framed lzo buffer with 100,000 'a'
   unsigned char buffer[482];
-  bzero(buffer, VELOX_ARRAY_SIZE(buffer));
+  bzero(buffer, std::size(buffer));
   // header
   buffer[0] = 190;
   buffer[1] = 3;
@@ -378,7 +378,7 @@ TEST_F(DecompressionTest, testLzoLong) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_LZO,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))),
+          new SeekableArrayInputStream(buffer, std::size(buffer))),
       128 * 1024);
   const void* ptr;
   int32_t length;
@@ -413,7 +413,7 @@ TEST_F(DecompressionTest, testLz4Small) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_LZ4,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))),
+          new SeekableArrayInputStream(buffer, std::size(buffer))),
       128 * 1024);
   const void* ptr;
   int32_t length;
@@ -430,7 +430,7 @@ TEST_F(DecompressionTest, testLz4Small) {
 TEST_F(DecompressionTest, testLz4Long) {
   // set up a framed lzo buffer with 100,000 'a'
   unsigned char buffer[406];
-  memset(buffer, 255, VELOX_ARRAY_SIZE(buffer));
+  memset(buffer, 255, std::size(buffer));
   // header
   buffer[0] = 38;
   buffer[1] = 3;
@@ -448,7 +448,7 @@ TEST_F(DecompressionTest, testLz4Long) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_LZ4,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))),
+          new SeekableArrayInputStream(buffer, std::size(buffer))),
       128 * 1024);
   const void* ptr;
   int32_t length;
@@ -465,7 +465,7 @@ TEST_F(DecompressionTest, testCreateZlib) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))),
+          new SeekableArrayInputStream(buffer, std::size(buffer))),
       32768);
   EXPECT_EQ(
       "PagedInputStream StreamInfo (Test Decompression) input stream (SeekableArrayInputStream 0 of 8) State (0) remaining length (0)",
@@ -497,7 +497,7 @@ TEST_F(DecompressionTest, testLiteralBlocks) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 5)),
+          new SeekableArrayInputStream(buffer, std::size(buffer), 5)),
       5);
   EXPECT_EQ(
       "PagedInputStream StreamInfo (Test Decompression) input stream (SeekableArrayInputStream 0 of 23) State (0) remaining length (0)",
@@ -539,8 +539,27 @@ TEST_F(DecompressionTest, testInflate) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))),
+          new SeekableArrayInputStream(buffer, std::size(buffer))),
       1000);
+  const void* ptr;
+  int32_t length;
+  ASSERT_EQ(true, result->Next(&ptr, &length));
+  ASSERT_EQ(30, length);
+  for (int32_t i = 0; i < 10; ++i) {
+    for (int32_t j = 0; j < 3; ++j) {
+      EXPECT_EQ(j, static_cast<const char*>(ptr)[i * 3 + j]);
+    }
+  }
+}
+
+TEST_F(DecompressionTest, testSmallBufferInflate) {
+  const unsigned char buffer[] = {
+      0xe, 0x0, 0x0, 0x63, 0x60, 0x64, 0x62, 0xc0, 0x8d, 0x0};
+  const std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
+      CompressionKind_ZLIB,
+      std::make_unique<SeekableArrayInputStream>(buffer, std::size(buffer)),
+      1 // blockSize 1 to test multiple inflate calls during decompression.
+  );
   const void* ptr;
   int32_t length;
   ASSERT_EQ(true, result->Next(&ptr, &length));
@@ -559,7 +578,7 @@ TEST_F(DecompressionTest, testInflateSequence) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 3)),
+          new SeekableArrayInputStream(buffer, std::size(buffer), 3)),
       1000);
   const void* ptr;
   int32_t length;
@@ -594,7 +613,7 @@ TEST_F(DecompressionTest, testSkipZlib) {
   std::unique_ptr<SeekableInputStream> result = createTestDecompressor(
       CompressionKind_ZLIB,
       std::unique_ptr<SeekableInputStream>(
-          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer), 5)),
+          new SeekableArrayInputStream(buffer, std::size(buffer), 5)),
       5);
   const void* ptr;
   int32_t length;
@@ -906,7 +925,7 @@ class TestSeek : public ::testing::Test {
     size_t arr[][2]{{0, 0}, {0, seekPos}, {offset1, seekPos}, {offset1, 0}};
     char* input[]{input1, input1, input2, input2};
 
-    for (size_t i = 0; i < VELOX_ARRAY_SIZE(arr); ++i) {
+    for (size_t i = 0; i < std::size(arr); ++i) {
       auto pos = arr[i];
       std::vector<uint64_t> list{pos[0], pos[1]};
       PositionProvider pp(list);
@@ -1046,8 +1065,8 @@ class TestingSeekableInputStream : public SeekableInputStream {
     return true;
   }
 
-  google::protobuf::int64 ByteCount() const override {
-    return position_;
+  int64_t ByteCount() const override {
+    return static_cast<int64_t>(position_);
   }
 
   void seekToPosition(PositionProvider& position) override {
@@ -1097,7 +1116,7 @@ TEST_F(TestSeek, uncompressedLarge) {
       entry.getCompressed()[i] = static_cast<char>(i);
     }
     written += runSize + kHeaderSize;
-    data.insert(data.end(), entry.data().begin(), entry.data().end());
+    data.insert(data.end(), entry.data().cbegin(), entry.data().cend());
   }
   auto stream = createTestDecompressor(
       CompressionKind_SNAPPY,

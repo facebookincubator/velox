@@ -17,6 +17,7 @@
 
 #include <folly/Executor.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/system/HardwareConcurrency.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/FlatVector.h"
@@ -196,6 +197,13 @@ class VectorTestBase {
   }
 
   template <typename T>
+  FlatVectorPtr<EvalType<T>> makeFlatVector(
+      const std::initializer_list<T>& data,
+      const TypePtr& type = CppToType<T>::create()) {
+    return vectorMaker_.flatVector<T>(data, type);
+  }
+
+  template <typename T>
   FlatVectorPtr<EvalType<T>> makeNullableFlatVector(
       const std::vector<std::optional<T>>& data,
       const TypePtr& type = CppToType<T>::create()) {
@@ -251,16 +259,16 @@ class VectorTestBase {
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
   // Example:
   //   auto arrayVector = makeArrayOfRowVector({
-  //       {variant::row({1, "red"}), variant::row({1, "blue"})},
+  //       {Variant::row({1, "red"}), Variant::row({1, "blue"})},
   //       {},
-  //       {variant::row({3, "green"})},
+  //       {Variant::row({3, "green"})},
   //   });
   //   EXPECT_EQ(3, arrayVector->size());
   //
-  // Use variant(TypeKind::ROW) to specify a null array element.
+  // Use Variant(TypeKind::ROW) to specify a null array element.
   ArrayVectorPtr makeArrayOfRowVector(
       const RowTypePtr& rowType,
-      const std::vector<std::vector<variant>>& data) {
+      const std::vector<std::vector<Variant>>& data) {
     return vectorMaker_.arrayOfRowVector(rowType, data);
   }
 
@@ -662,7 +670,7 @@ class VectorTestBase {
     return vectorMaker_.allNullMapVector(size, keyType, valueType);
   }
 
-  VectorPtr makeConstant(const variant& value, vector_size_t size) {
+  VectorPtr makeConstant(const Variant& value, vector_size_t size) {
     return BaseVector::createConstant(value.inferType(), value, size, pool());
   }
 
@@ -672,7 +680,7 @@ class VectorTestBase {
       vector_size_t size,
       const TypePtr& type = CppToType<EvalType<T>>::create()) {
     return std::make_shared<ConstantVector<EvalType<T>>>(
-        pool(), size, false, type, std::move(value));
+        pool(), size, false, type, EvalType<T>(value));
   }
 
   template <typename T>
@@ -693,7 +701,7 @@ class VectorTestBase {
   /// Create constant vector of type ROW from a Variant.
   VectorPtr makeConstantRow(
       const RowTypePtr& rowType,
-      variant value,
+      Variant value,
       vector_size_t size) {
     return vectorMaker_.constantRow(rowType, value, size);
   }
@@ -810,7 +818,7 @@ class VectorTestBase {
         pool(),
         CppToType<T>::create(),
         size,
-        std::make_unique<SimpleVectorLoader>([=](RowSet rows) {
+        std::make_unique<SimpleVectorLoader>([=, this](RowSet rows) {
           if (expectedSize.has_value()) {
             VELOX_CHECK_EQ(rows.size(), *expectedSize);
           }
@@ -828,7 +836,7 @@ class VectorTestBase {
         pool(),
         vector->type(),
         vector->size(),
-        std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+        std::make_unique<SimpleVectorLoader>([=, this](RowSet /*rows*/) {
           auto indices =
               makeIndices(vector->size(), [](auto row) { return row; });
           return wrapInDictionary(indices, vector->size(), vector);
@@ -839,12 +847,12 @@ class VectorTestBase {
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   velox::test::VectorMaker vectorMaker_{pool_.get()};
-  std::shared_ptr<folly::Executor> executor_{
-      std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+  std::unique_ptr<folly::Executor> executor_{
+      std::make_unique<folly::CPUThreadPoolExecutor>(
+          folly::hardware_concurrency())};
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          folly::hardware_concurrency())};
 };
 
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {

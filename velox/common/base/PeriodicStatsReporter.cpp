@@ -139,7 +139,10 @@ void PeriodicStatsReporter::reportCacheStats() {
   const auto cacheStats = cache_->refreshStats();
 
   // Memory cache snapshot stats.
-  RECORD_METRIC_VALUE(kMetricMemoryCacheNumEntries, cacheStats.numEntries);
+  RECORD_METRIC_VALUE(
+      kMetricMemoryCacheNumTinyEntries, cacheStats.numTinyEntries);
+  RECORD_METRIC_VALUE(
+      kMetricMemoryCacheNumLargeEntries, cacheStats.numLargeEntries);
   RECORD_METRIC_VALUE(
       kMetricMemoryCacheNumEmptyEntries, cacheStats.numEmptyEntries);
   RECORD_METRIC_VALUE(kMetricMemoryCacheNumSharedEntries, cacheStats.numShared);
@@ -209,7 +212,12 @@ void PeriodicStatsReporter::reportCacheStats() {
     REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteSsdErrors, deltaSsdStats.writeSsdErrors);
     REPORT_IF_NOT_ZERO(
+        kMetricSsdCacheWriteNoSpaceErrors, deltaSsdStats.writeSsdNoSpaceErrors);
+    REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteSsdDropped, deltaSsdStats.writeSsdDropped);
+    REPORT_IF_NOT_ZERO(
+        kMetricSsdCacheWriteExceedEntryLimit,
+        deltaSsdStats.writeSsdExceedEntryLimit);
     REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteCheckpointErrors,
         deltaSsdStats.writeCheckpointErrors);

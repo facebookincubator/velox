@@ -97,4 +97,6 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
   const std::vector<std::shared_ptr<const TypeWithId>> children_;
 };
 
+using TypeWithIdPtr = std::shared_ptr<const TypeWithId>;
+
 } // namespace facebook::velox::dwio::common

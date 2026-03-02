@@ -23,13 +23,13 @@
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Task.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
 #include <folly/init/Init.h>
+#include <folly/system/HardwareConcurrency.h>
 #include <algorithm>
 
 using namespace facebook::velox;
@@ -85,18 +85,12 @@ int main(int argc, char** argv) {
   // We need a connector id string to identify the connector.
   const std::string kHiveConnectorId = "test-hive";
 
-  // Register the Hive Connector Factory.
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  // Create a new connector instance from the connector factory and register
-  // it:
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              kHiveConnectorId,
-              std::make_shared<config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()));
+  // Create a new connector instance and register it.
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   connector::registerConnector(hiveConnector);
 
   // To be able to read local files, we need to register the local file
@@ -131,7 +125,7 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<folly::Executor> executor(
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency()));
+          folly::hardware_concurrency()));
 
   // Task is the top-level execution concept. A task needs a taskId (as a
   // string), the plan fragment to execute, a destination (only used for
@@ -141,7 +135,8 @@ int main(int argc, char** argv) {
       writerPlanFragment,
       /*destination=*/0,
       core::QueryCtx::create(executor.get()),
-      exec::Task::ExecutionMode::kSerial);
+      exec::Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // next() starts execution using the client thread. The loop pumps output
   // vectors out of the task (there are none in this query fragment).
@@ -171,7 +166,8 @@ int main(int argc, char** argv) {
       readPlanFragment,
       /*destination=*/0,
       core::QueryCtx::create(executor.get()),
-      exec::Task::ExecutionMode::kSerial);
+      exec::Task::ExecutionMode::kSerial,
+      exec::Consumer{});
 
   // Now that we have the query fragment and Task structure set up, we will
   // add data to it via `splits`.

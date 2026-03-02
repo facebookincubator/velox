@@ -28,6 +28,41 @@
 
 namespace facebook::velox::functions::sparksql {
 
+// The abs implementation is used for primitive types except for decimal type.
+template <typename TExec>
+struct AbsFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(T& result, const T& a) {
+    if constexpr (std::is_integral_v<T>) {
+      if (FOLLY_UNLIKELY(a == std::numeric_limits<T>::min())) {
+        if (ansiEnabled_) {
+          // In ANSI mode, returns an overflow error.
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError("Arithmetic overflow: abs({})", a);
+        }
+        // In ANSI off mode, returns the same negative minimum value.
+        result = a;
+        return Status::OK();
+      }
+    }
+    result = std::abs(a);
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
 template <typename T>
 struct RemainderFunction {
   template <
@@ -523,18 +558,15 @@ struct RIntFunction {
 
 template <typename TExec>
 struct CheckedAddFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
     if constexpr (std::is_integral_v<T>) {
       T res;
-      bool overflow = __builtin_add_overflow(a, b, &res);
-      if (UNLIKELY(overflow)) {
-        if (threadSkipErrorDetails()) {
-          return Status::UserError();
-        }
-        return Status::UserError("Arithmetic overflow: {} + {}", a, b);
-      }
+      VELOX_USER_RETURN(
+          __builtin_add_overflow(a, b, &res),
+          "Arithmetic overflow: {} + {}",
+          a,
+          b);
       result = res;
     } else {
       result = a + b;
@@ -545,17 +577,14 @@ struct CheckedAddFunction {
 
 template <typename TExec>
 struct CheckedSubtractFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
     if constexpr (std::is_integral_v<T>) {
-      bool overflow = __builtin_sub_overflow(a, b, &result);
-      if (UNLIKELY(overflow)) {
-        if (threadSkipErrorDetails()) {
-          return Status::UserError();
-        }
-        return Status::UserError("Arithmetic overflow: {} - {}", a, b);
-      }
+      VELOX_USER_RETURN(
+          __builtin_sub_overflow(a, b, &result),
+          "Arithmetic overflow: {} - {}",
+          a,
+          b);
     } else {
       result = a - b;
     }
@@ -565,17 +594,14 @@ struct CheckedSubtractFunction {
 
 template <typename TExec>
 struct CheckedMultiplyFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
     if constexpr (std::is_integral_v<T>) {
-      bool overflow = __builtin_mul_overflow(a, b, &result);
-      if (UNLIKELY(overflow)) {
-        if (threadSkipErrorDetails()) {
-          return Status::UserError();
-        }
-        return Status::UserError("Arithmetic overflow: {} * {}", a, b);
-      }
+      VELOX_USER_RETURN(
+          __builtin_mul_overflow(a, b, &result),
+          "Arithmetic overflow: {} * {}",
+          a,
+          b);
     } else {
       result = a * b;
     }
@@ -585,23 +611,56 @@ struct CheckedMultiplyFunction {
 
 template <typename TExec>
 struct CheckedDivideFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
-    if (b == 0) {
-      if (threadSkipErrorDetails()) {
-        return Status::UserError();
-      }
-      return Status::UserError("division by zero");
-    }
+    VELOX_USER_RETURN_EQ(b, 0, "division by zero");
     if constexpr (std::is_integral_v<T>) {
-      if (UNLIKELY(a == std::numeric_limits<T>::min() && b == -1)) {
-        if (threadSkipErrorDetails()) {
-          return Status::UserError();
-        }
-        return Status::UserError("Arithmetic overflow: {} / {}", a, b);
-      }
+      VELOX_USER_RETURN(
+          a == std::numeric_limits<T>::min() && b == -1,
+          "Arithmetic overflow: {} / {}",
+          a,
+          b);
     }
+    result = a / b;
+    return Status::OK();
+  }
+};
+
+/// Implements integral division with truncation towards zero.
+/// Returns Null if divisor is 0.
+template <typename TExec>
+struct IntegralDivideFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const T& a, const T& b) {
+    if (b == 0) {
+      return false;
+    }
+    // In Java, Long.MIN_VALUE is -2^63 and Long.MAX_VALUE is 2^63 - 1.
+    // Dividing Long.MIN_VALUE by -1 overflows because the positive
+    // result (+2^63) cannot be represented in a signed 64-bit integer.
+    // Java integer arithmetic wraps around on overflow (two's complement),
+    // so Long.MIN_VALUE / -1 evaluates to Long.MIN_VALUE itself instead
+    // of throwing an exception.
+    if (a == std::numeric_limits<int64_t>::min() && b == -1) {
+      result = a;
+      return true;
+    }
+
+    result = a / b;
+    return true;
+  }
+};
+
+/// Implements integral division with truncation towards zero.
+/// Returns Error if divisor is 0 or overflow.
+template <typename TExec>
+struct CheckedIntegralDivideFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const T& a, const T& b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    VELOX_USER_RETURN(
+        a == std::numeric_limits<int64_t>::min() && b == -1,
+        "Overflow in integral divide");
     result = a / b;
     return Status::OK();
   }

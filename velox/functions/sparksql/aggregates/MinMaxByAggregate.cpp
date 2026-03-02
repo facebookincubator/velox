@@ -78,8 +78,12 @@ std::string toString(const std::vector<TypePtr>& types) {
 }
 
 template <
-    template <typename U, typename V, bool B1, class C, bool B2>
-    class Aggregate,
+    template <
+        typename U,
+        typename V,
+        bool B1,
+        class C,
+        bool B2> class Aggregate,
     bool isMaxFunc>
 exec::AggregateRegistrationResult registerMinMaxBy(
     const std::string& name,
@@ -87,14 +91,15 @@ exec::AggregateRegistrationResult registerMinMaxBy(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   // V, C -> row(V, C) -> V.
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .typeVariable("V")
-                           .orderableTypeVariable("C")
-                           .returnType("V")
-                           .intermediateType("row(V,C)")
-                           .argumentType("V")
-                           .argumentType("C")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("V")
+          .orderableTypeVariable("C")
+          .returnType("V")
+          .intermediateType("row(V,C)")
+          .argumentType("V")
+          .argumentType("C")
+          .build());
   const std::vector<std::string> supportedCompareTypes = {
       "boolean",
       "tinyint",
@@ -136,6 +141,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
               resultType, valueType, compareType, errorMessage);
         }
       },
+      {.ignoreDuplicates = true},
       withCompanionFunctions,
       overwrite);
 }

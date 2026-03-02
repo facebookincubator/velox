@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
@@ -39,12 +40,9 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
   void SetUp() override {
     S3Test::SetUp();
     filesystems::registerS3FileSystem();
-    connector::registerConnectorFactory(
-        std::make_shared<connector::hive::HiveConnectorFactory>());
+    connector::hive::HiveConnectorFactory factory;
     auto hiveConnector =
-        connector::getConnectorFactory(
-            connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, minioServer_->hiveConfig());
+        factory.newConnector(kHiveConnectorId, minioServer_->hiveConfig());
     connector::registerConnector(hiveConnector);
     parquet::registerParquetReaderFactory();
   }
@@ -52,8 +50,6 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
   void TearDown() override {
     parquet::unregisterParquetReaderFactory();
     filesystems::finalizeS3FileSystem();
-    connector::unregisterConnectorFactory(
-        connector::hive::HiveConnectorFactory::kHiveConnectorName);
     connector::unregisterConnector(kHiveConnectorId);
     S3Test::TearDown();
   }

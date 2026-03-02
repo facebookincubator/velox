@@ -25,7 +25,7 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
   return std::make_unique<ParquetData>(
-      type, metaData_, pool(), sessionTimezone_);
+      type, metaData_, pool(), runtimeStatistics(), sessionTimezone_);
 }
 
 void ParquetData::filterRowGroups(
@@ -70,7 +70,9 @@ void ParquetData::filterRowGroups(
   }
 }
 
-bool ParquetData::rowGroupMatches(uint32_t rowGroupId, common::Filter* filter) {
+bool ParquetData::rowGroupMatches(
+    uint32_t rowGroupId,
+    const common::Filter* filter) {
   auto column = type_->column();
   auto type = type_->type();
   auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
@@ -126,6 +128,7 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
       type_,
       metadata.compression(),
       metadata.totalCompressedSize(),
+      stats_,
       sessionTimezone_);
   return dwio::common::PositionProvider(empty);
 }

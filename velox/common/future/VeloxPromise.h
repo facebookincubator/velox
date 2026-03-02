@@ -28,12 +28,15 @@ class VeloxPromise : public folly::Promise<T> {
   VeloxPromise() : folly::Promise<T>() {}
 
   explicit VeloxPromise(const std::string& context)
-      : folly::Promise<T>(), context_(context) {}
+      : folly::Promise<T>(), context_(context) {
+    if (context.empty()) {
+      LOG(WARNING)
+          << "PROMISE: VeloxPromise must be constructed with a context.";
+    }
+  }
 
-  VeloxPromise(
-      folly::futures::detail::EmptyConstruct,
-      const std::string& context) noexcept
-      : folly::Promise<T>(folly::Promise<T>::makeEmpty()), context_(context) {}
+  explicit VeloxPromise(folly::futures::detail::EmptyConstruct) noexcept
+      : folly::Promise<T>(folly::Promise<T>::makeEmpty()) {}
 
   ~VeloxPromise() {
     if (!this->isFulfilled()) {
@@ -42,7 +45,7 @@ class VeloxPromise : public folly::Promise<T> {
     }
   }
 
-  explicit VeloxPromise(VeloxPromise<T>&& other) noexcept
+  VeloxPromise(VeloxPromise<T>&& other) noexcept
       : folly::Promise<T>(std::move(other)),
         context_(std::move(other.context_)) {}
 
@@ -52,8 +55,8 @@ class VeloxPromise : public folly::Promise<T> {
     return *this;
   }
 
-  static VeloxPromise makeEmpty(const std::string& context = "") noexcept {
-    return VeloxPromise<T>(folly::futures::detail::EmptyConstruct{}, context);
+  static VeloxPromise makeEmpty() noexcept {
+    return VeloxPromise<T>(folly::futures::detail::EmptyConstruct{});
   }
 
  private:
@@ -65,8 +68,14 @@ using ContinuePromise = VeloxPromise<folly::Unit>;
 using ContinueFuture = folly::SemiFuture<folly::Unit>;
 
 /// Equivalent of folly's makePromiseContract for VeloxPromise.
+///
+/// NOTE: When you already have a valid promise, just call
+/// Promise::getSemiFuture() on it to get the future, instead of using this
+/// function to overwrite the promise.  Overwriting valid promise would cause
+/// exception throwing and stack unwinding thus performance issue.  See
+/// https://github.com/prestodb/presto/issues/26094 for details.
 static inline std::pair<ContinuePromise, ContinueFuture>
-makeVeloxContinuePromiseContract(const std::string& promiseContext = "") {
+makeVeloxContinuePromiseContract(const std::string& promiseContext) {
   auto p = ContinuePromise(promiseContext);
   auto f = p.getSemiFuture();
   return std::make_pair(std::move(p), std::move(f));

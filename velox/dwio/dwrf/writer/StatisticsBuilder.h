@@ -109,7 +109,7 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
  public:
   /// Constructs with 'options'.
   explicit StatisticsBuilder(const StatisticsBuilderOptions& options)
-      : options_{options} {
+      : options_{options}, arena_(std::make_unique<google::protobuf::Arena>()) {
     init();
   }
 
@@ -177,7 +177,7 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
   /*
    * Write stats to proto
    */
-  virtual void toProto(proto::ColumnStatistics& stats) const;
+  virtual void toProto(ColumnStatisticsWriteWrapper& stats) const;
 
   std::unique_ptr<dwio::common::ColumnStatistics> build() const;
 
@@ -198,13 +198,14 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     rawSize_ = 0;
     size_ = options_.initialSize;
     if (options_.countDistincts) {
-      hll_ = std::make_shared<common::hll::SparseHll>(options_.allocator);
+      hll_ = std::make_shared<common::hll::SparseHll<>>(options_.allocator);
     }
   }
 
  protected:
   StatisticsBuilderOptions options_;
-  std::shared_ptr<common::hll::SparseHll> hll_;
+  std::shared_ptr<common::hll::SparseHll<>> hll_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
 };
 
 class BooleanStatisticsBuilder : public StatisticsBuilder,
@@ -233,7 +234,7 @@ class BooleanStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -272,7 +273,7 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -332,7 +333,7 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -358,7 +359,7 @@ class StringStatisticsBuilder : public StatisticsBuilder,
 
   ~StringStatisticsBuilder() override = default;
 
-  void addValues(folly::StringPiece value, uint64_t count = 1) {
+  void addValues(std::string_view value, uint64_t count = 1) {
     // min_/max_ is not initialized with default that can be compared against
     // easily. So we need to capture whether self is empty and handle
     // differently.
@@ -368,10 +369,10 @@ class StringStatisticsBuilder : public StatisticsBuilder,
       min_ = value;
       max_ = value;
     } else {
-      if (min_.has_value() && value < folly::StringPiece{min_.value()}) {
+      if (min_.has_value() && value < std::string_view{min_.value()}) {
         min_ = value;
       }
-      if (max_.has_value() && value > folly::StringPiece{max_.value()}) {
+      if (max_.has_value() && value > std::string_view{max_.value()}) {
         max_ = value;
       }
     }
@@ -389,7 +390,7 @@ class StringStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   uint32_t lengthLimit_;
@@ -429,7 +430,7 @@ class BinaryStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {
@@ -477,7 +478,7 @@ class MapStatisticsBuilder : public StatisticsBuilder,
     init();
   }
 
-  void toProto(proto::ColumnStatistics& stats) const override;
+  void toProto(ColumnStatisticsWriteWrapper& stats) const override;
 
  private:
   void init() {

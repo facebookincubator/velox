@@ -92,6 +92,11 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
     VELOX_NYI();
   }
 
+  void visit(const core::EnforceDistinctNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::MergeExchangeNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
@@ -106,6 +111,11 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
       const core::NestedLoopJoinNode& node,
       core::PlanNodeVisitorContext& ctx) const override;
 
+  void visit(const core::SpatialJoinNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::OrderByNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
@@ -118,6 +128,12 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
 
   void visit(const core::ProjectNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
+
+  void visit(
+      const core::ParallelProjectNode& node,
+      core::PlanNodeVisitorContext& ctx) const override {
+    VELOX_NYI();
+  }
 
   void visit(const core::RowNumberNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
@@ -162,6 +178,11 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.
   void visit(const core::PlanNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::MixedUnionNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
   }

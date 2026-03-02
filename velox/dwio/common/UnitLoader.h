@@ -16,9 +16,13 @@
 
 #pragma once
 
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -39,6 +43,44 @@ class LoadUnit {
   virtual uint64_t getIoSize() = 0;
 };
 
+class UnitLoaderStats {
+ public:
+  UnitLoaderStats() = default;
+
+  void addCounter(const std::string& name, RuntimeCounter counter) {
+    auto locked = stats_.wlock();
+    auto it = locked->find(name);
+    if (it == locked->end()) {
+      auto [ptr, inserted] = locked->emplace(name, RuntimeMetric(counter.unit));
+      VELOX_CHECK(inserted);
+      ptr->second.addValue(counter.value);
+    } else {
+      VELOX_CHECK_EQ(it->second.unit, counter.unit);
+      it->second.addValue(counter.value);
+    }
+  }
+
+  void merge(const UnitLoaderStats& other) {
+    auto otherStats = other.stats();
+    auto locked = stats_.wlock();
+    for (const auto& [name, metric] : otherStats) {
+      auto it = locked->find(name);
+      if (it == locked->end()) {
+        locked->emplace(name, metric);
+      } else {
+        it->second.merge(metric);
+      }
+    }
+  }
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const {
+    return stats_.copy();
+  }
+
+ private:
+  folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
+};
+
 class UnitLoader {
  public:
   virtual ~UnitLoader() = default;
@@ -56,6 +98,10 @@ class UnitLoader {
   /// Reader reports seek calling this method. The call must be done **before**
   /// getLoadedUnit for the new unit.
   virtual void onSeek(uint32_t unit, uint64_t rowOffsetInUnit) = 0;
+
+  virtual UnitLoaderStats stats() {
+    return UnitLoaderStats();
+  };
 };
 
 class UnitLoaderFactory {

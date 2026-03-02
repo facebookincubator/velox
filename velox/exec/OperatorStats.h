@@ -15,8 +15,10 @@
  */
 #pragma once
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/core/PlanNode.h"
 #include "velox/expression/ExprStats.h"
 
 namespace facebook::velox::exec {
@@ -87,6 +89,11 @@ struct DynamicFilterStats {
 };
 
 struct OperatorStats {
+  /// Runtime stat name for per-driver CPU time (actual work time, not including
+  /// blocked time) for this operator. The max field will contain the CPU time
+  /// from the longest running single driver.
+  static constexpr const char* kDriverCpuTime = "driverCpuTimeNanos";
+
   /// Initial ordinal position in the operator's pipeline.
   int32_t operatorId = 0;
   int32_t pipelineId = 0;

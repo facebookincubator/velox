@@ -18,9 +18,21 @@
 #include "velox/exec/PartitionStreamingWindowBuild.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/SortWindowBuild.h"
+#include "velox/exec/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+common::PrefixSortConfig makePrefixSortConfig(
+    const core::QueryConfig& queryConfig) {
+  return common::PrefixSortConfig{
+      queryConfig.prefixSortNormalizedKeyMaxBytes(),
+      queryConfig.prefixSortMinRows(),
+      queryConfig.prefixSortMaxStringPrefixLength()};
+}
+
+} // namespace
 
 Window::Window(
     int32_t operatorId,
@@ -33,7 +45,7 @@ Window::Window(
           windowNode->id(),
           "Window",
           windowNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "Window")
               : std::nullopt),
       numInputColumns_(windowNode->inputType()->size()),
       windowNode_(windowNode),
@@ -55,16 +67,28 @@ Window::Window(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);
     }
   } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(
-        windowNode,
-        pool(),
-        common::PrefixSortConfig{
-            driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
-            driverCtx->queryConfig().prefixSortMinRows(),
-            driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
-        spillConfig,
-        &nonReclaimableSection_,
-        &spillStats_);
+    if (auto numSubPartitions =
+            operatorCtx_->driverCtx()->queryConfig().windowNumSubPartitions();
+        numSubPartitions > 1) {
+      windowBuild_ = std::make_unique<SubPartitionedSortWindowBuild>(
+          windowNode,
+          numSubPartitions,
+          pool(),
+          makePrefixSortConfig(driverCtx->queryConfig()),
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    } else {
+      windowBuild_ = std::make_unique<SortWindowBuild>(
+          windowNode,
+          pool(),
+          makePrefixSortConfig(driverCtx->queryConfig()),
+          spillConfig,
+          &nonReclaimableSection_,
+          &stats_,
+          spillStats_.get());
+    }
   }
 }
 
@@ -159,10 +183,11 @@ Window::WindowFrame Window::createWindowFrame(
       return std::make_optional(
           FrameChannelArg{kConstantChannel, nullptr, value});
     } else {
-      return std::make_optional(FrameChannelArg{
-          frameChannel,
-          BaseVector::create(frame->type(), 0, pool()),
-          std::nullopt});
+      return std::make_optional(
+          FrameChannelArg{
+              frameChannel,
+              BaseVector::create(frame->type(), 0, pool()),
+              std::nullopt});
     }
   };
 
@@ -196,14 +221,15 @@ void Window::createWindowFunctions() {
       }
     }
 
-    windowFunctions_.push_back(WindowFunction::create(
-        windowNodeFunction.functionCall->name(),
-        functionArgs,
-        windowNodeFunction.functionCall->type(),
-        windowNodeFunction.ignoreNulls,
-        operatorCtx_->pool(),
-        &stringAllocator_,
-        operatorCtx_->driverCtx()->queryConfig()));
+    windowFunctions_.push_back(
+        WindowFunction::create(
+            windowNodeFunction.functionCall->name(),
+            functionArgs,
+            windowNodeFunction.functionCall->type(),
+            windowNodeFunction.ignoreNulls,
+            operatorCtx_->pool(),
+            &stringAllocator_,
+            operatorCtx_->driverCtx()->queryConfig()));
 
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
@@ -686,6 +712,9 @@ RowVectorPtr Window::getOutput() {
 
   const auto numRowsLeft = numRows_ - numProcessedRows_;
   if (numRowsLeft == 0) {
+    if (windowBuild_ != nullptr) {
+      windowBuild_->release();
+    }
     return nullptr;
   }
 

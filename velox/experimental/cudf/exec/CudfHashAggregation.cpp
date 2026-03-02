@@ -14,21 +14,31 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/SignatureBinder.h"
+#include "velox/type/Type.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/reduction/approx_distinct_count.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
+
+#include <vector>
 
 namespace {
 
@@ -40,13 +50,15 @@ using namespace facebook::velox;
         core::AggregationNode::Step step,                                     \
         uint32_t inputIndex,                                                  \
         VectorPtr constant,                                                   \
-        bool is_global)                                                       \
+        bool is_global,                                                       \
+        const TypePtr& resultType)                                            \
         : Aggregator(                                                         \
               step,                                                           \
               cudf::aggregation::KIND,                                        \
               inputIndex,                                                     \
               constant,                                                       \
-              is_global) {}                                                   \
+              is_global,                                                      \
+              resultType) {}                                                  \
                                                                               \
     void addGroupbyRequest(                                                   \
         cudf::table_view const& tbl,                                          \
@@ -64,7 +76,13 @@ using namespace facebook::velox;
     std::unique_ptr<cudf::column> makeOutputColumn(                           \
         std::vector<cudf::groupby::aggregation_result>& results,              \
         rmm::cuda_stream_view stream) override {                              \
-      return std::move(results[output_idx].results[0]);                       \
+      auto col = std::move(results[output_idx].results[0]);                   \
+      const auto cudfType =                                                   \
+          cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));         \
+      if (col->type() != cudfType) {                                          \
+        col = cudf::cast(*col, cudfType, stream);                             \
+      }                                                                       \
+      return col;                                                             \
     }                                                                         \
                                                                               \
     std::unique_ptr<cudf::column> doReduce(                                   \
@@ -93,13 +111,15 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      bool isGlobal)
+      bool isGlobal,
+      const TypePtr& resultType)
       : Aggregator(
             step,
             cudf::aggregation::COUNT_VALID,
             inputIndex,
             constant,
-            isGlobal) {}
+            isGlobal,
+            resultType) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -139,6 +159,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       auto const cudfOutputType = cudf::data_type(cudf::type_id::INT64);
       auto const resultScalar = cudf::reduce(
           input.column(inputIndex), *aggRequest, cudfOutputType, stream);
+      resultScalar->set_valid_async(true, stream);
       return cudf::make_column_from_scalar(*resultScalar, 1, stream);
     }
     return nullptr;
@@ -149,8 +170,10 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       rmm::cuda_stream_view stream) override {
     // cudf produces int32 for count(0) but velox expects int64
     auto col = std::move(results[outputIdx_].results[0]);
-    if (col->type() == cudf::data_type(cudf::type_id::INT32)) {
-      col = cudf::cast(*col, cudf::data_type(cudf::type_id::INT64), stream);
+    const auto cudfOutputType =
+        cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));
+    if (col->type() != cudfOutputType) {
+      col = cudf::cast(*col, cudfOutputType, stream);
     }
     return col;
   }
@@ -164,13 +187,15 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      bool isGlobal)
+      bool isGlobal,
+      const TypePtr& resultType)
       : Aggregator(
             step,
             cudf::aggregation::MEAN,
             inputIndex,
             constant,
-            isGlobal) {}
+            isGlobal,
+            resultType) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
@@ -223,6 +248,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
+    const auto& outputType = asRowType(resultType);
     switch (step) {
       case core::AggregationNode::Step::kSingle:
         return std::move(results[meanIdx_].results[0]);
@@ -231,13 +257,20 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto count = std::move(results[sumIdx_].results[1]);
 
         auto const size = sum->size();
-
-        auto countInt64 =
-            cudf::cast(*count, cudf::data_type(cudf::type_id::INT64), stream);
+        auto const cudfSumType = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(0)));
+        auto const cudfCountType = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(1)));
+        if (sum->type() != cudf::data_type(cudfSumType)) {
+          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream);
+        }
+        if (count->type() != cudf::data_type(cudfCountType)) {
+          count = cudf::cast(*count, cudf::data_type(cudfCountType), stream);
+        }
 
         auto children = std::vector<std::unique_ptr<cudf::column>>();
         children.push_back(std::move(sum));
-        children.push_back(std::move(countInt64));
+        children.push_back(std::move(count));
 
         // TODO: Handle nulls. This can happen if all values are null in a
         // group.
@@ -260,6 +293,16 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto count = std::move(results[countIdx_].results[0]);
 
         auto size = sum->size();
+        auto const cudfSumType = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(0)));
+        auto const cudfCountType = cudf::data_type(
+            cudf_velox::veloxToCudfTypeId(outputType->childAt(1)));
+        if (sum->type() != cudf::data_type(cudfSumType)) {
+          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream);
+        }
+        if (count->type() != cudf::data_type(cudfCountType)) {
+          count = cudf::cast(*count, cudf::data_type(cudfCountType), stream);
+        }
 
         auto children = std::vector<std::unique_ptr<cudf::column>>();
         children.push_back(std::move(sum));
@@ -280,9 +323,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             *sum,
             *count,
             cudf::binary_operator::DIV,
-            // TODO: Change the output type to be dependent on the input type
-            // like in the cudf groupby implementation.
-            cudf::data_type(cudf::type_id::FLOAT64),
+            cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType)),
             stream);
         return avg;
       }
@@ -386,32 +427,296 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   uint32_t countIdx_;
 };
 
+struct ApproxDistinctAggregator : cudf_velox::CudfHashAggregation::Aggregator {
+  static constexpr cudf::null_policy kNullPolicy = cudf::null_policy::EXCLUDE;
+  static constexpr cudf::nan_policy kNanPolicy = cudf::nan_policy::NAN_IS_VALID;
+
+  ApproxDistinctAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      VectorPtr constant,
+      bool isGlobal,
+      const TypePtr& resultType,
+      std::int32_t precision = 11) // Default 11 matches Velox's 2.3% standard
+                                   // error (2^11 = 2048 buckets)
+      : Aggregator{step, cudf::aggregation::INVALID, inputIndex, constant, isGlobal, resultType},
+        precision_{precision} {
+    VELOX_CHECK(
+        constant == nullptr,
+        "ApproxDistinctAggregator does not support constant input");
+    VELOX_CHECK(
+        isGlobal,
+        "ApproxDistinctAggregator currently only supports global aggregation");
+  }
+
+  void addGroupbyRequest(
+      cudf::table_view const& tbl,
+      std::vector<cudf::groupby::aggregation_request>& requests) override {
+    VELOX_UNSUPPORTED(
+        "approx_distinct is not supported as a group aggregation");
+  }
+
+  std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      rmm::cuda_stream_view stream) override {
+    VELOX_UNSUPPORTED(
+        "approx_distinct is not supported as a group aggregation");
+  }
+
+  std::unique_ptr<cudf::column> doReduce(
+      cudf::table_view const& input,
+      TypePtr const& outputType,
+      rmm::cuda_stream_view stream) override {
+    if (exec::isRawInput(step)) {
+      return doPartialReduce(input, stream);
+    } else if (step == core::AggregationNode::Step::kIntermediate) {
+      return doIntermediateReduce(input, stream);
+    } else {
+      return doFinalReduce(input, stream);
+    }
+  }
+
+ private:
+  std::unique_ptr<cudf::column> makeSketchColumn(
+      cuda::std::span<cuda::std::byte const> sketch_bytes,
+      rmm::cuda_stream_view stream) {
+    auto sketch_size = static_cast<cudf::size_type>(sketch_bytes.size());
+
+    cudf::size_type offsets[2] = {0, sketch_size};
+    rmm::device_buffer offsets_device{2 * sizeof(cudf::size_type), stream};
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        offsets_device.data(),
+        offsets,
+        2 * sizeof(cudf::size_type),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+
+    rmm::device_buffer chars_buffer{sketch_bytes.size(), stream};
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        chars_buffer.data(),
+        sketch_bytes.data(),
+        sketch_bytes.size(),
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
+
+    // Sync stream before stack-allocated offsets goes out of scope
+    stream.synchronize();
+
+    auto offsets_column = std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT32},
+        2,
+        std::move(offsets_device),
+        rmm::device_buffer{},
+        0);
+
+    return cudf::make_strings_column(
+        1,
+        std::move(offsets_column),
+        std::move(chars_buffer),
+        0,
+        rmm::device_buffer{});
+  }
+
+  template <typename Func>
+  auto mergeSketchesAndApply(
+      cudf::column_view const& sketch_column,
+      Func&& func,
+      rmm::cuda_stream_view stream) {
+    auto strings_col = cudf::strings_column_view(sketch_column);
+    auto offsets_col = strings_col.offsets();
+    auto chars_ptr = strings_col.chars_begin(stream);
+
+    auto num_offsets = sketch_column.size() + 1;
+    std::vector<cudf::size_type> host_offsets(num_offsets);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        host_offsets.data(),
+        offsets_col.begin<cudf::size_type>(),
+        num_offsets * sizeof(cudf::size_type),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+    stream.synchronize(); // Need host_offsets before proceeding
+
+    cudf::size_type first_offset = host_offsets[0];
+    cudf::size_type first_size = host_offsets[1] - first_offset;
+
+    // Copy to mutable aligned buffer - cudf::approx_distinct_count requires
+    // non-const span and proper alignment for int32 registers
+    rmm::device_buffer aligned_sketch{
+        static_cast<std::size_t>(first_size), stream};
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        aligned_sketch.data(),
+        chars_ptr + first_offset,
+        static_cast<std::size_t>(first_size),
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
+
+    cudf::approx_distinct_count merged_sketch(
+        cuda::std::span<cuda::std::byte>(
+            static_cast<cuda::std::byte*>(aligned_sketch.data()), first_size),
+        precision_,
+        kNullPolicy,
+        kNanPolicy,
+        stream);
+
+    for (cudf::size_type i = 1; i < sketch_column.size(); ++i) {
+      cudf::size_type start_offset = host_offsets[i];
+      cudf::size_type end_offset = host_offsets[i + 1];
+      cudf::size_type size = end_offset - start_offset;
+
+      if (size > 0) {
+        rmm::device_buffer temp_sketch{static_cast<std::size_t>(size), stream};
+        CUDF_CUDA_TRY(cudaMemcpyAsync(
+            temp_sketch.data(),
+            chars_ptr + start_offset,
+            size,
+            cudaMemcpyDeviceToDevice,
+            stream.value()));
+
+        merged_sketch.merge(
+            cuda::std::span<cuda::std::byte>(
+                static_cast<cuda::std::byte*>(temp_sketch.data()), size),
+            stream);
+      }
+    }
+
+    return func(merged_sketch);
+  }
+
+  std::unique_ptr<cudf::column> doPartialReduce(
+      cudf::table_view const& input,
+      rmm::cuda_stream_view stream) {
+    auto inputTable = cudf::table_view({input.column(inputIndex)});
+
+    cudf::approx_distinct_count sketch{
+        inputTable, precision_, kNullPolicy, kNanPolicy, stream};
+
+    return makeSketchColumn(sketch.sketch(), stream);
+  }
+
+  std::unique_ptr<cudf::column> doIntermediateReduce(
+      cudf::table_view const& input,
+      rmm::cuda_stream_view stream) {
+    auto sketch_column = input.column(inputIndex);
+
+    if (sketch_column.size() == 0) {
+      return makeSketchColumn({}, stream);
+    }
+
+    return mergeSketchesAndApply(
+        sketch_column,
+        [this, stream](cudf::approx_distinct_count& sketch) {
+          return makeSketchColumn(sketch.sketch(), stream);
+        },
+        stream);
+  }
+
+  std::unique_ptr<cudf::column> doFinalReduce(
+      cudf::table_view const& input,
+      rmm::cuda_stream_view stream) {
+    auto sketch_column = input.column(inputIndex);
+
+    if (sketch_column.size() == 0) {
+      return cudf::make_column_from_scalar(
+          cudf::numeric_scalar<int64_t>(0, true, stream), 1, stream);
+    }
+
+    return mergeSketchesAndApply(
+        sketch_column,
+        [stream](cudf::approx_distinct_count& sketch) {
+          std::size_t estimate = sketch.estimate(stream);
+          return cudf::make_column_from_scalar(
+              cudf::numeric_scalar<int64_t>(
+                  static_cast<int64_t>(estimate), true, stream),
+              1,
+              stream);
+        },
+        stream);
+  }
+
+  std::int32_t precision_;
+};
+
 std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
     core::AggregationNode::Step step,
     std::string const& kind,
     uint32_t inputIndex,
     VectorPtr constant,
-    bool isGlobal) {
-  // Companion function may be count_merge_extract or count_partial or others,
-  // so use this to map
-  if (kind.rfind("sum", 0) == 0) {
+    bool isGlobal,
+    const TypePtr& resultType) {
+  auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
+  if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<SumAggregator>(
-        step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("count", 0) == 0) {
+        step, inputIndex, constant, isGlobal, resultType);
+  } else if (kind.rfind(prefix + "count", 0) == 0) {
     return std::make_unique<CountAggregator>(
-        step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("min", 0) == 0) {
+        step, inputIndex, constant, isGlobal, resultType);
+  } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<MinAggregator>(
-        step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("max", 0) == 0) {
+        step, inputIndex, constant, isGlobal, resultType);
+  } else if (kind.rfind(prefix + "max", 0) == 0) {
     return std::make_unique<MaxAggregator>(
-        step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("avg", 0) == 0) {
+        step, inputIndex, constant, isGlobal, resultType);
+  } else if (kind.rfind(prefix + "avg", 0) == 0) {
     return std::make_unique<MeanAggregator>(
-        step, inputIndex, constant, isGlobal);
+        step, inputIndex, constant, isGlobal, resultType);
+  } else if (kind.rfind(prefix + "approx_distinct", 0) == 0) {
+    return std::make_unique<ApproxDistinctAggregator>(
+        step, inputIndex, constant, isGlobal, resultType);
   } else {
-    VELOX_NYI("Aggregation not yet supported");
+    VELOX_NYI("Aggregation not yet supported, kind: {}", kind);
   }
+}
+
+/// \brief Convert companion function to step for the aggregation function
+///
+/// Companion functions are functions that are registered in velox along with
+/// their main aggregation functions. These are designed to always function
+/// with a fixed `step`. This is to allow spark style planNodes where `step` is
+/// the property of the aggregation function rather than the planNode.
+/// Companion functions allow us to override the planNode's step and use
+/// aggregations of different steps in the same planNode
+/// If an agg function name contains companionStep keyword, may cause error, now
+/// it does not exist.
+core::AggregationNode::Step getCompanionStep(
+    std::string const& kind,
+    core::AggregationNode::Step step) {
+  if (kind.ends_with("_merge")) {
+    return core::AggregationNode::Step::kIntermediate;
+  }
+
+  if (kind.ends_with("_partial")) {
+    return core::AggregationNode::Step::kPartial;
+  }
+
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (kind.find("_merge_extract") != std::string::npos) {
+    return core::AggregationNode::Step::kFinal;
+  }
+
+  return step;
+}
+
+std::string getOriginalName(const std::string& kind) {
+  if (kind.ends_with("_merge")) {
+    return kind.substr(0, kind.size() - std::string("_merge").size());
+  }
+
+  if (kind.ends_with("_partial")) {
+    return kind.substr(0, kind.size() - std::string("_partial").size());
+  }
+  // The format is count_merge_extract_BIGINT or count_merge_extract.
+  if (auto pos = kind.find("_merge_extract"); pos != std::string::npos) {
+    return kind.substr(0, pos);
+  }
+
+  return kind;
+}
+
+bool hasFinalAggs(
+    std::vector<core::AggregationNode::Aggregate> const& aggregates) {
+  return std::any_of(aggregates.begin(), aggregates.end(), [](auto const& agg) {
+    return agg.call->name().ends_with("_merge_extract");
+  });
 }
 
 auto toAggregators(
@@ -420,10 +725,13 @@ auto toAggregators(
   auto const step = aggregationNode.step();
   bool const isGlobal = aggregationNode.groupingKeys().empty();
   auto const& inputRowSchema = aggregationNode.sources()[0]->outputType();
+  const auto numKeys = aggregationNode.groupingKeys().size();
+  const auto outputType = aggregationNode.outputType();
 
   std::vector<std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator>>
       aggregators;
-  for (auto const& aggregate : aggregationNode.aggregates()) {
+  for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
+    auto const& aggregate = aggregationNode.aggregates()[i];
     std::vector<column_index_t> aggInputs;
     std::vector<VectorPtr> aggConstants;
     for (auto const& arg : aggregate.call->inputs()) {
@@ -444,7 +752,10 @@ auto toAggregators(
     // be multiple inputs to an aggregate.
     // We're postponing properly supporting this for now because the currently
     // supported aggregation functions in cudf_velox don't use it.
-    VELOX_CHECK(aggInputs.size() == 1);
+    VELOX_CHECK(aggInputs.size() <= 1);
+    if (aggInputs.empty()) {
+      aggInputs.push_back(0);
+    }
 
     if (aggregate.distinct) {
       VELOX_NYI("De-dup before aggregation is not yet supported");
@@ -453,8 +764,14 @@ auto toAggregators(
     auto const kind = aggregate.call->name();
     auto const inputIndex = aggInputs[0];
     auto const constant = aggConstants.empty() ? nullptr : aggConstants[0];
-    aggregators.push_back(
-        createAggregator(step, kind, inputIndex, constant, isGlobal));
+    auto const companionStep = getCompanionStep(kind, step);
+    const auto originalName = getOriginalName(kind);
+    const auto resultType = exec::isPartialOutput(companionStep)
+        ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
+        : outputType->childAt(numKeys + i);
+
+    aggregators.push_back(createAggregator(
+        companionStep, kind, inputIndex, constant, isGlobal, resultType));
   }
   return aggregators;
 }
@@ -475,8 +792,17 @@ auto toIntermediateAggregators(
     auto const inputIndex = aggregationNode.groupingKeys().size() + i;
     auto const kind = aggregate.call->name();
     auto const constant = nullptr;
-    aggregators.push_back(
-        createAggregator(step, kind, inputIndex, constant, isGlobal));
+    const auto originalName = getOriginalName(kind);
+    auto const companionStep = getCompanionStep(kind, step);
+    if (exec::isPartialOutput(companionStep)) {
+      const auto resultType =
+          exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
+      aggregators.push_back(createAggregator(
+          step, kind, inputIndex, constant, isGlobal, resultType));
+    } else {
+      // Final step aggregator will not use the intermediate aggregator.
+      aggregators.push_back(nullptr);
+    }
   }
   return aggregators;
 }
@@ -497,15 +823,15 @@ CudfHashAggregation::CudfHashAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "CudfPartialAggregation"
               : "CudfAggregation",
-          aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
-              : std::nullopt),
+          std::nullopt),
       NvtxHelper(
           nvtx3::rgb{34, 139, 34}, // Forest Green
           operatorId,
           fmt::format("[{}]", aggregationNode->id())),
       aggregationNode_(aggregationNode),
-      isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
+      isPartialOutput_(
+          exec::isPartialOutput(aggregationNode->step()) &&
+          !hasFinalAggs(aggregationNode->aggregates())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
       maxPartialAggregationMemoryUsage_(
@@ -514,7 +840,7 @@ CudfHashAggregation::CudfHashAggregation(
 void CudfHashAggregation::initialize() {
   Operator::initialize();
 
-  auto const& inputType = aggregationNode_->sources()[0]->outputType();
+  inputType_ = aggregationNode_->sources()[0]->outputType();
   ignoreNullKeys_ = aggregationNode_->ignoreNullKeys();
   setupGroupingKeyChannelProjections(
       groupingKeyInputChannels_, groupingKeyOutputChannels_);
@@ -578,8 +904,10 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
   // intermediate groupby results.
 
   auto inputTableStream = tbl->stream();
+  // Use getTableView() to avoid expensive materialization for packed_table.
+  // tbl stays alive during this function call, keeping the view valid.
   auto groupbyOnInput = doGroupByAggregation(
-      tbl->release(),
+      tbl->getTableView(),
       groupingKeyInputChannels_,
       aggregators_,
       inputTableStream);
@@ -603,8 +931,9 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
     // Now we have to groupby again but this time with intermediate aggregators.
+    // Keep concatenatedTable alive while we use its view.
     auto compactedOutput = doGroupByAggregation(
-        std::move(concatenatedTable),
+        concatenatedTable->view(),
         groupingKeyOutputChannels_,
         intermediateAggregators_,
         partialOutputStream);
@@ -641,16 +970,18 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
     // Do a distinct on the concatenated results.
+    // Keep concatenatedTable alive while we use its view.
     auto distinctOutput = getDistinctKeys(
-        std::move(concatenatedTable),
+        concatenatedTable->view(),
         groupingKeyOutputChannels_,
         inputTableStream);
     partialOutput_ = distinctOutput;
   } else {
     // First time processing, just store the result of the input batch's
-    // distinct.
+    // distinct. Use getTableView() to avoid expensive materialization for
+    // packed_table. tbl stays alive during this function call.
     partialOutput_ = getDistinctKeys(
-        tbl->release(), groupingKeyInputChannels_, inputTableStream);
+        tbl->getTableView(), groupingKeyInputChannels_, inputTableStream);
   }
 }
 
@@ -680,11 +1011,12 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 }
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
-    std::unique_ptr<cudf::table> tbl,
+    cudf::table_view tableView,
     std::vector<column_index_t> const& groupByKeys,
     std::vector<std::unique_ptr<Aggregator>>& aggregators,
     rmm::cuda_stream_view stream) {
-  auto groupbyKeyView = tbl->select(groupByKeys.begin(), groupByKeys.end());
+  auto groupbyKeyView =
+      tableView.select(groupByKeys.begin(), groupByKeys.end());
 
   size_t const numGroupingKeys = groupbyKeyView.num_columns();
 
@@ -697,7 +1029,7 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
 
   std::vector<cudf::groupby::aggregation_request> requests;
   for (auto& aggregator : aggregators) {
-    aggregator->addGroupbyRequest(tbl->view(), requests);
+    aggregator->addGroupbyRequest(tableView, requests);
   }
 
   auto [groupKeys, results] = groupByOwner.aggregate(requests, stream);
@@ -719,25 +1051,25 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
   // make a cudf table out of columns
   auto resultTable = std::make_unique<cudf::table>(std::move(resultColumns));
 
+  auto numRows = resultTable->num_rows();
+
   // velox expects nullptr instead of a table with 0 rows
-  if (resultTable->num_rows() == 0) {
+  if (numRows == 0) {
     return nullptr;
   }
-
-  auto numRows = resultTable->num_rows();
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, numRows, std::move(resultTable), stream);
 }
 
 CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
-    std::unique_ptr<cudf::table> tbl,
+    cudf::table_view tableView,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
   resultColumns.reserve(aggregators_.size());
   for (auto i = 0; i < aggregators_.size(); i++) {
-    resultColumns.push_back(aggregators_[i]->doReduce(
-        tbl->view(), outputType_->childAt(i), stream));
+    resultColumns.push_back(
+        aggregators_[i]->doReduce(tableView, outputType_->childAt(i), stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
@@ -749,11 +1081,11 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
 }
 
 CudfVectorPtr CudfHashAggregation::getDistinctKeys(
-    std::unique_ptr<cudf::table> tbl,
+    cudf::table_view tableView,
     std::vector<column_index_t> const& groupByKeys,
     rmm::cuda_stream_view stream) {
   auto result = cudf::distinct(
-      tbl->view().select(groupByKeys.begin(), groupByKeys.end()),
+      tableView.select(groupByKeys.begin(), groupByKeys.end()),
       {groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end()},
       cudf::duplicate_keep_option::KEEP_FIRST,
       cudf::null_equality::EQUAL,
@@ -761,6 +1093,11 @@ CudfVectorPtr CudfHashAggregation::getDistinctKeys(
       stream);
 
   auto numRows = result->num_rows();
+
+  // velox expects nullptr instead of a table with 0 rows
+  if (numRows == 0) {
+    return nullptr;
+  }
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, numRows, std::move(result), stream);
@@ -788,7 +1125,7 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
 RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  // Handle partial groupby.
+  // Handle partial groupby and distinct.
   if (isPartialOutput_ && !isGlobal_) {
     if (partialOutput_ &&
         partialOutput_->estimateFlatSize() >
@@ -817,12 +1154,13 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     return nullptr;
   }
 
-  if (inputs_.empty()) {
+  if (inputs_.empty() && !noMoreInput_) {
     return nullptr;
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, stream);
+
+  auto tbl = getConcatenatedTable(inputs_, inputType_, stream);
 
   // Release input data after synchronizing.
   stream.synchronize();
@@ -834,13 +1172,15 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
+  // Use tbl->view() instead of moving the table.
+  // tbl stays alive until the end of this function, keeping the view valid.
   if (isDistinct_) {
-    return getDistinctKeys(std::move(tbl), groupingKeyInputChannels_, stream);
+    return getDistinctKeys(tbl->view(), groupingKeyInputChannels_, stream);
   } else if (isGlobal_) {
-    return doGlobalAggregation(std::move(tbl), stream);
+    return doGlobalAggregation(tbl->view(), stream);
   } else {
     return doGroupByAggregation(
-        std::move(tbl), groupingKeyInputChannels_, aggregators_, stream);
+        tbl->view(), groupingKeyInputChannels_, aggregators_, stream);
   }
 }
 
@@ -853,6 +1193,550 @@ void CudfHashAggregation::noMoreInput() {
 
 bool CudfHashAggregation::isFinished() {
   return finished_;
+}
+
+// Step-aware aggregation registry implementation
+StepAwareAggregationRegistry& getStepAwareAggregationRegistry() {
+  static StepAwareAggregationRegistry registry;
+  return registry;
+}
+
+bool registerAggregationFunctionForStep(
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
+    bool overwrite) {
+  auto& registry = getStepAwareAggregationRegistry();
+
+  if (!overwrite && registry.find(name) != registry.end() &&
+      registry[name].find(step) != registry[name].end()) {
+    return false;
+  }
+
+  registry[name][step] = signatures;
+  return true;
+}
+
+// Register step-aware builtin aggregation functions
+bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
+  using exec::FunctionSignatureBuilder;
+
+  // Register sum function (split by aggregation step)
+  auto sumSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kSingle,
+      sumSingleSignatures);
+
+  auto sumPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kPartial,
+      sumPartialSignatures);
+
+  auto sumFinalIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kFinal,
+      sumFinalIntermediateSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "sum",
+      core::AggregationNode::Step::kIntermediate,
+      sumFinalIntermediateSignatures);
+
+  // Register count function (split by aggregation step)
+  auto countSinglePartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("varchar")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("boolean")
+          .build(),
+      FunctionSignatureBuilder().returnType("bigint").build()};
+
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kSingle,
+      countSinglePartialSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kPartial,
+      countSinglePartialSignatures);
+
+  auto countFinalIntermediateSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("bigint")
+                                                  .argumentType("bigint")
+                                                  .build()};
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kFinal,
+      countFinalIntermediateSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "count",
+      core::AggregationNode::Step::kIntermediate,
+      countFinalIntermediateSignatures);
+
+  // Register min function (same signatures for all steps)
+  auto minMaxSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("tinyint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("smallint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+
+  registerAggregationFunctionForStep(
+      prefix + "min", core::AggregationNode::Step::kSingle, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "min", core::AggregationNode::Step::kPartial, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "min", core::AggregationNode::Step::kFinal, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "min",
+      core::AggregationNode::Step::kIntermediate,
+      minMaxSignatures);
+
+  // Register max function (same signatures for all steps)
+  registerAggregationFunctionForStep(
+      prefix + "max", core::AggregationNode::Step::kSingle, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "max", core::AggregationNode::Step::kPartial, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "max", core::AggregationNode::Step::kFinal, minMaxSignatures);
+  registerAggregationFunctionForStep(
+      prefix + "max",
+      core::AggregationNode::Step::kIntermediate,
+      minMaxSignatures);
+
+  // Register avg function (different signatures for different steps)
+
+  // Single step: avg(input_type) -> double
+  auto avgSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("real")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kSingle,
+      avgSingleSignatures);
+
+  // Partial step: avg(input_type) -> row(sum input_type, count bigint)
+  auto avgPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("double")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kPartial,
+      avgPartialSignatures);
+
+  // Final step: avg(row(double, bigint)) -> double
+  auto avgFinalSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("row(double,bigint)")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg", core::AggregationNode::Step::kFinal, avgFinalSignatures);
+
+  // Intermediate step: avg(row(sum input_type, count bigint)) -> row(sum
+  // input_type, count bigint)
+  auto avgIntermediateSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("row(double,bigint)")
+          .argumentType("row(double,bigint)")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kIntermediate,
+      avgIntermediateSignatures);
+
+  // Register approx_distinct function
+  auto approxDistinctSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("tinyint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("smallint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("real")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("varchar")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("varbinary")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("date")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("timestamp")
+          .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kSingle,
+      approxDistinctSingleSignatures);
+
+  auto approxDistinctPartialSignatures =
+      std::vector<exec::FunctionSignaturePtr>{
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("tinyint")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("smallint")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("integer")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("bigint")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("real")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("double")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("varchar")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("varbinary")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("date")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("timestamp")
+              .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kPartial,
+      approxDistinctPartialSignatures);
+
+  auto approxDistinctIntermediateSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("varbinary")
+                                                  .argumentType("varbinary")
+                                                  .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kIntermediate,
+      approxDistinctIntermediateSignatures);
+
+  auto approxDistinctFinalSignatures =
+      std::vector<exec::FunctionSignaturePtr>{FunctionSignatureBuilder()
+                                                  .returnType("bigint")
+                                                  .argumentType("varbinary")
+                                                  .build()};
+  registerAggregationFunctionForStep(
+      prefix + "approx_distinct",
+      core::AggregationNode::Step::kFinal,
+      approxDistinctFinalSignatures);
+
+  return true;
+}
+
+bool matchTypedCallAgainstSignatures(
+    const core::CallTypedExpr& call,
+    const std::vector<exec::FunctionSignaturePtr>& sigs) {
+  const auto n = call.inputs().size();
+  std::vector<TypePtr> argTypes;
+  argTypes.reserve(n);
+  for (const auto& input : call.inputs()) {
+    argTypes.push_back(input->type());
+  }
+  for (const auto& sig : sigs) {
+    std::vector<Coercion> coercions(n);
+    exec::SignatureBinder binder(*sig, argTypes);
+    if (!binder.tryBindWithCoercions(coercions)) {
+      continue;
+    }
+
+    // For simplicity we skip checking for constant agruments, this may be added
+    // in the future
+
+    return true;
+  }
+  return false;
+}
+
+// Step-aware aggregation validation function
+bool canAggregationBeEvaluatedByCudf(
+    const core::CallTypedExpr& call,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputTypes,
+    core::QueryCtx* queryCtx) {
+  // Check against step-aware aggregation registry
+  auto& stepAwareRegistry = getStepAwareAggregationRegistry();
+  auto funcIt = stepAwareRegistry.find(call.name());
+  if (funcIt == stepAwareRegistry.end()) {
+    return false;
+  }
+
+  auto stepIt = funcIt->second.find(step);
+  if (stepIt == funcIt->second.end()) {
+    return false;
+  }
+
+  // Validate against step-specific signatures from registry
+  return matchTypedCallAgainstSignatures(call, stepIt->second);
+}
+
+bool canBeEvaluatedByCudf(
+    const core::AggregationNode& aggregationNode,
+    core::QueryCtx* queryCtx) {
+  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
+      ? nullptr
+      : aggregationNode.sources()[0].get();
+
+  // Get the aggregation step from the node
+  auto step = aggregationNode.step();
+
+  // Check supported aggregation functions using step-aware aggregation registry
+  for (const auto& aggregate : aggregationNode.aggregates()) {
+    // Use step-aware validation that handles partial/final/intermediate steps
+    if (!canAggregationBeEvaluatedByCudf(
+            *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {
+      return false;
+    }
+
+    // `distinct` aggregations are not supported, in testing fails with "De-dup
+    // before aggregation is not yet supported"
+    if (aggregate.distinct) {
+      return false;
+    }
+
+    // `mask` is NOT supported (in testing do not appear to be be applied and
+    // return incorrect results )
+    if (aggregate.mask) {
+      return false;
+    }
+
+    // Check input expressions can be evaluated by CUDF, expand the input first
+    for (const auto& input : aggregate.call->inputs()) {
+      auto expandedInput = expandFieldReference(input, sourceNode);
+      std::vector<core::TypedExprPtr> exprs = {expandedInput};
+      if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+        return false;
+      }
+    }
+  }
+
+  // Check grouping key expressions
+  if (!canGroupingKeysBeEvaluatedByCudf(
+          aggregationNode.groupingKeys(), sourceNode, queryCtx)) {
+    return false;
+  }
+
+  return true;
+}
+
+core::TypedExprPtr expandFieldReference(
+    const core::TypedExprPtr& expr,
+    const core::PlanNode* sourceNode) {
+  // If this is a field reference and we have a source projection, expand it
+  if (expr->kind() == core::ExprKind::kFieldAccess && sourceNode) {
+    auto projectNode = dynamic_cast<const core::ProjectNode*>(sourceNode);
+    if (projectNode) {
+      auto fieldExpr =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr);
+      if (fieldExpr) {
+        // Find the corresponding projection expression
+        const auto& projections = projectNode->projections();
+        const auto& names = projectNode->names();
+        for (size_t i = 0; i < names.size(); ++i) {
+          if (names[i] == fieldExpr->name()) {
+            return projections[i];
+          }
+        }
+      }
+    }
+  }
+  return expr;
+}
+
+bool canGroupingKeysBeEvaluatedByCudf(
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const core::PlanNode* sourceNode,
+    core::QueryCtx* queryCtx) {
+  // Check grouping key expressions (with expansion)
+  for (const auto& groupingKey : groupingKeys) {
+    auto expandedKey = expandFieldReference(groupingKey, sourceNode);
+    std::vector<core::TypedExprPtr> exprs = {expandedKey};
+    if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -52,6 +52,13 @@ using GetSpillDirectoryPathCB = std::function<std::string_view()>;
 /// bytes exceed the set limit.
 using UpdateAndCheckSpillLimitCB = std::function<void(uint64_t)>;
 
+/// Specifies the options for spill to disk.
+struct SpillDiskOptions {
+  std::string spillDirPath;
+  bool spillDirCreated{true};
+  std::function<std::string()> spillDirCreateCb{nullptr};
+};
+
 /// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig() = default;
@@ -71,8 +78,10 @@ struct SpillConfig {
       uint64_t _maxSpillRunRows,
       uint64_t _writerFlushThresholdSize,
       const std::string& _compressionKind,
+      uint32_t numMaxMergeFiles,
       std::optional<PrefixSortConfig> _prefixSortConfig = std::nullopt,
-      const std::string& _fileCreateConfig = {});
+      const std::string& _fileCreateConfig = {},
+      uint32_t _windowMinReadBatchRows = 1'000);
 
   /// Returns the spilling level with given 'startBitOffset' and
   /// 'numPartitionBits'.
@@ -151,11 +160,22 @@ struct SpillConfig {
   /// CompressionKind when spilling, CompressionKind_NONE means no compression.
   common::CompressionKind compressionKind;
 
+  /// The max number of files to merge at a time when merging sorted files into
+  /// a single ordered stream. 0 means unlimited. This is used to reduce memory
+  /// pressure by capping the number of open files when merging spilled sorted
+  /// files to avoid using too much memory and causing OOM. Note that this is
+  /// only applicable for ordered spill, is not applicable for spill scenarios
+  /// that don't need sorting, e.g. HashJoin.
+  uint32_t numMaxMergeFiles;
+
   /// Prefix sort config when spilling, enable prefix sort when this config is
   /// set, otherwise, fallback to timsort.
   std::optional<PrefixSortConfig> prefixSortConfig;
 
   /// Custom options passed to velox::FileSystem to create spill WriteFile.
   std::string fileCreateConfig;
+
+  /// The minimum number of rows to read when processing spilled window data.
+  uint32_t windowMinReadBatchRows;
 };
 } // namespace facebook::velox::common

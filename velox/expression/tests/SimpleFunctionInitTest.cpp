@@ -17,7 +17,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "velox/expression/Expr.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
@@ -99,8 +99,9 @@ TEST_F(SimpleFunctionInitTest, initializationArray) {
 
         auto rhsArrayVector = makeNullableArrayVector(
             std::vector<std::vector<std::optional<int32_t>>>{second});
-        args.push_back(std::make_shared<core::ConstantTypedExpr>(
-            BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
+        args.push_back(
+            std::make_shared<core::ConstantTypedExpr>(
+                BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
         exec::ExprSet expr(
             {std::make_shared<core::CallTypedExpr>(
                 ARRAY(INTEGER()), args, "non_default_behavior_with_init")},
@@ -181,8 +182,9 @@ TEST_F(SimpleFunctionInitTest, initializationMap) {
   std::vector<core::TypedExprPtr> args;
   args.push_back(std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"));
 
-  args.push_back(std::make_shared<core::ConstantTypedExpr>(
-      BaseVector::wrapInConstant(1, 0, mapVectorPtr)));
+  args.push_back(
+      std::make_shared<core::ConstantTypedExpr>(
+          BaseVector::wrapInConstant(1, 0, mapVectorPtr)));
   exec::ExprSet expr(
       {std::make_shared<core::CallTypedExpr>(
           BIGINT(), args, "non_default_behavior_with_map_init")},

@@ -71,7 +71,7 @@ class MapKeysFunction : public MapKeyValueFunction {
     VELOX_CHECK(
         arg->typeKind() == TypeKind::MAP,
         "Unsupported type for map_keys function {}",
-        mapTypeKindToName(arg->typeKind()));
+        TypeKindName::toName(arg->typeKind()));
 
     auto mapVector = arg->as<MapVector>();
     auto mapKeys = mapVector->mapKeys();
@@ -108,7 +108,7 @@ class MapValuesFunction : public MapKeyValueFunction {
     VELOX_CHECK(
         arg->typeKind() == TypeKind::MAP,
         "Unsupported type for map_values function {}",
-        mapTypeKindToName(arg->typeKind()));
+        TypeKindName::toName(arg->typeKind()));
 
     auto mapVector = arg->as<MapVector>();
     auto mapValues = mapVector->mapValues();

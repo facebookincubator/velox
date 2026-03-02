@@ -17,6 +17,7 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -31,11 +32,11 @@ class GetStructFieldTest : public SparkFunctionBaseTest {
       const VectorPtr& input,
       int ordinal,
       const VectorPtr& expected) {
-    std::vector<core::TypedExprPtr> inputs = {
-        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
-        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal))};
     auto expr = std::make_shared<const core::CallTypedExpr>(
-        expected->type(), std::move(inputs), "get_struct_field");
+        expected->type(),
+        "get_struct_field",
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
+        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal)));
 
     // Input is flat.
     auto result = evaluate(expr, makeRowVector({input}));

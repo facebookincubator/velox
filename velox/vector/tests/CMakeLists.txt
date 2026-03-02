@@ -33,34 +33,34 @@ add_executable(
   VectorPoolTest.cpp
   VectorPrepareForReuseTest.cpp
   VectorPrinterTest.cpp
+  VectorRetainedSizeTest.cpp
   VectorSaverTest.cpp
   VectorStreamTest.cpp
+  VectorStreamGroupTest.cpp
   VectorTest.cpp
   VectorTestUtils.cpp
-  VectorToStringTest.cpp)
+  VectorToStringTest.cpp
+)
 
 add_test(velox_vector_test velox_vector_test)
 
 target_link_libraries(
   velox_vector_test
+  velox_time
+  velox_vector_fuzzer
   velox_vector_test_lib
   velox_buffer
-  velox_vector
-  velox_vector_fuzzer
   velox_serialization
-  velox_memory
   velox_presto_serializer
   velox_presto_types
   velox_temp_path
-  velox_test_util
   velox_type_test_lib
-  velox_vector_fuzzer
+  velox_common_fuzzer_util
   Boost::atomic
   Boost::context
   Boost::date_time
   Boost::filesystem
   Boost::program_options
-  Boost::regex
   Boost::thread
   Boost::system
   GTest::gtest
@@ -69,7 +69,8 @@ target_link_libraries(
   Folly::folly
   glog::glog
   fmt::fmt
-  dl)
+  dl
+)
 
 add_executable(simple_vector_test SimpleVectorTest.cpp ToStringUtilityTest.cpp)
 
@@ -85,7 +86,8 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+)
 
 add_executable(bias_vector_test BiasVectorTest.cpp)
 
@@ -99,4 +101,5 @@ target_link_libraries(
   GTest::gtest_main
   Folly::folly
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+)

@@ -152,8 +152,8 @@ TEST_F(DynamicLinkTest, dynamicLoadErrFunc) {
       dynamicFunctionFail(0, 0),
       "Scalar function signature is not supported: dynamic_err(BIGINT). Supported signatures: (array(bigint)) -> bigint.");
 
-  auto check = makeRowVector(
-      {makeNullableArrayVector(std::vector<std::vector<std::optional<int64_t>>>{
+  auto check = makeRowVector({makeNullableArrayVector(
+      std::vector<std::vector<std::optional<int64_t>>>{
           {0, 1, 3, 4, 5, 6, 7, 8, 9}})});
 
   // Expecting a success because we are passing in an array.

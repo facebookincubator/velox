@@ -44,6 +44,7 @@ bing_tile_zoom_level
 bing_tiles_around
 binomial_cdf
 bit_count
+bit_length
 bitwise_and
 bitwise_arithmetic_shift_right
 bitwise_left_shift
@@ -86,6 +87,7 @@ day_of_month
 day_of_week
 day_of_year
 degrees
+dot_product
 dow
 doy
 e
@@ -130,6 +132,8 @@ geometry_nearest_points
 geometry_to_bing_tiles
 geometry_to_dissolved_bing_tiles
 geometry_union
+google_polyline_decode
+google_polyline_encode
 great_circle_distance
 greatest
 hamming_distance
@@ -173,6 +177,7 @@ json_format
 json_parse
 json_size
 key_sampling_percent
+l2_squared
 laplace_cdf
 last_day_of_month
 least
@@ -185,6 +190,7 @@ localtime
 localtimestamp
 log10
 log2
+longest_common_prefix
 lower
 lpad
 ltrim

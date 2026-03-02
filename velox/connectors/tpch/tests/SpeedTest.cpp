@@ -56,22 +56,16 @@ using std::chrono::system_clock;
 class TpchSpeedTest {
  public:
   TpchSpeedTest() {
-    connector::registerConnectorFactory(
-        std::make_shared<connector::tpch::TpchConnectorFactory>());
-    auto tpchConnector =
-        connector::getConnectorFactory(
-            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(
-                kTpchConnectorId_,
-                std::make_shared<config::ConfigBase>(
-                    std::unordered_map<std::string, std::string>()));
+    connector::tpch::TpchConnectorFactory factory;
+    auto tpchConnector = factory.newConnector(
+        kTpchConnectorId_,
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
     connector::registerConnector(tpchConnector);
   }
 
   ~TpchSpeedTest() {
     connector::unregisterConnector(kTpchConnectorId_);
-    connector::unregisterConnectorFactory(
-        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
   }
 
   void run(tpch::Table table, size_t scaleFactor, size_t numSplits) {
@@ -123,8 +117,9 @@ class TpchSpeedTest {
     for (size_t i = 0; i < numSplits; ++i) {
       task.addSplit(
           scanId,
-          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-              kTpchConnectorId_, /*cacheable=*/true, numSplits, i)));
+          exec::Split(
+              std::make_shared<connector::tpch::TpchConnectorSplit>(
+                  kTpchConnectorId_, /*cacheable=*/true, numSplits, i)));
     }
 
     task.noMoreSplits(scanId);

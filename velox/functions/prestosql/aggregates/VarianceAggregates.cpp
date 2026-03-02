@@ -16,7 +16,6 @@
 #include "velox/functions/prestosql/aggregates/VarianceAggregates.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/lib/aggregates/VarianceAggregatesBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -107,30 +106,32 @@ class VarSampAggregate : public VarianceAggregate<T, VarSampResultAccessor> {
 };
 
 template <template <typename TInput> class TClass>
-exec::AggregateRegistrationResult registerVariance(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerVariance(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(bigint,double,double)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(bigint,double,double)")
+            .argumentType(inputType)
+            .build());
   }
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         auto inputType = argTypes[0];
@@ -166,22 +167,34 @@ exec::AggregateRegistrationResult registerVariance(
 
 } // namespace
 
-void registerVarianceAggregates(
-    const std::string& prefix,
+void registerStdDevSampAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   registerVariance<StdDevSampAggregate>(
-      prefix + kStdDev, withCompanionFunctions, overwrite);
+      names, withCompanionFunctions, overwrite);
+}
+
+void registerStdDevPopAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
   registerVariance<StdDevPopAggregate>(
-      prefix + kStdDevPop, withCompanionFunctions, overwrite);
-  registerVariance<StdDevSampAggregate>(
-      prefix + kStdDevSamp, withCompanionFunctions, overwrite);
-  registerVariance<VarSampAggregate>(
-      prefix + kVariance, withCompanionFunctions, overwrite);
-  registerVariance<VarPopAggregate>(
-      prefix + kVarPop, withCompanionFunctions, overwrite);
-  registerVariance<VarSampAggregate>(
-      prefix + kVarSamp, withCompanionFunctions, overwrite);
+      names, withCompanionFunctions, overwrite);
+}
+
+void registerVarSampAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerVariance<VarSampAggregate>(names, withCompanionFunctions, overwrite);
+}
+
+void registerVarPopAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerVariance<VarPopAggregate>(names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

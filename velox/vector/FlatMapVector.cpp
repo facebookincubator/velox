@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/vector/FlatMapVector.h"
 #include <folly/hash/Hash.h>
-#include "velox/vector/FlatVector.h"
+
+#include "velox/vector/FlatMapVector.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
 namespace {
@@ -34,9 +35,9 @@ std::optional<column_index_t> getKeyChannelImpl(
     return std::nullopt;
   }
 
-  auto distinctFlatKeys = distinctKeys->as<FlatVector<T>>();
+  auto simpleKeys = distinctKeys->as<SimpleVector<T>>();
   VELOX_CHECK(
-      distinctFlatKeys != nullptr,
+      simpleKeys != nullptr,
       "Incompatible vector type for flat map vector keys: {}",
       distinctKeys->toString());
 
@@ -51,7 +52,7 @@ std::optional<column_index_t> getKeyChannelImpl(
   // Here there was at least one hash match. Need to compare to the keys vector
   // to ensure it's an actual match and not a hash collision.
   for (auto it = range.first; it != range.second; ++it) {
-    if (distinctFlatKeys->valueAtFast(it->second) == keyValue) {
+    if (simpleKeys->valueAt(it->second) == keyValue) {
       return it->second;
     }
   }
@@ -294,33 +295,78 @@ std::vector<vector_size_t> FlatMapVector::sortedKeyIndices(
   return indices;
 }
 
-// This function's logic is largely based on MapVector::compare().
-std::optional<int32_t> FlatMapVector::compare(
-    const BaseVector* other,
+std::optional<int32_t> FlatMapVector::compareToMap(
+    const MapVector* otherMap,
     vector_size_t index,
-    vector_size_t otherIndex,
+    vector_size_t wrappedOtherIndex,
     CompareFlags flags) const {
-  VELOX_CHECK(
-      flags.nullAsValue() || flags.equalsOnly, "Map is not orderable type");
-
-  // If maps are null.
-  bool isNull = isNullAt(index);
-  bool otherNull = other->isNullAt(otherIndex);
-  if (isNull || otherNull) {
-    return BaseVector::compareNulls(isNull, otherNull, flags);
+  if (keyType()->kind() != otherMap->mapKeys()->typeKind() ||
+      valueType()->kind() != otherMap->mapValues()->typeKind()) {
+    VELOX_FAIL(
+        "Compare of maps of different key/value types: {} and {}",
+        BaseVector::toString(),
+        otherMap->BaseVector::toString());
   }
 
-  // Validate we have compatible map types for comparison.
-  auto otherValue = other->wrappedVector();
-  auto wrappedOtherIndex = other->wrappedIndex(otherIndex);
-  VELOX_CHECK_EQ(
-      VectorEncoding::Simple::FLAT_MAP,
-      otherValue->encoding(),
-      "Compare of FLAT_MAP and non-FLAT_MAP: {} and {}",
-      BaseVector::toString(),
-      otherValue->BaseVector::toString());
-  auto otherFlatMap = otherValue->as<FlatMapVector>();
+  // We first get sorted key indices for both maps.
+  auto leftIndices = sortedKeyIndices(index);
+  auto rightIndices = otherMap->sortedKeyIndices(wrappedOtherIndex);
 
+  // If equalsOnly and maps have different sizes, we can bail fast.
+  if (flags.equalsOnly && leftIndices.size() != rightIndices.size()) {
+    int result = leftIndices.size() - rightIndices.size();
+    return flags.ascending ? result : result * -1;
+  }
+
+  // Compare each key value pair, using the sorted key order.
+  auto compareSize = std::min(leftIndices.size(), rightIndices.size());
+  bool resultIsIndeterminate = false;
+
+  for (auto i = 0; i < compareSize; ++i) {
+    // First compare the keys.
+    auto result = distinctKeys_->compare(
+        otherMap->mapKeys().get(), leftIndices[i], rightIndices[i], flags);
+
+    // Key mismatch; comparison can stop.
+    if (result == kIndeterminate) {
+      VELOX_DCHECK(
+          flags.equalsOnly,
+          "Compare should have thrown when null is encountered in child.");
+      resultIsIndeterminate = true;
+    } else if (result.value() != 0) {
+      return result;
+    }
+    // If keys are same, compare values.
+    else {
+      auto valueResult = mapValues_[leftIndices[i]]->compare(
+          otherMap->mapValues().get(), index, rightIndices[i], flags);
+
+      // If value mismatch, comparison can also stop.
+      if (valueResult == kIndeterminate) {
+        VELOX_DCHECK(
+            flags.equalsOnly,
+            "Compare should have thrown when null is encountered in child.");
+        resultIsIndeterminate = true;
+      } else if (valueResult.value() != 0) {
+        return valueResult;
+      }
+    }
+  }
+
+  if (resultIsIndeterminate) {
+    return kIndeterminate;
+  }
+
+  // If one map was smaller than the other.
+  int result = leftIndices.size() - rightIndices.size();
+  return flags.ascending ? result : result * -1;
+}
+
+std::optional<int32_t> FlatMapVector::compareToFlatMap(
+    const FlatMapVector* otherFlatMap,
+    vector_size_t index,
+    vector_size_t wrappedOtherIndex,
+    CompareFlags flags) const {
   if (keyType()->kind() != otherFlatMap->keyType()->kind() ||
       valueType()->kind() != otherFlatMap->valueType()->kind()) {
     VELOX_FAIL(
@@ -387,6 +433,174 @@ std::optional<int32_t> FlatMapVector::compare(
   // If one map was smaller than the other.
   int result = leftIndices.size() - rightIndices.size();
   return flags.ascending ? result : result * -1;
+}
+
+// This function's logic is largely based on MapVector::compare().
+std::optional<int32_t> FlatMapVector::compare(
+    const BaseVector* other,
+    vector_size_t index,
+    vector_size_t otherIndex,
+    CompareFlags flags) const {
+  VELOX_CHECK(
+      flags.nullAsValue() || flags.equalsOnly, "Map is not orderable type");
+
+  // If maps are null.
+  bool isNull = isNullAt(index);
+  bool otherNull = other->isNullAt(otherIndex);
+  if (isNull || otherNull) {
+    return BaseVector::compareNulls(isNull, otherNull, flags);
+  }
+
+  // Validate we have compatible map types for comparison.
+  auto otherValue = other->wrappedVector();
+  auto wrappedOtherIndex = other->wrappedIndex(otherIndex);
+
+  if (otherValue->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+    return compareToFlatMap(
+        otherValue->as<FlatMapVector>(), index, wrappedOtherIndex, flags);
+  } else if (otherValue->encoding() == VectorEncoding::Simple::MAP) {
+    return compareToMap(
+        otherValue->as<MapVector>(), index, wrappedOtherIndex, flags);
+  } else {
+    VELOX_FAIL(
+        "Compare of FLAT_MAP and non-MAP: {} and {}",
+        BaseVector::toString(),
+        otherValue->BaseVector::toString());
+  }
+}
+
+void FlatMapVector::copyInMapRanges(
+    column_index_t targetChannel,
+    const uint64_t* sourceInMaps,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  auto* targetInMaps = mutableRawInMapsAt(targetChannel);
+
+  // This means that the key being copied exists in all maps from both source
+  // and target; nothing to update.
+  if (sourceInMaps == nullptr && targetInMaps == nullptr) {
+    return;
+  }
+
+  // If there is something we need to copy, allocate the target in map buffer in
+  // case there isn't one.
+  if (targetInMaps == nullptr) {
+    inMapsAt(targetChannel, true) =
+        AlignedBuffer::allocate<bool>(size(), pool(), false);
+    targetInMaps = mutableRawInMapsAt(targetChannel);
+  }
+
+  // If there is source in map, we need to copy the buffer range regions from
+  // it.
+  if (sourceInMaps != nullptr) {
+    applyToEachRange(
+        ranges,
+        [targetInMaps, sourceInMaps](
+            auto targetIndex, auto sourceIndex, auto count) {
+          bits::copyBits(
+              sourceInMaps, sourceIndex, targetInMaps, targetIndex, count);
+        });
+  }
+  // If the buffer doesn't exist, it means the key is available on every row. In
+  // such case we just need to set the right ranges.
+  else {
+    applyToEachRange(
+        ranges,
+        [targetInMaps](auto targetIndex, auto /* sourceIndex */, auto count) {
+          bits::fillBits(targetInMaps, targetIndex, targetIndex + count, true);
+        });
+  }
+}
+
+void FlatMapVector::copyRanges(
+    const BaseVector* source,
+    const folly::Range<const CopyRange*>& ranges) {
+  if (ranges.empty()) {
+    return;
+  }
+
+  auto* sourceFlatMap = source->loadedVector()->as<FlatMapVector>();
+  if (sourceFlatMap == nullptr) {
+    VELOX_NYI(
+        "FlatMapVector::copyRanges expects a FlatMapVector, got {}.",
+        source->toString());
+  }
+
+  // If source may have nulls, copy top-level nulls from the ranges first.
+  if (sourceFlatMap->mayHaveNulls()) {
+    copyNulls(mutableRawNulls(), sourceFlatMap->rawNulls(), ranges);
+  }
+
+  auto startingNumDistinctKeys = numDistinctKeys();
+
+  // First, for each distinct key in the source vector, we look for a key match
+  // on the target. If there is not, we create a new distinct key, then copy the
+  // map values and update the in map buffers.
+  for (column_index_t i = 0; i < sourceFlatMap->distinctKeys_->size(); ++i) {
+    const auto channel = getKeyChannel(sourceFlatMap->distinctKeys_, i)
+                             .value_or(distinctKeys_->size());
+
+    if (channel == distinctKeys_->size()) {
+      // First append the new key to the distinct keys internal vector.
+      appendDistinctKey(sourceFlatMap->distinctKeys_, i);
+
+      // Then we allocate a new key values vector and in map buffer.
+      inMapsAt(channel, true) =
+          AlignedBuffer::allocate<bool>(size(), pool(), false);
+      mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+    }
+
+    // Finally, copy the map values and update the in map buffers.
+    mapValues_[channel]->copyRanges(sourceFlatMap->mapValues_[i].get(), ranges);
+    copyInMapRanges(channel, sourceFlatMap->rawInMapsAt(i), ranges);
+  }
+
+  // Keys that exist in the target but not in the source may need to be updated
+  // (since they could have got overwritten/erased).
+  for (column_index_t i = 0; i < startingNumDistinctKeys; ++i) {
+    // If a key doesn't exist in the source, we need to go and clean its in map
+    // buffer entries for all rows in range.
+    if (sourceFlatMap->getKeyChannel(distinctKeys_, i) == std::nullopt) {
+      auto& targetInMapsBuffer = inMapsAt(i, true);
+      if (targetInMapsBuffer == nullptr) {
+        targetInMapsBuffer =
+            AlignedBuffer::allocate<bool>(size(), pool(), false);
+      }
+      auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
+
+      applyToEachRange(
+          ranges,
+          [targetInMaps](auto targetIndex, auto /* sourceIndex */, auto count) {
+            bits::fillBits(
+                targetInMaps, targetIndex, targetIndex + count, false);
+          });
+    }
+  }
+}
+
+void FlatMapVector::ensureWritable(const SelectivityVector& rows) {
+  // Top-level and mapValues row ids are the same, so we can just propagate the
+  // selectivity vector.
+  for (size_t i = 0; i < numDistinctKeys(); ++i) {
+    BaseVector::ensureWritable(
+        rows, valueType(), BaseVector::pool_, mapValues_[i]);
+  }
+
+  for (auto& inMap : inMaps_) {
+    // Similar to top-level nulls, if the buffer is not mutable, copy on write
+    // it over.
+    if (inMap && !inMap->isMutable()) {
+      BufferPtr newInMap = AlignedBuffer::allocate<bool>(size(), pool_);
+      auto rawNewInMap = newInMap->asMutable<uint64_t>();
+      memcpy(rawNewInMap, inMap->as<uint64_t>(), bits::nbytes(size()));
+      inMap = std::move(newInMap);
+    }
+  }
+
+  // Distinct keys may be associated with all rows, hence all values already
+  // written must be preserved.
+  BaseVector::ensureWritable(
+      SelectivityVector::empty(), keyType(), BaseVector::pool_, distinctKeys_);
+  BaseVector::ensureWritable(rows);
 }
 
 // This function will copy map value elements from the individual mapValues_

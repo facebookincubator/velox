@@ -55,3 +55,37 @@ TEST(FileHandleTest, hiveColumnHandle) {
           {"c0.c0c1[3][\"foo\"].c0c1c0"}),
       "data type ROW<c0c0:BIGINT,c0c1:ARRAY<MAP<VARCHAR,ROW<c0c1c0:BIGINT,c0c1c1:BIGINT>>>> and hive type ROW<c0c0:BIGINT,c0c1:BIGINT> do not match");
 }
+
+TEST(TableHandleTest, hiveTableHandleIndexSupport) {
+  // Test HiveTableHandle without index columns.
+  auto tableHandleWithoutIndex =
+      std::make_shared<connector::hive::HiveTableHandle>(
+          "test-connector",
+          "test_table",
+          /*filterPushdownEnabled=*/true,
+          common::SubfieldFilters{},
+          /*remainingFilter=*/nullptr,
+          /*dataColumns=*/nullptr,
+          /*indexColumns=*/std::vector<std::string>{});
+
+  ASSERT_FALSE(tableHandleWithoutIndex->supportsIndexLookup());
+  ASSERT_TRUE(tableHandleWithoutIndex->needsIndexSplit());
+  ASSERT_TRUE(tableHandleWithoutIndex->indexColumns().empty());
+
+  // Test HiveTableHandle with index columns.
+  auto tableHandleWithIndex =
+      std::make_shared<connector::hive::HiveTableHandle>(
+          "test-connector",
+          "test_table",
+          /*filterPushdownEnabled=*/true,
+          common::SubfieldFilters{},
+          /*remainingFilter=*/nullptr,
+          /*dataColumns=*/nullptr,
+          /*indexColumns=*/std::vector<std::string>{"col1", "col2"});
+
+  ASSERT_TRUE(tableHandleWithIndex->supportsIndexLookup());
+  ASSERT_TRUE(tableHandleWithIndex->needsIndexSplit());
+  ASSERT_EQ(tableHandleWithIndex->indexColumns().size(), 2);
+  ASSERT_EQ(tableHandleWithIndex->indexColumns()[0], "col1");
+  ASSERT_EQ(tableHandleWithIndex->indexColumns()[1], "col2");
+}

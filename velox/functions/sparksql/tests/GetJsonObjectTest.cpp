@@ -15,7 +15,6 @@
  */
 #include <stdint.h>
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -48,6 +47,9 @@ TEST_F(GetJsonObjectTest, basic) {
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$"),
       R"({"name": "Alice", "age": 5, "id": "001"})");
   EXPECT_EQ(
+      getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$  "),
+      R"({"name": "Alice", "age": 5, "id": "001"})");
+  EXPECT_EQ(
       getJsonObject(R"({"name": "Alice", "age": 5, "id": "001"})", "$.age"),
       "5");
   EXPECT_EQ(
@@ -64,6 +66,31 @@ TEST_F(GetJsonObjectTest, basic) {
           "$[0].my.info.age"),
       "5");
 
+  // Json object with space in key.
+  EXPECT_EQ(getJsonObject(R"({"a b": "1"})", "$.a b"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$. a"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a b": "1"})", "$. a b"), "1");
+  EXPECT_EQ(getJsonObject(R"({"two spaces": "1"})", "$.  two spaces"), "1");
+  EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$.a "), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a ": "1"})", "$.a "), "1");
+  EXPECT_EQ(getJsonObject(R"({"a b": "1"})", "$.a b "), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$['a b']"), "1");
+  EXPECT_EQ(getJsonObject(R"({ "a b ": "1" })", "$['a b ']"), "1");
+  EXPECT_EQ(getJsonObject(R"({ " a b": "1" })", "$[' a b']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$[ 'a b']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$['a b' ]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a": {"a b": 1}})", "$.a['a b']"), "1");
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {" a b": 1}})", "$.a[' a b']"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"two spaces": "1"})", "$.  two spaces "), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$ .a"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"my": {"hello": true}})", "$.  my.  hello"), "true");
+  EXPECT_EQ(
+      getJsonObject(R"({"my": {"hello": true}})", "$.my.  hello"), "true");
+  EXPECT_EQ(getJsonObject(R"({"a$ ": {"b": 10}})", "$.a$ .b"), "10");
+  EXPECT_EQ(getJsonObject(R"({"a$. b": {"c": 10}})", "$.a$. b"), std::nullopt);
   // Json object as result.
   EXPECT_EQ(
       getJsonObject(
@@ -93,6 +120,18 @@ TEST_F(GetJsonObjectTest, basic) {
           R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other[1]"),
       "v2");
+
+  // Valid escape sequences: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX.
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\"b"})", "$.hello"), R"(a"b)");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\\b"})", "$.hello"), R"(a\b)");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\/b"})", "$.hello"), "a/b");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\bb"})", "$.hello"), "a\bb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\fb"})", "$.hello"), "a\fb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\nb"})", "$.hello"), "a\nb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\rb"})", "$.hello"), "a\rb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\tb"})", "$.hello"), "a\tb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u0041"})", "$.hello"), "A");
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u000A"})", "$.hello"), "\n");
 }
 
 TEST_F(GetJsonObjectTest, nullResult) {
@@ -117,6 +156,17 @@ TEST_F(GetJsonObjectTest, nullResult) {
           R"([{"my": {"info": {"name": "Alice"quoted""}}}, {"other": ["v1", "v2"]}])",
           "$[0].my.info.name"),
       std::nullopt);
+
+  // Invalid escape sequence.
+  EXPECT_EQ(getJsonObject(R"({"hello": "\x"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"hello": "test", "invalid": "\@"})", "$.hello"),
+      std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\๑"})", "$.hello"), std::nullopt);
+  // Invalid unicode escape sequences.
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u123"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\uGHIJ"})", "$.hello"), std::nullopt);
 }
 
 TEST_F(GetJsonObjectTest, incompleteJson) {
@@ -130,6 +180,9 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
       "3.5");
   EXPECT_EQ(
       getJsonObject(R"({"hello": "3.5","taskSort":"2",,,,,,})", "$.hello"),
+      "3.5");
+  EXPECT_EQ(
+      getJsonObject(R"({"hello": 3.5,"taskSort":"2",,,,,,})", "$.hello"),
       "3.5");
   EXPECT_EQ(
       getJsonObject(R"({"hello": "boy","taskSort":"2"},,,,,)", "$.hello"),
@@ -146,6 +199,40 @@ TEST_F(GetJsonObjectTest, incompleteJson) {
           R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}},)",
           "$['my']['info']"),
       R"({"name": "Alice", "age": "5", "id": "001"})");
+}
+
+TEST_F(GetJsonObjectTest, number) {
+  EXPECT_EQ(getJsonObject(R"({"f": +INF})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": -INF})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": NaN})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": Infinity})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": +21.00})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": +0.00})", "$.f"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"f": -0.00})", "$.f"), "-0.0");
+  EXPECT_EQ(getJsonObject(R"({"f": 0.00})", "$.f"), "0.0");
+  EXPECT_EQ(getJsonObject(R"({"f": -21.00})", "$.f"), "-21.0");
+  EXPECT_EQ(getJsonObject(R"({"f": -21.010})", "$.f"), "-21.01");
+  EXPECT_EQ(getJsonObject(R"({"f": 21e3})", "$.f"), "21000.0");
+  EXPECT_EQ(getJsonObject(R"({"f": -21E-3})", "$.f"), "-0.021");
+  EXPECT_EQ(getJsonObject(R"({"i": +0})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": -00})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": 00})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": 001})", "$.i"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"i": -0})", "$.i"), "0");
+  EXPECT_EQ(getJsonObject(R"({"i": 0})", "$.i"), "0");
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"big": 98765432109876543210987654321098765432 })", "$.big"),
+      "98765432109876543210987654321098765432");
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"big":  -98765432109876543210987654321098765432})", "$.big"),
+      "-98765432109876543210987654321098765432");
+  EXPECT_EQ(
+      getJsonObject(
+          R"({"nested": {"num": -1234567890123456789012345678901234567890 }})",
+          "$.nested.num"),
+      "-1234567890123456789012345678901234567890");
 }
 
 } // namespace

@@ -70,8 +70,9 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
 };
 
 template <template <typename U> class T>
-exec::AggregateRegistrationResult registerBitwise(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerBitwise(
+    const std::vector<std::string>& names,
+    bool ignoreDuplicates,
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
@@ -81,21 +82,23 @@ exec::AggregateRegistrationResult registerBitwise(
     typeList = {"bigint"};
   }
   for (const auto& inputType : typeList) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType(inputType)
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(inputType)
+            .intermediateType(inputType)
+            .argumentType(inputType)
+            .build());
   }
 
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_LE(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
@@ -114,7 +117,7 @@ exec::AggregateRegistrationResult registerBitwise(
                 inputType->kindName());
         }
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.ignoreDuplicates = ignoreDuplicates, .orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

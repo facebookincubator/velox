@@ -15,13 +15,14 @@
  */
 
 #include "velox/dwio/text/writer/TextWriter.h"
+#include "velox/common/encode/Base64.h"
 
 #include <utility>
-#include "velox/common/base/Pointers.h"
-#include "velox/common/encode/Base64.h"
-#include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::text {
+
+using dwio::common::SerDeOptions;
+
 template <typename T>
 std::optional<std::string> toTextStr(T val) {
   return std::optional(std::to_string(val));
@@ -57,6 +58,7 @@ std::optional<std::string> toTextStr<double>(double val) {
 template <>
 std::optional<std::string> toTextStr<Timestamp>(Timestamp val) {
   TimestampToStringOptions options;
+  val.toTimezone(Timestamp::defaultTimezone());
   options.dateTimeSeparator = ' ';
   options.precision = TimestampPrecision::kMilliseconds;
   return {val.toString(options)};
@@ -65,24 +67,83 @@ std::optional<std::string> toTextStr<Timestamp>(Timestamp val) {
 TextWriter::TextWriter(
     RowTypePtr schema,
     std::unique_ptr<dwio::common::FileSink> sink,
-    const std::shared_ptr<text::WriterOptions>& options)
+    const std::shared_ptr<text::WriterOptions>& options,
+    const SerDeOptions& serDeOptions)
     : schema_(std::move(schema)),
-      bufferedWriterSink_(std::make_unique<BufferedWriterSink>(
-          std::move(sink),
-          options->memoryPool->addLeafChild(fmt::format(
-              "{}.text_writer_node.{}",
-              options->memoryPool->name(),
-              folly::to<std::string>(folly::Random::rand64()))),
-          options->defaultFlushCount)) {}
+      bufferedWriterSink_(
+          std::make_unique<BufferedWriterSink>(
+              std::move(sink),
+              options->memoryPool->addLeafChild(
+                  fmt::format(
+                      "{}.text_writer_node.{}",
+                      options->memoryPool->name(),
+                      folly::to<std::string>(folly::Random::rand64()))),
+              options->defaultFlushCount)),
+      headerLineCount_(options->headerLineCount),
+      serDeOptions_(serDeOptions) {
+  VELOX_CHECK_LE(headerLineCount_, 1, "Header line count must be <= 1");
+}
+
+uint8_t TextWriter::getDelimiterForDepth(uint8_t depth) const {
+  VELOX_CHECK_LT(
+      depth,
+      serDeOptions_.separators.size(),
+      "Depth {} exceeds maximum supported depth",
+      depth);
+  return serDeOptions_.separators[depth];
+}
+
+// Adds escape characters before separator/delimiting characters in the input
+// string.
+std::string TextWriter::addEscapeChar(std::string&& data, uint8_t depth) {
+  if (!serDeOptions_.isEscaped) {
+    return std::move(data);
+  }
+
+  std::string escapedData;
+  escapedData.reserve(data.length() * 2);
+
+  for (size_t i = 0; i < data.length(); ++i) {
+    // Break out of the loop earlier if we count down.
+    for (int j = depth - 1; j >= 0; --j) {
+      if (data[i] == serDeOptions_.separators[j]) {
+        escapedData += static_cast<char>(serDeOptions_.escapeChar);
+        break;
+      }
+    }
+    escapedData += data[i];
+  }
+
+  return escapedData;
+}
 
 void TextWriter::write(const VectorPtr& data) {
   VELOX_CHECK_EQ(
       data->encoding(),
       VectorEncoding::Simple::ROW,
       "Text writer expects row vector input");
+
   VELOX_CHECK(
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input row vector type.");
+
+  // write 1 row of header
+  if (headerLineCount_ == 1) {
+    const auto numCols = schema_->size();
+    for (column_index_t col = 0; col < numCols; ++col) {
+      if (col != 0) {
+        bufferedWriterSink_->write((char)serDeOptions_.separators[0]);
+      }
+
+      std::string escapedcolName =
+          addEscapeChar(std::string(schema_->nameOf(col)), 0);
+      bufferedWriterSink_->write(
+          escapedcolName.data(), escapedcolName.length());
+    }
+
+    bufferedWriterSink_->write((char)serDeOptions_.newLine);
+  }
+
   const RowVector* dataRowVector = data->as<RowVector>();
 
   std::vector<std::shared_ptr<DecodedVector>> decodedColumnVectors;
@@ -94,15 +155,19 @@ void TextWriter::write(const VectorPtr& data) {
     decodedColumnVectors.push_back(std::move(decodedColumnVector));
   }
 
+  std::optional<uint8_t> delimiter;
   for (vector_size_t row = 0; row < data->size(); ++row) {
     for (size_t column = 0; column < numColumns; ++column) {
-      if (column != 0) {
-        bufferedWriterSink_->write(TextFileTraits::kSOH);
-      }
+      delimiter = (column == 0) ? std::nullopt
+                                : std::optional(serDeOptions_.separators[0]);
       writeCellValue(
-          decodedColumnVectors.at(column), schema_->childAt(column), row);
+          decodedColumnVectors.at(column),
+          schema_->childAt(column)->kind(),
+          row,
+          0,
+          delimiter);
     }
-    bufferedWriterSink_->write(TextFileTraits::kNewLine);
+    bufferedWriterSink_->write((char)serDeOptions_.newLine);
   }
 }
 
@@ -120,73 +185,186 @@ void TextWriter::abort() {
 
 void TextWriter::writeCellValue(
     const std::shared_ptr<DecodedVector>& decodedColumnVector,
-    const TypePtr& type,
-    vector_size_t row) {
-  std::optional<std::string> dataStr;
-  std::optional<StringView> dataSV;
+    const TypeKind type,
+    vector_size_t row,
+    uint8_t depth,
+    std::optional<uint8_t> delimiter) {
+  if (delimiter.has_value()) {
+    bufferedWriterSink_->write((char)delimiter.value());
+  }
 
   if (decodedColumnVector->isNullAt(row)) {
+    std::string escapedNullString =
+        addEscapeChar(std::string(serDeOptions_.nullString), depth);
     bufferedWriterSink_->write(
-        TextFileTraits::kNullData.data(), TextFileTraits::kNullData.length());
+        escapedNullString.data(), escapedNullString.length());
     return;
   }
-  switch (type->kind()) {
-    case TypeKind::BOOLEAN:
+
+  ++depth;
+
+  /// TODO: Increase supported depth in future
+  VELOX_CHECK_LE(depth, 4, "Depth {} exceeds maximum supported depth", 4);
+
+  std::optional<std::string> dataStr = std::nullopt;
+  std::optional<StringView> dataSV = std::nullopt;
+
+  switch (type) {
+    case TypeKind::BOOLEAN: {
       dataStr =
           toTextStr(folly::to<bool>(decodedColumnVector->valueAt<bool>(row)));
       break;
-    case TypeKind::TINYINT:
+    }
+    case TypeKind::TINYINT: {
       dataStr = toTextStr(decodedColumnVector->valueAt<int8_t>(row));
       break;
-    case TypeKind::SMALLINT:
+    }
+    case TypeKind::SMALLINT: {
       dataStr = toTextStr(decodedColumnVector->valueAt<int16_t>(row));
       break;
-    case TypeKind::INTEGER:
+    }
+    case TypeKind::INTEGER: {
       dataStr = toTextStr(decodedColumnVector->valueAt<int32_t>(row));
       break;
-    case TypeKind::BIGINT:
+    }
+    case TypeKind::BIGINT: {
       dataStr = toTextStr(decodedColumnVector->valueAt<int64_t>(row));
       break;
-    case TypeKind::REAL:
+    }
+    case TypeKind::REAL: {
       dataStr = toTextStr(decodedColumnVector->valueAt<float>(row));
       break;
-    case TypeKind::DOUBLE:
+    }
+    case TypeKind::DOUBLE: {
       dataStr = toTextStr(decodedColumnVector->valueAt<double>(row));
       break;
-    case TypeKind::TIMESTAMP:
+    }
+    case TypeKind::TIMESTAMP: {
       dataStr = toTextStr(decodedColumnVector->valueAt<Timestamp>(row));
       break;
-    case TypeKind::VARCHAR:
+    }
+    case TypeKind::VARCHAR: {
       dataSV = std::optional(decodedColumnVector->valueAt<StringView>(row));
       break;
+    }
     case TypeKind::VARBINARY: {
       auto data = decodedColumnVector->valueAt<StringView>(row);
       dataStr =
           std::optional(encoding::Base64::encode(data.data(), data.size()));
       break;
     }
-    // TODO Add support for complex types
-    case TypeKind::ARRAY:
-      [[fallthrough]];
-    case TypeKind::MAP:
-      [[fallthrough]];
-    case TypeKind::ROW:
-      [[fallthrough]];
+    case TypeKind::ARRAY: {
+      // ARRAY vector members
+      const auto& arrVecPtr = decodedColumnVector->base()->as<ArrayVector>();
+      const auto& indices = decodedColumnVector->indices();
+      const auto& size = arrVecPtr->sizeAt(indices[row]);
+      const auto& offset = arrVecPtr->offsetAt(indices[row]);
+
+      auto slice = arrVecPtr->elements()->slice(offset, size);
+      auto decodedElement =
+          std::make_shared<DecodedVector>(DecodedVector(*slice));
+      for (int i = 0; i < size; ++i) {
+        delimiter = (i == 0) ? std::nullopt
+                             : std::optional(getDelimiterForDepth(depth));
+        writeCellValue(
+            decodedElement,
+            arrVecPtr->elements().get()->typeKind(),
+            i,
+            depth,
+            delimiter);
+      }
+      return;
+    }
+    case TypeKind::MAP: {
+      // MAP vector members
+      const auto& mapVecPtr = decodedColumnVector->base()->as<MapVector>();
+      const auto& indices = decodedColumnVector->indices();
+      const auto& size = mapVecPtr->sizeAt(indices[row]);
+      const auto& offset = mapVecPtr->offsetAt(indices[row]);
+
+      auto keySlice = mapVecPtr->mapKeys()->slice(offset, size);
+      auto decodedKeys =
+          std::make_shared<DecodedVector>(DecodedVector(*keySlice));
+
+      auto valSlice = mapVecPtr->mapValues()->slice(offset, size);
+      auto decodedValues =
+          std::make_shared<DecodedVector>(DecodedVector(*valSlice));
+
+      for (int i = 0; i < size; ++i) {
+        delimiter = (i == 0) ? std::nullopt
+                             : std::optional(getDelimiterForDepth(depth));
+        writeCellValue(
+            decodedKeys,
+            mapVecPtr->mapKeys().get()->typeKind(),
+            i,
+            depth,
+            delimiter);
+
+        delimiter = std::optional(getDelimiterForDepth(depth + 1));
+        writeCellValue(
+            decodedValues,
+            mapVecPtr->mapValues().get()->typeKind(),
+            i,
+            depth,
+            delimiter);
+      }
+
+      return;
+    }
+    case TypeKind::ROW: {
+      const RowVector* rowVecPtr = decodedColumnVector->base()->as<RowVector>();
+      const auto& indices = decodedColumnVector->indices();
+      const auto actualRowIndex = indices[row];
+
+      std::vector<std::shared_ptr<DecodedVector>> decodedColumnVectors;
+      const auto numColumns = rowVecPtr->childrenSize();
+      for (size_t column = 0; column < numColumns; ++column) {
+        auto decodedColumnVector =
+            std::make_shared<DecodedVector>(DecodedVector(
+                *rowVecPtr->childAt(column),
+                SelectivityVector(rowVecPtr->size())));
+        decodedColumnVectors.push_back(std::move(decodedColumnVector));
+      }
+
+      std::optional<char> nestedRowDelimiter;
+      for (size_t column = 0; column < numColumns; ++column) {
+        nestedRowDelimiter = (column == 0)
+            ? std::nullopt
+            : std::optional(getDelimiterForDepth(depth));
+        writeCellValue(
+            decodedColumnVectors.at(column),
+            rowVecPtr->childAt(column)->typeKind(),
+            actualRowIndex,
+            depth,
+            nestedRowDelimiter);
+      }
+      return;
+    }
     case TypeKind::UNKNOWN:
       [[fallthrough]];
+    case TypeKind::FUNCTION:
+      [[fallthrough]];
+    case TypeKind::OPAQUE:
+      [[fallthrough]];
+    case TypeKind::INVALID:
+      [[fallthrough]];
     default:
-      VELOX_NYI("{} is not supported yet in TextWriter", type->kind());
+      VELOX_NYI(
+          "Text writer does not support type {}", TypeKindName::toName(type));
   }
 
-  if (dataStr.has_value()) {
-    VELOX_CHECK(!dataSV.has_value());
-    bufferedWriterSink_->write(
-        dataStr.value().data(), dataStr.value().length());
-    return;
-  }
+  VELOX_CHECK(
+      dataStr.has_value() ^ dataSV.has_value(),
+      "Exactly one of dataStr or dataSV must be set. Currently dataStr is {} and dataSV is {}",
+      dataStr.has_value(),
+      dataSV.has_value());
 
-  VELOX_CHECK(dataSV.has_value());
-  bufferedWriterSink_->write(dataSV.value().data(), dataSV.value().size());
+  std::string data = dataStr.has_value()
+      ? dataStr.value()
+      : std::string(dataSV.value().data(), dataSV.value().size());
+
+  std::string escapedData = addEscapeChar(std::move(data), depth);
+  bufferedWriterSink_->write(escapedData.data(), escapedData.length());
 }
 
 std::unique_ptr<dwio::common::Writer> TextWriterFactory::createWriter(

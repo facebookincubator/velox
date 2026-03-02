@@ -18,6 +18,7 @@
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
+#include "velox/exec/EnforceDistinct.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/Expand.h"
@@ -31,15 +32,20 @@
 #include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/MixedUnion.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OperatorTraceScan.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/ParallelProject.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/RowNumber.h"
 #include "velox/exec/ScaleWriterLocalPartition.h"
+#include "velox/exec/SpatialJoinBuild.h"
+#include "velox/exec/SpatialJoinProbe.h"
 #include "velox/exec/StreamingAggregation.h"
+#include "velox/exec/StreamingEnforceDistinct.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TableWriteMerge.h"
 #include "velox/exec/TableWriter.h"
@@ -78,6 +84,11 @@ bool mustStartNewPipeline(
   if (auto localMerge =
           std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
     // LocalMerge's source runs on its own pipeline.
+    return true;
+  }
+
+  if (std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+    // MixedUnion's sources run on their own pipelines.
     return true;
   }
 
@@ -121,7 +132,32 @@ OperatorSupplier makeOperatorSupplier(
           std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
     return [localMerge](int32_t operatorId, DriverCtx* ctx) {
       auto mergeSource = ctx->task->addLocalMergeSource(
-          ctx->splitGroupId, localMerge->id(), localMerge->outputType());
+          ctx->splitGroupId,
+          localMerge->id(),
+          localMerge->outputType(),
+          ctx->queryConfig().localMergeSourceQueueSize());
+      auto consumerCb =
+          [mergeSource](
+              RowVectorPtr input, bool drained, ContinueFuture* future) {
+            VELOX_CHECK(!drained);
+            return mergeSource->enqueue(std::move(input), future);
+          };
+      auto startCb = [mergeSource](ContinueFuture* future) {
+        return mergeSource->started(future);
+      };
+      return std::make_unique<CallbackSink>(
+          operatorId, ctx, std::move(consumerCb), std::move(startCb));
+    };
+  }
+
+  if (auto mixedUnion =
+          std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+    return [mixedUnion](int32_t operatorId, DriverCtx* ctx) {
+      auto mergeSource = ctx->task->addLocalMergeSource(
+          ctx->splitGroupId,
+          mixedUnion->id(),
+          mixedUnion->outputType(),
+          static_cast<int>(ctx->queryConfig().localMergeSourceQueueSize()));
       auto consumerCb =
           [mergeSource](
               RowVectorPtr input, bool drained, ContinueFuture* future) {
@@ -160,7 +196,7 @@ OperatorSupplier makeOperatorSupplier(
         VELOX_UNSUPPORTED(
             "Hash join currently does not support mixed grouped execution for join "
             "type {}",
-            core::joinTypeName(join->joinType()));
+            core::JoinTypeName::toName(join->joinType()));
       }
       return std::make_unique<HashBuild>(operatorId, ctx, join);
     };
@@ -170,6 +206,13 @@ OperatorSupplier makeOperatorSupplier(
           std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<NestedLoopJoinBuild>(operatorId, ctx, join);
+    };
+  }
+
+  if (auto join =
+          std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
+    return [join](int32_t operatorId, DriverCtx* ctx) {
+      return std::make_unique<SpatialJoinBuild>(operatorId, ctx, join);
     };
   }
 
@@ -190,7 +233,15 @@ OperatorSupplier makeOperatorSupplier(
               return source->enqueue(std::move(input), future);
             }
           };
-      return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
+      // NOTE: Pass planNodeId to associate CallbackSink with the MergeJoin
+      // node for proper operator identification and input collection.
+      // Operator::maybeSetTracer() uses this to enable tracing.
+      return std::make_unique<CallbackSink>(
+          operatorId,
+          ctx,
+          consumer,
+          nullptr,
+          ctx->queryConfig().queryTraceEnabled() ? planNodeId : "N/A");
     };
   }
 
@@ -204,10 +255,11 @@ void plan(
     OperatorSupplier operatorSupplier,
     std::vector<std::unique_ptr<DriverFactory>>* driverFactories) {
   if (!currentPlanNodes) {
-    driverFactories->push_back(std::make_unique<DriverFactory>());
-    currentPlanNodes = &driverFactories->back()->planNodes;
-    driverFactories->back()->operatorSupplier = std::move(operatorSupplier);
-    driverFactories->back()->consumerNode = consumerNode;
+    auto driverFactory = std::make_unique<DriverFactory>();
+    currentPlanNodes = &driverFactory->planNodes;
+    driverFactory->operatorSupplier = std::move(operatorSupplier);
+    driverFactory->consumerNode = consumerNode;
+    driverFactories->push_back(std::move(driverFactory));
   }
 
   const auto& sources = planNode->sources();
@@ -290,6 +342,9 @@ uint32_t maxDrivers(
     } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
       // Local merge must run single-threaded.
       return 1;
+    } else if (std::dynamic_pointer_cast<const core::MixedUnionNode>(node)) {
+      // Mixed union must run single-threaded.
+      return 1;
     } else if (std::dynamic_pointer_cast<const core::MergeExchangeNode>(node)) {
       // Merge exchange must run single-threaded.
       return 1;
@@ -298,8 +353,9 @@ uint32_t maxDrivers(
       return 1;
     } else if (
         auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-      // Right semi project doesn't support multi-threaded execution.
-      if (join->isRightSemiProjectJoin()) {
+      // Null-aware right semi project doesn't support multi-threaded
+      // execution.
+      if (join->isRightSemiProjectJoin() && join->isNullAware()) {
         return 1;
       }
     } else if (
@@ -351,7 +407,7 @@ void LocalPlanner::plan(
       planFragment.planNode,
       nullptr,
       nullptr,
-      detail::makeOperatorSupplier(consumerSupplier),
+      detail::makeOperatorSupplier(std::move(consumerSupplier)),
       driverFactories);
 
   (*driverFactories)[0]->outputDriver = true;
@@ -401,14 +457,14 @@ void LocalPlanner::determineGroupedExecutionPipelines(
       size_t numGroupedExecutionSources{0};
       for (const auto& sourceNode : localPartitionNode->sources()) {
         for (auto& anotherFactory : driverFactories) {
-          if (sourceNode == anotherFactory->planNodes.back() and
+          if (sourceNode == anotherFactory->planNodes.back() &&
               anotherFactory->groupedExecution) {
             ++numGroupedExecutionSources;
             break;
           }
         }
       }
-      if (numGroupedExecutionSources > 0 and
+      if (numGroupedExecutionSources > 0 &&
           numGroupedExecutionSources == localPartitionNode->sources().size()) {
         factory->groupedExecution = true;
       }
@@ -456,6 +512,11 @@ void LocalPlanner::markMixedJoinBridges(
             break;
           }
         }
+      } else if (
+          auto spatialJoinNode =
+              std::dynamic_pointer_cast<const core::SpatialJoinNode>(
+                  planNode)) {
+        VELOX_FAIL("Spatial joins do not support grouped execution.");
       }
     }
   }
@@ -464,6 +525,7 @@ void LocalPlanner::markMixedJoinBridges(
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
     std::shared_ptr<ExchangeClient> exchangeClient,
+    std::shared_ptr<PipelinePushdownFilters> filters,
     std::function<int(int pipelineId)> numDrivers) {
   auto driver = std::shared_ptr<Driver>(new Driver());
   ctx->driver = driver.get();
@@ -481,8 +543,9 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto next = planNodes[i + 1];
         if (auto projectNode =
                 std::dynamic_pointer_cast<const core::ProjectNode>(next)) {
-          operators.push_back(std::make_unique<FilterProject>(
-              id, ctx.get(), filterNode, projectNode));
+          operators.push_back(
+              std::make_unique<FilterProject>(
+                  id, ctx.get(), filterNode, projectNode));
           i++;
           continue;
         }
@@ -494,6 +557,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
       operators.push_back(
           std::make_unique<FilterProject>(id, ctx.get(), nullptr, projectNode));
+    } else if (
+        auto projectNode =
+            std::dynamic_pointer_cast<const core::ParallelProjectNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<ParallelProject>(id, ctx.get(), projectNode));
     } else if (
         auto valuesNode =
             std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {
@@ -517,8 +586,9 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto tableWriteMergeNode =
             std::dynamic_pointer_cast<const core::TableWriteMergeNode>(
                 planNode)) {
-      operators.push_back(std::make_unique<TableWriteMerge>(
-          id, ctx.get(), tableWriteMergeNode));
+      operators.push_back(
+          std::make_unique<TableWriteMerge>(
+              id, ctx.get(), tableWriteMergeNode));
     } else if (
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
@@ -530,14 +600,16 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
       // NOTE: the exchange client can only be used by one operator in a driver.
       VELOX_CHECK_NOT_NULL(exchangeClient);
-      operators.push_back(std::make_unique<Exchange>(
-          id, ctx.get(), exchangeNode, std::move(exchangeClient)));
+      operators.push_back(
+          std::make_unique<Exchange>(
+              id, ctx.get(), exchangeNode, std::move(exchangeClient)));
     } else if (
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
-      operators.push_back(std::make_unique<PartitionedOutput>(
-          id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
+      operators.push_back(
+          std::make_unique<PartitionedOutput>(
+              id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
@@ -549,6 +621,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(
           std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
     } else if (
+        auto spatialJoinNode =
+            std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<SpatialJoinProbe>(id, ctx.get(), spatialJoinNode));
+    } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(
                 planNode)) {
@@ -558,8 +635,9 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
       if (aggregationNode->isPreGrouped()) {
-        operators.push_back(std::make_unique<StreamingAggregation>(
-            id, ctx.get(), aggregationNode));
+        operators.push_back(
+            std::make_unique<StreamingAggregation>(
+                id, ctx.get(), aggregationNode));
       } else {
         operators.push_back(
             std::make_unique<HashAggregation>(id, ctx.get(), aggregationNode));
@@ -607,11 +685,30 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(
           std::make_unique<MarkDistinct>(id, ctx.get(), markDistinctNode));
     } else if (
+        auto enforceDistinctNode =
+            std::dynamic_pointer_cast<const core::EnforceDistinctNode>(
+                planNode)) {
+      if (enforceDistinctNode->isPreGrouped()) {
+        operators.push_back(
+            std::make_unique<StreamingEnforceDistinct>(
+                id, ctx.get(), enforceDistinctNode));
+      } else {
+        operators.push_back(
+            std::make_unique<EnforceDistinct>(
+                id, ctx.get(), enforceDistinctNode));
+      }
+    } else if (
         auto localMerge =
             std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
       auto localMergeOp =
           std::make_unique<LocalMerge>(id, ctx.get(), localMerge);
       operators.push_back(std::move(localMergeOp));
+    } else if (
+        auto mixedUnion =
+            std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
+      auto mixedUnionOp =
+          std::make_unique<MixedUnion>(id, ctx.get(), mixedUnion);
+      operators.push_back(std::move(mixedUnionOp));
     } else if (
         auto mergeJoin =
             std::dynamic_pointer_cast<const core::MergeJoinNode>(planNode)) {
@@ -622,12 +719,13 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto localPartitionNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(
                 planNode)) {
-      operators.push_back(std::make_unique<LocalExchange>(
-          id,
-          ctx.get(),
-          localPartitionNode->outputType(),
-          localPartitionNode->id(),
-          ctx->partitionId));
+      operators.push_back(
+          std::make_unique<LocalExchange>(
+              id,
+              ctx.get(),
+              localPartitionNode->outputType(),
+              localPartitionNode->id(),
+              ctx->partitionId));
     } else if (
         auto unnest =
             std::dynamic_pointer_cast<const core::UnnestNode>(planNode)) {
@@ -642,17 +740,19 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto assignUniqueIdNode =
             std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
                 planNode)) {
-      operators.push_back(std::make_unique<AssignUniqueId>(
-          id,
-          ctx.get(),
-          assignUniqueIdNode,
-          assignUniqueIdNode->taskUniqueId(),
-          assignUniqueIdNode->uniqueIdCounter()));
+      operators.push_back(
+          std::make_unique<AssignUniqueId>(
+              id,
+              ctx.get(),
+              assignUniqueIdNode,
+              assignUniqueIdNode->taskUniqueId(),
+              assignUniqueIdNode->uniqueIdCounter()));
     } else if (
         const auto traceScanNode =
             std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {
-      operators.push_back(std::make_unique<trace::OperatorTraceScan>(
-          id, ctx.get(), traceScanNode));
+      operators.push_back(
+          std::make_unique<trace::OperatorTraceScan>(
+              id, ctx.get(), traceScanNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {
@@ -672,6 +772,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     operators.push_back(operatorSupplier(operators.size(), ctx.get()));
   }
 
+  if (filters->empty()) {
+    filters->resize(operators.size());
+  } else {
+    VELOX_CHECK_EQ(filters->size(), operators.size());
+  }
   driver->init(std::move(ctx), std::move(operators));
   for (auto& adapter : adapters) {
     if (adapter.adapt(*this, *driver)) {
@@ -679,6 +784,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     }
   }
   driver->isAdaptable_ = false;
+  driver->pushdownFilters_ = std::move(filters);
   return driver;
 }
 
@@ -694,7 +800,7 @@ std::vector<std::unique_ptr<Operator>> DriverFactory::replaceOperators(
   }
 
   driver.operators_.erase(
-      driver.operators_.begin() + begin, driver.operators_.begin() + end);
+      driver.operators_.cbegin() + begin, driver.operators_.cbegin() + end);
 
   // Insert the replacement at the place of the erase. Do manually because
   // insert() is not good with unique pointers.
@@ -756,6 +862,19 @@ std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
           !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
         planNodeIds.emplace_back(joinNode->id());
       }
+    }
+  }
+
+  return planNodeIds;
+}
+
+std::vector<core::PlanNodeId> DriverFactory::needsSpatialJoinBridges() const {
+  std::vector<core::PlanNodeId> planNodeIds;
+  for (const auto& planNode : planNodes) {
+    if (auto joinNode =
+            std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
+      // Grouped execution pipelines should not create cross-mode bridges.
+      planNodeIds.emplace_back(joinNode->id());
     }
   }
 

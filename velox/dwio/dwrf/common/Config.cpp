@@ -130,7 +130,7 @@ Config::Entry<const std::vector<uint32_t>> Config::MAP_FLAT_COLS(
     [](const std::string& /* key */, const std::string& val) {
       std::vector<uint32_t> result;
       if (!val.empty()) {
-        std::vector<folly::StringPiece> pieces;
+        std::vector<std::string_view> pieces;
         folly::split(',', val, pieces, true);
         for (const auto& p : pieces) {
           const auto& trimmedCol = folly::trimWhitespace(p);
@@ -182,7 +182,7 @@ Config::Entry<const std::vector<std::vector<std::string>>>
 
 Config::Entry<uint32_t> Config::MAP_FLAT_MAX_KEYS(
     "orc.map.flat.max.keys",
-    20000);
+    30000);
 
 Config::Entry<uint64_t> Config::MAX_DICTIONARY_SIZE(
     "hive.exec.orc.max.dictionary.size",

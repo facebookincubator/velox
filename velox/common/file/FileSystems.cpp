@@ -17,6 +17,7 @@
 #include "velox/common/file/FileSystems.h"
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/CallOnce.h>
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 
@@ -90,7 +91,7 @@ class LocalFileSystem : public FileSystem {
                       std::max(
                           1,
                           static_cast<int32_t>(
-                              std::thread::hardware_concurrency() / 2)),
+                              folly::hardware_concurrency() / 2)),
                       std::make_shared<folly::NamedThreadFactory>(
                           "LocalReadahead"))
                 : nullptr) {}
@@ -229,7 +230,7 @@ class LocalFileSystem : public FileSystem {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
     return [](std::string_view filePath) {
-      return filePath.find("/") == 0 || filePath.find(kFileScheme) == 0;
+      return filePath.starts_with('/') || filePath.starts_with(kFileScheme);
     };
   }
 

@@ -22,30 +22,30 @@
 
 namespace facebook::velox::parquet::arrow {
 
-// Encryptor
+// Encryptor.
 Encryptor::Encryptor(
-    encryption::AesEncryptor* aes_encryptor,
+    encryption::AesEncryptor* aesEncryptor,
     const std::string& key,
-    const std::string& file_aad,
+    const std::string& fileAad,
     const std::string& aad,
     ::arrow::MemoryPool* pool)
-    : aes_encryptor_(aes_encryptor),
+    : aesEncryptor_(aesEncryptor),
       key_(key),
-      file_aad_(file_aad),
+      fileAad_(fileAad),
       aad_(aad),
       pool_(pool) {}
 
-int Encryptor::CiphertextSizeDelta() {
-  return aes_encryptor_->CiphertextSizeDelta();
+int Encryptor::ciphertextSizeDelta() {
+  return aesEncryptor_->ciphertextSizeDelta();
 }
 
-int Encryptor::Encrypt(
+int Encryptor::encrypt(
     const uint8_t* plaintext,
-    int plaintext_len,
+    int plaintextLen,
     uint8_t* ciphertext) {
-  return aes_encryptor_->Encrypt(
+  return aesEncryptor_->encrypt(
       plaintext,
-      plaintext_len,
+      plaintextLen,
       str2bytes(key_),
       static_cast<int>(key_.size()),
       str2bytes(aad_),
@@ -53,141 +53,138 @@ int Encryptor::Encrypt(
       ciphertext);
 }
 
-// InternalFileEncryptor
+// InternalFileEncryptor.
 InternalFileEncryptor::InternalFileEncryptor(
     FileEncryptionProperties* properties,
     ::arrow::MemoryPool* pool)
     : properties_(properties), pool_(pool) {
-  if (properties_->is_utilized()) {
+  if (properties_->isUtilized()) {
     throw ParquetException("Re-using encryption properties for another file");
   }
-  properties_->set_utilized();
+  properties_->setUtilized();
 }
 
-void InternalFileEncryptor::WipeOutEncryptionKeys() {
-  properties_->WipeOutEncryptionKeys();
+void InternalFileEncryptor::wipeOutEncryptionKeys() {
+  properties_->wipeOutEncryptionKeys();
 
-  for (auto const& i : all_encryptors_) {
-    i->WipeOut();
+  for (auto const& i : allEncryptors_) {
+    i->wipeOut();
   }
 }
 
-std::shared_ptr<Encryptor> InternalFileEncryptor::GetFooterEncryptor() {
-  if (footer_encryptor_ != nullptr) {
-    return footer_encryptor_;
-  }
-
-  ParquetCipher::type algorithm = properties_->algorithm().algorithm;
-  std::string footer_aad = encryption::CreateFooterAad(properties_->file_aad());
-  std::string footer_key = properties_->footer_key();
-  auto aes_encryptor = GetMetaAesEncryptor(algorithm, footer_key.size());
-  footer_encryptor_ = std::make_shared<Encryptor>(
-      aes_encryptor, footer_key, properties_->file_aad(), footer_aad, pool_);
-  return footer_encryptor_;
-}
-
-std::shared_ptr<Encryptor> InternalFileEncryptor::GetFooterSigningEncryptor() {
-  if (footer_signing_encryptor_ != nullptr) {
-    return footer_signing_encryptor_;
+std::shared_ptr<Encryptor> InternalFileEncryptor::getFooterEncryptor() {
+  if (footerEncryptor_ != nullptr) {
+    return footerEncryptor_;
   }
 
   ParquetCipher::type algorithm = properties_->algorithm().algorithm;
-  std::string footer_aad = encryption::CreateFooterAad(properties_->file_aad());
-  std::string footer_signing_key = properties_->footer_key();
-  auto aes_encryptor =
-      GetMetaAesEncryptor(algorithm, footer_signing_key.size());
-  footer_signing_encryptor_ = std::make_shared<Encryptor>(
-      aes_encryptor,
-      footer_signing_key,
-      properties_->file_aad(),
-      footer_aad,
-      pool_);
-  return footer_signing_encryptor_;
+  std::string footerAad = encryption::createFooterAad(properties_->fileAad());
+  std::string footerKey = properties_->footerKey();
+  auto aesEncryptor = getMetaAesEncryptor(algorithm, footerKey.size());
+  footerEncryptor_ = std::make_shared<Encryptor>(
+      aesEncryptor, footerKey, properties_->fileAad(), footerAad, pool_);
+  return footerEncryptor_;
 }
 
-std::shared_ptr<Encryptor> InternalFileEncryptor::GetColumnMetaEncryptor(
-    const std::string& column_path) {
-  return GetColumnEncryptor(column_path, true);
+std::shared_ptr<Encryptor> InternalFileEncryptor::getFooterSigningEncryptor() {
+  if (footerSigningEncryptor_ != nullptr) {
+    return footerSigningEncryptor_;
+  }
+
+  ParquetCipher::type algorithm = properties_->algorithm().algorithm;
+  std::string footerAad = encryption::createFooterAad(properties_->fileAad());
+  std::string footerSigningKey = properties_->footerKey();
+  auto aesEncryptor = getMetaAesEncryptor(algorithm, footerSigningKey.size());
+  footerSigningEncryptor_ = std::make_shared<Encryptor>(
+      aesEncryptor, footerSigningKey, properties_->fileAad(), footerAad, pool_);
+  return footerSigningEncryptor_;
 }
 
-std::shared_ptr<Encryptor> InternalFileEncryptor::GetColumnDataEncryptor(
-    const std::string& column_path) {
-  return GetColumnEncryptor(column_path, false);
+std::shared_ptr<Encryptor> InternalFileEncryptor::getColumnMetaEncryptor(
+    const std::string& columnPath) {
+  return getColumnEncryptor(columnPath, true);
+}
+
+std::shared_ptr<Encryptor> InternalFileEncryptor::getColumnDataEncryptor(
+    const std::string& columnPath) {
+  return getColumnEncryptor(columnPath, false);
 }
 
 std::shared_ptr<Encryptor>
-InternalFileEncryptor::InternalFileEncryptor::GetColumnEncryptor(
-    const std::string& column_path,
+InternalFileEncryptor::InternalFileEncryptor::getColumnEncryptor(
+    const std::string& columnPath,
     bool metadata) {
-  // first look if we already got the encryptor from before
+  // First look if we already got the encryptor from before.
   if (metadata) {
-    if (column_metadata_map_.find(column_path) != column_metadata_map_.end()) {
-      return column_metadata_map_.at(column_path);
+    if (columnMetadataMap_.find(columnPath) != columnMetadataMap_.end()) {
+      return columnMetadataMap_.at(columnPath);
     }
   } else {
-    if (column_data_map_.find(column_path) != column_data_map_.end()) {
-      return column_data_map_.at(column_path);
+    if (columnDataMap_.find(columnPath) != columnDataMap_.end()) {
+      return columnDataMap_.at(columnPath);
     }
   }
-  auto column_prop = properties_->column_encryption_properties(column_path);
-  if (column_prop == nullptr) {
+  auto columnProp = properties_->columnEncryptionProperties(columnPath);
+  if (columnProp == nullptr) {
     return nullptr;
   }
 
   std::string key;
-  if (column_prop->is_encrypted_with_footer_key()) {
-    key = properties_->footer_key();
+  if (columnProp->isEncryptedWithFooterKey()) {
+    key = properties_->footerKey();
   } else {
-    key = column_prop->key();
+    key = columnProp->key();
   }
 
   ParquetCipher::type algorithm = properties_->algorithm().algorithm;
-  auto aes_encryptor = metadata ? GetMetaAesEncryptor(algorithm, key.size())
-                                : GetDataAesEncryptor(algorithm, key.size());
+  auto aesEncryptor = metadata ? getMetaAesEncryptor(algorithm, key.size())
+                               : getDataAesEncryptor(algorithm, key.size());
 
-  std::string file_aad = properties_->file_aad();
+  std::string fileAad = properties_->fileAad();
   std::shared_ptr<Encryptor> encryptor =
-      std::make_shared<Encryptor>(aes_encryptor, key, file_aad, "", pool_);
+      std::make_shared<Encryptor>(aesEncryptor, key, fileAad, "", pool_);
   if (metadata)
-    column_metadata_map_[column_path] = encryptor;
+    columnMetadataMap_[columnPath] = encryptor;
   else
-    column_data_map_[column_path] = encryptor;
+    columnDataMap_[columnPath] = encryptor;
 
   return encryptor;
 }
 
-int InternalFileEncryptor::MapKeyLenToEncryptorArrayIndex(int key_len) {
-  if (key_len == 16)
+int InternalFileEncryptor::mapKeyLenToEncryptorArrayIndex(int keyLen) {
+  if (keyLen == 16)
     return 0;
-  else if (key_len == 24)
+  else if (keyLen == 24)
     return 1;
-  else if (key_len == 32)
+  else if (keyLen == 32)
     return 2;
   throw ParquetException("encryption key must be 16, 24 or 32 bytes in length");
 }
 
-encryption::AesEncryptor* InternalFileEncryptor::GetMetaAesEncryptor(
+encryption::AesEncryptor* InternalFileEncryptor::getMetaAesEncryptor(
     ParquetCipher::type algorithm,
-    size_t key_size) {
-  int key_len = static_cast<int>(key_size);
-  int index = MapKeyLenToEncryptorArrayIndex(key_len);
-  if (meta_encryptor_[index] == nullptr) {
-    meta_encryptor_[index].reset(encryption::AesEncryptor::Make(
-        algorithm, key_len, true, &all_encryptors_));
+    size_t keySize) {
+  int keyLen = static_cast<int>(keySize);
+  int index = mapKeyLenToEncryptorArrayIndex(keyLen);
+  if (metaEncryptor_[index] == nullptr) {
+    metaEncryptor_[index].reset(
+        encryption::AesEncryptor::make(
+            algorithm, keyLen, true, &allEncryptors_));
   }
-  return meta_encryptor_[index].get();
+  return metaEncryptor_[index].get();
 }
 
-encryption::AesEncryptor* InternalFileEncryptor::GetDataAesEncryptor(
+encryption::AesEncryptor* InternalFileEncryptor::getDataAesEncryptor(
     ParquetCipher::type algorithm,
-    size_t key_size) {
-  int key_len = static_cast<int>(key_size);
-  int index = MapKeyLenToEncryptorArrayIndex(key_len);
-  if (data_encryptor_[index] == nullptr) {
-    data_encryptor_[index].reset(encryption::AesEncryptor::Make(
-        algorithm, key_len, false, &all_encryptors_));
+    size_t keySize) {
+  int keyLen = static_cast<int>(keySize);
+  int index = mapKeyLenToEncryptorArrayIndex(keyLen);
+  if (dataEncryptor_[index] == nullptr) {
+    dataEncryptor_[index].reset(
+        encryption::AesEncryptor::make(
+            algorithm, keyLen, false, &allEncryptors_));
   }
-  return data_encryptor_[index].get();
+  return dataEncryptor_[index].get();
 }
 
 } // namespace facebook::velox::parquet::arrow

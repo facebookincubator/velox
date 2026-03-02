@@ -280,10 +280,11 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     std::vector<VectorPtr> children;
     children.push_back(makeFlatVector<int64_t>(data));
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
-      children.push_back(makeFlatVector<int64_t>(
-          data.size(),
-          [&](vector_size_t row) { return row + maxKey; },
-          nullptr));
+      children.push_back(
+          makeFlatVector<int64_t>(
+              data.size(),
+              [&](vector_size_t row) { return row + maxKey; },
+              nullptr));
     }
     return makeRowVector(children);
   }
@@ -311,21 +312,23 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
   RowVectorPtr
   makeProbeVector(int32_t size, int64_t hashTableSize, int64_t& sequence) {
     std::vector<VectorPtr> children;
-    children.push_back(makeFlatVector<int64_t>(
-        size,
-        [&](vector_size_t row) { return (sequence + row) % hashTableSize; },
-        nullptr));
+    children.push_back(
+        makeFlatVector<int64_t>(
+            size,
+            [&](vector_size_t row) { return (sequence + row) % hashTableSize; },
+            nullptr));
     sequence += size;
     for (int32_t i = 0; i < params_.numDependentFields; ++i) {
-      children.push_back(makeFlatVector<int64_t>(
-          size, [&](vector_size_t row) { return row + size; }, nullptr));
+      children.push_back(
+          makeFlatVector<int64_t>(
+              size, [&](vector_size_t row) { return row + size; }, nullptr));
     }
     return makeRowVector(children);
   }
 
   void copyVectorsToTable(RowVectorPtr batch, BaseHashTable* table) {
     int32_t batchSize = batch->size();
-    raw_vector<uint64_t> dummy(batchSize);
+    raw_vector<uint64_t> dummy(batchSize, pool());
     auto rowContainer = table->rows();
     auto& hashers = table->hashers();
     auto numKeys = hashers.size();
@@ -391,6 +394,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       topTable_->prepareJoinTable(
           std::move(otherTables),
           BaseHashTable::kNoSpillInputStartPartitionBit,
+          1'000'000,
+          false,
           executor_.get());
     }
     buildTime_ = buildClocks;

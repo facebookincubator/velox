@@ -110,7 +110,9 @@ TEST_F(VectorPoolTest, vectorRecycler) {
 
   // Empty scoped vector does nothing.
   VectorPtr vectorPtr;
-  { VectorRecycler vectorRecycler(vectorPtr, &vectorPool); }
+  {
+    VectorRecycler vectorRecycler(vectorPtr, &vectorPool);
+  }
 
   // Get new vector from the pool and release it back.
   BaseVector* rawPtr;

@@ -24,7 +24,11 @@ namespace facebook::velox::dwio::common::flatmap {
 namespace detail {
 
 // Reset vector with the desired size/hasNulls properties
-void reset(VectorPtr& vector, vector_size_t size, bool hasNulls);
+void reset(
+    VectorPtr& vector,
+    VectorEncoding::Simple desiredEncoding,
+    vector_size_t size,
+    bool hasNulls);
 
 // Reset vector smart pointer if any of the buffers is not single referenced.
 template <typename... T>
@@ -38,6 +42,14 @@ void resetIfNotWritable(VectorPtr& vector, const T&... buffer) {
 }
 
 } // namespace detail
+
+// Output type of flat map column reader, indicates the in memory representation
+// the flat map should be read into.
+enum class FlatMapOutput : uint8_t {
+  kMap = 0, // MapVector
+  kStruct = 1, // RowVector
+  kFlatMap = 2, // FlatMapVector
+};
 
 // Struct for keeping track flatmap key stream metrics.
 // Used by keySelectionCallback_ in FlatMapColumnReader
@@ -55,7 +67,7 @@ void initializeFlatVector(
     vector_size_t size,
     bool hasNulls,
     std::vector<BufferPtr>&& stringBuffers = {}) {
-  detail::reset(vector, size, hasNulls);
+  detail::reset(vector, VectorEncoding::Simple::FLAT, size, hasNulls);
   if (vector) {
     auto& flatVector = dynamic_cast<FlatVector<T>&>(*vector);
     detail::resetIfNotWritable(vector, flatVector.nulls(), flatVector.values());
@@ -224,14 +236,14 @@ KeyPredicate<T> prepareKeyPredicate(std::string_view expression) {
   // You cannot mix allow key and reject key.
   VELOX_CHECK(
       modes.empty() ||
-      std::all_of(modes.begin(), modes.end(), [&modes](const auto& v) {
+      std::all_of(modes.cbegin(), modes.cend(), [&modes](const auto& v) {
         return v == modes.front();
       }));
 
   auto mode = modes.empty() ? KeyProjectionMode::ALLOW : modes.front();
 
   return KeyPredicate<T>(
-      mode, typename KeyPredicate<T>::Lookup(keys.begin(), keys.end()));
+      mode, typename KeyPredicate<T>::Lookup(keys.cbegin(), keys.cend()));
 }
 
 } // namespace facebook::velox::dwio::common::flatmap

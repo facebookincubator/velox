@@ -37,9 +37,10 @@ constexpr int kVectorSize = 16 << 10;
 
 struct BenchmarkData {
   BenchmarkData()
-      : pool_(memory::memoryManager()->addLeafPool(
-            "BenchmarkData",
-            FLAGS_use_thread_safe_memory_usage_track)) {
+      : pool_(
+            memory::memoryManager()->addLeafPool(
+                "BenchmarkData",
+                FLAGS_use_thread_safe_memory_usage_track)) {
     VectorFuzzer::Options opts;
     opts.nullRatio = 0.01;
     opts.vectorSize = kVectorSize;

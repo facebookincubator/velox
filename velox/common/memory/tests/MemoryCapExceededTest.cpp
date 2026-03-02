@@ -69,7 +69,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
   // why).
   std::vector<std::string> expectedTexts = {
       "Can't grow ",
-      "capacity with 2.00MB. This will exceed its max capacity 5.00MB, current "
+      "capacity with 2.00MB. This will exceed its memory pool capacity 5.00MB, current "
       "capacity 5.00MB.\n"
       "ARBITRATOR[SHARED CAPACITY[6.00GB] STATS[numRequests 1 numRunning 1 "
       "numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
@@ -92,7 +92,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
       "node.1 usage 12.00KB reserved 1.00MB peak 1.00MB",
       "op.1.0.0.FilterProject usage 12.00KB reserved 1.00MB peak 12.00KB",
       "node.2 usage 3.74MB reserved 4.00MB peak 4.00MB",
-      "op.2.0.0.Aggregation usage 3.74MB reserved 4.00MB peak 3.74MB",
+      "op.2.0.0.Aggregation usage 3.74MB reserved 4.00MB peak 3.76MB",
       "Top 2 leaf memory pool usages:"};
 
   std::vector<RowVectorPtr> data;
@@ -113,8 +113,9 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
                   .orderBy({"c0"}, false)
                   .planNode();
   auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(
+          queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
@@ -171,8 +172,9 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
   auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(
+          queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
 
   const int32_t numDrivers = 10;
   CursorParameters params;

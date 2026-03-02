@@ -31,10 +31,11 @@ add_executable(
   SimdUtilTest.cpp
   SkewedPartitionBalancerTest.cpp
   SpillConfigTest.cpp
-  SpillStatsTest.cpp
+  SplitBlockBloomFilterTest.cpp
   StatsReporterTest.cpp
   StatusTest.cpp
-  SuccinctPrinterTest.cpp)
+  SuccinctPrinterTest.cpp
+)
 
 add_test(velox_base_test velox_base_test)
 
@@ -55,7 +56,8 @@ target_link_libraries(
     gflags::gflags
     GTest::gtest
     GTest::gmock
-    GTest::gtest_main)
+    GTest::gtest_main
+)
 
 add_executable(velox_id_map_test IdMapTest.cpp)
 
@@ -70,14 +72,11 @@ target_link_libraries(
   glog::glog
   GTest::gtest
   GTest::gtest_main
-  pthread)
+  pthread
+)
 
 add_executable(velox_memcpy_meter Memcpy.cpp)
 target_link_libraries(
   velox_memcpy_meter
-  PRIVATE
-    velox_common_base
-    velox_exception
-    velox_time
-    Folly::folly
-    gflags::gflags)
+  PRIVATE velox_common_base velox_exception velox_time Folly::folly gflags::gflags
+)

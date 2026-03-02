@@ -27,8 +27,14 @@ namespace {
 
 using namespace facebook::velox::exec::test;
 
-class StreamingAggregationTest : public HiveConnectorTestBase,
-                                 public testing::WithParamInterface<int32_t> {
+struct TestParams {
+  int32_t streamingMinOutputBatchSize;
+  uint64_t preferredOutputBatchBytes;
+};
+
+class StreamingAggregationTest
+    : public HiveConnectorTestBase,
+      public testing::WithParamInterface<TestParams> {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
@@ -36,7 +42,11 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
   }
 
   int32_t flushRows() {
-    return GetParam();
+    return GetParam().streamingMinOutputBatchSize;
+  }
+
+  uint64_t preferredOutputBatchBytes() {
+    return GetParam().preferredOutputBatchBytes;
   }
 
   AssertQueryBuilder& config(
@@ -48,7 +58,10 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
             std::to_string(outputBatchSize))
         .config(
             core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
-            std::to_string(flushRows()));
+            std::to_string(flushRows()))
+        .config(
+            core::QueryConfig::kPreferredOutputBatchBytes,
+            std::to_string(preferredOutputBatchBytes()));
   }
 
   void testAggregation(
@@ -139,21 +152,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
 
   void testSortedAggregationWithBarrier(
       const std::vector<VectorPtr>& keys,
-      uint32_t outputBatchSize) {
+      uint32_t outputBatchSize,
+      uint32_t expectedNumOuputBatches) {
     const auto inputVectors = addPayload(keys, 2);
-    int expectedNumOuputBatchesWithBarrier{0};
-    int numInputRows{0};
-    for (const auto& inputVector : inputVectors) {
-      numInputRows += inputVector->size();
-      if (outputBatchSize > inputVector->size()) {
-        ++expectedNumOuputBatchesWithBarrier;
-      } else {
-        expectedNumOuputBatchesWithBarrier +=
-            bits::divRoundUp(inputVector->size(), outputBatchSize);
-      }
-    }
-    const int expectedNumOuputBatches =
-        bits::divRoundUp(numInputRows, outputBatchSize);
 
     std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
@@ -168,8 +169,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
     core::PlanNodeId aggregationNodeId;
     auto plan = PlanBuilder(planNodeIdGenerator)
                     .startTableScan()
-                    .outputType(std::dynamic_pointer_cast<const RowType>(
-                        inputVectors[0]->type()))
+                    .outputType(
+                        std::dynamic_pointer_cast<const RowType>(
+                            inputVectors[0]->type()))
                     .endTableScan()
                     .streamingAggregation(
                         {"c0"},
@@ -201,8 +203,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
           velox::exec::toPlanStats(taskStats)
               .at(aggregationNodeId)
               .outputVectors,
-          barrierExecution ? expectedNumOuputBatchesWithBarrier
-                           : expectedNumOuputBatches);
+          expectedNumOuputBatches);
     }
   }
 
@@ -247,22 +248,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
 
   void testDistinctAggregationWithBarrier(
       const std::vector<VectorPtr>& keys,
-      uint32_t outputBatchSize) {
+      uint32_t outputBatchSize,
+      uint32_t expectedNumOuputBatches) {
     const auto inputVectors = addPayload(keys, 2);
-    int expectedNumOuputBatchesWithBarrier{0};
-    int numInputRows{0};
-    for (const auto& inputVector : inputVectors) {
-      numInputRows += inputVector->size();
-      if (outputBatchSize > inputVector->size()) {
-        ++expectedNumOuputBatchesWithBarrier;
-      } else {
-        expectedNumOuputBatchesWithBarrier +=
-            bits::divRoundUp(inputVector->size(), outputBatchSize);
-      }
-    }
-    const int expectedNumOuputBatches =
-        bits::divRoundUp(numInputRows, outputBatchSize);
-
     std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
     for (int32_t i = 0; i < numSplits; ++i) {
@@ -277,8 +265,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
       core::PlanNodeId aggregationNodeId;
       auto plan = PlanBuilder(planNodeIdGenerator)
                       .startTableScan()
-                      .outputType(std::dynamic_pointer_cast<const RowType>(
-                          inputVectors[0]->type()))
+                      .outputType(
+                          std::dynamic_pointer_cast<const RowType>(
+                              inputVectors[0]->type()))
                       .endTableScan()
                       .streamingAggregation(
                           {"c0"},
@@ -311,8 +300,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
             velox::exec::toPlanStats(taskStats)
                 .at(aggregationNodeId)
                 .outputVectors,
-            barrierExecution ? expectedNumOuputBatchesWithBarrier
-                             : expectedNumOuputBatches);
+            expectedNumOuputBatches);
       }
     }
 
@@ -321,8 +309,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
       auto plan =
           PlanBuilder(planNodeIdGenerator)
               .startTableScan()
-              .outputType(std::dynamic_pointer_cast<const RowType>(
-                  inputVectors[0]->type()))
+              .outputType(
+                  std::dynamic_pointer_cast<const RowType>(
+                      inputVectors[0]->type()))
               .endTableScan()
               .streamingAggregation(
                   {"c0"}, {}, {}, core::AggregationNode::Step::kSingle, false)
@@ -346,8 +335,7 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
             velox::exec::toPlanStats(taskStats)
                 .at(aggregationNodeId)
                 .outputVectors,
-            barrierExecution ? expectedNumOuputBatchesWithBarrier
-                             : expectedNumOuputBatches);
+            expectedNumOuputBatches);
       }
     }
   }
@@ -513,19 +501,6 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
       const std::vector<RowVectorPtr>& keys,
       uint32_t outputBatchSize) {
     const auto inputVectors = addPayload(keys);
-    int expectedNumOuputBatchesWithBarrier{0};
-    int numInputRows{0};
-    for (const auto& inputVector : inputVectors) {
-      numInputRows += inputVector->size();
-      if (outputBatchSize > inputVector->size()) {
-        ++expectedNumOuputBatchesWithBarrier;
-      } else {
-        expectedNumOuputBatchesWithBarrier +=
-            bits::divRoundUp(inputVector->size(), outputBatchSize);
-      }
-    }
-    const int expectedNumOuputBatches =
-        bits::divRoundUp(numInputRows, outputBatchSize);
     std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
     for (int32_t i = 0; i < numSplits; ++i) {
@@ -541,8 +516,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
       auto plan =
           PlanBuilder(planNodeIdGenerator)
               .startTableScan()
-              .outputType(std::dynamic_pointer_cast<const RowType>(
-                  inputVectors[0]->type()))
+              .outputType(
+                  std::dynamic_pointer_cast<const RowType>(
+                      inputVectors[0]->type()))
               .endTableScan()
               .streamingAggregation(
                   keys[0]->type()->asRow().names(),
@@ -578,12 +554,6 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
         const auto taskStats = task->taskStats();
         ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
-        ASSERT_EQ(
-            velox::exec::toPlanStats(taskStats)
-                .at(aggregationNodeId)
-                .outputVectors,
-            barrierExecution ? expectedNumOuputBatchesWithBarrier
-                             : expectedNumOuputBatches);
         EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
       }
     }
@@ -592,8 +562,9 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
       core::PlanNodeId aggregationNodeId;
       auto plan = PlanBuilder(planNodeIdGenerator)
                       .startTableScan()
-                      .outputType(std::dynamic_pointer_cast<const RowType>(
-                          inputVectors[0]->type()))
+                      .outputType(
+                          std::dynamic_pointer_cast<const RowType>(
+                              inputVectors[0]->type()))
                       .endTableScan()
                       .streamingAggregation(
                           keys[0]->type()->asRow().names(),
@@ -626,12 +597,6 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
         const auto taskStats = task->taskStats();
         ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
-        ASSERT_EQ(
-            velox::exec::toPlanStats(taskStats)
-                .at(aggregationNodeId)
-                .outputVectors,
-            barrierExecution ? expectedNumOuputBatchesWithBarrier
-                             : expectedNumOuputBatches);
         EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
       }
     }
@@ -641,13 +606,32 @@ class StreamingAggregationTest : public HiveConnectorTestBase,
 VELOX_INSTANTIATE_TEST_SUITE_P(
     StreamingAggregationTest,
     StreamingAggregationTest,
-    testing::ValuesIn({0, 1, 64, std::numeric_limits<int32_t>::max()}),
-    [](const testing::TestParamInfo<int32_t>& info) {
+    testing::Values(
+        TestParams{0, 1},
+        TestParams{0, 1024},
+        TestParams{0, std::numeric_limits<uint64_t>::max()},
+        TestParams{1, 1},
+        TestParams{1, 1024},
+        TestParams{1, std::numeric_limits<uint64_t>::max()},
+        TestParams{64, 1},
+        TestParams{64, 1024},
+        TestParams{64, std::numeric_limits<uint64_t>::max()},
+        TestParams{std::numeric_limits<int32_t>::max(), 1},
+        TestParams{std::numeric_limits<int32_t>::max(), 1024},
+        TestParams{
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<uint64_t>::max()}),
+    [](const testing::TestParamInfo<TestParams>& info) {
       return fmt::format(
-          "streamingMinOutputBatchSize_{}",
-          info.param == std::numeric_limits<int32_t>::max()
+          "streamingMinOutputBatchSize_{}_preferredOutputBatchBytes_{}",
+          info.param.streamingMinOutputBatchSize ==
+                  std::numeric_limits<int32_t>::max()
               ? "inf"
-              : std::to_string(info.param));
+              : std::to_string(info.param.streamingMinOutputBatchSize),
+          info.param.preferredOutputBatchBytes ==
+                  std::numeric_limits<uint64_t>::max()
+              ? "inf"
+              : std::to_string(info.param.preferredOutputBatchBytes));
     });
 
 TEST_P(StreamingAggregationTest, smallInputBatches) {
@@ -779,9 +763,7 @@ TEST_P(StreamingAggregationTest, closeUninitialized) {
                             std::make_shared<core::FieldAccessTypedExpr>(
                                 BIGINT(), "c0"),
                             std::make_shared<core::CallTypedExpr>(
-                                BIGINT(),
-                                std::vector<core::TypedExprPtr>{},
-                                "do-not-exist")},
+                                BIGINT(), "do-not-exist")},
                         source);
                   })
                   .partialStreamingAggregation({"c0"}, {"sum(x)"})
@@ -793,8 +775,7 @@ TEST_P(StreamingAggregationTest, closeUninitialized) {
 }
 
 TEST_P(StreamingAggregationTest, sortedAggregations) {
-  auto size = 1024;
-
+  const auto size = 512;
   std::vector<VectorPtr> keys = {
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
       makeFlatVector<int32_t>(size, [size](auto row) { return (size + row); }),
@@ -804,7 +785,7 @@ TEST_P(StreamingAggregationTest, sortedAggregations) {
           78, [size](auto row) { return (3 * size + row); }),
   };
 
-  testSortedAggregation(keys, 1024);
+  testSortedAggregation(keys, 512);
   testSortedAggregation(keys, 32);
 }
 
@@ -878,6 +859,189 @@ TEST_P(StreamingAggregationTest, clusteredInput) {
   }
 }
 
+TEST_P(StreamingAggregationTest, clusteredInputWithOutputSplit) {
+  std::vector<VectorPtr> keysWithOverlap = {
+      makeNullableFlatVector<int32_t>({1, 1, std::nullopt, 2, 2}),
+      makeFlatVector<int32_t>({2, 3, 3, 4}),
+      makeFlatVector<int32_t>({5, 6, 6, 6}),
+      makeFlatVector<int32_t>({6, 6, 6, 6}),
+      makeFlatVector<int32_t>({6, 7, 8}),
+  };
+  auto dataWithOverlap = addPayload(keysWithOverlap, 1);
+  auto planWithOverlap = PlanBuilder()
+                             .values(dataWithOverlap)
+                             .streamingAggregation(
+                                 {"c0"},
+                                 {"arbitrary(c1)", "array_agg(c1)"},
+                                 {},
+                                 core::AggregationNode::Step::kSingle,
+                                 false)
+                             .planNode();
+  const auto expectedWithOverlap = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3, 4, 5, 6, 7, 8}),
+      makeFlatVector<int32_t>({0, 2, 3, 6, 8, 9, 10, 18, 19}),
+      makeArrayVector<int32_t>(
+          {{0, 1},
+           {2},
+           {3, 4, 5},
+           {6, 7},
+           {8},
+           {9},
+           {10, 11, 12, 13, 14, 15, 16, 17},
+           {18},
+           {19}}),
+  });
+  for (auto batchSize : {1, 3, 20}) {
+    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    config(AssertQueryBuilder(planWithOverlap), batchSize)
+        .assertResults(expectedWithOverlap);
+  }
+
+  std::vector<VectorPtr> keysWithoutOverlap = {
+      makeNullableFlatVector<int32_t>({1, 1, std::nullopt, 2, 2}),
+      makeFlatVector<int32_t>({3, 3, 4, 4}),
+      makeFlatVector<int32_t>({5, 6, 6, 7}),
+      makeFlatVector<int32_t>({8, 8, 9, 9}),
+      makeFlatVector<int32_t>({10, 11, 12}),
+  };
+  auto dataWithoutOverlap = addPayload(keysWithoutOverlap, 1);
+  auto planWithoutOverlap = PlanBuilder()
+                                .values(dataWithoutOverlap)
+                                .streamingAggregation(
+                                    {"c0"},
+                                    {"arbitrary(c1)", "array_agg(c1)"},
+                                    {},
+                                    core::AggregationNode::Step::kSingle,
+                                    false)
+                                .planNode();
+  const auto expectedWithoutOverlap = makeRowVector(
+      {makeNullableFlatVector<int32_t>(
+           {1, std::nullopt, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+       makeFlatVector<int32_t>({0, 2, 3, 5, 7, 9, 10, 12, 13, 15, 17, 18, 19}),
+       makeArrayVector<int32_t>(
+           {{0, 1},
+            {2},
+            {3, 4},
+            {5, 6},
+            {7, 8},
+            {9},
+            {10, 11},
+            {12},
+            {13, 14},
+            {15, 16},
+            {17},
+            {18},
+            {19}})});
+  for (auto batchSize : {1, 3, 20}) {
+    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    config(AssertQueryBuilder(planWithoutOverlap), batchSize)
+        .assertResults(expectedWithoutOverlap);
+  }
+
+  std::vector<VectorPtr> mixedKeys = {
+      makeNullableFlatVector<int32_t>({1, 1, std::nullopt, std::nullopt, 2}),
+      makeFlatVector<int32_t>({3, 3, 4, 4}),
+      makeFlatVector<int32_t>({6, 6, 6, 7}),
+      makeFlatVector<int32_t>({7, 8, 9, 9}),
+      makeFlatVector<int32_t>({10, 11, 12}),
+  };
+  auto mixedData = addPayload(mixedKeys, 1);
+  auto mixedPlan = PlanBuilder()
+                       .values(mixedData)
+                       .streamingAggregation(
+                           {"c0"},
+                           {"arbitrary(c1)", "array_agg(c1)"},
+                           {},
+                           core::AggregationNode::Step::kSingle,
+                           false)
+                       .planNode();
+  const auto expectedMixedResult = makeRowVector(
+      {makeNullableFlatVector<int32_t>(
+           {1, std::nullopt, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12}),
+       makeFlatVector<int32_t>({0, 2, 4, 5, 7, 9, 12, 14, 15, 17, 18, 19}),
+       makeArrayVector<int32_t>(
+           {{0, 1},
+            {2, 3},
+            {4},
+            {5, 6},
+            {7, 8},
+            {9, 10, 11},
+            {12, 13},
+            {14},
+            {15, 16},
+            {17},
+            {18},
+            {19}})});
+  for (auto batchSize : {1, 3, 20}) {
+    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    config(AssertQueryBuilder(mixedPlan), batchSize)
+        .assertResults(expectedMixedResult);
+  }
+}
+
+TEST_P(StreamingAggregationTest, clusteredInputWithNulls) {
+  std::vector<VectorPtr> keyVectors = {
+      makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, 3, 3}),
+      makeFlatVector<int32_t>({4, 4, 4, 4, 5, 5, 5, 5, 6, 6}),
+      makeFlatVector<int32_t>({7, 7, 7, 8}),
+      makeFlatVector<int32_t>({8, 8, 8, 9, 9, 9, 10, 10, 10}),
+      makeFlatVector<int32_t>({11, 11, 11}),
+  };
+  std::vector<VectorPtr> dataVectors = {
+      makeRowVector(
+          {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, 3, 3}),
+           makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, 3, 3})},
+          [](auto row) { return row < 3; }),
+      makeRowVector(
+          {makeFlatVector<int32_t>({4, 4, 4, 4, 5, 5, 5, 5, 6, 6}),
+           makeFlatVector<int32_t>({4, 4, 4, 4, 5, 5, 5, 5, 6, 6})},
+          [](auto row) { return row < 4 || row > 7; }),
+
+      makeRowVector(
+          {makeFlatVector<int32_t>({7, 7, 7, 8}),
+           makeFlatVector<int32_t>({7, 7, 7, 8})},
+          [](auto row) { return row > 2; }),
+
+      makeRowVector(
+          {makeFlatVector<int32_t>({8, 8, 8, 9, 9, 9, 10, 10, 10}),
+           makeFlatVector<int32_t>({8, 8, 8, 9, 9, 9, 10, 10, 10})},
+          [](auto row) { return row < 3; }),
+
+      makeRowVector(
+          {makeFlatVector<int32_t>({11, 11, 11}),
+           makeFlatVector<int32_t>({11, 11, 11})},
+          [](auto /*unused*/) { return true; })};
+  ASSERT_EQ(keyVectors.size(), dataVectors.size());
+  std::vector<RowVectorPtr> rowVectors;
+  for (int i = 0; i < keyVectors.size(); ++i) {
+    rowVectors.emplace_back(makeRowVector({keyVectors[i], dataVectors[i]}));
+  }
+
+  const auto plan =
+      PlanBuilder()
+          .values(rowVectors)
+          .partialStreamingAggregation({"c0"}, {"count(c1)", "arbitrary(c1)"})
+          .finalAggregation()
+          .planNode();
+
+  const auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}),
+       makeFlatVector<int64_t>({0, 3, 4, 0, 4, 0, 3, 0, 3, 3, 0}),
+       makeRowVector(
+           {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}),
+            makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})},
+           [](auto row) {
+             if (row == 0 || row == 3 || row == 5 || row == 7 || row == 10) {
+               return true;
+             }
+             return false;
+           })});
+  for (auto batchSize : {20}) {
+    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    config(AssertQueryBuilder(plan), batchSize).assertResults(expected);
+  }
+}
+
 TEST_P(StreamingAggregationTest, sortedAggregationsWithBarrier) {
   const auto size = 1024;
   const std::vector<VectorPtr> keys = {
@@ -889,8 +1053,8 @@ TEST_P(StreamingAggregationTest, sortedAggregationsWithBarrier) {
           78, [size](auto row) { return (3 * size + row); }),
   };
 
-  testSortedAggregationWithBarrier(keys, 1024);
-  testSortedAggregationWithBarrier(keys, 32);
+  testSortedAggregationWithBarrier(keys, 1024, 4);
+  testSortedAggregationWithBarrier(keys, 32, 4);
 }
 
 TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
@@ -909,16 +1073,17 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId streamingAggregationNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .startTableScan()
-                  .outputType(std::dynamic_pointer_cast<const RowType>(
-                      inputVectors[0]->type()))
-                  .endTableScan()
-                  .partialStreamingAggregation(
-                      {"c0"}, {"count(c1)", "arbitrary(c1)", "array_agg(c1)"})
-                  .capturePlanNodeId(streamingAggregationNodeId)
-                  .finalAggregation()
-                  .planNode();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(
+              std::dynamic_pointer_cast<const RowType>(inputVectors[0]->type()))
+          .endTableScan()
+          .partialStreamingAggregation(
+              {"c0"}, {"count(c1)", "arbitrary(c1)", "array_agg(c1)"})
+          .capturePlanNodeId(streamingAggregationNodeId)
+          .finalAggregation()
+          .planNode();
   const auto expected = makeRowVector(
       {makeNullableFlatVector<int32_t>(
            {1, 2, std::nullopt, 3, 4, 9, 10, 11, 12, 17, 18, 19}),
@@ -929,28 +1094,20 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
   struct {
     int batchSize;
     bool barrierExecution;
+    int numExpectedOutputBatches;
 
     std::string debugString() const {
       return fmt::format(
-          "batchSize={}, barrierExecution={}", batchSize, barrierExecution);
+          "batchSize={}, barrierExecution={}, numExpectedOutputBatches={}",
+          batchSize,
+          barrierExecution,
+          numExpectedOutputBatches);
     }
-  } testSettings[] = {{3, true}, {3, false}, {20, true}, {20, false}};
+  } testSettings[] = {
+      {3, true, 3}, {3, false, 3}, {20, true, 3}, {20, false, 1}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    int expectedNumOuputBatchesWithBarrier{0};
-    int numInputRows{0};
-    for (const auto& inputVector : inputVectors) {
-      numInputRows += inputVector->size();
-      if (testData.batchSize > inputVector->size()) {
-        ++expectedNumOuputBatchesWithBarrier;
-      } else {
-        expectedNumOuputBatchesWithBarrier +=
-            bits::divRoundUp(inputVector->size(), testData.batchSize);
-      }
-    }
-    const int expectedNumOuputBatches =
-        bits::divRoundUp(numInputRows, testData.batchSize);
 
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .splits(makeHiveConnectorSplits(tempFiles))
@@ -967,8 +1124,7 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
         velox::exec::toPlanStats(taskStats)
             .at(streamingAggregationNodeId)
             .outputVectors,
-        testData.barrierExecution ? expectedNumOuputBatchesWithBarrier
-                                  : expectedNumOuputBatches);
+        testData.numExpectedOutputBatches);
   }
 }
 
@@ -983,8 +1139,8 @@ TEST_P(StreamingAggregationTest, distinctAggregationsWithBarrier) {
           78, [size](auto row) { return (3 * size + row); }),
   };
 
-  testDistinctAggregationWithBarrier(keys, 1024);
-  testDistinctAggregationWithBarrier(keys, 32);
+  testDistinctAggregationWithBarrier(keys, 1024, 4);
+  testDistinctAggregationWithBarrier(keys, 32, 4);
 
   std::vector<RowVectorPtr> multiKeys = {
       makeRowVector({
@@ -1002,6 +1158,331 @@ TEST_P(StreamingAggregationTest, distinctAggregationsWithBarrier) {
   };
   testMultiKeyDistinctAggregationWithBarrier(multiKeys, 1024);
   testMultiKeyDistinctAggregationWithBarrier(multiKeys, 3);
+}
+
+TEST_P(StreamingAggregationTest, constantInput) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 1, 2, 2})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialStreamingAggregation({"c0"}, {"array_agg(3)"})
+                  .finalAggregation()
+                  .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeArrayVector<int64_t>({{3, 3}, {3, 3}}),
+  });
+  config(AssertQueryBuilder(plan), 1).assertResults(expected);
+  config(AssertQueryBuilder(plan), 10).assertResults(expected);
+}
+
+TEST_P(StreamingAggregationTest, preferredOutputBatchBytes) {
+  // Use grouping keys that span one or more batches.
+  std::vector<VectorPtr> keys = {
+      makeNullableFlatVector<int32_t>({1, 1, std::nullopt, 2, 2}),
+      makeFlatVector<int32_t>({2, 3, 3, 4}),
+      makeFlatVector<int32_t>({5, 6, 6, 6}),
+      makeFlatVector<int32_t>({6, 6, 6, 6}),
+      makeFlatVector<int32_t>({6, 7, 8}),
+  };
+
+  auto data = addPayload(keys, 1);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialStreamingAggregation(
+                      {"c0"},
+                      {"count(1)",
+                       "min(c1)",
+                       "max(c1)",
+                       "sum(c1)",
+                       "sumnonpod(1)",
+                       "sum(cast(NULL as INT))"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto results =
+      config(AssertQueryBuilder(plan), 1024).copyResultBatches(pool_.get());
+
+  // If streamingMinOutputBatchSize is set to 1, we expect an output batch for:
+  // {1, NULL}, {2}, {3, 4}, {5}, {6}, {7, 8}.
+  // Otherwise, we expect the output batches to be determined by
+  // preferredOutputBatchBytes.
+  size_t expectedOutputBatches;
+  if (GetParam().streamingMinOutputBatchSize == 1) {
+    expectedOutputBatches = 6;
+  } else if (GetParam().preferredOutputBatchBytes == 1) {
+    expectedOutputBatches = 5;
+  } else if (GetParam().preferredOutputBatchBytes == 1024) {
+    expectedOutputBatches = 2;
+  } else {
+    ASSERT_EQ(
+        GetParam().preferredOutputBatchBytes,
+        std::numeric_limits<uint64_t>::max());
+    expectedOutputBatches = 1;
+  }
+
+  ASSERT_EQ(results.size(), expectedOutputBatches);
+}
+
+TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
+  // Create input batches where each batch has exactly one unique group.
+  // This tests the corner case where numGroups_ == 1 and noGroupsSpanBatches_
+  // is true.
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>({1, 1, 1, 1}),
+      makeFlatVector<int32_t>({2, 2, 2, 2}),
+      makeFlatVector<int32_t>({3, 3, 3, 3}),
+  };
+
+  auto data = addPayload(keys, 1);
+  createDuckDbTable(data);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggregationNodeId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(data)
+                  .streamingAggregation(
+                      {"c0"},
+                      {"count(1)", "sum(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
+                  .capturePlanNodeId(aggregationNodeId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(
+              core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+              std::to_string(1))
+          .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
+
+  // Verify the number of output batches matches the number of input batches
+  // because each batch contains a single group that should be output
+  // immediately.
+  const auto taskStats = task->taskStats();
+  ASSERT_EQ(
+      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      keys.size());
+}
+
+// Tests that when noGroupsSpanBatches is set, the number of output batches
+// matches the number of input batches when minOutputBatchRows is set to 1.
+// When minOutputBatchRows is set to an extremely large value, we expect a
+// single output batch.
+TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
+  // Create input batches where no group spans across batches.
+  // Each batch has unique grouping keys that don't appear in other batches.
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>({1, 1, 2, 2}),
+      makeFlatVector<int32_t>({3, 3, 4, 4}),
+      makeFlatVector<int32_t>({5, 5, 6, 6}),
+      makeFlatVector<int32_t>({7, 7, 8, 8}),
+      makeFlatVector<int32_t>({9, 9, 10, 10}),
+  };
+
+  auto data = addPayload(keys, 1);
+  createDuckDbTable(data);
+
+  struct {
+    int32_t minOutputBatchRows;
+    size_t expectedOutputBatches;
+
+    std::string debugString() const {
+      return fmt::format(
+          "minOutputBatchRows={}, expectedOutputBatches={}",
+          minOutputBatchRows,
+          expectedOutputBatches);
+    }
+  } testSettings[] = {
+      // Regardless of the value of minOutputBatchRows, each input batch
+      // produces an output batch.
+      // We do not respect minOutputBatchRows when noGroupsSpanBatches is set.
+      {1, keys.size()},
+      {std::numeric_limits<int32_t>::max(), keys.size()},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId aggregationNodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(data)
+                    .streamingAggregation(
+                        {"c0"},
+                        {"count(1)", "sum(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/true)
+                    .capturePlanNodeId(aggregationNodeId)
+                    .planNode();
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+                std::to_string(testData.minOutputBatchRows))
+            .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
+
+    // Verify the number of output batches.
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(
+        velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+        testData.expectedOutputBatches);
+  }
+}
+
+namespace {
+class InputSourceNode : public core::PlanNode {
+ public:
+  InputSourceNode(
+      const core::PlanNodeId& id,
+      int numInitialInputCalls,
+      int numSkipInputCalls,
+      core::PlanNodePtr source)
+      : PlanNode{id},
+        numInitialInputCalls_(numInitialInputCalls),
+        numSkipInputCalls_(numSkipInputCalls),
+        sources_{std::move(source)} {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  int numInitialInputCalls() const {
+    return numInitialInputCalls_;
+  }
+
+  int numSkipInputCalls() const {
+    return numSkipInputCalls_;
+  }
+
+  std::string_view name() const override {
+    return "external blocking node";
+  }
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+
+  const int numInitialInputCalls_;
+  const int numSkipInputCalls_;
+  const std::vector<core::PlanNodePtr> sources_;
+};
+
+class InputSourceOperator : public exec::Operator {
+ public:
+  InputSourceOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const InputSourceNode> node)
+      : Operator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            "InputSource"),
+        numInitialInputCalls_(node->numInitialInputCalls()),
+        numSkipInputCalls_(node->numSkipInputCalls()) {}
+
+  bool needsInput() const override {
+    if (numInitialInputCalls_-- >= 0) {
+      return true;
+    }
+    if (numSkipInputCalls_-- >= 0) {
+      return false;
+    }
+    return !noMoreInput_;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    auto output = std::move(input_);
+    input_ = nullptr;
+    return output;
+  }
+
+  exec::BlockingReason isBlocked(ContinueFuture* future) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_;
+  }
+
+ private:
+  mutable int numInitialInputCalls_{0};
+  mutable int numSkipInputCalls_{0};
+  RowVectorPtr input_;
+};
+
+class SourceNodeTranslator : public exec::Operator::PlanNodeTranslator {
+  std::unique_ptr<exec::Operator> toOperator(
+      exec::DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node) override {
+    if (auto castedNode =
+            std::dynamic_pointer_cast<const InputSourceNode>(node)) {
+      return std::make_unique<InputSourceOperator>(id, ctx, castedNode);
+    }
+    return nullptr;
+  }
+};
+} // namespace
+
+TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
+  exec::Operator::registerOperator(std::make_unique<SourceNodeTranslator>());
+  const auto size = 32;
+  const auto numBatches{5};
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int32_t>(
+             size,
+             [i, size](auto row) {
+               return row == 0 ? i * size + row - 1 : i * size + row;
+             }),
+         makeFlatVector<int32_t>(size, [](auto row) { return row; })}));
+  }
+  createDuckDbTable(batches);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggregationNodeId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(batches)
+                  .streamingAggregation(
+                      {"c0"},
+                      {"array_agg(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .addNode([](std::string id, core::PlanNodePtr input) mutable {
+                    return std::make_shared<InputSourceNode>(
+                        id, 2, numBatches - 2, input);
+                  })
+                  .project({"c0", "a0"})
+                  .capturePlanNodeId(aggregationNodeId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .serialExecution(true)
+          .config(
+              core::QueryConfig::kStreamingAggregationMinOutputBatchRows, "1")
+          .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY c0");
+  const auto taskStats = task->taskStats();
+  ASSERT_EQ(
+      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      9);
 }
 } // namespace
 } // namespace facebook::velox::exec

@@ -254,6 +254,57 @@ TEST(TimeZoneMapTest, getTimeZoneIDFromOffset) {
   VELOX_ASSERT_THROW(getTimeZoneID(-15'000), "Invalid timezone offset");
 }
 
+TEST(TimeZoneMapTest, offset) {
+  // Test offset-based timezones - should return the offset value.
+  {
+    const auto* tz = locateZone("+05:30");
+    ASSERT_NE(tz, nullptr);
+    auto offset = tz->offset();
+    ASSERT_TRUE(offset.has_value());
+    EXPECT_EQ(offset->count(), 330); // 5*60 + 30 = 330 minutes
+  }
+
+  {
+    const auto* tz = locateZone("-08:00");
+    ASSERT_NE(tz, nullptr);
+    auto offset = tz->offset();
+    ASSERT_TRUE(offset.has_value());
+    EXPECT_EQ(offset->count(), -480); // -8*60 = -480 minutes
+  }
+
+  {
+    const auto* tz = locateZone("+00:01");
+    ASSERT_NE(tz, nullptr);
+    auto offset = tz->offset();
+    ASSERT_TRUE(offset.has_value());
+    EXPECT_EQ(offset->count(), 1); // 1 minute
+  }
+
+  // Test named timezones - should return std::nullopt.
+  // Note: UTC is a named timezone with tzdb::time_zone pointer, not
+  // offset-based
+  {
+    const auto* tz = locateZone("UTC");
+    ASSERT_NE(tz, nullptr);
+    auto offset = tz->offset();
+    EXPECT_FALSE(offset.has_value());
+  }
+
+  {
+    const auto* tz = locateZone("America/Los_Angeles");
+    ASSERT_NE(tz, nullptr);
+    auto offset = tz->offset();
+    EXPECT_FALSE(offset.has_value());
+  }
+
+  {
+    const auto* tz = locateZone("Europe/London");
+    ASSERT_NE(tz, nullptr);
+    auto offset = tz->offset();
+    EXPECT_FALSE(offset.has_value());
+  }
+}
+
 TEST(TimeZoneMapTest, invalid) {
   VELOX_ASSERT_THROW(getTimeZoneName(99999999), "Unable to resolve timeZoneID");
   VELOX_ASSERT_THROW(getTimeZoneID("This is a test"), "Unknown time zone");

@@ -48,7 +48,7 @@ class VectorWriterBase {
     offset_ = offset;
   }
   virtual void commit(bool isSet) = 0;
-  virtual void ensureSize(size_t size) = 0;
+  virtual void ensureSize(vector_size_t size) = 0;
   virtual void finish() {}
   // Implementations that write variable length data or complex types should
   // override this to reset their state and that of their children.
@@ -94,8 +94,16 @@ struct PrimitiveWriter {
 };
 
 template <typename V>
-bool constexpr provide_std_interface = SimpleTypeTrait<V>::isPrimitiveType &&
-    !std::is_same_v<Varchar, V> && !std::is_same_v<Varbinary, V>;
+bool constexpr has_string_value =
+    std::is_same_v<V, Varchar> || std::is_same_v<V, Varbinary>;
+
+template <typename T, bool providesCustomComparison>
+bool constexpr has_string_value<CustomType<T, providesCustomComparison>> =
+    has_string_value<typename T::type>;
+
+template <typename V>
+bool constexpr provide_std_interface =
+    SimpleTypeTrait<V>::isPrimitiveType && !has_string_value<V>;
 
 // bool is an exception, it requires commit but also provides std::interface.
 template <typename V>
@@ -109,8 +117,7 @@ class ArrayWriter {
   using child_writer_t = VectorWriter<V, void>;
   using element_t = typename child_writer_t::exec_out_t;
 
-  static constexpr bool hasStringValue =
-      std::is_same_v<V, Varchar> || std::is_same_v<V, Varbinary>;
+  static constexpr bool hasStringValue = has_string_value<V>;
 
  public:
   // Note: size is with respect to the current size of this array being written.
@@ -118,8 +125,14 @@ class ArrayWriter {
     auto currentSize = size + valuesOffset_;
 
     if (UNLIKELY(currentSize > elementsVectorCapacity_)) {
-      elementsVectorCapacity_ = std::pow(2, std::ceil(std::log2(currentSize)));
-      childWriter_->ensureSize(elementsVectorCapacity_);
+      const vector_size_t childCapacity =
+          std::pow(2, std::ceil(std::log2(currentSize)));
+      childWriter_->ensureSize(childCapacity);
+
+      // Only update capacity_ after the writer has been successfully resized
+      // to ensure it accurately reflects the size of the elements even in the
+      // presence of failures.
+      elementsVectorCapacity_ = childCapacity;
     }
   }
 
@@ -598,10 +611,16 @@ class MapWriter {
     auto currentSize = size + innerOffset_;
 
     if (UNLIKELY(currentSize > capacity_)) {
-      capacity_ = std::pow(2, std::ceil(std::log2(currentSize)));
+      const vector_size_t childCapacity =
+          std::pow(2, std::ceil(std::log2(currentSize)));
 
-      keysWriter_->ensureSize(capacity_);
-      valuesWriter_->ensureSize(capacity_);
+      keysWriter_->ensureSize(childCapacity);
+      valuesWriter_->ensureSize(childCapacity);
+
+      // Only update capacity_ after the writers have been successfully resized
+      // to ensure it accurately reflects the minimum size of keys and values
+      // even in the presence of failures.
+      capacity_ = childCapacity;
     }
   }
 

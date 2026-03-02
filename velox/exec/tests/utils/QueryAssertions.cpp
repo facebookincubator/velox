@@ -20,9 +20,9 @@
 #include "duckdb/common/types.hpp" // @manual
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Type.h"
+#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
@@ -102,8 +102,9 @@ template <>
     vector_size_t index) {
   auto type = vector->type();
   if (type->isDate()) {
-    return ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
-        vector->as<SimpleVector<int32_t>>()->valueAt(index)));
+    return ::duckdb::Value::DATE(
+        ::duckdb::Date::EpochDaysToDate(
+            vector->as<SimpleVector<int32_t>>()->valueAt(index)));
   }
   return ::duckdb::Value(vector->as<SimpleVector<int32_t>>()->valueAt(index));
 }
@@ -129,6 +130,13 @@ template <>
     const int64_t microseconds = interval % kMicrosecondsInDay;
     const int64_t days = interval / kMicrosecondsInDay;
     return ::duckdb::Value::INTERVAL(0, days, microseconds);
+  }
+
+  if (type->isTime()) {
+    // TIME is stored as milliseconds since midnight in Velox.
+    // DuckDB TIME is stored as microseconds since midnight.
+    const auto timeMillis = vector->as<SimpleVector<int64_t>>()->valueAt(index);
+    return ::duckdb::Value::TIME(::duckdb::dtime_t(timeMillis * 1000L));
   }
 
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
@@ -218,9 +226,10 @@ template <>
   const auto& mapValues = mapVector->mapValues();
   auto offset = mapVector->offsetAt(mapRow);
   auto size = mapVector->sizeAt(mapRow);
-  auto mapType = ::duckdb::ListType::GetChildType(::duckdb::LogicalType::MAP(
-      duckdb::fromVeloxType(mapKeys->type()),
-      duckdb::fromVeloxType(mapValues->type())));
+  auto mapType = ::duckdb::ListType::GetChildType(
+      ::duckdb::LogicalType::MAP(
+          duckdb::fromVeloxType(mapKeys->type()),
+          duckdb::fromVeloxType(mapValues->type())));
   if (size == 0) {
     return ::duckdb::Value::MAP(mapType, ::duckdb::vector<::duckdb::Value>());
   }
@@ -276,7 +285,8 @@ variant variantAt<TypeKind::VARBINARY>(
     int32_t row,
     int32_t column) {
   return variant::binary(
-      StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
+      std::string(
+          ::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
 }
 
 template <>
@@ -321,7 +331,7 @@ variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
 
 template <>
 variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
-  return variant::binary(StringView(::duckdb::StringValue::Get(value)));
+  return variant::binary(std::string(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {
@@ -437,12 +447,20 @@ std::vector<MaterializedRow> materialize(
       } else if (type->isDecimal()) {
         row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
       } else if (type->isIntervalDayTime()) {
-        auto value = variant(::duckdb::Interval::GetMicro(
-            dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
+        auto value = variant(
+            ::duckdb::Interval::GetMicro(
+                dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
         row.push_back(value);
       } else if (type->isDate()) {
-        auto value = variant(::duckdb::Date::EpochDays(
-            dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
+        auto value = variant(
+            ::duckdb::Date::EpochDays(
+                dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
+        row.push_back(value);
+      } else if (type->isTime()) {
+        // DuckDB TIME is in microseconds, Velox TIME is in milliseconds.
+        auto value = variant(
+            dataChunk->GetValue(j, i).GetValue<::duckdb::dtime_t>().micros /
+            1000L);
         row.push_back(value);
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -453,93 +471,6 @@ std::vector<MaterializedRow> materialize(
     rows.push_back(row);
   }
   return rows;
-}
-
-template <TypeKind kind>
-variant variantAt(VectorPtr vector, int32_t row) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  return variant(vector->as<SimpleVector<T>>()->valueAt(row));
-}
-
-template <>
-variant variantAt<TypeKind::VARBINARY>(VectorPtr vector, int32_t row) {
-  return variant::binary(vector->as<SimpleVector<StringView>>()->valueAt(row));
-}
-
-variant variantAt(const VectorPtr& vector, vector_size_t row);
-
-variant arrayVariantAt(const VectorPtr& vector, vector_size_t row) {
-  auto arrayVector = vector->wrappedVector()->as<ArrayVector>();
-  auto& elements = arrayVector->elements();
-
-  auto wrappedRow = vector->wrappedIndex(row);
-  auto offset = arrayVector->offsetAt(wrappedRow);
-  auto size = arrayVector->sizeAt(wrappedRow);
-
-  std::vector<variant> array;
-  array.reserve(size);
-  for (auto i = 0; i < size; i++) {
-    auto innerRow = offset + i;
-    array.push_back(variantAt(elements, innerRow));
-  }
-  return variant::array(array);
-}
-
-variant mapVariantAt(const VectorPtr& vector, vector_size_t row) {
-  auto mapVector = vector->wrappedVector()->as<MapVector>();
-  auto& mapKeys = mapVector->mapKeys();
-  auto& mapValues = mapVector->mapValues();
-
-  auto wrappedRow = vector->wrappedIndex(row);
-  auto offset = mapVector->offsetAt(wrappedRow);
-  auto size = mapVector->sizeAt(wrappedRow);
-
-  std::map<variant, variant> map;
-  for (auto i = 0; i < size; i++) {
-    auto innerRow = offset + i;
-    auto key = variantAt(mapKeys, innerRow);
-    auto value = variantAt(mapValues, innerRow);
-    map.insert({key, value});
-  }
-  return variant::map(map);
-}
-
-variant rowVariantAt(const VectorPtr& vector, vector_size_t row) {
-  auto rowValues = vector->wrappedVector()->as<RowVector>();
-  auto wrappedRow = vector->wrappedIndex(row);
-
-  std::vector<variant> values;
-  for (auto& child : rowValues->children()) {
-    values.push_back(variantAt(child, wrappedRow));
-  }
-  return variant::row(std::move(values));
-}
-
-variant variantAt(const VectorPtr& vector, vector_size_t row) {
-  if (vector->isNullAt(row)) {
-    return nullVariant(vector->type());
-  }
-
-  auto typeKind = vector->typeKind();
-  if (typeKind == TypeKind::ROW) {
-    return rowVariantAt(vector, row);
-  }
-
-  if (typeKind == TypeKind::ARRAY) {
-    return arrayVariantAt(vector, row);
-  }
-
-  if (typeKind == TypeKind::MAP) {
-    return mapVariantAt(vector, row);
-  }
-
-  if (isTimestampWithTimeZoneType(vector->type())) {
-    return variant::typeWithCustomComparison<TypeKind::BIGINT>(
-        vector->as<SimpleVector<int64_t>>()->valueAt(row),
-        TIMESTAMP_WITH_TIME_ZONE());
-  }
-
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, typeKind, vector, row);
 }
 
 MaterializedRow getColumns(
@@ -797,7 +728,7 @@ std::string toTypeString(const MaterializedRow& row) {
     if (i > 0) {
       out << ", ";
     }
-    out << mapTypeKindToName(row[i].kind());
+    out << TypeKindName::toName(row[i].kind());
   }
   out << ")";
   return out.str();
@@ -899,7 +830,7 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
     MaterializedRow row;
     row.reserve(numColumns);
     for (size_t j = 0; j < numColumns; ++j) {
-      row.push_back(variantAt(simpleVectors[j], i));
+      row.push_back(simpleVectors[j]->variantAt(i));
     }
     rows.push_back(row);
   }
@@ -1433,11 +1364,12 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
-
   while (!cursor->noMoreSplits()) {
     addSplits(cursor.get());
     while (cursor->moveNext()) {
-      result.push_back(cursor->current());
+      auto vector = cursor->current();
+      vector->loadedVector();
+      result.push_back(std::move(vector));
       testingMaybeTriggerAbort(task);
     }
   }
@@ -1507,7 +1439,7 @@ bool waitForTaskStateChange(
 void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
   uint64_t waitUs = 0;
   while (Task::numRunningTasks() != 0) {
-    constexpr uint64_t kWaitInternalUs = 1'000;
+    constexpr uint64_t kWaitInternalUs = 50'000;
     std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
     waitUs += kWaitInternalUs;
     if (waitUs >= maxWaitUs) {
@@ -1527,6 +1459,15 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       "{} pending tasks\n{}",
       pendingTasks.size(),
       folly::join("\n", pendingTaskStats));
+}
+
+void cancelAllTasks() {
+  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
+  for (const auto& task : pendingTasks) {
+    if (task->isRunning()) {
+      task->requestCancel();
+    }
+  }
 }
 
 std::shared_ptr<Task> assertQuery(

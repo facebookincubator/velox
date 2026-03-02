@@ -18,13 +18,10 @@
 
 namespace facebook::velox::functions {
 
-/// Checks nested nulls in a complex type vector. Returns true if value at
-/// specified index is null. Throws an exception if the base vector contains
-/// nulls if 'throwOnNestedNulls' is true.
 bool checkNestedNulls(
     const DecodedVector& decoded,
-    const vector_size_t* indices,
     vector_size_t index,
+    vector_size_t baseIndex,
     bool throwOnNestedNulls) {
   if (decoded.isNullAt(index)) {
     return true;
@@ -32,11 +29,12 @@ bool checkNestedNulls(
 
   if (throwOnNestedNulls) {
     VELOX_USER_CHECK(
-        !decoded.base()->containsNullAt(indices[index]),
+        !decoded.base()->containsNullAt(baseIndex),
         "{} comparison not supported for values that contain nulls",
-        mapTypeKindToName(decoded.base()->typeKind()));
+        TypeKindName::toName(decoded.base()->typeKind()));
   }
 
   return false;
 }
+
 } // namespace facebook::velox::functions

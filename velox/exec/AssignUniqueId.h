@@ -37,7 +37,7 @@ class AssignUniqueId : public Operator {
   }
 
   bool needsInput() const override {
-    return true;
+    return input_ == nullptr;
   }
 
   void addInput(RowVectorPtr input) override;
@@ -46,6 +46,11 @@ class AssignUniqueId : public Operator {
 
   BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return BlockingReason::kNotBlocked;
+  }
+
+  bool startDrain() override {
+    // No need to drain for assignUniqueId operator.
+    return false;
   }
 
   bool isFinished() override;

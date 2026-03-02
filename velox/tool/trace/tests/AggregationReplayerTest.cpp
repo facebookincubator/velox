@@ -25,15 +25,16 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -66,11 +67,7 @@ class AggregationReplayerTest : public HiveConnectorTestBase {
     }
     Type::registerSerDe();
     common::Filter::registerSerDe();
-    connector::hive::HiveTableHandle::registerSerDe();
-    connector::hive::LocationHandle::registerSerDe();
-    connector::hive::HiveColumnHandle::registerSerDe();
-    connector::hive::HiveInsertTableHandle::registerSerDe();
-    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
+    connector::hive::HiveConnector::registerSerDe();
     core::PlanNode::registerSerDe();
     velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
@@ -274,6 +271,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
                                        traceNodeId_,
                                        "Aggregation",
                                        "",
+                                       "",
                                        0,
                                        executor_.get())
                                        .run();
@@ -289,6 +287,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
 
       FLAGS_task_id = task->taskId();
       FLAGS_driver_ids = "";
@@ -298,6 +297,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
     }
   }
 }
@@ -340,6 +340,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
                                        traceNodeId_,
                                        "Aggregation",
                                        "",
+                                       "",
                                        0,
                                        executor_.get())
                                        .run();
@@ -355,6 +356,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
 
       FLAGS_task_id = task->taskId();
       FLAGS_driver_ids = "";
@@ -364,6 +366,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
         runner.init();
         runner.run();
       }
+      resetHiveConnector();
     }
   }
 }

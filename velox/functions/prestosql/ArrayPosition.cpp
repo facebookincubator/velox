@@ -15,7 +15,7 @@
  */
 #include <folly/CPortability.h>
 
-#include "velox/expression/Expr.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/DecodedVector.h"
@@ -437,22 +437,23 @@ class ArrayPositionFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {// array(T), T -> int64_t
-            exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("bigint")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .build(),
+    return {
+        // array(T), T -> int64_t
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("bigint")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .build(),
 
-            // array(T), T, int64_t -> int64_t
-            exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("bigint")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .argumentType("bigint")
-                .build()};
+        // array(T), T, int64_t -> int64_t
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("bigint")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .argumentType("bigint")
+            .build()};
   }
 };
 

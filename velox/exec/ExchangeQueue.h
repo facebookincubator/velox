@@ -15,66 +15,11 @@
  */
 #pragma once
 
-#include "velox/common/memory/ByteStream.h"
+#include "velox/exec/SerializedPage.h"
+
+#include <mutex>
 
 namespace facebook::velox::exec {
-
-/// Corresponds to Presto SerializedPage, i.e. a container for serialize vectors
-/// in Presto wire format.
-class SerializedPage {
- public:
-  /// Construct from IOBuf chain.
-  explicit SerializedPage(
-      std::unique_ptr<folly::IOBuf> iobuf,
-      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr,
-      std::optional<int64_t> numRows = std::nullopt);
-
-  ~SerializedPage();
-
-  /// Returns the size of the serialized data in bytes.
-  uint64_t size() const {
-    return iobufBytes_;
-  }
-
-  std::optional<int64_t> numRows() const {
-    return numRows_;
-  }
-
-  /// Makes 'input' ready for deserializing 'this' with
-  /// VectorStreamGroup::read().
-  std::unique_ptr<ByteInputStream> prepareStreamForDeserialize();
-
-  std::unique_ptr<folly::IOBuf> getIOBuf() const {
-    return iobuf_->clone();
-  }
-
- private:
-  static int64_t chainBytes(folly::IOBuf& iobuf) {
-    int64_t size = 0;
-    for (auto& range : iobuf) {
-      size += range.size();
-    }
-    return size;
-  }
-
-  // Buffers containing the serialized data. The memory is owned by 'iobuf_'.
-  std::vector<ByteRange> ranges_;
-
-  // IOBuf holding the data in 'ranges_.
-  std::unique_ptr<folly::IOBuf> iobuf_;
-
-  // Number of payload bytes in 'iobuf_'.
-  const int64_t iobufBytes_;
-
-  // Number of payload rows, if provided.
-  const std::optional<int64_t> numRows_;
-
-  // Callback that will be called on destruction of the SerializedPage,
-  // primarily used to free externally allocated memory backing folly::IOBuf
-  // from caller. Caller is responsible to pass in proper cleanup logic to
-  // prevent any memory leak.
-  std::function<void(folly::IOBuf&)> onDestructionCb_;
-};
 
 /// Queue of results retrieved from source. Owned by shared_ptr by
 /// Exchange and client threads and registered callbacks waiting
@@ -108,7 +53,7 @@ class ExchangeQueue {
   /// returned in 'promises'. When 'page' is nullptr and the queue is not
   /// completed serving data, no 'promises' will be added and returned.
   void enqueueLocked(
-      std::unique_ptr<SerializedPage>&& page,
+      std::unique_ptr<SerializedPageBase>&& page,
       std::vector<ContinuePromise>& promises);
 
   /// If data is permanently not available, e.g. the source cannot be
@@ -127,7 +72,7 @@ class ExchangeQueue {
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
-  std::vector<std::unique_ptr<SerializedPage>> dequeueLocked(
+  std::vector<std::unique_ptr<SerializedPageBase>> dequeueLocked(
       int consumerId,
       uint32_t maxBytes,
       bool* atEnd,
@@ -162,6 +107,10 @@ class ExchangeQueue {
 
   void noMoreSources();
 
+  bool hasNoMoreSources() const {
+    return noMoreSources_;
+  }
+
   void close();
 
  private:
@@ -170,9 +119,9 @@ class ExchangeQueue {
     return clearAllPromisesLocked();
   }
 
-  std::vector<ContinuePromise> checkCompleteLocked() {
+  std::vector<ContinuePromise> checkNoMoreInput() {
     if (noMoreSources_ && numCompleted_ == numSources_) {
-      atEnd_ = true;
+      noMoreInput_ = true;
       return clearAllPromisesLocked();
     }
     return {};
@@ -193,7 +142,9 @@ class ExchangeQueue {
   }
 
   std::vector<ContinuePromise> clearAllPromisesLocked() {
-    std::vector<ContinuePromise> promises(promises_.size());
+    std::vector<ContinuePromise> promises;
+    promises.reserve(promises_.size());
+
     auto it = promises_.begin();
     while (it != promises_.end()) {
       promises.push_back(std::move(it->second));
@@ -216,11 +167,14 @@ class ExchangeQueue {
 
   int numCompleted_{0};
   int numSources_{0};
-  bool noMoreSources_{false};
-  bool atEnd_{false};
+  tsan_atomic<bool> noMoreSources_{false};
+  // True if no more pages will be enqueued. This can be due to all sources
+  // completing normally or an error. Note that the queue itself may still
+  // contain data to be consumed.
+  bool noMoreInput_{false};
 
   std::mutex mutex_;
-  std::deque<std::unique_ptr<SerializedPage>> queue_;
+  std::deque<std::unique_ptr<SerializedPageBase>> queue_;
   // The map from consumer id to the waiting promise
   folly::F14FastMap<int, ContinuePromise> promises_;
 

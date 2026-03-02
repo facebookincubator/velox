@@ -358,12 +358,12 @@ struct Timestamp {
       const TimestampToStringOptions& options,
       char* const startPosition);
 
-  // Assuming the timestamp represents a time at zone, converts it to the GMT
-  // time at the same moment. For example:
-  //
-  //  Timestamp ts{0, 0};
-  //  ts.Timezone("America/Los_Angeles");
-  //  ts.toString(); // returns January 1, 1970 08:00:00
+  /// Assuming the timestamp represents a time at zone, converts it to the GMT
+  /// time at the same moment. For example:
+  ///
+  ///  Timestamp ts{0, 0};
+  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toString(); // returns January 1, 1970 08:00:00
   void toGMT(const tz::TimeZone& zone);
 
   /// Assuming the timestamp represents a GMT time, converts it to the time at
@@ -377,33 +377,8 @@ struct Timestamp {
   /// A default time zone that is same across the process.
   static const tz::TimeZone& defaultTimezone();
 
-  bool operator==(const Timestamp& b) const {
-    return seconds_ == b.seconds_ && nanos_ == b.nanos_;
-  }
-
-  bool operator!=(const Timestamp& b) const {
-    return seconds_ != b.seconds_ || nanos_ != b.nanos_;
-  }
-
-  bool operator<(const Timestamp& b) const {
-    return seconds_ < b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ < b.nanos_);
-  }
-
-  bool operator<=(const Timestamp& b) const {
-    return seconds_ < b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ <= b.nanos_);
-  }
-
-  bool operator>(const Timestamp& b) const {
-    return seconds_ > b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ > b.nanos_);
-  }
-
-  bool operator>=(const Timestamp& b) const {
-    return seconds_ > b.seconds_ ||
-        (seconds_ == b.seconds_ && nanos_ >= b.nanos_);
-  }
+  bool operator==(const Timestamp& b) const = default;
+  auto operator<=>(const Timestamp& b) const = default;
 
   void operator++() {
     if (nanos_ < kMaxNanos) {
@@ -473,8 +448,6 @@ struct Timestamp {
   int64_t seconds_;
   uint64_t nanos_;
 };
-
-void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Timestamp& value, T* result) {

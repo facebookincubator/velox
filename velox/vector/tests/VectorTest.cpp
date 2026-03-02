@@ -22,8 +22,10 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -34,6 +36,7 @@
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
+#include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -63,6 +66,10 @@ class TestingLoader : public VectorLoader {
 
   int32_t rowCount() const {
     return rowCounter_;
+  }
+
+  bool supportsHook() const override {
+    return true;
   }
 
  private:
@@ -112,6 +119,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    common::testutil::TestValue::enable();
   }
 
   void SetUp() override {
@@ -290,6 +298,24 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       flat->resize(size * 2);
       EXPECT_EQ(flat->valueAt(size * 2 - 1).size(), 0);
     }
+
+// This part of the test relies on TestValues to inject a failure, these are
+// only enabled in debug builds.
+#ifndef NDEBUG
+    {
+      // Make a copy so we don't modify the original Vector.
+      const auto slice = flat->slice(0, flat->size());
+
+      const std::string errorMessage = "Simulated failure in memory allocation";
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::FlatVector::resizeValues",
+          std::function<void(FlatVector<T>*)>(
+              [&](FlatVector<T>*) { VELOX_FAIL(errorMessage); }));
+
+      VELOX_ASSERT_THROW(slice->resize(slice->size() * 2), errorMessage);
+      slice->validate();
+    }
+#endif
 
     // Fill, the values at size * 2 - 1 gets assigned a second time.
     for (int32_t i = 0; i < flat->size(); ++i) {
@@ -663,11 +689,12 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       int level,
       vector_size_t offset,
       vector_size_t length) {
-    SCOPED_TRACE(fmt::format(
-        "testSlice encoding={} offset={} length={}",
-        vec->encoding(),
-        offset,
-        length));
+    SCOPED_TRACE(
+        fmt::format(
+            "testSlice encoding={} offset={} length={}",
+            vec->encoding(),
+            offset,
+            length));
     ASSERT_GE(vec->size(), offset + length);
     auto slice = vec->loadedVector()->slice(offset, length);
     ASSERT_EQ(slice->size(), length);
@@ -743,14 +770,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       // immutable. This is true for a slice since it creates buffer views over
       // the buffers of the original vector that it sliced.
       auto newSize = slice->size() * 2;
+      auto sliceCopy = BaseVector::copy(*slice);
       slice->resize(newSize);
       EXPECT_EQ(slice->size(), newSize);
+      slice->resize(sliceCopy->size());
+      test::assertEqualVectors(slice, sliceCopy);
     }
   }
 
   static void testSlices(const VectorPtr& slice, int level = 2) {
     for (vector_size_t offset : {0, 16, 17}) {
-      for (vector_size_t length : {0, 1, 83}) {
+      for (vector_size_t length : {0, 1, 83, 100}) {
         if (offset + length <= slice->size()) {
           testSlice(slice, level, offset, length);
         }
@@ -871,6 +901,17 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     OStreamOutputStream oddOutputStream(&oddStream);
     even.flush(&evenOutputStream);
     odd.flush(&oddOutputStream);
+    ASSERT_GT(even.size(), 0);
+    even.clear();
+    // We expect two pages for header after clear.
+    ASSERT_EQ(
+        even.size(),
+        memory::AllocationTraits::pageBytes(even.testingAllocationQuantum()));
+    ASSERT_GT(odd.size(), 0);
+    odd.clear();
+    ASSERT_EQ(
+        odd.size(),
+        memory::AllocationTraits::pageBytes(odd.testingAllocationQuantum()));
 
     auto evenString = evenStream.str();
     checkSizes(source.get(), evenSizes, evenString);
@@ -1472,16 +1513,6 @@ TEST_F(VectorTest, wrapInConstant) {
     ASSERT_TRUE(constArrayVector->equalValueAt(arrayVector.get(), i, 3));
   }
 
-  // Wrap constant with valueVector and null value.
-  constBaseVector = std::make_shared<ConstantVector<ComplexType>>(
-      pool(), size, 7, arrayVector);
-  constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
-      BaseVector::wrapInConstant(size, 22, constBaseVector, true));
-  EXPECT_NE(constArrayVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_TRUE(constArrayVector->isNullAt(i));
-  }
-
   // Wrap a loaded lazy complex vector that will be retained as a valueVector.
   // Ensure the lazy layer is stripped away and the valueVector points to the
   // loaded Vector underneath it.
@@ -1495,78 +1526,6 @@ TEST_F(VectorTest, wrapInConstant) {
   constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
       BaseVector::wrapInConstant(size, 22, lazyOverArray));
   EXPECT_FALSE(constArrayVector->valueVector()->isLazy());
-}
-
-TEST_F(VectorTest, wrapInConstantWithCopy) {
-  // Wrap flat vector.
-  const vector_size_t size = 1'000;
-  auto flatVector =
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }, nullEvery(7));
-
-  auto constVector = std::dynamic_pointer_cast<ConstantVector<int32_t>>(
-      BaseVector::wrapInConstant(size, 5, flatVector, true));
-  EXPECT_EQ(constVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_FALSE(constVector->isNullAt(i));
-    ASSERT_EQ(5, constVector->valueAt(i));
-  }
-
-  constVector = std::dynamic_pointer_cast<ConstantVector<int32_t>>(
-      BaseVector::wrapInConstant(size, 7, flatVector, true));
-  EXPECT_EQ(constVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_TRUE(constVector->isNullAt(i));
-  }
-
-  // Wrap dictionary vector.
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (auto i = 0; i < size; i++) {
-    rawIndices[i] = 2 * i % size;
-  }
-
-  BufferPtr nulls = allocateNulls(size, pool());
-  auto rawNulls = nulls->asMutable<uint64_t>();
-  for (auto i = 0; i < size; i++) {
-    bits::setNull(rawNulls, i, i % 11 == 0);
-  }
-
-  auto dictVector =
-      BaseVector::wrapInDictionary(nulls, indices, size, flatVector);
-
-  constVector = std::dynamic_pointer_cast<ConstantVector<int32_t>>(
-      BaseVector::wrapInConstant(size, 5, dictVector, true));
-  EXPECT_EQ(constVector->valueVector(), nullptr);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_FALSE(constVector->isNullAt(i));
-    ASSERT_EQ(10, constVector->valueAt(i));
-  }
-
-  // Wrap constant with valueVector.
-  auto arrayVector = makeArrayVector<int32_t>(
-      size, [](auto) { return 10; }, [](auto i) { return i; }, nullEvery(7));
-  auto constBaseVector = std::make_shared<ConstantVector<ComplexType>>(
-      pool(), size, 3, arrayVector);
-  auto constArrayVector =
-      std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
-          BaseVector::wrapInConstant(size, 22, constBaseVector, true));
-  EXPECT_NE(constArrayVector->valueVector(), nullptr);
-  EXPECT_EQ(constArrayVector->valueVector().use_count(), 1);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_FALSE(constArrayVector->isNullAt(i));
-    ASSERT_TRUE(constArrayVector->equalValueAt(arrayVector.get(), i, 3));
-  }
-
-  // Wrap constant with valueVector and null value.
-  constBaseVector = std::make_shared<ConstantVector<ComplexType>>(
-      pool(), size, 7, arrayVector);
-  constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
-      BaseVector::wrapInConstant(size, 22, constBaseVector, true));
-  EXPECT_NE(constArrayVector->valueVector(), nullptr);
-  EXPECT_EQ(constArrayVector->valueVector().use_count(), 1);
-  for (auto i = 0; i < size; i++) {
-    ASSERT_TRUE(constArrayVector->isNullAt(i));
-  }
 }
 
 TEST_F(VectorTest, rowResize) {
@@ -1673,6 +1632,15 @@ TEST_F(VectorTest, rowPrepareForReuse) {
       ASSERT_EQ(child->size(), newSize);
     }
   }
+}
+
+TEST_F(VectorTest, makeFlatVectorWithInitializerList) {
+  auto vector = makeFlatVector<int64_t>({803});
+
+  ASSERT_NE(vector, nullptr);
+  EXPECT_EQ(vector->size(), 1);
+
+  EXPECT_EQ(vector->asFlatVector<int64_t>()->valueAt(0), 803);
 }
 
 TEST_F(VectorTest, wrapConstantInDictionary) {
@@ -2007,6 +1975,8 @@ TEST_F(VectorCreateConstantTest, complex) {
   testComplexConstant<TypeKind::ROW>(
       ROW({{"c0", INTEGER()}}),
       makeRowVector({makeFlatVector<int32_t>(1, [](auto i) { return i; })}));
+
+  testComplexConstant<TypeKind::ROW>(ROW({}), makeRowVector(ROW({}), 1));
 }
 
 TEST_F(VectorCreateConstantTest, null) {
@@ -2030,6 +2000,7 @@ TEST_F(VectorCreateConstantTest, null) {
   testNullConstant<TypeKind::VARBINARY>(VARBINARY());
 
   testNullConstant<TypeKind::ROW>(ROW({BIGINT(), REAL()}));
+  testNullConstant<TypeKind::ROW>(ROW({}));
   testNullConstant<TypeKind::ARRAY>(ARRAY(DOUBLE()));
   testNullConstant<TypeKind::MAP>(MAP(INTEGER(), DOUBLE()));
 }
@@ -2053,6 +2024,7 @@ class TestingHook : public ValueHook {
       }
     }
   }
+
   int32_t errors() const {
     return errors_;
   }
@@ -2284,8 +2256,9 @@ TEST_F(VectorTest, nestedLazy) {
 
   // Verify that the unloaded dictionary can be nested as long as it has one top
   // level vector.
-  EXPECT_NO_THROW(BaseVector::wrapInDictionary(
-      nullptr, makeIndices(size, indexAt), size, dict));
+  EXPECT_NO_THROW(
+      BaseVector::wrapInDictionary(
+          nullptr, makeIndices(size, indexAt), size, dict));
 
   // Limitation: Current checks cannot prevent existing references of the lazy
   // vector to load rows. For example, the following would succeed even though
@@ -2734,14 +2707,16 @@ TEST_F(VectorTest, testCopyWithZeroCount) {
   runTest(makeFlatVector<int32_t>({1, 2}));
 
   // Complex types.
-  runTest(makeArrayVector<int32_t>(
-      1, [](auto) { return 10; }, [](auto i) { return i; }));
+  runTest(
+      makeArrayVector<int32_t>(
+          1, [](auto) { return 10; }, [](auto i) { return i; }));
 
-  runTest(makeMapVector<int32_t, float>(
-      1,
-      [](auto) { return 10; },
-      [](auto i) { return i; },
-      [](auto i) { return i; }));
+  runTest(
+      makeMapVector<int32_t, float>(
+          1,
+          [](auto) { return 10; },
+          [](auto i) { return i; },
+          [](auto i) { return i; }));
 
   runTest(
       makeRowVector({makeFlatVector<int32_t>(1, [](auto i) { return i; })}));
@@ -2775,24 +2750,43 @@ TEST_F(VectorTest, flattenVector) {
 
   VectorPtr lazy = std::make_shared<LazyVector>(
       pool(), INTEGER(), flat->size(), std::make_unique<TestingLoader>(flat));
-  test(lazy, true);
+  test(lazy, false);
 
-  // Constant
+  // Constant.
   VectorPtr constant = BaseVector::wrapInConstant(100, 1, flat);
   test(constant, false);
   EXPECT_TRUE(constant->isFlatEncoding());
 
-  // Dictionary
+  // Dictionary.
   VectorPtr dictionary = BaseVector::wrapInDictionary(
       nullptr, makeIndices(100, [](auto row) { return row % 2; }), 100, flat);
   test(dictionary, false);
   EXPECT_TRUE(dictionary->isFlatEncoding());
 
+  // Lazy dictionary.
   VectorPtr lazyDictionary =
       wrapInLazyDictionary(makeFlatVector<int32_t>({1, 2, 3}));
-  test(lazyDictionary, true);
-  EXPECT_TRUE(lazyDictionary->isLazy());
-  EXPECT_TRUE(lazyDictionary->loadedVector()->isFlatEncoding());
+  test(lazyDictionary, false);
+  EXPECT_TRUE(lazyDictionary->isFlatEncoding());
+
+  // Lazy dictionary row, where children are also lazy dictionaries.
+  VectorPtr rowWithLazyDictionaryChildren = wrapInLazyDictionary(makeRowVector(
+      {wrapInLazyDictionary(makeFlatVector<int32_t>({1, 2, 3})),
+       wrapInLazyDictionary(array),
+       wrapInLazyDictionary(map)}));
+  test(rowWithLazyDictionaryChildren, false);
+  EXPECT_EQ(
+      rowWithLazyDictionaryChildren->encoding(), VectorEncoding::Simple::ROW);
+  RowVector* rowWithLazyDictionaryChildrenRowVector =
+      rowWithLazyDictionaryChildren->as<RowVector>();
+  EXPECT_TRUE(
+      rowWithLazyDictionaryChildrenRowVector->childAt(0)->isFlatEncoding());
+  EXPECT_EQ(
+      rowWithLazyDictionaryChildrenRowVector->childAt(1)->encoding(),
+      VectorEncoding::Simple::ARRAY);
+  EXPECT_EQ(
+      rowWithLazyDictionaryChildrenRowVector->childAt(2)->encoding(),
+      VectorEncoding::Simple::MAP);
 
   // Array with constant elements.
   auto* arrayVector = array->as<ArrayVector>();
@@ -3270,26 +3264,19 @@ TEST_F(VectorTest, mutableValues) {
   auto vector = makeFlatVector<int64_t>(1'000, [](auto row) { return row; });
 
   auto* rawValues = vector->rawValues();
-  vector->mutableValues(1'001);
+  vector->mutableValues();
   ASSERT_EQ(rawValues, vector->rawValues());
   for (auto i = 0; i < 1'000; ++i) {
     EXPECT_EQ(rawValues[i], i);
   }
 
-  vector->mutableValues(10'000);
-  ASSERT_NE(rawValues, vector->rawValues());
-  rawValues = vector->rawValues();
-  for (auto i = 0; i < 1'000; ++i) {
-    EXPECT_EQ(rawValues[i], i);
-  }
-
-  auto values = vector->mutableValues(2'000);
+  auto values = vector->mutableValues();
   ASSERT_EQ(rawValues, vector->rawValues());
   for (auto i = 0; i < 1'000; ++i) {
     EXPECT_EQ(rawValues[i], i);
   }
 
-  vector->mutableValues(500);
+  vector->mutableValues();
   ASSERT_NE(rawValues, vector->rawValues());
   rawValues = vector->rawValues();
   for (auto i = 0; i < 500; ++i) {
@@ -3643,6 +3630,81 @@ TEST_F(VectorTest, flatAllNulls) {
   }
 }
 
+TEST_F(VectorTest, hashValueAtArray) {
+  auto data = makeArrayVectorFromJson<int32_t>({
+      "[1, 2, 3]",
+      "[2, 1, 3]",
+      "[3, 2, 1]",
+      "[1, 2, 3, 4]",
+      "[1, null, 3]",
+      "[1, 2, 3]",
+  });
+
+  std::unordered_set<uint64_t> hashes;
+  for (auto i = 0; i < 5; ++i) {
+    EXPECT_TRUE(hashes.insert(data->hashValueAt(i)).second);
+  }
+  EXPECT_EQ(5, hashes.size());
+
+  EXPECT_EQ(data->hashValueAt(0), data->hashValueAt(5));
+}
+
+TEST_F(VectorTest, hashValueAtMap) {
+  auto data = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{1: 20, 2: 10}",
+      "{10: 1, 20: 2}",
+      "{1: 2, 3: 4}",
+      "{1: 2, 3: 4, 5: 6}",
+      "{2: 20, 1: 10}",
+  });
+
+  std::unordered_set<uint64_t> hashes;
+  for (auto i = 0; i < 5; ++i) {
+    EXPECT_TRUE(hashes.insert(data->hashValueAt(i)).second);
+  }
+  EXPECT_EQ(5, hashes.size());
+
+  EXPECT_EQ(data->hashValueAt(0), data->hashValueAt(5));
+}
+
+TEST_F(VectorTest, variantHashMatchesVectorHash) {
+  auto flat = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+  for (vector_size_t i = 0; i < flat->size(); ++i) {
+    auto v = flat->variantAt(i);
+    EXPECT_EQ(flat->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto array = makeArrayVectorFromJson<int64_t>({
+      "[1, 2, 3]",
+      "null",
+      "[1, null, 3]",
+  });
+  for (vector_size_t i = 0; i < array->size(); ++i) {
+    auto v = array->variantAt(i);
+    EXPECT_EQ(array->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{1: 10}",
+      "null",
+      "{1: null}",
+  });
+  for (vector_size_t i = 0; i < map->size(); ++i) {
+    auto v = map->variantAt(i);
+    EXPECT_EQ(map->hashValueAt(i), v.hash()) << "at " << i;
+  }
+
+  auto child1 = makeFlatVector<int64_t>({1, 2, 3});
+  auto child2 = makeNullableFlatVector<int64_t>({4, 5, std::nullopt});
+  auto row =
+      makeRowVector({child1, child2}, [](vector_size_t i) { return i == 1; });
+  for (vector_size_t i = 0; i < row->size(); ++i) {
+    auto v = row->variantAt(i);
+    EXPECT_EQ(row->hashValueAt(i), v.hash()) << "at " << i;
+  }
+}
+
 TEST_F(VectorTest, hashAll) {
   auto data = makeFlatVector<int32_t>({1, 2, 3});
   ASSERT_TRUE(data->getNullCount().has_value());
@@ -3662,11 +3724,40 @@ TEST_F(VectorTest, hashAll) {
 }
 
 TEST_F(VectorTest, setType) {
+  std::function<void(const VectorPtr&, const TypePtr&)> checkType =
+      [&](const VectorPtr& vector, const TypePtr& type) {
+        EXPECT_EQ(vector->type()->toString(), type->toString());
+        switch (vector->typeKind()) {
+          case TypeKind::ROW: {
+            auto rowVector = vector->as<RowVector>();
+            for (auto i = 0; i < rowVector->childrenSize(); ++i) {
+              auto& child = rowVector->childAt(i);
+              if (child) {
+                checkType(child, type->childAt(i));
+              }
+            }
+            break;
+          }
+          case TypeKind::ARRAY: {
+            checkType(vector->as<ArrayVector>()->elements(), type->childAt(0));
+            break;
+          }
+          case TypeKind::MAP: {
+            auto mapVector = vector->as<MapVector>();
+            checkType(mapVector->mapKeys(), type->childAt(0));
+            checkType(mapVector->mapValues(), type->childAt(1));
+            break;
+          }
+          default:
+            break;
+        }
+      };
+
   auto test = [&](auto& type, auto& newType, auto& invalidNewType) {
     auto vector = BaseVector::create(type, 1'000, pool());
 
     vector->setType(newType);
-    EXPECT_EQ(vector->type()->toString(), newType->toString());
+    checkType(vector, newType);
 
     VELOX_ASSERT_RUNTIME_THROW(
         vector->setType(invalidNewType),
@@ -3716,6 +3807,21 @@ TEST_F(VectorTest, setType) {
                ROW({"ee", "ff"}, {VARCHAR(), BIGINT()})),
            BIGINT()});
   test(type, newType, invalidNewType);
+
+  // Row with missing fields
+  type = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+  newType = ROW({"aa", "bb"}, {BIGINT(), BIGINT()});
+  auto vector = std::make_shared<RowVector>(
+      pool(),
+      type,
+      nullptr,
+      1,
+      std::vector<VectorPtr>{
+          BaseVector::create(BIGINT(), 1, pool()),
+          nullptr,
+      });
+  vector->setType(newType);
+  checkType(vector, newType);
 }
 
 TEST_F(VectorTest, getLargeStringBuffer) {
@@ -3726,20 +3832,45 @@ TEST_F(VectorTest, getLargeStringBuffer) {
 }
 
 TEST_F(VectorTest, mapUpdate) {
-  auto base = makeNullableMapVector<int64_t, int64_t>({
+  auto verifyUpdate =
+      [](MapVectorPtr& base, MapVectorPtr& update, MapVectorPtr& expected) {
+        auto actual = base->update({update});
+        ASSERT_EQ(actual->size(), expected->size());
+        for (int i = 0; i < actual->size(); ++i) {
+          ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
+        }
+      };
+
+  auto baseNoNulls = makeMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+      common::testutil::Empty,
+      {{{3, 1}}},
+      {{{4, 1}}},
+      {{{4, 1}}},
+  });
+  auto updateNoNulls = makeMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}}},
+      {{{4, 2}}},
+      common::testutil::Empty,
+      {{{5, 2}}},
+      {{{4, 1}}},
+  });
+  auto baseWithNulls = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
       common::testutil::optionalEmpty,
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
   });
-  auto update = makeNullableMapVector<int64_t, int64_t>({
+  auto updateWithNulls = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {3, 2}}},
       {{{4, 2}}},
       common::testutil::optionalEmpty,
       {{{5, 2}}},
       std::nullopt,
   });
+
+  // Case 1: Both base and update have nulls
   auto expected = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {3, 2}, {1, 1}}},
       {{{4, 2}}},
@@ -3747,11 +3878,35 @@ TEST_F(VectorTest, mapUpdate) {
       std::nullopt,
       std::nullopt,
   });
-  auto actual = base->update({update});
-  ASSERT_EQ(actual->size(), expected->size());
-  for (int i = 0; i < actual->size(); ++i) {
-    ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
-  }
+  verifyUpdate(baseWithNulls, updateWithNulls, expected);
+
+  // Case 2: Only base has nulls
+  expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{4, 1}}},
+  });
+  verifyUpdate(baseWithNulls, updateNoNulls, expected);
+  // Case 3: Only update has nulls
+  expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      {{{4, 1}, {5, 2}}},
+      std::nullopt,
+  });
+  verifyUpdate(baseNoNulls, updateWithNulls, expected);
+  // Case 4: Both base and update do not have nulls
+  expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {3, 2}, {1, 1}}},
+      {{{4, 2}}},
+      {{{3, 1}}},
+      {{{4, 1}, {5, 2}}},
+      {{{4, 1}}},
+  });
+  verifyUpdate(baseNoNulls, updateNoNulls, expected);
 }
 
 TEST_F(VectorTest, mapUpdateRowKeyType) {
@@ -4163,6 +4318,201 @@ TEST_F(VectorTest, estimateFlatSize) {
   // Test that the second call to prepareForReuse will not cause crash
   arrayVector->prepareForReuse();
 }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+TEST_F(VectorTest, transferOrCopyTo) {
+  auto rootPool = memory::memoryManager()->addRootPool("long-living");
+  auto pool = rootPool->addLeafChild("long-living leaf");
+  memory::MemoryManager anotherManager{memory::MemoryManager::Options{}};
+
+  VectorPtr vector;
+  VectorPtr expected;
+
+  // Test primitive type.
+  auto testPrimitive = [&](memory::MemoryManager* memoryManager) {
+    std::vector<int64_t> c0;
+    std::vector<std::string> c1;
+    {
+      auto localRootPool = memoryManager->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+      FuzzerGenerator rng{123};
+      std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+      for (auto i = 0; i < 1000; ++i) {
+        c0.push_back(fuzzer::rand<int64_t>(rng, fuzzer::DataSpec{}));
+        std::string buf;
+        fuzzer::randString(
+            rng,
+            fuzzer::rand<uint64_t>(rng, 0, 100),
+            {fuzzer::UTF8CharList::ASCII,
+             fuzzer::UTF8CharList::UNICODE_CASE_SENSITIVE,
+             fuzzer::UTF8CharList::EXTENDED_UNICODE},
+            buf,
+            converter);
+        c1.push_back(buf);
+      }
+      test::VectorMaker maker{localPool.get()};
+      vector = maker.rowVector(
+          {maker.flatVector<int64_t>(c0), maker.flatVector<std::string>(c1)});
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::VectorMaker maker{pool.get()};
+    expected = maker.rowVector(
+        {maker.flatVector<int64_t>(c0), maker.flatVector<std::string>(c1)});
+    test::assertEqualVectors(expected, vector);
+  };
+  testPrimitive(memory::memoryManager());
+  testPrimitive(&anotherManager);
+
+  // Test complex type.
+  auto testComplex = [&](memory::MemoryManager* memoryManager) {
+    {
+      auto localRootPool = memoryManager->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+      test::VectorMaker maker{localPool.get()};
+      vector = maker.rowVector(
+          {maker.flatVector<double>(
+               3,
+               [](auto row) { return row; },
+               [](auto row) { return row == 2; }),
+           maker.constantVector<bool>({true, true, true}),
+           maker.dictionaryVector<int64_t>({1, std::nullopt, 1}),
+           maker.arrayVector<int64_t>(
+               3,
+               [](auto row) { return row; },
+               [](auto row) { return row; },
+               [](auto row) { return row == 0; },
+               [](auto row) { return row == 1; }),
+           maker.mapVector<int64_t, int64_t>(
+               3,
+               [](auto row) { return row; },
+               [](auto row) { return row; },
+               [](auto row) { return row + 1; },
+               [](auto row) { return row == 1; },
+               [](auto row) { return row == 2; })});
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  };
+  testComplex(memory::memoryManager());
+  testComplex(&anotherManager);
+
+  // Test with fuzzing.
+  // TODO: FlatMapVector doesn't support copy() yet. Add it later when it
+  // supports.
+  VectorFuzzer::Options options{
+      .nullRatio = 0.2,
+      .stringVariableLength = true,
+      .allowLazyVector = true,
+      .allowFlatMapVector = false};
+  const int kNumIterations = 500;
+  auto testFuzz = [&](memory::MemoryManager* memoryManager) {
+    for (auto i = 0; i < kNumIterations; ++i) {
+      {
+        auto localRootPool = memoryManager->addRootPool("short-living");
+        auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+        VectorFuzzer fuzzer{options, localPool.get(), 123};
+        auto type = fuzzer.randType();
+        vector = fuzzer.fuzz(type);
+        expected = BaseVector::copy(*vector, pool.get());
+        vector->transferOrCopyTo(pool.get());
+      }
+      ASSERT_EQ(vector->pool(), pool.get());
+      test::assertEqualVectors(expected, vector);
+    }
+  };
+  testFuzz(memory::memoryManager());
+  testFuzz(&anotherManager);
+
+  // Test complex-typed vectors with buffers from different pools.
+  auto testBufferFromDifferentPools =
+      [&](memory::MemoryManager* memoryManager) {
+        VectorFuzzer fuzzer{options, pool.get(), 123};
+        for (auto i = 0; i < kNumIterations; ++i) {
+          {
+            auto localRootPool = memoryManager->addRootPool("short-living");
+            auto localPool = localRootPool->addLeafChild("short-living leaf");
+            VectorFuzzer localFuzzer{options, localPool.get(), 123};
+
+            auto type = fuzzer.randType();
+            auto elements = localFuzzer.fuzz(type);
+            auto arrays = fuzzer.fuzzArray(elements, 70);
+            fuzzer.setOptions({});
+            auto keys = fuzzer.fuzz(BIGINT());
+            fuzzer.setOptions(options);
+            auto maps = localFuzzer.fuzzMap(keys, arrays, 50);
+            vector = localFuzzer.fuzzRow({maps}, 50);
+
+            expected = BaseVector::copy(*vector, pool.get());
+            vector->transferOrCopyTo(pool.get());
+          }
+          ASSERT_EQ(vector->pool(), pool.get());
+          test::assertEqualVectors(expected, vector);
+        }
+      };
+  testBufferFromDifferentPools(memory::memoryManager());
+  testBufferFromDifferentPools(&anotherManager);
+
+  // Test opaque vector.
+  auto testOpaque = [&](memory::MemoryManager* memoryManager) {
+    {
+      auto localRootPool = memoryManager->addRootPool("short-living");
+      auto localPool = localRootPool->addLeafChild("short-living leaf");
+
+      auto type = OPAQUE<NonPOD>();
+      auto size = 100;
+      vector = BaseVector::create(type, size, localPool.get());
+      auto opaqueObj = std::make_shared<NonPOD>();
+      for (auto i = 0; i < size; ++i) {
+        vector->as<FlatVector<std::shared_ptr<void>>>()->set(i, opaqueObj);
+      }
+      expected = BaseVector::copy(*vector, pool.get());
+      vector->transferOrCopyTo(pool.get());
+    }
+    ASSERT_EQ(vector->pool(), pool.get());
+    test::assertEqualVectors(expected, vector);
+  };
+  testOpaque(memory::memoryManager());
+  testOpaque(&anotherManager);
+
+  auto testMemoryStats = [&options](size_t seed) {
+    auto localRoot1 = memory::memoryManager()->addRootPool("local root 1");
+    auto localLeaf1 = localRoot1->addLeafChild("local leaf 1");
+    auto localRoot2 = memory::memoryManager()->addRootPool("local root 2");
+    auto localLeaf2 = localRoot2->addLeafChild("local leaf 2");
+
+    EXPECT_EQ(localLeaf1->usedBytes(), 0);
+    EXPECT_EQ(localLeaf1->peakBytes(), 0);
+    EXPECT_EQ(localLeaf2->usedBytes(), 0);
+    EXPECT_EQ(localLeaf2->peakBytes(), 0);
+
+    VectorFuzzer fuzzer{options, localLeaf1.get(), seed};
+    auto size = fuzzer.randInRange(0, 10000);
+    auto type = fuzzer.randType();
+    auto vector = fuzzer.fuzz(type, size);
+    auto usedBytes = localLeaf1->usedBytes();
+    auto peakBytes = localLeaf1->peakBytes();
+
+    vector->transferOrCopyTo(localLeaf2.get());
+    EXPECT_LE(localLeaf2->usedBytes(), usedBytes);
+    EXPECT_LE(localLeaf2->peakBytes(), peakBytes);
+    if (localLeaf2->usedBytes() == 0) {
+      auto tmp = facebook::velox::isLazyNotLoaded(*vector) ||
+          vector->isConstantEncoding();
+      EXPECT_TRUE(tmp);
+    }
+    vector = nullptr;
+  };
+
+  for (auto i = 0; i < kNumIterations; ++i) {
+    testMemoryStats(kNumIterations * i + i);
+  }
+}
+#pragma GCC diagnostic pop
 
 } // namespace
 } // namespace facebook::velox

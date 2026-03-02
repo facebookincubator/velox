@@ -30,6 +30,7 @@
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::dwrf {
+
 using dwio::common::BufferedOutputStream;
 using dwio::common::DataBufferHolder;
 using dwio::common::compression::CompressionBufferPool;
@@ -50,16 +51,14 @@ class WriterContext : public CompressionBufferPool {
   ~WriterContext() override;
 
   bool hasStream(const DwrfStreamIdentifier& stream) const {
-    return streams_.find(stream) != streams_.end();
+    return streams_.find(stream) != streams_.cend();
   }
 
   const DataBufferHolder& getStream(const DwrfStreamIdentifier& stream) const {
     return streams_.at(stream);
   }
 
-  void addBuffer(
-      const DwrfStreamIdentifier& stream,
-      folly::StringPiece buffer) {
+  void addBuffer(const DwrfStreamIdentifier& stream, std::string_view buffer) {
     streams_.at(stream).take(buffer);
   }
 
@@ -115,7 +114,7 @@ class WriterContext : public CompressionBufferPool {
       velox::memory::MemoryPool& dictionaryPool,
       velox::memory::MemoryPool& generalPool) {
     auto result = dictEncoders_.find(encodingKey);
-    if (result == dictEncoders_.end()) {
+    if (result == dictEncoders_.cend()) {
       auto emplaceResult = dictEncoders_.emplace(
           encodingKey,
           std::make_unique<IntegerDictionaryEncoder<T>>(
@@ -233,7 +232,7 @@ class WriterContext : public CompressionBufferPool {
   void removeAllIntDictionaryEncodersOnNode(
       std::function<bool(uint32_t)> predicate) {
     auto iter = dictEncoders_.begin();
-    while (iter != dictEncoders_.end()) {
+    while (iter != dictEncoders_.cend()) {
       if (predicate(iter->first.node())) {
         iter = dictEncoders_.erase(iter);
       } else {

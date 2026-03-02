@@ -23,24 +23,15 @@
 #include <folly/experimental/EventCount.h>
 
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/hyperloglog/SparseHll.h"
-#include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TableWriter.h"
-#include "velox/exec/TraceUtil.h"
-#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/FilterProjectReplayer.h"
-
-#include "velox/common/file/Utils.h"
-#include "velox/exec/PlanNodeStats.h"
-
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;
@@ -54,6 +45,7 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::common::hll;
 
 namespace facebook::velox::tool::trace::test {
+namespace {
 class FilterProjectReplayerTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -65,13 +57,7 @@ class FilterProjectReplayerTest : public HiveConnectorTestBase {
     }
     Type::registerSerDe();
     common::Filter::registerSerDe();
-    connector::ConnectorTableHandle::registerSerDe();
-    connector::hive::HiveTableHandle::registerSerDe();
-    connector::hive::LocationHandle::registerSerDe();
-    connector::hive::HiveColumnHandle::registerSerDe();
-    connector::hive::HiveInsertTableHandle::registerSerDe();
-    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
-    connector::hive::HiveConnectorSplit::registerSerDe();
+    connector::hive::HiveConnector::registerSerDe();
     core::PlanNode::registerSerDe();
     velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
@@ -291,8 +277,8 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                               .run();
   assertEqualResults({result}, {replayingResult1, replayingResult2});
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto opTraceDir =
       exec::trace::getOpTraceDirectory(taskTraceDir, projectNodeId_, 0, 0);
   const auto opTraceDataFile = exec::trace::getOpTraceInputFilePath(opTraceDir);
@@ -352,4 +338,5 @@ TEST_F(FilterProjectReplayerTest, dryRun) {
                              .run();
   assertEqualResults({result}, {replayingResult});
 }
+} // namespace
 } // namespace facebook::velox::tool::trace::test

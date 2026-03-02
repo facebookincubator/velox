@@ -16,16 +16,16 @@
 #include "FunctionBaseTest.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/parse/TypeResolver.h"
 
 namespace facebook::velox::functions::test {
 
 void FunctionBaseTest::SetUpTestCase() {
   parse::registerTypeResolver();
-  // TODO: remove the registraiton of QDigest here once it is registered through
-  // registerAllScalarFunctions().
-  registerQDigestType();
+  // TODO: remove the registration of KHyperLogLog here once it is registered
+  // through registerAllScalarFunctions().
+  registerKHyperLogLogType();
   functions::prestosql::registerAllScalarFunctions();
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 }

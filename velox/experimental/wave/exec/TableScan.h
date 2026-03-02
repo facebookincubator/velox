@@ -65,15 +65,6 @@ class TableScan : public WaveSourceOperator {
 
   bool isFinished() const override;
 
-  bool canAddDynamicFilter() const override {
-    return true;
-  }
-
-  void addDynamicFilter(
-      const core::PlanNodeId& producer,
-      column_index_t outputChannel,
-      const std::shared_ptr<common::Filter>& filter) override;
-
   static uint64_t ioWaitNanos() {
     return ioWaitNanos_;
   }
@@ -105,14 +96,15 @@ class TableScan : public WaveSourceOperator {
   void updateStats(
       std::unordered_map<std::string, RuntimeCounter> stats,
       WaveSplitReader* splitReader = nullptr);
+  void updateStats(
+      std::unordered_map<std::string, RuntimeMetric> stats,
+      WaveSplitReader* splitReader = nullptr);
 
   // Process-wide IO wait time.
   static std::atomic<uint64_t> ioWaitNanos_;
 
-  const std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
-  const std::
-      unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-          columnHandles_;
+  const connector::ConnectorTableHandlePtr tableHandle_;
+  const connector::ColumnHandleMap columnHandles_;
   exec::DriverCtx* const driverCtx_;
   memory::MemoryPool* const connectorPool_;
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
@@ -121,9 +113,6 @@ class TableScan : public WaveSourceOperator {
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   bool noMoreSplits_ = false;
-  // Dynamic filters to add to the data source when it gets created.
-  std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
-      pendingDynamicFilters_;
 
   std::shared_ptr<connector::DataSource> dataSource_;
 

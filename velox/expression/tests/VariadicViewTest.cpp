@@ -293,8 +293,9 @@ TEST_F(NullableVariadicViewTest, variadicIntMoreArgs) {
       {makeNullableFlatVector(std::vector<std::optional<int64_t>>{-1, -2, -3}),
        makeNullableFlatVector(
            std::vector<std::optional<int64_t>>{-4, std::nullopt, -6}),
-       makeNullableFlatVector(std::vector<std::optional<int64_t>>{
-           std::nullopt, std::nullopt, std::nullopt})});
+       makeNullableFlatVector(
+           std::vector<std::optional<int64_t>>{
+               std::nullopt, std::nullopt, std::nullopt})});
 }
 
 TEST_F(NullableVariadicViewTest, notNullContainer) {
@@ -351,8 +352,9 @@ TEST_F(NullFreeVariadicViewTest, variadicIntMoreArgs) {
       {makeNullableFlatVector(std::vector<std::optional<int64_t>>{-1, -2, -3}),
        makeNullableFlatVector(
            std::vector<std::optional<int64_t>>{-4, std::nullopt, -6}),
-       makeNullableFlatVector(std::vector<std::optional<int64_t>>{
-           std::nullopt, std::nullopt, std::nullopt})});
+       makeNullableFlatVector(
+           std::vector<std::optional<int64_t>>{
+               std::nullopt, std::nullopt, std::nullopt})});
 }
 
 TEST_F(NullFreeVariadicViewTest, iteratorDifference) {

@@ -47,7 +47,7 @@ namespace facebook::velox::tool::trace {
 class TraceReplayRunner {
  public:
   TraceReplayRunner();
-  virtual ~TraceReplayRunner() = default;
+  virtual ~TraceReplayRunner();
 
   /// Initializes the trace replay runner by setting the velox runtime
   /// environment for the trace replay. It is invoked before run().
@@ -57,7 +57,8 @@ class TraceReplayRunner {
   virtual void run();
 
  protected:
-  std::unique_ptr<tool::trace::OperatorReplayerBase> createReplayer() const;
+  virtual std::unique_ptr<tool::trace::OperatorReplayerBase> createReplayer()
+      const;
 
   const std::unique_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_;
   const std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;

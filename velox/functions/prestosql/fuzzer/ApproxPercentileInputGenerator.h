@@ -56,8 +56,9 @@ class ApproxPercentileInputGenerator : public InputGenerator {
         percentile_ = pickPercentile(fuzzer, rng);
       }
 
-      inputs.push_back(BaseVector::createConstant(
-          DOUBLE(), percentile_.value(), size, pool));
+      inputs.push_back(
+          BaseVector::createConstant(
+              DOUBLE(), percentile_.value(), size, pool));
     } else {
       VELOX_CHECK(percentileType->isArray());
       VELOX_CHECK(percentileType->childAt(0)->isDouble());

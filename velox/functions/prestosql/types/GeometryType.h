@@ -16,20 +16,18 @@
 
 #pragma once
 
-#include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
 
-class GeometryType : public VarbinaryType {
+class GeometryType final : public VarbinaryType {
   GeometryType() = default;
 
  public:
-  static const std::shared_ptr<const GeometryType>& get() {
-    static const std::shared_ptr<const GeometryType> instance{
-        new GeometryType()};
-    return instance;
+  static std::shared_ptr<const GeometryType> get() {
+    VELOX_CONSTEXPR_SINGLETON GeometryType kInstance;
+    return {std::shared_ptr<const GeometryType>{}, &kInstance};
   }
 
   bool equivalent(const Type& other) const override {
@@ -50,6 +48,10 @@ class GeometryType : public VarbinaryType {
     obj["name"] = "Type";
     obj["type"] = name();
     return obj;
+  }
+
+  bool isOrderable() const override {
+    return false;
   }
 };
 

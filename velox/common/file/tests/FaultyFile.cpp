@@ -34,7 +34,7 @@ std::string_view FaultyReadFile::pread(
     uint64_t offset,
     uint64_t length,
     void* buf,
-    filesystems::File::IoStats* stats) const {
+    const FileIoContext& context) const {
   if (injectionHook_ != nullptr) {
     FaultFileReadOperation op(path_, offset, length, buf);
     injectionHook_(&op);
@@ -42,13 +42,13 @@ std::string_view FaultyReadFile::pread(
       return std::string_view(static_cast<char*>(op.buf), op.length);
     }
   }
-  return delegatedFile_->pread(offset, length, buf, stats);
+  return delegatedFile_->pread(offset, length, buf, context);
 }
 
 uint64_t FaultyReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
+    const FileIoContext& context) const {
   if (injectionHook_ != nullptr) {
     FaultFileReadvOperation op(path_, offset, buffers);
     injectionHook_(&op);
@@ -56,16 +56,16 @@ uint64_t FaultyReadFile::preadv(
       return op.readBytes;
     }
   }
-  return delegatedFile_->preadv(offset, buffers, stats);
+  return delegatedFile_->preadv(offset, buffers, context);
 }
 
 folly::SemiFuture<uint64_t> FaultyReadFile::preadvAsync(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    filesystems::File::IoStats* stats) const {
+    const FileIoContext& context) const {
   // TODO: add fault injection for async read later.
   if (delegatedFile_->hasPreadvAsync() || executor_ == nullptr) {
-    return delegatedFile_->preadvAsync(offset, buffers, stats);
+    return delegatedFile_->preadvAsync(offset, buffers, context);
   }
   auto promise = std::make_unique<folly::Promise<uint64_t>>();
   folly::SemiFuture<uint64_t> future = promise->getSemiFuture();
@@ -73,9 +73,9 @@ folly::SemiFuture<uint64_t> FaultyReadFile::preadvAsync(
                   _promise = std::move(promise),
                   _offset = offset,
                   _buffers = buffers,
-                  _stats = stats]() {
+                  _context = context]() {
     auto delegateFuture =
-        delegatedFile_->preadvAsync(_offset, _buffers, _stats);
+        delegatedFile_->preadvAsync(_offset, _buffers, _context);
     _promise->setValue(delegateFuture.wait().value());
   });
   return future;

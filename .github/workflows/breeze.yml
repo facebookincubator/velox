@@ -54,10 +54,13 @@ jobs:
         working-directory: velox
     steps:
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
 
       - name: Install Dependencies
         run: |
@@ -85,22 +88,24 @@ jobs:
     if: ${{ github.repository == 'facebookincubator/velox' }}
     name: Ubuntu GPU debug
     env:
-      CUDA_VERSION: '12.2'
+      CUDA_VERSION: '12.9'
     defaults:
       run:
         shell: bash
         working-directory: velox
     steps:
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: velox
           persist-credentials: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
+
       - name: Install Dependencies
         run: |
           source scripts/setup-ubuntu.sh && install_apt_deps && install_cuda ${CUDA_VERSION}
-          sudo chmod 755 -R /usr/local/lib/python3.10/dist-packages
 
       - name: Make RelWithDebInfo Build
         run: |

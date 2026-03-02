@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 #include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/FromJson.h"
+#include "velox/functions/sparksql/specialforms/GetArrayStructFields.h"
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
 namespace facebook::velox::functions {
 void registerSparkSpecialFormFunctions() {
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, expression::kRowConstructor);
 }
 
 namespace sparksql {
@@ -43,14 +44,17 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
       std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
   registerSparkSpecialFormFunctions();
   registerFunctionCallToSpecialForm(
-      "cast", std::make_unique<SparkCastCallToSpecialForm>());
+      expression::kCast, std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      "try_cast", std::make_unique<SparkTryCastCallToSpecialForm>());
+      expression::kTryCast, std::make_unique<SparkTryCastCallToSpecialForm>());
   exec::registerFunctionCallToSpecialForm(
       FromJsonCallToSpecialForm::kFromJson,
       std::make_unique<FromJsonCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       "get_struct_field", std::make_unique<GetStructFieldCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      GetArrayStructFieldsCallToSpecialForm::kGetArrayStructFields,
+      std::make_unique<GetArrayStructFieldsCallToSpecialForm>());
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

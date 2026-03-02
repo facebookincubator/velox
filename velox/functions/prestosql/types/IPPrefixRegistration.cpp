@@ -170,7 +170,10 @@ class IPPrefixCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto ipAddressStringView = decoded.valueAt<StringView>(row);
-      auto tryIpPrefix = ipaddress::tryParseIpPrefixString(ipAddressStringView);
+
+      // TODO: Remove explicit std::string_view cast.
+      auto tryIpPrefix = ipaddress::tryParseIpPrefixString(
+          std::string_view(ipAddressStringView));
       if (tryIpPrefix.hasError()) {
         context.setStatus(row, std::move(tryIpPrefix.error()));
         return;
@@ -183,7 +186,7 @@ class IPPrefixCastOperator : public exec::CastOperator {
   }
 };
 
-class IPPrefixTypeFactories : public CustomTypeFactories {
+class IPPrefixTypeFactory : public CustomTypeFactory {
  public:
   TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
     VELOX_CHECK(parameters.empty());
@@ -208,7 +211,6 @@ class IPPrefixTypeFactories : public CustomTypeFactories {
 } // namespace
 
 void registerIPPrefixType() {
-  registerCustomType(
-      "ipprefix", std::make_unique<const IPPrefixTypeFactories>());
+  registerCustomType("ipprefix", std::make_unique<const IPPrefixTypeFactory>());
 }
 } // namespace facebook::velox

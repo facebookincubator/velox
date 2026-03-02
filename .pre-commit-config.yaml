@@ -35,22 +35,16 @@ repos:
 
   - repo: local
     hooks:
-      - id: cmake-format
-        name: cmake-format
-        description: Format CMake files.
-        entry: cmake-format
-        language: python
-        files: (CMakeLists.*|.*\.cmake|.*\.cmake.in)$
-        args: [--in-place]
-        require_serial: false
-        additional_dependencies: [cmake-format==0.6.13, pyyaml]
-
       - id: clang-tidy
         name: clang-tidy
-        description: Run clang-tidy on C/C++ files
+        description: >-
+          Run clang-tidy on C/C++ files, requires 'compile_commands.json'
+          to be available in the repo root (e.g. symlinked) or BUILD_PATH
+          set to it's path e.g. _build/release.
         stages:
-          - manual # Needs compile_commands.json
-        entry: clang-tidy
+          - pre-commit
+        entry: ./scripts/checks/run-clang-tidy.py
+        args: [--commit, HEAD]
         language: python
         types_or: [c++, c]
         additional_dependencies: [clang-tidy==18.1.8]
@@ -76,8 +70,14 @@ repos:
           NOTICE.txt
           )$
 
+  - repo: https://github.com/BlankSpruce/gersemi
+    rev: 0.21.0
+    hooks:
+      - id: gersemi
+        name: CMake formatter
+
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v18.1.3
+    rev: v21.1.2
     hooks:
       - id: clang-format
         # types_or: [c++, c, cuda, metal, objective-c]
@@ -91,8 +91,8 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/koalaman/shellcheck-precommit
-    rev: v0.10.0
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
     hooks:
       - id: shellcheck
         args: [-x, --severity=warning]

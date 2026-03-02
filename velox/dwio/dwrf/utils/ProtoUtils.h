@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SeekableInputStream.h"
+#include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/type/Type.h"
 
@@ -26,8 +27,8 @@ class ProtoUtils final {
  public:
   static void writeType(
       const Type& type,
-      proto::Footer& footer,
-      proto::Type* parent = nullptr);
+      FooterWriteWrapper&,
+      TypeWriteWrapper* parent = nullptr);
 
   static std::shared_ptr<const Type> fromFooter(
       const proto::Footer& footer,

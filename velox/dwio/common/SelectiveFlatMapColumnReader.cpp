@@ -16,9 +16,6 @@
 
 #include "velox/dwio/common/SelectiveFlatMapColumnReader.h"
 
-#include "velox/common/process/TraceContext.h"
-#include "velox/vector/FlatMapVector.h"
-
 namespace facebook::velox::dwio::common {
 namespace {
 
@@ -41,27 +38,6 @@ FlatMapVector* tryReuseResult(
   }
   return nullptr;
 }
-
-FlatMapVector* prepareResult(
-    VectorPtr& result,
-    const VectorPtr& distinctKeys,
-    vector_size_t size) {
-  if (auto reused = tryReuseResult(result, distinctKeys, size)) {
-    return reused;
-  }
-
-  auto flatMap = std::make_shared<FlatMapVector>(
-      result->pool(),
-      result->type(),
-      nullptr,
-      size,
-      distinctKeys,
-      std::vector<VectorPtr>(distinctKeys->size()),
-      std::vector<BufferPtr>{});
-  result = flatMap;
-  return flatMap.get();
-}
-
 } // namespace
 
 void SelectiveFlatMapColumnReader::getValues(
@@ -81,37 +57,37 @@ void SelectiveFlatMapColumnReader::getValues(
   auto* resultFlatMap = prepareResult(*result, keysVector_, rows.size());
   setComplexNulls(rows, *result);
 
-  for (const auto& childSpec : scanSpec_->children()) {
-    VELOX_TRACE_HISTORY_PUSH("getValues %s", childSpec->fieldName().c_str());
-    if (!childSpec->keepValues()) {
-      continue;
+  // Loop over column readers
+  for (int i = 0; i < children_.size(); ++i) {
+    auto& child = children_[i];
+    VectorPtr values;
+    child->getValues(rows, &values);
+    resultFlatMap->mapValuesAt(i) = values;
+
+    const auto& inMap = inMapBuffer(i);
+    if (inMap) {
+      resultFlatMap->inMapsAt(i, true) = inMap;
     }
-
-    VELOX_CHECK(
-        childSpec->readFromFile(),
-        "Flatmap children must always be read from file.");
-
-    if (childSpec->subscript() == kConstantChildSpecSubscript) {
-      continue;
-    }
-
-    const auto channel = childSpec->channel();
-    const auto index = childSpec->subscript();
-    auto& childResult = resultFlatMap->mapValuesAt(channel);
-
-    VELOX_CHECK(
-        !childSpec->deltaUpdate(),
-        "Delta update not supported in flat map yet");
-    VELOX_CHECK(
-        !childSpec->isConstant(),
-        "Flat map values cannot be constant in scanSpec.");
-    VELOX_CHECK_EQ(
-        childSpec->columnType(),
-        velox::common::ScanSpec::ColumnType::kRegular,
-        "Flat map only supports regular column types in scan spec.");
-
-    children_[index]->getValues(rows, &childResult);
   }
 }
 
+FlatMapVector* SelectiveFlatMapColumnReader::prepareResult(
+    VectorPtr& result,
+    const VectorPtr& distinctKeys,
+    vector_size_t size) const {
+  if (auto reused = tryReuseResult(result, distinctKeys, size)) {
+    return reused;
+  }
+
+  auto flatMap = std::make_shared<FlatMapVector>(
+      result->pool(),
+      result->type(),
+      nullptr,
+      size,
+      distinctKeys,
+      std::vector<VectorPtr>(distinctKeys->size()),
+      std::vector<BufferPtr>{});
+  result = flatMap;
+  return flatMap.get();
+}
 } // namespace facebook::velox::dwio::common

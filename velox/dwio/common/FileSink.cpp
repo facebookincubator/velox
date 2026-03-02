@@ -26,8 +26,8 @@
 
 namespace facebook::velox::dwio::common {
 namespace {
-constexpr std::string_view kFileScheme("file:");
-constexpr std::string_view kFileSep("/");
+constexpr std::string_view kFileScheme{"file:"};
+constexpr char kFileSep{'/'};
 
 std::vector<FileSink::Factory>& factories() {
   static std::vector<FileSink::Factory> factories;
@@ -37,10 +37,10 @@ std::vector<FileSink::Factory>& factories() {
 std::unique_ptr<FileSink> localFileSink(
     const std::string& filePath,
     const FileSink::Options& options) {
-  if (filePath.find(kFileScheme) == 0) {
+  if (filePath.starts_with(kFileScheme)) {
     return std::make_unique<LocalFileSink>(filePath.substr(5), options);
   }
-  if (filePath.find(kFileSep) == 0) {
+  if (filePath.starts_with(kFileSep)) {
     return std::make_unique<LocalFileSink>(filePath, options);
   }
   return nullptr;
@@ -111,10 +111,13 @@ WriteFileSink::WriteFileSink(
     std::unique_ptr<WriteFile> writeFile,
     std::string name,
     MetricsLogPtr metricLogger,
-    IoStatistics* stats)
+    IoStatistics* stats,
+    velox::IoStats* fileSystemStats)
     : FileSink(
           std::move(name),
-          {.metricLogger = std::move(metricLogger), .stats = stats}),
+          {.metricLogger = std::move(metricLogger),
+           .stats = stats,
+           .fileSystemStats = fileSystemStats}),
       writeFile_{std::move(writeFile)} {
   VELOX_CHECK_NOT_NULL(writeFile_);
 }

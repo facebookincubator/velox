@@ -91,7 +91,7 @@ int32_t AggregationFuzzerBase::randInt(int32_t min, int32_t max) {
 
 bool AggregationFuzzerBase::isSupportedType(const TypePtr& type) const {
   // Date / IntervalDayTime/ Unknown are not currently supported by DWRF.
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
+  if (type->isDate() || type->isIntervalDayTime() || type->isUnknown()) {
     return false;
   }
 
@@ -303,8 +303,9 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
       children.push_back(vectorFuzzer_.fuzz(inputType->childAt(j), size));
     }
 
-    input.push_back(std::make_shared<RowVector>(
-        pool_.get(), inputType, nullptr, size, std::move(children)));
+    input.push_back(
+        std::make_shared<RowVector>(
+            pool_.get(), inputType, nullptr, size, std::move(children)));
   }
 
   if (generator != nullptr) {
@@ -404,16 +405,18 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
         // values. This is done to introduce some repetition of key values for
         // windowing.
         auto baseVector = vectorFuzzer_.fuzz(types[i], numPartitions);
-        children.push_back(BaseVector::wrapInDictionary(
-            partitionNulls, partitionIndices, size, baseVector));
+        children.push_back(
+            BaseVector::wrapInDictionary(
+                partitionNulls, partitionIndices, size, baseVector));
       } else if (
           windowFrameBoundsSet.find(names[i]) != windowFrameBoundsSet.end()) {
         // Frame bound columns cannot have NULLs.
         children.push_back(vectorFuzzer_.fuzzNotNull(types[i], size));
       } else if (sortingKeySet.find(names[i]) != sortingKeySet.end()) {
         auto baseVector = vectorFuzzer_.fuzz(types[i], numPeerGroups);
-        children.push_back(BaseVector::wrapInDictionary(
-            sortingNulls, sortingIndices, size, baseVector));
+        children.push_back(
+            BaseVector::wrapInDictionary(
+                sortingNulls, sortingIndices, size, baseVector));
       } else {
         children.push_back(vectorFuzzer_.fuzz(types[i], size));
       }

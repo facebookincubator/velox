@@ -21,16 +21,21 @@
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around velox::ConfigBase. Defines constants for query
+/// A simple wrapper around velox::IConfig. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  explicit QueryConfig(
-      const std::unordered_map<std::string, std::string>& values);
+  explicit QueryConfig(std::unordered_map<std::string, std::string> values);
 
-  explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
+  // This is needed only to resolve correct ctor for cases like
+  // QueryConfig{{}} or QueryConfig({}).
+  struct ConfigTag {};
+
+  explicit QueryConfig(
+      ConfigTag /*tag*/,
+      std::shared_ptr<const config::IConfig> config);
 
   /// Maximum memory that a query can use on a single host.
   static constexpr const char* kQueryMaxMemoryPerNode =
@@ -39,6 +44,11 @@ class QueryConfig {
   /// User provided session timezone. Stores a string with the actual timezone
   /// name, e.g: "America/Los_Angeles".
   static constexpr const char* kSessionTimezone = "session_timezone";
+
+  /// Session start time in milliseconds since Unix epoch. This represents when
+  /// the query session began execution. Used for functions that need to know
+  /// the session start time (e.g., current_date, localtime).
+  static constexpr const char* kSessionStartTime = "start_time";
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
@@ -63,6 +73,26 @@ class QueryConfig {
   /// small batches, e.g. < 10K rows.
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
+
+  /// Takes a comma separated list of function names to track CPU usage for.
+  /// Only applicable when kExprTrackCpuUsage is set to false. Is empty by
+  /// default. This allows fine-grained control over CPU tracking overhead when
+  /// only specific functions need to be monitored.
+  static constexpr const char* kExprTrackCpuUsageForFunctions =
+      "expression.track_cpu_usage_for_functions";
+
+  /// Controls whether non-deterministic expressions are deduplicated during
+  /// compilation. This is intended for testing and debugging purposes. By
+  /// default, this is set to true to preserve standard behavior. If set to
+  /// false, non-deterministic functions (such as rand()) will not be
+  /// deduplicated. Since non-deterministic functions may yield different
+  /// outputs on each call, disabling deduplication guarantees that the function
+  /// is executed only when the original expression is evaluated, rather than
+  /// being triggered for every deduplicated instance. This ensures each
+  /// invocation corresponds directly to the actual expression, maintaining
+  /// independent behavior for each call.
+  static constexpr const char* kExprDedupNonDeterministic =
+      "expression.dedup_non_deterministic";
 
   /// Whether to track CPU usage for stages of individual operators. True by
   /// default. Can be expensive when processing small batches, e.g. < 10K rows.
@@ -139,6 +169,11 @@ class QueryConfig {
   static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
       "local_exchange_partition_buffer_preserve_encoding";
 
+  /// Maximum number of vectors buffered in each local merge source before
+  /// blocking to wait for consumers.
+  static constexpr const char* kLocalMergeSourceQueueSize =
+      "local_merge_source_queue_size";
+
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
   static constexpr const char* kMaxExchangeBufferSize =
@@ -170,14 +205,49 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialAggregationMinPct =
       "abandon_partial_aggregation_min_pct";
 
+  /// Memory threshold in bytes for triggering string compaction during
+  /// global aggregation. When total string storage exceeds this limit with
+  /// high unused memory ratio, compaction is triggered to reclaim dead strings.
+  /// Disabled by default (0).
+  ///
+  /// NOTE: currently only applies to approx_most_frequent aggregate with
+  /// StringView type during global aggregation. May extend to other types.
+  static constexpr const char* kAggregationCompactionBytesThreshold =
+      "aggregation_compaction_bytes_threshold";
+
+  /// Ratio of unused (evicted) bytes to total bytes that triggers compaction.
+  /// Value is between 0.0 and 1.0. Default is 0.25.
+  ///
+  /// NOTE: currently only applies to approx_most_frequent aggregate with
+  /// StringView type during global aggregation. May extend to other types.
+  static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
+      "aggregation_compaction_unused_memory_ratio";
+
   static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
       "abandon_partial_topn_row_number_min_rows";
 
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
+  /// Number of input rows to receive before starting to check whether to
+  /// abandon building a HashTable without duplicates in HashBuild for left
+  /// semi/anti join.
+  static constexpr const char* kAbandonDedupHashMapMinRows =
+      "abandon_dedup_hashmap_min_rows";
+
+  /// Abandons building a HashTable without duplicates in HashBuild for left
+  /// semi/anti join if the percentage of distinct keys in the HashTable exceeds
+  /// this threshold. Zero means 'disable this optimization'.
+  static constexpr const char* kAbandonDedupHashMapMinPct =
+      "abandon_dedup_hashmap_min_pct";
+
   static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
       "max_elements_size_in_repeat_and_sequence";
+
+  /// If true, the PartitionedOutput operator will flush rows eagerly, without
+  /// waiting until buffers reach certain size. Default is false.
+  static constexpr const char* kPartitionedOutputEagerFlush =
+      "partitioned_output_eager_flush";
 
   /// The maximum number of bytes to buffer in PartitionedOutput operator to
   /// avoid creating tiny SerializedPages.
@@ -214,6 +284,14 @@ class QueryConfig {
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
 
+  /// Initial output batch size in rows for MergeJoin operator. When non-zero,
+  /// the batch size starts at this value and is dynamically adjusted based on
+  /// the average row size of previous output batches. When zero (default),
+  /// dynamic adjustment is disabled and the batch size is fixed at
+  /// preferredOutputBatchRows.
+  static constexpr const char* kMergeJoinOutputBatchStartSize =
+      "merge_join_output_batch_start_size";
+
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
   /// limit'.
@@ -229,6 +307,10 @@ class QueryConfig {
   /// taken to calculate them.
   static constexpr const char* kAdaptiveFilterReorderingEnabled =
       "adaptive_filter_reordering_enabled";
+
+  /// If true, allow hash probe drivers to generate build-side rows in parallel.
+  static constexpr const char* kParallelOutputJoinBuildRowsEnabled =
+      "parallel_output_join_build_rows_enabled";
 
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
@@ -250,6 +332,13 @@ class QueryConfig {
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
+  /// When processing spilled window data, read batches of whole partitions
+  /// having at least that many rows. Set to 1 to read one whole partition at a
+  /// time. Each driver processing the Window operator will process that much
+  /// data at once.
+  static constexpr const char* kWindowSpillMinReadBatchRows =
+      "window_spill_min_read_batch_rows";
+
   /// If true, the memory arbitrator will reclaim memory from table writer by
   /// flushing its buffered data to disk. only applies if "spill_enabled" flag
   /// is set.
@@ -264,7 +353,8 @@ class QueryConfig {
       "topn_row_number_spill_enabled";
 
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+  static constexpr const char* kLocalMergeSpillEnabled =
+      "local_merge_spill_enabled";
 
   /// Specify the max number of local sources to merge at a time.
   static constexpr const char* kLocalMergeMaxNumMergeSources =
@@ -298,6 +388,14 @@ class QueryConfig {
   static constexpr const char* kSpillCompressionKind =
       "spill_compression_codec";
 
+  /// The max number of files to merge at a time when merging sorted files into
+  /// a single ordered stream. 0 means unlimited. This is used to reduce memory
+  /// pressure by capping the number of open files when merging spilled sorted
+  /// files to avoid using too much memory and causing OOM. Note that this is
+  /// only applicable for ordered spill.
+  static constexpr const char* kSpillNumMaxMergeFiles =
+      "spill_num_max_merge_files";
+
   /// Enable the prefix sort or fallback to timsort in spill. The prefix sort is
   /// faster than std::sort but requires the memory to build normalized prefix
   /// keys, which might have potential risk of running out of server memory.
@@ -322,8 +420,20 @@ class QueryConfig {
   static constexpr const char* kSpillFileCreateConfig =
       "spill_file_create_config";
 
-  /// Default offset spill start partition bit. It is used with
-  /// 'kJoinSpillPartitionBits' or 'kAggregationSpillPartitionBits' together to
+  /// Config used to create aggregation spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kAggregationSpillFileCreateConfig =
+      "aggregation_spill_file_create_config";
+
+  /// Config used to create hash join spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kHashJoinSpillFileCreateConfig =
+      "hash_join_spill_file_create_config";
+
+  /// Default offset spill start partition bit.
+  /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
   /// spill.
   static constexpr const char* kSpillStartPartitionBit =
@@ -363,6 +473,14 @@ class QueryConfig {
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
 
+  /// If true, Spark function's behavior is ANSI-compliant, e.g. throws runtime
+  /// exception instead of returning null on invalid inputs. It affects only
+  /// functions explicitly marked as "ANSI compliant".
+  /// Note: This feature is still under development to achieve full ANSI
+  /// compliance. Users can refer to the Spark function documentation to verify
+  /// the current support status of a specific function.
+  static constexpr const char* kSparkAnsiEnabled = "spark.ansi_enabled";
+
   /// The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
@@ -390,6 +508,11 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyStatisticalAggregate =
       "spark.legacy_statistical_aggregate";
 
+  /// If true, ignore null fields when generating JSON string.
+  /// If false, null fields are included with a null value.
+  static constexpr const char* kSparkJsonIgnoreNullFields =
+      "spark.json_ignore_null_fields";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -402,6 +525,18 @@ class QueryConfig {
   /// of hash joins.
   static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
       "hash_probe_finish_early_on_empty_build";
+
+  /// Whether hash probe can generate any dynamic filter (including Bloom
+  /// filter) and push down to upstream operators.
+  static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
+      "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// The maximum byte size of Bloom filter that can be generated from hash
+  /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
+  /// optimal performance, this should not be too larger than the CPU cache size
+  /// on the host.
+  static constexpr const char* kHashProbeBloomFilterPushdownMaxSize =
+      "hash_probe_bloom_filter_pushdown_max_size";
 
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
@@ -441,6 +576,12 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  /// Window operator can be configured to sub-divide window partitions on each
+  /// thread of execution into groups of partitions for sequential processing.
+  /// This setting specifies how many sub-partitions to create for each thread.
+  static constexpr const char* kWindowNumSubPartitions =
+      "window_num_sub_partitions";
+
   /// Maximum number of bytes to use for the normalized key in prefix-sort. Use
   /// 0 to disable prefix-sort.
   static constexpr const char* kPrefixSortNormalizedKeyMaxBytes =
@@ -460,11 +601,6 @@ class QueryConfig {
 
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
-
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  /// The plan node id whose input data will be traced.
-  /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
 
   /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
@@ -522,9 +658,18 @@ class QueryConfig {
   static constexpr const char* kDebugMemoryPoolNameRegex =
       "debug_memory_pool_name_regex";
 
+  /// Warning threshold in bytes for debug memory pools. When set to a
+  /// non-zero value, a warning will be logged once per memory pool when
+  /// allocations cause the pool to exceed this threshold. This is useful for
+  /// identifying memory usage patterns during debugging. Requires allocation
+  /// tracking to be enabled via `debug_memory_pool_name_regex` for the pool. A
+  /// value of 0 means no warning threshold is enforced.
+  static constexpr const char* kDebugMemoryPoolWarnThresholdBytes =
+      "debug_memory_pool_warn_threshold_bytes";
+
   /// Some lambda functions over arrays and maps are evaluated in batches of the
   /// underlying elements that comprise the arrays/maps. This is done to make
-  /// the batch size managable as array vectors can have thousands of elements
+  /// the batch size manageable as array vectors can have thousands of elements
   /// each and hit scaling limits as implementations typically expect
   /// BaseVectors to a couple of thousand entries. This lets up tune those batch
   /// sizes.
@@ -607,6 +752,12 @@ class QueryConfig {
   static constexpr const char* kIndexLookupJoinMaxPrefetchBatches =
       "index_lookup_join_max_prefetch_batches";
 
+  /// If this is true, then the index join operator might split output for each
+  /// input batch based on the output batch size control. Otherwise, it tries to
+  /// produce a single output for each input batch.
+  static constexpr const char* kIndexLookupJoinSplitOutput =
+      "index_lookup_join_split_output";
+
   // Max wait time for exchange request in seconds.
   static constexpr const char* kRequestDataSizesMaxWaitSec =
       "request_data_sizes_max_wait_sec";
@@ -621,17 +772,38 @@ class QueryConfig {
   static constexpr const char* kStreamingAggregationEagerFlush =
       "streaming_aggregation_eager_flush";
 
+  // If true, skip request data size if there is only single source.
+  // This is used to optimize the Presto-on-Spark use case where each
+  // exchange client has only one shuffle partition source.
+  static constexpr const char* kSkipRequestDataSizeWithSingleSourceEnabled =
+      "skip_request_data_size_with_single_source_enabled";
+
+  /// If true, exchange clients defer data fetching until next() is called.
+  /// This enables waiter tasks using cached hash tables to skip I/O entirely
+  /// when the table is already cached. If false (default), exchange clients
+  /// start fetching data immediately when remote tasks are added.
+  static constexpr const char* kExchangeLazyFetchingEnabled =
+      "exchange_lazy_fetching_enabled";
+
   /// If this is true, then it allows you to get the struct field names
   /// as json element names when casting a row to json.
   static constexpr const char* kFieldNamesInJsonCastEnabled =
       "field_names_in_json_cast_enabled";
 
-  /// If this is true, then operators that evaluate expressions will track their
-  /// stats and return them as part of their operator stats. Tracking these
-  /// stats can be expensive (especially if operator stats are retrieved
-  /// frequently) and this allows the user to explicitly enable it.
+  /// If this is true, then operators that evaluate expressions will track
+  /// stats for expressions that are not special forms and return them as
+  /// part of their operator stats. Tracking these stats can be expensive
+  /// (especially if operator stats are retrieved frequently) and this allows
+  /// the user to explicitly enable it.
   static constexpr const char* kOperatorTrackExpressionStats =
       "operator_track_expression_stats";
+
+  /// If this is true, enable the operator input/output batch size stats
+  /// collection in driver execution. This can be expensive for data types with
+  /// a large number of columns (e.g., ROW types) as it calls estimateFlatSize()
+  /// which recursively calculates sizes for all child vectors.
+  static constexpr const char* kEnableOperatorBatchSizeStats =
+      "enable_operator_batch_size_stats";
 
   /// If this is true, then the unnest operator might split output for each
   /// input batch based on the output batch size control. Otherwise, it produces
@@ -643,8 +815,41 @@ class QueryConfig {
   static constexpr const char* kQueryMemoryReclaimerPriority =
       "query_memory_reclaimer_priority";
 
+  /// The max number of input splits to listen to by SplitListener per table
+  /// scan node per worker. It's up to the SplitListener implementation to
+  /// respect this config.
+  static constexpr const char* kMaxNumSplitsListenedTo =
+      "max_num_splits_listened_to";
+
+  /// Source of the query. Used by Presto to identify the file system username.
+  static constexpr const char* kSource = "source";
+
+  /// Client tags of the query. Used by Presto to identify the file system
+  /// username.
+  static constexpr const char* kClientTags = "client_tags";
+
+  /// Enable (reader) row size tracker as a fallback to file level row size
+  /// estimates.
+  static constexpr const char* kRowSizeTrackingMode = "row_size_tracking_mode";
+
+  /// Maximum number of distinct values to keep when merging vector hashers in
+  /// join HashBuild.
+  static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
+      "join_build_vector_hasher_max_num_distinct";
+
+  enum class RowSizeTrackingMode {
+    DISABLED = 0,
+    EXCLUDE_DELTA_SPLITS = 1,
+    ENABLED_FOR_ALL = 2,
+  };
+
   bool selectiveNimbleReaderEnabled() const {
-    return get<bool>(kSelectiveNimbleReaderEnabled, false);
+    return get<bool>(kSelectiveNimbleReaderEnabled, true);
+  }
+
+  RowSizeTrackingMode rowSizeTrackingMode() const {
+    return get<RowSizeTrackingMode>(
+        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
   }
 
   bool debugDisableExpressionsWithPeeling() const {
@@ -667,6 +872,12 @@ class QueryConfig {
     return get<std::string>(kDebugMemoryPoolNameRegex, "");
   }
 
+  uint64_t debugMemoryPoolWarnThresholdBytes() const {
+    return config::toCapacity(
+        get<std::string>(kDebugMemoryPoolWarnThresholdBytes, "0B"),
+        config::CapacityUnit::BYTE);
+  }
+
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
       const {
     return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
@@ -677,7 +888,7 @@ class QueryConfig {
   }
 
   uint8_t debugBingTileChildrenMaxZoomShift() const {
-    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 5);
+    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 7);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -704,12 +915,28 @@ class QueryConfig {
     return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
   }
 
+  uint64_t aggregationCompactionBytesThreshold() const {
+    return get<uint64_t>(kAggregationCompactionBytesThreshold, 0);
+  }
+
+  double aggregationCompactionUnusedMemoryRatio() const {
+    return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
+  }
+
   int32_t abandonPartialTopNRowNumberMinRows() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinRows, 100'000);
   }
 
   int32_t abandonPartialTopNRowNumberMinPct() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
+  }
+
+  int32_t abandonHashBuildDedupMinRows() const {
+    return get<int32_t>(kAbandonDedupHashMapMinRows, 100'000);
+  }
+
+  int32_t abandonHashBuildDedupMinPct() const {
+    return get<int32_t>(kAbandonDedupHashMapMinPct, 0);
   }
 
   int32_t maxElementsSizeInRepeatAndSequence() const {
@@ -724,6 +951,10 @@ class QueryConfig {
   uint64_t maxSpillBytes() const {
     static constexpr uint64_t kDefault = 100UL << 30;
     return get<uint64_t>(kMaxSpillBytes, kDefault);
+  }
+
+  bool partitionedOutputEagerFlush() const {
+    return get<bool>(kPartitionedOutputEagerFlush, false);
   }
 
   uint64_t maxPartitionedOutputBufferSize() const {
@@ -768,6 +999,10 @@ class QueryConfig {
     return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
   }
 
+  uint32_t localMergeSourceQueueSize() const {
+    return get<uint32_t>(kLocalMergeSourceQueueSize, 2);
+  }
+
   uint64_t maxExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxExchangeBufferSize, kDefault);
@@ -799,6 +1034,12 @@ class QueryConfig {
     VELOX_USER_CHECK_LE(
         maxBatchRows, std::numeric_limits<vector_size_t>::max());
     return maxBatchRows;
+  }
+
+  vector_size_t mergeJoinOutputBatchStartSize() const {
+    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
+    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
+    return batchRows;
   }
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
@@ -847,8 +1088,18 @@ class QueryConfig {
     return get<std::string>(kSessionTimezone, "");
   }
 
+  /// Returns the session start time in milliseconds since Unix epoch.
+  /// If not set, returns 0 (or epoch).
+  int64_t sessionStartTimeMs() const {
+    return get<int64_t>(kSessionStartTime, 0);
+  }
+
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool parallelOutputJoinBuildRowsEnabled() const {
+    return get<bool>(kParallelOutputJoinBuildRowsEnabled, false);
   }
 
   bool spillEnabled() const {
@@ -873,6 +1124,10 @@ class QueryConfig {
 
   bool windowSpillEnabled() const {
     return get<bool>(kWindowSpillEnabled, true);
+  }
+
+  uint32_t windowSpillMinReadBatchRows() const {
+    return get<uint32_t>(kWindowSpillMinReadBatchRows, 1'000);
   }
 
   bool writerSpillEnabled() const {
@@ -927,6 +1182,11 @@ class QueryConfig {
     return get<std::string>(kSpillCompressionKind, "none");
   }
 
+  uint32_t spillNumMaxMergeFiles() const {
+    constexpr uint32_t kDefaultMergeFiles = 0;
+    return get<uint32_t>(kSpillNumMaxMergeFiles, kDefaultMergeFiles);
+  }
+
   bool spillPrefixSortEnabled() const {
     return get<bool>(kSpillPrefixSortEnabled, false);
   }
@@ -943,6 +1203,14 @@ class QueryConfig {
 
   std::string spillFileCreateConfig() const {
     return get<std::string>(kSpillFileCreateConfig, "");
+  }
+
+  std::string aggregationSpillFileCreateConfig() const {
+    return get<std::string>(kAggregationSpillFileCreateConfig, "");
+  }
+
+  std::string hashJoinSpillFileCreateConfig() const {
+    return get<std::string>(kHashJoinSpillFileCreateConfig, "");
   }
 
   int32_t minSpillableReservationPct() const {
@@ -962,12 +1230,6 @@ class QueryConfig {
   std::string queryTraceDir() const {
     // The default query trace dir, empty by default.
     return get<std::string>(kQueryTraceDir, "");
-  }
-
-  /// @Deprecated. Do not use. Remove once existing call sites are updated.
-  std::string queryTraceNodeIds() const {
-    // Use the new config kQueryTraceNodeId.
-    return get<std::string>(kQueryTraceNodeId, "");
   }
 
   std::string queryTraceNodeId() const {
@@ -994,6 +1256,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool sparkAnsiEnabled() const {
+    return get<bool>(kSparkAnsiEnabled, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {
@@ -1035,8 +1301,20 @@ class QueryConfig {
     return get<bool>(kSparkLegacyStatisticalAggregate, false);
   }
 
+  bool sparkJsonIgnoreNullFields() const {
+    return get<bool>(kSparkJsonIgnoreNullFields, true);
+  }
+
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
+  }
+
+  std::string exprTrackCpuUsageForFunctions() const {
+    return get<std::string>(kExprTrackCpuUsageForFunctions, "");
+  }
+
+  bool exprDedupNonDeterministic() const {
+    return get<bool>(kExprDedupNonDeterministic, true);
   }
 
   bool operatorTrackCpuUsage() const {
@@ -1054,6 +1332,14 @@ class QueryConfig {
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
     return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
+  }
+
+  bool hashProbeDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  uint64_t hashProbeBloomFilterPushdownMaxSize() const {
+    return get<uint64_t>(kHashProbeBloomFilterPushdownMaxSize, 0);
   }
 
   uint32_t minTableRowsForParallelJoinBuild() const {
@@ -1090,6 +1376,10 @@ class QueryConfig {
 
   uint32_t driverCpuTimeSliceLimitMs() const {
     return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
+  }
+
+  uint32_t windowNumSubPartitions() const {
+    return get<uint32_t>(kWindowNumSubPartitions, 1);
   }
 
   uint32_t prefixSortNormalizedKeyMaxBytes() const {
@@ -1134,6 +1424,10 @@ class QueryConfig {
     return get<uint32_t>(kIndexLookupJoinMaxPrefetchBatches, 0);
   }
 
+  bool indexLookupJoinSplitOutput() const {
+    return get<bool>(kIndexLookupJoinSplitOutput, true);
+  }
+
   std::string shuffleCompressionKind() const {
     return get<std::string>(kShuffleCompressionKind, "none");
   }
@@ -1155,12 +1449,24 @@ class QueryConfig {
     return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
   }
 
+  bool singleSourceExchangeOptimizationEnabled() const {
+    return get<bool>(kSkipRequestDataSizeWithSingleSourceEnabled, false);
+  }
+
+  bool exchangeLazyFetchingEnabled() const {
+    return get<bool>(kExchangeLazyFetchingEnabled, false);
+  }
+
   bool isFieldNamesInJsonCastEnabled() const {
     return get<bool>(kFieldNamesInJsonCastEnabled, false);
   }
 
   bool operatorTrackExpressionStats() const {
     return get<bool>(kOperatorTrackExpressionStats, false);
+  }
+
+  bool enableOperatorBatchSizeStats() const {
+    return get<bool>(kEnableOperatorBatchSizeStats, true);
   }
 
   bool unnestSplitOutput() const {
@@ -1172,13 +1478,34 @@ class QueryConfig {
         kQueryMemoryReclaimerPriority, std::numeric_limits<int32_t>::max());
   }
 
+  int32_t maxNumSplitsListenedTo() const {
+    return get<int32_t>(kMaxNumSplitsListenedTo, 0);
+  }
+
+  std::string source() const {
+    return get<std::string>(kSource, "");
+  }
+
+  std::string clientTags() const {
+    return get<std::string>(kClientTags, "");
+  }
+
+  uint32_t joinBuildVectorHasherMaxNumDistinct() const {
+    return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
+  }
+
   template <typename T>
   T get(const std::string& key, const T& defaultValue) const {
     return config_->get<T>(key, defaultValue);
   }
+
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return config_->get<T>(key);
+  }
+
+  const std::shared_ptr<const config::IConfig>& config() const {
+    return config_;
   }
 
   /// Test-only method to override the current query config properties.
@@ -1191,6 +1518,6 @@ class QueryConfig {
  private:
   void validateConfig();
 
-  std::unique_ptr<velox::config::ConfigBase> config_;
+  std::shared_ptr<const config::IConfig> config_;
 };
 } // namespace facebook::velox::core

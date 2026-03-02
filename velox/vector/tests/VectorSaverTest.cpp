@@ -352,8 +352,9 @@ TEST_F(VectorSaverTest, flatBoolean) {
   testRoundTrip(makeFlatVector<bool>({true, false, true, true, false}));
 
   // Some nulls.
-  testRoundTrip(makeNullableFlatVector<bool>(
-      {true, std::nullopt, true, std::nullopt, false}));
+  testRoundTrip(
+      makeNullableFlatVector<bool>(
+          {true, std::nullopt, true, std::nullopt, false}));
 
   // Empty vector.
   testRoundTrip(BaseVector::create(BOOLEAN(), 0, pool()));
@@ -363,8 +364,9 @@ TEST_F(VectorSaverTest, flatBoolean) {
       makeFlatVector<bool>(10'000, [](auto row) { return row % 7 == 2; }));
 
   // Long vector with nulls.
-  testRoundTrip(makeFlatVector<bool>(
-      10'000, [](auto row) { return row % 2 == 1; }, nullEvery(17)));
+  testRoundTrip(
+      makeFlatVector<bool>(
+          10'000, [](auto row) { return row % 2 == 1; }, nullEvery(17)));
 }
 
 TEST_F(VectorSaverTest, flatVarchar) {
@@ -566,14 +568,15 @@ TEST_F(VectorSaverTest, dictionaryArray) {
   auto offsets = makeEvenIndices(64);
   auto sizes = makeIndices(64, [](auto /* row */) { return 2; });
 
-  testRoundTrip(std::make_shared<ArrayVector>(
-      pool(),
-      ARRAY(INTEGER()),
-      makeNulls(64, nullEvery(7)),
-      64,
-      offsets,
-      sizes,
-      elementsVector));
+  testRoundTrip(
+      std::make_shared<ArrayVector>(
+          pool(),
+          ARRAY(INTEGER()),
+          makeNulls(64, nullEvery(7)),
+          64,
+          offsets,
+          sizes,
+          elementsVector));
 }
 
 TEST_F(VectorSaverTest, dictionaryMap) {

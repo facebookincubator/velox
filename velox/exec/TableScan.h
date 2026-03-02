@@ -28,6 +28,8 @@ class TableScan : public SourceOperator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::TableScanNode>& tableScanNode);
 
+  void initialize() override;
+
   RowVectorPtr getOutput() override;
 
   BlockingReason isBlocked(ContinueFuture* future) override {
@@ -50,10 +52,9 @@ class TableScan : public SourceOperator {
     return connector_->canAddDynamicFilter();
   }
 
-  void addDynamicFilter(
+  void addDynamicFilterLocked(
       const core::PlanNodeId& producer,
-      column_index_t outputChannel,
-      const std::shared_ptr<common::Filter>& filter) override;
+      const PushdownFilters& filters) override;
 
   /// The name of runtime stats specific to table scan.
   /// The number of running table scan drivers.
@@ -65,6 +66,11 @@ class TableScan : public SourceOperator {
 
   std::shared_ptr<ScaledScanController> testingScaledController() const {
     return scaledController_;
+  }
+
+  /// Returns the current read batch size. Used for testing.
+  vector_size_t testingReadBatchSize() const {
+    return readBatchSize_;
   }
 
  private:
@@ -98,10 +104,12 @@ class TableScan : public SourceOperator {
   // processing or not.
   void tryScaleUp();
 
-  const std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
-  const std::
-      unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-          columnHandles_;
+  // Calculates the batch size to read based on available row size information.
+  // Returns the number of rows to read in the next batch.
+  int32_t calculateBatchSize(int64_t currentEstimatedRowSize);
+
+  const connector::ConnectorTableHandlePtr tableHandle_;
+  const connector::ColumnHandleMap columnHandles_;
   DriverCtx* const driverCtx_;
   const int32_t maxSplitPreloadPerDriver_{0};
   const vector_size_t maxReadBatchSize_;
@@ -124,9 +132,6 @@ class TableScan : public SourceOperator {
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSource> dataSource_;
   bool noMoreSplits_ = false;
-  // Dynamic filters to add to the data source when it gets created.
-  std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
-      dynamicFilters_;
 
   int32_t maxPreloadedSplits_{0};
 
@@ -144,6 +149,10 @@ class TableScan : public SourceOperator {
   int32_t numReadyPreloadedSplits_{0};
 
   double maxFilteringRatio_{0};
+
+  // Row size estimate from the file reader. It is set to the last known
+  // estimated row size from the current split reader or the previous ones.
+  int64_t fileEstimatedRowSize_{connector::DataSource::kUnknownRowSize};
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;

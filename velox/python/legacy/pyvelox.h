@@ -304,9 +304,10 @@ inline void addDataTypeBindings(
   mapType.def("key_type", &MapType::keyType, "Return the key type");
   mapType.def("value_type", &MapType::valueType, "Return the value type");
 
-  rowType.def(py::init<
-              std::vector<std::string>,
-              std::vector<std::shared_ptr<const Type>>>());
+  rowType.def(
+      py::init<
+          std::vector<std::string>,
+          std::vector<std::shared_ptr<const Type>>>());
   rowType.def("size", &RowType::size, "Return the number of columns");
   rowType.def(
       "child_at",

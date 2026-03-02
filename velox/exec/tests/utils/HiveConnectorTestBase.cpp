@@ -18,12 +18,13 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
@@ -35,20 +36,17 @@ HiveConnectorTestBase::HiveConnectorTestBase() {
 
 void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              kHiveConnectorId,
-              std::make_shared<config::ConfigBase>(
-                  std::unordered_map<std::string, std::string>()),
-              ioExecutor_.get());
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()),
+      ioExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
+  text::registerTextReaderFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
@@ -58,18 +56,17 @@ void HiveConnectorTestBase::TearDown() {
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
-  connector::unregisterConnectorFactory(
-      connector::hive::HiveConnectorFactory::kHiveConnectorName);
+  text::unregisterTextReaderFactory();
   OperatorTestBase::TearDown();
 }
 
 void HiveConnectorTestBase::resetHiveConnector(
     const std::shared_ptr<const config::ConfigBase>& config) {
   connector::unregisterConnector(kHiveConnectorId);
+
+  connector::hive::HiveConnectorFactory factory;
   auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, config, ioExecutor_.get());
+      factory.newConnector(kHiveConnectorId, config, ioExecutor_.get());
   connector::registerConnector(hiveConnector);
 }
 
@@ -206,23 +203,23 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
         infoColumns) {
   auto file =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
-  const int64_t fileSize = file->size();
+  const uint64_t fileSize = file->size();
   // Take the upper bound.
-  const int64_t splitSize = std::ceil((fileSize) / splitCount);
+  const uint64_t splitSize = std::ceil((fileSize) / splitCount);
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
   // Add all the splits.
-  for (int i = 0; i < splitCount; i++) {
+  for (uint32_t i = 0; i < splitCount; i++) {
     auto splitBuilder = HiveConnectorSplitBuilder(filePath)
                             .fileFormat(format)
                             .start(i * splitSize)
                             .length(splitSize);
     if (infoColumns.has_value()) {
-      for (auto infoColumn : infoColumns.value()) {
+      for (const auto& infoColumn : infoColumns.value()) {
         splitBuilder.infoColumn(infoColumn.first, infoColumn.second);
       }
     }
     if (partitionKeys.has_value()) {
-      for (auto partitionKey : partitionKeys.value()) {
+      for (const auto& partitionKey : partitionKeys.value()) {
         splitBuilder.partitionKey(partitionKey.first, partitionKey.second);
       }
     }
@@ -262,7 +259,8 @@ std::vector<std::shared_ptr<connector::ConnectorSplit>>
 HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-  for (auto filePath : filePaths) {
+  splits.reserve(filePaths.size());
+  for (const auto& filePath : filePaths) {
     splits.push_back(makeHiveConnectorSplit(
         filePath->getPath(),
         filePath->fileSize(),

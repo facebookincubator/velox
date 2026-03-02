@@ -34,9 +34,8 @@ class AverageAggregate {
   using InputType = Row<T>;
 
   // Type of intermediate result vector wrapped in Row.
-  using IntermediateType =
-      Row</*sum*/ double,
-          /*count*/ int64_t>;
+  using IntermediateType = Row</*sum*/ double,
+                               /*count*/ int64_t>;
 
   // Type of output vector.
   using OutputType =
@@ -102,18 +101,20 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("double")
-                             .intermediateType("row(double,bigint)")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("double")
+            .intermediateType("row(double,bigint)")
+            .argumentType(inputType)
+            .build());
   }
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .returnType("real")
-                           .intermediateType("row(double,bigint)")
-                           .argumentType("real")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("real")
+          .intermediateType("row(double,bigint)")
+          .argumentType("real")
+          .build());
 
   return exec::registerAggregateFunction(
       name,

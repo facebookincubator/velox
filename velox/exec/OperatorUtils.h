@@ -15,8 +15,11 @@
  */
 #pragma once
 
+#include <optional>
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spiller.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
 
@@ -145,6 +148,12 @@ std::string makeOperatorSpillPath(
     int driverId,
     int32_t operatorId);
 
+/// Set a named runtime metric in operator 'stats'.
+void setOperatorRuntimeStats(
+    const std::string& name,
+    const RuntimeCounter& value,
+    std::unordered_map<std::string, RuntimeMetric>& stats);
+
 /// Add a named runtime metric to operator 'stats'.
 void addOperatorRuntimeStats(
     const std::string& name,
@@ -168,7 +177,8 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
 /// Projects children of 'src' row vector according to 'projections'. Optionally
 /// takes a 'mapping' and 'size' that represent the indices and size,
 /// respectively, of a dictionary wrapping that should be applied to the
-/// projections. The output param 'projectedChildren' will contain all the final
+/// projections. Dictionary wrapping of the same child vector is cached for
+/// reuse. The output param 'projectedChildren' will contain all the final
 /// projections at the expected channel index. Indices not specified in
 /// 'projections' will be left untouched in 'projectedChildren'.
 void projectChildren(
@@ -300,4 +310,12 @@ class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
  private:
   BlockedOperatorCb blockedCb_{nullptr};
 };
+
+/// Creates VectorSerde::Options for the given VectorSerde kind with compression
+/// settings. Optionally configures minimum compression ratio.
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    common::CompressionKind compressionKind,
+    VectorSerde::Kind kind,
+    std::optional<float> minCompressionRatio = std::nullopt);
+
 } // namespace facebook::velox::exec

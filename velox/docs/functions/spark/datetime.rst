@@ -1,6 +1,6 @@
-=====================================
+=======================
 Date and Time Functions
-=====================================
+=======================
 
 Convenience Extraction Functions
 --------------------------------
@@ -106,6 +106,15 @@ These functions support TIMESTAMP and DATE input types.
         SELECT datediff('2009-07-31', '2009-07-30'); -- 1
         SELECT datediff('2009-07-30', '2009-07-31'); -- -1
 
+.. spark:function:: dayname(date) -> varchar
+
+    Returns the three-letter abbreviated day name from the given date (Sun, Mon, Tue, Wed, Thu, Fri, Sat). ::
+
+        SELECT dayname('2009-07-30'); -- 'Thu'
+        SELECT dayname('2023-08-20'); -- 'Sun'
+        SELECT dayname('2023-08-21'); -- 'Mon'
+        SELECT dayname('1582-10-15'); -- 'Fri'
+
 .. spark:function:: dayofmonth(date) -> integer
 
     Returns the day of month of the date. ::
@@ -183,35 +192,6 @@ These functions support TIMESTAMP and DATE input types.
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
 
-.. spark:function:: make_ym_interval([years[, months]]) -> interval year to month
-
-    Make year-month interval from ``years`` and ``months`` fields.
-    Returns the actual year-month with month in the range of [0, 11].
-    Both ``years`` and ``months`` can be zero, positive or negative.
-    Throws an error when inputs lead to int overflow,
-    e.g., make_ym_interval(178956970, 8). ::
-
-        SELECT make_ym_interval(1, 2); -- 1-2
-        SELECT make_ym_interval(1, 0); -- 1-0
-        SELECT make_ym_interval(-1, 1); -- -0-11
-        SELECT make_ym_interval(1, 100); -- 9-4
-        SELECT make_ym_interval(1, 12); -- 2-0
-        SELECT make_ym_interval(1, -12); -- 0-0
-        SELECT make_ym_interval(2); -- 2-0
-        SELECT make_ym_interval(); -- 0-0
-
-.. spark:function:: minute(timestamp) -> integer
-
-    Returns the minutes of ``timestamp``.::
-
-        SELECT minute('2009-07-30 12:58:59'); -- 58
-
-.. spark:function:: quarter(date) -> integer
-
-    Returns the quarter of ``date``. The value ranges from ``1`` to ``4``. ::
-
-        SELECT quarter('2009-07-30'); -- 3
-
 .. spark:function:: make_timestamp(year, month, day, hour, minute, second[, timezone]) -> timestamp
 
     Create timestamp from ``year``, ``month``, ``day``, ``hour``, ``minute`` and ``second`` fields.
@@ -244,11 +224,58 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_timestamp(2014, 12, 28, 6, 30, 60.000001); -- NULL
         SELECT make_timestamp(2014, 13, 28, 6, 30, 45.887); -- NULL
 
+.. spark:function:: make_ym_interval([years[, months]]) -> interval year to month
+
+    Make year-month interval from ``years`` and ``months`` fields.
+    Returns the actual year-month with month in the range of [0, 11].
+    Both ``years`` and ``months`` can be zero, positive or negative.
+    Throws an error when inputs lead to int overflow,
+    e.g., make_ym_interval(178956970, 8). ::
+
+        SELECT make_ym_interval(1, 2); -- 1-2
+        SELECT make_ym_interval(1, 0); -- 1-0
+        SELECT make_ym_interval(-1, 1); -- -0-11
+        SELECT make_ym_interval(1, 100); -- 9-4
+        SELECT make_ym_interval(1, 12); -- 2-0
+        SELECT make_ym_interval(1, -12); -- 0-0
+        SELECT make_ym_interval(2); -- 2-0
+        SELECT make_ym_interval(); -- 0-0
+
+.. spark:function:: minute(timestamp) -> integer
+
+    Returns the minutes of ``timestamp``.::
+
+        SELECT minute('2009-07-30 12:58:59'); -- 58
+
 .. spark:function:: month(date) -> integer
 
     Returns the month of ``date``. ::
 
         SELECT month('2009-07-30'); -- 7
+
+.. spark:function:: monthname(date) -> varchar
+
+    Returns the three-letter abbreviated month name for the given ``date``.
+    Possible values: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec. ::
+
+        SELECT monthname('2008-02-20'); -- 'Feb'
+        SELECT monthname('2011-05-06'); -- 'May'
+        SELECT monthname('2023-08-20'); -- 'Aug'
+        SELECT monthname('1582-10-15'); -- 'Oct'
+
+.. spark:function:: months_between(timestamp1, timestamp2, roundOff) -> double
+
+    Returns number of months between times ``timestamp1`` and ``timestamp2``.
+    If ``timestamp1`` is later than ``timestamp2``, the result is positive.
+    If ``timestamp1`` and ``timestamp2`` are on the same day of month, or both are the
+    last day of month, time of day will be ignored. Otherwise, the difference is calculated
+    based on 31 days per month, and rounded to 8 digits unless ``roundOff`` is false. ::
+
+        SELECT months_between('1997-02-28 10:30:00', '1996-10-30', true); -- 3.94959677
+        SELECT months_between('1997-02-28 10:30:00', '1996-10-30', false); -- 3.9495967741935485
+        SELECT months_between('1997-02-28 10:30:00', '1996-03-31 11:00:00', true); -- 11.0
+        SELECT months_between('1997-02-28 10:30:00', '1996-03-28 11:00:00', true); -- 11.0
+        SELECT months_between('1997-02-21 10:30:00', '1996-03-21 11:00:00', true); -- 11.0
 
 .. spark:function:: next_day(startDate, dayOfWeek) -> date
 
@@ -265,11 +292,46 @@ These functions support TIMESTAMP and DATE input types.
         SELECT next_day('2015-07-23', "tu"); -- '2015-07-28'
         SELECT next_day('2015-07-23', "we"); -- '2015-07-29'
 
+.. spark:function:: quarter(date) -> integer
+
+    Returns the quarter of ``date``. The value ranges from ``1`` to ``4``. ::
+
+        SELECT quarter('2009-07-30'); -- 3
+
 .. spark:function:: second(timestamp) -> integer
 
     Returns the seconds of ``timestamp``. ::
 
         SELECT second('2009-07-30 12:58:59'); -- 59
+
+.. spark:function:: timestampadd(unit, value, timestamp) -> timestamp
+
+    Adds an int or bigint interval ``value`` of type ``unit`` to ``timestamp``.
+    Subtraction can be performed by using a negative ``value``.
+    Throws exception if ``unit`` is invalid.
+    ``unit`` is case insensitive and must be one of the following:
+    ``YEAR``, ``QUARTER``, ``MONTH``, ``WEEK``, ``DAY``, ``DAYOFYEAR``, ``HOUR``, ``MINUTE``, ``SECOND``,
+    ``MILLISECOND``, ``MICROSECOND``. ::
+
+        SELECT timestampadd(YEAR, 1, '2030-02-28 10:00:00.500'); -- 2031-02-28 10:00:00.500
+        SELECT timestampadd(DAY, 1, '2020-02-29 10:00:00.500'); -- 2020-03-01 10:00:00.500
+        SELECT timestampadd(DAYOFYEAR, 1, '2020-02-29 10:00:00.500'); -- 2020-03-01 10:00:00.500
+        SELECT timestampadd(SECOND, 10, '2019-03-01 10:00:00.500'); -- 2019-03-01 10:00:10.500
+        SELECT timestampadd(MICROSECOND, 500, '2019-02-28 10:01:00.500999'); -- 2019-02-28 10:01:00.501499
+
+.. spark:function:: timestampdiff(unit, timestamp1, timestamp2) -> bigint
+
+    Returns ``timestamp2`` - ``timestamp1`` expressed in terms of ``unit``, the fraction
+    part is truncated.
+    Throws exception if ``unit`` is invalid.
+    ``unit`` is case insensitive and must be one of the following:
+    ``YEAR``, ``QUARTER``, ``MONTH``, ``WEEK``, ``DAY``, ``HOUR``, ``MINUTE``, ``SECOND``,
+    ``MILLISECOND``, ``MICROSECOND``. ::
+
+        SELECT timestampdiff(YEAR, '2020-02-29 10:00:00.500', '2030-02-28 10:00:00.500'); -- 9
+        SELECT timestampdiff(DAY, '2019-01-30 10:00:00.500', '2020-02-29 10:00:00.500'); -- 395
+        SELECT timestampdiff(SECOND, '2019-02-28 10:00:00.500', '2019-03-01 10:00:00.500'); -- 86400
+        SELECT timestampdiff(MICROSECOND, '2019-02-28 10:00:00.000000', '2019-02-28 10:01:00.500999'); -- 60500999
 
 .. spark:function:: timestamp_micros(x) -> timestamp
 
@@ -284,6 +346,23 @@ These functions support TIMESTAMP and DATE input types.
     Supported types are: TINYINT, SMALLINT, INTEGER and BIGINT.::
 
         SELECT timestamp_millis(1230219000123); -- '2008-12-25 15:30:00.123'
+
+.. spark:function:: timestamp_seconds(x) -> timestamp
+
+    Returns timestamp from the number of seconds (can be fractional) since UTC epoch.
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, and DOUBLE.
+    For integral types (TINYINT, SMALLINT, INTEGER, BIGINT), the function directly
+    converts the number of seconds to a timestamp. For floating-point types
+    (FLOAT, DOUBLE), the function scales the input to microseconds, truncates
+    towards zero, and saturates the result to the minimum and maximum values allowed
+    in Spark. Returns NULL when ``x`` is NaN or Infinity. ::
+
+        SELECT timestamp_seconds(1230219000); -- '2008-12-25 15:30:00'
+        SELECT timestamp_seconds(1230219000.123); -- '2008-12-25 15:30:00.123'
+        SELECT timestamp_seconds(double(1.1234567)); -- '1970-01-01 00:00:01.123456'
+        SELECT timestamp_seconds(double('inf')); -- NULL
+        SELECT timestamp_seconds(float(3.4028235E+38)); -- '+294247-01-10 04:00:54.775807'
+        SELECT timestamp_seconds(float('nan')); -- NULL
 
 .. spark:function:: to_unix_timestamp(date) -> bigint
    :noindex:

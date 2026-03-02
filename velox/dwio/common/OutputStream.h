@@ -47,8 +47,8 @@ class BufferedOutputStream : public google::protobuf::io::ZeroCopyOutputStream {
 
   void BackUp(int32_t count) override;
 
-  google::protobuf::int64 ByteCount() const override {
-    return static_cast<google::protobuf::int64>(size());
+  int64_t ByteCount() const override {
+    return static_cast<int64_t>(size());
   }
 
   bool WriteAliasedRaw(const void* /* unused */, int32_t /* unused */)
@@ -116,7 +116,7 @@ class BufferedOutputStream : public google::protobuf::io::ZeroCopyOutputStream {
       void** buffer,
       int32_t* size,
       uint64_t headerSize,
-      const std::vector<folly::StringPiece>& bufferToFlush) {
+      const std::vector<std::string_view>& bufferToFlush) {
     bufferHolder_.take(bufferToFlush);
     *buffer = buffer_.data() + headerSize;
     *size = static_cast<int32_t>(buffer_.size() - headerSize);

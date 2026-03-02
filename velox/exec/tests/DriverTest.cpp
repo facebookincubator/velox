@@ -124,8 +124,9 @@ class DriverTest : public OperatorTestBase {
       bool addTestingPauser = false) {
     std::vector<RowVectorPtr> batches;
     for (int32_t i = 0; i < numBatches; ++i) {
-      batches.push_back(std::dynamic_pointer_cast<RowVector>(
-          BatchMaker::createBatch(rowType, rowsInBatch, *pool_)));
+      batches.push_back(
+          std::dynamic_pointer_cast<RowVector>(
+              BatchMaker::createBatch(rowType, rowsInBatch, *pool_)));
     }
     if (filterFunc) {
       int32_t hits = 0;
@@ -188,10 +189,11 @@ class DriverTest : public OperatorTestBase {
     bool paused = false;
     for (;;) {
       if (operation == ResultOperation::kPause && paused) {
-        if (!cursor->hasNext()) {
-          paused = false;
-          Task::resume(cursor->task());
-        }
+        // Resume the task so that next() can retrieve more data.
+        // If there's already buffered data, next() returns it immediately;
+        // otherwise it will wait for the resumed task to produce output.
+        paused = false;
+        Task::resume(cursor->task());
       }
       if (!cursor->next()) {
         break;
@@ -468,10 +470,11 @@ TEST_F(DriverTest, error) {
   EXPECT_EQ(numRead, 0);
   EXPECT_TRUE(stateFutures_.at(0).isReady());
   // Realized immediately since task not running.
-  EXPECT_TRUE(tasks_[0]
-                  ->taskCompletionFuture()
-                  .within(std::chrono::microseconds(1'000'000))
-                  .isReady());
+  EXPECT_TRUE(
+      tasks_[0]
+          ->taskCompletionFuture()
+          .within(std::chrono::microseconds(1'000'000))
+          .isReady());
   EXPECT_EQ(tasks_[0]->state(), TaskState::kFailed);
 }
 
@@ -799,8 +802,9 @@ TEST_F(DriverTest, pauserNode) {
   // all its Tasks in the test instance to create inter-Task pauses.
   static DriverTest* testInstance;
   testInstance = this;
-  Operator::registerOperator(std::make_unique<PauserNodeFactory>(
-      kThreadsPerTask, sequence, testInstance));
+  Operator::registerOperator(
+      std::make_unique<PauserNodeFactory>(
+          kThreadsPerTask, sequence, testInstance));
 
   std::vector<CursorParameters> params(kNumTasks);
   int32_t hits{0};
@@ -1142,6 +1146,43 @@ TEST_F(DriverTest, nonVeloxOperatorException) {
       AssertQueryBuilder(makePlan(ThrowNode::OperatorMethod::kGetOutput))
           .copyResults(pool()),
       "Operator::getOutput failed for [operator: Throw, plan node ID: 1]");
+}
+
+TEST_F(DriverTest, enableOperatorBatchSizeStatsConfig) {
+  CursorParameters params;
+  int32_t hits;
+  params.planNode = makeValuesFilterProject(
+      rowType_,
+      "m1 % 10 > 0",
+      "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
+      100,
+      1'000,
+      [](int64_t num) { return num % 10 > 0; },
+      &hits);
+  params.maxDrivers = 4;
+  std::unordered_map<std::string, std::string> queryConfig{
+      {core::QueryConfig::kEnableOperatorBatchSizeStats, "true"}};
+  params.queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig(std::move(queryConfig)));
+  int32_t numRead = 0;
+  readResults(params, ResultOperation::kRead, 1'000'000, &numRead);
+  EXPECT_EQ(numRead, 4 * hits);
+  auto stateFuture = tasks_[0]->taskCompletionFuture().within(
+      std::chrono::microseconds(100'000'000));
+  auto& executor = folly::QueuedImmediateExecutor::instance();
+  auto state = std::move(stateFuture).via(&executor);
+  state.wait();
+  EXPECT_TRUE(tasks_[0]->isFinished());
+  EXPECT_EQ(tasks_[0]->numRunningDrivers(), 0);
+  const auto taskStats = tasks_[0]->taskStats();
+  ASSERT_EQ(taskStats.pipelineStats.size(), 1);
+  const auto& operatorStats = taskStats.pipelineStats[0].operatorStats;
+  EXPECT_GT(operatorStats[1].getOutputTiming.wallNanos, 0);
+  EXPECT_EQ(operatorStats[0].outputPositions, 400'000);
+  EXPECT_GT(operatorStats[0].outputBytes, 0);
+  EXPECT_EQ(operatorStats[1].inputPositions, 400'000);
+  EXPECT_EQ(operatorStats[1].outputPositions, 4 * hits);
+  EXPECT_GT(operatorStats[1].outputBytes, 0);
 }
 
 DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {
@@ -1577,7 +1618,8 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
           0,
           core::QueryCtx::create(
               driverExecutor_.get(), core::QueryConfig{std::move(queryConfig)}),
-          testParam.executionMode);
+          testParam.executionMode,
+          exec::Consumer{});
       while (task->next() != nullptr) {
       }
     }

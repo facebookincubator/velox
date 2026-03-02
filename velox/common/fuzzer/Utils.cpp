@@ -15,6 +15,8 @@
  */
 
 #include "velox/common/fuzzer/Utils.h"
+#include <fmt/format.h>
+#include "velox/type/Time.h"
 
 namespace facebook::velox::fuzzer {
 
@@ -117,6 +119,10 @@ int32_t randDate(FuzzerGenerator& rng) {
   return rand<int32_t>(rng, min, max);
 }
 
+int32_t randTime(FuzzerGenerator& rng) {
+  return rand<int64_t>(rng, TimeType::kMin, TimeType::kMax);
+}
+
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
 /// enum values.
 ///
@@ -151,6 +157,15 @@ static const std::vector<std::vector<std::pair<char16_t, char16_t>>>
             {u'\u25A0', u'\u25FF'}, // Geometric Shapes.
             {u'\u27C0', u'\u27EF'}, // Math Symbols.
             {u'\u2A00', u'\u2AFF'}, // Supplemental.
+        },
+        // UTF8CharList::ALPHABETIC
+        {
+            {u'A', u'Z'}, // Uppercase alphabetic characters.
+            {u'a', u'z'}, // Lowercase alphabetic characters.
+        },
+        // UTF8CharList::NUMERIC
+        {
+            {u'0', u'9'}, // Numeric characters.
         },
     };
 
@@ -192,5 +207,39 @@ std::string randString(
   return buf;
 }
 #pragma GCC diagnostic pop
+
+int16_t generateRandomTimezoneOffset(
+    FuzzerGenerator& rng,
+    double frequentlyUsedProbability) {
+  // 25% probability: pick from frequently used offsets
+  // 75% probability: generate random offset in range [-840, 840]
+  if (coinToss(rng, frequentlyUsedProbability)) {
+    auto index =
+        rand<size_t>(rng, 0, kFrequentlyUsedTimezoneOffsets.size() - 1);
+    return kFrequentlyUsedTimezoneOffsets[index];
+  } else {
+    return rand<int16_t>(rng, -util::kTimeZoneBias, util::kTimeZoneBias);
+  }
+}
+
+std::string timezoneOffsetToString(int16_t offsetMinutes) {
+  // Validate range [-840, 840]
+  VELOX_USER_CHECK(
+      offsetMinutes >= -util::kTimeZoneBias &&
+          offsetMinutes <= util::kTimeZoneBias,
+      "Timezone offset {} minutes is out of range [-840, 840]",
+      offsetMinutes);
+
+  // Determine sign
+  char sign = (offsetMinutes >= 0) ? '+' : '-';
+
+  // Calculate hours and minutes using absolute value
+  int16_t absOffset = std::abs(offsetMinutes);
+  int16_t hours = absOffset / util::kMinutesInHour;
+  int16_t minutes = absOffset % util::kMinutesInHour;
+
+  // Format as "+HH:mm" or "-HH:mm" with zero-padding
+  return fmt::format("{}{:02d}:{:02d}", sign, hours, minutes);
+}
 
 } // namespace facebook::velox::fuzzer

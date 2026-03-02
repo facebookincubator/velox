@@ -48,6 +48,8 @@ namespace facebook {
 namespace velox {
 namespace bits {
 
+inline constexpr uint64_t kNullHash = 1;
+
 template <typename T>
 inline bool isBitSet(const T* bits, uint64_t idx) {
   return bits[idx / (sizeof(bits[0]) * 8)] &
@@ -90,6 +92,11 @@ inline void clearBit(T* bits, uint64_t idx) {
 template <typename T>
 inline void setBit(T* bits, uint64_t idx, bool value) {
   value ? setBit(bits, idx) : clearBit(bits, idx);
+}
+
+inline void negateBit(void* bits, uint64_t idx) {
+  auto* bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
+  bitsAs8Bit[idx / 8] ^= (1 << (idx % 8));
 }
 
 inline void negate(uint64_t* bits, int32_t size) {

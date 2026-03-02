@@ -17,18 +17,16 @@
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 #include <cctype>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
 
-using facebook::velox::Type;
-using facebook::velox::TypeKind;
-
+namespace facebook::velox::type::fbhive {
 namespace {
+
 /// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
+bool isPositiveInteger(std::string_view str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -39,9 +37,18 @@ bool isSupportedSpecialChar(char c) {
   static std::unordered_set<char> supported{'_', '$', '#'};
   return supported.count(c) == 1;
 }
-} // namespace
 
-namespace facebook::velox::type::fbhive {
+/// Returns whether `prefix` is non-empty case-insensitive prefix of `input`.
+bool isPrefix(std::string_view input, std::string_view prefix) {
+  return prefix.size() > 0 && input.size() >= prefix.size() &&
+      std::equal(
+             prefix.begin(),
+             prefix.end(),
+             input.begin(),
+             folly::AsciiCaseInsensitive{});
+}
+
+} // namespace
 
 HiveTypeParser::HiveTypeParser() {
   metadata_.resize(static_cast<size_t>(TokenType::MaxTokenType));
@@ -73,15 +80,15 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::EndOfStream, TypeKind::INVALID>();
 }
 
-std::shared_ptr<const Type> HiveTypeParser::parse(const std::string& ser) {
-  remaining_ = folly::StringPiece(ser);
+TypePtr HiveTypeParser::parse(std::string_view input) {
+  remaining_ = input;
   Result result = parseType();
   VELOX_CHECK(
       remaining_.size() == 0 || TokenType::EndOfStream == lookAhead(),
       "Input remaining after parsing the Hive type \"{}\"\n"
       "Remaining: \"{}\"",
-      ser,
-      remaining_.toString());
+      input,
+      remaining_);
   return result.type;
 }
 
@@ -92,8 +99,8 @@ Result HiveTypeParser::parseType() {
   if (!nt.isValidType()) {
     VELOX_FAIL(
         "Unexpected token {} at {}. typeKind = {}",
-        nt.value.toString(),
-        remaining_.toString(),
+        nt.value,
+        remaining_,
         nt.typeKind());
   }
 
@@ -102,12 +109,12 @@ Result HiveTypeParser::parseType() {
       eatToken(TokenType::LeftRoundBracket);
       Token precision = nextToken();
       VELOX_CHECK(
-          isPositiveInteger(precision.value.toString()),
+          isPositiveInteger(precision.value),
           "Decimal precision must be a positive integer");
       eatToken(TokenType::Comma);
       Token scale = nextToken();
       VELOX_CHECK(
-          isPositiveInteger(scale.value.toString()),
+          isPositiveInteger(scale.value),
           "Decimal scale must be a positive integer");
       eatToken(TokenType::RightRoundBracket);
       return Result{DECIMAL(
@@ -123,18 +130,20 @@ Result HiveTypeParser::parseType() {
       eatToken(TokenType::LeftRoundBracket);
       Token length = nextToken();
       VELOX_CHECK(
-          isPositiveInteger(length.value.toString()),
+          isPositiveInteger(length.value),
           "Varchar length must be a positive integer");
       eatToken(TokenType::RightRoundBracket);
     }
     return Result{scalarType};
   } else if (nt.isOpaqueType()) {
     eatToken(TokenType::StartSubType);
-    folly::StringPiece innerTypeName =
+    std::string_view innerTypeName =
         eatToken(TokenType::Identifier, true).value;
     eatToken(TokenType::EndSubType);
 
-    auto typeIndex = getTypeIdForOpaqueTypeAlias(innerTypeName.str());
+    // TODO: `getTypeIdForOpaqueTypeAlias()` should take a std::string_view so
+    // we don't need to needlessly construct a std::string.
+    auto typeIndex = getTypeIdForOpaqueTypeAlias(std::string(innerTypeName));
     auto instance = std::make_shared<const OpaqueType>(typeIndex);
     return Result{instance};
   } else {
@@ -144,27 +153,31 @@ Result HiveTypeParser::parseType() {
         return Result{velox::ROW(
             std::move(resultList.names), std::move(resultList.typelist))};
       case velox::TypeKind::MAP: {
-        VELOX_CHECK(
-            resultList.typelist.size() == 2,
+        VELOX_CHECK_EQ(
+            resultList.typelist.size(),
+            2,
             "wrong param count for map type def");
         return Result{
             velox::MAP(resultList.typelist.at(0), resultList.typelist.at(1))};
       }
       case velox::TypeKind::ARRAY: {
-        VELOX_CHECK(
-            resultList.typelist.size() == 1,
+        VELOX_CHECK_EQ(
+            resultList.typelist.size(),
+            1,
             "wrong param count for array type def");
         return Result{velox::ARRAY(resultList.typelist.at(0))};
       }
       default:
-        VELOX_FAIL("unsupported kind: " + mapTypeKindToName(nt.typeKind()));
+        VELOX_FAIL(
+            "Unsupported kind: '{}'", TypeKindName::toName(nt.typeKind()));
     }
   }
 }
 
 ResultList HiveTypeParser::parseTypeList(bool hasFieldNames) {
-  std::vector<std::shared_ptr<const Type>> subTypeList{};
+  std::vector<TypePtr> subTypeList{};
   std::vector<std::string> names{};
+
   eatToken(TokenType::StartSubType);
   while (true) {
     if (TokenType::EndSubType == lookAhead()) {
@@ -172,11 +185,11 @@ ResultList HiveTypeParser::parseTypeList(bool hasFieldNames) {
       return ResultList{std::move(subTypeList), std::move(names)};
     }
 
-    folly::StringPiece fieldName;
+    std::string_view fieldName;
     if (hasFieldNames) {
       fieldName = eatToken(TokenType::Identifier, true).value;
       eatToken(TokenType::Colon);
-      names.push_back(fieldName.toString());
+      names.emplace_back(fieldName);
     }
 
     Result result = parseType();
@@ -198,7 +211,7 @@ Token HiveTypeParser::eatToken(TokenType tokenType, bool ignorePredefined) {
     return token;
   }
 
-  VELOX_FAIL("Unexpected token " + token.remaining.toString());
+  VELOX_FAIL("Unexpected token '{}'", token.remaining);
 }
 
 Token HiveTypeParser::nextToken(bool ignorePredefined) {
@@ -208,29 +221,28 @@ Token HiveTypeParser::nextToken(bool ignorePredefined) {
 }
 
 TokenAndRemaining HiveTypeParser::nextToken(
-    folly::StringPiece sp,
+    std::string_view sv,
     bool ignorePredefined) const {
-  while (!sp.empty() && isspace(sp.front())) {
-    sp.advance(1);
+  while (!sv.empty() && isspace(sv.front())) {
+    sv.remove_prefix(1);
   }
 
-  if (sp.empty()) {
-    return makeExtendedToken(getMetadata(TokenType::EndOfStream), sp, 0);
+  if (sv.empty()) {
+    return makeExtendedToken(getMetadata(TokenType::EndOfStream), sv, 0);
   }
 
   if (!ignorePredefined) {
     for (auto& metadata : metadata_) {
       for (auto& token : metadata->tokenString) {
-        folly::StringPiece match(token);
-        if (match.size() > 0 &&
-            sp.startsWith(match, folly::AsciiCaseInsensitive{})) {
-          return makeExtendedToken(metadata.get(), sp, match.size());
+        std::string_view match(token);
+        if (isPrefix(sv, match)) {
+          return makeExtendedToken(metadata.get(), sv, match.size());
         }
       }
     }
   }
 
-  auto iter = sp.cbegin();
+  auto iter = sv.cbegin();
   size_t len = 0;
   while (isalnum(*iter) || isSupportedSpecialChar(*iter)) {
     ++len;
@@ -238,10 +250,10 @@ TokenAndRemaining HiveTypeParser::nextToken(
   }
 
   if (len > 0) {
-    return makeExtendedToken(getMetadata(TokenType::Identifier), sp, len);
+    return makeExtendedToken(getMetadata(TokenType::Identifier), sv, len);
   }
 
-  VELOX_FAIL("Bad Token at " + sp.toString());
+  VELOX_FAIL("Bad Token at '{}'", sv);
 }
 
 TokenType Token::tokenType() const {
@@ -274,15 +286,15 @@ int8_t HiveTypeParser::makeTokenId(TokenType tokenType) const {
 
 TokenAndRemaining HiveTypeParser::makeExtendedToken(
     TokenMetadata* tokenMetadata,
-    folly::StringPiece sp,
+    std::string_view sv,
     size_t len) const {
-  folly::StringPiece spmatch(sp.cbegin(), sp.cbegin() + len);
-  sp.advance(len);
+  std::string_view spmatch{sv.data(), len};
+  sv.remove_prefix(len);
 
   TokenAndRemaining result;
   result.metadata = tokenMetadata;
   result.value = spmatch;
-  result.remaining = sp;
+  result.remaining = sv;
   return result;
 }
 

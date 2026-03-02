@@ -16,6 +16,7 @@
 
 #include <string>
 
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
@@ -24,8 +25,11 @@
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
+#include "velox/functions/prestosql/ArraySubset.h"
+#include "velox/functions/prestosql/L2Norm.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::functions {
 extern void registerArrayConcatFunctions(const std::string& prefix);
@@ -123,6 +127,15 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
       {prefix + "array_remove"});
 }
 
+template <typename T>
+inline void registerArraySubsetFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArraySubsetFunction, T>,
+      Array<T>,
+      Array<T>,
+      Array<int32_t>>({prefix + "array_subset"});
+}
+
 void registerInternalArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_$internal$canonicalize, "$internal$canonicalize");
@@ -158,16 +171,22 @@ void registerArrayFunctions(const std::string& prefix) {
       makeArrayShuffle,
       getMetadataForArrayShuffle());
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sort, prefix + "array_sort");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_array_sort_desc, prefix + "array_sort_desc");
-
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort", arraySortSignatures(true), makeArraySortAsc);
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort_desc",
+      arraySortSignatures(false),
+      makeArraySortDesc);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
 
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
-    return rewriteArraySortCall(prefix, expr);
-  });
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_flatten, prefix + "flatten");
+
+  auto checker = std::make_shared<SimpleComparisonChecker>();
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [prefix, checker](const auto& expr) {
+        return rewriteArraySortCall(prefix, expr, checker);
+      });
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, prefix + "array_sum");
   exec::registerStatefulVectorFunction(
@@ -211,11 +230,6 @@ void registerArrayFunctions(const std::string& prefix) {
 
   registerArrayConcatFunctions(prefix);
   registerArrayNGramsFunctions(prefix);
-
-  registerFunction<
-      ArrayFlattenFunction,
-      Array<Generic<T1>>,
-      Array<Array<Generic<T1>>>>({prefix + "flatten"});
 
   registerArrayRemoveFunctions<int8_t>(prefix);
   registerArrayRemoveFunctions<int16_t>(prefix);
@@ -316,6 +330,8 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayCumSumFunction<int128_t>(prefix);
   registerArrayCumSumFunction<float>(prefix);
   registerArrayCumSumFunction<double>(prefix);
+  registerArrayCumSumFunction<LongDecimal<P1, S1>>(prefix);
+  registerArrayCumSumFunction<ShortDecimal<P1, S1>>(prefix);
 
   registerArrayHasDuplicatesFunctions<int8_t>(prefix);
   registerArrayHasDuplicatesFunctions<int16_t>(prefix);
@@ -343,5 +359,94 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayNormalizeFunctions<int64_t>(prefix);
   registerArrayNormalizeFunctions<float>(prefix);
   registerArrayNormalizeFunctions<double>(prefix);
+
+  registerArraySubsetFunctions<int8_t>(prefix);
+  registerArraySubsetFunctions<int16_t>(prefix);
+  registerArraySubsetFunctions<int32_t>(prefix);
+  registerArraySubsetFunctions<int64_t>(prefix);
+  registerArraySubsetFunctions<int128_t>(prefix);
+  registerArraySubsetFunctions<float>(prefix);
+  registerArraySubsetFunctions<double>(prefix);
+  registerArraySubsetFunctions<bool>(prefix);
+  registerArraySubsetFunctions<Timestamp>(prefix);
+  registerArraySubsetFunctions<Date>(prefix);
+  registerArraySubsetFunctions<Varbinary>(prefix);
+  registerArraySubsetFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArraySubsetVarcharFunction,
+      Array<Varchar>,
+      Array<Varchar>,
+      Array<int32_t>>({prefix + "array_subset"});
+  registerFunction<
+      ArraySubsetGenericFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Array<int32_t>>({prefix + "array_subset"});
+
+  // Register l2_norm function for arrays
+  registerFunction<ArrayL2NormFunction, double, Array<int8_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int16_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int32_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int64_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<float>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<double>>(
+      {prefix + "l2_norm"});
+
+  // Register l2_norm function for maps with numeric values
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int8_t>,
+      double,
+      Map<Varchar, int8_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int16_t>,
+      double,
+      Map<Varchar, int16_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int32_t>,
+      double,
+      Map<Varchar, int32_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int64_t>,
+      double,
+      Map<Varchar, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, float>,
+      double,
+      Map<Varchar, float>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, double>,
+      double,
+      Map<Varchar, double>>({prefix + "l2_norm"});
+
+  // Register l2_norm function for maps with integer keys
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, int32_t>,
+      double,
+      Map<int32_t, int32_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, int64_t>,
+      double,
+      Map<int32_t, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, float>,
+      double,
+      Map<int32_t, float>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, double>,
+      double,
+      Map<int32_t, double>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int64_t, int64_t>,
+      double,
+      Map<int64_t, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int64_t, double>,
+      double,
+      Map<int64_t, double>>({prefix + "l2_norm"});
 }
 } // namespace facebook::velox::functions

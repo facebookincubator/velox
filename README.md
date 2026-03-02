@@ -1,5 +1,8 @@
 <img src="static/logo.svg" alt="Velox logo" width="50%" align="center" />
 
+[![Linux Build using GCC](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml)
+[![macOS Build](https://github.com/facebookincubator/velox/actions/workflows/macos.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/macos.yml)
+
 Velox is a composable execution engine distributed as an open source C++
 library. It provides reusable, extensible, and high-performance data processing
 components that can be (re-)used to build data management systems focused on
@@ -112,6 +115,32 @@ Details on the dependencies and how Velox manages some of them for you
 Velox also provides the following scripts to help developers setup and install Velox
 dependencies for a given platform.
 
+### Supported OS and compiler matrix
+
+The minimum versions of supported compilers:
+
+| OS | Compiler | Version |
+|----|----------|---------|
+| Linux | gcc | 11 |
+| Linux | clang | 15 |
+| macOS | clang | 15 |
+
+The recommended OS versions and compilers:
+
+| OS | Compiler | Version |
+|----|----------|---------|
+| CentOS 9/RHEL 9 | gcc | 12 |
+| Ubuntu 22.04 | gcc | 11 |
+| macOS | clang | 16 |
+
+Alternative combinations:
+
+| OS | Compiler | Version |
+|----|----------|---------|
+| CentOS 9/RHEL 9 | gcc | 11 |
+| Ubuntu 20.04 | gcc | 11 |
+| Ubuntu 24.04 | clang | 15 |
+
 ### Setting up dependencies
 
 The following setup scripts use the `DEPENDENCY_DIR` environment variable to set the
@@ -125,7 +154,7 @@ Using the default install location `/usr/local` on macOS is discouraged since th
 location is used by certain Homebrew versions.
 
 Manually add the `INSTALL_PREFIX` value in the IDE or bash environment,
-say `export INSTALL_PREFIX=/Users/$USERNAME/velox/deps-install` to `~/.zshrc` so that
+say `export INSTALL_PREFIX=/Users/$USER/velox/deps-install` to `~/.zshrc` so that
 subsequent Velox builds can use the installed packages.
 
 *You can reuse `DEPENDENCY_INSTALL` and `INSTALL_PREFIX` for Velox clients such as Prestissimo

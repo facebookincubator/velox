@@ -20,9 +20,6 @@
 
 namespace facebook::velox::exec {
 
-constexpr const char* kIf = "if";
-constexpr const char* kSwitch = "switch";
-
 /// CASE expression:
 ///
 /// case
@@ -61,20 +58,24 @@ class SwitchExpr : public SpecialForm {
   }
 
  private:
-  static TypePtr resolveType(const std::vector<TypePtr>& argTypes);
-
   void computePropagatesNulls() override;
 
   const size_t numCases_;
   const bool hasElseClause_;
   BufferPtr tempValues_;
-
-  friend class SwitchCallToSpecialForm;
 };
 
 class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
  public:
+  /// Returns the type of the 2nd argument. Throws if types of even arguments
+  /// (conditions) are not BOOLEAN or if types of odd arguments (then and else
+  /// branches) don't match.
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+
+  /// Supports coercions for odd arguments (then and else branches).
+  TypePtr resolveTypeWithCorsions(
+      const std::vector<TypePtr>& argTypes,
+      std::vector<TypePtr>& coercions) override;
 
   ExprPtr constructSpecialForm(
       const TypePtr& type,
@@ -85,6 +86,15 @@ class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
 
 class IfCallToSpecialForm : public SwitchCallToSpecialForm {
  public:
+  /// Returns the type of the 2nd argument. Throws if number of arguments is not
+  /// 3 or types, type of 1st argument (condition) is not BOOLEAN, or types of
+  /// 2nd (then) and 3rd (else) arguments don't match.
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+
+  /// Supports coercions for 2nd and 3rd arguments (then and else branches).
+  TypePtr resolveTypeWithCorsions(
+      const std::vector<TypePtr>& argTypes,
+      std::vector<TypePtr>& coercions) override;
 };
+
 } // namespace facebook::velox::exec

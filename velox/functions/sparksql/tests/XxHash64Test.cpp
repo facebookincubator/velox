@@ -184,8 +184,9 @@ TEST_F(XxHash64Test, array) {
 
   assertEqualVectors(
       makeFlatVector<int64_t>({-6698625589789238999, 8420071140774656230, 42}),
-      xxhash64(makeNullableArrayVector<int32_t>(
-          {{1, std::nullopt}, {std::nullopt, 2}, {std::nullopt}})));
+      xxhash64(
+          makeNullableArrayVector<int32_t>(
+              {{1, std::nullopt}, {std::nullopt, 2}, {std::nullopt}})));
 
   // Nested array.
   {
@@ -286,10 +287,11 @@ TEST_F(XxHash64Test, unknown) {
 
   assertEqualVectors(
       makeFlatVector<int64_t>({42, 42}),
-      xxhash64(makeNullableArrayVector<UnknownValue>({
-          {std::nullopt, std::nullopt},
-          {std::nullopt, std::nullopt, std::nullopt},
-      })));
+      xxhash64(
+          makeNullableArrayVector<UnknownValue>({
+              {std::nullopt, std::nullopt},
+              {std::nullopt, std::nullopt, std::nullopt},
+          })));
 
   auto mapVector = makeNullableMapVector<UnknownValue, UnknownValue>({
       std::nullopt,

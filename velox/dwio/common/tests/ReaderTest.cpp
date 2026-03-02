@@ -148,34 +148,79 @@ TEST_F(ReaderTest, projectColumnsMutation) {
       makeFlatVector<int64_t>({0, 1, 3, 4, 5, 6, 7, 8, 9}),
   });
   test::assertEqualVectors(expected, actual);
-  random::setSeed(42);
-  random::RandomSkipTracker randomSkip(0.5);
-  mutation.randomSkip = &randomSkip;
-  actual = RowReader::projectColumns(input, spec, &mutation);
-  if constexpr (std::is_same_v<folly::detail::DefaultGenerator, std::mt19937>) {
-#if __APPLE__
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({1, 5, 6, 7, 8, 9}),
-    });
-#else
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({3, 4, 7, 9}),
-    });
-#endif
-#if FOLLY_HAVE_EXTRANDOM_SFMT19937
-  } else if constexpr (std::is_same_v<
-                           folly::detail::DefaultGenerator,
-                           __gnu_cxx::sfmt19937>) {
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1, 3, 5, 6, 8}),
-    });
-#endif
-  } else {
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({1, 3, 5, 7}),
-    });
+
+  constexpr auto kNumRounds = 1U << 6;
+
+  size_t numNonZero = 0;
+  size_t numNonMax = 0;
+
+  // Test with random skip - use property-based testing instead of hardcoded
+  // outputs to avoid brittleness when folly::Random implementation changes.
+  std::mt19937 seeds;
+  for (size_t round = 0; round < kNumRounds; ++round) {
+    const auto seed = seeds();
+
+    random::setSeed(folly::to_narrow(seed));
+    random::RandomSkipTracker randomSkip(0.5);
+    mutation.randomSkip = &randomSkip;
+    actual = RowReader::projectColumns(input, spec, &mutation);
+
+    // Property 1: Result size should be less than input size (some rows
+    // skipped). With 0.5 sample rate and 9 eligible rows (excluding deleted row
+    // 2), we expect roughly 4-5 rows, but allow wider range for RNG variance.
+    EXPECT_GE(actual->size(), 0);
+    EXPECT_LE(actual->size(), kSize - 1);
+
+    numNonZero += actual->size() > 0;
+    numNonMax += actual->size() < kSize - 1;
+
+    // The result is a RowVector with one child column. Assume it.
+    auto res = actual->as<RowVector>()->childAt(0)->as<SimpleVector<int64_t>>();
+    std::vector<int64_t> vec;
+    vec.reserve(actual->size());
+    for (vector_size_t i = 0; i < actual->size(); ++i) {
+      vec.push_back(res->valueAt(i));
+    }
+
+    // Property 2: All values in result must be from original input.
+    for (auto val : vec) {
+      // Each value must be in valid range
+      EXPECT_GE(val, 0);
+      EXPECT_LT(val, kSize);
+      // Deleted row should never appear
+      EXPECT_NE(val, 2);
+    }
+
+    // Property 3: Values should be in ascending order (projectColumns preserves
+    // order).
+    EXPECT_TRUE(std::is_sorted(vec.begin(), vec.end()));
+
+    // Property 4: No duplicate values (each input row appears at most once).
+    EXPECT_TRUE(std::adjacent_find(vec.begin(), vec.end()) == vec.end());
+
+    // Property 5: With a fixed seed, the result should be deterministic
+    // (same seed = same output, even if we don't know what that output is)
+    random::setSeed(folly::to_narrow(seed));
+    random::RandomSkipTracker randomSkip2(0.5);
+    mutation.randomSkip = &randomSkip2;
+    auto actual2 = RowReader::projectColumns(input, spec, &mutation);
+    test::assertEqualVectors(actual, actual2);
   }
-  test::assertEqualVectors(expected, actual);
+
+  EXPECT_NE(0, numNonZero);
+  EXPECT_NE(0, numNonMax);
+}
+
+TEST_F(ReaderTest, rowRangeEmpty) {
+  // Empty when startRow >= endRow
+  EXPECT_TRUE((RowRange{0, 0}.empty()));
+  EXPECT_TRUE((RowRange{5, 5}.empty()));
+  EXPECT_TRUE((RowRange{10, 5}.empty()));
+
+  // Not empty when startRow < endRow
+  EXPECT_FALSE((RowRange{0, 1}.empty()));
+  EXPECT_FALSE((RowRange{0, 10}.empty()));
+  EXPECT_FALSE((RowRange{5, 10}.empty()));
 }
 
 } // namespace

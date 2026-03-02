@@ -32,16 +32,20 @@ class LoadUnitMock : public LoadUnit {
       uint64_t rowCount,
       uint64_t ioSize,
       std::vector<std::atomic_bool>& unitsLoaded,
-      size_t unitId)
+      size_t unitId,
+      std::chrono::milliseconds loadDelay = std::chrono::milliseconds(100))
       : rowCount_{rowCount},
         ioSize_{ioSize},
         unitsLoaded_{unitsLoaded},
-        unitId_{unitId} {}
+        unitId_{unitId},
+        loadDelay_(loadDelay) {}
 
   ~LoadUnitMock() override = default;
 
   void load() override {
     VELOX_CHECK(!isLoaded());
+    // Simulate loading time
+    std::this_thread::sleep_for(loadDelay_);
     unitsLoaded_[unitId_] = true;
   }
 
@@ -67,6 +71,7 @@ class LoadUnitMock : public LoadUnit {
   uint64_t ioSize_;
   std::vector<std::atomic_bool>& unitsLoaded_;
   size_t unitId_;
+  std::chrono::milliseconds loadDelay_;
 };
 
 class ReaderMock {
@@ -82,7 +87,7 @@ class ReaderMock {
   void seek(uint64_t rowNumber);
 
   std::vector<bool> unitsLoaded() const {
-    return {unitsLoaded_.begin(), unitsLoaded_.end()};
+    return {unitsLoaded_.cbegin(), unitsLoaded_.cend()};
   }
 
  private:

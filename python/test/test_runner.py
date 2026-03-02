@@ -40,7 +40,7 @@ class TestPyVeloxRunner(unittest.TestCase):
     def tearDown(self) -> None:
         unregister_all()
 
-    def test_runner_empty(self):
+    def test_empty(self):
         plan_builder = PlanBuilder().values()
         runner = LocalRunner(plan_builder.get_plan_node())
         total_size = 0
@@ -49,19 +49,31 @@ class TestPyVeloxRunner(unittest.TestCase):
             total_size += vector.size()
         self.assertEqual(total_size, 0)
 
-    def test_runner_not_executed(self):
+    def test_not_executed(self):
         # Ensure it won't hang on destruction when it was not executed.
         plan_builder = PlanBuilder().values()
         LocalRunner(plan_builder.get_plan_node())
 
-    def test_runner_executed_twice(self):
-        # Ensure the runner fails if it is executed twice.
-        plan_builder = PlanBuilder().values()
-        runner = LocalRunner(plan_builder.get_plan_node())
-        runner.execute()
-        self.assertRaises(RuntimeError, runner.execute)
+    def test_execute_twice(self):
+        # Ensure a runner can be executed twice.
+        vector = to_velox(
+            pyarrow.record_batch([pyarrow.array(list(range(10)))], names=["c0"])
+        )
 
-    def test_runner_with_values(self):
+        plan_builder = PlanBuilder().values([vector])
+        runner = LocalRunner(plan_builder.get_plan_node())
+
+        total_size = 0
+        for vector in runner.execute():
+            total_size += vector.size()
+        self.assertEqual(total_size, 10)
+
+        total_size = 0
+        for vector in runner.execute():
+            total_size += vector.size()
+        self.assertEqual(total_size, 10)
+
+    def test_values(self):
         vectors = []
         batch_size = 10
         num_batches = 10
@@ -79,7 +91,7 @@ class TestPyVeloxRunner(unittest.TestCase):
             total_size += vector.size()
         self.assertEqual(total_size, 100)
 
-    def test_runner_with_values_order_limit(self):
+    def test_values_order_limit(self):
         vectors = []
         batch_size = 10
         num_batches = 10
@@ -103,7 +115,7 @@ class TestPyVeloxRunner(unittest.TestCase):
         )
         self.assertEqual(output, expected_result)
 
-    def test_runner_with_hash_join(self):
+    def test_hash_join(self):
         batch_size = 100
         probe = list(range(batch_size))
         build = [i for i in probe if i % 2 == 0]
@@ -138,7 +150,7 @@ class TestPyVeloxRunner(unittest.TestCase):
         result = int(vector.child_at(0)[0])
         self.assertEqual(result, sum(build))
 
-    def test_runner_with_merge_join(self):
+    def test_merge_join(self):
         batch_size = 10
         array = pyarrow.array([42] * batch_size)
         batch = to_velox(pyarrow.record_batch([array], names=["c0"]))
@@ -159,7 +171,7 @@ class TestPyVeloxRunner(unittest.TestCase):
             total_size += vector.size()
         self.assertEqual(total_size, batch_size * batch_size)
 
-    def test_runner_with_merge_sort(self):
+    def test_merge_sort(self):
         array = pyarrow.array([0, 1, 2, 3, 4])
         batch = to_velox(pyarrow.record_batch([array], names=["c0"]))
 
@@ -186,6 +198,43 @@ class TestPyVeloxRunner(unittest.TestCase):
         )
         self.assertEqual(output, expected)
 
+    def test_unnest_and_streaming_aggregate(self):
+        batch_size = 100
+        base = list(range(batch_size))
+
+        input_vector = to_velox(
+            pyarrow.record_batch([pyarrow.array([base])], names=["c0"])
+        )
+        # Single row containing an array column with `batch_size` elements.
+        self.assertEqual(input_vector.size(), 1)
+
+        # Unnest it and check we get batch_size rows.
+        plan_builder = PlanBuilder()
+        plan_builder.values([input_vector]).unnest(unnest_columns=["c0"])
+
+        runner = LocalRunner(plan_builder.get_plan_node())
+        iterator = runner.execute()
+        vector = next(iterator)
+
+        self.assertRaises(StopIteration, next, iterator)
+        self.assertEqual(vector.size(), batch_size)
+
+        # Unnest then stream aggregate it back to ensure we get the input
+        # vector back.
+        plan_builder = PlanBuilder()
+        plan_builder.values([input_vector]).unnest(
+            unnest_columns=["c0"],
+        ).streaming_aggregate(
+            grouping_keys=[],
+            aggregations=["array_agg(c0_e)"],
+        )
+
+        runner = LocalRunner(plan_builder.get_plan_node())
+        iterator = runner.execute()
+        vector = next(iterator)
+
+        self.assertEqual(vector, input_vector)
+
     def test_register_connectors(self):
         register_hive("conn1")
         self.assertRaises(RuntimeError, register_hive, "conn1")
@@ -209,11 +258,12 @@ class TestPyVeloxRunner(unittest.TestCase):
         input_batch = to_velox(pyarrow.record_batch([array], names=["c0"]))
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            output_file = f"{temp_dir}/output_file"
+            output_file_name = "output_file"
+            output_file_path = f"{temp_dir}/{output_file_name}"
 
             plan_builder = PlanBuilder()
             plan_builder.values([input_batch]).table_write(
-                output_file=DWRF(output_file),
+                output_file=DWRF(output_file_path),
                 connector_id="hive",
             )
 
@@ -225,14 +275,14 @@ class TestPyVeloxRunner(unittest.TestCase):
             self.assertNotEqual(runner.print_plan_with_stats(), "")
 
             output_file_from_table_writer = self.extract_file(output)
-            self.assertEqual(output_file, output_file_from_table_writer)
+            self.assertEqual(output_file_path, output_file_from_table_writer)
 
             # Now scan it back.
             scan_plan_builder = PlanBuilder()
             scan_plan_builder.table_scan(
                 output_schema=ROW(["c0"], [BIGINT()]),
                 connector_id="hive",
-                input_files=[DWRF(output_file)],
+                input_files=[DWRF(output_file_path)],
             )
 
             runner = LocalRunner(scan_plan_builder.get_plan_node())
@@ -242,6 +292,28 @@ class TestPyVeloxRunner(unittest.TestCase):
 
             # Ensure the read batch is the same as the one written.
             self.assertEqual(input_batch, result)
+
+            # Test special columns ($row_group_id and $row_number).
+            special_column_plan_builder = PlanBuilder().table_scan(
+                output_schema=ROW(
+                    ["$row_group_id", "row_number"],
+                    [VARCHAR(), BIGINT()],
+                ),
+                row_index="row_number",
+                connector_id="hive",
+                input_files=[DWRF(output_file_path)],
+            )
+
+            runner = LocalRunner(special_column_plan_builder.get_plan_node())
+            iterator = runner.execute()
+            result = next(iterator)
+            self.assertRaises(StopIteration, next, iterator)
+
+            # First column is always the output file name; the second is a
+            # monotonically increasing row id.
+            for i in range(batch_size):
+                self.assertEqual(result.child_at(0)[i], output_file_name)
+                self.assertEqual(result.child_at(1)[i], str(i))
 
     def test_tpch_gen(self):
         register_tpch("tpch")

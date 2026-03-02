@@ -15,12 +15,11 @@
  */
 
 #include "velox/expression/TypeSignature.h"
-#include "velox/common/base/Exceptions.h"
+#include <folly/String.h>
+#include <sstream>
 
 namespace facebook::velox::exec {
-void toAppend(
-    const facebook::velox::exec::TypeSignature& signature,
-    std::string* result) {
+void toAppend(const TypeSignature& signature, std::string* result) {
   result->append(signature.toString());
 }
 
@@ -31,7 +30,11 @@ std::string TypeSignature::toString() const {
   }
   out << baseName_;
   if (!parameters_.empty()) {
-    out << "(" << folly::join(",", parameters_) << ")";
+    if (isHomogeneousRow()) {
+      out << "(" << parameters_[0].toString() << ", ..." << ")";
+    } else {
+      out << "(" << folly::join(",", parameters_) << ")";
+    }
   }
   return out.str();
 }

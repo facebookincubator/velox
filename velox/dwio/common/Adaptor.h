@@ -27,7 +27,7 @@
 #define DIAGNOSTIC_PUSH _Pragma("GCC diagnostic push")
 #define DIAGNOSTIC_POP _Pragma("GCC diagnostic pop")
 #else
-#error("Unknown compiler")
+#error ("Unknown compiler")
 #endif
 
 #define PRAGMA(TXT) _Pragma(#TXT)

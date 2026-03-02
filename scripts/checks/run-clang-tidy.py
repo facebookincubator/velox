@@ -15,74 +15,11 @@
 
 import argparse
 import json
-import regex
+import re
 import sys
+import os
 
 import util
-
-CODE_CHECKS = """*
-    -abseil-*
-    -android-*
-    -cert-err58-cpp
-    -clang-analyzer-osx-*
-    -cppcoreguidelines-avoid-c-arrays
-    -cppcoreguidelines-avoid-magic-numbers
-    -cppcoreguidelines-pro-bounds-array-to-pointer-decay
-    -cppcoreguidelines-pro-bounds-pointer-arithmetic
-    -cppcoreguidelines-pro-type-reinterpret-cast
-    -cppcoreguidelines-pro-type-vararg
-    -fuchsia-*
-    -google-*
-    -hicpp-avoid-c-arrays
-    -hicpp-deprecated-headers
-    -hicpp-no-array-decay
-    -hicpp-use-equals-default
-    -hicpp-vararg
-    -llvmlibc-*
-    -llvm-header-guard
-    -llvm-include-order
-    -mpi-*
-    -misc-non-private-member-variables-in-classes
-    -misc-no-recursion
-    -misc-unused-parameters
-    -modernize-avoid-c-arrays
-    -modernize-deprecated-headers
-    -modernize-use-nodiscard
-    -modernize-use-trailing-return-type
-    -objc-*
-    -openmp-*
-    -readability-avoid-const-params-in-decls
-    -readability-convert-member-functions-to-static
-    -readability-magic-numbers
-    -zircon-*
-"""
-
-# Additional opt-outs because googletest macros trip too many things.
-#
-TEST_CHECKS = (
-    CODE_CHECKS
-    + """
-    -cert-err58-cpp
-    -cppcoreguidelines-avoid-goto
-    -cppcoreguidelines-avoid-non-const-global-variables
-    -cppcoreguidelines-owning-memory
-    -cppcoreguidelines-pro-type-vararg
-    -cppcoreguidelines-special-member-functions
-    -hicpp-avoid-goto
-    -hicpp-special-member-functions
-    -hicpp-vararg
-    -misc-no-recursion
-    -readability-implicit-bool-conversion
-"""
-)
-
-
-def check_list(check_string):
-    return ",".join([check.strip() for check in check_string.strip().splitlines()])
-
-
-CODE_CHECKS = check_list(CODE_CHECKS)
-TEST_CHECKS = check_list(TEST_CHECKS)
 
 
 class Multimap(dict):
@@ -101,76 +38,94 @@ def git_changed_lines(commit):
         line = line.rstrip("\n")
         fields = line.split()
 
-        match = regex.match(r"^\+\+\+ b/.*", line)
+        match = re.match(r"^\+\+\+ b/.*", line)
         if match:
             file = ""
 
-        match = regex.match(r"^\+\+\+ b/(.*(\.cpp|\.h))$", line)
+        match = re.match(r"^\+\+\+ b/(.*(\.cpp|\.h|\.hpp))$", line)
         if match:
             file = match.group(1)
 
-        match = regex.match(r"^@@", line)
-        if match and file != "":
+        match = re.match(r"^@@", line)
+        if match and file != "" and len(fields) >= 3:
             lspan = fields[2].split(",")
             if len(lspan) <= 1:
-                lspan.append(0)
+                lspan.append("0")
 
-            changed_lines[file] = [int(lspan[0]), int(lspan[0]) + int(lspan[1])]
+            start_line = int(lspan[0])
+            line_count = int(lspan[1])
 
-    return json.dumps(
-        [{"name": key, "lines": value} for key, value in changed_lines.items()]
-    )
+            # Skip invalid line ranges (e.g., +0,0 from deleted files)
+            if start_line > 0 or line_count > 0:
+                changed_lines[file] = [start_line, start_line + line_count]
 
-
-def checks(args):
-    status, stdout, stderr = util.run(
-        f"clang-tidy -checks='{CODE_CHECKS}' --list-checks"
-    )
-    print(stdout)
+    return changed_lines
 
 
 def check_output(output):
-    return regex.match(r"^/.* warning: ", output)
+    return re.match(r"(^/.* warning: |^$)", output)
 
 
 def tidy(args):
     files = util.input_files(args.files)
+    files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
-    groups = Multimap()
+    in_gha = os.environ.get("GITHUB_ACTIONS") is not None
 
-    for file in files:
-        groups["test" if "/tests/" in file else "main"] = file
+    changed_lines = git_changed_lines(args.commit)
+
+    line_filter = json.dumps(
+        [{"name": key, "lines": value} for key, value in changed_lines.items()]
+    )
+    filtered_files = [*changed_lines.keys()]
+    if len(filtered_files) == 0:
+        return 0
 
     fix = "--fix" if args.fix == "fix" else ""
-    lines = (
-        ("'--line-filter=" + git_changed_lines(args.commit)) + "'"
-        if args.commit is not None
-        else ""
-    )
+    lines = f"'--line-filter={line_filter}'" if args.commit is not None else ""
 
     ok = True
-    if groups.get("main", None):
-        status, stdout, stderr = util.run(
-            f"xargs clang-tidy -p=build/release/ --format-style=file -header-filter='.*' --checks='{CODE_CHECKS}' --quiet {fix} {lines}",
-            input=groups["main"],
-        )
-        ok = check_output(stdout) and ok
+    build_path = args.p or os.getenv("BUILD_PATH")
+    build_path_str = f"-p {build_path}" if build_path else ""
 
-    if groups.get("test", None):
-        status, stdout, stderr = util.run(
-            f"xargs clang-tidy -p=build/release/ --format-style=file -header-filter='.*' --checks='{TEST_CHECKS}' --quiet {fix} {lines}",
-            input=groups["test"],
+    if build_path_str == "" and not os.path.isfile(
+        os.getcwd().join("compile_commands.json")
+    ):
+        print("compile_commands.json not found, skipping clang-tidy")
+        return 0
+
+    status, stdout, stderr = util.run(
+        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {build_path_str} {fix} {lines}",
+        input=filtered_files,
+    )
+
+    if in_gha:
+        clang_tidy_pattern = (
+            r"^(.*):(\d+):(\d+):\s+(error|warning):\s+(.*) \[([a-z0-9,\-]+)\]\s*$"
         )
-        ok = check_output(stdout) and ok
+
+        for stdout_line in stdout.split("\n"):
+            m = re.match(clang_tidy_pattern, stdout_line)
+            if m is not None:
+                file, line, col, severity, message, rule = m.groups()
+                file = file.removeprefix("/__w/velox/velox/")
+                print(
+                    f"::{severity} file={file},line={line},col={col},title={rule}::{message}"
+                )
+
+    ok = check_output(stdout)
+    if not ok:
+        print(stdout)
 
     return 0 if ok else 1
 
 
 def parse_args():
     global parser
-    parser = argparse.ArgumentParser(description="CircliCi Utility")
+    parser = argparse.ArgumentParser(description="Clang Tidy Utility")
     parser.add_argument("--commit")
     parser.add_argument("--fix")
+    parser.add_argument("-p", help="Path containing 'compile_commands.json'")
 
     parser.add_argument("files", metavar="FILES", nargs="+", help="files to process")
 

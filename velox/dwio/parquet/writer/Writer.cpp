@@ -22,6 +22,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -133,13 +134,13 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   WriterProperties::Builder* properties = &builder;
   if (options.enableDictionary.value_or(
           facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
-    properties = properties->enable_dictionary();
-    properties = properties->dictionary_pagesize_limit(
+    properties = properties->enableDictionary();
+    properties = properties->dictionaryPagesizeLimit(
         options.dictionaryPageSizeLimit.value_or(
             facebook::velox::parquet::arrow::
                 DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   } else {
-    properties = properties->disable_dictionary();
+    properties = properties->disableDictionary();
   }
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
@@ -149,30 +150,30 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
         getArrowParquetCompression(columnCompressionValues.second));
   }
   properties = properties->encoding(options.encoding);
-  properties = properties->data_pagesize(options.dataPageSize.value_or(
+  properties = properties->dataPagesize(options.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));
-  properties = properties->write_batch_size(options.batchSize.value_or(
+  properties = properties->writeBatchSize(options.batchSize.value_or(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
-  properties = properties->max_row_group_length(
+  properties = properties->maxRowGroupLength(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
-  properties = properties->codec_options(options.codecOptions);
-  properties = properties->enable_store_decimal_as_integer();
+  properties = properties->codecOptions(options.codecOptions);
+  properties = properties->enableStoreDecimalAsInteger();
   if (options.useParquetDataPageV2.value_or(false)) {
-    properties =
-        properties->data_page_version(arrow::ParquetDataPageVersion::V2);
+    properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
   } else {
-    properties =
-        properties->data_page_version(arrow::ParquetDataPageVersion::V1);
+    properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V1);
   }
   if (options.createdBy.has_value()) {
-    properties = properties->created_by(options.createdBy.value());
+    properties = properties->createdBy(options.createdBy.value());
   }
   return properties->build();
 }
 
-void validateSchemaRecursive(const RowTypePtr& schema) {
-  // Check the schema's field names is not empty and unique.
-  VELOX_USER_CHECK_NOT_NULL(schema, "Field schema must not be empty.");
+void validateSchemaRecursive(
+    const RowTypePtr& schema,
+    const std::vector<ParquetFieldId>& parquetFieldIds) {
+  // Check the schema's field names are not empty and unique.
+  VELOX_USER_CHECK_NOT_NULL(schema, "Schema must not be empty.");
   const auto& fieldNames = schema->names();
 
   folly::F14FastSet<std::string> uniqueNames;
@@ -185,55 +186,100 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
         name);
   }
 
+  if (!parquetFieldIds.empty()) {
+    VELOX_USER_CHECK_EQ(parquetFieldIds.size(), schema->size());
+  }
+
   for (auto i = 0; i < schema->size(); ++i) {
-    if (auto childSchema =
-            std::dynamic_pointer_cast<const RowType>(schema->childAt(i))) {
-      validateSchemaRecursive(childSchema);
+    const auto& childType = schema->childAt(i);
+    const auto& childFieldIds =
+        parquetFieldIds.empty() ? parquetFieldIds : parquetFieldIds[i].children;
+
+    if (childType->isRow()) {
+      validateSchemaRecursive(
+          std::dynamic_pointer_cast<const RowType>(childType), childFieldIds);
+    } else if (childType->isArray()) {
+      if (!parquetFieldIds.empty()) {
+        VELOX_USER_CHECK_EQ(parquetFieldIds[i].children.size(), 1);
+      }
+      const auto& elementType = childType->asArray().elementType();
+      if (elementType->isRow()) {
+        validateSchemaRecursive(
+            std::dynamic_pointer_cast<const RowType>(elementType),
+            childFieldIds.empty() ? childFieldIds : childFieldIds[0].children);
+      }
+    } else if (childType->isMap()) {
+      if (!parquetFieldIds.empty()) {
+        VELOX_USER_CHECK_EQ(parquetFieldIds[i].children.size(), 2);
+      }
+      const auto& mapType = childType->asMap();
+      if (mapType.keyType()->isRow()) {
+        validateSchemaRecursive(
+            std::dynamic_pointer_cast<const RowType>(mapType.keyType()),
+            childFieldIds.empty() ? childFieldIds : childFieldIds[0].children);
+      }
+      if (mapType.valueType()->isRow()) {
+        validateSchemaRecursive(
+            std::dynamic_pointer_cast<const RowType>(mapType.valueType()),
+            childFieldIds.empty() ? childFieldIds : childFieldIds[1].children);
+      }
     }
   }
 }
 
-std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
+std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
     const std::shared_ptr<::arrow::Field>& field,
     const Type& type,
+    const ParquetFieldId* fieldId,
     const std::string& name = "") {
+  auto newField = name.empty() ? field : field->WithName(name);
+
+  if (fieldId) {
+    newField =
+        newField->WithMetadata(arrow::arrow::fieldIdMetadata(fieldId->fieldId));
+  }
+
   if (type.isRow()) {
     auto& rowType = type.asRow();
-    auto newField = field->WithName(name);
     auto structType =
         std::dynamic_pointer_cast<::arrow::StructType>(newField->type());
     auto childrenSize = rowType.size();
+    VELOX_CHECK(!fieldId || childrenSize <= fieldId->children.size());
     std::vector<std::shared_ptr<::arrow::Field>> newFields;
     newFields.reserve(childrenSize);
-    for (auto i = 0; i < childrenSize; i++) {
-      newFields.push_back(updateFieldNameRecursive(
-          structType->fields()[i], *rowType.childAt(i), rowType.nameOf(i)));
+    for (auto i = 0; i < childrenSize; ++i) {
+      const auto* childSetting = fieldId ? &fieldId->children.at(i) : nullptr;
+      newFields.push_back(updateFieldNameAndIdRecursive(
+          structType->fields()[i],
+          *rowType.childAt(i),
+          childSetting,
+          rowType.nameOf(i)));
     }
-    return newField->WithType(::arrow::struct_(newFields));
+    newField = newField->WithType(::arrow::struct_(newFields));
   } else if (type.isArray()) {
-    auto newField = field->WithName(name);
     auto listType =
         std::dynamic_pointer_cast<::arrow::BaseListType>(newField->type());
     auto elementType = type.asArray().elementType();
     auto elementField = listType->value_field();
-    return newField->WithType(
-        ::arrow::list(updateFieldNameRecursive(elementField, *elementType)));
+    const auto* childSetting = fieldId ? &fieldId->children.at(0) : nullptr;
+    auto updatedElementField =
+        updateFieldNameAndIdRecursive(elementField, *elementType, childSetting);
+    newField = newField->WithType(::arrow::list(updatedElementField));
   } else if (type.isMap()) {
     auto mapType = type.asMap();
-    auto newField = field->WithName(name);
     auto arrowMapType =
         std::dynamic_pointer_cast<::arrow::MapType>(newField->type());
-    auto newKeyField =
-        updateFieldNameRecursive(arrowMapType->key_field(), *mapType.keyType());
-    auto newValueField = updateFieldNameRecursive(
-        arrowMapType->item_field(), *mapType.valueType());
-    return newField->WithType(
-        ::arrow::map(newKeyField->type(), newValueField->type()));
-  } else if (name != "") {
-    return field->WithName(name);
-  } else {
-    return field;
+    const auto* keySetting = fieldId ? &fieldId->children.at(0) : nullptr;
+    const auto* valueSetting = fieldId ? &fieldId->children.at(1) : nullptr;
+    auto newKeyField = updateFieldNameAndIdRecursive(
+        arrowMapType->key_field(), *mapType.keyType(), keySetting);
+    auto newValueField = updateFieldNameAndIdRecursive(
+        arrowMapType->item_field(), *mapType.valueType(), valueSetting);
+    newField = newField->WithType(
+        std::make_shared<::arrow::MapType>(newKeyField, newValueField));
   }
+
+  return newField;
 }
 
 std::optional<TimestampPrecision> getTimestampUnit(
@@ -247,6 +293,17 @@ std::optional<TimestampPrecision> getTimestampUnit(
     return std::optional(static_cast<TimestampPrecision>(unit.value()));
   }
   return std::nullopt;
+}
+
+// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
+// "6" (micro), or "9" (nano).
+TimestampPrecision stringToTimestampPrecision(const std::string& value) {
+  auto unit = folly::to<uint8_t>(value);
+  VELOX_CHECK(
+      unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
+      "Invalid timestamp unit: {}",
+      unit);
+  return static_cast<TimestampPrecision>(unit);
 }
 
 std::optional<std::string> getTimestampTimeZone(
@@ -327,13 +384,14 @@ Writer::Writer(
     RowTypePtr schema)
     : pool_(std::move(pool)),
       generalPool_{pool_->addLeafChild(".general")},
-      stream_(std::make_shared<ArrowDataBufferSink>(
-          std::move(sink),
-          *generalPool_,
-          options.bufferGrowRatio)),
+      stream_(
+          std::make_shared<ArrowDataBufferSink>(
+              std::move(sink),
+              *generalPool_,
+              options.bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
-  validateSchemaRecursive(schema_);
+  validateSchemaRecursive(schema_, options.parquetFieldIds);
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
@@ -350,6 +408,8 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+  arrowMemoryPool_ = options.arrowMemoryPool;
+  parquetFieldIds_ = std::move(options.parquetFieldIds);
 }
 
 Writer::Writer(
@@ -359,9 +419,10 @@ Writer::Writer(
     : Writer{
           std::move(sink),
           options,
-          options.memoryPool->addAggregateChild(fmt::format(
-              "writer_node_{}",
-              folly::to<std::string>(folly::Random::rand64()))),
+          options.memoryPool->addAggregateChild(
+              fmt::format(
+                  "writer_node_{}",
+                  folly::to<std::string>(folly::Random::rand64()))),
           std::move(schema)} {}
 
 void Writer::flush() {
@@ -369,14 +430,14 @@ void Writer::flush() {
     if (!arrowContext_->writer) {
       ArrowWriterProperties::Builder builder;
       if (writeInt96AsTimestamp_) {
-        builder.enable_deprecated_int96_timestamps();
+        builder.enableDeprecatedInt96Timestamps();
       }
       auto arrowProperties = builder.build();
       PARQUET_ASSIGN_OR_THROW(
           arrowContext_->writer,
-          FileWriter::Open(
+          FileWriter::open(
               *arrowContext_->schema.get(),
-              ::arrow::default_memory_pool(),
+              arrowMemoryPool_.get(),
               stream_,
               arrowContext_->properties,
               arrowProperties));
@@ -396,7 +457,7 @@ void Writer::flush() {
         arrowContext_->schema,
         std::move(chunks),
         static_cast<int64_t>(arrowContext_->stagingRows));
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->WriteTable(
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->writeTable(
         *table, static_cast<int64_t>(flushPolicy_->rowsInRowGroup())));
     PARQUET_THROW_NOT_OK(stream_->Flush());
     for (auto& chunk : arrowContext_->stagingChunks) {
@@ -427,10 +488,15 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
+  VectorPtr exportData = data;
+  if (needFlatten(exportData)) {
+    BaseVector::flattenVector(exportData);
+  }
+
   ArrowArray array;
   ArrowSchema schema;
-  exportToArrow(data, array, generalPool_.get(), options_);
-  exportToArrow(data, schema, options_);
+  exportToArrow(exportData, array, generalPool_.get(), options_);
+  exportToArrow(exportData, schema, options_);
 
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
@@ -439,9 +505,15 @@ void Writer::write(const VectorPtr& data) {
       "facebook::velox::parquet::Writer::write", arrowSchema.get());
   std::vector<std::shared_ptr<::arrow::Field>> newFields;
   auto childSize = schema_->size();
+  if (!parquetFieldIds_.empty()) {
+    VELOX_CHECK(childSize == parquetFieldIds_.size());
+  }
   for (auto i = 0; i < childSize; i++) {
-    newFields.push_back(updateFieldNameRecursive(
-        arrowSchema->fields()[i], *schema_->childAt(i), schema_->nameOf(i)));
+    newFields.push_back(updateFieldNameAndIdRecursive(
+        arrowSchema->fields()[i],
+        *schema_->childAt(i),
+        !parquetFieldIds_.empty() ? &parquetFieldIds_.at(i) : nullptr,
+        schema_->nameOf(i)));
   }
 
   PARQUET_ASSIGN_OR_THROW(
@@ -472,19 +544,19 @@ void Writer::write(const VectorPtr& data) {
 }
 
 bool Writer::isCodecAvailable(common::CompressionKind compression) {
-  return arrow::util::Codec::IsAvailable(
+  return arrow::util::Codec::isAvailable(
       getArrowParquetCompression(compression));
 }
 
 void Writer::newRowGroup(int32_t numRows) {
-  PARQUET_THROW_NOT_OK(arrowContext_->writer->NewRowGroup(numRows));
+  PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
 }
 
 void Writer::close() {
   flush();
 
   if (arrowContext_->writer) {
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->Close());
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());
@@ -514,6 +586,22 @@ void Writer::setMemoryReclaimers() {
   generalPool_->setReclaimer(exec::MemoryReclaimer::create());
 }
 
+bool Writer::needFlatten(const VectorPtr& data) const {
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(data);
+  VELOX_CHECK_NOT_NULL(
+      rowVector, "Arrow export expects a RowVector as input data.");
+
+  const auto& children = rowVector->children();
+  return std::any_of(children.begin(), children.end(), [](const auto& child) {
+    bool isNestedWrapped =
+        (child->encoding() == VectorEncoding::Simple::DICTIONARY ||
+         child->encoding() == VectorEncoding::Simple::CONSTANT) &&
+        child->valueVector() && !child->wrappedVector()->isFlatEncoding();
+    bool isComplex = !child->isScalar();
+    return isNestedWrapped || isComplex;
+  });
+}
+
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
@@ -538,11 +626,30 @@ void WriterOptions::processConfigs(
   VELOX_CHECK_NOT_NULL(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");
 
+  // Check serdeParameters for timestamp settings first (highest priority).
+  auto serdeTimestampUnitIt = serdeParameters.find(kParquetSerdeTimestampUnit);
+  if (serdeTimestampUnitIt != serdeParameters.end()) {
+    parquetWriteTimestampUnit =
+        stringToTimestampPrecision(serdeTimestampUnitIt->second);
+  }
+
+  auto serdeTimestampTimezoneIt =
+      serdeParameters.find(kParquetSerdeTimestampTimezone);
+  if (serdeTimestampTimezoneIt != serdeParameters.end()) {
+    // Empty string means no timezone conversion (nullopt).
+    if (serdeTimestampTimezoneIt->second.empty()) {
+      parquetWriteTimestampTimeZone = std::nullopt;
+    } else {
+      parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second;
+    }
+  }
+
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =
         getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
         ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
-        : getTimestampUnit(connectorConfig, kParquetSessionWriteTimestampUnit);
+        : getTimestampUnit(
+              connectorConfig, kParquetHiveConnectorWriteTimestampUnit);
   }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;

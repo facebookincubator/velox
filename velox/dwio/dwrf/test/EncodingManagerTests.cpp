@@ -34,10 +34,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().begin(),
-        footer.encoding().end()};
-    EXPECT_EQ(footer.encoding().begin(), iter.current_);
-    EXPECT_EQ(footer.encoding().end(), iter.currentEnd_);
+        footer.encoding().cbegin(),
+        footer.encoding().cend()};
+    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
+    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
   }
   {
     // A valid end iterator.
@@ -45,10 +45,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().end(),
-        footer.encoding().end()};
-    EXPECT_EQ(footer.encoding().end(), iter.current_);
-    EXPECT_EQ(footer.encoding().end(), iter.currentEnd_);
+        footer.encoding().cend(),
+        footer.encoding().cend()};
+    EXPECT_EQ(footer.encoding().cend(), iter.current_);
+    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
   }
   footer.add_encoding();
   // footer [e]
@@ -58,10 +58,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().begin(),
-        footer.encoding().end()};
-    EXPECT_EQ(footer.encoding().begin(), iter.current_);
-    EXPECT_EQ(footer.encoding().end(), iter.currentEnd_);
+        footer.encoding().cbegin(),
+        footer.encoding().cend()};
+    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
+    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
   }
   {
     // A valid end iterator.
@@ -69,10 +69,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().end(),
-        footer.encoding().end()};
-    EXPECT_EQ(footer.encoding().end(), iter.current_);
-    EXPECT_EQ(footer.encoding().end(), iter.currentEnd_);
+        footer.encoding().cend(),
+        footer.encoding().cend()};
+    EXPECT_EQ(footer.encoding().cend(), iter.current_);
+    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
   }
   proto::StripeEncryptionGroup group1;
   proto::StripeEncryptionGroup group2;
@@ -85,10 +85,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().begin(),
-        footer.encoding().end()};
-    EXPECT_EQ(footer.encoding().begin(), iter.current_);
-    EXPECT_EQ(footer.encoding().end(), iter.currentEnd_);
+        footer.encoding().cbegin(),
+        footer.encoding().cend()};
+    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
+    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
   }
   {
     // A valid end iterator.
@@ -96,10 +96,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         1,
-        encryptionGroups.at(1).encoding().end(),
-        encryptionGroups.at(1).encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        encryptionGroups.at(1).encoding().cend(),
+        encryptionGroups.at(1).encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   {
     // An adjusted end iterator.
@@ -107,10 +107,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().end(),
-        footer.encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        footer.encoding().cend(),
+        footer.encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   encryptionGroups[1].add_encoding();
   // footer [e]
@@ -120,10 +120,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().begin(),
-        footer.encoding().end()};
-    EXPECT_EQ(footer.encoding().begin(), iter.current_);
-    EXPECT_EQ(footer.encoding().end(), iter.currentEnd_);
+        footer.encoding().cbegin(),
+        footer.encoding().cend()};
+    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
+    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
   }
   {
     // An adjusted iterator.
@@ -131,10 +131,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().end(),
-        footer.encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().begin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        footer.encoding().cend(),
+        footer.encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   {
     // An adjusted iterator.
@@ -142,10 +142,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         0,
-        encryptionGroups.at(0).encoding().begin(),
-        encryptionGroups.at(0).encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().begin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        encryptionGroups.at(0).encoding().cbegin(),
+        encryptionGroups.at(0).encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   {
     // A valid end iterator.
@@ -153,10 +153,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         1,
-        encryptionGroups.at(1).encoding().end(),
-        encryptionGroups.at(1).encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        encryptionGroups.at(1).encoding().cend(),
+        encryptionGroups.at(1).encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   footer.Clear();
   // footer []
@@ -167,10 +167,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().begin(),
-        footer.encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().begin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        footer.encoding().cbegin(),
+        footer.encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   {
     // An adjusted iterator further back.
@@ -178,10 +178,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().end(),
-        footer.encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().begin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        footer.encoding().cend(),
+        footer.encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   encryptionGroups.at(1).Clear();
   // footer []
@@ -192,10 +192,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         0,
-        encryptionGroups.at(0).encoding().end(),
-        encryptionGroups.at(0).encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        encryptionGroups.at(0).encoding().cend(),
+        encryptionGroups.at(0).encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
   {
     // An adjusted end iterator further back.
@@ -203,10 +203,10 @@ TEST(TestEncodingIter, Ctor) {
         footer,
         encryptionGroups,
         -1,
-        footer.encoding().end(),
-        footer.encoding().end()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().end(), iter.currentEnd_);
+        footer.encoding().cend(),
+        footer.encoding().cend()};
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
+    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
   }
 }
 
@@ -227,15 +227,15 @@ TEST(TestEncodingIter, EncodingIterBeginAndEnd) {
       footer,
       encryptionGroups,
       -1,
-      footer.encoding().begin(),
-      footer.encoding().end()};
+      footer.encoding().cbegin(),
+      footer.encoding().cend()};
   EXPECT_EQ(begin, EncodingIter::begin(footer, encryptionGroups));
   EncodingIter end{
       footer,
       encryptionGroups,
       1,
-      encryptionGroups.at(1).encoding().end(),
-      encryptionGroups.at(1).encoding().end()};
+      encryptionGroups.at(1).encoding().cend(),
+      encryptionGroups.at(1).encoding().cend()};
   EXPECT_EQ(end, EncodingIter::end(footer, encryptionGroups));
 }
 

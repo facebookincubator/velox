@@ -20,10 +20,9 @@ target_link_libraries(
   velox_row_test
   PRIVATE
     velox_exception
-    velox_row_fast
-    velox_vector
     velox_vector_fuzzer
     velox_vector_test_lib
     Folly::folly
     GTest::gtest
-    GTest::gtest_main)
+    GTest::gtest_main
+)

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/ApproxDistinctAggregates.h"
 #include "velox/functions/prestosql/aggregates/HyperLogLogAggregate.h"
 #include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
@@ -23,8 +22,8 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
-exec::AggregateRegistrationResult registerApproxDistinct(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerApproxDistinct(
+    const std::vector<std::string>& names,
     bool hllAsFinalResult,
     bool withCompanionFunctions,
     bool overwrite,
@@ -49,52 +48,57 @@ exec::AggregateRegistrationResult registerApproxDistinct(
             "date",
             "unknown"};
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(returnType)
-                             .intermediateType("varbinary")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(returnType)
+            .intermediateType("varbinary")
+            .argumentType(inputType)
+            .build());
 
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(returnType)
-                             .intermediateType("varbinary")
-                             .argumentType(inputType)
-                             .argumentType("double")
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(returnType)
+            .intermediateType("varbinary")
+            .argumentType(inputType)
+            .argumentType("double")
+            .build());
   }
   if (!hllAsFinalResult) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType("bigint")
-                             .intermediateType("tinyint")
-                             .argumentType("boolean")
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType("bigint")
+            .intermediateType("tinyint")
+            .argumentType("boolean")
+            .build());
   }
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .returnType(returnType)
-                           .intermediateType("varbinary")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .build());
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .returnType(returnType)
-                           .intermediateType("varbinary")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .argumentType("double")
-                           .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType(returnType)
+          .intermediateType("varbinary")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .build());
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .returnType(returnType)
+          .intermediateType("varbinary")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("double")
+          .build());
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name, hllAsFinalResult, hllAsRawInput, defaultError](
+      [hllAsFinalResult, hllAsRawInput, defaultError](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        if (argTypes[0]->isUnKnown()) {
+        if (argTypes[0]->isUnknown()) {
           if (hllAsFinalResult) {
             return std::make_unique<HyperLogLogAggregate<UnknownValue, true>>(
                 resultType, hllAsRawInput, defaultError);
@@ -123,12 +127,13 @@ exec::AggregateRegistrationResult registerApproxDistinct(
 } // namespace
 
 void registerApproxDistinctAggregates(
-    const std::string& prefix,
+    const std::vector<std::string>& approxDistinctNames,
+    const std::vector<std::string>& approxSetNames,
     bool withCompanionFunctions,
     bool overwrite) {
   registerHyperLogLogType();
   registerApproxDistinct(
-      prefix + kApproxDistinct,
+      approxDistinctNames,
       false,
       withCompanionFunctions,
       overwrite,
@@ -136,7 +141,7 @@ void registerApproxDistinctAggregates(
   // approx_set is companion function for approx_distinct. Don't register
   // companion functions for it.
   registerApproxDistinct(
-      prefix + kApproxSet,
+      approxSetNames,
       true,
       false,
       overwrite,

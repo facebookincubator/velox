@@ -21,16 +21,15 @@ namespace facebook::velox::wave {
 using namespace connector::hive;
 
 WaveHiveDataSource::WaveHiveDataSource(
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+    const HiveTableHandlePtr& hiveTableHandle,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
-        partitionKeys,
+    std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const connector::ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const exec::ExprSet* remainingFilter,
     std::shared_ptr<common::MetadataFilter> metadataFilter) {
   params_.hiveTableHandle = hiveTableHandle;
@@ -41,7 +40,7 @@ WaveHiveDataSource::WaveHiveDataSource(
   params_.executor = executor;
   params_.connectorQueryCtx = connectorQueryCtx;
   params_.hiveConfig = hiveConfig;
-  params_.ioStats = ioStats;
+  params_.ioStatistics = ioStatistics;
   remainingFilter_ = remainingFilter ? remainingFilter->exprs().at(0) : nullptr;
   metadataFilter_ = metadataFilter;
 }
@@ -69,8 +68,8 @@ void WaveHiveDataSource::setFromDataSource(
   splitReader_ = std::move(source->splitReader_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
-  source->params_.ioStats->merge(*params_.ioStats);
-  params_.ioStats = std::move(source->params_.ioStats);
+  source->params_.ioStatistics->merge(*params_.ioStatistics);
+  params_.ioStatistics = std::move(source->params_.ioStatistics);
 }
 
 void WaveHiveDataSource::addSplit(
@@ -124,8 +123,9 @@ bool WaveHiveDataSource::isFinished() {
       if (it == splitReaderStats_.end()) {
         splitReaderStats_.insert(std::make_pair(name, counter));
       } else {
-        splitReaderStats_.insert(std::make_pair(
-            name, RuntimeCounter(it->second.value, counter.unit)));
+        splitReaderStats_.insert(
+            std::make_pair(
+                name, RuntimeCounter(it->second.value, counter.unit)));
       }
     }
     return true;
@@ -141,11 +141,12 @@ uint64_t WaveHiveDataSource::getCompletedRows() {
   return completedRows_;
 }
 
-std::unordered_map<std::string, RuntimeCounter>
-WaveHiveDataSource::runtimeStats() {
-  auto map = runtimeStats_.toMap();
+std::unordered_map<std::string, RuntimeMetric>
+WaveHiveDataSource::getRuntimeStats() {
+  auto map = runtimeStats_.toRuntimeMetricMap();
   for (const auto& [name, counter] : splitReaderStats_) {
-    map.insert(std::make_pair(name, counter));
+    map.insert(
+        std::make_pair(name, RuntimeMetric(counter.value, counter.unit)));
   }
   return map;
 }
@@ -161,35 +162,31 @@ void WaveHiveDataSource::registerConnector() {
       std::unordered_map<std::string, std::string>());
 
   // Create hive connector with config...
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector("wavemock", config, nullptr);
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector("wavemock", config, nullptr);
   connector::registerConnector(hiveConnector);
   connector::hive::HiveDataSource::registerWaveDelegateHook(
-      [](const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
+      [](const HiveTableHandlePtr& hiveTableHandle,
          const std::shared_ptr<common::ScanSpec>& scanSpec,
          const RowTypePtr& readerOutputType,
-         std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
-             partitionKeys,
+         std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
          FileHandleFactory* fileHandleFactory,
          folly::Executor* executor,
          const connector::ConnectorQueryCtx* connectorQueryCtx,
          const std::shared_ptr<HiveConfig>& hiveConfig,
-         const std::shared_ptr<io::IoStatistics>& ioStats,
+         const std::shared_ptr<io::IoStatistics>& ioStatistics,
          const exec::ExprSet* remainingFilter,
          std::shared_ptr<common::MetadataFilter> metadataFilter) {
         return std::make_shared<WaveHiveDataSource>(
             hiveTableHandle,
             scanSpec,
             readerOutputType,
-
             partitionKeys,
             fileHandleFactory,
             executor,
             connectorQueryCtx,
             hiveConfig,
-            ioStats,
+            ioStatistics,
             remainingFilter,
             metadataFilter);
       });

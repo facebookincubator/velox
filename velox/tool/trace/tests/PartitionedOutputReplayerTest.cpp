@@ -21,12 +21,13 @@
 #include "folly/dynamic.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 
@@ -58,11 +59,7 @@ class PartitionedOutputReplayerTest
     }
     Type::registerSerDe();
     common::Filter::registerSerDe();
-    connector::hive::HiveTableHandle::registerSerDe();
-    connector::hive::LocationHandle::registerSerDe();
-    connector::hive::HiveColumnHandle::registerSerDe();
-    connector::hive::HiveInsertTableHandle::registerSerDe();
-    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
+    connector::hive::HiveConnector::registerSerDe();
     core::PlanNode::registerSerDe();
     velox::exec::trace::registerDummySourceSerDe();
     core::ITypedExpr::registerSerDe();
@@ -117,7 +114,8 @@ class PartitionedOutputReplayerTest
               std::to_string(8UL << 20)},
              {core::QueryConfig::kMaxOutputBufferSize,
               std::to_string(8UL << 20)}}),
-        Task::ExecutionMode::kParallel);
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
     return task;
   }
 
@@ -165,7 +163,7 @@ TEST_P(PartitionedOutputReplayerTest, defaultConsumer) {
                       "",
                       0,
                       executor_.get())
-                      .run(false));
+                      .run(false, false));
 }
 
 TEST_P(PartitionedOutputReplayerTest, basic) {
@@ -240,8 +238,8 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
         });
 
     // Verified that the trace summary has been written properly.
-    const auto taskTraceDir =
-        exec::trace::getTaskTraceDirectory(traceRoot, *originalTask);
+    const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+        traceRoot, originalTask->queryCtx()->queryId(), originalTask->taskId());
     originalTask.reset();
 
     {
@@ -262,7 +260,7 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
           [&](auto partition, auto page) {
             replayedPartitionedResults[partition].push_back(std::move(page));
           })
-          .run(false);
+          .run(false, false);
 
       ASSERT_EQ(replayedPartitionedResults.size(), testParam.numPartitions);
       for (uint32_t partition = 0; partition < testParam.numPartitions;

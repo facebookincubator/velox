@@ -112,7 +112,8 @@ class DwrfRowReader : public StrideIndexProvider,
     stats.footerBufferOverread += getReader().footerBufferOverread();
     stats.numStripes += stripeCeiling_ - firstStripe_;
     stats.columnReaderStatistics.flattenStringDictionaryValues +=
-        columnReaderStatistics_.flattenStringDictionaryValues;
+        columnReaderStatistics_->flattenStringDictionaryValues;
+    stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
   void resetFilterCaches() override;
@@ -148,11 +149,14 @@ class DwrfRowReader : public StrideIndexProvider,
   }
 
  private:
-  bool shouldReadNode(uint32_t nodeId) const;
+  bool shouldReadNode(
+      uint32_t nodeId,
+      const velox::common::ScanSpec* fieldScanSpec) const;
 
   std::optional<size_t> estimatedRowSizeHelper(
       const FooterWrapper& fileFooter,
       const dwio::common::Statistics& stats,
+      const velox::common::ScanSpec* scanSpec,
       uint32_t nodeId) const;
 
   bool emptyFile() const {
@@ -210,17 +214,22 @@ class DwrfRowReader : public StrideIndexProvider,
   // Number of processed strides.
   int64_t processedStrides_{0};
 
+  dwio::common::UnitLoaderStats unitLoadStats_;
+
   // Set to true after clearing filter caches, i.e. adding a dynamic filter.
   // Causes filters to be re-evaluated against stride stats on next stride
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
 
-  dwio::common::ColumnReaderStatistics columnReaderStatistics_;
+  std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStatistics_;
 
   std::optional<int64_t> nextRowNumber_;
 
   std::unique_ptr<dwio::common::UnitLoader> unitLoader_;
   DwrfUnit* currentUnit_;
+
+  mutable std::optional<size_t> estimatedRowSize_;
+  mutable bool hasRowEstimate_{false};
 };
 
 class DwrfReader : public dwio::common::Reader {

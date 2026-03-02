@@ -91,8 +91,8 @@ bool DirectInputStream::SkipInt64(int64_t count) {
   return false;
 }
 
-google::protobuf::int64 DirectInputStream::ByteCount() const {
-  return static_cast<google::protobuf::int64>(offsetInRegion_);
+int64_t DirectInputStream::ByteCount() const {
+  return static_cast<int64_t>(offsetInRegion_);
 }
 
 void DirectInputStream::seekToPosition(PositionProvider& seekPosition) {
@@ -153,7 +153,8 @@ void DirectInputStream::loadSync() {
     input_->read(ranges, loadedRegion_.offset, LogType::FILE);
   }
   ioStats_->read().increment(loadedRegion_.length);
-  ioStats_->queryThreadIoLatency().increment(usecs);
+  ioStats_->queryThreadIoLatencyUs().increment(usecs);
+  ioStats_->storageReadLatencyUs().increment(usecs);
   ioStats_->incTotalScanTime(usecs * 1'000);
 }
 
@@ -173,7 +174,9 @@ void DirectInputStream::loadPosition() {
         loadedRegion_.offset = region_.offset;
         loadedRegion_.length = load->getData(region_.offset, data_, tinyData_);
       }
-      ioStats_->queryThreadIoLatency().increment(loadUs);
+      ioStats_->queryThreadIoLatencyUs().increment(loadUs);
+      // DirectCoalescedLoad always reads from remote storage, not SSD.
+      ioStats_->coalescedStorageLoadLatencyUs().increment(loadUs);
     } else {
       // Standalone stream, not part of coalesced load.
       loadedRegion_.offset = 0;

@@ -417,7 +417,7 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
         rows + rowIndex,
         std::min<int32_t>(remainingValues_, numRows - rowIndex));
     const auto endOfRun = currentRow + remainingValues_;
-    const auto bound = std::lower_bound(range.begin(), range.end(), endOfRun);
+    const auto bound = std::lower_bound(range.cbegin(), range.cend(), endOfRun);
     return std::make_pair(bound - range.begin(), bound[-1] - currentRow + 1);
   }
 

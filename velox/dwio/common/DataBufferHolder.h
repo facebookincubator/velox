@@ -47,14 +47,14 @@ class DataBufferHolder {
 
   /// Takes content of the incoming data buffer. It is the caller's
   /// responsibility to resize the buffer (if required).
-  void take(const std::vector<folly::StringPiece>& buffers);
+  void take(const std::vector<std::string_view>& buffers);
 
-  void take(folly::StringPiece buffer) {
-    take(std::vector<folly::StringPiece>{buffer});
+  void take(std::string_view buffer) {
+    take(std::vector<std::string_view>{buffer});
   }
 
   void take(const dwio::common::DataBuffer<char>& buffer) {
-    take(folly::StringPiece{buffer.data(), buffer.size()});
+    take(std::string_view{buffer.data(), buffer.size()});
   }
 
   std::vector<dwio::common::DataBuffer<char>>& getBuffers() {

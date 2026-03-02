@@ -596,6 +596,38 @@ void readLosslessTimestampValues(
   }
 }
 
+Timestamp readMicrosecondTimestamp(ByteInputStream* source) {
+  int64_t micros = source->read<int64_t>();
+  return Timestamp::fromMicros(micros);
+}
+
+void readMicrosecondTimestampValues(
+    ByteInputStream* source,
+    vector_size_t size,
+    vector_size_t offset,
+    const BufferPtr& nulls,
+    vector_size_t nullCount,
+    const BufferPtr& values) {
+  auto rawValues = values->asMutable<Timestamp>();
+  checkValuesSize<Timestamp>(values, nulls, size, offset);
+  if (nullCount > 0) {
+    int32_t toClear = offset;
+    bits::forEachSetBit(
+        nulls->as<uint64_t>(), offset, offset + size, [&](int32_t row) {
+          // Set the values between the last non-null and this to type default.
+          for (; toClear < row; ++toClear) {
+            rawValues[toClear] = Timestamp();
+          }
+          rawValues[row] = readMicrosecondTimestamp(source);
+          toClear = row + 1;
+        });
+  } else {
+    for (int32_t row = offset; row < offset + size; ++row) {
+      rawValues[row] = readMicrosecondTimestamp(source);
+    }
+  }
+}
+
 template <typename T>
 void readValues(
     ByteInputStream* source,
@@ -706,10 +738,20 @@ void read(
   auto nullCount = readNulls(
       source, size, resultOffset, incomingNulls, numIncomingNulls, *flatResult);
 
-  BufferPtr values = flatResult->mutableValues(resultOffset + numNewValues);
+  BufferPtr values = flatResult->mutableValues();
   if constexpr (std::is_same_v<T, Timestamp>) {
     if (opts.useLosslessTimestamp) {
       readLosslessTimestampValues(
+          source,
+          numNewValues,
+          resultOffset,
+          flatResult->nulls(),
+          nullCount,
+          values);
+      return;
+    }
+    if (opts.useMicrosecondPrecision) {
+      readMicrosecondTimestampValues(
           source,
           numNewValues,
           resultOffset,
@@ -780,7 +822,7 @@ void read<StringView>(
   result->resize(resultOffset + numNewValues);
 
   auto flatResult = result->as<FlatVector<StringView>>();
-  BufferPtr values = flatResult->mutableValues(resultOffset + size);
+  BufferPtr values = flatResult->mutableValues();
   auto rawValues = values->asMutable<StringView>();
   int32_t lastOffset = 0;
   for (int32_t i = 0; i < numNewValues; ++i) {
@@ -837,7 +879,7 @@ void read<OpaqueType>(
   auto deserialization = opaqueType->getDeserializeFunc();
 
   auto flatResult = result->as<FlatVector<std::shared_ptr<void>>>();
-  BufferPtr values = flatResult->mutableValues(resultOffset + size);
+  BufferPtr values = flatResult->mutableValues();
 
   auto rawValues = values->asMutable<std::shared_ptr<void>>();
   std::vector<int32_t> offsets;
@@ -866,7 +908,7 @@ void read<OpaqueType>(
   for (int32_t i = 0; i < numNewValues; ++i) {
     int32_t offset = offsets[i];
     auto sv = StringView(rawString + previousOffset, offset - previousOffset);
-    auto opaqueValue = deserialization(sv);
+    auto opaqueValue = deserialization(std::string(sv));
     rawValues[resultOffset + i] = opaqueValue;
     previousOffset = offset;
   }

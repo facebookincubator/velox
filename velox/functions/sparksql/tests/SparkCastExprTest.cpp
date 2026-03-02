@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
@@ -211,53 +212,80 @@ TEST_F(SparkCastExprTest, invalidDate) {
       "date", {12.99}, "Cast from DOUBLE to DATE is not supported", DOUBLE());
 
   // Parsing ill-formated dates.
-  testInvalidCast<std::string>(
+  testCast<std::string, int32_t>(
+      "date", {"2012-Oct-23"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"2015-03-18X"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"2015/03/18"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"2015.03.18"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"20150318"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"2015-031-8"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"-1-1-1"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"-11-1-1"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"-111-1-1"}, {std::nullopt}, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"- 1111-1-1"}, {std::nullopt}, VARCHAR(), DATE());
+}
+
+TEST_F(SparkCastExprTest, stringToDate) {
+  // Set up scope guard to restore ANSI mode after test
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Explicitly set ANSI mode to false for the first part of the test
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  // Valid dates.
+  testCast<std::string, int32_t>(
       "date",
-      {"2012-Oct-23"},
-      "Unable to parse date value: \"2012-Oct-23\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
+      {"1970-01-01",
+       "2015-03-18",
+       "2015-03-18T", /*Trailing T*/
+       "2015-03-18 123", /*Trailing content*/
+       "  1970-01-01  ", /*Whitespace*/
+       "2015", /*Year only*/
+       "2015-03", /*Year-month*/
+       "1970-1-1"}, /*Single digit month/day*/
+      {0, 16512, 16512, 16512, 0, 16436, 16495, 0},
+      VARCHAR(),
+      DATE());
+
+  // ANSI OFF: Invalid dates return null.
+  testCast<std::string, int32_t>(
       "date",
-      {"2015-03-18X"},
-      "Unable to parse date value: \"2015-03-18X\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"2015/03/18"},
-      "Unable to parse date value: \"2015/03/18\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"2015.03.18"},
-      "Unable to parse date value: \"2015.03.18\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"20150318"},
-      "Unable to parse date value: \"20150318\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"2015-031-8"},
-      "Unable to parse date value: \"2015-031-8\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date", {"-1-1-1"}, "Unable to parse date value: \"-1-1-1\"", VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"-11-1-1"},
-      "Unable to parse date value: \"-11-1-1\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"-111-1-1"},
-      "Unable to parse date value: \"-111-1-1\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"- 1111-1-1"},
-      "Unable to parse date value: \"- 1111-1-1\"",
-      VARCHAR());
+      {"2012-Oct-23", /*Invalid format*/
+       "2015/03/18", /*Wrong separator*/
+       "2015-13-01", /*Invalid month*/
+       "2015-02-30"}, /*Invalid day*/
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      VARCHAR(),
+      DATE());
+
+  // ANSI ON: Invalid dates throw exceptions.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  auto testInvalidDate = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluateCast(VARCHAR(), DATE(), input, false)),
+        "Unable to parse date value");
+  };
+
+  testInvalidDate("2012-Oct-23");
+  testInvalidDate("2015/03/18");
+  testInvalidDate("2015-13-01");
+  testInvalidDate("2015-02-30");
 }
 
 TEST_F(SparkCastExprTest, stringToTimestamp) {
@@ -341,25 +369,25 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
 TEST_F(SparkCastExprTest, timestampToInt) {
   // Cast timestamp as bigint.
   testCast(
-      makeFlatVector<Timestamp>({
-          Timestamp(0, 0),
-          Timestamp(1, 0),
-          Timestamp(10, 0),
-          Timestamp(-1, 0),
-          Timestamp(-10, 0),
-          Timestamp(-1, 500000),
-          Timestamp(-2, 999999),
-          Timestamp(-10, 999999),
-          Timestamp(1, 999999),
-          Timestamp(-1, 1),
-          Timestamp(1234567, 500000),
-          Timestamp(-9876543, 1234),
-          Timestamp(1727181032, 0),
-          Timestamp(-1727181032, 0),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(-9223372036855, 224'192'000),
-      }),
-      makeFlatVector<int64_t>({
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0),
+           Timestamp(1, 0),
+           Timestamp(10, 0),
+           Timestamp(-1, 0),
+           Timestamp(-10, 0),
+           Timestamp(-1, 500000),
+           Timestamp(-2, 999999),
+           Timestamp(-10, 999999),
+           Timestamp(1, 999999),
+           Timestamp(-1, 1),
+           Timestamp(1234567, 500000),
+           Timestamp(-9876543, 1234),
+           Timestamp(1727181032, 0),
+           Timestamp(-1727181032, 0),
+           Timestamp(9223372036854, 775'807'000),
+           Timestamp(-9223372036855, 224'192'000),
+           Timestamp(9223372036856, 0)}),
+      makeNullableFlatVector<int64_t>({
           0,
           1,
           10,
@@ -376,11 +404,8 @@ TEST_F(SparkCastExprTest, timestampToInt) {
           -1727181032,
           9223372036854,
           -9223372036855,
+          std::nullopt,
       }));
-  testInvalidCast<Timestamp>(
-      "bigint",
-      {Timestamp(9223372036856, 0)},
-      "Could not convert Timestamp(9223372036856, 0) to microseconds");
 
   // Cast timestamp as tinyint/smallint/integer.
   testTimestampToIntegralCast<int8_t>();
@@ -468,57 +493,121 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
   // To integer.
   {
     // Invalid strings.
-    testInvalidCast<std::string>(
-        "tinyint",
-        {"1234567"},
-        "Cannot cast VARCHAR '1234567' to TINYINT. TINYINT overflow: 123 * 10");
-    testInvalidCast<std::string>(
-        "tinyint", {"1a"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>("tinyint", {""}, "Empty string");
-    testInvalidCast<std::string>(
-        "integer", {"1'234'567"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>(
-        "integer", {"1,234,567"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>(
-        "bigint", {"infinity"}, "Encountered a non-digit character");
-    testInvalidCast<std::string>(
-        "bigint", {"nan"}, "Encountered a non-digit character");
+    testCast<std::string, int8_t>("tinyint", {"1234567"}, {std::nullopt});
+    testCast<std::string, int8_t>("tinyint", {"1a"}, {std::nullopt});
+    testCast<std::string, int8_t>("tinyint", {""}, {std::nullopt});
+    testCast<std::string, int32_t>("integer", {"1'234'567"}, {std::nullopt});
+    testCast<std::string, int32_t>("integer", {"1,234,567"}, {std::nullopt});
+    testCast<std::string, int64_t>("bigint", {"infinity"}, {std::nullopt});
+    testCast<std::string, int64_t>("bigint", {"nan"}, {std::nullopt});
   }
 
   // To floating-point.
   {
     // Invalid strings.
-    testInvalidCast<std::string>(
-        "real",
-        {"1.2a"},
-        "Non-whitespace character found after end of conversion");
-    testInvalidCast<std::string>(
-        "real",
-        {"1.2.3"},
-        "Non-whitespace character found after end of conversion");
+    testCast<std::string, float>("real", {"1.2a"}, {std::nullopt});
+    testCast<std::string, float>("real", {"1.2.3"}, {std::nullopt});
   }
 
   // To boolean.
   {
-    testInvalidCast<std::string>(
-        "boolean", {"1.7E308"}, "Cannot cast 1.7E308 to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"nan"}, "Cannot cast nan to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"infinity"}, "Cannot cast infinity to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"12"}, "Cannot cast 12 to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"-1"}, "Cannot cast -1 to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"tr"}, "Cannot cast tr to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"tru"}, "Cannot cast tru to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"on"}, "Cannot cast on to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"off"}, "Cannot cast off to BOOLEAN");
+    testCast<std::string, bool>("boolean", {"1.7E308"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"nan"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"12"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"-1"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"tr"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"tru"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"on"}, {std::nullopt});
+    testCast<std::string, bool>("boolean", {"off"}, {std::nullopt});
   }
+}
+
+TEST_F(SparkCastExprTest, stringToBoolean) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Test common valid cases for both ANSI modes.
+  for (const auto& ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    // Valid strings for true (case-insensitive): t, true, y, yes, 1.
+    testCast<std::string, bool>(
+        "boolean",
+        {"t", "T", "true", "TRUE", "TrUe", "y", "Y", "yes", "YES", "YeS", "1"},
+        {true, true, true, true, true, true, true, true, true, true, true});
+
+    // Valid strings for false (case-insensitive): f, false, n, no, 0.
+    testCast<std::string, bool>(
+        "boolean",
+        {"f", "F", "false", "FALSE", "FaLsE", "n", "N", "no", "NO", "nO", "0"},
+        {false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false});
+
+    // Whitespace should be trimmed.
+    testCast<std::string, bool>(
+        "boolean",
+        {" true", "false ", " 1 ", "  yes  ", "  no  "},
+        {true, false, true, true, false});
+
+    // NULL values should remain NULL.
+    testCast<std::string, bool>(
+        "boolean",
+        {"true", std::nullopt, "false", std::nullopt},
+        {true, std::nullopt, false, std::nullopt});
+  }
+
+  // Test invalid strings with ANSI off - should return NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  testCast<std::string, bool>(
+      "boolean",
+      {"invalid", "tru", "2", "-1", "on", "off", "nan", "", " "},
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+
+  testCast<std::string, bool>(
+      "boolean",
+      {"true", "invalid", "false", std::nullopt, "1", "2", "0"},
+      {true, std::nullopt, false, std::nullopt, true, std::nullopt, false});
+
+  // Test invalid strings with ANSI on - should throw.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(evaluate("cast(c0 as boolean)", input), "Cannot cast");
+  };
+
+  testInvalidString("invalid");
+  testInvalidString("tru");
+  testInvalidString("2");
+  testInvalidString("-1");
+  testInvalidString("on");
+  testInvalidString("off");
+  testInvalidString("");
+  testInvalidString(" ");
+  testInvalidString("nan");
 }
 
 TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
@@ -608,7 +697,7 @@ TEST_F(SparkCastExprTest, truncate) {
       "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5});
 }
 
-TEST_F(SparkCastExprTest, errorHandling) {
+TEST_F(SparkCastExprTest, tryCast) {
   testTryCast<std::string, int8_t>(
       "tinyint",
       {"-",
@@ -627,7 +716,8 @@ TEST_F(SparkCastExprTest, errorHandling) {
        "-..",
        "125.5",
        "127",
-       "-128"},
+       "-128",
+       "1.2"},
       {std::nullopt,
        0,
        std::nullopt,
@@ -642,14 +732,26 @@ TEST_F(SparkCastExprTest, errorHandling) {
        std::nullopt,
        std::nullopt,
        std::nullopt,
-       125,
+       std::nullopt,
        127,
-       -128});
+       -128,
+       std::nullopt});
 
-  testTryCast<double, int>(
+  testTryCast<double, int32_t>(
       "integer",
       {1e12, 2.5, 3.6, 100.44, -100.101},
-      {std::numeric_limits<int32_t>::max(), 2, 3, 100, -100});
+      {std::nullopt, 2, 3, 100, -100});
+  testTryCast<int64_t, int8_t>("tinyint", {456}, {std::nullopt});
+  testTryCast<int64_t, int16_t>("smallint", {1234567}, {std::nullopt});
+  testTryCast<int64_t, int32_t>("integer", {2147483649}, {std::nullopt});
+
+  testTryCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
+  testTryCast<std::string, int32_t>("integer", {"17515055537"}, {std::nullopt});
+  testTryCast<std::string, int32_t>(
+      "integer", {"-17515055537"}, {std::nullopt});
+  testTryCast<std::string, int64_t>(
+      "bigint", {"9663372036854775809"}, {std::nullopt});
+  testTryCast<int64_t, int8_t>("tinyint", {456}, {std::nullopt}, DECIMAL(6, 0));
 }
 
 TEST_F(SparkCastExprTest, overflow) {
@@ -681,37 +783,27 @@ TEST_F(SparkCastExprTest, overflow) {
   testCast(
       shortFlat,
       makeNullableFlatVector<int8_t>(
-          {-44, -4, 26, 56, -100, 0, 124, 117, 63, -78, -48, std::nullopt}));
+          {-44, -4, 26, 56, -100, 0, 124, 117, 63, -78, -48, std::nullopt}),
+      false);
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int8_t>({0}));
+      makeNullableFlatVector<int8_t>({0}),
+      false);
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int32_t>({-2147483648}));
+      makeNullableFlatVector<int32_t>({-2147483648}),
+      false);
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int64_t>({2147483648}));
+      makeNullableFlatVector<int64_t>({2147483648}),
+      false);
 
-  testInvalidCast<std::string>(
-      "tinyint",
-      {"166"},
-      "Cannot cast VARCHAR '166' to TINYINT. TINYINT overflow: 16 * 10");
-  testInvalidCast<std::string>(
-      "smallint",
-      {"52769"},
-      "Cannot cast VARCHAR '52769' to SMALLINT. SMALLINT overflow: 5276 * 10");
-  testInvalidCast<std::string>(
-      "integer",
-      {"17515055537"},
-      "Cannot cast VARCHAR '17515055537' to INTEGER. INTEGER overflow: 1751505553 * 10");
-  testInvalidCast<std::string>(
-      "integer",
-      {"-17515055537"},
-      "Cannot cast VARCHAR '-17515055537' to INTEGER. INTEGER overflow: -1751505553 * 10");
-  testInvalidCast<std::string>(
-      "bigint",
-      {"9663372036854775809"},
-      "Cannot cast VARCHAR '9663372036854775809' to BIGINT. BIGINT overflow: 966337203685477580 * 10");
+  testCast<std::string, int8_t>("tinyint", {"166"}, {std::nullopt});
+  testCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
+  testCast<std::string, int32_t>("integer", {"17515055537"}, {std::nullopt});
+  testCast<std::string, int32_t>("integer", {"-17515055537"}, {std::nullopt});
+  testCast<std::string, int64_t>(
+      "bigint", {"9663372036854775809"}, {std::nullopt});
 }
 
 TEST_F(SparkCastExprTest, timestampToString) {
@@ -929,6 +1021,127 @@ TEST_F(SparkCastExprTest, boolToTimestamp) {
       makeFlatVector<Timestamp>({
           Timestamp(0, 1000),
           Timestamp(0, 0),
+      }));
+}
+
+TEST_F(SparkCastExprTest, decimalToString) {
+  auto guard = folly::makeGuard([&] {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+  });
+
+  // Verify behavior is identical for both ANSI ON and OFF modes.
+  for (const char* ansiEnabled : {"false", "true"}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {100, 1230, 12345, 0, -100, -1230, -12345}, DECIMAL(10, 2)),
+        makeFlatVector<std::string>(
+            {"1.00", "12.30", "123.45", "0.00", "-1.00", "-12.30", "-123.45"}));
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {100000, 123000, 123450, 0, -100000, -123000, -123450},
+            DECIMAL(10, 3)),
+        makeFlatVector<std::string>(
+            {"100.000",
+             "123.000",
+             "123.450",
+             "0.000",
+             "-100.000",
+             "-123.000",
+             "-123.450"}));
+
+    testCast(
+        makeFlatVector<int128_t>(
+            {HugeInt::build(0, 10000000000),
+             HugeInt::build(0, 12300000000),
+             HugeInt::build(0, 12345000000),
+             HugeInt::build(0, 0),
+             -HugeInt::build(0, 10000000000),
+             -HugeInt::build(0, 12300000000),
+             -HugeInt::build(0, 12345000000)},
+            DECIMAL(20, 10)),
+        makeFlatVector<std::string>(
+            {"1.0000000000",
+             "1.2300000000",
+             "1.2345000000",
+             "0.0000000000",
+             "-1.0000000000",
+             "-1.2300000000",
+             "-1.2345000000"}));
+
+    testCast(
+        makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 0)),
+        makeFlatVector<std::string>({"100", "200", "300"}));
+
+    testCast(
+        makeFlatVector<int64_t>({12, 120, 1200, -12, -120}, DECIMAL(10, 8)),
+        makeFlatVector<std::string>(
+            {"0.00000012",
+             "0.00000120",
+             "0.00001200",
+             "-0.00000012",
+             "-0.00000120"}));
+
+    testCast(
+        makeNullableFlatVector<int64_t>(
+            {100, std::nullopt, 1230, std::nullopt}, DECIMAL(10, 2)),
+        makeNullableFlatVector<std::string>(
+            {"1.00", std::nullopt, "12.30", std::nullopt}));
+  }
+}
+
+TEST_F(SparkCastExprTest, recursiveTryCast) {
+  // Test array elements.
+  testCast(
+      makeArrayVector<StringView>({
+          {"1", "2", "3"},
+          {"4", "a", "6"},
+          {"b", "c", "d"},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, std::nullopt, 6},
+          {std::nullopt, std::nullopt, std::nullopt},
+      }));
+
+  // Test map values (Spark doesn't allow casting if the map keys can become
+  // null).
+  testCast(
+      makeMapVectorFromJson<int64_t, std::string>({
+          R"( {1:"1", 2:"2", 3:"3"} )",
+          R"( {1:"4", 2:"a", 3:"6"} )",
+          R"( {1:"b", 2:"c", 3:"d"} )",
+      }),
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:1, 2:2, 3:3}",
+          "{1:4, 2:null, 3:6}",
+          "{1:null, 2:null, 3:null}",
+      }));
+
+  // Test row fields.
+  testCast(
+      makeRowVector(
+          {makeFlatVector<StringView>({"1", "4", "b"}),
+           makeFlatVector<StringView>({"2", "a", "c"}),
+           makeFlatVector<StringView>({"3", "6", "d"})}),
+      makeRowVector(
+          {makeNullableFlatVector<int64_t>({1, 4, std::nullopt}),
+           makeNullableFlatVector<int64_t>({2, std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int64_t>({3, 6, std::nullopt})}));
+
+  // Test nested arrays.
+  testCast(
+      makeNestedArrayVectorFromJson<std::string>({
+          R"( [["1", "2", "3"], ["4", "a", "6"]] )",
+          R"( [["b", "c", "d"], ["x", "7", "z"]] )",
+      }),
+      makeNestedArrayVectorFromJson<int64_t>({
+          "[[1, 2, 3], [4, null, 6]]",
+          "[[null, null, null], [null, 7, null]]",
       }));
 }
 

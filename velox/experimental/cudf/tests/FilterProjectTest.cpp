@@ -13,13 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -39,6 +43,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     rng_.seed(123);
 
@@ -370,6 +375,61 @@ class CudfFilterProjectTest : public OperatorTestBase {
         "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
   }
 
+  void testStringLiteralExpansion(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR literal as standalone expression (needs special handling)
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"'literal_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT 'literal_value' AS result FROM tmp");
+  }
+
+  void testStringLiteralInComparison(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR literal within comparison (should work normally)
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT c2 = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringLowerOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR lower
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"LOWER(c2) = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT LOWER(c2) = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringUpperOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR upper
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"UPPER(c2) = 'TEST_VALUE' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT UPPER(c2) = 'TEST_VALUE' AS result FROM tmp");
+  }
+
+  void testMixedLiteralProjection(const std::vector<RowVectorPtr>& input) {
+    // Test mixing standalone literals with expressions containing literals
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"'standalone_string' AS str_literal",
+                         "42 AS int_literal",
+                         "c2 = 'comparison_string' AS bool_result"})
+                    .planNode();
+
+    runTest(
+        plan,
+        "SELECT 'standalone_string' AS str_literal, 42 AS int_literal, c2 = 'comparison_string' AS bool_result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -479,10 +539,10 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
   testYearFunction(vectors);
 }
 
-TEST_F(CudfFilterProjectTest, DISABLED_caseWhenOperation) {
+// The result mismatches.
+TEST_F(CudfFilterProjectTest, caseWhenOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
-  // failing because switch copies nulls too.
   createDuckDbTable(vectors);
 
   testCaseWhenOperation(vectors);
@@ -598,6 +658,68 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   createDuckDbTable(vectors);
 
   testMixedInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, round) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// TODO (dm): Enable after adding decimal support to velox-cudf
+TEST_F(CudfFilterProjectTest, DISABLED_roundDecimal) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  auto decimalData = makeRowVector(
+      {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({decimalData})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  auto decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({decimalData})
+             .project({"round(c0) as c1"})
+             .planNode();
+  decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({410000, -460000}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({decimalData})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
 }
 
 TEST_F(CudfFilterProjectTest, simpleFilter) {
@@ -774,4 +896,308 @@ TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
   // Run the test - should return empty result
   assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 < 0 AND c0 > 1000");
 }
+
+TEST_F(CudfFilterProjectTest, stringLiteralExpansion) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLiteralExpansion(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringLiteralInComparison) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLiteralInComparison(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringLowerOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLowerOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringUpperOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringUpperOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMixedLiteralProjection(vectors);
+}
+
+// This test checks for CudfExpression's ability to handle nested field
+// references. However, to test this, we need to disable CPU fallback, otherwise
+// the test could pass by using CPU, having not exercised the CudfExpression at
+// all. But this test relies on row_constructor to construct the nested fields,
+// which CudfExpression doesn't support. Disabling this until we have a better
+// test
+TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
+  auto rowType = ROW(
+      {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
+  auto vectors = makeVectors(rowType, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"row_constructor(c1, c2) AS c1_c2"})
+                  .project({"c1_c2.c1", "c1_c2.c2"})
+                  .planNode();
+  assertQuery(plan, "SELECT c1, c2 FROM tmp");
+
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"row_constructor(c1, c2) AS c1_c2"})
+             .filter("c1_c2.c1 % 10 = 5")
+             .project({"c1_c2.c1", "c1_c2.c2"})
+             .planNode();
+  assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+}
+
+TEST_F(CudfFilterProjectTest, cardinality) {
+  auto input = makeArrayVector<int64_t>({{1, 2, 3}, {1, 2}, {}});
+  auto data = makeRowVector({input});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cardinality(c0) AS result"})
+                  .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({3, 2, 0})});
+  AssertQueryBuilder(plan).assertResults({expected});
+}
+
+TEST_F(CudfFilterProjectTest, split) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello"});
+  auto data = makeRowVector({input});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"split(c0, 'hello', 2) AS result"})
+                  .planNode();
+  auto splitResults = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto calculatedSplitResults = makeRowVector({
+      makeArrayVector<std::string>({
+          {"", " world"},
+          {"", " world2"},
+          {"", " hello"},
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      splitResults, calculatedSplitResults);
+}
+
+TEST_F(CudfFilterProjectTest, cardinalityAndSplitOneByOne) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello", "does not contain it"});
+  auto data = makeRowVector({input});
+  auto splitPlan = PlanBuilder()
+                       .values({data})
+                       .project({"split(c0, 'hello', 2) AS c0"})
+                       .planNode();
+  auto splitResults = AssertQueryBuilder(splitPlan).copyResults(pool());
+
+  auto calculatedSplitResults = makeRowVector({
+      makeArrayVector<std::string>({
+          {"", " world"},
+          {"", " world2"},
+          {"", " hello"},
+          {"does not contain it"},
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      splitResults, calculatedSplitResults);
+  auto cardinalityPlan = PlanBuilder()
+                             .values({splitResults})
+                             .project({"cardinality(c0) AS result"})
+                             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
+  AssertQueryBuilder(cardinalityPlan).assertResults({expected});
+}
+
+// TODO: Requires a fix for the expression evaluator to handle function nesting.
+TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello", "does not contain it"});
+  auto data = makeRowVector({input});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cardinality(split(c0, 'hello', 2)) AS c0"})
+                  .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
+  AssertQueryBuilder(plan).assertResults({expected});
+}
+
+TEST_F(CudfFilterProjectTest, negativeSubstr) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto negativeSubstrPlan =
+      PlanBuilder().values({data}).project({"substr(c0, -2) AS c0"}).planNode();
+  auto negativeSubstrResults =
+      AssertQueryBuilder(negativeSubstrPlan).copyResults(pool());
+
+  auto calculatedNegativeSubstrResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "lo",
+          "ng",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      negativeSubstrResults, calculatedNegativeSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, negativeSubstrWithLength) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto negativeSubstrWithLengthPlan = PlanBuilder()
+                                          .values({data})
+                                          .project({"substr(c0, -6, 3) AS c0"})
+                                          .planNode();
+  auto negativeSubstrWithLengthResults =
+      AssertQueryBuilder(negativeSubstrWithLengthPlan).copyResults(pool());
+
+  auto calculatedNegativeSubstrWithLengthResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "ghe",
+          "str",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      negativeSubstrWithLengthResults,
+      calculatedNegativeSubstrWithLengthResults);
+}
+
+TEST_F(CudfFilterProjectTest, substrWithLength) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto substrPlan = PlanBuilder()
+                        .values({data})
+                        .project({"substr(c0, 1, 3) AS c0"})
+                        .planNode();
+  auto substrResults = AssertQueryBuilder(substrPlan).copyResults(pool());
+
+  auto calculatedSubstrResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "hel",
+          "sec",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      substrResults, calculatedSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, coalesceColumnWithLiteral) {
+  vector_size_t batchSize = 100;
+  auto vectors = makeVectors(rowType_, 1, batchSize);
+  // Introduce nulls into c0 to exercise replacement
+  auto& vec = vectors[0];
+  auto c0Vector = vec->childAt(0)->asFlatVector<int32_t>();
+  for (vector_size_t i = 0; i < batchSize; i += 3) {
+    c0Vector->setNull(i, true);
+  }
+
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(c0, 5::INTEGER) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(c0, 5) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, coalesceLiteralFirst) {
+  vector_size_t batchSize = 100;
+  auto vectors = makeVectors(rowType_, 1, batchSize);
+  createDuckDbTable(vectors);
+
+  // Literal appears before any column; result should be a constant column.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(5::INTEGER, c0) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(5, c0) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
+  // Use two integer columns to validate that columns after the literal are
+  // ignored.
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", INTEGER()}});
+  auto vectors = makeVectors(rowType, 1, 50);
+  // Make some c0 nulls so fallback engages.
+  auto& vec = vectors[0];
+  auto c0 = vec->childAt(0)->asFlatVector<int32_t>();
+  for (vector_size_t i = 1; i < vec->size(); i += 4) {
+    c0->setNull(i, true);
+  }
+
+  createDuckDbTable(vectors);
+
+  // With expression coalesce(c0, 100, c1), rows with null c0 should become 100,
+  // regardless of c1. This also verifies we stop at the first literal.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(c0, 100::INTEGER, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(c0, 100, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, switchExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<double>({45676567.78, 6789098767.90876, -2.34}),
+       makeFlatVector<double>({123.4, 124.5, 1678})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"CASE WHEN c0 > 0.0 THEN c0 / c1 ELSE cast(null as double) END AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<double>(
+          {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
+ protected:
+  static void SetUpTestCase() {
+    parse::registerTypeResolver();
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::registerCudf();
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterCudf();
+  }
+};
+
+TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
+  auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
+  EXPECT_EQ(castValue, 12);
+  auto tryCast =
+      evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
+  EXPECT_EQ(tryCast, -214);
+}
+
 } // namespace

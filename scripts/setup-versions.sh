@@ -19,18 +19,24 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-FB_OS_VERSION="v2025.04.28.00"
-FMT_VERSION="10.1.1"
+# Note: When updating FB_OS_VERSION, ensure that
+# CMake/third-party/FBThriftCppLibrary.cmake is updated
+# with the matching version from fbthrift:
+# <fbthrift_github>/build/fbcode_builder/CMake/FBThriftCppLibrary.cmake
+# The new FB_OS version of fbthrift might require changes such that thrift
+# files are generated properly on all platforms.
+FB_OS_VERSION="v2026.01.05.00"
+FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="15.0.0"
 DUCKDB_VERSION="v0.8.1"
 PROTOBUF_VERSION="21.8"
 XSIMD_VERSION="10.0.0"
-SIMDJSON_VERSION="3.9.3"
+SIMDJSON_VERSION="4.1.0"
 CPR_VERSION="1.10.5"
 DOUBLE_CONVERSION_VERSION="v3.1.5"
 RANGE_V3_VERSION="0.12.0"
-RE2_VERSION="2022-02-01"
+RE2_VERSION="2024-07-02"
 GFLAGS_VERSION="v2.2.2"
 GLOG_VERSION="v0.6.0"
 LZO_VERSION="2.10"
@@ -49,8 +55,8 @@ GRPC_VERSION="v1.48.1"
 CRC32_VERSION="1.1.2"
 NLOHMAN_JSON_VERSION="v3.11.3"
 GOOGLE_CLOUD_CPP_VERSION="v2.22.0"
-HADOOP_VERSION="3.3.0"
+HADOOP_VERSION="3.3.6"
 AZURE_SDK_VERSION="12.8.0"
 MINIO_VERSION="2022-05-26T05-48-41Z"
 MINIO_BINARY_NAME="minio-2022-05-26"
-AWS_SDK_VERSION="1.11.321"
+AWS_SDK_VERSION="1.11.654"

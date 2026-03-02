@@ -69,7 +69,7 @@ TEST_F(ZipTest, combineInt) {
 
   auto firstResult = makeNullableFlatVector<int64_t>(
       {1, 1, 1, 1, 2, 2, 2, std::nullopt, std::nullopt});
-  auto secondResult = makeNullableFlatVector<std::string>(
+  auto secondResult = makeNullableFlatVector<StringView>(
       {S("a"),
        S("a"),
        S("a"),
@@ -127,17 +127,19 @@ TEST_F(ZipTest, arity) {
   std::vector<VectorPtr> inputs;
   for (auto i = 0; i < 7; i++) {
     if (i % 2 == 0) {
-      inputs.push_back(makeArrayVectorFromJson<int32_t>({
-          "[1, 1, 1, 1]",
-          "[2, 2, 2]",
-          "[3, 3]",
-      }));
+      inputs.push_back(
+          makeArrayVectorFromJson<int32_t>({
+              "[1, 1, 1, 1]",
+              "[2, 2, 2]",
+              "[3, 3]",
+          }));
     } else {
-      inputs.push_back(makeArrayVectorFromJson<double>({
-          "[1.1, 1.1, 1.1, 1.1]",
-          "[2.2, 2.2, 2.2]",
-          "[3.3, 3.3]",
-      }));
+      inputs.push_back(
+          makeArrayVectorFromJson<double>({
+              "[1.1, 1.1, 1.1, 1.1]",
+              "[2.2, 2.2, 2.2]",
+              "[3.3, 3.3]",
+          }));
     }
   }
 

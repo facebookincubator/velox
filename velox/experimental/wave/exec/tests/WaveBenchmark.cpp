@@ -15,10 +15,9 @@
  */
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/dwrf/writer/WriterContext.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/exec/ToWave.h"
 #include "velox/experimental/wave/exec/WaveHiveDataSource.h"
@@ -220,7 +219,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
       facebook::velox::parquet::WriterOptions options;
       options.memoryPool = childPool.get();
       int32_t flushCounter = 0;
-      options.encoding = parquet::arrow::Encoding::type::BIT_PACKED;
+      options.encoding = parquet::arrow::Encoding::type::kBitPacked;
       options.flushPolicyFactory = [&]() {
         return std::make_unique<facebook::velox::parquet::LambdaFlushPolicy>(
             1000000, 1000000000, [&]() { return (++flushCounter % 1 == 0); });
@@ -258,8 +257,11 @@ class WaveBenchmark : public QueryBenchmarkBase {
         float passRatio = FLAGS_filter_pass_pct / 100.0;
         std::vector<std::string> scanFilters;
         for (auto i = 0; i < FLAGS_num_column_filters; ++i) {
-          scanFilters.push_back(fmt::format(
-              "c{} < {}", i, static_cast<int64_t>(specs_[i].mod * passRatio)));
+          scanFilters.push_back(
+              fmt::format(
+                  "c{} < {}",
+                  i,
+                  static_cast<int64_t>(specs_[i].mod * passRatio)));
         }
         auto builder =
             PlanBuilder(leafPool_.get()).tableScan(type_, scanFilters);
@@ -267,10 +269,11 @@ class WaveBenchmark : public QueryBenchmarkBase {
         for (auto i = FLAGS_num_column_filters;
              i < FLAGS_num_column_filters + FLAGS_num_expr_filters;
              ++i) {
-          builder = builder.filter(fmt::format(
-              "c{} + 1 < {}",
-              i,
-              static_cast<int64_t>(specs_[i].mod * passRatio)));
+          builder = builder.filter(
+              fmt::format(
+                  "c{} + 1 < {}",
+                  i,
+                  static_cast<int64_t>(specs_[i].mod * passRatio)));
         }
 
         std::vector<std::string> aggInputs;
@@ -278,12 +281,13 @@ class WaveBenchmark : public QueryBenchmarkBase {
         std::vector<std::string> keys;
         for (auto i = 0; i < type_->size(); ++i) {
           if (i < FLAGS_num_keys) {
-            keyProjections.push_back(fmt::format(
-                "(c{} / {}) % {} as c{}",
-                i,
-                specs_[i].roundUp,
-                FLAGS_key_mod,
-                i));
+            keyProjections.push_back(
+                fmt::format(
+                    "(c{} / {}) % {} as c{}",
+                    i,
+                    specs_[i].roundUp,
+                    FLAGS_key_mod,
+                    i));
             keys.push_back(fmt::format("c{}", i));
           } else {
             keyProjections.push_back(fmt::format("c{}", i));

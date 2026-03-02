@@ -15,10 +15,17 @@
  */
 #include "velox/functions/prestosql/aggregates/MergeAggregate.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/HyperLogLogAggregate.h"
+#include "velox/functions/prestosql/aggregates/MergeKHyperLogLogAggregate.h"
+#include "velox/functions/prestosql/aggregates/MergeQDigestAggregate.h"
 #include "velox/functions/prestosql/aggregates/MergeTDigestAggregate.h"
+#include "velox/functions/prestosql/aggregates/SfmSketchAggregate.h"
 #include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
+#include "velox/functions/prestosql/types/QDigestRegistration.h"
+#include "velox/functions/prestosql/types/SfmSketchRegistration.h"
+#include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 
@@ -26,27 +33,35 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
-exec::AggregateRegistrationResult registerMerge(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerMerge(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite,
     double defaultError) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  auto inputTypes = std::vector<std::string>{"hyperloglog", "tdigest(double)"};
+  auto inputTypes = std::vector<std::string>{
+      "hyperloglog",
+      "khyperloglog",
+      "sfmsketch",
+      "tdigest(double)",
+      "qdigest(bigint)",
+      "qdigest(real)",
+      "qdigest(double)"};
   signatures.reserve(inputTypes.size());
   for (const auto& inputType : inputTypes) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType("varbinary")
-                             .argumentType(inputType)
-                             .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(inputType)
+            .intermediateType("varbinary")
+            .argumentType(inputType)
+            .build());
   }
   bool hllAsRawInput = true;
   bool hllAsFinalResult = true;
   return exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
-      [name, hllAsFinalResult, hllAsRawInput, defaultError](
+      [hllAsFinalResult, hllAsRawInput, defaultError](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -55,7 +70,23 @@ exec::AggregateRegistrationResult registerMerge(
         if (*argTypes[0] == *TDIGEST(DOUBLE())) {
           return createMergeTDigestAggregate(resultType);
         }
-        if (argTypes[0]->isUnKnown()) {
+        if (*argTypes[0] == *QDIGEST(BIGINT()) ||
+            *argTypes[0] == *QDIGEST(REAL()) ||
+            *argTypes[0] == *QDIGEST(DOUBLE())) {
+          return createMergeQDigestAggregate(resultType, argTypes[0]);
+        }
+        if (argTypes[0] == SFMSKETCH()) {
+          if (exec::isPartialOutput(step)) {
+            return std::make_unique<SfmSketchAggregate<true, false, true>>(
+                VARBINARY());
+          }
+          return std::make_unique<SfmSketchAggregate<true, false, true>>(
+              resultType);
+        }
+        if (argTypes[0] == KHYPERLOGLOG()) {
+          return std::make_unique<MergeKHyperLogLogAggregate>(resultType);
+        }
+        if (argTypes[0]->isUnknown()) {
           return std::make_unique<HyperLogLogAggregate<UnknownValue, true>>(
               resultType, hllAsRawInput, defaultError);
         }
@@ -79,18 +110,18 @@ exec::AggregateRegistrationResult registerMerge(
 } // namespace
 
 void registerMergeAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool /* withCompanionFunctions */,
     bool overwrite) {
+  registerSfmSketchType();
   registerHyperLogLogType();
+  registerKHyperLogLogType();
   registerTDigestType();
+  registerQDigestType();
   // merge is companion function for approx_distinct. Don't register companion
   // functions for it.
   registerMerge(
-      prefix + kMerge,
-      false,
-      overwrite,
-      common::hll::kDefaultApproxSetStandardError);
+      names, false, overwrite, common::hll::kDefaultApproxSetStandardError);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

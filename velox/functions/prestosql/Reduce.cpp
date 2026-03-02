@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/core/Expressions.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 
@@ -324,19 +327,13 @@ core::TypedExprPtr toArraySum(
   auto lambda = std::make_shared<core::LambdaTypedExpr>(
       ROW({inputArgs->nameOf(1)}, {inputArgs->childAt(1)}), expr);
   auto transform = std::make_shared<core::CallTypedExpr>(
-      ARRAY(expr->type()),
-      std::vector<core::TypedExprPtr>({reduce.inputs()[0], lambda}),
-      prefix + "transform");
+      ARRAY(expr->type()), prefix + "transform", reduce.inputs()[0], lambda);
   auto arraySum = std::make_shared<core::CallTypedExpr>(
-      sumType,
-      std::vector<core::TypedExprPtr>({transform}),
-      prefix + "array_sum_propagate_element_null");
+      sumType, prefix + "array_sum_propagate_element_null", transform);
   auto cast =
       std::make_shared<core::CastTypedExpr>(initial->type(), arraySum, false);
   auto plus = std::make_shared<core::CallTypedExpr>(
-      initial->type(),
-      std::vector<core::TypedExprPtr>({initial, cast}),
-      prefix + "plus");
+      initial->type(), prefix + "plus", initial, cast);
   VLOG(1) << "Rewrite expression: " << reduce.toString() << " => "
           << plus->toString();
   addThreadLocalRuntimeStat("numReduceRewrite", RuntimeCounter(1));
@@ -392,11 +389,10 @@ core::TypedExprPtr rewriteReduce(
       return nullptr;
     }
     auto minus = std::make_shared<core::CallTypedExpr>(
-        fx->type(),
-        std::vector<core::TypedExprPtr>({fx, inputBody->inputs()[1]}),
-        prefix + "minus");
+        fx->type(), prefix + "minus", fx, inputBody->inputs()[1]);
     return toArraySum(prefix, *reduce, inputArgs, minus);
-  } else if (inputBody->name() == "if" && inputBody->inputs().size() == 3) {
+  } else if (
+      inputBody->name() == expression::kIf && inputBody->inputs().size() == 3) {
     // if(h(x), s + f(x), s + g(x)) =>
     // array_sum(transform(array, x -> if(h(x), f(x), g(x))))
     auto fx = extractFromAddition(prefix, inputBody->inputs()[1], s);
@@ -408,9 +404,7 @@ core::TypedExprPtr rewriteReduce(
       return nullptr;
     }
     auto ifExpr = std::make_shared<core::CallTypedExpr>(
-        fx->type(),
-        std::vector<core::TypedExprPtr>({inputBody->inputs()[0], fx, gx}),
-        "if");
+        fx->type(), expression::kIf, inputBody->inputs()[0], fx, gx);
     return toArraySum(prefix, *reduce, inputArgs, ifExpr);
   }
   return nullptr;
@@ -430,7 +424,7 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     std::make_unique<ReduceFunction>());
 
 void registerReduceRewrites(const std::string& prefix) {
-  exec::registerExpressionRewrite(
+  expression::ExprRewriteRegistry::instance().registerRewrite(
       [prefix](const auto& expr) { return rewriteReduce(prefix, expr); });
 }
 

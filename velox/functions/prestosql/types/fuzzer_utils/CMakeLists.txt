@@ -12,15 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 velox_add_library(
-  velox_presto_types_fuzzer_utils TimestampWithTimeZoneInputGenerator.cpp
-  HyperLogLogInputGenerator.cpp)
+  velox_presto_types_fuzzer_utils
+  TimestampWithTimeZoneInputGenerator.cpp
+  TimeWithTimezoneInputGenerator.cpp
+  HyperLogLogInputGenerator.cpp
+  KHyperLogLogInputGenerator.cpp
+  P4HyperLogLogInputGenerator.cpp
+  SfmSketchInputGenerator.cpp
+)
 
 velox_link_libraries(
   velox_presto_types_fuzzer_utils
   velox_type
   velox_common_fuzzer_util
   velox_presto_types
-  velox_type_tz)
+  velox_type_tz
+  velox_functions_sfm
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

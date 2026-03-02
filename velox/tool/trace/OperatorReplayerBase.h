@@ -29,11 +29,12 @@ namespace facebook::velox::tool::trace {
 class OperatorReplayerBase {
  public:
   OperatorReplayerBase(
-      std::string traceDir,
-      std::string queryId,
-      std::string taskId,
-      std::string nodeId,
-      std::string operatorType,
+      const std::string& traceDir,
+      const std::string& queryId,
+      const std::string& taskId,
+      const std::string& nodeId,
+      const std::string& nodeName,
+      const std::string& spillBaseDir,
       const std::string& driverIds,
       uint64_t queryCapacity,
       folly::Executor* executor);
@@ -45,7 +46,23 @@ class OperatorReplayerBase {
   OperatorReplayerBase& operator=(OperatorReplayerBase&& other) noexcept =
       delete;
 
-  virtual RowVectorPtr run(bool copyResults = true);
+  /// @deprecated Use the two-parameter version instead. This overload exists
+  ///        for backward compatibility and will be removed once all subclasses
+  ///        migrate to the new interface.
+  virtual RowVectorPtr run(bool copyResults) {
+    return run(copyResults, /*cursorCopyResult=*/false);
+  }
+
+  /// Runs the replayer with control over both result copying and cursor
+  /// per-batch copying.
+  /// @param copyResults If true, copies and returns all results as a single
+  ///        RowVector. If false, returns nullptr.
+  /// @param cursorCopyResult If true, each output batch is deep copied as it's
+  ///        consumed by the cursor. This can be expensive for complex nested
+  ///        types. Default is false.
+  virtual RowVectorPtr run(
+      bool copyResults = true,
+      bool cursorCopyResult = false);
 
  protected:
   virtual core::PlanNodePtr createPlanNode(
@@ -60,9 +77,10 @@ class OperatorReplayerBase {
   const std::string queryId_;
   const std::string taskId_;
   const std::string nodeId_;
-  const std::string operatorType_;
+  const std::string nodeName_;
   const std::string taskTraceDir_;
   const std::string nodeTraceDir_;
+  const std::string spillBaseDir_;
   const std::shared_ptr<filesystems::FileSystem> fs_;
   const std::vector<uint32_t> pipelineIds_;
   const std::vector<uint32_t> driverIds_;

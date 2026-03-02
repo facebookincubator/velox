@@ -78,7 +78,7 @@ class ValueHook {
     VELOX_UNSUPPORTED();
   }
 
-  virtual void addValue(vector_size_t /*row*/, folly::StringPiece /*value*/) {
+  virtual void addValue(vector_size_t /*row*/, std::string_view /*value*/) {
     VELOX_UNSUPPORTED();
   }
 
@@ -159,7 +159,8 @@ class ValueHook {
       const StringView* values,
       vector_size_t size) {
     for (auto i = 0; i < size; ++i) {
-      addValue(rows[i], values[i]);
+      // TODO: Remove explicit std::string_view cast.
+      addValue(rows[i], std::string_view(values[i]));
     }
   }
 
@@ -167,11 +168,16 @@ class ValueHook {
   void addValueTyped(vector_size_t row, T value) {
     if constexpr (std::is_integral_v<T> && sizeof(T) < sizeof(int64_t)) {
       addValue(row, static_cast<int64_t>(value));
+    } else if constexpr (std::is_same_v<T, StringView>) {
+      // TODO: Remove explicit std::string_view cast.
+      addValue(row, std::string_view(value));
     } else {
       addValue(row, value);
     }
   }
 };
+
+class ChainedVectorLoader;
 
 // Produces values for a LazyVector for a set of positions.
 class VectorLoader {
@@ -199,14 +205,44 @@ class VectorLoader {
       const SelectivityVector& rows,
       ValueHook* hook,
       vector_size_t resultSize,
-      VectorPtr* result);
+      VectorPtr* result,
+      memory::MemoryPool* pool);
+
+  virtual bool supportsHook() const {
+    return false;
+  }
 
  protected:
+  friend class ChainedVectorLoader;
+
   virtual void loadInternal(
       RowSet rows,
       ValueHook* hook,
       vector_size_t resultSize,
       VectorPtr* result) = 0;
+};
+
+class ChainedVectorLoader : public VectorLoader {
+ public:
+  using PostVectorLoadProcessor = std::function<void(VectorPtr&)>;
+
+  ChainedVectorLoader(
+      std::unique_ptr<VectorLoader> loader,
+      PostVectorLoadProcessor postLoadProc)
+      : loader_(std::move(loader)), postLoadProc_(std::move(postLoadProc)) {}
+
+ private:
+  void loadInternal(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) override {
+    loader_->loadInternal(rows, hook, resultSize, result);
+    postLoadProc_(*result);
+  }
+
+  std::unique_ptr<VectorLoader> loader_;
+  PostVectorLoadProcessor postLoadProc_;
 };
 
 // Vector class which produces values on first use. This is used for
@@ -330,11 +366,6 @@ class LazyVector : public BaseVector {
     return loadedVector()->containsNullAt(index);
   }
 
-  uint64_t retainedSize() const override {
-    return isLoaded() ? loadedVector()->retainedSize()
-                      : BaseVector::retainedSize();
-  }
-
   /// Returns zero if vector has not been loaded yet.
   uint64_t estimateFlatSize() const override {
     return isLoaded() ? loadedVector()->estimateFlatSize() : 0;
@@ -345,6 +376,16 @@ class LazyVector : public BaseVector {
   }
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
+  bool supportsHook() const {
+    return loader_->supportsHook();
+  }
+
+  void chain(ChainedVectorLoader::PostVectorLoadProcessor postLoadProc) {
+    VELOX_CHECK(!allLoaded_);
+    loader_ = std::make_unique<ChainedVectorLoader>(
+        std::move(loader_), std::move(postLoadProc));
+  }
 
   // Loads 'rows' of 'vector'. 'vector' may be an arbitrary wrapping
   // of a LazyVector. 'rows' are translated through the wrappers. If
@@ -370,6 +411,13 @@ class LazyVector : public BaseVector {
     return loadedVector()->testingCopyPreserveEncodings(pool);
   }
 
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (vector_) {
+      vector_->transferOrCopyTo(pool);
+    }
+  }
+
  private:
   static void ensureLoadedRowsImpl(
       const VectorPtr& vector,
@@ -378,6 +426,11 @@ class LazyVector : public BaseVector {
       SelectivityVector& baseRows);
 
   void loadVectorInternal() const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return isLoaded() ? loadedVector()->retainedSize(totalStringBufferSize)
+                      : BaseVector::retainedSizeImpl();
+  }
 
   std::unique_ptr<VectorLoader> loader_;
 

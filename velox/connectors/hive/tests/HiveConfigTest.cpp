@@ -23,8 +23,9 @@ using namespace facebook::velox::connector::hive;
 using facebook::velox::connector::hive::HiveConfig;
 
 TEST(HiveConfigTest, defaultConfig) {
-  HiveConfig hiveConfig(std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>()));
+  HiveConfig hiveConfig(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
   ASSERT_EQ(
@@ -53,6 +54,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_TRUE(hiveConfig.isPartitionPathAsLowerCase(emptySession.get()));
   ASSERT_TRUE(hiveConfig.allowNullPartitionKeys(emptySession.get()));
   ASSERT_EQ(hiveConfig.loadQuantum(emptySession.get()), 8 << 20);
+  ASSERT_FALSE(hiveConfig.preserveFlatMapsInMemory(emptySession.get()));
 }
 
 TEST(HiveConfigTest, overrideConfig) {
@@ -75,7 +77,8 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kSortWriterFinishTimeSliceLimitMs, "400"},
       {HiveConfig::kReadStatsBasedFilterReorderDisabled, "true"},
       {HiveConfig::kLoadQuantum, std::to_string(4 << 20)},
-      {HiveConfig::kMaxBucketCount, std::to_string(100'000)}};
+      {HiveConfig::kMaxBucketCount, std::to_string(100'000)},
+      {HiveConfig::kPreserveFlatMapsInMemory, "true"}};
   HiveConfig hiveConfig(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)));
   auto emptySession = std::make_shared<config::ConfigBase>(
@@ -106,11 +109,13 @@ TEST(HiveConfigTest, overrideConfig) {
       hiveConfig.readStatsBasedFilterReorderDisabled(emptySession.get()));
   ASSERT_EQ(hiveConfig.loadQuantum(emptySession.get()), 4 << 20);
   ASSERT_EQ(hiveConfig.maxBucketCount(emptySession.get()), 100'000);
+  ASSERT_TRUE(hiveConfig.preserveFlatMapsInMemory(emptySession.get()));
 }
 
 TEST(HiveConfigTest, overrideSession) {
-  HiveConfig hiveConfig(std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>()));
+  HiveConfig hiveConfig(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   std::unordered_map<std::string, std::string> sessionOverride = {
       {HiveConfig::kInsertExistingPartitionsBehaviorSession, "OVERWRITE"},
       {HiveConfig::kOrcUseColumnNamesSession, "true"},
@@ -123,7 +128,9 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kAllowNullPartitionKeysSession, "false"},
       {HiveConfig::kIgnoreMissingFilesSession, "true"},
       {HiveConfig::kReadStatsBasedFilterReorderDisabledSession, "true"},
-      {HiveConfig::kLoadQuantumSession, std::to_string(4 << 20)}};
+      {HiveConfig::kLoadQuantumSession, std::to_string(4 << 20)},
+      {HiveConfig::kPreserveFlatMapsInMemorySession, "true"},
+  };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
   ASSERT_EQ(
@@ -149,4 +156,5 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_TRUE(hiveConfig.ignoreMissingFiles(session.get()));
   ASSERT_TRUE(hiveConfig.readStatsBasedFilterReorderDisabled(session.get()));
   ASSERT_EQ(hiveConfig.loadQuantum(session.get()), 4 << 20);
+  ASSERT_TRUE(hiveConfig.preserveFlatMapsInMemory(session.get()));
 }

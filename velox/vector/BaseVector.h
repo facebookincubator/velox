@@ -70,14 +70,14 @@ class BaseVector {
   BaseVector(const BaseVector&) = delete;
   BaseVector& operator=(const BaseVector&) = delete;
 
-  static constexpr uint64_t kNullHash = 1;
+  static constexpr uint64_t kNullHash = bits::kNullHash;
 
   BaseVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
-      size_t length,
+      vector_size_t length,
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
       std::optional<vector_size_t> nullCount = std::nullopt,
       std::optional<ByteCount> representedByteCount = std::nullopt,
@@ -107,7 +107,7 @@ class BaseVector {
 
   inline bool isIndexInRange(vector_size_t index) const {
     // This compiles better than index >= 0 && index < length_.
-    return static_cast<uint32_t>(index) < length_;
+    return static_cast<uint32_t>(index) < static_cast<uint32_t>(length_);
   }
 
   template <typename T>
@@ -292,11 +292,6 @@ class BaseVector {
   /// optimized format
   std::optional<ByteCount> representedBytes() const {
     return representedByteCount_;
-  }
-
-  /// @return the number of bytes required to hold this vector in memory
-  ByteCount inMemoryBytes() const {
-    return inMemoryBytes_;
   }
 
   /// @return true if this vector has the same value at the given index as the
@@ -547,6 +542,13 @@ class BaseVector {
   virtual VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const = 0;
 
+  /// Transfer or copy this vector and all its buffers recursively to 'pool'.
+  /// The transfer of a buffer is allowed if its original pool and 'pool' are
+  /// from the same MemoryAllocator and the buffer is not a BufferView. If a
+  /// buffer is not allowed to be transferred, it is copied to pool. After this
+  /// call, this vector and all its buffers are owned by 'pool'.
+  virtual void transferOrCopyTo(velox::memory::MemoryPool* pool);
+
   /// Construct a zero-copy slice of the vector with the indicated offset and
   /// length.
   virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
@@ -598,7 +600,7 @@ class BaseVector {
 
   static VectorPtr createConstant(
       const TypePtr& type,
-      variant value,
+      Variant value,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
@@ -628,14 +630,9 @@ class BaseVector {
   /// before making a new ConstantVector. The result vector is either a
   /// ConstantVector holding a scalar value or a ConstantVector wrapping flat or
   /// lazy vector. The result cannot be a wrapping over another constant or
-  /// dictionary vector. If copyBase is true and the result vector wraps a
-  /// vector, the wrapped vector is newly constructed by copying the value from
-  /// the original, guaranteeing no Vectors are shared with 'vector'.
-  static VectorPtr wrapInConstant(
-      vector_size_t length,
-      vector_size_t index,
-      VectorPtr vector,
-      bool copyBase = false);
+  /// dictionary vector.
+  static VectorPtr
+  wrapInConstant(vector_size_t length, vector_size_t index, VectorPtr vector);
 
   /// Makes 'result' writable for 'rows'. A wrapper (e.g. dictionary, constant,
   /// sequence) is flattened and a multiply referenced flat vector is copied.
@@ -662,7 +659,7 @@ class BaseVector {
   /// Returns true if the following conditions hold:
   ///  * The vector is singly referenced.
   ///  * The vector has a Flat-like encoding (Flat, Array, Map, Row).
-  ///  * Any child Buffers are mutable  and singly referenced.
+  ///  * Any child Buffers are mutable and singly referenced.
   ///  * All of these conditions hold for child Vectors recursively.
   /// This function is templated rather than taking a
   /// std::shared_ptr<BaseVector> because if we were to do that the compiler
@@ -781,7 +778,7 @@ class BaseVector {
       velox::memory::MemoryPool* pool,
       BufferPtr* buffer,
       RawT** raw) {
-    vector_size_t minBytes = byteSize<T>(size);
+    auto minBytes = static_cast<uint64_t>(byteSize<T>(size));
     if (*buffer && (*buffer)->capacity() >= minBytes && (*buffer)->unique()) {
       (*buffer)->setSize(minBytes);
       if (raw) {
@@ -801,8 +798,17 @@ class BaseVector {
   }
 
   /// Returns the byte size of memory that is kept live through 'this'.
-  virtual uint64_t retainedSize() const {
-    return nulls_ ? nulls_->capacity() : 0;
+  uint64_t retainedSize() const {
+    uint64_t totalStringBufferSize{0};
+    return retainedSizeImpl(totalStringBufferSize);
+  }
+
+  /// Returns the byte size of memory that is kept live through 'this'. Also add
+  /// the total size of all string buffers recursively carried by 'this' to
+  /// totalStringBufferSize. To get the total size of all string buffers, set
+  /// the initial value of totalStringBufferSize to 0 when calling this method.
+  uint64_t retainedSize(uint64_t& totalStringBufferSize) const {
+    return retainedSizeImpl(totalStringBufferSize);
   }
 
   /// Returns an estimate of the 'retainedSize' of a flat representation of the
@@ -850,6 +856,21 @@ class BaseVector {
   std::string toString() const {
     return toString(false);
   }
+
+  static constexpr std::string_view kNullValueString = "null";
+
+  /// Returns the value at specified index as a Variant.
+  Variant variantAt(vector_size_t index) const;
+
+  /// Returns values for all rows as Variants.
+  std::vector<Variant> toVariants() const;
+
+  /// Creates a vector from a list of Variant values. The result is a flat
+  /// vector with one element per value.
+  static VectorPtr createFromVariants(
+      const TypePtr& type,
+      const std::vector<Variant>& values,
+      velox::memory::MemoryPool* pool);
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
@@ -970,6 +991,13 @@ class BaseVector {
     return nulls_ ? Buffer::slice<bool>(nulls_, offset, length, pool_) : nulls_;
   }
 
+  virtual uint64_t retainedSizeImpl(
+      uint64_t& /*totalStringBufferSize*/) const = 0;
+
+  uint64_t retainedSizeImpl() const {
+    return nulls_ ? nulls_->capacity() : 0;
+  }
+
   TypePtr type_;
   const TypeKind typeKind_;
   // Whether `type_` is a type that provides custom comparison operations.
@@ -993,7 +1021,6 @@ class BaseVector {
   std::optional<vector_size_t> distinctValueCount_;
   std::optional<ByteCount> representedByteCount_;
   std::optional<ByteCount> storageByteCount_;
-  ByteCount inMemoryBytes_ = 0;
 
  private:
   static VectorPtr createInternal(

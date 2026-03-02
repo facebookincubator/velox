@@ -181,8 +181,9 @@ TEST_F(TreeOfLosersTest, allSorted) {
 TEST_F(TreeOfLosersTest, allEmpty) {
   for (bool testNextEqual : {false, true}) {
     for (int numStreams : {0, 1, 5, 100}) {
-      SCOPED_TRACE(fmt::format(
-          "numStreams: {}, testNextEqual", numStreams, testNextEqual));
+      SCOPED_TRACE(
+          fmt::format(
+              "numStreams: {}, testNextEqual", numStreams, testNextEqual));
       std::vector<std::unique_ptr<TestingStream>> mergeStreams;
       for (int i = 0; i < numStreams; ++i) {
         mergeStreams.push_back(
@@ -211,12 +212,13 @@ TEST_F(TreeOfLosersTest, randomWithDuplicates) {
     for (int iter = 0; iter < 10; ++iter) {
       const int numCount = std::max<int>(1, folly::Random::rand32(1000'000));
       const int numStreams = std::max<int>(3, folly::Random::rand32(100));
-      SCOPED_TRACE(fmt::format(
-          "iter: {}, testNextEqual: {}, numCount: {}, numStreams: {}",
-          iter,
-          testNextEqual,
-          numCount,
-          numStreams));
+      SCOPED_TRACE(
+          fmt::format(
+              "iter: {}, testNextEqual: {}, numCount: {}, numStreams: {}",
+              iter,
+              testNextEqual,
+              numCount,
+              numStreams));
       std::vector<std::vector<uint32_t>> streamNumVectors(numStreams);
       for (int i = 0; i < numCount; ++i) {
         const int streamIndex = folly::Random::rand32(numStreams);

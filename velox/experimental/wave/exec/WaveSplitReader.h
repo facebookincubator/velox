@@ -30,17 +30,16 @@ namespace facebook::velox::wave {
 
 /// Parameters for a Wave Hive SplitReaderFactory.
 struct SplitReaderParams {
-  std ::shared_ptr<connector::hive::HiveTableHandle> hiveTableHandle;
+  connector::hive::HiveTableHandlePtr hiveTableHandle;
   std::shared_ptr<common::ScanSpec> scanSpec;
   RowTypePtr readerOutputType;
-  std::unordered_map<
-      std::string,
-      std::shared_ptr<connector::hive::HiveColumnHandle>>* partitionKeys;
+  std::unordered_map<std::string, connector::hive::HiveColumnHandlePtr>*
+      partitionKeys;
   FileHandleFactory* fileHandleFactory;
   folly::Executor* executor;
   const connector::ConnectorQueryCtx* connectorQueryCtx;
   std::shared_ptr<connector::hive::HiveConfig> hiveConfig;
-  std::shared_ptr<io::IoStatistics> ioStats;
+  std::shared_ptr<io::IoStatistics> ioStatistics;
 };
 
 class WaveSplitReaderFactory;

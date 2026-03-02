@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include <folly/io/IOBuf.h>
 
 #include <array>
@@ -45,7 +44,7 @@ class Base64 {
   static std::string encode(const char* input, size_t inputSize);
 
   /// Encodes the specified text.
-  static std::string encode(folly::StringPiece text);
+  static std::string encode(std::string_view text);
 
   /// Encodes the specified IOBuf data.
   static std::string encode(const folly::IOBuf* inputBuffer);
@@ -60,7 +59,7 @@ class Base64 {
   static std::string encodeUrl(const char* input, size_t inputSize);
 
   /// Encodes the specified text using URL encoding.
-  static std::string encodeUrl(folly::StringPiece text);
+  static std::string encodeUrl(std::string_view text);
 
   /// Encodes the specified IOBuf data using URL encoding.
   static std::string encodeUrl(const folly::IOBuf* inputBuffer);
@@ -72,7 +71,7 @@ class Base64 {
   encodeUrl(const char* input, size_t inputSize, char* outputBuffer);
 
   /// Decodes the input Base64 encoded string.
-  static std::string decode(folly::StringPiece encodedText);
+  static std::string decode(std::string_view encodedText);
 
   /// Decodes the specified encoded payload and writes the result to the
   /// 'output'.
@@ -94,7 +93,7 @@ class Base64 {
       size_t outputSize);
 
   /// Decodes the input Base64 URL encoded string.
-  static std::string decodeUrl(folly::StringPiece encodedText);
+  static std::string decodeUrl(std::string_view encodedText);
 
   /// Decodes the specified URL encoded payload and writes the result to the
   /// 'output'.
@@ -115,6 +114,11 @@ class Base64 {
   static Status
   decodeMime(const char* input, size_t inputSize, char* outputBuffer);
 
+  /// Encodes the input buffer into Base64 MIME format.
+  /// Inserts a CRLF every kMaxLineLength output characters.
+  static void
+  encodeMime(const char* input, size_t inputSize, char* outputBuffer);
+
   /// Calculates the encoded size based on input 'inputSize'.
   static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
 
@@ -130,9 +134,18 @@ class Base64 {
       const char* input,
       const size_t inputSize);
 
+  /// Computes the exact output length for MIME‐mode Base64 encoding,
+  /// including required CRLF line breaks.
+  static size_t calculateMimeEncodedSize(size_t inputSize);
+
  private:
   // Padding character used in encoding.
   static const char kPadding = '=';
+
+  // Soft Line breaks used in mime encoding as defined in RFC 2045, section 6.8:
+  // https://www.rfc-editor.org/rfc/rfc2045#section-6.8
+  inline static const std::string kNewline{"\r\n"};
+  static const size_t kMaxLineLength = 76;
 
   // Checks if the input Base64 string is padded.
   static inline bool isPadded(const char* input, size_t inputSize) {

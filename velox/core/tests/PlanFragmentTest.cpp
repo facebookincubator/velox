@@ -129,10 +129,9 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
   const std::vector<FieldAccessTypedExprPtr> emptyPreGroupingKeys;
   std::vector<std::string> aggregateNames{"sum"};
   std::vector<std::string> emptyAggregateNames{};
-  std::vector<TypedExprPtr> aggregateInputs{
-      std::make_shared<InputTypedExpr>(BIGINT())};
+  auto aggregateInput = std::make_shared<InputTypedExpr>(BIGINT());
   const std::vector<AggregationNode::Aggregate> aggregates{
-      {std::make_shared<core::CallTypedExpr>(BIGINT(), aggregateInputs, "sum"),
+      {std::make_shared<core::CallTypedExpr>(BIGINT(), "sum", aggregateInput),
        {},
        nullptr,
        {},
@@ -149,8 +148,9 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
 
     std::string debugString() const {
       return fmt::format(
-          "aggregationStep:{} isSpillEnabled:{} isAggregationSpillEnabled:{} isDistinct:{} hasPreAggregation:{} expectedCanSpill:{}",
-          AggregationNode::stepName(aggregationStep),
+          "aggregationStep:{} isSpillEnabled:{} isAggregationSpillEnabled:{} "
+          "isDistinct:{} hasPreAggregation:{} expectedCanSpill:{}",
+          AggregationNode::toName(aggregationStep),
           isSpillEnabled,
           isAggregationSpillEnabled,
           isDistinct,
@@ -188,7 +188,8 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
         testData.hasPreAggregation ? preGroupingKeys : emptyPreGroupingKeys,
         testData.isDistinct ? emptyAggregateNames : aggregateNames,
         testData.isDistinct ? emptyAggregates : aggregates,
-        false,
+        /*ignoreNullKeys=*/false,
+        /*noGroupsSpanBatches=*/false,
         valueNode_);
     auto queryCtx = getSpillQueryCtx(
         testData.isSpillEnabled,
@@ -354,7 +355,7 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
                               core::JoinType::kAnti)
                           .planNode();
     const PlanFragment planFragment{plan};
-    ASSERT_FALSE(planFragment.supportsBarrier());
+    ASSERT_TRUE(planFragment.firstNodeNotSupportingBarrier() != nullptr);
   }
   // Plan fragment with plan node supporting barrier.
   {
@@ -374,6 +375,6 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
                         core::JoinType::kInner)
                     .planNode();
     const PlanFragment planFragment{plan};
-    ASSERT_TRUE(planFragment.supportsBarrier());
+    ASSERT_TRUE(planFragment.firstNodeNotSupportingBarrier() == nullptr);
   }
 }

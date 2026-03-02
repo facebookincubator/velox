@@ -24,9 +24,9 @@ JSON Functions
     Casts ``jsonString`` to an ARRAY, MAP, or ROW type, with the output type
     determined by the expression. Returns NULL, if the input string is unparsable.
     Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP,
-    the element type of the array or the value type of the map must be one of
-    these supported types, and for maps, the key type must be VARCHAR. Casting
+    REAL, DOUBLE, DECIMAL, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
+    or MAP, the element type of the array or the value type of the map must be one
+    of these supported types, and for maps, the key type must be VARCHAR. Casting
     to ROW supports only JSON objects.
     Note that since the result type can be inferred from the expression, in Velox we
     do not need to provide the ``schema`` parameter as required by Spark's from_json
@@ -35,6 +35,7 @@ JSON Functions
         SELECT from_json('{"a": true}', 'a BOOLEAN'); -- {'a'=true}
         SELECT from_json('{"a": 1}', 'a INT'); -- {'a'=1}
         SELECT from_json('{"a": 1.0}', 'a DOUBLE'); -- {'a'=1.0}
+        SELECT from_json('{"a": 5.321E2}', 'a DECIMAL(7, 2)'); -- {'a'=532.10}
         SELECT from_json('{"a":"2021-7-1T"}', 'a DATE'); -- {'a'="2021-07-01"}
         SELECT from_json('{"a":"1"}', 'a DATE'); -- {'a'="1970-01-02"}
         SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']
@@ -58,16 +59,19 @@ JSON Functions
 .. spark:function:: get_json_object(jsonString, path) -> varchar
 
     Returns a json object, represented by VARCHAR, from ``jsonString`` by searching ``path``.
-    Valid ``path`` should start with '$' and then contain "[index]", "['field']" or ".field"
-    to define a JSON path. Here are some examples: "$.a" "$.a.b", "$[0]['a'].b". Returns
-    ``jsonString`` if ``path`` is "$". Returns NULL if ``jsonString`` or ``path`` is malformed.
-    Returns NULL if ``path`` does not exist. ::
+    Returns NULL if ``jsonString`` or ``path`` is malformed or ``path`` does not exist. ::
 
         SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
         SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'
         SELECT get_json_object('{"a":3}', '$.b'); -- NULL (unexisting field)
         SELECT get_json_object('{"a"-3}'', '$.a'); -- NULL (malformed JSON string)
         SELECT get_json_object('{"a":3}'', '.a'); -- NULL (malformed JSON path)
+
+    Valid ``path`` syntax:
+        * Must start with '$'.
+        * Using "[index]", "['field']" or ".field" to navigate to the desired JSON object.
+        * Whitespace is allowed **after the dot** and **before the field name**, e.g., "$.  field".
+        * Trailing whitespace after '$' is allowed, e.g., "$   ".
 
 .. spark:function:: json_array_length(jsonString) -> integer
 
@@ -90,3 +94,21 @@ JSON Functions
         SELECT json_object_keys(1); -- NULL
         SELECT json_object_keys('"hello"'); -- NULL
         SELECT json_object_keys("invalid json"); -- NULL
+
+.. spark:function:: to_json(jsonObject) -> jsonString
+
+    Converts a Json object (ROW, ARRAY or MAP) into a JSON string. ::
+
+        SELECT to_json(named_struct('c0', 1, 'c1', 'a')); -- {"c0":1,"c1":"a"}
+        SELECT to_json(ARRAY(1, 2, 3)); -- [1,2,3]
+        SELECT to_json(MAP('x', 1, 'y', 2)); -- {"x":1,"y":2}
+
+    The current implementation has following limitations.
+
+    * Does not support user provided options. ::
+
+        to_json(MAP(1, 'a'), map('option', 'value'))
+
+    * MAP key type cannot be/contain MAP. ::
+
+        to_json(MAP(MAP('a', 1), 10))

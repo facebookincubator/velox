@@ -6,45 +6,44 @@ The versions of certain libraries is the default provided by
 the platform's package manager. Some libraries can be bundled
 by Velox. See details on bundling below.
 
-| Library Name      | Minimum Version | Bundled? |
-|-------------------|-----------------|----------|
-| ninja             | default         | No       |
-| ccache            | default         | No       |
-| icu4c             | default         | Yes      |
-| gflags            | default         | Yes      |
-| glog              | default         | Yes      |
-| gtest (testing)   | default         | Yes      |
-| libevent          | default         | No       |
-| libsodium         | default         | No       |
-| lz4               | default         | No       |
-| snappy            | default         | No       |
-| xz                | default         | No       |
-| zstd              | default         | No       |
-| openssl           | default         | No       |
-| protobuf          | 21.7 >= x < 22  | Yes      |
-| boost             | 1.77.0          | Yes      |
-| flex              | 2.5.13          | No       |
-| bison             | 3.0.4           | No       |
-| cmake             | 3.28            | No       |
-| double-conversion | 3.1.5           | No       |
-| xsimd             | 10.0.0          | Yes      |
-| re2               | 2021-04-01      | Yes      |
-| fmt               | 10.1.1          | Yes      |
-| simdjson          | 3.9.3           | Yes      |
-| faiss             | 1.11.0          | Yes      |
-| folly             | v2025.04.28.00  | Yes      |
-| fizz              | v2025.04.28.00  | No       |
-| wangle            | v2025.04.28.00  | No       |
-| mvfst             | v2025.04.28.00  | No       |
-| fbthrift          | v2025.04.28.00  | No       |
-| libstemmer        | 2.2.0           | Yes      |
-| DuckDB (testing)  | 0.8.1           | Yes      |
-| cpr (testing)     | 1.10.15         | Yes      |
-| arrow             | 15.0.0          | Yes      |
-| geos              | 3.10.7          | Yes      |
-| fast_float        | v8.0.2          | Yes      |
-| xxhash            | default         | No       |
-| thrift            | 0.16            | No       |
+| Library Name      | Minimum Version | Bundled? | Comment |
+|-------------------|-----------------|----------|---------|
+| ninja             | default         | No       ||
+| ccache            | default         | No       ||
+| icu4c             | default         | Yes      ||
+| gflags            | default         | Yes      ||
+| glog              | default         | Yes      ||
+| gtest (testing)   | default         | Yes      ||
+| libevent          | default         | No       ||
+| libsodium         | default         | No       ||
+| lz4               | default         | No       ||
+| snappy            | default         | No       ||
+| xz                | default         | No       ||
+| zstd              | default         | No       ||
+| openssl           | default         | No       ||
+| protobuf          | 21.7 >= x < 22  | Yes      ||
+| boost             | 1.77.0          | Yes      ||
+| flex              | 2.5.13          | No       ||
+| bison             | 3.0.4           | No       ||
+| cmake             | 3.28            | No       ||
+| double-conversion | 3.1.5           | No       ||
+| xsimd             | 10.0.0          | Yes      ||
+| re2               | 2024-07-02      | Yes      ||
+| fmt               | 11.2.0          | Yes      | Used API must be fmt 9 compatible |
+| simdjson          | 4.1.0           | Yes      ||
+| faiss             | 1.11.0          | Yes      ||
+| folly             | v2026.01.05.00  | Yes      ||
+| fizz              | v2026.01.05.00  | No       ||
+| wangle            | v2026.01.05.00  | No       ||
+| mvfst             | v2026.01.05.00  | No       ||
+| fbthrift          | v2026.01.05.00  | No       ||
+| libstemmer        | 2.2.0           | Yes      ||
+| DuckDB (testing)  | 0.8.1           | Yes      ||
+| arrow             | 15.0.0          | Yes      ||
+| geos              | 3.10.7          | Yes      ||
+| fast_float        | v8.0.2          | Yes      ||
+| xxhash            | default         | No       ||
+| thrift            | 0.16            | No       ||
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.

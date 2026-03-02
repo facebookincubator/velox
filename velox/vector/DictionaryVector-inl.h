@@ -53,18 +53,13 @@ void DictionaryVector<T>::setInternalState() {
     }
   }
   initialized_ = true;
-
-  BaseVector::inMemoryBytes_ =
-      BaseVector::nulls_ ? BaseVector::nulls_->capacity() : 0;
-  BaseVector::inMemoryBytes_ += indices_->capacity();
-  BaseVector::inMemoryBytes_ += dictionaryValues_->inMemoryBytes();
 }
 
 template <typename T>
 DictionaryVector<T>::DictionaryVector(
     velox::memory::MemoryPool* pool,
     BufferPtr nulls,
-    size_t length,
+    vector_size_t length,
     VectorPtr dictionaryValues,
     BufferPtr dictionaryIndices,
     const SimpleVectorStats<T>& stats,
@@ -77,7 +72,7 @@ DictionaryVector<T>::DictionaryVector(
           pool,
           dictionaryValues->type(),
           VectorEncoding::Simple::DICTIONARY,
-          nulls,
+          std::move(nulls),
           length,
           stats,
           distinctValueCount,
@@ -108,7 +103,8 @@ bool DictionaryVector<T>::isNullAt(vector_size_t idx) const {
 }
 
 template <typename T>
-const T DictionaryVector<T>::valueAtFast(vector_size_t idx) const {
+typename SimpleVector<T>::TValueAt DictionaryVector<T>::valueAtFast(
+    vector_size_t idx) const {
   VELOX_DCHECK(initialized_);
   if (rawDictionaryValues_) {
     return rawDictionaryValues_[getDictionaryIndex(idx)];
@@ -117,7 +113,8 @@ const T DictionaryVector<T>::valueAtFast(vector_size_t idx) const {
 }
 
 template <>
-inline const bool DictionaryVector<bool>::valueAtFast(vector_size_t idx) const {
+inline SimpleVector<bool>::TValueAt DictionaryVector<bool>::valueAtFast(
+    vector_size_t idx) const {
   VELOX_DCHECK(initialized_);
   auto innerIndex = getDictionaryIndex(idx);
   return scalarDictionaryValues_->valueAt(innerIndex);
@@ -159,6 +156,7 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
       sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
 }
 
+#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
 xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
@@ -174,6 +172,7 @@ xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     VELOX_UNREACHABLE();
   }
 }
+#endif
 
 template <typename T>
 VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)

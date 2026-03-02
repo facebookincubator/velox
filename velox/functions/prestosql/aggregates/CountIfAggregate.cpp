@@ -17,7 +17,6 @@
 #include "velox/functions/prestosql/aggregates/CountIfAggregate.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -173,7 +172,7 @@ class CountIfAggregate : public exec::Aggregate {
 } // namespace
 
 void registerCountIfAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -184,16 +183,16 @@ void registerCountIfAggregate(
           .build(),
   };
 
-  auto name = prefix + kCountIf;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           std::vector<TypePtr> argTypes,
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes one argument", name);
 
         auto isPartial = exec::isRawInput(step);
@@ -207,7 +206,7 @@ void registerCountIfAggregate(
 
         return std::make_unique<CountIfAggregate>();
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

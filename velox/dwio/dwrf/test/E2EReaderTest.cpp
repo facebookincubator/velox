@@ -73,11 +73,11 @@ class ValueTypes {
   }
 
   auto begin() const {
-    return values_.begin();
+    return values_.cbegin();
   }
 
   auto end() const {
-    return values_.end();
+    return values_.cend();
   }
 
   const std::shared_ptr<folly::Executor>& decodingExecutor() const {
@@ -244,127 +244,159 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
 INSTANTIATE_TEST_SUITE_P(
     SingleTypesSerialMap,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"tinyint"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"smallint"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"integer"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"bigint"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"string"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<tinyint>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<smallint>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<integer>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<bigint>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"tinyint"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"smallint"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"integer"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"bigint"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"string"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<tinyint>"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<smallint>"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<integer>"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<bigint>"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::MAP, {"array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     SingleTypesSerialStruct,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"tinyint"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"smallint"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"integer"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"bigint"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"string"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<tinyint>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<smallint>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<integer>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<bigint>"}),
-        ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"tinyint"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"smallint"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"integer"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"bigint"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"string"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<tinyint>"}),
+            ValueTypes(
+                Decoding::SERIAL,
+                FlatMapAs::STRUCT,
+                {"array<smallint>"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<integer>"}),
+            ValueTypes(Decoding::SERIAL, FlatMapAs::STRUCT, {"array<bigint>"}),
+            ValueTypes(
+                Decoding::SERIAL,
+                FlatMapAs::STRUCT,
+                {"array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     AllTypesSerialMap,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{ValueTypes(
-        Decoding::SERIAL,
-        FlatMapAs::MAP,
-        {"tinyint",
-         "smallint",
-         "integer",
-         "bigint",
-         "string",
-         "array<tinyint>",
-         "array<smallint>",
-         "array<integer>",
-         "array<bigint>",
-         "array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{ValueTypes(
+            Decoding::SERIAL,
+            FlatMapAs::MAP,
+            {"tinyint",
+             "smallint",
+             "integer",
+             "bigint",
+             "string",
+             "array<tinyint>",
+             "array<smallint>",
+             "array<integer>",
+             "array<bigint>",
+             "array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     AllTypesSerialStruct,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{ValueTypes(
-        Decoding::SERIAL,
-        FlatMapAs::STRUCT,
-        {"tinyint",
-         "smallint",
-         "integer",
-         "bigint",
-         "string",
-         "array<tinyint>",
-         "array<smallint>",
-         "array<integer>",
-         "array<bigint>",
-         "array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{ValueTypes(
+            Decoding::SERIAL,
+            FlatMapAs::STRUCT,
+            {"tinyint",
+             "smallint",
+             "integer",
+             "bigint",
+             "string",
+             "array<tinyint>",
+             "array<smallint>",
+             "array<integer>",
+             "array<bigint>",
+             "array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     SingleTypesParallelMap,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"tinyint"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"smallint"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"integer"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"bigint"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"string"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<tinyint>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<smallint>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<integer>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<bigint>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"tinyint"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"smallint"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"integer"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"bigint"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"string"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<tinyint>"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<smallint>"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<integer>"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::MAP, {"array<bigint>"}),
+            ValueTypes(
+                Decoding::PARALLEL,
+                FlatMapAs::MAP,
+                {"array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     SingleTypesParallelStruct,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"tinyint"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"smallint"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"integer"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"bigint"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"string"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"array<tinyint>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"array<smallint>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"array<integer>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"array<bigint>"}),
-        ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"tinyint"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"smallint"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"integer"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"bigint"}),
+            ValueTypes(Decoding::PARALLEL, FlatMapAs::STRUCT, {"string"}),
+            ValueTypes(
+                Decoding::PARALLEL,
+                FlatMapAs::STRUCT,
+                {"array<tinyint>"}),
+            ValueTypes(
+                Decoding::PARALLEL,
+                FlatMapAs::STRUCT,
+                {"array<smallint>"}),
+            ValueTypes(
+                Decoding::PARALLEL,
+                FlatMapAs::STRUCT,
+                {"array<integer>"}),
+            ValueTypes(
+                Decoding::PARALLEL,
+                FlatMapAs::STRUCT,
+                {"array<bigint>"}),
+            ValueTypes(
+                Decoding::PARALLEL,
+                FlatMapAs::STRUCT,
+                {"array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     AllTypesParallelMap,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{ValueTypes(
-        Decoding::PARALLEL,
-        FlatMapAs::MAP,
-        {"tinyint",
-         "smallint",
-         "integer",
-         "bigint",
-         "string",
-         "array<tinyint>",
-         "array<smallint>",
-         "array<integer>",
-         "array<bigint>",
-         "array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{ValueTypes(
+            Decoding::PARALLEL,
+            FlatMapAs::MAP,
+            {"tinyint",
+             "smallint",
+             "integer",
+             "bigint",
+             "string",
+             "array<tinyint>",
+             "array<smallint>",
+             "array<integer>",
+             "array<bigint>",
+             "array<string>"})}));
 
 INSTANTIATE_TEST_SUITE_P(
     AllTypesParallelStruct,
     E2EReaderTest,
-    ValuesIn(std::vector<ValueTypes>{ValueTypes(
-        Decoding::PARALLEL,
-        FlatMapAs::STRUCT,
-        {"tinyint",
-         "smallint",
-         "integer",
-         "bigint",
-         "string",
-         "array<tinyint>",
-         "array<smallint>",
-         "array<integer>",
-         "array<bigint>",
-         "array<string>"})}));
+    ValuesIn(
+        std::vector<ValueTypes>{ValueTypes(
+            Decoding::PARALLEL,
+            FlatMapAs::STRUCT,
+            {"tinyint",
+             "smallint",
+             "integer",
+             "bigint",
+             "string",
+             "array<tinyint>",
+             "array<smallint>",
+             "array<integer>",
+             "array<bigint>",
+             "array<string>"})}));

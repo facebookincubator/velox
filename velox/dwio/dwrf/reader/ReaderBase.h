@@ -199,7 +199,7 @@ class ReaderBase {
   const std::string& writerName() const {
     for (int32_t index = 0; index < footer_->metadataSize(); ++index) {
       auto entry = footer_->metadata(index);
-      if (entry.name() == WRITER_NAME_KEY) {
+      if (entry.name() == kWriterNameKey) {
         return entry.value();
       }
     }

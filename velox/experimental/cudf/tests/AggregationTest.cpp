@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -21,6 +22,8 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <cmath>
 
 namespace facebook::velox::exec::test {
 
@@ -38,6 +41,7 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
@@ -292,8 +296,9 @@ TEST_F(AggregationTest, allKeyTypes) {
 
   std::vector<RowVectorPtr> batches;
   for (auto i = 0; i < 10; ++i) {
-    batches.push_back(std::static_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rowType, 100, *pool_)));
+    batches.push_back(
+        std::static_pointer_cast<RowVector>(
+            BatchMaker::createBatch(rowType, 100, *pool_)));
   }
   createDuckDbTable(batches);
   auto op =
@@ -421,6 +426,22 @@ TEST_F(AggregationTest, avgPartialFinalGlobal) {
   assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 }
 
+TEST_F(AggregationTest, countStarGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+
+  createDuckDbTable(vectors);
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .filter("c0 > 10")
+                .project({})
+                .partialAggregation({}, {"count(*)"})
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp WHERE c0 > 10");
+}
+
 TEST_F(AggregationTest, countSingleGroupBy) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -479,6 +500,33 @@ TEST_F(AggregationTest, countPartialFinalGlobal) {
   assertQuery(op, "SELECT count(*) FROM tmp");
 }
 
+/// Tests the spark scenario of having different types of aggs in the same
+/// planNode Specific example being tested is
+/// https://github.com/facebookincubator/velox/issues/12830#issuecomment-2783340233
+TEST_F(AggregationTest, CompanionAggs) {
+  std::vector<int64_t> keys0{1, 1, 1, 2, 1, 1, 2, 2};
+  std::vector<int64_t> keys1{1, 2, 1, 2, 1, 2, 1, 2};
+  std::vector<int64_t> values{1, 2, 3, 4, 5, 6, 7, 8};
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(keys0),
+       makeFlatVector<int64_t>(keys1),
+       makeFlatVector<int64_t>(values)});
+
+  createDuckDbTable({rowVector});
+
+  auto op =
+      PlanBuilder()
+          .values({rowVector})
+          .singleAggregation({"c2", "c0"}, {"count_partial(c1)"})
+          .localPartition({"c2", "c0"})
+          .singleAggregation({"c0"}, {"count_merge(a0)", "count_partial(c2)"})
+          .localPartition({"c0"})
+          .singleAggregation({"c0"}, {"count_merge(a0)", "count_merge(a1)"})
+          .planNode();
+  assertQuery(
+      op, "SELECT c0, count(c1), count(distinct c2) FROM tmp GROUP BY c0");
+}
+
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   auto vectors = {
       makeRowVector({makeFlatVector<int32_t>(
@@ -498,12 +546,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   core::PlanNodeId aggNodeId;
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .config(QueryConfig::kMaxPartialAggregationMemory, 100)
-                  .plan(PlanBuilder()
-                            .values(vectors)
-                            .partialAggregation({"c0"}, {})
-                            .capturePlanNodeId(aggNodeId)
-                            .finalAggregation()
-                            .planNode())
+                  .plan(
+                      PlanBuilder()
+                          .values(vectors)
+                          .partialAggregation({"c0"}, {})
+                          .capturePlanNodeId(aggNodeId)
+                          .finalAggregation()
+                          .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
 
   auto rowFlushStats = toPlanStats(task->taskStats())
@@ -515,12 +564,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   // Count aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
              .config(QueryConfig::kMaxPartialAggregationMemory, 1)
-             .plan(PlanBuilder()
-                       .values(vectors)
-                       .partialAggregation({"c0"}, {"count(1)"})
-                       .capturePlanNodeId(aggNodeId)
-                       .finalAggregation()
-                       .planNode())
+             .plan(
+                 PlanBuilder()
+                     .values(vectors)
+                     .partialAggregation({"c0"}, {"count(1)"})
+                     .capturePlanNodeId(aggNodeId)
+                     .finalAggregation()
+                     .planNode())
              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 
   rowFlushStats = toPlanStats(task->taskStats())
@@ -532,18 +582,297 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   // Global aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
              .config(QueryConfig::kMaxPartialAggregationMemory, 1)
-             .plan(PlanBuilder()
-                       .values(vectors)
-                       .partialAggregation({}, {"sum(c0)"})
-                       .capturePlanNodeId(aggNodeId)
-                       .finalAggregation()
-                       .planNode())
+             .plan(
+                 PlanBuilder()
+                     .values(vectors)
+                     .partialAggregation({}, {"sum(c0)"})
+                     .capturePlanNodeId(aggNodeId)
+                     .finalAggregation()
+                     .planNode())
              .assertResults("SELECT sum(c0) FROM tmp");
   EXPECT_EQ(
       0,
       toPlanStats(task->taskStats())
           .at(aggNodeId)
           .customStats.count("flushRowCount"));
+}
+
+class EmptyInputAggregationTest : public AggregationTest {
+ protected:
+  void SetUp() override {
+    AggregationTest::SetUp();
+
+    // Common test data setup
+    data_ = makeRowVector({
+        makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+        makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+        makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+    });
+
+    createDuckDbTable({data_});
+    filter_ = "c0 > 10"; // This filter eliminates all rows
+  }
+
+  void TearDown() override {
+    // Need to clear data before plan destruction to keep memory pools happy
+    data_.reset();
+    plan_.reset();
+    filter_.clear();
+    AggregationTest::TearDown();
+  }
+
+  RowVectorPtr data_;
+  core::PlanNodePtr plan_;
+  std::string filter_;
+};
+
+TEST_F(EmptyInputAggregationTest, groupedSingleAggregation) {
+  // Test case where CUDF aggregation operator receives no input rows for
+  // grouped aggregation
+  plan_ = PlanBuilder()
+              .values({data_})
+              .filter(filter_)
+              .singleAggregation(
+                  {"c2"}, {"sum(c0)", "count(c1)", "max(c1)", "avg(c1)"})
+              .planNode();
+
+  // should return empty result for grouped aggregation
+  assertQuery(
+      plan_,
+      "SELECT c2, sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10 GROUP BY c2");
+}
+
+TEST_F(EmptyInputAggregationTest, globalSingleAggregation) {
+  // Test case where CUDF aggregation operator receives no input rows for global
+  // aggregation
+  plan_ =
+      PlanBuilder()
+          .values({data_})
+          .filter(filter_)
+          .singleAggregation({}, {"sum(c0)", "count(c1)", "max(c1)", "avg(c1)"})
+          .planNode();
+
+  // global aggregation should return one row with null/zero values
+  assertQuery(
+      plan_,
+      "SELECT sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10");
+}
+
+TEST_F(EmptyInputAggregationTest, distinctSingleAggregation) {
+  // Test case where CUDF aggregation operator receives no input rows for
+  // distinct aggregation
+  plan_ = PlanBuilder()
+              .values({data_})
+              .filter(filter_)
+              .singleAggregation({"c2"}, {})
+              .planNode();
+
+  // should return empty result for distinct aggregation
+  assertQuery(plan_, "SELECT DISTINCT c2 FROM tmp WHERE c0 > 10");
+}
+
+TEST_F(EmptyInputAggregationTest, distinctPartialFinalAggregation) {
+  // Test case where CUDF aggregation operator receives no input rows for
+  // distinct partial-final aggregation
+  plan_ = PlanBuilder()
+              .values({data_})
+              .filter(filter_)
+              .partialAggregation({"c2"}, {})
+              .finalAggregation()
+              .planNode();
+
+  // should return empty result for distinct aggregation
+  assertQuery(plan_, "SELECT DISTINCT c2 FROM tmp WHERE c0 > 10");
+}
+
+TEST_F(EmptyInputAggregationTest, groupedPartialFinalAggregation) {
+  // Test case where CUDF aggregation operator receives no input rows for
+  // partial-final aggregation
+  plan_ = PlanBuilder()
+              .values({data_})
+              .filter(filter_)
+              .partialAggregation(
+                  {"c2"}, {"sum(c0)", "count(c1)", "max(c1)", "avg(c1)"})
+              .finalAggregation()
+              .planNode();
+
+  // should return empty result for partial-final aggregation
+  assertQuery(
+      plan_,
+      "SELECT c2, sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10 GROUP BY c2");
+}
+
+TEST_F(EmptyInputAggregationTest, globalPartialFinalAggregation) {
+  // Test case where CUDF aggregation operator receives no input rows for global
+  // partial-final aggregation
+  plan_ = PlanBuilder()
+              .values({data_})
+              .filter(filter_)
+              .partialAggregation(
+                  {}, {"sum(c0)", "count(c1)", "max(c1)", "avg(c1)"})
+              .finalAggregation()
+              .planNode();
+
+  // global partial-final aggregation should return 1 row with null/zero values
+  assertQuery(
+      plan_,
+      "SELECT sum(c0), count(c1), max(c1), avg(c1) FROM tmp WHERE c0 > 10");
+}
+
+TEST_F(AggregationTest, globalApproxDistinct) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
+      makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation(
+                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(c0_estimate, 4);
+  EXPECT_LE(c0_estimate, 6);
+
+  EXPECT_GE(c1_estimate, 4);
+  EXPECT_LE(c1_estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctWithNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 3, 4, 5, 1, 2, 3}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(estimate, 4);
+  EXPECT_LE(estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctHighCardinality) {
+  std::vector<int64_t> values;
+  for (int64_t i = 0; i < 10000; ++i) {
+    values.push_back(i);
+  }
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(values),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  double error_rate =
+      std::abs(static_cast<double>(estimate) - 10000.0) / 10000.0;
+  EXPECT_LT(error_rate, 0.05);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctEmpty) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(std::vector<int64_t>{}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"approx_distinct(c0)"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_EQ(estimate, 0);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctPartialIntermediateFinal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 1, 2, 3, 4, 5}),
+      makeFlatVector<int32_t>({10, 20, 30, 40, 50, 10, 20, 30, 40, 50}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation(
+                      {}, {"approx_distinct(c0)", "approx_distinct(c1)"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto c0_estimate = result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  auto c1_estimate = result->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  EXPECT_GE(c0_estimate, 4);
+  EXPECT_LE(c0_estimate, 6);
+
+  EXPECT_GE(c1_estimate, 4);
+  EXPECT_LE(c1_estimate, 6);
+}
+
+TEST_F(AggregationTest, globalApproxDistinctWithNaN) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 2.0, std::nan(""), 4.0, std::nan(""), 1.0}),
+  });
+
+  auto planCudf = PlanBuilder()
+                      .values({data})
+                      .partialAggregation({}, {"approx_distinct(c0)"})
+                      .finalAggregation()
+                      .planNode();
+
+  auto cudfResult = AssertQueryBuilder(planCudf).copyResults(pool());
+  ASSERT_EQ(cudfResult->size(), 1);
+  auto cudfEstimate =
+      cudfResult->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+
+  cudf_velox::unregisterCudf();
+  auto planVelox = PlanBuilder()
+                       .values({data})
+                       .partialAggregation({}, {"approx_distinct(c0)"})
+                       .finalAggregation()
+                       .planNode();
+
+  auto veloxResult = AssertQueryBuilder(planVelox).copyResults(pool());
+  ASSERT_EQ(veloxResult->size(), 1);
+  auto veloxEstimate =
+      veloxResult->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
+  cudf_velox::registerCudf();
+
+  EXPECT_EQ(cudfEstimate, veloxEstimate)
+      << "CUDF and Velox should produce the same result for NaN values. "
+      << "Expected distinct count: 3 (1.0, 2.0, 4.0) plus NaN as distinct. "
+      << "CUDF result: " << cudfEstimate << ", Velox result: " << veloxEstimate;
+
+  EXPECT_GE(cudfEstimate, 3);
+  EXPECT_LE(cudfEstimate, 5);
 }
 
 } // namespace facebook::velox::exec::test

@@ -35,7 +35,7 @@ void StringColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
+  prepareRead<std::string_view>(offset, rows, incomingNulls);
   dwio::common::StringColumnReadWithVisitorHelper<true, false>(
       *this, rows)([&](auto visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
@@ -83,7 +83,7 @@ void StringColumnReader::dedictionarize() {
       }
       auto& view = dict->valueAt(indices[i]);
       numValues_ = i;
-      addStringValue(folly::StringPiece(view.data(), view.size()));
+      addStringValue(std::string_view(view.data(), view.size()));
     }
     numValues_ = numValues;
   }

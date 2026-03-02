@@ -33,9 +33,7 @@ if(${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(examples)
 endif()
 
-if(${VELOX_ENABLE_BENCHMARKS} OR ${VELOX_ENABLE_BENCHMARKS_BASIC})
-  add_subdirectory(benchmarks)
-endif()
+add_subdirectory(benchmarks)
 
 if(${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(expression)
@@ -54,15 +52,15 @@ if(${VELOX_ENABLE_TPCH_CONNECTOR})
   add_subdirectory(tpch/gen)
 endif()
 
+if(${VELOX_ENABLE_TPCDS_CONNECTOR})
+  add_subdirectory(tpcds/gen)
+endif()
+
 add_subdirectory(functions) # depends on md5 (postgresql)
 add_subdirectory(connectors)
 
 if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
-  # Disable runner from pyvelox builds
-  if(${VELOX_BUILD_RUNNER})
-    add_subdirectory(runner)
-  endif()
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})
@@ -78,11 +76,6 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     add_subdirectory(experimental/wave)
     add_subdirectory(external/jitify)
   endif()
-endif()
-
-# substrait converter
-if(${VELOX_ENABLE_SUBSTRAIT})
-  add_subdirectory(substrait)
 endif()
 
 if(${VELOX_BUILD_TESTING})

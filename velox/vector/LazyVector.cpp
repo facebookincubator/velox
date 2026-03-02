@@ -77,7 +77,8 @@ void VectorLoader::load(
     const SelectivityVector& rows,
     ValueHook* hook,
     vector_size_t resultSize,
-    VectorPtr* result) {
+    VectorPtr* result,
+    memory::MemoryPool* pool) {
   if (rows.isAllSelected()) {
     const auto& indices = DecodedVector::consecutiveIndices();
     VELOX_DCHECK(!indices.empty());
@@ -90,7 +91,7 @@ void VectorLoader::load(
       return;
     }
   }
-  raw_vector<vector_size_t> positions(rows.countSelected());
+  raw_vector<vector_size_t> positions(rows.countSelected(), pool);
   simd::indicesOfSetBits(
       rows.allBits(), rows.begin(), rows.end(), positions.data());
   load(positions, hook, resultSize, result);
@@ -191,7 +192,7 @@ void LazyVector::ensureLoadedRowsImpl(
 
   if (!baseLazyVector->isLoaded()) {
     // Create rowSet.
-    raw_vector<vector_size_t> rowNumbers;
+    raw_vector<vector_size_t> rowNumbers(baseLazyVector->pool());
     RowSet rowSet;
     if (decoded.isConstantMapping()) {
       rowNumbers.push_back(decoded.index(rows.begin()));
@@ -202,15 +203,17 @@ void LazyVector::ensureLoadedRowsImpl(
         rowSet = RowSet(iota, rows.end());
       } else {
         rowNumbers.resize(rows.end());
-        rowNumbers.resize(simd::indicesOfSetBits(
-            rows.asRange().bits(), 0, rows.end(), rowNumbers.data()));
+        rowNumbers.resize(
+            simd::indicesOfSetBits(
+                rows.asRange().bits(), 0, rows.end(), rowNumbers.data()));
         rowSet = RowSet(rowNumbers);
       }
     } else {
       selectBaseRowsToLoad(decoded, baseRows, rows);
       rowNumbers.resize(baseRows.end());
-      rowNumbers.resize(simd::indicesOfSetBits(
-          baseRows.asRange().bits(), 0, baseRows.end(), rowNumbers.data()));
+      rowNumbers.resize(
+          simd::indicesOfSetBits(
+              baseRows.asRange().bits(), 0, baseRows.end(), rowNumbers.data()));
 
       rowSet = RowSet(rowNumbers);
     }
@@ -254,6 +257,7 @@ void LazyVector::validate(const VectorValidateOptions& options) const {
 
 void LazyVector::load(RowSet rows, ValueHook* hook) const {
   VELOX_CHECK(!allLoaded_, "A LazyVector can be loaded at most once");
+  VELOX_CHECK(!hook || supportsHook());
 
   allLoaded_ = true;
   if (rows.empty()) {
@@ -280,7 +284,7 @@ void LazyVector::loadVectorInternal() const {
       vector_ = BaseVector::create(type_, 0, pool_);
     }
     SelectivityVector allRows(BaseVector::length_);
-    loader_->load(allRows, nullptr, size(), &vector_);
+    loader_->load(allRows, nullptr, size(), &vector_, pool_);
     VELOX_CHECK_NOT_NULL(vector_);
     if (vector_->encoding() == VectorEncoding::Simple::LAZY) {
       vector_ = vector_->asUnchecked<LazyVector>()->loadedVectorShared();

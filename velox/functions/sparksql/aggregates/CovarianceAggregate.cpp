@@ -40,6 +40,9 @@ struct CovarSampResultAccessor {
           "NaN is returned only when m2 is 0 and nullOnDivideByZero is false.");
       return std::numeric_limits<double>::quiet_NaN();
     }
+    if (FOLLY_UNLIKELY(std::isinf(accumulator.c2()))) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
     return accumulator.c2() / (accumulator.count() - 1);
   }
 };
@@ -47,24 +50,34 @@ struct CovarSampResultAccessor {
 template <bool nullOnDivideByZero>
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
-    if constexpr (nullOnDivideByZero) {
-      if (accumulator.count() == 1) {
+    if (accumulator.count() == 1) {
+      if constexpr (nullOnDivideByZero) {
         return false;
-      }
-      return accumulator.m2X() != 0 && accumulator.m2Y() != 0;
-    } else {
-      if (accumulator.count() == 1) {
+      } else {
         return true;
       }
-      return accumulator.m2X() != 0 && accumulator.m2Y() != 0;
     }
+
+    // Returns true if any of the following conditions are met:
+    // 1. m2Y or m2X or c2 is NaN.
+    // 2. m2Y and m2X are not zero.
+    return std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
+        std::isnan(accumulator.c2()) ||
+        (accumulator.m2Y() != 0 && accumulator.m2X() != 0);
   }
 
   static double result(const CorrAccumulator& accumulator) {
     if (accumulator.count() == 1) {
-      VELOX_CHECK(
-          !nullOnDivideByZero,
-          "NaN is returned only when m2 is 0 and nullOnDivideByZero is false.");
+      if constexpr (!nullOnDivideByZero) {
+        return std::numeric_limits<double>::quiet_NaN();
+      } else {
+        VELOX_UNREACHABLE();
+      }
+    }
+
+    if (FOLLY_UNLIKELY(
+            std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
+            std::isnan(accumulator.c2()))) {
       return std::numeric_limits<double>::quiet_NaN();
     }
     double stddevX = std::sqrt(accumulator.m2X());
@@ -77,8 +90,7 @@ template <
     typename TAccumulator,
     typename TIntermediateInput,
     typename TIntermediateResult,
-    template <bool>
-    class TResultAccessor>
+    template <bool> class TResultAccessor>
 exec::AggregateRegistrationResult registerCovariance(
     const std::string& name,
     bool withCompanionFunctions,

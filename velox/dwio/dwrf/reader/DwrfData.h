@@ -72,6 +72,10 @@ class DwrfData : public dwio::common::FormatData {
     return flatMapContext_.inMapDecoder ? inMap_->as<uint64_t>() : nullptr;
   }
 
+  const velox::BufferPtr& inMapBuffer() {
+    return inMap_;
+  }
+
   /// Seeks possible flat map in map streams and nulls to the row group
   /// and returns a PositionsProvider for the other streams.
   dwio::common::PositionProvider seekToRowGroup(int64_t index) override;
@@ -96,7 +100,7 @@ class DwrfData : public dwio::common::FormatData {
   static std::vector<uint64_t> toPositionsInner(
       const proto::RowIndexEntry& entry) {
     return std::vector<uint64_t>(
-        entry.positions().begin(), entry.positions().end());
+        entry.positions().cbegin(), entry.positions().cend());
   }
 
   memory::MemoryPool& memoryPool_;

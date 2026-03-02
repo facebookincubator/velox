@@ -129,6 +129,8 @@ class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
     topTable_->prepareJoinTable(
         std::move(otherTables_),
         BaseHashTable::kNoSpillInputStartPartitionBit,
+        1'000'000,
+        false,
         executor_.get());
     VELOX_CHECK_EQ(topTable_->hashMode(), params_.mode);
   }
@@ -180,7 +182,7 @@ class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
 
   void copyVectorsToTable(RowVectorPtr batch, BaseHashTable* table) {
     int32_t batchSize = batch->size();
-    raw_vector<uint64_t> dummy(batchSize);
+    raw_vector<uint64_t> dummy(batchSize, pool());
     auto rowContainer = table->rows();
     auto& hashers = table->hashers();
     auto numKeys = hashers.size();

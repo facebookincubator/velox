@@ -15,10 +15,11 @@
  */
 
 #include "velox/functions/remote/server/RemoteFunctionService.h"
-#include "velox/common/base/Exceptions.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/remote/if/GetSerde.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
@@ -59,8 +60,9 @@ std::vector<core::TypedExprPtr> getExpressions(
     const std::string& functionName) {
   std::vector<core::TypedExprPtr> inputs;
   for (size_t i = 0; i < inputType->size(); ++i) {
-    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-        inputType->childAt(i), inputType->nameOf(i)));
+    inputs.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            inputType->childAt(i), inputType->nameOf(i)));
   }
 
   return {std::make_shared<core::CallTypedExpr>(
@@ -102,8 +104,8 @@ void RemoteFunctionServiceHandler::handleErrors(
       BufferPtr(),
       numRows,
       std::vector<VectorPtr>{flatVector});
-  result->errorPayload_ref() =
-      rowVectorToIOBuf(errorRowVector, *pool_, serde.get());
+  result->errorPayload() =
+      rowVectorToIOBufBatch(errorRowVector, *pool_, serde.get());
 }
 
 void RemoteFunctionServiceHandler::invokeFunction(
@@ -148,11 +150,11 @@ void RemoteFunctionServiceHandler::invokeFunction(
   auto outputRowVector = std::make_shared<RowVector>(
       pool_.get(), ROW({outputType}), BufferPtr(), numRows, expressionResult);
 
-  auto result = response.result_ref();
-  result->rowCount_ref() = outputRowVector->size();
-  result->pageFormat_ref() = serdeFormat;
-  result->payload_ref() =
-      rowVectorToIOBuf(outputRowVector, rows.end(), *pool_, serde.get());
+  auto result = response.result();
+  result->rowCount() = outputRowVector->size();
+  result->pageFormat() = serdeFormat;
+  result->payload() =
+      rowVectorToIOBufBatch(outputRowVector, rows.end(), *pool_, serde.get());
 
   auto evalErrors = evalCtx.errors();
   if (evalErrors != nullptr && evalErrors->hasError()) {

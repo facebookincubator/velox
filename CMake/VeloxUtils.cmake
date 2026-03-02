@@ -12,34 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 include_guard(GLOBAL)
-function(get_rpath_origin VAR)
+
+include(CMakePackageConfigHelpers)
+
+function(velox_get_rpath_origin VAR)
   if(APPLE)
     set(_origin @loader_path)
   else()
     set(_origin "\$ORIGIN")
   endif()
-  set(${VAR}
-      ${_origin}
-      PARENT_SCOPE)
+  set(${VAR} ${_origin} PARENT_SCOPE)
 endfunction()
 
 function(pyvelox_add_module TARGET)
   pybind11_add_module(${TARGET} ${ARGN})
 
   if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
-    target_compile_definitions(
-      ${TARGET} PRIVATE PYVELOX_VERSION=${SKBUILD_PROJECT_VERSION_FULL})
+    target_compile_definitions(${TARGET} PRIVATE PYVELOX_VERSION=${SKBUILD_PROJECT_VERSION_FULL})
   else()
     target_compile_definitions(${TARGET} PRIVATE PYVELOX_VERSION=dev)
   endif()
 
   # Set the rpath so linker looks within pyvelox package for libs
-  get_rpath_origin(_origin)
+  velox_get_rpath_origin(_origin)
   set_target_properties(
-    ${TARGET} PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
-                         INSTALL_RPATH_USE_LINK_PATH TRUE)
-  install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox
-                                    COMPONENT pyvelox_libraries)
+    ${TARGET}
+    PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib" INSTALL_RPATH_USE_LINK_PATH TRUE
+  )
+  install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
 endfunction()
 
 # TODO use file sets
@@ -50,10 +50,9 @@ function(velox_install_library_headers)
     cmake_path(
       RELATIVE_PATH
       CMAKE_CURRENT_SOURCE_DIR
-      BASE_DIRECTORY
-      "${CMAKE_SOURCE_DIR}"
-      OUTPUT_VARIABLE
-      _hdr_dir)
+      BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      OUTPUT_VARIABLE _hdr_dir
+    )
     install(FILES ${_hdrs} DESTINATION include/${_hdr_dir})
   endif()
 endfunction()
@@ -70,12 +69,7 @@ function(velox_add_library TARGET)
   set(options OBJECT STATIC SHARED INTERFACE)
   set(oneValueArgs)
   set(multiValueArgs)
-  cmake_parse_arguments(
-    VELOX
-    "${options}"
-    "${oneValueArgs}"
-    "${multiValueArgs}"
-    ${ARGN})
+  cmake_parse_arguments(VELOX "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   # Remove library type specifiers from ARGN
   set(library_type)
@@ -98,8 +92,9 @@ function(velox_add_library TARGET)
     if(TARGET velox)
       # Target already exists, append sources to it.
       target_sources(velox PRIVATE ${ARGN})
-      install(TARGETS velox LIBRARY DESTINATION pyvelox
-                                    COMPONENT pyvelox_libraries)
+      if(VELOX_BUILD_PYTHON_PACKAGE)
+        install(TARGETS velox LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+      endif()
     else()
       set(_type STATIC)
       if(VELOX_BUILD_SHARED)
@@ -107,11 +102,56 @@ function(velox_add_library TARGET)
       endif()
       # Create the target if this is the first invocation.
       add_library(velox ${_type} ${ARGN})
-      set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY
-                                             ${PROJECT_BINARY_DIR}/lib)
-      set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY
-                                             ${PROJECT_BINARY_DIR}/lib)
-      install(TARGETS velox DESTINATION lib/velox)
+      set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+      set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+      install(TARGETS velox DESTINATION lib/velox EXPORT velox_targets)
+      if(VELOX_BUILD_CMAKE_PACKAGE)
+        set(package_cmake_dir "lib/cmake/Velox")
+        set(config_cmake_in "${PROJECT_SOURCE_DIR}/CMake/VeloxConfig.cmake.in")
+        set(config_cmake "${PROJECT_BINARY_DIR}/CMake/VeloxConfig.cmake")
+        configure_package_config_file(
+          "${config_cmake_in}"
+          "${config_cmake}"
+          INSTALL_DESTINATION "${package_cmake_dir}"
+        )
+        install(FILES "${config_cmake}" DESTINATION "${package_cmake_dir}")
+        set(system_dependencies)
+        if(Arrow_SOURCE STREQUAL "SYSTEM")
+          list(APPEND system_dependencies Arrow)
+        endif()
+        if(glog_SOURCE STREQUAL "SYSTEM")
+          list(APPEND system_dependencies glog)
+        endif()
+        if(VELOX_ENABLE_COMPRESSION_LZ4)
+          list(APPEND system_dependencies lz4)
+        endif()
+        if(re2_SOURCE STREQUAL "SYSTEM")
+          list(APPEND system_dependencies re2)
+        endif()
+        if(stemmer_SOURCE STREQUAL "SYSTEM")
+          list(APPEND system_dependencies stemmer)
+        endif()
+        if(VELOX_BUILD_MINIMAL_WITH_DWIO OR VELOX_ENABLE_HIVE_CONNECTOR)
+          list(APPEND system_dependencies Snappy zstd)
+        endif()
+        foreach(system_dependency ${system_dependencies})
+          set(velox_find_module "${PROJECT_SOURCE_DIR}/CMake/Find${system_dependency}.cmake")
+          if(EXISTS "${velox_find_module}")
+            install(FILES "${velox_find_module}" DESTINATION "${package_cmake_dir}")
+          endif()
+        endforeach()
+        # TODO: We can enable this once we add version to Velox.
+        # set(version_cmake "${PROJECT_BINARY_DIR}/CMake/VeloxConfigVersion.cmake")
+        # write_basic_package_version_file("${version_cmake}"
+        #                                  COMPATIBILITY SameMajorVersion)
+        # install(FILES "${version_cmake}" DESTINATION "${package_cmake_dir}")
+        install(
+          EXPORT velox_targets
+          DESTINATION "${package_cmake_dir}"
+          NAMESPACE "Velox::"
+          FILE "VeloxTargets.cmake"
+        )
+      endif()
     endif()
     # create alias for compatability
     if(NOT TARGET ${TARGET})
@@ -131,15 +171,17 @@ function(velox_link_libraries TARGET)
     # These targets follow the velox_* name for consistency but are NOT actually
     # aliases to velox when building the mono lib and need to be linked
     # explicitly (this is a hack)
-    set(explicit_targets
-        velox_exec_test_lib
-        # see velox/experimental/wave/README.md
-        velox_wave_common
-        velox_wave_decode
-        velox_wave_dwio
-        velox_wave_exec
-        velox_wave_stream
-        velox_wave_vector)
+    set(
+      explicit_targets
+      velox_exec_test_lib
+      # see velox/experimental/wave/README.md
+      velox_wave_common
+      velox_wave_decode
+      velox_wave_dwio
+      velox_wave_exec
+      velox_wave_stream
+      velox_wave_vector
+    )
 
     foreach(_arg ${ARGN})
       list(FIND explicit_targets ${_arg} _explicit)

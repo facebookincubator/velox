@@ -32,7 +32,8 @@ TEST(Decryption, NotEncrypted) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(footer, &factory);
   ASSERT_FALSE(handler->isEncrypted());
@@ -42,7 +43,8 @@ TEST(Decryption, NoKeyProvider) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   footer.mutable_encryption();
   TestDecrypterFactory factory;
   ASSERT_THROW(
@@ -53,7 +55,8 @@ TEST(Decryption, EmptyGroup) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   TestDecrypterFactory factory;
@@ -65,7 +68,8 @@ TEST(Decryption, EmptyNodes) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   auto group = enc->add_encryptiongroups();
@@ -79,7 +83,8 @@ TEST(Decryption, StatsMismatch) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   auto group = enc->add_encryptiongroups();
@@ -96,7 +101,8 @@ TEST(Decryption, KeyExistenceMismatch) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   for (size_t i = 0; i < 2; ++i) {
@@ -116,7 +122,8 @@ TEST(Decryption, ReuseStripeKey) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   auto group = enc->add_encryptiongroups();
@@ -135,7 +142,8 @@ TEST(Decryption, StripeKeyMismatch) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   auto group = enc->add_encryptiongroups();
@@ -153,7 +161,8 @@ TEST(Decryption, Basic) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:float,c:string,d:double>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   for (auto i = 0; i < 5; ++i) {
@@ -183,7 +192,8 @@ TEST(Decryption, NestedType) {
   auto type = parser.parse(
       "struct<a:int,b:map<float,map<int,double>>,c:struct<a:string,b:int>,d:array<double>>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
 
@@ -222,7 +232,8 @@ TEST(Decryption, RootNode) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:int>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
   auto group = enc->add_encryptiongroups();
@@ -238,7 +249,8 @@ TEST(Decryption, GroupOverlap) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:struct<a:float,b:double>>");
   proto::Footer footer;
-  ProtoUtils::writeType(*type, footer);
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*type, footerWrapper);
   auto enc = footer.mutable_encryption();
   enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
 

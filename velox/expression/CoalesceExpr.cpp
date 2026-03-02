@@ -14,17 +14,74 @@
  * limitations under the License.
  */
 #include "velox/expression/CoalesceExpr.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+
+TypePtr resolveTypeInt(
+    const std::vector<TypePtr>& argTypes,
+    bool allowedCoercions,
+    std::vector<TypePtr>& coercions) {
+  VELOX_CHECK_GT(
+      argTypes.size(),
+      0,
+      "COALESCE statements expect to receive at least 1 argument, but did not receive any.");
+
+  const auto numArgs = argTypes.size();
+
+  if (allowedCoercions) {
+    coercions.clear();
+    coercions.resize(numArgs);
+  }
+
+  auto resultType = argTypes[0];
+
+  for (auto i = 1; i < numArgs; i++) {
+    if (*resultType == *argTypes[i]) {
+      continue;
+    }
+
+    if (allowedCoercions && TypeCoercer::coercible(argTypes[i], resultType)) {
+      coercions[i] = resultType;
+      continue;
+    }
+
+    if (allowedCoercions && TypeCoercer::coercible(resultType, argTypes[i])) {
+      resultType = argTypes[i];
+      for (auto j = 0; j < i; j++) {
+        coercions[j] = resultType;
+      }
+      continue;
+    }
+
+    VELOX_USER_CHECK(
+        *argTypes[0] == *argTypes[i],
+        "Inputs to coalesce must have the same type. Expected {}, but got {}.",
+        argTypes[0]->toString(),
+        argTypes[i]->toString());
+  }
+
+  return resultType;
+}
+
+TypePtr resolveTypeInt(const std::vector<TypePtr>& argTypes) {
+  std::vector<TypePtr> coercions;
+  return resolveTypeInt(argTypes, false, coercions);
+}
+} // namespace
 
 CoalesceExpr::CoalesceExpr(
     TypePtr type,
     std::vector<ExprPtr>&& inputs,
     bool inputsSupportFlatNoNullsFastPath)
     : SpecialForm(
+          SpecialFormKind::kCoalesce,
           std::move(type),
           std::move(inputs),
-          kCoalesce,
+          expression::kCoalesce,
           inputsSupportFlatNoNullsFastPath,
           false /* trackCpuUsage */) {
   std::vector<TypePtr> inputTypes;
@@ -36,10 +93,10 @@ CoalesceExpr::CoalesceExpr(
       [](const ExprPtr& expr) { return expr->type(); });
 
   // Apply type checks.
-  auto expectedType = resolveType(inputTypes);
+  auto expectedType = resolveTypeInt(inputTypes);
   VELOX_CHECK(
       *expectedType == *this->type(),
-      "Coalesce expression type different than its inputs. Expected {} but got Actual {}.",
+      "Coalesce expression type different than its inputs. Expected {}, but got {}.",
       expectedType->toString(),
       this->type()->toString());
 }
@@ -85,26 +142,15 @@ void CoalesceExpr::evalSpecialForm(
   }
 }
 
-// static
-TypePtr CoalesceExpr::resolveType(const std::vector<TypePtr>& argTypes) {
-  VELOX_CHECK_GT(
-      argTypes.size(),
-      0,
-      "COALESCE statements expect to receive at least 1 argument, but did not receive any.");
-  for (auto i = 1; i < argTypes.size(); i++) {
-    VELOX_USER_CHECK(
-        *argTypes[0] == *argTypes[i],
-        "Inputs to coalesce must have the same type. Expected {}, but got {}.",
-        argTypes[0]->toString(),
-        argTypes[i]->toString());
-  }
-
-  return argTypes[0];
-}
-
 TypePtr CoalesceCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& argTypes) {
-  return CoalesceExpr::resolveType(argTypes);
+  return resolveTypeInt(argTypes);
+}
+
+TypePtr CoalesceCallToSpecialForm::resolveTypeWithCorsions(
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  return resolveTypeInt(argTypes, true, coercions);
 }
 
 ExprPtr CoalesceCallToSpecialForm::constructSpecialForm(

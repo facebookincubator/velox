@@ -15,10 +15,14 @@
  */
 
 #include "velox/expression/tests/ExpressionVerifier.h"
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include "velox/common/base/Fs.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -47,11 +51,20 @@ void logInputs(const std::vector<fuzzer::InputTestCase>& inputTestCases) {
   }
 }
 
+// Generate random id for plannode. Eventually used for fuzzer table
+// uniqueness in Presto SOT tests.
+std::string generateRandomId() {
+  auto id = boost::uuids::to_string(boost::uuids::random_generator()());
+  folly::MutableStringPiece msp(&id[0], id.size());
+  msp.replaceAll("-", "_");
+  return id;
+}
+
 core::PlanNodePtr makeSourcePlan(
     const RowVectorPtr& input,
     const std::vector<core::TypedExprPtr>& transformProjections) {
   core::PlanNodePtr source = std::make_shared<core::ValuesNode>(
-      "values", std::vector<RowVectorPtr>{input});
+      generateRandomId(), std::vector<RowVectorPtr>{input});
 
   std::vector<std::string> transformNames(transformProjections.size());
   // If we need to transform types into intermediate types, add an extra
@@ -181,12 +194,14 @@ void transformInputTestCases(
   const auto [transformedInputs, transformProjections] =
       referenceQueryRunner->inputProjections(input);
   for (const auto& expr : transformProjections) {
-    transformPlans.push_back(core::Expressions::inferTypes(
-        expr, transformedInputs[0]->type(), pool));
+    transformPlans.push_back(
+        core::Expressions::inferTypes(
+            expr, transformedInputs[0]->type(), pool));
   }
   for (int i = 0; i < transformedInputs.size(); ++i) {
-    transformedInputTestCases.push_back(fuzzer::InputTestCase{
-        transformedInputs[i], inputTestCases[i].activeRows});
+    transformedInputTestCases.push_back(
+        fuzzer::InputTestCase{
+            transformedInputs[i], inputTestCases[i].activeRows});
   }
 }
 
@@ -419,6 +434,7 @@ ExpressionVerifier::verify(
             // Throws in case only one evaluation path throws exception.
             // Otherwise, return false to signal that the expression failed.
             if (exceptionCommonPtr && exceptionReference) {
+              LOG(INFO) << "Both paths threw exception.";
               verificationStates.push_back(VerificationState::kBothPathsThrow);
             } else {
               verificationStates.push_back(

@@ -122,9 +122,10 @@ Expected<std::unique_ptr<Codec>> Codec::create(
     const CodecOptions& codecOptions) {
   if (!isAvailable(kind)) {
     auto name = compressionKindToString(kind);
-    return folly::makeUnexpected(Status::Invalid(
-        "Support for codec '{}' is either not built or not implemented.",
-        name));
+    return folly::makeUnexpected(
+        Status::Invalid(
+            "Support for codec '{}' is either not built or not implemented.",
+            name));
   }
 
   auto compressionLevel = codecOptions.compressionLevel;
@@ -155,9 +156,10 @@ Expected<std::unique_ptr<Codec>> Codec::create(
   }
   VELOX_RETURN_UNEXPECTED_IF(
       codec == nullptr,
-      Status::Invalid(fmt::format(
-          "Support for codec '{}' is either not built or not implemented.",
-          compressionKindToString(kind))));
+      Status::Invalid(
+          fmt::format(
+              "Support for codec '{}' is either not built or not implemented.",
+              compressionKindToString(kind))));
 
   VELOX_RETURN_UNEXPECTED_NOT_OK(codec->init());
 
@@ -184,8 +186,9 @@ bool Codec::isAvailable(CompressionKind kind) {
 Expected<uint64_t> Codec::getUncompressedLength(
     const uint8_t* input,
     uint64_t inputLength) const {
-  return folly::makeUnexpected(Status::Invalid(
-      "getUncompressedLength is unsupported with {} format.", name()));
+  return folly::makeUnexpected(
+      Status::Invalid(
+          "getUncompressedLength is unsupported with {} format.", name()));
 }
 
 Expected<uint64_t> Codec::compressFixedLength(
@@ -203,14 +206,16 @@ bool Codec::supportsStreamingCompression() const {
 
 Expected<std::shared_ptr<StreamingCompressor>>
 Codec::makeStreamingCompressor() {
-  return folly::makeUnexpected(Status::Invalid(
-      "Streaming compression is unsupported with {} format.", name()));
+  return folly::makeUnexpected(
+      Status::Invalid(
+          "Streaming compression is unsupported with {} format.", name()));
 }
 
 Expected<std::shared_ptr<StreamingDecompressor>>
 Codec::makeStreamingDecompressor() {
-  return folly::makeUnexpected(Status::Invalid(
-      "Streaming decompression is unsupported with {} format.", name()));
+  return folly::makeUnexpected(
+      Status::Invalid(
+          "Streaming decompression is unsupported with {} format.", name()));
 }
 
 int32_t Codec::compressionLevel() const {

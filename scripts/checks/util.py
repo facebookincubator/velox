@@ -15,7 +15,7 @@
 import gzip
 import json
 import os
-import regex
+import re
 import subprocess
 import sys
 
@@ -27,7 +27,7 @@ class attrdict(dict):
 
 class string(str):
     def extract(self, rexp):
-        return regex.match(rexp, self).group(1)
+        return re.match(rexp, self).group(1)
 
     def json(self):
         return json.loads(self, object_hook=attrdict)

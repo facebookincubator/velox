@@ -32,16 +32,18 @@ class SsdFileTestHelper;
 class SsdCacheTestHelper;
 } // namespace test
 
-/// A 64 bit word describing a SSD cache entry in an SsdFile. The low 23 bits
-/// are the size, for a maximum entry size of 8MB. The high bits are the offset.
+/// The 'fileBits_' field is a 64 bit word describing a SSD cache entry in an
+/// SsdFile. The low 23 bits are the size, for a maximum entry size of 8MB. The
+/// high 41 bits are the offset. The 'checksum_' field is optional and is used
+/// only when the checksum feature is enabled, otherwise, its value is always 0.
 class SsdRun {
  public:
   static constexpr int32_t kSizeBits = 23;
 
-  SsdRun() : fileBits_(0) {}
+  SsdRun() = default;
 
   SsdRun(uint64_t offset, uint32_t size, uint32_t checksum)
-      : fileBits_((offset << kSizeBits) | ((size - 1))), checksum_(checksum) {
+      : fileBits_((offset << kSizeBits) | (size - 1)), checksum_(checksum) {
     VELOX_CHECK_LT(offset, 1L << (64 - kSizeBits));
     VELOX_CHECK_NE(size, 0);
     VELOX_CHECK_LE(size, 1 << kSizeBits);
@@ -58,9 +60,11 @@ class SsdRun {
     checksum_ = other.checksum_;
   }
 
-  void operator=(SsdRun&& other) {
+  void operator=(SsdRun&& other) noexcept {
     fileBits_ = other.fileBits_;
     checksum_ = other.checksum_;
+    other.fileBits_ = 0;
+    other.checksum_ = 0;
   }
 
   uint64_t offset() const {
@@ -83,8 +87,8 @@ class SsdRun {
 
  private:
   // Contains the file offset and size.
-  uint64_t fileBits_;
-  uint32_t checksum_;
+  uint64_t fileBits_{0};
+  uint32_t checksum_{0};
 };
 
 /// Represents an SsdFile entry that is planned for load or being loaded. This
@@ -164,7 +168,9 @@ struct SsdCacheStats {
     deleteMetaFileErrors = tsanAtomicValue(other.deleteMetaFileErrors);
     growFileErrors = tsanAtomicValue(other.growFileErrors);
     writeSsdErrors = tsanAtomicValue(other.writeSsdErrors);
+    writeSsdNoSpaceErrors = tsanAtomicValue(other.writeSsdNoSpaceErrors);
     writeSsdDropped = tsanAtomicValue(other.writeSsdDropped);
+    writeSsdExceedEntryLimit = tsanAtomicValue(other.writeSsdExceedEntryLimit);
     writeCheckpointErrors = tsanAtomicValue(other.writeCheckpointErrors);
     readSsdErrors = tsanAtomicValue(other.readSsdErrors);
     readCheckpointErrors = tsanAtomicValue(other.readCheckpointErrors);
@@ -193,7 +199,11 @@ struct SsdCacheStats {
         deleteMetaFileErrors - other.deleteMetaFileErrors;
     result.growFileErrors = growFileErrors - other.growFileErrors;
     result.writeSsdErrors = writeSsdErrors - other.writeSsdErrors;
+    result.writeSsdNoSpaceErrors =
+        writeSsdNoSpaceErrors - other.writeSsdNoSpaceErrors;
     result.writeSsdDropped = writeSsdDropped - other.writeSsdDropped;
+    result.writeSsdExceedEntryLimit =
+        writeSsdExceedEntryLimit - other.writeSsdExceedEntryLimit;
     result.writeCheckpointErrors =
         writeCheckpointErrors - other.writeCheckpointErrors;
     result.readSsdCorruptions = readSsdCorruptions - other.readSsdCorruptions;
@@ -232,7 +242,9 @@ struct SsdCacheStats {
   tsan_atomic<uint32_t> deleteMetaFileErrors{0};
   tsan_atomic<uint32_t> growFileErrors{0};
   tsan_atomic<uint32_t> writeSsdErrors{0};
+  tsan_atomic<uint32_t> writeSsdNoSpaceErrors{0};
   tsan_atomic<uint32_t> writeSsdDropped{0};
+  tsan_atomic<uint32_t> writeSsdExceedEntryLimit{0};
   tsan_atomic<uint32_t> writeCheckpointErrors{0};
   tsan_atomic<uint32_t> readSsdErrors{0};
   tsan_atomic<uint32_t> readCheckpointErrors{0};
@@ -257,6 +269,7 @@ class SsdFile {
         bool _disableFileCow = false,
         bool _checksumEnabled = false,
         bool _checksumReadVerificationEnabled = false,
+        uint64_t _maxEntries = 0,
         folly::Executor* _executor = nullptr)
         : fileName(_fileName),
           shardId(_shardId),
@@ -266,7 +279,8 @@ class SsdFile {
           checksumEnabled(_checksumEnabled),
           checksumReadVerificationEnabled(
               _checksumEnabled && _checksumReadVerificationEnabled),
-          executor(_executor){};
+          maxEntries(_maxEntries),
+          executor(_executor) {}
 
     /// Name of cache file, used as prefix for checkpoint files.
     const std::string fileName;
@@ -279,19 +293,28 @@ class SsdFile {
 
     /// Checkpoint after every 'checkpointIntervalBytes' written into this
     /// file. 0 means no checkpointing. This is set to 0 if checkpointing fails.
-    uint64_t checkpointIntervalBytes;
+    const uint64_t checkpointIntervalBytes;
 
     /// True if copy on write should be disabled.
-    bool disableFileCow;
+    const bool disableFileCow;
 
     /// If true, checksum write to SSD is enabled.
-    bool checksumEnabled;
+    const bool checksumEnabled;
 
     /// If true, checksum read verification from SSD is enabled.
-    bool checksumReadVerificationEnabled;
+    const bool checksumReadVerificationEnabled;
+
+    /// Maximum number of SSD cache entries allowed. A value of 0 means no
+    /// limit. When the limit is reached, new entry writes will be skipped.
+    const uint64_t maxEntries;
 
     /// Executor for async fsync in checkpoint.
-    folly::Executor* executor;
+    folly::Executor* const executor;
+  };
+
+  enum class State : uint8_t {
+    kActive,
+    kNoSpace,
   };
 
   static constexpr uint64_t kRegionSize = 1 << 26; // 64MB
@@ -299,6 +322,9 @@ class SsdFile {
   /// Constructs a cache backed by filename. Discards any previous contents of
   /// filename.
   SsdFile(const Config& config);
+
+  /// Convert State to std::string.
+  static std::string stateString(State state);
 
   /// Adds entries of 'pins' to this file. 'pins' must be in read mode and
   /// those pins that are successfully added to SSD are marked as being on SSD.
@@ -386,7 +412,18 @@ class SsdFile {
   // Magic number at end of completed checkpoint file.
   static constexpr int64_t kCheckpointEndMarker = 0xcbedf11e;
 
+  // Maximum percentage of erased entries in a region before it becomes
+  // eligible for clearing and reuse. When more than 50% of a region's
+  // entries have been erased (e.g., via TTL eviction), the region can be
+  // cleared and added back to the writable regions pool.
   static constexpr int kMaxErasedSizePct = 50;
+
+  // Number of eviction candidates to consider when selecting regions to
+  // evict.
+  static constexpr int32_t kNumEvictionCandidates = 3;
+
+  // Buffer size for reading checkpoint files during recovery.
+  static constexpr int32_t kCheckpointReadBufferSize = 1 << 20; // 1MB
 
   // Updates the read count of a region.
   void regionRead(int32_t region, int32_t size) {
@@ -473,6 +510,10 @@ class SsdFile {
     if (!checkpointEnabled()) {
       return false;
     }
+    // Once no SSD space, skip the subsequent checkpointing.
+    if (state_.load() == State::kNoSpace) {
+      return false;
+    }
     return force || (bytesAfterCheckpoint_ >= checkpointIntervalBytes_);
   }
 
@@ -548,6 +589,12 @@ class SsdFile {
   // Shard index within 'cache_'.
   const int32_t shardId_;
 
+  // Maximum number of SSD cache entries allowed in this file. 0 means no limit.
+  const uint64_t maxEntries_;
+
+  // Executor for async fsync in checkpoint.
+  folly::Executor* const executor_;
+
   // Serializes access to all private data members.
   mutable std::shared_mutex mutex_;
 
@@ -578,6 +625,8 @@ class SsdFile {
   // Map of file number and offset to location in file.
   folly::F14FastMap<FileCacheKey, SsdRun> entries_;
 
+  std::atomic<State> state_{State::kActive};
+
   // File system.
   std::shared_ptr<filesystems::FileSystem> fs_;
 
@@ -603,9 +652,6 @@ class SsdFile {
   // means no checkpointing. This is set to 0 if checkpointing fails.
   int64_t checkpointIntervalBytes_{0};
 
-  // Executor for async fsync in checkpoint.
-  folly::Executor* executor_;
-
   // Count of bytes written after last checkpoint.
   std::atomic<uint64_t> bytesAfterCheckpoint_{0};
 
@@ -622,4 +668,16 @@ class SsdFile {
   friend class test::SsdCacheTestHelper;
 };
 
+std::ostream& operator<<(std::ostream& out, const SsdFile::State& state);
+
 } // namespace facebook::velox::cache
+
+template <>
+struct fmt::formatter<facebook::velox::cache::SsdFile::State>
+    : formatter<std::string> {
+  auto format(facebook::velox::cache::SsdFile::State state, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        facebook::velox::cache::SsdFile::stateString(state), ctx);
+  }
+};

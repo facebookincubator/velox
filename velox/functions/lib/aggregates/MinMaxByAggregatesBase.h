@@ -310,7 +310,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     if (decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (checkNestedNulls(
-                decodedComparison_, indices, i, throwOnNestedNulls_)) {
+                decodedComparison_, i, indices[i], throwOnNestedNulls_)) {
           return;
         }
         updateValues(
@@ -324,7 +324,8 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         if (throwOnNestedNulls_) {
-          checkNestedNulls(decodedComparison_, indices, i, throwOnNestedNulls_);
+          checkNestedNulls(
+              decodedComparison_, i, indices[i], throwOnNestedNulls_);
         }
         updateValues(
             groups[i], decodedValue_, decodedComparison_, i, false, mayUpdate);
@@ -388,12 +389,14 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     // the maximum.
     decodedValue_.decode(*args[0], rows);
     decodedComparison_.decode(*args[1], rows);
-    const auto* indices = decodedComparison_.indices();
 
     if (decodedValue_.isConstantMapping() &&
         decodedComparison_.isConstantMapping()) {
       if (checkNestedNulls(
-              decodedComparison_, indices, 0, throwOnNestedNulls_)) {
+              decodedComparison_,
+              0,
+              decodedComparison_.index(0),
+              throwOnNestedNulls_)) {
         return;
       }
       updateValues(
@@ -403,11 +406,14 @@ class MinMaxByAggregateBase : public exec::Aggregate {
           0,
           decodedValue_.isNullAt(0),
           mayUpdate);
-    } else if (
-        decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
+      return;
+    }
+
+    const auto* indices = decodedComparison_.indices();
+    if (decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (checkNestedNulls(
-                decodedComparison_, indices, i, throwOnNestedNulls_)) {
+                decodedComparison_, i, indices[i], throwOnNestedNulls_)) {
           return;
         }
         updateValues(
@@ -421,7 +427,8 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         if (throwOnNestedNulls_) {
-          checkNestedNulls(decodedComparison_, indices, i, throwOnNestedNulls_);
+          checkNestedNulls(
+              decodedComparison_, i, indices[i], throwOnNestedNulls_);
         }
         updateValues(
             group, decodedValue_, decodedComparison_, i, false, mayUpdate);
@@ -573,8 +580,12 @@ class MinMaxByAggregateBase : public exec::Aggregate {
 };
 
 template <
-    template <typename U, typename V, bool B1, class C, bool B2>
-    class Aggregate,
+    template <
+        typename U,
+        typename V,
+        bool B1,
+        class C,
+        bool B2> class Aggregate,
     bool isMaxFunc,
     class Comparator,
     bool compareTypeUsesCustomComparison,
@@ -682,8 +693,12 @@ std::unique_ptr<exec::Aggregate> create(
 }
 
 template <
-    template <typename U, typename V, bool B1, class C, bool B2>
-    class Aggregate,
+    template <
+        typename U,
+        typename V,
+        bool B1,
+        class C,
+        bool B2> class Aggregate,
     class Comparator,
     bool isMaxFunc,
     bool compareTypeUsesCustomComparison = false>

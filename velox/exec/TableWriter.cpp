@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/TableWriter.h"
-
-#include "HashAggregation.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -24,7 +22,7 @@ namespace facebook::velox::exec {
 TableWriter::TableWriter(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const std::shared_ptr<const core::TableWriteNode>& tableWriteNode)
+    const core::TableWriteNodePtr& tableWriteNode)
     : Operator(
           driverCtx,
           tableWriteNode->outputType(),
@@ -32,7 +30,7 @@ TableWriter::TableWriter(
           tableWriteNode->id(),
           "TableWrite",
           tableWriteNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(operatorId, "TableWrite")
               : std::nullopt),
       driverCtx_(driverCtx),
       connectorPool_(driverCtx_->task->addConnectorPoolLocked(
@@ -44,18 +42,22 @@ TableWriter::TableWriter(
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
       commitStrategy_(tableWriteNode->commitStrategy()),
-      createTimeUs_(getCurrentTimeNano()) {
+      createTimeNs_(getCurrentTimeNano()) {
   setConnectorMemoryReclaimer();
   if (tableWriteNode->outputType()->size() == 1) {
-    VELOX_USER_CHECK_NULL(tableWriteNode->aggregationNode());
+    VELOX_USER_CHECK(!tableWriteNode->columnStatsSpec().has_value());
   } else {
     VELOX_USER_CHECK(tableWriteNode->outputType()->equivalent(
-        *(TableWriteTraits::outputType(tableWriteNode->aggregationNode()))));
+        *(TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()))));
   }
 
-  if (tableWriteNode->aggregationNode() != nullptr) {
-    aggregation_ = std::make_unique<HashAggregation>(
-        operatorId, driverCtx, tableWriteNode->aggregationNode());
+  if (tableWriteNode->columnStatsSpec().has_value()) {
+    statsCollector_ = std::make_unique<ColumnStatsCollector>(
+        tableWriteNode->columnStatsSpec().value(),
+        tableWriteNode->sources()[0]->outputType(),
+        &operatorCtx_->driverCtx()->queryConfig(),
+        operatorCtx_->pool(),
+        &nonReclaimableSection_);
   }
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
@@ -68,7 +70,7 @@ TableWriter::TableWriter(
 }
 
 void TableWriter::setTypeMappings(
-    const std::shared_ptr<const core::TableWriteNode>& tableWriteNode) {
+    const core::TableWriteNodePtr& tableWriteNode) {
   auto outputNames = tableWriteNode->columnNames();
   auto outputTypes = tableWriteNode->columns()->children();
 
@@ -95,8 +97,8 @@ void TableWriter::initialize() {
   Operator::initialize();
   VELOX_CHECK_NULL(dataSink_);
   createDataSink();
-  if (aggregation_ != nullptr) {
-    aggregation_->initialize();
+  if (statsCollector_ != nullptr) {
+    statsCollector_->initialize();
   }
 }
 
@@ -159,15 +161,15 @@ void TableWriter::addInput(RowVectorPtr input) {
   numWrittenRows_ += input->size();
   updateStats(dataSink_->stats());
 
-  if (aggregation_ != nullptr) {
-    aggregation_->addInput(input);
+  if (statsCollector_ != nullptr) {
+    statsCollector_->addInput(input);
   }
 }
 
 void TableWriter::noMoreInput() {
   Operator::noMoreInput();
-  if (aggregation_ != nullptr) {
-    aggregation_->noMoreInput();
+  if (statsCollector_ != nullptr) {
+    statsCollector_->noMoreInput();
   }
 }
 
@@ -185,11 +187,11 @@ RowVectorPtr TableWriter::getOutput() {
     return nullptr;
   }
 
-  if (aggregation_ != nullptr && !aggregation_->isFinished()) {
+  if (statsCollector_ != nullptr && !statsCollector_->finished()) {
     const std::string commitContext = createTableCommitContext(false);
     return TableWriteTraits::createAggregationStatsOutput(
         outputType_,
-        aggregation_->getOutput(),
+        statsCollector_->getOutput(),
         StringView(commitContext),
         pool());
   }
@@ -253,11 +255,12 @@ RowVectorPtr TableWriter::getOutput() {
       writtenRowsVector, fragmentsVector, commitContextVector};
 
   // 4. Set null statistics columns.
-  if (aggregation_ != nullptr) {
+  if (statsCollector_ != nullptr) {
     for (int i = TableWriteTraits::kStatsChannel; i < outputType_->size();
          ++i) {
-      columns.push_back(BaseVector::createNullConstant(
-          outputType_->childAt(i), writtenRowsVector->size(), pool()));
+      columns.push_back(
+          BaseVector::createNullConstant(
+              outputType_->childAt(i), writtenRowsVector->size(), pool()));
     }
   }
 
@@ -271,14 +274,14 @@ std::string TableWriter::createTableCommitContext(bool lastOutput) {
       folly::dynamic::object
           (TableWriteTraits::kLifeSpanContextKey, "TaskWide")
           (TableWriteTraits::kTaskIdContextKey, connectorQueryCtx_->taskId())
-          (TableWriteTraits::kCommitStrategyContextKey, commitStrategyToString(commitStrategy_))
+          (TableWriteTraits::kCommitStrategyContextKey, connector::CommitStrategyName::toName(commitStrategy_))
           (TableWriteTraits::klastPageContextKey, lastOutput));
   // clang-format on
 }
 
 void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
   const auto currentTimeNs = getCurrentTimeNano();
-  VELOX_CHECK_GE(currentTimeNs, createTimeUs_);
+  VELOX_CHECK_GE(currentTimeNs, createTimeNs_);
   {
     auto lockedStats = stats_.wlock();
     lockedStats->physicalWrittenBytes = stats.numWrittenBytes;
@@ -312,10 +315,10 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
     lockedStats->addRuntimeStat(
         kRunningWallNanos,
         RuntimeCounter(
-            currentTimeNs - createTimeUs_, RuntimeCounter::Unit::kNanos));
+            currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
-    *spillStats_.wlock() += stats.spillStats;
+    *spillStats_ += stats.spillStats;
   }
 }
 
@@ -325,8 +328,8 @@ void TableWriter::close() {
     // regular close.
     abortDataSink();
   }
-  if (aggregation_ != nullptr) {
-    aggregation_->close();
+  if (statsCollector_ != nullptr) {
+    statsCollector_->close();
   }
   Operator::close();
 }
@@ -334,8 +337,9 @@ void TableWriter::close() {
 void TableWriter::setConnectorMemoryReclaimer() {
   VELOX_CHECK_NOT_NULL(connectorPool_);
   if (connectorPool_->parent()->reclaimer() != nullptr) {
-    connectorPool_->setReclaimer(TableWriter::ConnectorReclaimer::create(
-        spillConfig_, operatorCtx_->driverCtx(), this));
+    connectorPool_->setReclaimer(
+        TableWriter::ConnectorReclaimer::create(
+            spillConfig_, operatorCtx_->driverCtx(), this));
   }
 }
 
@@ -403,105 +407,4 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
   return ParallelMemoryReclaimer::reclaim(pool, targetBytes, maxWaitMs, stats);
 }
 
-// static
-RowVectorPtr TableWriteTraits::createAggregationStatsOutput(
-    RowTypePtr outputType,
-    RowVectorPtr aggregationOutput,
-    StringView tableCommitContext,
-    velox::memory::MemoryPool* pool) {
-  // TODO: record aggregation stats output time.
-  if (aggregationOutput == nullptr) {
-    return nullptr;
-  }
-  VELOX_CHECK_GT(aggregationOutput->childrenSize(), 0);
-  const vector_size_t numOutputRows = aggregationOutput->childAt(0)->size();
-  std::vector<VectorPtr> columns;
-  for (int channel = 0; channel < outputType->size(); channel++) {
-    if (channel < TableWriteTraits::kContextChannel) {
-      // 1. Set null rows column.
-      // 2. Set null fragments column.
-      columns.push_back(BaseVector::createNullConstant(
-          outputType->childAt(channel), numOutputRows, pool));
-      continue;
-    }
-    if (channel == TableWriteTraits::kContextChannel) {
-      // 3. Set commitcontext column.
-      columns.push_back(std::make_shared<ConstantVector<StringView>>(
-          pool,
-          numOutputRows,
-          false /*isNull*/,
-          VARBINARY(),
-          std::move(tableCommitContext)));
-      continue;
-    }
-    // 4. Set statistics columns.
-    columns.push_back(
-        aggregationOutput->childAt(channel - TableWriteTraits::kStatsChannel));
-  }
-  return std::make_shared<RowVector>(
-      pool, outputType, nullptr, numOutputRows, columns);
-}
-
-std::string TableWriteTraits::rowCountColumnName() {
-  static const std::string kRowCountName = "rows";
-  return kRowCountName;
-}
-
-std::string TableWriteTraits::fragmentColumnName() {
-  static const std::string kFragmentName = "fragments";
-  return kFragmentName;
-}
-
-std::string TableWriteTraits::contextColumnName() {
-  static const std::string kContextName = "commitcontext";
-  return kContextName;
-}
-
-const TypePtr& TableWriteTraits::rowCountColumnType() {
-  static const TypePtr kRowCountType = BIGINT();
-  return kRowCountType;
-}
-
-const TypePtr& TableWriteTraits::fragmentColumnType() {
-  static const TypePtr kFragmentType = VARBINARY();
-  return kFragmentType;
-}
-
-const TypePtr& TableWriteTraits::contextColumnType() {
-  static const TypePtr kContextType = VARBINARY();
-  return kContextType;
-}
-
-const RowTypePtr TableWriteTraits::outputType(
-    const std::shared_ptr<core::AggregationNode>& aggregationNode) {
-  static const auto kOutputTypeWithoutStats =
-      ROW({rowCountColumnName(), fragmentColumnName(), contextColumnName()},
-          {rowCountColumnType(), fragmentColumnType(), contextColumnType()});
-  if (aggregationNode == nullptr) {
-    return kOutputTypeWithoutStats;
-  }
-  return kOutputTypeWithoutStats->unionWith(aggregationNode->outputType());
-}
-
-folly::dynamic TableWriteTraits::getTableCommitContext(
-    const RowVectorPtr& input) {
-  VELOX_CHECK_GT(input->size(), 0);
-  auto* contextVector =
-      input->childAt(kContextChannel)->as<SimpleVector<StringView>>();
-  return folly::parseJson(contextVector->valueAt(input->size() - 1));
-}
-
-int64_t TableWriteTraits::getRowCount(const RowVectorPtr& output) {
-  VELOX_CHECK_GT(output->size(), 0);
-  auto rowCountVector =
-      output->childAt(kRowCountChannel)->asFlatVector<int64_t>();
-  VELOX_CHECK_NOT_NULL(rowCountVector);
-  int64_t rowCount{0};
-  for (int i = 0; i < output->size(); ++i) {
-    if (!rowCountVector->isNullAt(i)) {
-      rowCount += rowCountVector->valueAt(i);
-    }
-  }
-  return rowCount;
-}
 } // namespace facebook::velox::exec

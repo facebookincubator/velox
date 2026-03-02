@@ -81,7 +81,7 @@ struct AllocationRange {
         firstRowOffset(roundUp64(capacity / rowSize) / 8),
         rowOffset(firstRowOffset),
         stringOffset(capacity) {
-    ::memset(reinterpret_cast<char*>(base), 0, firstRowOffset);
+    ::memset(reinterpret_cast<uint8_t*>(base), 0, firstRowOffset);
   }
 
   AllocationRange(AllocationRange&& other) {
@@ -92,7 +92,7 @@ struct AllocationRange {
 
   void operator=(AllocationRange&& other) {
     *this = other;
-    memset(&other, 0, sizeof(AllocationRange));
+    memset(reinterpret_cast<uint8_t*>(&other), 0, sizeof(AllocationRange));
   }
 
   int64_t availableFixed() {

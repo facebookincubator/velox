@@ -17,6 +17,7 @@
 #include <fstream>
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 
 namespace facebook::velox {
 
@@ -247,10 +248,11 @@ void writeStringViews(
   std::vector<BufferMetadata> sortedStringBuffers;
   sortedStringBuffers.reserve(stringBuffers.size());
   for (int64_t i = 0; i < stringBuffers.size(); ++i) {
-    sortedStringBuffers.push_back(BufferMetadata{
-        stringBuffers[i]->as<char>(),
-        stringBuffers[i]->as<char>() + stringBuffers[i]->size(),
-        i});
+    sortedStringBuffers.push_back(
+        BufferMetadata{
+            stringBuffers[i]->as<char>(),
+            stringBuffers[i]->as<char>() + stringBuffers[i]->size(),
+            i});
   }
 
   std::sort(

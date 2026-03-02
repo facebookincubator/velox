@@ -15,12 +15,37 @@
  */
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
+#include <iostream>
+#include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/exec/Split.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
 
-DEFINE_string(data_format, "parquet", "Data format");
+namespace {
 
-DEFINE_validator(
-    data_format,
-    &facebook::velox::QueryBenchmarkBase::validateDataFormat);
+bool validateDataFormat(const char* flagname, const std::string& value) {
+  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
+    return true;
+  }
+  std::cout
+      << fmt::format(
+             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
+             flagname,
+             value)
+      << std::endl;
+  return false;
+}
+} // namespace
+
+DEFINE_string(data_format, "parquet", "Data format: parquet or dwrf.");
+
+DEFINE_validator(data_format, &validateDataFormat);
 
 DEFINE_bool(
     include_custom_stats,
@@ -97,20 +122,24 @@ using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox {
 
-//  static
-bool QueryBenchmarkBase::validateDataFormat(
-    const char* flagname,
-    const std::string& value) {
-  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
-    return true;
+std::string RunStats::toString(bool detail) const {
+  std::stringstream out;
+  out << succinctNanos(micros * 1000) << " "
+      << succinctBytes(rawInputBytes / (micros / 1000000.0)) << "/s raw, "
+      << succinctNanos(userNanos) << " user " << succinctNanos(systemNanos)
+      << " system (" << (100 * (userNanos + systemNanos) / (micros * 1000))
+      << "%)";
+  if (!flags.empty()) {
+    out << " flags: ";
+    for (auto& pair : flags) {
+      out << pair.first << "=" << pair.second << " ";
+    }
   }
-  std::cout
-      << fmt::format(
-             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
-             flagname,
-             value)
-      << std::endl;
-  return false;
+  out << std::endl << "======" << std::endl;
+  if (detail) {
+    out << std::endl << output << std::endl;
+  }
+  return out.str();
 }
 
 // static
@@ -175,6 +204,20 @@ void QueryBenchmarkBase::initialize() {
       std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
 
   // Add new values into the hive configuration...
+  auto properties = makeConnectorProperties();
+
+  // Create hive connector with config...
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector =
+      factory.newConnector(kHiveConnectorId, properties, ioExecutor_.get());
+  connector::registerConnector(hiveConnector);
+  parquet::registerParquetReaderFactory();
+  dwrf::registerDwrfReaderFactory();
+}
+
+std::shared_ptr<config::ConfigBase>
+QueryBenchmarkBase::makeConnectorProperties() {
+  // Default behaviour identical to the original hard-coded version.
   auto configurationValues = std::unordered_map<std::string, std::string>();
   configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
       std::to_string(FLAGS_max_coalesced_bytes);
@@ -182,19 +225,8 @@ void QueryBenchmarkBase::initialize() {
       FLAGS_max_coalesced_distance_bytes;
   configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
       std::to_string(FLAGS_parquet_prefetch_rowgroups);
-  auto properties = std::make_shared<const config::ConfigBase>(
-      std::move(configurationValues));
-
-  // Create hive connector with config...
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
-  connector::registerConnector(hiveConnector);
-  parquet::registerParquetReaderFactory();
-  dwrf::registerDwrfReaderFactory();
+  return std::make_shared<config::ConfigBase>(
+      std::move(configurationValues), true);
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -218,13 +250,16 @@ void QueryBenchmarkBase::shutdown() {
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
+QueryBenchmarkBase::run(
+    const TpchPlan& tpchPlan,
+    const std::unordered_map<std::string, std::string>& queryConfigs) {
   int32_t repeat = 0;
   try {
     for (;;) {
       CursorParameters params;
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
+      params.queryConfigs = queryConfigs;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
@@ -326,10 +361,14 @@ void QueryBenchmarkBase::runCombinations(int32_t level) {
       auto tvNanos = [](struct timeval tv) {
         return tv.tv_sec * 1000000000 + tv.tv_usec * 1000;
       };
-      stats.userNanos = tvNanos(final.ru_utime) - tvNanos(start.ru_utime);
-      stats.systemNanos = tvNanos(final.ru_stime) - tvNanos(start.ru_stime);
+      if (!stats.userNanos) {
+        stats.userNanos = tvNanos(final.ru_utime) - tvNanos(start.ru_utime);
+        stats.systemNanos = tvNanos(final.ru_stime) - tvNanos(start.ru_stime);
+      }
     }
-    stats.micros = micros;
+    if (!stats.micros) {
+      stats.micros = micros;
+    }
     stats.output = result.str();
     for (auto i = 0; i < parameters_.size(); ++i) {
       std::string name;
@@ -340,12 +379,19 @@ void QueryBenchmarkBase::runCombinations(int32_t level) {
   } else {
     auto& flag = parameters_[level].flag;
     for (auto& value : parameters_[level].values) {
-      std::string result =
-          gflags::SetCommandLineOption(flag.c_str(), value.c_str());
-      if (result.empty()) {
-        LOG(ERROR) << "Failed to set " << flag << "=" << value;
+      if (flag.substr(0, 2) == "s-") {
+        auto config = flag.substr(2, flag.size() - 2);
+        config_[config] = value;
+        std::cout << "Set session config " << config << " = " << value
+                  << std::endl;
+      } else {
+        std::string result =
+            gflags::SetCommandLineOption(flag.c_str(), value.c_str());
+        if (result.empty()) {
+          LOG(ERROR) << "Failed to set " << flag << "=" << value;
+        }
+        std::cout << result << std::endl;
       }
-      std::cout << result << std::endl;
       runCombinations(level + 1);
     }
   }

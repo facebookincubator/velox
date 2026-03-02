@@ -232,6 +232,7 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
   }
   output.resize(outputBuffer - output.data());
 }
+
 } // namespace detail
 
 template <typename T>

@@ -56,11 +56,29 @@ class HdfsFileSystem::Impl {
   }
 
   ~Impl() {
-    LOG(INFO) << "Disconnecting HDFS file system";
-    int disconnectResult = driver_->Disconnect(hdfsClient_);
-    if (disconnectResult != 0) {
-      LOG(WARNING) << "hdfs disconnect failure in HdfsReadFile close: "
-                   << errno;
+    if (!closed_) {
+      LOG(WARNING)
+          << "The HdfsFileSystem instance is not closed upon destruction. You must explicitly call the close() API before JVM termination to ensure proper disconnection.";
+    }
+  }
+
+  // The HdfsFileSystem::Disconnect operation requires the JVM method
+  // definitions to be loaded within an active JVM process.
+  // Therefore, it must be invoked before the JVM shuts down.
+
+  // To address this, we’ve introduced a new close() API that performs the
+  // disconnect operation. Third-party applications can call this close() method
+  // prior to JVM termination to ensure proper cleanup.
+  void close() {
+    if (!closed_) {
+      LOG(WARNING) << "Disconnecting HDFS file system";
+      int disconnectResult = driver_->Disconnect(hdfsClient_);
+      if (disconnectResult != 0) {
+        LOG(WARNING) << "hdfs disconnect failure in HdfsReadFile close: "
+                     << errno;
+      }
+
+      closed_ = true;
     }
   }
 
@@ -75,6 +93,7 @@ class HdfsFileSystem::Impl {
  private:
   hdfsFS hdfsClient_;
   filesystems::arrow::io::internal::LibHdfsShim* driver_;
+  bool closed_ = false;
 };
 
 HdfsFileSystem::HdfsFileSystem(
@@ -91,7 +110,7 @@ std::string HdfsFileSystem::name() const {
 std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  // Only remove the schema for hdfs path.
+  // Only remove the scheme for hdfs path.
   if (path.find(kScheme) == 0) {
     path.remove_prefix(kScheme.length());
     if (auto index = path.find('/')) {
@@ -107,6 +126,10 @@ std::unique_ptr<WriteFile> HdfsFileSystem::openFileForWrite(
     const FileOptions& /*unused*/) {
   return std::make_unique<HdfsWriteFile>(
       impl_->hdfsShim(), impl_->hdfsClient(), path);
+}
+
+void HdfsFileSystem::close() {
+  impl_->close();
 }
 
 bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
@@ -129,11 +152,11 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     // Fall back to get a fixed endpoint from config.
     auto hdfsHost = config->get<std::string>("hive.hdfs.host");
     VELOX_CHECK(
-        hdfsHost.hasValue(),
+        hdfsHost.has_value(),
         "hdfsHost is empty, configuration missing for hdfs host");
     auto hdfsPort = config->get<std::string>("hive.hdfs.port");
     VELOX_CHECK(
-        hdfsPort.hasValue(),
+        hdfsPort.has_value(),
         "hdfsPort is empty, configuration missing for hdfs port");
     return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
   }
@@ -152,7 +175,131 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
 }
 
 void HdfsFileSystem::remove(std::string_view path) {
-  VELOX_UNSUPPORTED("Does not support removing files from hdfs");
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->Delete(impl_->hdfsClient(), path.data(), 0),
+      0,
+      "Cannot delete file : {} in HDFS, error is : {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+}
+
+std::vector<std::string> HdfsFileSystem::list(std::string_view path) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  std::vector<std::string> result;
+  int numEntries;
+
+  auto fileInfo = impl_->hdfsShim()->ListDirectory(
+      impl_->hdfsClient(), path.data(), &numEntries);
+
+  VELOX_CHECK_NOT_NULL(
+      fileInfo,
+      "Unable to list the files in path {}. got error: {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+
+  for (auto i = 0; i < numEntries; i++) {
+    result.emplace_back(fileInfo[i].mName);
+  }
+
+  impl_->hdfsShim()->FreeFileInfo(fileInfo, numEntries);
+
+  return result;
+}
+
+bool HdfsFileSystem::exists(std::string_view path) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  return impl_->hdfsShim()->Exists(impl_->hdfsClient(), path.data()) == 0;
+}
+
+void HdfsFileSystem::mkdir(
+    std::string_view path,
+    const DirectoryOptions& options) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->MakeDirectory(impl_->hdfsClient(), path.data()),
+      0,
+      "Cannot mkdir {} in HDFS, error is : {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+}
+
+void HdfsFileSystem::rename(
+    std::string_view path,
+    std::string_view newPath,
+    bool overWrite) {
+  VELOX_CHECK_EQ(
+      overWrite, false, "HdfsFileSystem::rename doesn't support overwrite");
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  // Only remove the scheme for hdfs path.
+  if (newPath.find(kScheme) == 0) {
+    newPath.remove_prefix(kScheme.length());
+    if (auto index = newPath.find('/')) {
+      newPath.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->Rename(
+          impl_->hdfsClient(), path.data(), newPath.data()),
+      0,
+      "Cannot rename file from {} to {} in HDFS, error is : {}",
+      path,
+      newPath,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
+}
+
+void HdfsFileSystem::rmdir(std::string_view path) {
+  // Only remove the scheme for hdfs path.
+  if (path.find(kScheme) == 0) {
+    path.remove_prefix(kScheme.length());
+    if (auto index = path.find('/')) {
+      path.remove_prefix(index);
+    }
+  }
+
+  VELOX_CHECK_EQ(
+      impl_->hdfsShim()->Delete(
+          impl_->hdfsClient(), path.data(), /*recursive=*/true),
+      0,
+      "Cannot remove directory {} recursively in HDFS, error is : {}",
+      path,
+      impl_->hdfsShim()->GetLastExceptionRootCause());
 }
 
 } // namespace facebook::velox::filesystems

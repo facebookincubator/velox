@@ -17,7 +17,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SumAggregateBase.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -153,7 +152,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
 } // namespace
 
 void registerCountAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -169,21 +168,20 @@ void registerCountAggregate(
           .build(),
   };
 
-  auto name = prefix + kCount;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+            argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<CountAggregate>();
       },
-      {false /*orderSensitive*/, false /*companionFunction*/},
+      {.orderSensitive = false},
       withCompanionFunctions,
       overwrite);
 }

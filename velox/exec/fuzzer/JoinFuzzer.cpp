@@ -88,6 +88,7 @@ class JoinFuzzer {
     opts.stringVariableLength = true;
     opts.stringLength = 100;
     opts.nullRatio = FLAGS_null_ratio;
+    opts.useRandomNullPattern = true;
     opts.timestampPrecision =
         VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
     return opts;
@@ -205,14 +206,11 @@ JoinFuzzer::JoinFuzzer(
   // Make sure not to run out of open file descriptors.
   std::unordered_map<std::string, std::string> hiveConfig = {
       {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  auto hiveConnector =
-      connector::getConnectorFactory(
-          connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(
-              test::kHiveConnectorId,
-              std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
+
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      test::kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();

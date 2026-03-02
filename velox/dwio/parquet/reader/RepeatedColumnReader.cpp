@@ -153,8 +153,6 @@ void MapColumnReader::seekToRowGroup(int64_t index) {
   BufferPtr noBuffer;
   formatData_->as<ParquetData>().setNulls(noBuffer, 0);
   lengths_.setLengths(nullptr);
-  keyReader_->seekToRowGroup(index);
-  elementReader_->seekToRowGroup(index);
 }
 
 void MapColumnReader::skipUnreadLengths() {

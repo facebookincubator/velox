@@ -50,9 +50,10 @@ void generateJsonTyped(
         std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (!legacyCast) {
         if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-          result.append(fmt::format(
-              "\"{}\"",
-              util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+          result.append(
+              fmt::format(
+                  "\"{}\"",
+                  util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
         } else {
           result.append(
               util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
@@ -1192,8 +1193,8 @@ bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
       }
       return true;
     case TypeKind::MAP:
-      if (other->childAt(1)->isUnKnown()) {
-        if (other->childAt(0)->isUnKnown()) {
+      if (other->childAt(1)->isUnknown()) {
+        if (other->childAt(0)->isUnknown()) {
           return true;
         }
         return isSupportedBasicType(other->childAt(0)) &&

@@ -22,6 +22,9 @@ on:
       - CMakeLists.txt
       - CMake/**
       - scripts/setup-macos.sh
+      - scripts/setup-common.sh
+      - scripts/setup-versions.sh
+      - scripts/setup-helper-functions.sh
       - .github/workflows/macos.yml
 
   pull_request:
@@ -31,6 +34,9 @@ on:
       - CMakeLists.txt
       - CMake/**
       - scripts/setup-macos.sh
+      - scripts/setup-common.sh
+      - scripts/setup-versions.sh
+      - scripts/setup-helper-functions.sh
       - .github/workflows/macos.yml
 
 permissions:
@@ -43,22 +49,20 @@ concurrency:
 jobs:
   macos-build:
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: ${{ matrix.os }}
+    name: macos-15-${{ matrix.type }}
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 = x86_64 Mac
-        # macos-14 = arm64 Mac
-        os: [macos-13, macos-14]
-    runs-on: ${{ matrix.os }}
+        # macos-15 = arm64 Mac and cmake 4.0 with 7GB RAM
+        type: [debug, release]
+    runs-on: macos-15
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
-      # The arm runners have only 7GB RAM
-      BUILD_TYPE: ${{ matrix.os ==  'macos-14' && 'Release' || 'Debug' }}
+      BUILD_TYPE: ${{ matrix.type }}
       INSTALL_PREFIX: /tmp/deps-install
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
@@ -70,20 +74,25 @@ jobs:
           source scripts/setup-macos.sh
           install_build_prerequisites
           install_velox_deps_from_brew
+          install_gflags
+          install_glog
           # Needed for faiss to find BLAS
           install_faiss_deps
           install_double_conversion
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
-          brew link --force protobuf@21
-          brew uninstall cmake
-          pipx install --force cmake==3.31
+          majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
+          if (( majorVersion == 13 )); then
+            brew uninstall cmake
+            pipx install --force cmake==3.31
+          fi
+          echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
       - name: Cache ccache
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-macos-1-${{ matrix.os }}
+          key: ccache-macos-1-macos-15-${{ matrix.type }}
 
       - name: Configure Build
         env:
@@ -111,7 +120,7 @@ jobs:
       - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-macos-1-${{ matrix.os }}
+          key: ccache-macos-1-macos-15-${{ matrix.type }}
 
       - name: Run Tests
         if: false
