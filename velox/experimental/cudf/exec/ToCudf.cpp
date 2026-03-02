@@ -408,6 +408,9 @@ void CudfConfig::initialize(
   if (config.find(kCudfTopNBatchSize) != config.end()) {
     topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
   }
+  if (config.find(kCudfFunctionEngine) != config.end()) {
+    functionEngine = config[kCudfFunctionEngine];
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

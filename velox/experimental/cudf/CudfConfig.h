@@ -39,6 +39,8 @@ struct CudfConfig {
       "cudf.jit_expression_priority"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
+  // The value could be either spark or presto.
+  static constexpr const char* kCudfFunctionEngine{"cudf.function_engine"};
 
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
@@ -94,6 +96,10 @@ struct CudfConfig {
 
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
+
+  // Register the Spark or Presto functions, the value could be either spark or
+  // presto.
+  std::string functionEngine{"presto"};
 };
 
 } // namespace facebook::velox::cudf_velox
