@@ -17,6 +17,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 namespace facebook::velox::functions {
@@ -249,6 +250,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<MillisecondFunction, int64_t, Date>(
       {prefix + "millisecond"});
   registerFunction<MillisecondFunction, int64_t, TimestampWithTimezone>(
+      {prefix + "millisecond"});
+  registerFunction<MillisecondTimeWithTimezoneFunction, int64_t, TimeWithTimezone>(
       {prefix + "millisecond"});
   registerFunction<MillisecondFunction, int64_t, Time>(
       {prefix + "millisecond"});
