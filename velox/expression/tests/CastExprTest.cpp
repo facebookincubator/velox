@@ -1710,6 +1710,19 @@ TEST_F(CastExprTest, decimalToFloat) {
   testDecimalToFloatCasts<double>();
 }
 
+// Test for precision loss fix: DECIMAL(18,4) to REAL. Float has ~7 significant
+// digits; casting unscaled int128/int64 to float first loses precision for
+// values with 8+ digits. The fix divides in double then casts to float.
+TEST_F(CastExprTest, decimalToFloatNoPrecisionLoss) {
+  const int64_t unscaledSum = 113751964; // 11375.1964 with scale 4
+  auto decimalVector = makeFlatVector<int64_t>({unscaledSum}, DECIMAL(18, 4));
+  auto result = evaluateCast(
+      DECIMAL(18, 4), REAL(), makeRowVector({decimalVector}), false);
+  auto floatResult = result->as<FlatVector<float>>()->valueAt(0);
+  EXPECT_NEAR(floatResult, 11375.196f, 0.0005f)
+      << "cast(DECIMAL(18,4) 11375.1964 as REAL) should be ~11375.196, not 11375.197";
+}
+
 TEST_F(CastExprTest, decimalToBool) {
   auto shortFlat = makeNullableFlatVector<int64_t>(
       {DecimalUtil::kShortDecimalMin, 0, std::nullopt}, DECIMAL(18, 18));
