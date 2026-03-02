@@ -61,6 +61,10 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
 
   auto expected2 = {makeRowVector({getSerializedBloomFilter(524'288)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
+
+  // Max bits case: bloom filter is at its largest possible size.
+  auto expected3 = {makeRowVector({getSerializedBloomFilter(4'194'304)})};
+  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 10000000)"}, expected3);
 }
 
 TEST_F(BloomFilterAggAggregateTest, emptyInput) {
