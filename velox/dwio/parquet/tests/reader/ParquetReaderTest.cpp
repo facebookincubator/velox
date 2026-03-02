@@ -81,10 +81,14 @@ TEST_F(ParquetReaderTest, parseSample) {
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col0->id(), 1);
+  EXPECT_EQ(col0->maxId(), 1);
   auto col1 = type->childAt(1);
   EXPECT_EQ(col1->type()->kind(), TypeKind::DOUBLE);
   EXPECT_EQ(type->childByName("a"), col0);
   EXPECT_EQ(type->childByName("b"), col1);
+  EXPECT_EQ(col1->id(), 2);
+  EXPECT_EQ(col1->maxId(), 2);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
@@ -191,34 +195,41 @@ TEST_F(ParquetReaderTest, parseUnannotatedList) {
   EXPECT_EQ(col0->type()->kind(), TypeKind::ARRAY);
   EXPECT_EQ(
       std::static_pointer_cast<const ParquetTypeWithId>(col0)->name_, "self");
+  EXPECT_EQ(col0->id(), 1);
+  EXPECT_EQ(col0->maxId(), 5);
 
   EXPECT_EQ(col0->size(), 1ULL);
-  EXPECT_EQ(col0->childAt(0)->type()->kind(), TypeKind::ROW);
+  auto col0_0 = col0->childAt(0);
+  EXPECT_EQ(col0_0->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(
-      std::static_pointer_cast<const ParquetTypeWithId>(col0->childAt(0))
-          ->name_,
+      std::static_pointer_cast<const ParquetTypeWithId>(col0_0)->name_,
       "dummy");
+  EXPECT_EQ(col0_0->id(), 2);
+  EXPECT_EQ(col0_0->maxId(), 5);
 
-  EXPECT_EQ(col0->childAt(0)->childAt(0)->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col0_0->childAt(0)->type()->kind(), TypeKind::BIGINT);
   EXPECT_EQ(
-      std::static_pointer_cast<const ParquetTypeWithId>(
-          col0->childAt(0)->childAt(0))
+      std::static_pointer_cast<const ParquetTypeWithId>(col0_0->childAt(0))
           ->name_,
       "a");
+  EXPECT_EQ(col0_0->childAt(0)->id(), 3);
+  EXPECT_EQ(col0_0->childAt(0)->maxId(), 3);
 
-  EXPECT_EQ(col0->childAt(0)->childAt(1)->type()->kind(), TypeKind::BOOLEAN);
+  EXPECT_EQ(col0_0->childAt(1)->type()->kind(), TypeKind::BOOLEAN);
   EXPECT_EQ(
-      std::static_pointer_cast<const ParquetTypeWithId>(
-          col0->childAt(0)->childAt(1))
+      std::static_pointer_cast<const ParquetTypeWithId>(col0_0->childAt(1))
           ->name_,
       "b");
+  EXPECT_EQ(col0_0->childAt(1)->id(), 4);
+  EXPECT_EQ(col0_0->childAt(1)->maxId(), 4);
 
-  EXPECT_EQ(col0->childAt(0)->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(col0_0->childAt(2)->type()->kind(), TypeKind::VARCHAR);
   EXPECT_EQ(
-      std::static_pointer_cast<const ParquetTypeWithId>(
-          col0->childAt(0)->childAt(2))
+      std::static_pointer_cast<const ParquetTypeWithId>(col0_0->childAt(2))
           ->name_,
       "c");
+  EXPECT_EQ(col0_0->childAt(2)->id(), 5);
+  EXPECT_EQ(col0_0->childAt(2)->maxId(), 5);
 }
 
 TEST_F(ParquetReaderTest, parseUnannotatedMap) {
@@ -474,6 +485,27 @@ TEST_F(ParquetReaderTest, parseRowMapArrayReadAsLowerCase) {
   // +-----------------------+
   // |{120, {key -> {[{1}]}}}|
   // +-----------------------+
+  // Parquet schema:
+  //  message spark_schema {
+  //    optional group Cc {  -->id=1
+  //      optional int64 CcLong0;  -->id=2
+  //      optional group CcMap1 (MAP) {  -->id=3
+  //        repeated group key_value {  -->id=4
+  //          required binary key (STRING);  -->id=5
+  //          optional group value {  -->id=6
+  //            optional group CcArray2 (LIST) {  -->id=7
+  //              repeated group list {  -->id=8
+  //                optional group element {  -->id=9
+  //                  optional int32 CcInt3;  -->id=10
+  //                }
+  //              }
+  //            }
+  //          }
+  //        }
+  //      }
+  //    }
+  //  }
+
   const std::string upper(getExampleFilePath("upper_complex.parquet"));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
@@ -488,30 +520,48 @@ TEST_F(ParquetReaderTest, parseRowMapArrayReadAsLowerCase) {
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(type->childByName("cc"), col0);
+  EXPECT_EQ(col0->id(), 1);
+  EXPECT_EQ(col0->maxId(), 10);
 
   auto col0_0 = col0->childAt(0);
   EXPECT_EQ(col0_0->type()->kind(), TypeKind::BIGINT);
   EXPECT_EQ(col0->childByName("cclong0"), col0_0);
+  // CcLong0 is schema index 2 (leaf)
+  EXPECT_EQ(col0_0->id(), 2);
+  EXPECT_EQ(col0_0->maxId(), 2);
 
   auto col0_1 = col0->childAt(1);
   EXPECT_EQ(col0_1->type()->kind(), TypeKind::MAP);
   EXPECT_EQ(col0->childByName("ccmap1"), col0_1);
+  EXPECT_EQ(col0_1->id(), 3);
+  EXPECT_EQ(col0_1->maxId(), 10);
 
   auto col0_1_0 = col0_1->childAt(0);
   EXPECT_EQ(col0_1_0->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(col0_1_0->id(), 5);
+  EXPECT_EQ(col0_1_0->maxId(), 5);
 
   auto col0_1_1 = col0_1->childAt(1);
   EXPECT_EQ(col0_1_1->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(col0_1_1->id(), 6);
+  EXPECT_EQ(col0_1_1->maxId(), 10);
 
   auto col0_1_1_0 = col0_1_1->childAt(0);
   EXPECT_EQ(col0_1_1_0->type()->kind(), TypeKind::ARRAY);
   EXPECT_EQ(col0_1_1->childByName("ccarray2"), col0_1_1_0);
+  EXPECT_EQ(col0_1_1_0->id(), 7);
+  EXPECT_EQ(col0_1_1_0->maxId(), 10);
 
   auto col0_1_1_0_0 = col0_1_1_0->childAt(0);
   EXPECT_EQ(col0_1_1_0_0->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(col0_1_1_0_0->id(), 9);
+  EXPECT_EQ(col0_1_1_0_0->maxId(), 10);
+
   auto col0_1_1_0_0_0 = col0_1_1_0_0->childAt(0);
   EXPECT_EQ(col0_1_1_0_0_0->type()->kind(), TypeKind::INTEGER);
   EXPECT_EQ(col0_1_1_0_0->childByName("ccint3"), col0_1_1_0_0_0);
+  EXPECT_EQ(col0_1_1_0_0_0->id(), 10);
+  EXPECT_EQ(col0_1_1_0_0_0->maxId(), 10);
 }
 
 TEST_F(ParquetReaderTest, parseEmpty) {
@@ -705,6 +755,22 @@ TEST_F(ParquetReaderTest, parseDate) {
 TEST_F(ParquetReaderTest, parseRowMapArray) {
   // sample.parquet holds one row of type (ROW(BIGINT c0, MAP(VARCHAR,
   // ARRAY(INTEGER)) c1) c)
+  // Parquet schema:
+  // message hive_schema {
+  //   optional group c { -->id=1
+  //     optional int64 c0; -->id=2
+  //     optional group c1 (MAP) { -->id=3
+  //       repeated group key_value (MAP_KEY_VALUE) { -->id=4
+  //         optional binary key (STRING); -->id=5
+  //         optional group value (LIST) { -->id=6
+  //           repeated group bag { -->id=7
+  //             optional int32 array_element; -->id=8
+  //           }
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
   const std::string sample(getExampleFilePath("row_map_array.parquet"));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
@@ -718,23 +784,36 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(type->childByName("c"), col0);
+  EXPECT_EQ(col0->id(), 1);
+  EXPECT_EQ(col0->maxId(), 8);
 
   auto col0_0 = col0->childAt(0);
   EXPECT_EQ(col0_0->type()->kind(), TypeKind::BIGINT);
   EXPECT_EQ(col0->childByName("c0"), col0_0);
+  EXPECT_EQ(col0_0->id(), 2);
+  EXPECT_EQ(col0_0->maxId(), 2);
 
   auto col0_1 = col0->childAt(1);
   EXPECT_EQ(col0_1->type()->kind(), TypeKind::MAP);
   EXPECT_EQ(col0->childByName("c1"), col0_1);
+  EXPECT_EQ(col0_1->id(), 3);
+  EXPECT_EQ(col0_1->maxId(), 8);
 
   auto col0_1_0 = col0_1->childAt(0);
   EXPECT_EQ(col0_1_0->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(col0_1_0->id(), 5);
+  EXPECT_EQ(col0_1_0->maxId(), 5);
 
   auto col0_1_1 = col0_1->childAt(1);
   EXPECT_EQ(col0_1_1->type()->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(col0_1_1->id(), 6);
+  EXPECT_EQ(col0_1_1->maxId(), 8);
 
   auto col0_1_1_0 = col0_1_1->childAt(0);
   EXPECT_EQ(col0_1_1_0->type()->kind(), TypeKind::INTEGER);
+  // element is schema index 8 (leaf)
+  EXPECT_EQ(col0_1_1_0->id(), 8);
+  EXPECT_EQ(col0_1_1_0->maxId(), 8);
 }
 
 TEST_F(ParquetReaderTest, projectNoColumns) {
@@ -828,12 +907,18 @@ TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
 
   auto mapColumnType = rowType->childAt(0);
   EXPECT_EQ(mapColumnType->type()->kind(), TypeKind::MAP);
+  EXPECT_EQ(mapColumnType->id(), 1);
+  EXPECT_EQ(mapColumnType->maxId(), 4);
 
   auto mapKeyType = mapColumnType->childAt(0);
   EXPECT_EQ(mapKeyType->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(mapKeyType->id(), 3);
+  EXPECT_EQ(mapKeyType->maxId(), 3);
 
   auto mapValueType = mapColumnType->childAt(1);
   EXPECT_EQ(mapValueType->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(mapValueType->id(), 4);
+  EXPECT_EQ(mapValueType->maxId(), 4);
 
   auto fileSchema =
       ROW({"test"}, {createType<TypeKind::MAP>({VARCHAR(), BIGINT()})});
