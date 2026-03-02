@@ -271,6 +271,13 @@ uint32_t HiveConfig::maxRowsPerIndexRequest(
       config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
 }
 
+bool HiveConfig::fileMetadataCacheEnabled(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kFileMetadataCacheEnabledSession,
+      config_->get<bool>(kFileMetadataCacheEnabled, false));
+}
+
 std::string HiveConfig::user(const config::ConfigBase* session) const {
   return session->get<std::string>(kUser, config_->get<std::string>(kUser, ""));
 }

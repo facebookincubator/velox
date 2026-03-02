@@ -35,6 +35,40 @@ std::shared_ptr<DwioMetricsLogFactory>& metricsLogFactory() {
 }
 } // namespace
 
+/* static */ std::shared_ptr<const MetricsLog> MetricsLog::voidLog() {
+  static const MetricsLog kInstance{{}};
+  return {std::shared_ptr<const MetricsLog>{}, &kInstance};
+}
+
+/* static */ std::string MetricsLog::getMetricTypeName(Type type) {
+  switch (type) {
+    case Type::HEADER:
+      return "HEADER";
+    case Type::FOOTER:
+      return "FOOTER";
+    case Type::FILE:
+      return "FILE";
+    case Type::STRIPE:
+      return "STRIPE";
+    case Type::STRIPE_INDEX:
+      return "STRIPE_INDEX";
+    case Type::STRIPE_FOOTER:
+      return "STRIPE_FOOTER";
+    case Type::STREAM:
+      return "STREAM";
+    case Type::STREAM_BUNDLE:
+      return "STREAM_BUNDLE";
+    case Type::GROUP:
+      return "GROUP";
+    case Type::GROUP_INDEX:
+      return "GROUP_INDEX";
+    case Type::BLOCK:
+      return "BLOCK";
+    case Type::TEST:
+      return "TEST";
+  }
+}
+
 void registerMetricsLogFactory(std::shared_ptr<DwioMetricsLogFactory> factory) {
   metricsLogFactory() = std::move(factory);
 }

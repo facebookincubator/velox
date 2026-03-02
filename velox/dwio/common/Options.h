@@ -733,6 +733,14 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  bool fileMetadataCacheEnabled() const {
+    return fileMetadataCacheEnabled_;
+  }
+
+  void setFileMetadataCacheEnabled(bool value) {
+    fileMetadataCacheEnabled_ = value;
+  }
+
   bool allowEmptyFile() const {
     return allowEmptyFile_;
   }
@@ -758,6 +766,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool fileMetadataCacheEnabled_{false};
   bool allowEmptyFile_{false};
 };
 

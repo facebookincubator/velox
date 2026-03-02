@@ -574,6 +574,15 @@ class CacheShard {
       uint64_t size,
       folly::SemiFuture<bool>* readyFuture);
 
+  /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
+  /// exists and is not exclusive. Returns an empty pin (inside optional) if
+  /// the entry is exclusive; if 'waitFuture' is not nullptr it is set to a
+  /// future realized when the entry is no longer exclusive. Returns
+  /// std::nullopt on miss. Does not create entries.
+  std::optional<CachePin> find(
+      RawFileCacheKey key,
+      folly::SemiFuture<bool>* waitFuture = nullptr);
+
   /// Marks the cache entry with given cache 'key' as immediate evictable.
   void makeEvictable(RawFileCacheKey key);
 
@@ -806,6 +815,15 @@ class AsyncDataCache : public memory::Cache {
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
+      folly::SemiFuture<bool>* waitFuture = nullptr);
+
+  /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
+  /// exists and is not exclusive. Returns an empty pin (inside optional) if
+  /// the entry is exclusive; if 'waitFuture' is not nullptr it is set to a
+  /// future realized when the entry is no longer exclusive. Returns
+  /// std::nullopt on miss.
+  std::optional<CachePin> find(
+      RawFileCacheKey key,
       folly::SemiFuture<bool>* waitFuture = nullptr);
 
   /// Marks the cache entry with given cache 'key' as immediate evictable.
