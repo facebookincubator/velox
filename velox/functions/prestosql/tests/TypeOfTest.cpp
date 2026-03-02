@@ -63,6 +63,7 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("timestamp", typeOf(TIMESTAMP()));
   EXPECT_EQ("date", typeOf(DATE()));
   EXPECT_EQ("time", typeOf(TIME()));
+  EXPECT_EQ("time micro", typeOf(TIME_MICRO()));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 

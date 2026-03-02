@@ -1657,12 +1657,16 @@ TEST_F(SimpleFunctionTest, toDebugString) {
       "Priority: 999997\nDefaultNullBehavior: true");
 }
 
-template <typename T>
+template <typename T, typename TimeType>
 struct TimePlusOneFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  void call(out_type<Time>& out, const arg_type<Time>& input) {
-    out = input + 1;
+  void call(out_type<TimeType>& out, const arg_type<TimeType>& input) {
+    if constexpr (std::is_same_v<TimeType, Time>) {
+      out = input + 1;
+    } else if constexpr (std::is_same_v<TimeType, TimeMicro>) {
+      out = input / 1000 + 1;
+    }
   }
 };
 
@@ -1677,16 +1681,23 @@ struct ArrayTimeFunction {
       }
     }
   }
+
+  void call(
+      out_type<Array<TimeMicro>>& out,
+      const arg_type<Array<TimeMicro>>& input) {}
 };
 
 TEST_F(SimpleFunctionTest, timeTypeTest) {
-  registerFunction<TimePlusOneFunction, Time, Time>({"time_plus_one"});
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3}, TIME()),
-  });
-  auto result = evaluate("time_plus_one(c0)", data);
-  auto expected = makeFlatVector<int64_t>({2, 3, 4}, TIME());
-  assertEqualVectors(expected, result);
+  {
+    registerFunction<ParameterBinder<TimePlusOneFunction, Time>, Time, Time>(
+        {"time_plus_one"});
+    auto data = makeRowVector({
+        makeFlatVector<int64_t>({1000, 2000, 3000}, TIME()),
+    });
+    auto result = evaluate("time_plus_one(c0)", data);
+    auto expected = makeFlatVector<int64_t>({1001, 2001, 3001}, TIME());
+    assertEqualVectors(expected, result);
+  }
 
   // Test out Time in complex type.
   {
@@ -1699,6 +1710,35 @@ TEST_F(SimpleFunctionTest, timeTypeTest) {
 
     auto result = evaluate("array_time(c0)", data);
     auto expected = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 6}}, TIME());
+    assertEqualVectors(expected, result);
+  }
+}
+
+TEST_F(SimpleFunctionTest, timeMicroTypeTest) {
+  {
+    registerFunction<
+        ParameterBinder<TimePlusOneFunction, TimeMicro>,
+        TimeMicro,
+        TimeMicro>({"time_micro_plus_one"});
+    auto data = makeRowVector({
+        makeFlatVector<int64_t>({1000, 2000, 3000}, TIME_MICRO()),
+    });
+    auto result = evaluate("time_micro_plus_one(c0)", data);
+    auto expected = makeFlatVector<int64_t>({2, 3, 4}, TIME_MICRO());
+    assertEqualVectors(expected, result);
+  }
+
+  // Test out TimeMicro in complex type.
+  {
+    registerFunction<ArrayTimeFunction, Array<TimeMicro>, Array<TimeMicro>>(
+        {"array_time_micro"});
+
+    auto data = makeRowVector({
+        makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 6}}, TIME_MICRO()),
+    });
+
+    auto result = evaluate("array_time_micro(c0)", data);
+    auto expected = makeArrayVector<int64_t>({{}, {}}, TIME_MICRO());
     assertEqualVectors(expected, result);
   }
 }

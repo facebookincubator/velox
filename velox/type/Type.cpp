@@ -265,7 +265,9 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
-  registry.Register("TimeType", TimeType::deserialize);
+  registry.Register("TimeType", TimeMilliPrecisionType::deserialize);
+  registry.Register(
+      "TimeMicroPrecisionType", TimeMicroPrecisionType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -1358,6 +1360,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
       {"TIME", TIME()},
+      {"TIME MICRO", TIME_MICRO()},
       {"UNKNOWN", UNKNOWN()},
   };
   return kTypes;
@@ -1508,14 +1511,34 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
   return it->second;
 }
 
-folly::dynamic TimeType::serialize() const {
+namespace {
+
+const auto& timePrecisionNames() {
+  static const folly::F14FastMap<TimePrecision, std::string_view> kNames = {
+      {TimePrecision::kMilliseconds, "MILLISECONDS"},
+      {TimePrecision ::kMicroseconds, "MICROSECONDS"}};
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TimePrecision, timePrecisionNames);
+
+folly::dynamic TimeMilliPrecisionType::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "TimeType";
   obj["type"] = name();
   return obj;
 }
 
-StringView TimeType::valueToString(int64_t value, char* const startPos) const {
+// static
+TypePtr TimeMilliPrecisionType::deserialize(const folly::dynamic& obj) {
+  return TIME();
+}
+
+StringView TimeMilliPrecisionType::valueToString(
+    int64_t value,
+    char* const startPos) const {
   // Ensure the value is within valid TIME range
   VELOX_USER_CHECK(
       !(value < 0 || value >= 86400000),
@@ -1531,25 +1554,24 @@ StringView TimeType::valueToString(int64_t value, char* const startPos) const {
 
   // TIME is represented as milliseconds since midnight
   // Convert to HH:mm:ss.SSS format
-
   fmt::format_to_n(
       startPos,
-      kTimeToVarcharRowSize,
+      timeToVarcharRowSize(),
       "{:02d}:{:02d}:{:02d}.{:03d}",
       hours,
       minutes,
       seconds,
       millis);
-  return StringView{startPos, kTimeToVarcharRowSize};
+  return StringView{startPos, timeToVarcharRowSize()};
 }
 
-int64_t TimeType::valueToTime(const StringView& timeStr) const {
+int64_t TimeMilliPrecisionType::valueToTime(const StringView& timeStr) const {
   return util::fromTimeString(timeStr).thenOrThrow(
       folly::identity,
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 
-int64_t TimeType::valueToTime(
+int64_t TimeMilliPrecisionType::valueToTime(
     const StringView& timeStr,
     const tz::TimeZone* timeZone,
     int64_t sessionStartTimeMs) const {
@@ -1603,8 +1625,20 @@ int64_t TimeType::valueToTime(
   return adjustedTime;
 }
 
+folly::dynamic TimeMicroPrecisionType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimeMicroPrecisionType";
+  obj["type"] = name();
+  return obj;
+}
+
 // static
-std::string TimeType::toCompactIso8601(int64_t microseconds) {
+TypePtr TimeMicroPrecisionType::deserialize(const folly::dynamic& obj) {
+  return TIME_MICRO();
+}
+
+// static
+std::string TimeMicroPrecisionType::toCompactIso8601(int64_t microseconds) {
   int64_t hours = microseconds / util::kMicrosPerHour;
   microseconds %= util::kMicrosPerHour;
   int64_t minutes = microseconds / util::kMicrosPerMinute;

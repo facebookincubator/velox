@@ -237,7 +237,7 @@ VectorPtr CastExpr::castFromTime(
       auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
 
       Buffer* buffer = resultFlatVector->getBufferWithSpace(
-          rows.countSelected() * TimeType::kTimeToVarcharRowSize,
+          rows.countSelected() * TIME()->timeToVarcharRowSize(),
           true /*exactSize*/);
       char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
