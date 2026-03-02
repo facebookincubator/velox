@@ -42,6 +42,7 @@ namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
 
+using arrow::internal::kJulianEpochOffsetDays;
 using schema::GroupNode;
 using schema::NodePtr;
 using schema::PrimitiveNode;
@@ -514,6 +515,7 @@ using TestValuesWriterInt32Type = TestPrimitiveWriter<Int32Type>;
 using TestValuesWriterInt64Type = TestPrimitiveWriter<Int64Type>;
 using TestByteArrayValuesWriter = TestPrimitiveWriter<ByteArrayType>;
 using TestFixedLengthByteArrayValuesWriter = TestPrimitiveWriter<FLBAType>;
+using TestTimestampValuesWriter = TestPrimitiveWriter<Int96Type>;
 
 TYPED_TEST(TestPrimitiveWriter, RequiredPlain) {
   this->testRequiredWithEncoding(Encoding::kPlain);
@@ -903,6 +905,40 @@ TEST_F(TestByteArrayValuesWriter, CheckDefaultStats) {
   writer->close();
 
   ASSERT_TRUE(this->metadataIsStatsSet());
+}
+
+TEST_F(TestTimestampValuesWriter, TimestampConventions) {
+  auto testTimestamp =
+      [](int64_t seconds, int32_t dayDelta, uint64_t nanoseconds) {
+        Int96 actual;
+        arrow::internal::secondsToImpalaTimestamp(seconds, &actual);
+        auto julianDay = kJulianEpochOffsetDays + dayDelta;
+#if ARROW_LITTLE_ENDIAN
+        Int96 expected = {
+            {static_cast<uint32_t>(nanoseconds),
+             static_cast<uint32_t>(nanoseconds >> 32),
+             static_cast<uint32_t>(julianDay)}};
+#else
+        Int96 expected = {
+            {static_cast<uint32_t>(nanoseconds >> 32),
+             static_cast<uint32_t>(nanoseconds),
+             static_cast<uint32_t>(julianDay)}};
+#endif
+        EXPECT_EQ(actual, expected);
+      };
+
+  // Positive timestamps.
+  testTimestamp(0, 0, 0);
+  testTimestamp(1, 0, 1'000'000'000);
+  testTimestamp(3600, 0, 3'600'000'000'000);
+  testTimestamp(86400, 1, 0);
+  testTimestamp(1767229259, 20454, 3'659'000'000'000);
+
+  // Negative timestamps.
+  testTimestamp(-1, -1, 86'399'000'000'000);
+  testTimestamp(-3600, -1, 23LL * 3600 * 1'000'000'000);
+  testTimestamp(-86400, -1, 0);
+  testTimestamp(-86401, -2, 86'399'000'000'000);
 }
 
 TEST(TestColumnWriter, RepeatedListsUpdateSpacedBug) {
