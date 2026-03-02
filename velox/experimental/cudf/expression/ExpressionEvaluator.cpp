@@ -263,6 +263,23 @@ class CardinalityFunction : public CudfFunction {
   }
 };
 
+class NotFunction : public CudfFunction {
+ public:
+  NotFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "not expects exactly 1 input");
+    VELOX_CHECK(
+        expr->inputs()[0]->type()->isBoolean(), "not expects a boolean input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::unary_operation(inputCol, cudf::unary_operator::NOT, stream);
+  }
+};
+
 class RoundFunction : public CudfFunction {
  public:
   explicit RoundFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -815,6 +832,16 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {FunctionSignatureBuilder()
            .returnType("integer")
            .argumentType("array(any)")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "not",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<NotFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
            .build()});
 
   registerCudfFunctions(
