@@ -1025,6 +1025,14 @@ TEST_F(SparkCastExprTest, fromString) {
       "real", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
   testCast<std::string, double>(
       "double", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
+  testCast<std::string, float>("real", {"123.0f"}, {123.0});
+  testCast<std::string, float>("real", {"123.0F"}, {123.0});
+  testCast<std::string, float>("real", {"123.0d"}, {123.0});
+  testCast<std::string, float>("real", {"123.0D"}, {123.0});
+  testCast<std::string, double>("double", {"123.0f"}, {123.0});
+  testCast<std::string, double>("double", {"123.0F"}, {123.0});
+  testCast<std::string, double>("double", {"123.0d"}, {123.0});
+  testCast<std::string, double>("double", {"123.0D"}, {123.0});
   testCast<std::string, Timestamp>(
       "timestamp",
       {"\n\f\r\t\n\u001F 2000-01-01 12:21:56\u000B\u001C\u001D\u001E"},
