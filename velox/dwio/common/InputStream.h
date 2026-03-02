@@ -145,7 +145,8 @@ class ReadFileInputStream final : public InputStream {
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
       velox::IoStats* ioStats = nullptr,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {});
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      bool cacheable = true);
 
   ~ReadFileInputStream() override = default;
 

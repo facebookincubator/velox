@@ -80,7 +80,8 @@ class VectorStream {
       VELOX_CHECK_EQ(header_.size, kHeaderSize);
     }
     header_.size = name.size() + sizeof(int32_t);
-    folly::storeUnaligned<int32_t>(header_.buffer, name.size());
+    folly::storeUnaligned<int32_t>(
+        header_.buffer, static_cast<int32_t>(name.size()));
     ::memcpy(header_.buffer + sizeof(int32_t), &name[0], name.size());
   }
 

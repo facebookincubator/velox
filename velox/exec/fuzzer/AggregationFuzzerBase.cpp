@@ -18,10 +18,10 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Spill.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/vector/VectorSaver.h"
@@ -84,6 +84,8 @@ DEFINE_bool(
     "enabled. Note that this option only works in debug builds.");
 
 namespace facebook::velox::exec::test {
+
+using namespace facebook::velox::common::testutil;
 
 int32_t AggregationFuzzerBase::randInt(int32_t min, int32_t max) {
   return boost::random::uniform_int_distribution<int32_t>(min, max)(rng_);
@@ -498,7 +500,7 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
 
     int32_t spillPct{0};
     if (injectSpill) {
-      spillDirectory = exec::test::TempDirectoryPath::create();
+      spillDirectory = TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kAggregationSpillEnabled, "true")

@@ -720,6 +720,10 @@ class Connector {
   static inline const std::string kTotalRemainingFilterTime{
       "totalRemainingFilterWallNanos"};
 
+  /// Total CPU time spent on remaining filter evaluation.
+  static inline const std::string kTotalRemainingFilterCpuTime{
+      "totalRemainingFilterCpuNanos"};
+
   /// Total time spent waiting for synchronously issued IO or for an in-progress
   /// read-ahead to finish.
   static inline const std::string kIoWaitWallNanos{"ioWaitWallNanos"};

@@ -91,6 +91,9 @@ struct EncodedKeyBounds {
   /// Encoded upper bound key. If present, represents the maximum key value
   /// (inclusive or exclusive based on IndexBound.inclusive).
   std::optional<std::string> upperKey;
+
+  /// Returns a human-readable string representation with hex-encoded keys.
+  std::string toString() const;
 };
 
 /// KeyEncoder encodes multi-column keys into byte-comparable strings that
@@ -201,12 +204,28 @@ class KeyEncoder {
   // Each row in the input vector produces one encoded key string.
   std::vector<std::string> encode(const RowVectorPtr& input);
 
-  // Creates a new row vector with the key columns incremented by 1 for multiple
-  // rows. For each row, the increment takes place from the rightmost (least
-  // significant) column.
-  // Returns nullptr if any row fails to increment (all key columns overflow),
-  // otherwise returns RowVectorPtr with incremented values.
-  RowVectorPtr createIncrementedBounds(const RowVectorPtr& bounds) const;
+  // Creates a new row vector with the key columns incremented by 1 for each
+  // row. For each row, the increment starts from the rightmost (least
+  // significant) column and propagates left on overflow until successful or all
+  // columns overflow.
+  //
+  // Returns:
+  // - bounds: A RowVector containing only successfully incremented rows. If all
+  //   rows succeed, children are direct copies. If some rows fail, children are
+  //   dictionary-wrapped to reference only succeeded rows. Returns nullptr if
+  //   no rows succeed.
+  // - succeededIndices: Buffer containing original row indices that succeeded.
+  //   Returns nullptr if all rows succeed (no dictionary needed) or if no rows
+  //   succeed.
+  struct IncrementedBoundsResult {
+    RowVectorPtr bounds;
+    BufferPtr succeededIndices;
+
+    // Returns true if all rows succeeded (no dictionary wrapping needed).
+    bool allSucceeded() const;
+  };
+  IncrementedBoundsResult createIncrementedBounds(
+      const RowVectorPtr& bounds) const;
 
   // Encodes a single column for all rows.
   void encodeColumn(

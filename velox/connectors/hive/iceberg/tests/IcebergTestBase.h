@@ -21,10 +21,10 @@
 #include <string>
 #include <vector>
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -32,6 +32,8 @@
 #endif
 
 namespace facebook::velox::connector::hive::iceberg::test {
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 extern const std::string kIcebergConnectorId;
 

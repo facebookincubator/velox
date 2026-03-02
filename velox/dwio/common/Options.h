@@ -475,6 +475,15 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
+  bool collectColumnStats() const {
+    return collectColumnStats_;
+  }
+
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    collectColumnStats_ = collect;
+    return *this;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -539,6 +548,7 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
+  bool collectColumnStats_{false};
 };
 
 /// Options for creating a Reader.
@@ -699,12 +709,12 @@ class ReaderOptions : public io::ReaderOptions {
     randomSkip_ = std::move(randomSkip);
   }
 
-  bool noCacheRetention() const {
-    return noCacheRetention_;
+  bool cacheable() const {
+    return cacheable_;
   }
 
-  void setNoCacheRetention(bool noCacheRetention) {
-    noCacheRetention_ = noCacheRetention;
+  void setCacheable(bool cacheable) {
+    cacheable_ = cacheable;
   }
 
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {

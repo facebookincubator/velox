@@ -25,8 +25,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/ScopedTestTime.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
@@ -144,7 +144,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       // second creation of cache must find the checkpoint of the
       // previous one.
       if (tempDirectory_ == nullptr || eraseCheckpoint) {
-        tempDirectory_ = exec::test::TempDirectoryPath::create();
+        tempDirectory_ = TempDirectoryPath::create();
       }
       SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
@@ -158,7 +158,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       ssdCache = std::make_unique<SsdCache>(config);
       if (ssdCache != nullptr) {
         ssdCacheHelper_ =
-            std::make_unique<test::SsdCacheTestHelper>(ssdCache.get());
+            std::make_unique<cache::test::SsdCacheTestHelper>(ssdCache.get());
         ASSERT_EQ(ssdCacheHelper_->numShards(), kNumSsdShards);
       }
     }
@@ -173,7 +173,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     cache_ =
         AsyncDataCache::create(allocator_, std::move(ssdCache), cacheOptions);
     asyncDataCacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     if (filenames_.empty()) {
       for (auto i = 0; i < kNumFiles; ++i) {
         auto name = fmt::format("testing_file_{}", i);
@@ -313,12 +313,12 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     }
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
   std::unique_ptr<memory::MemoryManager> manager_;
   memory::MemoryAllocator* allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
-  std::unique_ptr<test::SsdCacheTestHelper> ssdCacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
+  std::unique_ptr<cache::test::SsdCacheTestHelper> ssdCacheHelper_;
   std::vector<StringIdLease> filenames_;
   std::unique_ptr<folly::IOThreadPoolExecutor> loadExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ssdExecutor_;
@@ -1423,7 +1423,7 @@ TEST_P(AsyncDataCacheTest, makeEvictable) {
     const auto cacheEntries = asyncDataCacheHelper_->cacheEntries();
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
-          test::AsyncDataCacheEntryTestHelper(cacheEntry);
+          cache::test::AsyncDataCacheEntryTestHelper(cacheEntry);
       ASSERT_EQ(cacheEntry->ssdSaveable(), !evictable);
       ASSERT_EQ(cacheEntryHelper.accessStats().numUses, 0);
       if (evictable) {

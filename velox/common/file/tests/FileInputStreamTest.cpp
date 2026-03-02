@@ -19,11 +19,12 @@
 #include "velox/common/file/FileInputStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::memory;
 
 class FileInputStreamTest : public testing::Test {
@@ -42,7 +43,7 @@ class FileInputStreamTest : public testing::Test {
     mmapAllocator_ = static_cast<MmapAllocator*>(memoryManager_->allocator());
     pool_ = memoryManager_->addLeafPool("ByteStreamTest");
     rng_.seed(124);
-    tempDirPath_ = exec::test::TempDirectoryPath::create();
+    tempDirPath_ = TempDirectoryPath::create();
     fs_ = filesystems::getFileSystem(tempDirPath_->getPath(), nullptr);
   }
 
@@ -70,7 +71,7 @@ class FileInputStreamTest : public testing::Test {
   MmapAllocator* mmapAllocator_;
   std::shared_ptr<memory::MemoryPool> pool_;
   std::atomic_uint64_t fileId_{0};
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirPath_;
+  std::shared_ptr<TempDirectoryPath> tempDirPath_;
   std::shared_ptr<filesystems::FileSystem> fs_;
 };
 

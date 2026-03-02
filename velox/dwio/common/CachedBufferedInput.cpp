@@ -59,7 +59,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       region,
       input_,
       fileNum_.id(),
-      options_.noCacheRetention(),
+      options_.cacheable(),
       tracker_,
       id,
       groupId_.id(),
@@ -520,7 +520,7 @@ void CachedBufferedInput::readRegions(
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
-            [pendingLoad = load, ssdSavable = !options_.noCacheRetention()]() {
+            [pendingLoad = load, ssdSavable = options_.cacheable()]() {
               process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
@@ -579,7 +579,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       Region{offset, length},
       input_,
       fileNum_.id(),
-      options_.noCacheRetention(),
+      options_.cacheable(),
       nullptr,
       TrackingId(),
       0,

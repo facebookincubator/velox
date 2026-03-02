@@ -16,13 +16,14 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class RowNumberTest : public OperatorTestBase {
  protected:
@@ -204,7 +205,7 @@ TEST_F(RowNumberTest, spill) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     TestScopedSpillInjection scopedSpillInjection(100, ".*", 1);
 
@@ -269,7 +270,7 @@ TEST_F(RowNumberTest, maxSpillBytes) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     try {
       TestScopedSpillInjection scopedSpillInjection(100, ".*", 1);
@@ -321,7 +322,7 @@ TEST_F(RowNumberTest, memoryUsage) {
 
     for (const auto& spillEnable : {false, true}) {
       auto queryCtx = core::QueryCtx::create(executor_.get());
-      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto spillDirectory = TempDirectoryPath::create();
       const std::string spillEnableConfig = std::to_string(spillEnable);
 
       std::shared_ptr<Task> task;
@@ -375,7 +376,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     std::atomic_int numRound{0};
@@ -443,7 +444,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     std::atomic_int numSpills{0};
@@ -540,7 +541,7 @@ TEST_F(RowNumberTest, spillWithYield) {
     SCOPED_TRACE(testData.debugString());
     TestScopedSpillInjection scopedSpillInjection(
         100, ".*", testData.numSpills);
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     core::PlanNodeId rowNumberPlanNodeId;

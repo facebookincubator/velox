@@ -23,9 +23,9 @@
 #include "gtest/gtest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
@@ -44,6 +44,8 @@
 
 DECLARE_string(velox_save_input_on_expression_any_failure_path);
 DECLARE_string(velox_save_input_on_expression_system_failure_path);
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::test {
 namespace {
@@ -2484,7 +2486,7 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   }
 
   // Enable saving vector and expression SQL for system errors only.
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto tempDirectory = TempDirectoryPath::create();
   FLAGS_velox_save_input_on_expression_system_failure_path =
       tempDirectory->getPath();
 

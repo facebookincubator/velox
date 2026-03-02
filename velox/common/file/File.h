@@ -77,15 +77,22 @@ struct FileIoContext {
   /// Tracer for IO operations, providing call stack context.
   std::shared_ptr<FileIoTracer> ioTracer;
 
+  /// When false, hints to the storage layer that this read should not be cached
+  /// or should be evicted soon after reading. This is useful for one-time reads
+  /// where caching would waste resources.
+  bool cacheable{true};
+
   FileIoContext() = default;
 
   explicit FileIoContext(
       IoStats* stats,
       folly::F14FastMap<std::string, std::string> fileOpts = {},
-      std::shared_ptr<FileIoTracer> tracer = nullptr)
+      std::shared_ptr<FileIoTracer> tracer = nullptr,
+      bool cacheable = true)
       : ioStats(stats),
         fileOpts(std::move(fileOpts)),
-        ioTracer(std::move(tracer)) {}
+        ioTracer(std::move(tracer)),
+        cacheable(cacheable) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.

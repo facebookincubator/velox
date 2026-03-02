@@ -20,6 +20,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
@@ -29,7 +30,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <re2/re2.h>
@@ -41,6 +41,8 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 
 namespace velox::exec::test {
+using namespace facebook::velox::common::testutil;
+
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
 
 class BasicTableWriterTestBase : public HiveConnectorTestBase {};

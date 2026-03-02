@@ -15,6 +15,7 @@
  */
 #include "velox/exec/RowNumber.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
@@ -28,9 +29,9 @@ RowNumber::RowNumber(
           rowNumberNode->outputType(),
           operatorId,
           rowNumberNode->id(),
-          "RowNumber",
+          OperatorType::kRowNumber,
           rowNumberNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "RowNumber")
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kRowNumber)
               : std::nullopt),
       limit_{rowNumberNode->limit()},
       generateRowNumber_{rowNumberNode->generateRowNumber()} {

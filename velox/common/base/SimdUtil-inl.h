@@ -91,10 +91,24 @@ struct BitMask<T, A, 1> {
 
 #if XSIMD_WITH_NEON
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
-    alignas(A::alignment()) static const int8_t kShift[] = {
-        -7, -6, -5, -4, -3, -2, -1, 0, -7, -6, -5, -4, -3, -2, -1, 0};
-    int8x16_t vshift = vld1q_s8(kShift);
-    uint8x16_t vmask = vshlq_u8(vandq_u8(mask, vdupq_n_u8(0x80)), vshift);
+    static constexpr uint8x16_t vmask_const = {
+        0x01,
+        0x02,
+        0x04,
+        0x08,
+        0x10,
+        0x20,
+        0x40,
+        0x80, // lower half
+        0x01,
+        0x02,
+        0x04,
+        0x08,
+        0x10,
+        0x20,
+        0x40,
+        0x80}; // upper half
+    uint8x16_t vmask = vandq_u8(mask.data, vmask_const);
     return (vaddv_u8(vget_high_u8(vmask)) << 8) | vaddv_u8(vget_low_u8(vmask));
   }
 #endif
@@ -125,6 +139,15 @@ struct BitMask<T, A, 2> {
   }
 #endif
 
+#if XSIMD_WITH_NEON
+  static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    static constexpr uint16x8_t vmask_const = {
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+    uint16x8_t vmask = vandq_u16(mask.data, vmask_const);
+    return vaddvq_u16(vmask);
+  }
+#endif
+
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::generic&) {
     return genericToBitMask(mask);
   }
@@ -143,6 +166,14 @@ struct BitMask<T, A, 4> {
 #if XSIMD_WITH_SSE2
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::sse2&) {
     return _mm_movemask_ps(reinterpret_cast<__m128>(mask.data));
+  }
+#endif
+
+#if XSIMD_WITH_NEON
+  static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    static constexpr uint32x4_t vmask_const = {0x1, 0x2, 0x4, 0x8};
+    uint32x4_t vmask = vandq_u32(mask.data, vmask_const);
+    return vaddvq_u32(vmask);
   }
 #endif
 
@@ -170,6 +201,14 @@ struct BitMask<T, A, 8> {
 #if XSIMD_WITH_SSE2
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::sse2&) {
     return _mm_movemask_pd(reinterpret_cast<__m128d>(mask.data));
+  }
+#endif
+
+#if XSIMD_WITH_NEON
+  static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    static constexpr uint64x2_t vmask_const = {0x1, 0x2};
+    const uint64x2_t vmask = vandq_u64(mask.data, vmask_const);
+    return vaddvq_u64(vmask);
   }
 #endif
 

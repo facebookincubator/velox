@@ -282,7 +282,7 @@ target_link_libraries(
   velox_fuzzer_util
   velox_functions_prestosql
   velox_exec_test_lib
-  velox_temp_path
+  velox_test_util
   velox_vector_fuzzer
   GTest::gtest
   GTest::gtest_main
@@ -306,7 +306,13 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_library(velox_simple_aggregate SimpleAverageAggregate.cpp SimpleArrayAggAggregate.cpp)
+add_library(
+  velox_simple_aggregate
+  SimpleAverageAggregate.cpp
+  SimpleArrayAggAggregate.cpp
+  SimpleVariadicArrayAggAggregate.cpp
+  SimpleVariadicSumAggregate.cpp
+)
 
 target_link_libraries(
   velox_simple_aggregate

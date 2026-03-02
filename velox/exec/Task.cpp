@@ -31,6 +31,7 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorTraceCtx.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -131,11 +132,11 @@ inline size_t numSourceNodes(const core::PlanNode* planNode) {
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
-  op.runtimeStats["runningAddInputWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningAddInputWallNanos)] =
       RuntimeMetric(op.addInputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
-  op.runtimeStats["runningGetOutputWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningGetOutputWallNanos)] =
       RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
-  op.runtimeStats["runningFinishWallNanos"] =
+  op.runtimeStats[std::string(OperatorStats::kRunningFinishWallNanos)] =
       RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
@@ -185,24 +186,31 @@ std::string makeUuid() {
 
 // Returns true if an operator is a hash join operator given 'operatorType'.
 bool isHashJoinOperator(const std::string& operatorType) {
-  return (operatorType == "HashBuild") || (operatorType == "HashProbe");
+  return (operatorType == OperatorType::kHashBuild) ||
+      (operatorType == OperatorType::kHashProbe);
 }
 
 class QueueSplitsStore : public SplitsStore {
  public:
   using SplitsStore::SplitsStore;
 
-  void requestBarrier(std::vector<ContinuePromise>& promises) override {
-    addSplit(Split::createBarrier(), promises);
+  void requestBarrier(
+      uint32_t numDrivers,
+      std::vector<ContinuePromise>& promises) override {
+    addSplit(Split::createBarrier(numDrivers), promises);
   }
 
   bool nextSplit(
-      Split& split,
-      ContinueFuture& future,
+      std::optional<uint32_t> driverId,
       int maxPreloadSplits,
-      const ConnectorSplitPreloadFunc& preload) override {
+      const ConnectorSplitPreloadFunc& preload,
+      Split& split,
+      ContinueFuture& future) override {
     if (!splits_.empty()) {
       split = getSplit(maxPreloadSplits, preload);
+      return true;
+    }
+    if (tryGetBarrier(driverId, split)) {
       return true;
     }
     if (noMoreSplits_) {
@@ -471,11 +479,6 @@ Task::~Task() {
 }
 
 void Task::ensureBarrierSupport() const {
-  VELOX_CHECK_EQ(
-      mode_,
-      Task::ExecutionMode::kSerial,
-      "Task doesn't support barriered execution.");
-
   VELOX_CHECK_NULL(
       firstNodeNotSupportingBarrier_,
       "Task doesn't support barriered execution. Name of the first node that "
@@ -511,6 +514,8 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
+    VELOX_CHECK_EQ(factory->numDrivers, 1);
+    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
 
   // Create drivers.
@@ -1028,6 +1033,7 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       numDriversUngrouped_ += factory->numDrivers;
     }
     numTotalDrivers_ += factory->numTotalDrivers;
+    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
   }
@@ -1649,7 +1655,7 @@ void Task::addSplitToStoreLocked(
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
   if (split.isBarrier()) {
-    splitsStore->requestBarrier(promises);
+    splitsStore->requestBarrier(split.barrier->numDrivers, promises);
     return;
   }
   auto* queueSplitsStore =
@@ -1806,7 +1812,8 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
 
   promises.reserve(leafPlanNodeIds.size());
   for (const auto& leafPlanNode : leafPlanNodeIds) {
-    auto barrierSplit = Split::createBarrier();
+    const auto barrierSplit =
+        Split::createBarrier(numDriversPerLeafNode_.at(leafPlanNode));
     auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
     addSplitLocked(splitState, barrierSplit, promises);
   }
@@ -1967,12 +1974,13 @@ bool Task::isAllSplitsFinishedLocked() {
 }
 
 BlockingReason Task::getSplitOrFuture(
+    uint32_t driverId,
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId,
-    exec::Split& split,
-    ContinueFuture& future,
     int32_t maxPreloadSplits,
-    const ConnectorSplitPreloadFunc& preload) {
+    const ConnectorSplitPreloadFunc& preload,
+    exec::Split& split,
+    ContinueFuture& future) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
   auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
@@ -1981,7 +1989,8 @@ BlockingReason Task::getSplitOrFuture(
         splitsStore,
         std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
   }
-  return splitsStore->nextSplit(split, future, maxPreloadSplits, preload)
+  return splitsStore->nextSplit(
+             driverId, maxPreloadSplits, preload, split, future)
       ? BlockingReason::kNotBlocked
       : BlockingReason::kWaitForSplit;
 }
@@ -2494,6 +2503,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     exchangeClients.swap(exchangeClients_);
 
     barrierPromises.swap(barrierFinishPromises_);
+    // Clear the barrier flag to ensure underBarrier() returns false after task
+    // termination.
+    barrierRequested_ = false;
   }
 
   taskCompletionNotifier.notify();
@@ -2556,8 +2568,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
           }
           while (!store->allSplitsConsumed()) {
             auto future = ContinueFuture::makeEmpty();
-            VELOX_CHECK(
-                store->nextSplit(splits.emplace_back(), future, 0, nullptr));
+            const auto hasNextSplit = store->nextSplit(
+                /*driverId=*/std::nullopt,
+                /*maxPreloadSplits=*/0,
+                /*preload=*/nullptr,
+                splits.emplace_back(),
+                future);
+            VELOX_CHECK(hasNextSplit);
           }
         }
         if (!splits.empty()) {

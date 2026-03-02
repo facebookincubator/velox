@@ -18,6 +18,7 @@
 #include <optional>
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Spiller.h"
 #include "velox/vector/VectorStream.h"
 
@@ -232,7 +233,12 @@ class BlockedOperator : public Operator {
       int32_t id,
       core::PlanNodePtr node,
       BlockedOperatorCb&& blockedCb)
-      : Operator(ctx, node->outputType(), id, node->id(), "BlockedOperator"),
+      : Operator(
+            ctx,
+            node->outputType(),
+            id,
+            node->id(),
+            OperatorType::kBlockedOperator),
         blockedCb_(std::move(blockedCb)) {}
 
   BlockingReason isBlocked(ContinueFuture* future) override {

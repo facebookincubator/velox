@@ -15,6 +15,8 @@
  */
 #include "velox/exec/EnforceSingleRow.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 EnforceSingleRow::EnforceSingleRow(
@@ -26,7 +28,7 @@ EnforceSingleRow::EnforceSingleRow(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "EnforceSingleRow") {
+          OperatorType::kEnforceSingleRow) {
   isIdentityProjection_ = true;
 }
 
