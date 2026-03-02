@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/aggregates/Register.h"
 
+#include "velox/functions/sparksql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/functions/sparksql/aggregates/AverageAggregate.h"
 #include "velox/functions/sparksql/aggregates/BitwiseXorAggregate.h"
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
@@ -68,6 +69,7 @@ void registerAggregateFunctions(
   registerModeAggregate(prefix, withCompanionFunctions, overwrite);
   registerVarianceAggregate(prefix, withCompanionFunctions, overwrite);
   registerCovarianceAggregates(prefix, withCompanionFunctions, overwrite);
+  registerApproxPercentileAggregate(prefix, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql
