@@ -1206,6 +1206,87 @@ StepAwareAggregationRegistry& getStepAwareAggregationRegistry() {
   return registry;
 }
 
+// Get aggregation function signatures map from the CUDF registry
+exec::AggregateFunctionSignatureMap getCudfAggregationFunctionSignatureMap() {
+  exec::AggregateFunctionSignatureMap result;
+  const auto& registry = getStepAwareAggregationRegistry();
+
+  for (const auto& [name, stepMap] : registry) {
+    const auto singleIt = stepMap.find(core::AggregationNode::Step::kSingle);
+    const auto partialIt = stepMap.find(core::AggregationNode::Step::kPartial);
+
+    // We need both single (for return type) and partial (for intermediate
+    // type) signatures to build AggregateFunctionSignature entries.
+    if (singleIt == stepMap.end() || partialIt == stepMap.end()) {
+      continue;
+    }
+
+    const auto& singleSignatures = singleIt->second;
+    const auto& partialSignatures = partialIt->second;
+    const auto signatureCount =
+        std::min(singleSignatures.size(), partialSignatures.size());
+
+    if (signatureCount == 0) {
+      continue;
+    }
+
+    std::vector<exec::AggregateFunctionSignaturePtr> aggregateSignatures;
+    aggregateSignatures.reserve(signatureCount);
+
+    for (size_t i = 0; i < signatureCount; ++i) {
+      const auto& singleSignature = singleSignatures[i];
+      const auto& partialSignature = partialSignatures[i];
+
+      exec::AggregateFunctionSignatureBuilder builder;
+
+      // Preserve declared signature variables.
+      for (const auto& [_, variable] : singleSignature->variables()) {
+        if (variable.isTypeParameter()) {
+          if (variable.knownTypesOnly()) {
+            builder.knownTypeVariable(variable.name());
+          } else if (variable.orderableTypesOnly()) {
+            builder.orderableTypeVariable(variable.name());
+          } else if (variable.comparableTypesOnly()) {
+            builder.comparableTypeVariable(variable.name());
+          } else {
+            builder.typeVariable(variable.name());
+          }
+        } else if (variable.isIntegerParameter()) {
+          builder.integerVariable(
+              variable.name(),
+              variable.constraint().empty()
+                  ? std::nullopt
+                  : std::make_optional(variable.constraint()));
+        }
+      }
+
+      builder.returnType(singleSignature->returnType().toString());
+      builder.intermediateType(partialSignature->returnType().toString());
+
+      const auto& argumentTypes = singleSignature->argumentTypes();
+      const auto& constantArguments = singleSignature->constantArguments();
+      for (size_t argIndex = 0; argIndex < argumentTypes.size(); ++argIndex) {
+        const auto argType = argumentTypes[argIndex].toString();
+        if (constantArguments[argIndex]) {
+          builder.constantArgumentType(argType);
+        } else {
+          builder.argumentType(argType);
+        }
+      }
+
+      if (singleSignature->variableArity()) {
+        builder.variableArity();
+      }
+
+      aggregateSignatures.push_back(builder.build());
+    }
+
+    result[name] = std::move(aggregateSignatures);
+  }
+
+  return result;
+}
+
 bool registerAggregationFunctionForStep(
     const std::string& name,
     core::AggregationNode::Step step,
