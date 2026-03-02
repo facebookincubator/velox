@@ -545,6 +545,11 @@ class QueryConfig {
   static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
       "hash_probe_dynamic_filter_pushdown_enabled";
 
+  /// Whether hash probe can generate dynamic filter for string types and
+  /// push down to upstream operators.
+  static constexpr const char* kHashProbeStringDynamicFilterPushdownEnabled =
+      "hash_probe_string_dynamic_filter_pushdown_enabled";
+
   /// The maximum byte size of Bloom filter that can be generated from hash
   /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
   /// optimal performance, this should not be too larger than the CPU cache size
@@ -1358,6 +1363,10 @@ class QueryConfig {
 
   bool hashProbeDynamicFilterPushdownEnabled() const {
     return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  bool hashProbeStringDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeStringDynamicFilterPushdownEnabled, false);
   }
 
   uint64_t hashProbeBloomFilterPushdownMaxSize() const {

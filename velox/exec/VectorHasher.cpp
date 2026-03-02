@@ -698,8 +698,19 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
         return common::createBigintValues(values, nullAllowed);
       }
       [[fallthrough]];
+    case TypeKind::VARCHAR:
+      [[fallthrough]];
+    case TypeKind::VARBINARY:
+      if (!distinctOverflow_) {
+        std::vector<std::string> values;
+        values.reserve(uniqueValues_.size());
+        for (const auto& value : uniqueValues_) {
+          values.emplace_back(value.asString());
+        }
+        return std::make_unique<common::BytesValues>(values, nullAllowed);
+      }
+      [[fallthrough]];
     default:
-      // TODO Add support for strings.
       return nullptr;
   }
 }
