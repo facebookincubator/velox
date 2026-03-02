@@ -90,7 +90,7 @@ CudfVectorPtr CudfTopN::mergeTopK(
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
   // Ensure input-stream deallocations don't race with merge stream.
-  streamsWaitForStream(inputStreams, stream);
+  streamsWaitForStream(cudaEvent_, inputStreams, stream);
   // slice it
   auto topk =
       cudf::split(

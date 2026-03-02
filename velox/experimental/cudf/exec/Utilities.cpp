@@ -288,9 +288,9 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 }
 
 void streamsWaitForStream(
+    CudaEvent& event,
     const std::vector<rmm::cuda_stream_view>& streams,
     rmm::cuda_stream_view stream) {
-  CudaEvent event(cudaEventDisableTiming);
   event.recordFrom(stream);
   for (const auto& strm : streams) {
     event.waitOn(strm);
