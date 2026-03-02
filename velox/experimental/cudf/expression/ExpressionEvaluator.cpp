@@ -245,6 +245,306 @@ class DateAddFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> value_;
 };
 
+// Presto date_diff(unit, date1/ts1, date2/ts2) → bigint.
+// The unit argument is always a constant VARCHAR resolved at construction time.
+// Supported units for DATE: day, week, month, quarter, year.
+// Supported units for TIMESTAMP: millisecond, second, minute, hour, day, week,
+//   month, quarter, year.
+// cuDF stores dates as TIMESTAMP_DAYS (int32 days since epoch) and timestamps
+// as TIMESTAMP_MICROSECONDS (int64 µs since epoch), so for simple duration
+// units we can subtract and scale. Calendar-aware units (month, quarter, year)
+// extract components and compute differences.
+class DateDiffFunction : public CudfFunction {
+ public:
+  DateDiffFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "date_diff expects exactly 3 inputs");
+
+    auto unitExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(unitExpr, "date_diff unit must be a constant");
+    unit_ = unitExpr->value()->toString(0);
+
+    isDate_ = expr->inputs()[1]->type()->isDate();
+
+    // Either date argument may be a constant (e.g. DATE '2025-03-01' or
+    // CURRENT_DATE). Literals are excluded from inputColumns by the framework,
+    // so we capture them here as cuDF scalars.
+    if (auto c = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      leftScalar_ = makeScalarFromConstantExpr(c);
+      leftIsConst_ = true;
+    }
+    if (auto c = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[2])) {
+      rightScalar_ = makeScalarFromConstantExpr(c);
+      rightIsConst_ = true;
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // Resolve the two date/timestamp operands. Constants were captured at
+    // construction; column refs arrive via inputColumns in left-to-right order
+    // (skipping literals).
+    size_t colIdx = 0;
+    std::unique_ptr<cudf::column> leftOwned, rightOwned;
+    cudf::column_view col1, col2;
+
+    if (leftIsConst_) {
+      cudf::size_type n = asView(inputColumns[0]).size();
+      leftOwned = cudf::make_column_from_scalar(*leftScalar_, n, stream, mr);
+      col1 = leftOwned->view();
+    } else {
+      col1 = asView(inputColumns[colIdx++]);
+    }
+
+    if (rightIsConst_) {
+      cudf::size_type n = leftIsConst_ ? 1 : col1.size();
+      rightOwned = cudf::make_column_from_scalar(*rightScalar_, n, stream, mr);
+      col2 = rightOwned->view();
+    } else {
+      col2 = asView(inputColumns[colIdx++]);
+    }
+
+    if (unit_ == "day") {
+      return diffBySubtraction(col1, col2, 1, stream, mr);
+    } else if (unit_ == "week") {
+      return diffBySubtraction(col1, col2, 7, stream, mr);
+    } else if (unit_ == "month") {
+      return diffByComponent(
+          col1,
+          col2,
+          cudf::datetime::datetime_component::MONTH,
+          cudf::datetime::datetime_component::YEAR,
+          stream,
+          mr);
+    } else if (unit_ == "quarter") {
+      auto months = diffByComponent(
+          col1,
+          col2,
+          cudf::datetime::datetime_component::MONTH,
+          cudf::datetime::datetime_component::YEAR,
+          stream,
+          mr);
+      auto monthsView = asView(months);
+      auto three = cudf::numeric_scalar<int64_t>(3, true, stream, mr);
+      return cudf::binary_operation(
+          monthsView,
+          three,
+          cudf::binary_operator::FLOOR_DIV,
+          cudf::data_type(cudf::type_id::INT64),
+          stream,
+          mr);
+    } else if (unit_ == "year") {
+      auto y1 = cudf::datetime::extract_datetime_component(
+          col1, cudf::datetime::datetime_component::YEAR, stream, mr);
+      auto y2 = cudf::datetime::extract_datetime_component(
+          col2, cudf::datetime::datetime_component::YEAR, stream, mr);
+      return cudf::binary_operation(
+          y2->view(),
+          y1->view(),
+          cudf::binary_operator::SUB,
+          cudf::data_type(cudf::type_id::INT64),
+          stream,
+          mr);
+    } else if (!isDate_) {
+      if (unit_ == "second") {
+        return diffTimestampUs(col1, col2, 1000000LL, stream, mr);
+      } else if (unit_ == "millisecond") {
+        return diffTimestampUs(col1, col2, 1000LL, stream, mr);
+      } else if (unit_ == "minute") {
+        return diffTimestampUs(col1, col2, 60000000LL, stream, mr);
+      } else if (unit_ == "hour") {
+        return diffTimestampUs(col1, col2, 3600000000LL, stream, mr);
+      }
+    }
+    VELOX_FAIL("Unsupported date_diff unit: {}", unit_);
+  }
+
+ private:
+  // For day/week on DATE or TIMESTAMP: subtract, then divide.
+  ColumnOrView diffBySubtraction(
+      cudf::column_view col1,
+      cudf::column_view col2,
+      int64_t divisor,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    if (isDate_) {
+      // DATE columns are TIMESTAMP_DAYS. cuDF can't cast timestamps to int
+      // directly — subtract to get DURATION_DAYS, then cast duration to INT.
+      auto duration = cudf::binary_operation(
+          col2,
+          col1,
+          cudf::binary_operator::SUB,
+          cudf::data_type(cudf::type_id::DURATION_DAYS),
+          stream,
+          mr);
+      auto diff = cudf::cast(
+          duration->view(),
+          cudf::data_type(cudf::type_id::INT64),
+          stream,
+          mr);
+      if (divisor == 1) {
+        return diff;
+      }
+      auto div = cudf::numeric_scalar<int64_t>(divisor, true, stream, mr);
+      return cudf::binary_operation(
+          diff->view(),
+          div,
+          cudf::binary_operator::FLOOR_DIV,
+          cudf::data_type(cudf::type_id::INT64),
+          stream,
+          mr);
+    }
+    // TIMESTAMP: use microsecond subtraction path
+    return diffTimestampUs(
+        col1, col2, divisor * 86400LL * 1000000LL, stream, mr);
+  }
+
+  // Subtract two TIMESTAMP columns via DURATION, then scale.
+  ColumnOrView diffTimestampUs(
+      cudf::column_view col1,
+      cudf::column_view col2,
+      int64_t usPerUnit,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    // col2 - col1 → DURATION_MICROSECONDS
+    auto duration = cudf::binary_operation(
+        col2,
+        col1,
+        cudf::binary_operator::SUB,
+        cudf::data_type(cudf::type_id::DURATION_MICROSECONDS),
+        stream,
+        mr);
+    // DURATION → INT64
+    auto diff = cudf::cast(
+        duration->view(),
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    if (usPerUnit == 1) {
+      return diff;
+    }
+    auto div = cudf::numeric_scalar<int64_t>(usPerUnit, true, stream, mr);
+    return cudf::binary_operation(
+        diff->view(),
+        div,
+        cudf::binary_operator::FLOOR_DIV,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+  }
+
+  // Calendar-aware diff for month (and quarter via post-divide).
+  ColumnOrView diffByComponent(
+      cudf::column_view col1,
+      cudf::column_view col2,
+      cudf::datetime::datetime_component monthComp,
+      cudf::datetime::datetime_component yearComp,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    auto y1 = cudf::datetime::extract_datetime_component(
+        col1, yearComp, stream, mr);
+    auto y2 = cudf::datetime::extract_datetime_component(
+        col2, yearComp, stream, mr);
+    auto m1 = cudf::datetime::extract_datetime_component(
+        col1, monthComp, stream, mr);
+    auto m2 = cudf::datetime::extract_datetime_component(
+        col2, monthComp, stream, mr);
+    // (y2 - y1) * 12 + (m2 - m1)
+    auto yearDiff = cudf::binary_operation(
+        y2->view(),
+        y1->view(),
+        cudf::binary_operator::SUB,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    auto twelve = cudf::numeric_scalar<int64_t>(12, true, stream, mr);
+    auto yearMonths = cudf::binary_operation(
+        yearDiff->view(),
+        twelve,
+        cudf::binary_operator::MUL,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    auto monthDiff = cudf::binary_operation(
+        m2->view(),
+        m1->view(),
+        cudf::binary_operator::SUB,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    return cudf::binary_operation(
+        yearMonths->view(),
+        monthDiff->view(),
+        cudf::binary_operator::ADD,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+  }
+
+  std::string unit_;
+  bool isDate_;
+  std::unique_ptr<cudf::scalar> leftScalar_;
+  std::unique_ptr<cudf::scalar> rightScalar_;
+  bool leftIsConst_ = false;
+  bool rightIsConst_ = false;
+};
+
+// Presto to_unixtime(timestamp) → double.
+// Returns seconds since epoch as a double. cuDF TIMESTAMP_MICROSECONDS
+// are internally int64 µs since epoch, so we cast to INT64, convert to
+// DOUBLE, and divide by 1e6.
+class ToUnixtimeFunction : public CudfFunction {
+ public:
+  explicit ToUnixtimeFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "to_unixtime expects exactly 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    // Subtract epoch (0 µs) to get DURATION_MICROSECONDS, then cast to INT64.
+    auto epoch = cudf::timestamp_scalar<cudf::timestamp_us>(
+        cudf::duration_us{0}, true, stream, mr);
+    auto duration = cudf::binary_operation(
+        inputCol,
+        epoch,
+        cudf::binary_operator::SUB,
+        cudf::data_type(cudf::type_id::DURATION_MICROSECONDS),
+        stream,
+        mr);
+    // DURATION_MICROSECONDS → INT64
+    auto asInt = cudf::cast(
+        duration->view(),
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        mr);
+    // INT64 → DOUBLE, divide by 1e6 to get seconds
+    auto asDouble = cudf::cast(
+        asInt->view(),
+        cudf::data_type(cudf::type_id::FLOAT64),
+        stream,
+        mr);
+    auto divisor =
+        cudf::numeric_scalar<double>(1000000.0, true, stream, mr);
+    return cudf::binary_operation(
+        asDouble->view(),
+        divisor,
+        cudf::binary_operator::DIV,
+        cudf::data_type(cudf::type_id::FLOAT64),
+        stream,
+        mr);
+  }
+};
+
 class CardinalityFunction : public CudfFunction {
  public:
   CardinalityFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1041,6 +1341,34 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("date")
            .argumentType("date")
            .constantArgumentType("integer")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "date_diff",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateDiffFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .argumentType("date")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .argumentType("timestamp")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "to_unixtime",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ToUnixtimeFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("timestamp")
            .build()});
 
   return true;
