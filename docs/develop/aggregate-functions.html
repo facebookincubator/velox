@@ -198,8 +198,9 @@ create a new class that extends velox::exec::Aggregate base class
 <h2>Simple Function Interface<a class="headerlink" href="#simple-function-interface" title="Link to this heading">¶</a></h2>
 <p>This section describes the main concepts and the simple interface of
 aggregation functions. Examples of aggregation functions implemented through
-the simple-function interface can be found at velox/exec/tests/SimpleAverageAggregate.cpp
-and velox/exec/tests/SimpleArrayAggAggregate.cpp.</p>
+the simple-function interface can be found at SimpleAverageAggregate.cpp,
+SimpleArrayAggAggregate.cpp, SimpleVariadicSumAggregate.cpp, and
+SimpleVariadicArrayAggAggregate.cpp under velox/exec/tests.</p>
 <p>A simple aggregation function is implemented as a class as the following.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array_agg(T) -&gt; array(T) -&gt; array(T)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">ArrayAggAggregate</span><span class="w"> </span><span class="p">{</span>
@@ -488,11 +489,8 @@ null should be written to the final result vector.</p>
 </section>
 <section id="limitations">
 <h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
-<p>The simple aggregation function interface currently has three limitations.</p>
+<p>The simple aggregation function interface currently has two limitations.</p>
 <ol class="arabic simple">
-<li><p>All values read or written by the aggrgeaiton function must be part of the
-accumulators. This means that there cannot be function-level states kept
-outside of accumulators.</p></li>
 <li><p>Optimizations on constant inputs is not supported. I.e., constant input
 arguments are processed once per row in the same way as non-constant inputs.</p></li>
 <li><p>Aggregation pushdown to table scan is not supported yet. We’re planning to
