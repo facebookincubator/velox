@@ -227,7 +227,14 @@ void CudfFilterProject::initialize() {
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
+  auto inputBytes = input->estimateFlatSize();
   input_ = std::move(input);
+  queuedInputBytes_ = inputBytes;
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfFilterProject::getOutput() {
@@ -238,6 +245,9 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
   if (input_->size() == 0) {
     input_.reset();
+    queuedInputBytes_ = 0;
+    addRuntimeStat(
+        "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
     return nullptr;
   }
 
@@ -263,6 +273,9 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto cudfOutput = std::make_shared<CudfVector>(
       input_->pool(), outputType_, size, std::move(outputTable), stream);
   input_.reset();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   if (numColumns == 0 or size == 0) {
     return nullptr;
   }

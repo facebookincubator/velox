@@ -130,13 +130,16 @@ void CudfTopN::addInput(RowVectorPtr input) {
   if (count_ == 0 || input->size() == 0) {
     return;
   }
-
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Take topk of each input, add to batch.
   // If got kBatchSize_ batches, concat batches and topk once.
   // During getOutput, concat batches and topk once.
-  topNBatches_.push_back(getTopKBatch(cudfInput, count_));
+  auto topKBatch = getTopKBatch(cudfInput, count_);
+  topNBatches_.push_back(topKBatch);
+  if (topKBatch) {
+    queuedInputBytes_ += topKBatch->estimateFlatSize();
+  }
   // sum of sizes of topNBatches_ >= count_, then concat and topk once.
   auto totalSize = std::accumulate(
       topNBatches_.begin(),
@@ -151,8 +154,14 @@ void CudfTopN::addInput(RowVectorPtr input) {
 
     auto result = mergeTopK(topNBatches_, count_, stream, mr);
     topNBatches_.clear();
+    queuedInputBytes_ = result ? result->estimateFlatSize() : 0;
     topNBatches_.push_back(std::move(result));
   }
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfTopN::getOutput() {
@@ -169,6 +178,9 @@ RowVectorPtr CudfTopN::getOutput() {
   auto mr = cudf::get_current_device_resource_ref();
   auto result = mergeTopK(topNBatches_, count_, stream, mr);
   topNBatches_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   finished_ = noMoreInput_ && topNBatches_.empty();
   return result;
 }

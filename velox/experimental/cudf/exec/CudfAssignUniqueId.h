@@ -76,5 +76,6 @@ class CudfAssignUniqueId : public exec::Operator, public NvtxHelper {
   int64_t maxRowIdCounterValue_;
 
   std::shared_ptr<std::atomic_int64_t> rowIdPool_;
+  uint64_t queuedInputBytes_{0};
 };
 } // namespace facebook::velox::cudf_velox
