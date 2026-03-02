@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #pragma once
+#include <algorithm>
+#include <numeric>
 #include <string_view>
 
 #include <folly/container/F14Map.h>
@@ -261,6 +263,19 @@ class MergeJoin : public Operator {
       vector_size_t leftRow,
       const RowVectorPtr& rightBatch,
       vector_size_t rightRow);
+
+  // Batch-fills output indices for a contiguous range of inner rows paired with
+  // a single outer row. Uses std::fill/std::iota instead of per-row stores.
+  // Returns the number of rows added (may be less than requested if output is
+  // full). Falls back to per-row tryAddOutputRow when filter or anti-join
+  // tracking is needed.
+  template <bool IsLeftJoin>
+  vector_size_t addOutputRowsForRange(
+      const RowVectorPtr& outerBatch,
+      vector_size_t outerRow,
+      const RowVectorPtr& innerBatch,
+      vector_size_t innerStartRow,
+      vector_size_t innerEndRow);
 
   // If the right side projected columns in the current output vector happen to
   // span more than one vector from the right side, they cannot be simply

@@ -517,6 +517,81 @@ TEST_F(MergeJoinTest, keySkew) {
       [](auto row) { return row < 10 ? row : row + 10240; });
 }
 
+// Tests for batch-filled output indices in addOutputRowsForRange.
+TEST_F(MergeJoinTest, highCardinalityCrossProduct) {
+  // 500 left rows (2 batches) × 300 right rows = 150,000 output rows.
+  // Small batch size forces many cursor save/restore cycles.
+  std::vector<VectorPtr> leftKeys = {
+      makeFlatVector<int32_t>(250, [](auto) { return 42; }),
+      makeFlatVector<int32_t>(250, [](auto) { return 42; }),
+  };
+  std::vector<VectorPtr> rightKeys = {
+      makeFlatVector<int32_t>(300, [](auto) { return 42; }),
+  };
+
+  testJoin(leftKeys, rightKeys);
+  testJoin(rightKeys, leftKeys);
+}
+
+TEST_F(MergeJoinTest, multiBatchMatch) {
+  // Both sides span 2 batches with the same key, stressing cursor logic.
+  std::vector<VectorPtr> leftKeys = {
+      makeFlatVector<int32_t>(100, [](auto) { return 7; }),
+      makeFlatVector<int32_t>(100, [](auto) { return 7; }),
+  };
+  std::vector<VectorPtr> rightKeys = {
+      makeFlatVector<int32_t>(150, [](auto) { return 7; }),
+      makeFlatVector<int32_t>(50, [](auto) { return 7; }),
+  };
+
+  testJoin(leftKeys, rightKeys);
+  testJoin(rightKeys, leftKeys);
+}
+
+TEST_F(MergeJoinTest, asymmetricMatch) {
+  // 1 left row × many right rows, and vice versa.
+  std::vector<VectorPtr> leftKeys = {
+      makeFlatVector<int32_t>(1, [](auto) { return 10; }),
+  };
+  std::vector<VectorPtr> rightKeys = {
+      makeFlatVector<int32_t>(5000, [](auto) { return 10; }),
+  };
+
+  testJoin(leftKeys, rightKeys);
+  testJoin(rightKeys, leftKeys);
+}
+
+TEST_F(MergeJoinTest, mixedCardinalityKeys) {
+  // Alternating high-cardinality and single-row keys tests state cleanup
+  // between matches.
+  auto leftKeys = makeFlatVector<int32_t>(600, [](auto row) {
+    // key=1 for rows 0-199, key=2 for row 200, key=3 for rows 201-400,
+    // key=4 for row 401, ...
+    if (row <= 199)
+      return 1;
+    if (row == 200)
+      return 2;
+    if (row <= 400)
+      return 3;
+    if (row == 401)
+      return 4;
+    return 5;
+  });
+  auto rightKeys = makeFlatVector<int32_t>(600, [](auto row) {
+    if (row <= 199)
+      return 1;
+    if (row == 200)
+      return 2;
+    if (row <= 400)
+      return 3;
+    if (row == 401)
+      return 4;
+    return 5;
+  });
+
+  testJoin({leftKeys}, {rightKeys});
+}
+
 TEST_F(MergeJoinTest, aggregationOverJoin) {
   auto left =
       makeRowVector({"t_c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
