@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/buffer/Buffer.h"
@@ -165,7 +166,8 @@ std::unique_ptr<cudf::table> CudfVector::release() {
   // This copies the data since the view references the packed buffer.
   auto& packedPtr =
       std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
-  auto mr = cudf::get_current_device_resource_ref();
+  // Using same memory resource as packed_table
+  auto mr = packedPtr->data.gpu_data->memory_resource();
   auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
   stream_.synchronize();
   // Clear the packed table since we've materialized

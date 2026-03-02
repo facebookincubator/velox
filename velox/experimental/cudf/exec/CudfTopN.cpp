@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+
+#include "velox/common/base/RuntimeMetrics.h"
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
@@ -117,7 +120,7 @@ CudfVectorPtr CudfTopN::getTopKBatch(CudfVectorPtr cudfInput, int32_t k) {
     return nullptr;
   }
   auto stream = cudfInput->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto values = cudfInput->getTableView();
   auto result = getTopK(values, k, stream, mr);
   auto const size = result->num_rows();
@@ -130,13 +133,22 @@ void CudfTopN::addInput(RowVectorPtr input) {
   if (count_ == 0 || input->size() == 0) {
     return;
   }
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(input->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
 
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Take topk of each input, add to batch.
   // If got kBatchSize_ batches, concat batches and topk once.
   // During getOutput, concat batches and topk once.
-  topNBatches_.push_back(getTopKBatch(cudfInput, count_));
+  auto topKBatch = getTopKBatch(cudfInput, count_);
+  topNBatches_.push_back(topKBatch);
+  if (topKBatch) {
+    queuedInputBytes_ += topKBatch->estimateFlatSize();
+  }
   // sum of sizes of topNBatches_ >= count_, then concat and topk once.
   auto totalSize = std::accumulate(
       topNBatches_.begin(),
@@ -147,12 +159,18 @@ void CudfTopN::addInput(RowVectorPtr input) {
       });
   if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
-    auto mr = cudf::get_current_device_resource_ref();
+    auto mr = get_output_mr();
 
     auto result = mergeTopK(topNBatches_, count_, stream, mr);
     topNBatches_.clear();
+    queuedInputBytes_ = result ? result->estimateFlatSize() : 0;
     topNBatches_.push_back(std::move(result));
   }
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfTopN::getOutput() {
@@ -166,10 +184,20 @@ RowVectorPtr CudfTopN::getOutput() {
   }
 
   auto stream = topNBatches_[0]->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto result = mergeTopK(topNBatches_, count_, stream, mr);
   topNBatches_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   finished_ = noMoreInput_ && topNBatches_.empty();
+  if (result) {
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(result->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
+  }
   return result;
 }
 
@@ -183,5 +211,10 @@ void CudfTopN::noMoreInput() {
 
 bool CudfTopN::isFinished() {
   return finished_;
+}
+
+void CudfTopN::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  Operator::close();
 }
 } // namespace facebook::velox::cudf_velox

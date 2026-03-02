@@ -13,7 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+
+#include "velox/common/base/RuntimeMetrics.h"
 
 #include <cudf/lists/filling.hpp>
 
@@ -53,7 +57,18 @@ void CudfAssignUniqueId::addInput(RowVectorPtr input) {
   auto numInput = input->size();
   VELOX_CHECK_NE(
       numInput, 0, "CudfAssignUniqueId::addInput received empty set of rows");
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(input->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   input_ = std::move(input);
+  queuedInputBytes_ = input_->estimateFlatSize();
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfAssignUniqueId::getOutput() {
@@ -66,8 +81,8 @@ RowVectorPtr CudfAssignUniqueId::getOutput() {
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
   auto stream = cudfVector->stream();
-  auto uniqueIdColumn = generateIdColumn(
-      input_->size(), stream, cudf::get_current_device_resource_ref());
+  auto uniqueIdColumn =
+      generateIdColumn(input_->size(), stream, get_output_mr());
   auto size = cudfVector->size();
   auto columns = cudfVector->release()->release();
   columns.push_back(std::move(uniqueIdColumn));
@@ -78,6 +93,14 @@ RowVectorPtr CudfAssignUniqueId::getOutput() {
       std::make_unique<cudf::table>(std::move(columns)),
       stream);
   input_ = nullptr;
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
+  addRuntimeStat(
+      "gpuOutputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   return output;
 }
 
@@ -146,5 +169,10 @@ void CudfAssignUniqueId::requestRowIds() {
   rowIdCounter_ = rowIdPool_->fetch_add(kRowIdsPerRequest);
   maxRowIdCounterValue_ =
       std::min(rowIdCounter_ + kRowIdsPerRequest, kMaxRowId);
+}
+
+void CudfAssignUniqueId::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  Operator::close();
 }
 } // namespace facebook::velox::cudf_velox

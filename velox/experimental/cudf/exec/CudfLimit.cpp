@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/common/base/RuntimeMetrics.h"
 
 #include <cudf/copying.hpp>
 
@@ -52,7 +56,18 @@ bool CudfLimit::needsInput() const {
 
 void CudfLimit::addInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
+  addRuntimeStat(
+      "gpuInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(input->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   input_ = input;
+  queuedInputBytes_ = input_->estimateFlatSize();
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfLimit::getOutput() {
@@ -66,6 +81,9 @@ RowVectorPtr CudfLimit::getOutput() {
   if (remainingOffset_ >= inputSize) {
     remainingOffset_ -= inputSize;
     input_ = nullptr;
+    queuedInputBytes_ = 0;
+    addRuntimeStat(
+        "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
     return nullptr;
   }
 
@@ -84,8 +102,8 @@ RowVectorPtr CudfLimit::getOutput() {
          static_cast<int>(remainingOffset_ + outputSize)},
         cudfInput->stream());
 
-    auto materializedTable =
-        std::make_unique<cudf::table>(slicedTable[0], cudfInput->stream());
+    auto materializedTable = std::make_unique<cudf::table>(
+        slicedTable[0], cudfInput->stream(), get_output_mr());
 
     remainingOffset_ = 0;
     remainingLimit_ -= outputSize;
@@ -99,6 +117,14 @@ RowVectorPtr CudfLimit::getOutput() {
         std::move(materializedTable),
         cudfInput->stream());
     input_.reset();
+    queuedInputBytes_ = 0;
+    addRuntimeStat(
+        "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(output->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     return output;
   }
 
@@ -112,6 +138,14 @@ RowVectorPtr CudfLimit::getOutput() {
     remainingLimit_ -= inputSize;
     auto output = input_;
     input_.reset();
+    queuedInputBytes_ = 0;
+    addRuntimeStat(
+        "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
+    addRuntimeStat(
+        "gpuOutputBytes",
+        RuntimeCounter(
+            static_cast<int64_t>(output->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
     return output;
   }
 
@@ -123,9 +157,7 @@ RowVectorPtr CudfLimit::getOutput() {
       cudfInput->stream());
 
   auto materializedTable = std::make_unique<cudf::table>(
-      slicedTable[0],
-      cudfInput->stream(),
-      cudf::get_current_device_resource_ref());
+      slicedTable[0], cudfInput->stream(), get_output_mr());
 
   auto output = std::make_shared<cudf_velox::CudfVector>(
       input_->pool(),
@@ -134,8 +166,21 @@ RowVectorPtr CudfLimit::getOutput() {
       std::move(materializedTable),
       cudfInput->stream());
   input_.reset();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   remainingLimit_ = 0;
+  addRuntimeStat(
+      "gpuOutputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(output->estimateFlatSize()),
+          RuntimeCounter::Unit::kBytes));
   return output;
+}
+
+void CudfLimit::close() {
+  RuntimeStatWriterScopeGuard statsGuard(this);
+  Operator::close();
 }
 
 } // namespace facebook::velox::cudf_velox

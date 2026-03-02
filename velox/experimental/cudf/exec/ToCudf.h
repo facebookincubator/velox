@@ -19,8 +19,6 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
-#include <rmm/mr/device_memory_resource.hpp>
-
 namespace facebook::velox::cudf_velox {
 
 class CompileState {
@@ -42,8 +40,6 @@ class CompileState {
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
 };
-
-extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
 
 /// Registers adapter to add cuDF operators to Drivers.
 void registerCudf();

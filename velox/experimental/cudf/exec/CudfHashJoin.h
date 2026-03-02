@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
@@ -109,10 +110,13 @@ class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
+  void close() override;
+
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::vector<CudfVectorPtr> inputs_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
+  uint64_t queuedInputBytes_{0};
 };
 
 /**
@@ -186,6 +190,7 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   // Batched probe inputs needed for right join
   std::vector<CudfVectorPtr> inputs_;
+  uint64_t queuedInputBytes_{0};
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
   /** @brief Column indices for join keys in left (probe) table */
