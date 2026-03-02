@@ -638,19 +638,17 @@ TEST_F(NestedLoopJoinTest, addOutputRowWithContinuesBuildRow) {
   createDuckDbTable("u", {buildVector});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .values({probeVector})
-                .nestedLoopJoin(
-                    PlanBuilder(planNodeIdGenerator)
-                        .values({buildVector})
-                        .planNode(),
-                    "l1 = r1",
-                    {"l1", "l2", "r1", "r2"},
-                    core::JoinType::kLeft)
-                .planNode();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "l1 = r1",
+              {"l1", "l2", "r1", "r2"},
+              core::JoinType::kLeft)
+          .planNode();
 
-  assertQuery(
-      op, "SELECT l1, l2, r1, r2 FROM t LEFT JOIN u ON l1 = r1");
+  assertQuery(op, "SELECT l1, l2, r1, r2 FROM t LEFT JOIN u ON l1 = r1");
 }
 
 TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
