@@ -162,4 +162,16 @@ class CudaEvent {
  private:
   cudaEvent_t event_{};
 };
+
+/**
+ * @brief Waits for all streams to reach the event recorded on the given stream.
+ *
+ * @param event The event to wait for.
+ * @param streams The streams to wait for.
+ * @param stream The stream to record the event on.
+ */
+void streamsWaitForStream(
+    CudaEvent& event,
+    cudf::host_span<rmm::cuda_stream_view const> streams,
+    rmm::cuda_stream_view stream);
 } // namespace facebook::velox::cudf_velox

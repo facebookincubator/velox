@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfLocalMerge.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
@@ -43,6 +44,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Limit.h"
+#include "velox/exec/Merge.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/StreamingAggregation.h"
@@ -118,9 +120,17 @@ bool CompileState::compile(bool allowCpuFallback) {
         OperatorProperties props;
         auto adapter = registry.findAdapter(op);
         props.adapter = adapter;
-        if (adapter && isValidPlanNodeId(op->planNodeId())) {
-          static_cast<OperatorAdapter::Properties&>(props) =
-              adapter->properties(op, getPlanNode(op->planNodeId()), ctx);
+        if (adapter) {
+          core::PlanNodePtr planNode = nullptr;
+          if (isValidPlanNodeId(op->planNodeId())) {
+            planNode = getPlanNode(op->planNodeId());
+          } else if (driverFactory_.consumerNode) {
+            planNode = driverFactory_.consumerNode;
+          }
+          if (planNode) {
+            static_cast<OperatorAdapter::Properties&>(props) =
+                adapter->properties(op, planNode, ctx);
+          }
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
@@ -226,32 +236,34 @@ bool CompileState::compile(bool allowCpuFallback) {
     }
 
     if (debugEnabled) {
-      VLOG(1) << "Operator: ID " << oper->operatorId() << ": "
-              << oper->toString() << ", keepOperator = " << keepOperator
-              << ", isPureCpuOperator = " << isPureCpuOperator
-              << ", replaceOp.size() = " << replaceOp.size()
-              << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
-              << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
-              << ", isLastOperatorOfTask = " << isLastOperatorOfTask
-              << ", canRunOnGPU[" << operatorIndex
-              << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
-              << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
-              << ", producesGpuOutput[" << operatorIndex
-              << "] = " << thisOpProps.producesGpuOutput
-              << ", planNode = " << bool(planNode);
+      LOG(INFO) << "Operator: ID " << oper->operatorId() << ": "
+                << oper->toString() << ", keepOperator = " << keepOperator
+                << ", isPureCpuOperator = " << isPureCpuOperator
+                << ", replaceOp.size() = " << replaceOp.size()
+                << ", previousOperatorIsNotGpu = " << previousOperatorIsNotGpu
+                << ", nextOperatorIsNotGpu = " << nextOperatorIsNotGpu
+                << ", isLastOperatorOfTask = " << isLastOperatorOfTask
+                << ", canRunOnGPU[" << operatorIndex
+                << "] = " << thisOpProps.canRunOnGPU << ", acceptsGpuInput["
+                << operatorIndex << "] = " << thisOpProps.acceptsGpuInput
+                << ", producesGpuOutput[" << operatorIndex
+                << "] = " << thisOpProps.producesGpuOutput
+                << ", planNode = " << bool(planNode);
+    }
+    if (isPureCpuOperator) {
+      LOG(WARNING) << "Replacement with cuDF operator failed. "
+                   << (allowCpuFallback ? "Falling back to CPU execution"
+                                        : "No fallback allowed");
+      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
+      auto planNode = getPlanNode(oper->planNodeId());
+      LOG(WARNING) << "Replacement Failed PlanNode: "
+                   << planNode->toString(true, false);
     }
     if (!allowCpuFallback) {
       // condition is if GPU replacement success or if CPU operators itself is
       // GPU compatible. or if specific CPU operator is allowed even when
       // fallback is disabled.
       VELOX_CHECK(!isPureCpuOperator, "Replacement with cuDF operator failed");
-    } else if (isPureCpuOperator) {
-      LOG(WARNING)
-          << "Replacement with cuDF operator failed. Falling back to CPU execution";
-      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
-      auto planNode = getPlanNode(oper->planNodeId());
-      LOG(WARNING) << "Replacement Failed PlanNode: "
-                   << planNode->toString(true, false);
     }
 
     if (not replaceOp.empty()) {
