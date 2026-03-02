@@ -33,7 +33,7 @@ jobs:
       diff-range: ${{ steps.changes.outputs.range }}
       merge-base-commit: ${{ steps.changes.outputs.merge_base_commit }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -93,7 +93,7 @@ jobs:
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -246,7 +246,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.1
         with:
           path: velox
           persist-credentials: false
@@ -312,7 +312,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.1
         with:
           fetch-depth: 2
           path: velox
