@@ -16,14 +16,18 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/Hash.h>
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
+#include <type_traits>
+#include <utility>
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/UnitLoader.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/io/IoStatistics.h"
-#include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -535,6 +539,99 @@ class Statistics {
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
+/// Runs 'func' and records decompression stats if 'counter' is non-null.
+template <typename F>
+auto withDecompressStats(io::IoCounter* counter, F&& func)
+    -> std::enable_if_t<!std::is_void_v<decltype(func())>, decltype(func())> {
+  if (counter) {
+    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
+      counter->increment(timing.cpuNanos);
+    });
+    return func();
+  }
+  return func();
+}
+
+template <typename F>
+auto withDecompressStats(io::IoCounter* counter, F&& func)
+    -> std::enable_if_t<std::is_void_v<decltype(func())>> {
+  if (counter) {
+    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
+      counter->increment(timing.cpuNanos);
+    });
+    func();
+    return;
+  }
+  func();
+}
+
+/// Per-column statistics counters. Wraps multiple IoCounter instances for
+/// different types of measurements (decompression, encoding, etc.).
+/// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
+struct ColumnMetrics {
+  io::IoCounter decompressCPUTimeNanos;
+
+  /// Merges stats from another ColumnMetrics instance.
+  void merge(const ColumnMetrics& other) {
+    decompressCPUTimeNanos.merge(other.decompressCPUTimeNanos);
+  }
+};
+
+/// Thread-safe collection of per-column metrics keyed by nodeId.
+/// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
+struct ColumnMetricsSet {
+  /// Gets or creates a ColumnMetrics for a column.
+  ColumnMetrics* getOrCreate(uint32_t nodeId) {
+    auto locked = map_.wlock();
+    auto it = locked->find(nodeId);
+    if (it == locked->end()) {
+      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+    }
+    return it->second.get();
+  }
+
+  /// Merges all column metrics from another ColumnMetricsSet instance.
+  void mergeFrom(const ColumnMetricsSet& other) {
+    auto srcLocked = other.map_.rlock();
+    auto dstLocked = map_.wlock();
+    for (const auto& [nodeId, srcStats] : *srcLocked) {
+      auto it = dstLocked->find(nodeId);
+      if (it == dstLocked->end()) {
+        it =
+            dstLocked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+      }
+      it->second->merge(*srcStats);
+    }
+  }
+
+  /// Exports per-column metrics into the runtime metrics result map.
+  void toRuntimeMetrics(
+      std::unordered_map<std::string, RuntimeMetric>& result) const {
+    auto statsLocked = map_.rlock();
+    for (const auto& [nodeId, stats] : *statsLocked) {
+      const auto& counter = stats->decompressCPUTimeNanos;
+      if (counter.count() == 0) {
+        continue;
+      }
+      result.emplace(
+          fmt::format("column_{}.decompressCPUTimeNanos", nodeId),
+          RuntimeMetric{
+              static_cast<int64_t>(counter.sum()),
+              static_cast<int64_t>(counter.count()),
+              static_cast<int64_t>(counter.min()),
+              static_cast<int64_t>(counter.max()),
+              RuntimeCounter::Unit::kNanos});
+    }
+  }
+
+ private:
+  // Per-column stats keyed by nodeId. Uses unique_ptr because IoCounter
+  // contains std::atomic and is not copyable.
+  folly::Synchronized<
+      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnMetrics>>>
+      map_;
+};
+
 struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
@@ -542,6 +639,45 @@ struct ColumnReaderStatistics {
 
   // Total time spent in loading pages, in nanoseconds.
   io::IoCounter pageLoadTimeNs;
+
+  // Per-column decompression metrics. Only populated when column stats
+  // collection is enabled.
+  std::optional<ColumnMetricsSet> columnMetricsSet;
+
+  /// Merges all stats from another ColumnReaderStatistics instance.
+  void mergeFrom(const ColumnReaderStatistics& other) {
+    flattenStringDictionaryValues += other.flattenStringDictionaryValues;
+    pageLoadTimeNs.merge(other.pageLoadTimeNs);
+    if (other.columnMetricsSet) {
+      if (!columnMetricsSet) {
+        columnMetricsSet.emplace();
+      }
+      columnMetricsSet->mergeFrom(*other.columnMetricsSet);
+    }
+  }
+
+  /// Exports all metrics into the runtime metrics result map.
+  void toRuntimeMetrics(
+      std::unordered_map<std::string, RuntimeMetric>& result) const {
+    if (flattenStringDictionaryValues > 0) {
+      result.emplace(
+          "flattenStringDictionaryValues",
+          RuntimeMetric(flattenStringDictionaryValues));
+    }
+    if (pageLoadTimeNs.sum() > 0) {
+      result.emplace(
+          "pageLoadTimeNs",
+          RuntimeMetric(
+              pageLoadTimeNs.sum(),
+              pageLoadTimeNs.count(),
+              pageLoadTimeNs.min(),
+              pageLoadTimeNs.max(),
+              RuntimeCounter::Unit::kNanos));
+    }
+    if (columnMetricsSet) {
+      columnMetricsSet->toRuntimeMetrics(result);
+    }
+  }
 };
 
 struct RuntimeStatistics {
@@ -565,7 +701,7 @@ struct RuntimeStatistics {
   int64_t numStripes{0};
 
   UnitLoaderStats unitLoaderStats;
-  ColumnReaderStatistics columnReaderStatistics;
+  ColumnReaderStatistics columnReaderStats;
 
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() {
     std::unordered_map<std::string, RuntimeMetric> result;
@@ -597,21 +733,7 @@ struct RuntimeStatistics {
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));
     }
-    if (columnReaderStatistics.flattenStringDictionaryValues > 0) {
-      result.emplace(
-          "flattenStringDictionaryValues",
-          RuntimeMetric(columnReaderStatistics.flattenStringDictionaryValues));
-    }
-    if (columnReaderStatistics.pageLoadTimeNs.sum() > 0) {
-      result.emplace(
-          "pageLoadTimeNs",
-          RuntimeMetric(
-              columnReaderStatistics.pageLoadTimeNs.sum(),
-              columnReaderStatistics.pageLoadTimeNs.count(),
-              columnReaderStatistics.pageLoadTimeNs.min(),
-              columnReaderStatistics.pageLoadTimeNs.max(),
-              RuntimeCounter::Unit::kNanos));
-    }
+    columnReaderStats.toRuntimeMetrics(result);
     return result;
   }
 };

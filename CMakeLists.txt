@@ -670,6 +670,9 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Find Threads library
   find_package(Threads REQUIRED)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
+  # Explicitly enable folly coroutines when compiler supports them.
+  # This is required for folly::coro::AsyncGenerator to work correctly.
+  add_compile_definitions(FOLLY_HAS_COROUTINES=1)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)

@@ -546,6 +546,13 @@ Aggregation
        The value is in the range of [0, 1). Currently only applies to approx_most_frequent
        aggregate with StringView type during global aggregation. May be extended
        to other aggregation types on-demand.
+   * - aggregation_memory_compaction_reclaim_enabled
+     - bool
+     - false
+     - If true, enables lightweight memory compaction before spilling during
+       memory reclaim in aggregation. When enabled, the aggregation operator
+       will try to compact aggregate function state (e.g., free dead strings)
+       before resorting to spilling.
    * - streaming_aggregation_min_output_batch_rows
      - integer
      - 0
