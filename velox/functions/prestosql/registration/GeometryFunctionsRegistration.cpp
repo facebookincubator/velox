@@ -20,6 +20,7 @@
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/SphericalGeographyRegistration.h"
+#include "velox/functions/prestosql/GooglePolylineFunctions.h"
 
 namespace facebook::velox::functions {
 
@@ -214,6 +215,30 @@ void registerBingTileGeometryFunctions(const std::string& prefix) {
       int32_t>({{prefix + "geometry_to_dissolved_bing_tiles"}});
 }
 
+void registerGooglePolylineFunctions(const std::string& prefix) {
+  registerFunction<
+      GooglePolylineEncodeFunction,
+      Varchar,
+      Array<Geometry>>({{prefix + "google_polyline_encode"}});
+
+  registerFunction<
+      GooglePolylineEncodeFunction,
+      Varchar,
+      Array<Geometry>,
+      int64_t>({{prefix + "google_polyline_encode"}});
+
+  registerFunction<
+      GooglePolylineDecodeFunction,
+      Array<Geometry>,
+      Varchar>({{prefix + "google_polyline_decode"}});
+
+  registerFunction<
+      GooglePolylineDecodeFunction,
+      Array<Geometry>,
+      Varchar,
+      int64_t>({{prefix + "google_polyline_decode"}});
+}
+
 } // namespace
 
 void registerGeometryFunctions(const std::string& prefix) {
@@ -224,6 +249,7 @@ void registerGeometryFunctions(const std::string& prefix) {
   registerOverlayOperations(prefix);
   registerAccessors(prefix);
   registerBingTileGeometryFunctions(prefix);
+  registerGooglePolylineFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions
