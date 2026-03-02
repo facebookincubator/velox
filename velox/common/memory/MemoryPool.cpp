@@ -439,15 +439,16 @@ MemoryPoolImpl::MemoryPoolImpl(
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
     const Options& options)
-    : MemoryPool{name, kind, parent, options},
+    : MemoryPool{name, kind, std::move(parent), options},
       manager_{memoryManager},
       allocator_{manager_->allocator()},
       arbitrator_{manager_->arbitrator()},
-      reclaimer_(std::move(reclaimer)),
+      reclaimer_{reclaimer.get()},
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
-      capacity_(parent_ != nullptr ? kMaxMemory : 0) {
+      capacity_{parent_ != nullptr ? kMaxMemory : 0} {
   VELOX_CHECK(options.threadSafe || isLeaf());
+  std::ignore = reclaimer.release();
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
@@ -483,6 +484,8 @@ MemoryPoolImpl::~MemoryPoolImpl() {
   if (destructionCb_ != nullptr) {
     destructionCb_(this);
   }
+
+  delete reclaimer_.load(std::memory_order_relaxed);
 }
 
 MemoryPool::Stats MemoryPoolImpl::stats() const {
@@ -1096,13 +1099,12 @@ void MemoryPoolImpl::setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) {
         parent_->name());
   }
   std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK_NULL(reclaimer_);
-  reclaimer_ = std::move(reclaimer);
+  VELOX_CHECK_NULL(reclaimer_.load(std::memory_order_relaxed));
+  reclaimer_.store(reclaimer.release(), std::memory_order_relaxed);
 }
 
 MemoryReclaimer* MemoryPoolImpl::reclaimer() const {
-  tsan_lock_guard<std::mutex> l(mutex_);
-  return reclaimer_.get();
+  return reclaimer_.load(std::memory_order_relaxed);
 }
 
 std::optional<uint64_t> MemoryPoolImpl::reclaimableBytes() const {

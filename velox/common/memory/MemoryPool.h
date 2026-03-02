@@ -1052,7 +1052,7 @@ class MemoryPoolImpl : public MemoryPool {
   // object if not null. For example, a memory pool can reclaim the used memory
   // from a spillable operator through disk spilling. If null, we can't reclaim
   // memory from this memory pool.
-  std::unique_ptr<MemoryReclaimer> reclaimer_;
+  std::atomic<MemoryReclaimer*> reclaimer_;
 
   // The memory cap in bytes to enforce.
   tsan_atomic<int64_t> capacity_;
