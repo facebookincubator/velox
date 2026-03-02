@@ -17,6 +17,7 @@ velox_add_library(
   ArrayConcatRegistration.cpp
   ArrayFunctionsRegistration.cpp
   ArrayNGramsRegistration.cpp
+  ArraySplitIntoChunksRegistration.cpp
   BinaryFunctionsRegistration.cpp
   BingTileFunctionsRegistration.cpp
   BitwiseFunctionsRegistration.cpp
