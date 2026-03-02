@@ -92,6 +92,8 @@ jobs:
       CUDA_VERSION: '12.9'
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
+    outputs:
+      cudf-changes: ${{ steps.changes.outputs.cudf }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -220,6 +222,108 @@ jobs:
           sed -i 's/-Wno-maybe-uninitialized//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-fcoroutines//g' $BUILD_PATH/compile_commands.json
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
+
+      - name: Check cuDF Changes
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        if: ${{ ! inputs.use-clang && always() }}
+        with:
+          filters: |
+            cudf:
+              - 'velox/experimental/cudf/**'
+              - 'CMake/resolve_dependency_modules/cudf.cmake'
+
+      - name: Copy Shared Libraries for cuDF Test Binaries
+        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        env:
+          CUDF_DIR: _build/release/velox/experimental/cudf
+        run: |
+          mkdir -p $CUDF_DIR/cudf-libs
+          deps=$( \
+            for exe in $CUDF_DIR/tests/velox_cudf_*; \
+              do ldd "$exe" 2>/dev/null; done | \
+            sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | \
+            # don't copy cuda runtime and certain system libraries
+            sed '/libcuda/ d' |  \
+            sed '/librt.so/ d' |  \
+            sed '/libm.so/ d' |  \
+            sed '/libstdc++.so/ d' |  \
+            sed '/ld-linux-x86-64.so/ d' |  \
+            sed '/libc.so/ d' | sort -u \
+          ) && \
+          # copy all "real" files and symlink targets to $CUDF_DIR/cudf-libs
+          ( \
+            echo "$deps" | \
+            xargs readlink -f | \
+            xargs -I {} cp {} $CUDF_DIR/cudf-libs/ \
+          ) && \
+          # filter out which libraries are symlinks
+          lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) && \
+          # write new symlinks to the same folder, with targets in the same folder
+          ( \
+            cd $CUDF_DIR/cudf-libs && \
+            echo "$lndeps" | \
+            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}
+          ) && \
+          tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
+
+      - name: Upload cuDF Test Binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        with:
+          name: cudftestbinaries
+          path: |
+            velox/dwio/parquet/tests/examples/int.parquet
+            velox/experimental/cudf/tests/CMakeLists.txt
+            _build/release/velox/experimental/cudf/tests/velox_cudf_*
+            _build/release/velox/experimental/cudf/tests/CTestTestfile.cmake
+            _build/release/velox/experimental/cudf/cudf-libs.tar
+          retention-days: ${{ env.RETENTION }}
+
+  cudf-tests:
+    runs-on: 4-core-ubuntu-gpu-t4
+    needs: adapters
+    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes && always() }}
+    timeout-minutes: 30
+    env:
+      CUDF_DIR: _build/release/velox/experimental/cudf
+    steps:
+      - name: Install Packages
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake patchelf cuda-toolkit-12-9
+          export MINIO_VERSION="2022-05-26T05-48-41Z"
+          export MINIO_BINARY_NAME="minio-2022-05-26"
+          wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
+          sudo mv ./"${MINIO_BINARY_NAME}" /usr/local/bin/
+          sudo chmod +x /usr/local/bin/"${MINIO_BINARY_NAME}"
+
+      - name: Check NVIDIA Driver Version
+        run: |
+          nvidia-smi
+
+      - name: Download cuDF Test Binaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: cudftestbinaries
+
+      - name: Adapt Downloaded Files
+        run: |
+          # Change hardcoded workspace path in CTestTestfile.cmake to the runner workspace
+          sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' $CUDF_DIR/tests/CTestTestfile.cmake
+          grep "Source directory" $CUDF_DIR/tests/CTestTestfile.cmake
+          grep "Build directory" $CUDF_DIR/tests/CTestTestfile.cmake
+          (cd  $CUDF_DIR && tar -xf cudf-libs.tar)
+          # Patch test executables
+          for exe in $CUDF_DIR/tests/velox_cudf_*; do \
+            patchelf --force-rpath --set-rpath '$ORIGIN/../cudf-libs' "$exe"
+            chmod +x "$exe"
+            ls -l "$exe"
+          done
+
+      - name: Run cuDF Tests
+        run: |
+          cd $CUDF_DIR/tests/
+          ctest --output-on-failure
 
   ubuntu-debug:
     runs-on: 16-core-ubuntu
