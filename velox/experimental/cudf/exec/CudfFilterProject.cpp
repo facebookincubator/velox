@@ -249,7 +249,34 @@ RowVectorPtr CudfFilterProject::getOutput() {
   if (hasFilter_) {
     filter(inputTableColumns, stream);
   }
+  vector_size_t filteredRowCount = 0;
+  if (!inputTableColumns.empty()) {
+    filteredRowCount = inputTableColumns.front()->size();
+  } else {
+    filteredRowCount = input_->size();
+  }
   auto outputColumns = project(inputTableColumns, stream);
+
+  if (outputColumns.empty()) {
+    if (filteredRowCount == 0) {
+      input_.reset();
+      return nullptr;
+    }
+    auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
+    stream.synchronize();
+    if (CudfConfig::getInstance().debugEnabled) {
+      VLOG(1) << "cudfProject Output: " << filteredRowCount
+              << " rows, 0 columns";
+    }
+    auto cudfOutput = std::make_shared<CudfVector>(
+        input_->pool(),
+        outputType_,
+        filteredRowCount,
+        std::move(outputTable),
+        stream);
+    input_.reset();
+    return cudfOutput;
+  }
 
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
   stream.synchronize();
@@ -263,7 +290,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto cudfOutput = std::make_shared<CudfVector>(
       input_->pool(), outputType_, size, std::move(outputTable), stream);
   input_.reset();
-  if (numColumns == 0 or size == 0) {
+  if (size == 0) {
     return nullptr;
   }
   return cudfOutput;
