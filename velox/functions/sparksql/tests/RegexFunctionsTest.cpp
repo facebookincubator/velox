@@ -546,6 +546,7 @@ TEST_F(RegexFunctionsTest, regexpReplaceMassiveVectors) {
   assertEqualVectors(result, output);
 }
 
+// LRUCache supports compile more than "expression.max_compiled_regexes".
 TEST_F(RegexFunctionsTest, regexpReplaceCacheLimitTest) {
   std::vector<std::string> patterns;
   std::vector<std::string> strings;
@@ -561,9 +562,9 @@ TEST_F(RegexFunctionsTest, regexpReplaceCacheLimitTest) {
         "X" + std::to_string(i) + "-Y" + std::to_string(i));
   }
 
-  VELOX_ASSERT_THROW(
-      testingRegexpReplaceRows(strings, patterns, replaces),
-      "Max number of regex reached");
+  auto result = testingRegexpReplaceRows(strings, patterns, replaces);
+  auto output = convertOutput(expectedOutputs, 1);
+  assertEqualVectors(result, output);
 }
 
 TEST_F(RegexFunctionsTest, regexpReplaceCacheMissLimit) {
