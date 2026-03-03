@@ -34,6 +34,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
+#include "velox/common/time/Timer.h"
 
 namespace facebook::velox::cache {
 
@@ -548,6 +549,8 @@ struct CacheStats {
   /// Sum of scores of evicted entries. This serves to infer an average
   /// lifetime for entries in cache.
   int64_t sumEvictScore{0};
+  /// Cumulative clocks spent waiting to acquire shard mutexes.
+  uint64_t shardMutexWaitClocks{0};
 
   /// Ssd cache stats that include both snapshot and cumulative stats.
   std::shared_ptr<SsdCacheStats> ssdStats = nullptr;
@@ -701,6 +704,9 @@ class CacheShard {
   // Tracker of cumulative time spent in allocating/freeing MemoryAllocator
   // space for backing cached data.
   std::atomic<uint64_t> allocClocks_{0};
+  // Tracker of cumulative clocks spent waiting to acquire shard mutex.
+  // Mutable to allow updating from const methods like exists().
+  mutable std::atomic<uint64_t> shardMutexWaitClocks_{0};
 
   friend class test::CacheShardTestHelper;
 };

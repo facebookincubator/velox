@@ -475,6 +475,13 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(
         counterMap.count(std::string(kMetricMemoryCacheNumAllocClocks)), 0);
     ASSERT_EQ(
+        counterMap.count(
+            std::string(kMetricMemoryCacheNumShardMutexWaitClocks)),
+        0);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricMemoryCacheShardMutexWaitTimeMs)),
+        0);
+    ASSERT_EQ(
         counterMap.count(std::string(kMetricMemoryCacheNumAgedOutEntries)), 0);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricMemoryCacheSumEvictScore)), 0);
@@ -552,6 +559,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
        .numAgedOut = 10,
        .allocClocks = 10,
        .sumEvictScore = 10,
+       .shardMutexWaitClocks = 10,
        .ssdStats = newSsdStats});
   arbitrator.updateStats(
       memory::MemoryArbitrator::Stats(
@@ -577,6 +585,10 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricMemoryCacheNumWaitExclusive)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricMemoryCacheNumAllocClocks)), 1);
+    ASSERT_EQ(
+        counterMap.count(
+            std::string(kMetricMemoryCacheNumShardMutexWaitClocks)),
+        1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricMemoryCacheNumAgedOutEntries)), 1);
     ASSERT_EQ(
@@ -614,7 +626,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheRecoveredEntries)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheReadWithoutChecksum)), 1);
-    ASSERT_EQ(counterMap.size(), 58);
+    ASSERT_EQ(counterMap.size(), 59);
   }
 }
 
