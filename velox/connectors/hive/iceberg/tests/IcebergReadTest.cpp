@@ -15,7 +15,9 @@
  */
 
 #include <folly/Singleton.h>
+#include <folly/lang/Bits.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -920,7 +922,13 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
        makeFlatVector<int64_t>({0, 1, 2})})};
   writeToFile(deleteFilePath->getPath(), deleteVectors);
 
-  // upperBound "2" is the max position in the delete file.
+  // upperBound "2" is the max position in the delete file. Iceberg stores
+  // long bounds as 8-byte little-endian binary, then Base64 encodes them.
+  uint64_t upperBound = 2;
+  auto upperBoundLE = folly::Endian::little(upperBound);
+  auto encodedUpperBound = encoding::Base64::encode(
+      std::string_view(
+          reinterpret_cast<const char*>(&upperBoundLE), sizeof(upperBoundLE)));
   IcebergDeleteFile deleteFile(
       FileContent::kPositionalDeletes,
       deleteFilePath->getPath(),
@@ -930,7 +938,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
           std::fopen(deleteFilePath->getPath().c_str(), "r")),
       {},
       {},
-      {{posColumn->id, "2"}});
+      {{posColumn->id, encodedUpperBound}});
 
   auto plan = PlanBuilder()
                   .startTableScan()
