@@ -1322,6 +1322,7 @@ void HashBuild::reclaim(
   std::vector<HashBuildSpiller*> spillers;
   for (auto* op : operators) {
     HashBuild* buildOp = static_cast<HashBuild*>(op);
+    buildOp->table_->freePointerTable();
     spillers.push_back(buildOp->spiller_.get());
   }
 
