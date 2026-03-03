@@ -1374,6 +1374,12 @@ UnnestNode::UnnestNode(
   std::vector<std::string> names;
   std::vector<TypePtr> types;
 
+  const auto expectedSize = replicateVariables_.size() + unnestNames_.size() +
+      static_cast<size_t>(ordinalityName_.has_value()) +
+      static_cast<size_t>(emptyUnnestValueName_.has_value());
+  names.reserve(expectedSize);
+  types.reserve(expectedSize);
+
   for (const auto& variable : replicateVariables_) {
     names.emplace_back(variable->name());
     types.emplace_back(variable->type());
@@ -1381,17 +1387,23 @@ UnnestNode::UnnestNode(
 
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
-    if (variable->type()->isArray()) {
+    const auto& type = variable->type();
+    if (type->isArray()) {
       names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(variable->type()->asArray().elementType());
-    } else if (variable->type()->isMap()) {
-      const auto& mapType = variable->type()->asMap();
+      types.emplace_back(type->asArray().elementType());
+    } else if (type->isMap()) {
+      const auto& mapType = type->asMap();
 
       names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(mapType.keyType());
 
       names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(mapType.valueType());
+    } else if (type->isRow()) {
+      for (const auto& child : type->asRow().children()) {
+        names.emplace_back(unnestNames_[unnestIndex++]);
+        types.emplace_back(child);
+      }
     } else {
       VELOX_FAIL(
           "Unexpected type of unnest variable. Expected ARRAY or MAP, but got {}.",
