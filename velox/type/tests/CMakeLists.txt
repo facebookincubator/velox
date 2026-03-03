@@ -15,6 +15,7 @@ add_subdirectory(utils)
 
 add_executable(
   velox_type_test
+  CastRegistryTest.cpp
   ConversionsTest.cpp
   DecimalTest.cpp
   FilterTest.cpp
