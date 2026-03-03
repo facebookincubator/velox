@@ -28,7 +28,9 @@ namespace facebook::velox::text {
 
 namespace {
 
-int32_t parseDate(const std::string& text) { return DATE()->toDays(text); }
+int32_t parseDate(const std::string& text) {
+  return DATE()->toDays(text);
+}
 
 class TextReaderTest : public testing::Test,
                        public velox::test::VectorTestBase {
@@ -37,11 +39,17 @@ class TextReaderTest : public testing::Test,
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  void SetUp() override { registerTextReaderFactory(); }
+  void SetUp() override {
+    registerTextReaderFactory();
+  }
 
-  void TearDown() override { unregisterTextReaderFactory(); }
+  void TearDown() override {
+    unregisterTextReaderFactory();
+  }
 
-  memory::MemoryPool& poolRef() { return *pool(); }
+  memory::MemoryPool& poolRef() {
+    return *pool();
+  }
 
   void setScanSpec(const Type& type, dwio::common::RowReaderOptions& options) {
     auto spec = std::make_shared<common::ScanSpec>("root");
@@ -59,36 +67,70 @@ struct TestCompressionParam {
 };
 
 class TextReaderDecompressionTest
-  : public TextReaderTest,
-    public testing::WithParamInterface<TestCompressionParam> {};
+    : public TextReaderTest,
+      public testing::WithParamInterface<TestCompressionParam> {};
 
 TEST_F(TextReaderTest, basic) {
   auto expected = makeRowVector({
-    makeFlatVector<std::string>({"FOO", "FOO", "FOO", "FOO", "BAR", "BAR",
-                                 "BAR", "BAR", "BAZ", "BAZ", "BAZ", "BAZ"}),
-    makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
-    makeFlatVector<double>({1.123, 2.333, -6.1, 4.2, 47.2, 79.5, 3.1415926,
-                            -221.145, 93.12, -4123.11, 950.2, 43.66}),
-    makeFlatVector<bool>({true, true, false, true, false, false, true, true,
-                          false, false, false, true}),
+      makeFlatVector<std::string>(
+          {"FOO",
+           "FOO",
+           "FOO",
+           "FOO",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           "BAZ"}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+      makeFlatVector<double>(
+          {1.123,
+           2.333,
+           -6.1,
+           4.2,
+           47.2,
+           79.5,
+           3.1415926,
+           -221.145,
+           93.12,
+           -4123.11,
+           950.2,
+           43.66}),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           false,
+           true,
+           false,
+           false,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true}),
   });
 
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path =
-    velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                 "examples/simple_types_compressed_file.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
@@ -133,39 +175,62 @@ TEST_F(TextReaderTest, basic) {
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {
-  tzset();
   auto expected = makeRowVector({
-    makeFlatVector<std::string>({"FOO", "FOO", "FOO", "FOO", "BAR", "BAR",
-                                 "BAR", "BAR", "BAZ", "BAZ", "BAZ", "BAZ", ""}),
-    makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}),
-    makeNullableFlatVector<double>(
-      {std::nullopt, 2.333, -6.1, 4.2, std::nullopt, 79.5, std::nullopt,
-       -221.145, 93.12, std::nullopt, 950.2, 43.66, std::nullopt}),
-    makeNullableFlatVector<Timestamp>({
-      Timestamp{1'695'378'095, 148'000'000},
-      Timestamp{1'695'690'351, 0},
-      Timestamp{1'695'686'400, 0},
-      Timestamp{1'695'083'400, 0},
-      std::nullopt,
-      Timestamp{1'695'657'091, 209'000'000},
-      Timestamp{1'695'690'437, 469'123'000},
-      Timestamp{1'696'540'679, 976'000'000},
-      Timestamp{1'695'657'171, 637'000'000},
-      Timestamp{1'695'693'225, 745'123'000},
-      std::nullopt,
-      Timestamp{1'695'406'246, 0},
-      Timestamp{1'699'392'124, 736'000'000},
-    }),
+      makeFlatVector<std::string>(
+          {"FOO",
+           "FOO",
+           "FOO",
+           "FOO",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           ""}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}),
+      makeNullableFlatVector<double>(
+          {std::nullopt,
+           2.333,
+           -6.1,
+           4.2,
+           std::nullopt,
+           79.5,
+           std::nullopt,
+           -221.145,
+           93.12,
+           std::nullopt,
+           950.2,
+           43.66,
+           std::nullopt}),
+      makeNullableFlatVector<Timestamp>({
+          Timestamp{1'695'378'095, 148'000'000},
+          Timestamp{1'695'690'351, 0},
+          Timestamp{1'695'686'400, 0},
+          Timestamp{1'695'083'400, 0},
+          std::nullopt,
+          Timestamp{1'695'657'091, 209'000'000},
+          Timestamp{1'695'690'437, 469'123'000},
+          Timestamp{1'696'540'679, 976'000'000},
+          Timestamp{1'695'657'171, 637'000'000},
+          Timestamp{1'695'693'225, 745'123'000},
+          std::nullopt,
+          Timestamp{1'695'406'246, 0},
+          Timestamp{1'699'392'124, 736'000'000},
+      }),
   });
 
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_ts", TIMESTAMP()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_ts", TIMESTAMP()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/simple_types_with_header");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/simple_types_with_header");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
@@ -175,7 +240,7 @@ TEST_F(TextReaderTest, headerAndCustomNullString) {
   rowReaderOptions.setSkipRows(1);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -249,12 +314,12 @@ TEST_F(TextReaderTest, headerAndCustomNullString) {
 TEST_F(TextReaderTest, complexTypesWithCustomDelimiters) {
   const vector_size_t length = 13;
   const auto keyVector = makeFlatVector<int64_t>(
-    {1,   111,  22, 22222, 333, 33, 44,    5,   555, 66, 7777,     7,
-     777, 8888, 88, 9,     99,  10, 10000, 111, 1,   11, 11122222, 123142});
+      {1,   111,  22, 22222, 333, 33, 44,    5,   555, 66, 7777,     7,
+       777, 8888, 88, 9,     99,  10, 10000, 111, 1,   11, 11122222, 123142});
   const auto valueVector = makeFlatVector<bool>(
-    {false, true, true,  false, false, true,  false, true,
-     false, true, false, true,  false, false, true,  true,
-     false, true, false, true,  false, true,  true,  true});
+      {false, true, true,  false, false, true,  false, true,
+       false, true, false, true,  false, false, true,  true,
+       false, true, false, true,  false, true,  true,  true});
   BufferPtr sizes = facebook::velox::allocateOffsets(length, pool());
   BufferPtr offsets = facebook::velox::allocateOffsets(length, pool());
   auto rawSizes = sizes->asMutable<vector_size_t>();
@@ -277,48 +342,68 @@ TEST_F(TextReaderTest, complexTypesWithCustomDelimiters) {
   }
 
   const auto expected = makeRowVector({
-    makeFlatVector<std::string>({"FOO", "FOO", "FOO", "FOO", "BAR", "BAR",
-                                 "BAR", "BAR", "BAZ", "BAZ", "BAZ", "FOO\\nBAZ",
-                                 "FOO\n\nBAR\nBAZ"}),
-    makeArrayVector<int64_t>({{1, 11, 111},
-                              {22, 22222},
-                              {333, 33},
-                              {4444, 44},
-                              {5, 555},
-                              {666, 66, 66},
-                              {7777, 7, 777},
-                              {8888, 88},
-                              {9, 99},
-                              {10, 10000},
-                              {111, 1, 111},
-                              {12, 11122222, 222},
-                              {13, 11133333, 333}}),
-    makeArrayVector<double>({{1.123, 1.3123},
-                             {2.333, -5512, 1.23},
-                             {-6.1, 65.777},
-                             {4.2, 24, 324.11},
-                             {47.2, 213.23},
-                             {79.5, -44.11},
-                             {3.1415926, 441.124},
-                             {-221.145, 878.43, -11},
-                             {93.12, 632},
-                             {-4123.11, -177.1},
-                             {950.2, -4412},
-                             {43.66, 33121.43},
-                             {-42.11, -123.43}}),
-    std::make_shared<MapVector>(
-      pool(), MAP(keyVector->type(), valueVector->type()), nullptr, length,
-      offsets, sizes, keyVector, valueVector),
+      makeFlatVector<std::string>(
+          {"FOO",
+           "FOO",
+           "FOO",
+           "FOO",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           "FOO\\nBAZ",
+           "FOO\n\nBAR\nBAZ"}),
+      makeArrayVector<int64_t>(
+          {{1, 11, 111},
+           {22, 22222},
+           {333, 33},
+           {4444, 44},
+           {5, 555},
+           {666, 66, 66},
+           {7777, 7, 777},
+           {8888, 88},
+           {9, 99},
+           {10, 10000},
+           {111, 1, 111},
+           {12, 11122222, 222},
+           {13, 11133333, 333}}),
+      makeArrayVector<double>(
+          {{1.123, 1.3123},
+           {2.333, -5512, 1.23},
+           {-6.1, 65.777},
+           {4.2, 24, 324.11},
+           {47.2, 213.23},
+           {79.5, -44.11},
+           {3.1415926, 441.124},
+           {-221.145, 878.43, -11},
+           {93.12, 632},
+           {-4123.11, -177.1},
+           {950.2, -4412},
+           {43.66, 33121.43},
+           {-42.11, -123.43}}),
+      std::make_shared<MapVector>(
+          pool(),
+          MAP(keyVector->type(), valueVector->type()),
+          nullptr,
+          length,
+          offsets,
+          sizes,
+          keyVector,
+          valueVector),
   });
 
-  const auto type = ROW({{"col_string", VARCHAR()},
-                         {"col_bigint_arr", ARRAY(BIGINT())},
-                         {"col_double_arr", ARRAY(DOUBLE())},
-                         {"col_map", MAP(BIGINT(), BOOLEAN())}});
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/custom_delimiters_file");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/custom_delimiters_file");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
@@ -327,7 +412,7 @@ TEST_F(TextReaderTest, complexTypesWithCustomDelimiters) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReaderOptions = dwio::common::RowReaderOptions();
   setScanSpec(*type, rowReaderOptions);
@@ -375,14 +460,15 @@ TEST_F(TextReaderTest, complexTypesWithCustomDelimiters) {
 }
 
 TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
-  const auto type = ROW({{"col_string", VARCHAR()},
-                         {"col_bigint_arr", ARRAY(BIGINT())},
-                         {"col_double_arr", ARRAY(DOUBLE())},
-                         {"col_map", MAP(BIGINT(), BOOLEAN())}});
+  const auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_bigint_arr", ARRAY(BIGINT())},
+       {"col_double_arr", ARRAY(DOUBLE())},
+       {"col_map", MAP(BIGINT(), BOOLEAN())}});
 
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/custom_delimiters_file");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/custom_delimiters_file");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto serDeOptions = dwio::common::SerDeOptions('\t', '|', '#', '\\', true);
@@ -391,35 +477,39 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
 
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addField("col_string", 0);
-  spec->addField("col_map", 1);
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
+  spec->addField("col_string", 1);
+  spec->addField("col_map", 2);
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
-    type, std::vector<std::string>({"col_string", "col_map"})));
+  rowOptions.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          type, std::vector<std::string>({"col_string", "col_map"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
-  auto outputType =
-    ROW({"col_string", "col_map"}, {VARCHAR(), MAP(BIGINT(), BOOLEAN())});
-  VectorPtr result = BaseVector::create(outputType, 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
 
   ASSERT_EQ(rowReader->next(13, result), 13);
-  ASSERT_EQ(*result->type(), *ROW({"col_string", "col_map"},
-                                  {VARCHAR(), MAP(BIGINT(), BOOLEAN())}));
+  ASSERT_EQ(
+      *result->type(),
+      *ROW(
+          {"ds", "col_string", "col_map"},
+          {VARCHAR(), VARCHAR(), MAP(BIGINT(), BOOLEAN())}));
 
   const vector_size_t length = 13;
   const auto keyVector = makeFlatVector<int64_t>(
-    {1,   111,  22, 22222, 333, 33, 44,    5,   555, 66, 7777,     7,
-     777, 8888, 88, 9,     99,  10, 10000, 111, 1,   11, 11122222, 123142});
+      {1,   111,  22, 22222, 333, 33, 44,    5,   555, 66, 7777,     7,
+       777, 8888, 88, 9,     99,  10, 10000, 111, 1,   11, 11122222, 123142});
   const auto valueVector = makeFlatVector<bool>(
-    {false, true, true,  false, false, true,  false, true,
-     false, true, false, true,  false, false, true,  true,
-     false, true, false, true,  false, true,  true,  true});
+      {false, true, true,  false, false, true,  false, true,
+       false, true, false, true,  false, false, true,  true,
+       false, true, false, true,  false, true,  true,  true});
   BufferPtr sizes = facebook::velox::allocateOffsets(length, pool());
   BufferPtr offsets = facebook::velox::allocateOffsets(length, pool());
   auto rawSizes = sizes->asMutable<vector_size_t>();
@@ -442,12 +532,31 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
   }
 
   auto expected = makeRowVector({
-    makeFlatVector<std::string>({"FOO", "FOO", "FOO", "FOO", "BAR", "BAR",
-                                 "BAR", "BAR", "BAZ", "BAZ", "BAZ", "FOO\\nBAZ",
-                                 "FOO\n\nBAR\nBAZ"}),
-    std::make_shared<MapVector>(
-      pool(), MAP(keyVector->type(), valueVector->type()), nullptr, length,
-      offsets, sizes, keyVector, valueVector),
+      std::make_shared<ConstantVector<StringView>>(
+          pool(), 13, false, VARCHAR(), "2023-07-18"),
+      makeFlatVector<std::string>(
+          {"FOO",
+           "FOO",
+           "FOO",
+           "FOO",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           "FOO\\nBAZ",
+           "FOO\n\nBAR\nBAZ"}),
+      std::make_shared<MapVector>(
+          pool(),
+          MAP(keyVector->type(), valueVector->type()),
+          nullptr,
+          length,
+          offsets,
+          sizes,
+          keyVector,
+          valueVector),
   });
 
   ASSERT_EQ(result->size(), expected->size());
@@ -457,18 +566,19 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
 }
 
 TEST_F(TextReaderTest, projectPrimitiveTypes) {
-  auto type = ROW({{"col_int", INTEGER()},
-                   {"col_huge", BIGINT()},
-                   {"col_tiny", TINYINT()},
-                   {"col_double", DOUBLE()}});
+  auto type = ROW(
+      {{"col_int", INTEGER()},
+       {"col_huge", BIGINT()},
+       {"col_tiny", TINYINT()},
+       {"col_double", DOUBLE()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/simple_types");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
 
   // Test projection of multiple primitive types: VARCHAR, INTEGER, and BOOLEAN
@@ -479,23 +589,41 @@ TEST_F(TextReaderTest, projectPrimitiveTypes) {
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
-    type, std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
+  rowOptions.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          type,
+          std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
-  auto outputType = ROW({"col_tiny", "col_int", "col_double"},
-                        {TINYINT(), INTEGER(), DOUBLE()});
-  VectorPtr result = BaseVector::create(outputType, 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
   ASSERT_EQ(rowReader->next(20, result), 16);
+  ASSERT_EQ(
+      *result->type(),
+      *ROW(
+          {"col_tiny", "col_int", "col_double"},
+          {TINYINT(), INTEGER(), DOUBLE()}));
 
   auto expected = makeRowVector({
-    makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-    makeFlatVector<int32_t>(
-      {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}),
-    makeNullableFlatVector<double>({1.123, 2.333, -6.1, 4.2, 0.0000513, 79.5,
-                                    std::nullopt, 3.1415926, 93.12, -221.145,
-                                    std::nullopt, 950.2, -4123.11, 43.66,
-                                    std::nullopt, std::nullopt}),
+      makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
+      makeFlatVector<int32_t>(
+          {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}),
+      makeNullableFlatVector<double>(
+          {1.123,
+           2.333,
+           -6.1,
+           4.2,
+           0.0000513,
+           79.5,
+           std::nullopt,
+           3.1415926,
+           93.12,
+           -221.145,
+           std::nullopt,
+           950.2,
+           -4123.11,
+           43.66,
+           std::nullopt,
+           std::nullopt}),
   });
 
   ASSERT_EQ(result->size(), expected->size());
@@ -505,33 +633,50 @@ TEST_F(TextReaderTest, projectPrimitiveTypes) {
 }
 
 TEST_F(TextReaderTest, projectColumns) {
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path =
-    velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                 "examples/simple_types_compressed_file.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addField("col_float", 0);
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
+  spec->addField("col_float", 1);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
-  rowOptions.select(std::make_shared<dwio::common::ColumnSelector>(
-    type, std::vector<std::string>({"col_float"})));
+  rowOptions.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          type, std::vector<std::string>({"col_float"})));
   auto rowReader = reader->createRowReader(rowOptions);
-  auto outputType = ROW({"col_float"}, {DOUBLE()});
-  VectorPtr result = BaseVector::create(outputType, 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
   ASSERT_EQ(rowReader->next(10, result), 10);
+  ASSERT_EQ(*result->type(), *ROW({"ds", "col_float"}, {VARCHAR(), DOUBLE()}));
   auto expected = makeRowVector({
-    makeFlatVector<double>({1.123, 2.333, -6.1, 4.2, 47.2, 79.5, 3.1415926,
-                            -221.145, 93.12, -4123.11}),
+      std::make_shared<ConstantVector<StringView>>(
+          pool(), 10, false, VARCHAR(), "2023-07-18"),
+      makeFlatVector<double>(
+          {1.123,
+           2.333,
+           -6.1,
+           4.2,
+           47.2,
+           79.5,
+           3.1415926,
+           -221.145,
+           93.12,
+           -4123.11,
+           950.2,
+           43.66}),
   });
   ASSERT_EQ(result->size(), expected->size());
   for (int i = 0; i < 10; ++i) {
@@ -542,14 +687,15 @@ TEST_F(TextReaderTest, projectColumns) {
 TEST_F(TextReaderTest, projectNone) {
   // Tests the case where none of the columns are projected, e.g. a basic
   // count(*) query.
-  auto type = ROW({{"col_int", INTEGER()},
-                   {"col_big_int", BIGINT()},
-                   {"col_tiny_int", TINYINT()},
-                   {"col_double", DOUBLE()}});
+  auto type = ROW(
+      {{"col_int", INTEGER()},
+       {"col_big_int", BIGINT()},
+       {"col_tiny_int", TINYINT()},
+       {"col_double", DOUBLE()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/simple_types");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
@@ -559,14 +705,14 @@ TEST_F(TextReaderTest, projectNone) {
   // Project none of the columns.
   setScanSpec(*ROW({}, {}), rowReaderOptions);
   rowReaderOptions.select(
-    std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
+      std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
-  VectorPtr result = BaseVector::create(ROW({}, {}), 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
   // We expect to get 16 rows.
   ASSERT_EQ(rowReader->next(16, result), 16);
   ASSERT_EQ(rowReader->next(10, result), 0);
@@ -575,15 +721,16 @@ TEST_F(TextReaderTest, projectNone) {
 TEST_F(TextReaderTest, compressedProjectNone) {
   // Tests the case where none of the columns are projected, e.g. a basic
   // count(*) query.
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path =
-    velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                 "examples/simple_types_compressed_file.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
@@ -593,49 +740,55 @@ TEST_F(TextReaderTest, compressedProjectNone) {
   // Project none of the columns.
   setScanSpec(*ROW({}, {}), rowReaderOptions);
   rowReaderOptions.select(
-    std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
+      std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
-  VectorPtr result = BaseVector::create(ROW({}, {}), 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
   // We expect to get 12 rows.
   ASSERT_EQ(rowReader->next(12, result), 12);
   ASSERT_EQ(rowReader->next(10, result), 0);
 }
 
 TEST_F(TextReaderTest, compressedFilter) {
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path =
-    velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                 "examples/simple_types_compressed_file.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addField("col_int", 0);
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
+  spec->addField("col_int", 1);
   spec->getOrCreateChild(common::Subfield("col_string"))
-    ->setFilter(std::make_unique<common::BytesValues>(
-      std::vector<std::string>({"BAR"}), false));
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>({"BAR"}), false));
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
   rowOptions.select(
-    std::make_shared<dwio::common::ColumnSelector>(type, type->names()));
+      std::make_shared<dwio::common::ColumnSelector>(type, type->names()));
   auto rowReader = reader->createRowReader(rowOptions);
-  auto outputType = ROW({"col_int"}, {INTEGER()});
-  VectorPtr result = BaseVector::create(outputType, 0, pool());
-  ASSERT_EQ(rowReader->next(10, result), 12);
+  VectorPtr result = BaseVector::create(type, 0, pool());
+  ASSERT_EQ(rowReader->next(10, result), 10);
+  ASSERT_EQ(*result->type(), *ROW({"ds", "col_int"}, {VARCHAR(), INTEGER()}));
   auto expected = makeRowVector({
-    makeFlatVector<int32_t>({5, 6, 7, 8}),
+      std::make_shared<ConstantVector<StringView>>(
+          pool(), 4, false, VARCHAR(), "2023-07-18"),
+      makeFlatVector<int32_t>({5, 6, 7, 8}),
   });
   ASSERT_EQ(result->size(), expected->size());
   for (int i = 0; i < expected->size(); ++i) {
@@ -644,49 +797,57 @@ TEST_F(TextReaderTest, compressedFilter) {
 }
 
 TEST_F(TextReaderTest, filter) {
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_big_int", BIGINT()},
-                   {"col_bool", BOOLEAN()},
-                   {"col_timestamp", TIMESTAMP()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_big_int", BIGINT()},
+       {"col_bool", BOOLEAN()},
+       {"col_timestamp", TIMESTAMP()}});
 
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/more_simple_types");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/more_simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
 
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addField("col_big_int", 0);
+  spec->addField("ds", 0)->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "2023-07-18", 1, pool()));
+  spec->addField("col_big_int", 1);
   spec->getOrCreateChild(common::Subfield("col_string"))
-    ->setFilter(std::make_unique<common::BytesValues>(
-      std::vector<std::string>({"BAR", "BAZ"}), false));
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>({"BAR", "BAZ"}), false));
 
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
   rowOptions.select(
-    std::make_shared<dwio::common::ColumnSelector>(type, type->names()));
+      std::make_shared<dwio::common::ColumnSelector>(type, type->names()));
 
   auto rowReader = reader->createRowReader(rowOptions);
-  auto outputType = ROW({"col_big_int"}, {BIGINT()});
-  VectorPtr result = BaseVector::create(outputType, 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
 
   ASSERT_EQ(rowReader->next(15, result), 13);
+
+  ASSERT_EQ(
+      *result->type(), *ROW({"ds", "col_big_int"}, {VARCHAR(), BIGINT()}));
   auto expected = makeRowVector({
-    makeFlatVector<int64_t>({
-      4192,
-      4193,
-      4192,
-      4192,
-      4194,
-      4192,
-      4195,
-    }),
+      std::make_shared<ConstantVector<StringView>>(
+          pool(), 7, false, VARCHAR(), "2023-07-18"),
+      makeFlatVector<int64_t>({
+          4192,
+          4193,
+          4192,
+          4192,
+          4194,
+          4192,
+          4195,
+      }),
   });
 
   ASSERT_EQ(result->size(), expected->size());
@@ -696,26 +857,27 @@ TEST_F(TextReaderTest, filter) {
 }
 
 TEST_F(TextReaderTest, shrinkBatch) {
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/simple_types");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
   rowOptions.select(
-    std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
+      std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
   auto rowReader = reader->createRowReader(rowOptions);
-  VectorPtr result = BaseVector::create(ROW({}, {}), 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
 
   ASSERT_EQ(rowReader->next(6, result), 6);
   ASSERT_EQ(result->size(), 6);
@@ -727,27 +889,28 @@ TEST_F(TextReaderTest, shrinkBatch) {
 }
 
 TEST_F(TextReaderTest, compressedShrinkBatch) {
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path =
-    velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                 "examples/simple_types_compressed_file.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(spec);
   rowOptions.select(
-    std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
+      std::make_shared<dwio::common::ColumnSelector>(ROW({}, {})));
   auto rowReader = reader->createRowReader(rowOptions);
-  VectorPtr result = BaseVector::create(ROW({}, {}), 0, pool());
+  VectorPtr result = BaseVector::create(type, 0, pool());
   ASSERT_EQ(rowReader->next(6, result), 6);
   ASSERT_EQ(result->size(), 6);
   ASSERT_EQ(rowReader->next(4, result), 4);
@@ -759,12 +922,12 @@ TEST_F(TextReaderTest, compressedShrinkBatch) {
 
 TEST_F(TextReaderTest, emptyFile) {
   auto type = ROW({
-    {"transaction_id", VARCHAR()},
-    {"serial_number", VARCHAR()},
+      {"transaction_id", VARCHAR()},
+      {"serial_number", VARCHAR()},
   });
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/empty.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/empty.gz");
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
@@ -772,7 +935,7 @@ TEST_F(TextReaderTest, emptyFile) {
   setScanSpec(*type, rowReaderOptions);
   rowReaderOptions.setSkipRows(1);
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
   EXPECT_EQ(*reader->rowType(), *type);
@@ -783,40 +946,41 @@ TEST_F(TextReaderTest, emptyFile) {
 
 TEST_F(TextReaderTest, readRanges) {
   auto expected = makeRowVector(
-    {makeFlatVector<int64_t>(
-       {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}),
-     makeFlatVector<int64_t>({
-       4191,
-       4192,
-       4192,
-       4196,
-       4192,
-       4193,
-       4192,
-       4192,
-       4194,
-       4192,
-       4195,
-       4192,
-       4192,
-       4192,
-       4192,
-     }),
-     makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})});
+      {makeFlatVector<int64_t>(
+           {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}),
+       makeFlatVector<int64_t>({
+           4191,
+           4192,
+           4192,
+           4196,
+           4192,
+           4193,
+           4192,
+           4192,
+           4194,
+           4192,
+           4195,
+           4192,
+           4192,
+           4192,
+           4192,
+       }),
+       makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})});
 
   auto type =
-    ROW({{"id", BIGINT()}, {"org_id", BIGINT()}, {"deleted", TINYINT()}});
+      ROW({{"id", BIGINT()}, {"org_id", BIGINT()}, {"deleted", TINYINT()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
   auto path = velox::test::getDataFilePath(
-    "velox/dwio/text/tests/reader/", "examples/simple_types_10_bytes_per_row");
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_10_bytes_per_row");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   const int bytesPerRows = 10;
 
@@ -857,35 +1021,63 @@ TEST_F(TextReaderTest, readRanges) {
 
 TEST_F(TextReaderTest, readFloatAsInt) {
   auto expected = makeRowVector({
-    makeFlatVector<int32_t>(
-      {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}),
-    makeFlatVector<int64_t>({4191, 4192, 4192, 4196, 4192, 4193, 4192, 4192,
-                             4194, 4192, 4195, 4192, 4192, 4192, 4192, 4192,
-                             4192}),
-    makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-    makeNullableFlatVector<int32_t>(
-      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-       std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-       std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-       std::nullopt}),
+      makeFlatVector<int32_t>(
+          {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}),
+      makeFlatVector<int64_t>(
+          {4191,
+           4192,
+           4192,
+           4196,
+           4192,
+           4193,
+           4192,
+           4192,
+           4194,
+           4192,
+           4195,
+           4192,
+           4192,
+           4192,
+           4192,
+           4192,
+           4192}),
+      makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt}),
   });
 
-  auto type = ROW({{"id", INTEGER()},
-                   {"org_id", BIGINT()},
-                   {"deleted", TINYINT()},
-                   {"ratio", INTEGER()}});
+  auto type = ROW(
+      {{"id", INTEGER()},
+       {"org_id", BIGINT()},
+       {"deleted", TINYINT()},
+       {"ratio", INTEGER()}});
 
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/simple_types");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
@@ -907,40 +1099,81 @@ TEST_F(TextReaderTest, readFloatAsInt) {
 
 TEST_F(TextReaderTest, simpleTypes) {
   auto expected = makeRowVector({
-    makeFlatVector<std::string>({"FOO", "FOO", "FOO", "FOO", "BAR", "BAR",
-                                 "BAR", "BAR", "BAZ", "BAZ", "BAZ", "FOO",
-                                 "FOOBARBAZ"}),
-    makeFlatVector<int64_t>({4191, 4192, 4192, 4196, 4192, 4193, 4192, 4192,
-                             4194, 4192, 4195, 4192, 4192}),
-    makeFlatVector<bool>({true, true, true, true, true, true, false, false,
-                          false, false, true, false, true}),
-    makeNullableFlatVector<Timestamp>(
-      {Timestamp{1'695'378'095, 148'000'000}, Timestamp{1'695'690'351, 0},
-       Timestamp{1'695'686'400, 0}, Timestamp{1'695'083'400, 0}, std::nullopt,
-       Timestamp{1'695'657'091, 209'000'000},
-       Timestamp{1'695'690'437, 469'123'000},
-       Timestamp{1'696'540'679, 976'000'000},
-       Timestamp{1'695'657'171, 637'000'000},
-       Timestamp{1'695'693'225, 745'123'000}, std::nullopt,
-       Timestamp{1'695'406'246, 0}, Timestamp{1'699'392'124, 736'000'000}}),
+      makeFlatVector<std::string>(
+          {"FOO",
+           "FOO",
+           "FOO",
+           "FOO",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           "FOO",
+           "FOOBARBAZ"}),
+      makeFlatVector<int64_t>(
+          {4191,
+           4192,
+           4192,
+           4196,
+           4192,
+           4193,
+           4192,
+           4192,
+           4194,
+           4192,
+           4195,
+           4192,
+           4192}),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           true,
+           false,
+           true}),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp{1'695'378'095, 148'000'000},
+           Timestamp{1'695'690'351, 0},
+           Timestamp{1'695'686'400, 0},
+           Timestamp{1'695'083'400, 0},
+           std::nullopt,
+           Timestamp{1'695'657'091, 209'000'000},
+           Timestamp{1'695'690'437, 469'123'000},
+           Timestamp{1'696'540'679, 976'000'000},
+           Timestamp{1'695'657'171, 637'000'000},
+           Timestamp{1'695'693'225, 745'123'000},
+           std::nullopt,
+           Timestamp{1'695'406'246, 0},
+           Timestamp{1'699'392'124, 736'000'000}}),
   });
 
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_big_int", BIGINT()},
-                   {"col_bool", BOOLEAN()},
-                   {"col_timestamp", TIMESTAMP()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_big_int", BIGINT()},
+       {"col_bool", BOOLEAN()},
+       {"col_timestamp", TIMESTAMP()}});
 
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/more_simple_types");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/more_simple_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
@@ -980,18 +1213,20 @@ TEST_F(TextReaderTest, primitiveLimitsStressTest) {
     bigintValues.push_back(std::numeric_limits<int64_t>::max());
   }
 
-  auto expected = makeRowVector({makeFlatVector<int8_t>(tinyintValues),
-                                 makeFlatVector<int32_t>(integerValues),
-                                 makeFlatVector<int64_t>(bigintValues)});
+  auto expected = makeRowVector(
+      {makeFlatVector<int8_t>(tinyintValues),
+       makeFlatVector<int32_t>(integerValues),
+       makeFlatVector<int64_t>(bigintValues)});
 
-  auto type = ROW({{"col_tinyint", TINYINT()},
-                   {"col_integer", INTEGER()},
-                   {"col_bigint", BIGINT()}});
+  auto type = ROW(
+      {{"col_tinyint", TINYINT()},
+       {"col_integer", INTEGER()},
+       {"col_bigint", BIGINT()}});
 
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/primitive_limits");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/primitive_limits");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
@@ -1000,7 +1235,7 @@ TEST_F(TextReaderTest, primitiveLimitsStressTest) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
@@ -1054,10 +1289,23 @@ TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
 
   // Combine all inner map keys and values
   const auto allInnerMapKeys = makeFlatVector<int64_t>(
-    {1, 11, 22, 33, 44, 55, 66, 77, 88, 99, 100, 200, 300, 400, 500});
-  const auto allInnerMapValues =
-    makeFlatVector<bool>({true, false, true, false, true, true, true, false,
-                          true, false, true, false, false, false, true});
+      {1, 11, 22, 33, 44, 55, 66, 77, 88, 99, 100, 200, 300, 400, 500});
+  const auto allInnerMapValues = makeFlatVector<bool>(
+      {true,
+       false,
+       true,
+       false,
+       true,
+       true,
+       true,
+       false,
+       true,
+       false,
+       true,
+       false,
+       false,
+       false,
+       true});
 
   // Create inner maps with proper offsets and sizes
   BufferPtr innerMapSizes = allocateOffsets(6, pool());
@@ -1065,12 +1313,12 @@ TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
   auto rawInnerMapSizes = innerMapSizes->asMutable<vector_size_t>();
   auto rawInnerMapOffsets = innerMapOffsets->asMutable<vector_size_t>();
 
-  rawInnerMapSizes[0] = 3;  // {1:true, 11:false, 22:true}
-  rawInnerMapSizes[1] = 2;  // {33:false, 44:true}
-  rawInnerMapSizes[2] = 4;  // {55:true, 66:true, 77:false, 88:true}
-  rawInnerMapSizes[3] = 1;  // {99:false}
-  rawInnerMapSizes[4] = 2;  // {100:true, 200:false}
-  rawInnerMapSizes[5] = 3;  // {300:false, 400:false, 500:true}
+  rawInnerMapSizes[0] = 3; // {1:true, 11:false, 22:true}
+  rawInnerMapSizes[1] = 2; // {33:false, 44:true}
+  rawInnerMapSizes[2] = 4; // {55:true, 66:true, 77:false, 88:true}
+  rawInnerMapSizes[3] = 1; // {99:false}
+  rawInnerMapSizes[4] = 2; // {100:true, 200:false}
+  rawInnerMapSizes[5] = 3; // {300:false, 400:false, 500:true}
 
   rawInnerMapOffsets[0] = 0;
   for (int i = 1; i < 6; i++) {
@@ -1078,8 +1326,14 @@ TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
   }
 
   auto innerMapsVector = std::make_shared<MapVector>(
-    pool(), MAP(BIGINT(), BOOLEAN()), nullptr, 6, innerMapOffsets,
-    innerMapSizes, allInnerMapKeys, allInnerMapValues);
+      pool(),
+      MAP(BIGINT(), BOOLEAN()),
+      nullptr,
+      6,
+      innerMapOffsets,
+      innerMapSizes,
+      allInnerMapKeys,
+      allInnerMapValues);
 
   // Create arrays containing the inner maps
   // Array 1: [innerMap0, innerMap1] (maps at indices 0, 1)
@@ -1107,16 +1361,22 @@ TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
   rawOuterMapSizes[2] = 1;
 
   const auto expected = makeRowVector({std::make_shared<MapVector>(
-    pool(), MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN()))), nullptr, 3,
-    outerMapOffsets, outerMapSizes, outerMapKeys, arrayVector)});
+      pool(),
+      MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN()))),
+      nullptr,
+      3,
+      outerMapOffsets,
+      outerMapSizes,
+      outerMapKeys,
+      arrayVector)});
 
   const auto type =
-    ROW({{"col_nested_map", MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN())))}});
+      ROW({{"col_nested_map", MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN())))}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
   auto path = velox::test::getDataFilePath(
-    "velox/dwio/text/tests/reader/",
-    "examples/custom_delimiter_nested_complex_types");
+      "velox/dwio/text/tests/reader/",
+      "examples/custom_delimiter_nested_complex_types");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   // Set up custom delimiters:
@@ -1132,7 +1392,7 @@ TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReaderOptions = dwio::common::RowReaderOptions();
   setScanSpec(*type, rowReaderOptions);
@@ -1158,23 +1418,23 @@ TEST_F(TextReaderTest, nestedArraysWithCustomDelimiters) {
 
   // Create inner arrays for each row
   auto innerArraysRow1 =
-    makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
+      makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
   auto innerArraysRow2 =
-    makeArrayVector<int64_t>({{10, 20}, {30, 40, 50}, {60}});
+      makeArrayVector<int64_t>({{10, 20}, {30, 40, 50}, {60}});
   auto innerArraysRow3 =
-    makeArrayVector<int64_t>({{100}, {200, 300, 400}, {500, 600}});
+      makeArrayVector<int64_t>({{100}, {200, 300, 400}, {500, 600}});
 
   // Combine all inner arrays into a single vector
   auto allInnerArrays = makeArrayVector<int64_t>({
-    {1, 2, 3},
-    {4, 5},
-    {6, 7, 8, 9},  // Row 1 inner arrays
-    {10, 20},
-    {30, 40, 50},
-    {60},  // Row 2 inner arrays
-    {100},
-    {200, 300, 400},
-    {500, 600}  // Row 3 inner arrays
+      {1, 2, 3},
+      {4, 5},
+      {6, 7, 8, 9}, // Row 1 inner arrays
+      {10, 20},
+      {30, 40, 50},
+      {60}, // Row 2 inner arrays
+      {100},
+      {200, 300, 400},
+      {500, 600} // Row 3 inner arrays
   });
 
   // Create the outer array structure with proper offsets
@@ -1188,8 +1448,8 @@ TEST_F(TextReaderTest, nestedArraysWithCustomDelimiters) {
   const auto type = ROW({{"col_nested_array", ARRAY(ARRAY(BIGINT()))}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/nested_arrays_file");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/nested_arrays_file");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   // Set up custom delimiters for nested arrays:
@@ -1203,7 +1463,7 @@ TEST_F(TextReaderTest, nestedArraysWithCustomDelimiters) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReaderOptions = dwio::common::RowReaderOptions();
   setScanSpec(*type, rowReaderOptions);
@@ -1230,55 +1490,55 @@ TEST_F(TextReaderTest, tripleNestedArraysWithCustomDelimiters) {
 
   // Create the innermost arrays (level 3)
   auto innermostArrays = makeArrayVector<int64_t>({
-    {1, 2},
-    {3, 4},  // Row 1, outer array 0
-    {5, 6, 7},
-    {8, 9},  // Row 1, outer array 1
-    {10, 11, 12, 13},
-    {14, 15},  // Row 1, outer array 2
-    {20, 21},
-    {22, 23, 24},  // Row 2, outer array 0
-    {25, 26},      // Row 2, outer array 1
-    {27, 28, 29},
-    {30, 31, 32},     // Row 2, outer array 2
-    {100, 101, 102},  // Row 3, outer array 0
-    {200, 201},
-    {300, 301, 302, 303},  // Row 3, outer array 1
-    {400, 401, 402},
-    {500, 501}  // Row 3, outer array 2
+      {1, 2},
+      {3, 4}, // Row 1, outer array 0
+      {5, 6, 7},
+      {8, 9}, // Row 1, outer array 1
+      {10, 11, 12, 13},
+      {14, 15}, // Row 1, outer array 2
+      {20, 21},
+      {22, 23, 24}, // Row 2, outer array 0
+      {25, 26}, // Row 2, outer array 1
+      {27, 28, 29},
+      {30, 31, 32}, // Row 2, outer array 2
+      {100, 101, 102}, // Row 3, outer array 0
+      {200, 201},
+      {300, 301, 302, 303}, // Row 3, outer array 1
+      {400, 401, 402},
+      {500, 501} // Row 3, outer array 2
   });
 
   // Create middle level arrays (level 2) - each contains innermost arrays
   auto middleArrays = makeArrayVector(
-    {
-      0,   // Row 1, outer array 0: contains innermost arrays [0,1]
-      2,   // Row 1, outer array 1: contains innermost arrays [2,3]
-      4,   // Row 1, outer array 2: contains innermost arrays [4,5]
-      6,   // Row 2, outer array 0: contains innermost arrays [6,7]
-      8,   // Row 2, outer array 1: contains innermost arrays [8]
-      9,   // Row 2, outer array 2: contains innermost arrays [9,10]
-      11,  // Row 3, outer array 0: contains innermost arrays [11]
-      12,  // Row 3, outer array 1: contains innermost arrays [12,13]
-      14,  // Row 3, outer array 2: contains innermost arrays [14,15]
-      16   // End marker
-    },
-    innermostArrays);
+      {
+          0, // Row 1, outer array 0: contains innermost arrays [0,1]
+          2, // Row 1, outer array 1: contains innermost arrays [2,3]
+          4, // Row 1, outer array 2: contains innermost arrays [4,5]
+          6, // Row 2, outer array 0: contains innermost arrays [6,7]
+          8, // Row 2, outer array 1: contains innermost arrays [8]
+          9, // Row 2, outer array 2: contains innermost arrays [9,10]
+          11, // Row 3, outer array 0: contains innermost arrays [11]
+          12, // Row 3, outer array 1: contains innermost arrays [12,13]
+          14, // Row 3, outer array 2: contains innermost arrays [14,15]
+          16 // End marker
+      },
+      innermostArrays);
 
   // Create outermost arrays (level 1) - each row contains middle arrays
   auto outerArray = makeArrayVector(
-    {
-      0, 3, 6, 9  // Row boundaries: Row 1 [0-2], Row 2 [3-5], Row 3 [6-8]
-    },
-    middleArrays);
+      {
+          0, 3, 6, 9 // Row boundaries: Row 1 [0-2], Row 2 [3-5], Row 3 [6-8]
+      },
+      middleArrays);
 
   const auto expected = makeRowVector({outerArray});
 
   const auto type =
-    ROW({{"col_triple_nested_array", ARRAY(ARRAY(ARRAY(BIGINT())))}});
+      ROW({{"col_triple_nested_array", ARRAY(ARRAY(ARRAY(BIGINT())))}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
   auto path = velox::test::getDataFilePath(
-    "velox/dwio/text/tests/reader/", "examples/triple_nested_arrays_file");
+      "velox/dwio/text/tests/reader/", "examples/triple_nested_arrays_file");
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   // Set up custom delimiters for triple nested arrays:
@@ -1294,7 +1554,7 @@ TEST_F(TextReaderTest, tripleNestedArraysWithCustomDelimiters) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   auto rowReaderOptions = dwio::common::RowReaderOptions();
   setScanSpec(*type, rowReaderOptions);
@@ -1318,8 +1578,8 @@ TEST_F(TextReaderTest, varbinarySuccessfulDecoding) {
   auto type = ROW({{"col_binary", VARBINARY()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/varbinary");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/varbinary");
 
   auto readFile = std::make_shared<LocalReadFile>(path);
 
@@ -1327,7 +1587,7 @@ TEST_F(TextReaderTest, varbinarySuccessfulDecoding) {
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
 
   dwio::common::RowReaderOptions rowReaderOptions;
@@ -1353,8 +1613,8 @@ TEST_F(TextReaderTest, varbinaryUnsuccessfulDecoding) {
   auto type = ROW({{"col_binary", VARBINARY()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/varbinary_unsuccessful");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/varbinary_unsuccessful");
 
   auto readFile = std::make_shared<LocalReadFile>(path);
 
@@ -1362,7 +1622,7 @@ TEST_F(TextReaderTest, varbinaryUnsuccessfulDecoding) {
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
 
   dwio::common::RowReaderOptions rowReaderOptions;
@@ -1385,56 +1645,76 @@ TEST_F(TextReaderTest, varbinaryUnsuccessfulDecoding) {
 
 TEST_F(TextReaderTest, logicalTypes) {
   auto expected = makeRowVector(
-    {makeNullableFlatVector<int64_t>(
-       {0, 123, -1234567, 999999999999999, std::nullopt, 4242, -1, std::nullopt,
-        314159265358979, 77777, 100000000000000, -5432199, std::nullopt, 1234,
-        -999999999999999, 999999999999999},
-       DECIMAL(15, 2)),
-     makeNullableFlatVector<int128_t>(
-       {0, HugeInt::parse("999999999999999999999"),
-        HugeInt::parse("123456789012345678901234567890"),
-        HugeInt::parse("-99999999999999999999999999"),
-        HugeInt::parse("88888888888888888888"), std::nullopt, 1, std::nullopt,
-        HugeInt::parse("27182818284590452353612"),
-        HugeInt::parse("-123456789012345678999"),
-        HugeInt::parse("12345678901234567890123456789012345678"), 987654321012,
-        std::nullopt, 5678, -123,
-        HugeInt::parse("99999999999999999999999999999999")},
-       DECIMAL(38, 2)),
-     makeNullableFlatVector<int32_t>(
-       {
-         parseDate("1970-01-01"),
-         parseDate("2024-02-29"),
-         parseDate("1900-01-01"),
-         parseDate("2099-12-31"),
-         parseDate("2001-09-11"),
-         parseDate("2025-09-10"),
-         std::nullopt,
-         std::nullopt,
-         parseDate("1999-12-31"),
-         parseDate("2012-12-21"),
-         parseDate("2200-01-01"),
-         parseDate("1988-08-08"),
-         parseDate("1969-07-20"),
-         parseDate("2000-01-01"),
-         parseDate("1800-06-15"),
-         parseDate("2500-12-31"),
-       },
-       DATE())});
+      {makeNullableFlatVector<int64_t>(
+           {0,
+            123,
+            -1234567,
+            999999999999999,
+            std::nullopt,
+            4242,
+            -1,
+            std::nullopt,
+            314159265358979,
+            77777,
+            100000000000000,
+            -5432199,
+            std::nullopt,
+            1234,
+            -999999999999999,
+            999999999999999},
+           DECIMAL(15, 2)),
+       makeNullableFlatVector<int128_t>(
+           {0,
+            HugeInt::parse("999999999999999999999"),
+            HugeInt::parse("123456789012345678901234567890"),
+            HugeInt::parse("-99999999999999999999999999"),
+            HugeInt::parse("88888888888888888888"),
+            std::nullopt,
+            1,
+            std::nullopt,
+            HugeInt::parse("27182818284590452353612"),
+            HugeInt::parse("-123456789012345678999"),
+            HugeInt::parse("12345678901234567890123456789012345678"),
+            987654321012,
+            std::nullopt,
+            5678,
+            -123,
+            HugeInt::parse("99999999999999999999999999999999")},
+           DECIMAL(38, 2)),
+       makeNullableFlatVector<int32_t>(
+           {
+               parseDate("1970-01-01"),
+               parseDate("2024-02-29"),
+               parseDate("1900-01-01"),
+               parseDate("2099-12-31"),
+               parseDate("2001-09-11"),
+               parseDate("2025-09-10"),
+               std::nullopt,
+               std::nullopt,
+               parseDate("1999-12-31"),
+               parseDate("2012-12-21"),
+               parseDate("2200-01-01"),
+               parseDate("1988-08-08"),
+               parseDate("1969-07-20"),
+               parseDate("2000-01-01"),
+               parseDate("1800-06-15"),
+               parseDate("2500-12-31"),
+           },
+           DATE())});
 
   auto type =
-    ROW({{"c0", DECIMAL(15, 2)}, {"c1", DECIMAL(38, 2)}, {"c2", DATE()}});
+      ROW({{"c0", DECIMAL(15, 2)}, {"c1", DECIMAL(38, 2)}, {"c2", DATE()}});
 
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/logical_types.gz");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/logical_types.gz");
 
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
@@ -1454,30 +1734,35 @@ TEST_F(TextReaderTest, logicalTypes) {
 
 TEST_F(TextReaderTest, nestedRows) {
   auto nestedRowChildren = std::vector<VectorPtr>{
-    makeFlatVector<int32_t>({42, 100, -5, 0, 999}),
-    makeFlatVector<bool>({true, false, true, false, true}),
-    makeArrayVector<double>({{3.14159, 2.71828},
-                             {2.71828, 1.41421, 0.0},
-                             {1.41421, -123.456},
-                             {0.0, 999.999},
-                             {-123.456, 42.0, 3.14159}})};
+      makeFlatVector<int32_t>({42, 100, -5, 0, 999}),
+      makeFlatVector<bool>({true, false, true, false, true}),
+      makeArrayVector<double>(
+          {{3.14159, 2.71828},
+           {2.71828, 1.41421, 0.0},
+           {1.41421, -123.456},
+           {0.0, 999.999},
+           {-123.456, 42.0, 3.14159}})};
   auto nestedRowVector = makeRowVector(
-    {"nested_int", "nested_bool", "nested_arr_double"}, nestedRowChildren);
+      {"nested_int", "nested_bool", "nested_arr_double"}, nestedRowChildren);
 
   const auto expected = makeRowVector(
-    {makeFlatVector<std::string>({"hello", "world", "test", "sample", "data"}),
-     nestedRowVector, makeFlatVector<bool>({false, true, false, true, false})});
+      {makeFlatVector<std::string>(
+           {"hello", "world", "test", "sample", "data"}),
+       nestedRowVector,
+       makeFlatVector<bool>({false, true, false, true, false})});
 
-  auto type =
-    ROW({{"col_varchar", VARCHAR()},
-         {"col_nested_row", ROW({{"nested_int", INTEGER()},
-                                 {"nested_bool", BOOLEAN()},
-                                 {"nested_arr_double", ARRAY(DOUBLE())}})},
-         {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_varchar", VARCHAR()},
+       {"col_nested_row",
+        ROW(
+            {{"nested_int", INTEGER()},
+             {"nested_bool", BOOLEAN()},
+             {"nested_arr_double", ARRAY(DOUBLE())}})},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
-  auto path = velox::test::getDataFilePath("velox/dwio/text/tests/reader/",
-                                           "examples/nested_row");
+  auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/", "examples/nested_row");
 
   auto readFile = std::make_shared<LocalReadFile>(path);
   auto serDeOptions = dwio::common::SerDeOptions('&', ',', '#', '\\', true);
@@ -1487,7 +1772,7 @@ TEST_F(TextReaderTest, nestedRows) {
   readerOptions.setSerDeOptions(serDeOptions);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
 
   dwio::common::RowReaderOptions rowReaderOptions;
@@ -1508,30 +1793,64 @@ TEST_F(TextReaderTest, nestedRows) {
 TEST_P(TextReaderDecompressionTest, tests) {
   auto [filepath, format] = GetParam();
   auto expected = makeRowVector({
-    makeFlatVector<std::string>({"FOO", "FOO", "FOO", "FOO", "BAR", "BAR",
-                                 "BAR", "BAR", "BAZ", "BAZ", "BAZ", "BAZ"}),
-    makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
-    makeFlatVector<double>({1.123, 2.333, -6.1, 4.2, 47.2, 79.5, 3.1415926,
-                            -221.145, 93.12, -4123.11, 950.2, 43.66}),
-    makeFlatVector<bool>({true, true, false, true, false, false, true, true,
-                          false, false, false, true}),
+      makeFlatVector<std::string>(
+          {"FOO",
+           "FOO",
+           "FOO",
+           "FOO",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAR",
+           "BAZ",
+           "BAZ",
+           "BAZ",
+           "BAZ"}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+      makeFlatVector<double>(
+          {1.123,
+           2.333,
+           -6.1,
+           4.2,
+           47.2,
+           79.5,
+           3.1415926,
+           -221.145,
+           93.12,
+           -4123.11,
+           950.2,
+           43.66}),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           false,
+           true,
+           false,
+           false,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true}),
   });
 
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
 
   auto path =
-    velox::test::getDataFilePath("velox/dwio/text/tests/reader/", filepath);
+      velox::test::getDataFilePath("velox/dwio/text/tests/reader/", filepath);
   auto readFile = std::make_shared<LocalReadFile>(path);
 
   auto readerOptions = dwio::common::ReaderOptions(pool());
   readerOptions.setFileSchema(type);
 
   auto input =
-    std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = factory->createReader(std::move(input), readerOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*type, rowReaderOptions);
@@ -1576,37 +1895,40 @@ TEST_P(TextReaderDecompressionTest, tests) {
 }
 
 std::vector<TestCompressionParam> params = {
-  {"examples/simple_types_compressed_file.deflate", "deflate"},
-  {"examples/simple_types_compressed_file.zst", "zstd"}};
+    {"examples/simple_types_compressed_file.deflate", "deflate"},
+    {"examples/simple_types_compressed_file.zst", "zstd"}};
 
-INSTANTIATE_TEST_SUITE_P(TextReaderDecompressionTests,
-                         TextReaderDecompressionTest, testing::ValuesIn(params),
-                         [](const auto& paramInfo) {
-                           return paramInfo.param.compression;
-                         });
+INSTANTIATE_TEST_SUITE_P(
+    TextReaderDecompressionTests,
+    TextReaderDecompressionTest,
+    testing::ValuesIn(params),
+    [](const auto& paramInfo) { return paramInfo.param.compression; });
 
 TEST_F(TextReaderTest, unsupportedCompressedKind) {
-  auto type = ROW({{"col_string", VARCHAR()},
-                   {"col_int", INTEGER()},
-                   {"col_float", DOUBLE()},
-                   {"col_bool", BOOLEAN()}});
+  auto type = ROW(
+      {{"col_string", VARCHAR()},
+       {"col_int", INTEGER()},
+       {"col_float", DOUBLE()},
+       {"col_bool", BOOLEAN()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   const std::string kBaseDir = "velox/dwio/text/tests/reader/";
   std::vector paths = {
-    getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lz4"),
-    getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lzo"),
-    getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.snappy")};
+      getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lz4"),
+      getDataFilePath(kBaseDir, "examples/simple_types_compressed_file.lzo"),
+      getDataFilePath(
+          kBaseDir, "examples/simple_types_compressed_file.snappy")};
   for (const auto& path : paths) {
     auto readFile = std::make_shared<LocalReadFile>(path);
     auto readerOptions = dwio::common::ReaderOptions(pool());
     readerOptions.setFileSchema(type);
     auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-    EXPECT_THROW(factory->createReader(std::move(input), readerOptions),
-                 VeloxRuntimeError);
+        std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+    EXPECT_THROW(
+        factory->createReader(std::move(input), readerOptions),
+        VeloxRuntimeError);
   }
 }
 
-}  // namespace
+} // namespace
 
-}  // namespace facebook::velox::text
+} // namespace facebook::velox::text

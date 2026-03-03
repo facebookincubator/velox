@@ -341,6 +341,13 @@ void TextRowReader::initializeColumnReaders() {
       continue;
     }
 
+    if (scanSpec->isConstant()) {
+      // File type column is supposed to be read - we can't make it constant.
+      VELOX_DCHECK(!fileType.getChildIdxIfExists(scanSpec->fieldName()));
+      constantSpecs_.push_back(scanSpec.get());
+      continue;
+    }
+
     const auto& fileName = scanSpec->fieldName();
     auto fileTypeIdx = fileType.getChildIdx(fileName);
     fileColumns_[fileTypeIdx].resultVectorIdx = scanSpec->channel();
@@ -420,7 +427,16 @@ void TextRowReader::initializeColumnReaders() {
 }
 
 namespace {
-void processMutation(RowVectorPtr& rowVecPtr, const Mutation* mutation) {
+void processMutation(
+    RowVectorPtr& rowVecPtr,
+    const Mutation* mutation,
+    const std::vector<const velox::common::ScanSpec*>& constantSpecs) {
+  // Set constant vectors for partition columns and other constants.
+  for (auto* spec : constantSpecs) {
+    rowVecPtr->children()[spec->channel()] =
+        BaseVector::wrapInConstant(rowVecPtr->size(), 0, spec->constantValue());
+  }
+
   if (!mutation) {
     return;
   }
@@ -556,7 +572,7 @@ uint64_t TextRowReader::next(
   // Resize the row vector to the actual number of rows read.
   // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(acceptedRows);
-  processMutation(rowVecPtr, mutation);
+  processMutation(rowVecPtr, mutation, constantSpecs_);
   result = std::move(rowVecPtr);
   VELOX_DCHECK_GE(currentRow_, startRow);
   return currentRow_ - startRow;
@@ -1494,7 +1510,7 @@ bool TextRowReader::readHugeInt(
       data,
       insertionRow,
       [](std::string_view s) -> std::optional<int128_t> {
-        return HugeInt::parse(std::string{s});
+        return HugeInt::parse(s);
       },
       filter);
 }

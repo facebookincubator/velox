@@ -230,6 +230,7 @@ class TextRowReader : public dwio::common::RowReader {
     const velox::common::Filter* filter = nullptr;
   };
   std::vector<FileColumnDesc> fileColumns_;
+  std::vector<const velox::common::ScanSpec*> constantSpecs_;
 
   void initializeColumnReaders();
 

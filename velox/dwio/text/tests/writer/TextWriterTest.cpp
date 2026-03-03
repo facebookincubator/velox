@@ -17,10 +17,10 @@
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/dwio/text/RegisterTextWriter.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -28,8 +28,6 @@
 /// TODO: Add fuzzer test.
 
 namespace facebook::velox::text {
-using namespace facebook::velox::common::testutil;
-
 class TextWriterTest : public testing::Test,
                        public velox::test::VectorTestBase {
  public:
@@ -37,7 +35,9 @@ class TextWriterTest : public testing::Test,
     velox::filesystems::registerLocalFileSystem();
     registerTextWriterFactory();
     registerTextReaderFactory();
-    tempPath_ = TempDirectoryPath::create();
+    rootPool_ = memory::memoryManager()->addRootPool("TextWriterTests");
+    leafPool_ = rootPool_->addLeafChild("TextWriterTests");
+    tempPath_ = exec::test::TempDirectoryPath::create();
   }
 
   void TearDown() override {
@@ -46,7 +46,7 @@ class TextWriterTest : public testing::Test,
   }
 
  protected:
-  static void SetUpTestSuite() {
+  static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
@@ -62,7 +62,9 @@ class TextWriterTest : public testing::Test,
 
   constexpr static float kInf = std::numeric_limits<float>::infinity();
   constexpr static double kNaN = std::numeric_limits<double>::quiet_NaN();
-  std::shared_ptr<TempDirectoryPath> tempPath_;
+  std::shared_ptr<memory::MemoryPool> rootPool_;
+  std::shared_ptr<memory::MemoryPool> leafPool_;
+  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
 };
 
 TEST_F(TextWriterTest, write) {
@@ -101,7 +103,7 @@ TEST_F(TextWriterTest, write) {
   const auto filename = "test_text_writer.txt";
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto writer = std::make_unique<TextWriter>(
       schema,
       std::move(sink),
@@ -211,7 +213,7 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto writer = std::make_unique<TextWriter>(
       schema,
       std::move(sink),
@@ -324,7 +326,7 @@ TEST_F(TextWriterTest, mapAndArrayComplexTypes) {
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // use traits to specify delimiters when it is not nested
   const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
@@ -475,7 +477,7 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // use traits to specify delimiters when it is not nested
   const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
@@ -586,7 +588,7 @@ TEST_F(TextWriterTest, arrayTypes) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
   auto writer = std::make_unique<TextWriter>(
@@ -667,7 +669,7 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
   auto writer = std::make_unique<TextWriter>(
@@ -786,7 +788,7 @@ TEST_F(TextWriterTest, mapTypes) {
 
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
   auto writer = std::make_unique<TextWriter>(
@@ -905,7 +907,7 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
 
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   const auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', '#');
   auto writer = std::make_unique<TextWriter>(
@@ -979,7 +981,7 @@ TEST_F(TextWriterTest, nestedRowTypes) {
 
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   const auto serDeOptions = dwio::common::SerDeOptions(',', '|', '#');
   auto writer = std::make_unique<TextWriter>(
@@ -1058,7 +1060,7 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
 
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Use custom delimiters: field separator '\x01', nested row field separator
   // '\x02'
@@ -1206,7 +1208,7 @@ TEST_F(TextWriterTest, DISABLED_deeplyNestedComplexTypes) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Define hierarchical delimiters for nested data structures:
   // '\x01' - field separator (between columns)
@@ -1273,7 +1275,7 @@ TEST_F(TextWriterTest, abort) {
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto writer = std::make_unique<TextWriter>(
       schema,
       std::move(sink),
@@ -1350,7 +1352,7 @@ TEST_F(TextWriterTest, tripleNestedArraysWithCustomDelimiters) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', ',');
   serDeOptions.separators[3] = '#';
@@ -1446,7 +1448,7 @@ TEST_F(
       fs::path(fmt::format("{}/test_text_writer.txt", tempPath_->getPath()));
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
       filePath.string(),
-      dwio::common::FileSink::Options{.pool = pool_.get()});
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   auto serDeOptions = dwio::common::SerDeOptions('\x01', '|', ',');
   serDeOptions.separators[3] = '#';
@@ -1507,7 +1509,7 @@ TEST_F(TextWriterTest, simpleEscapeCharTest) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Configure SerDeOptions with comma as field delimiter and escaping enabled
   auto serDeOptions = dwio::common::SerDeOptions(
@@ -1568,7 +1570,7 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Configure SerDeOptions with comma as field delimiter and escaping enabled
   auto serDeOptions = dwio::common::SerDeOptions(
@@ -1639,7 +1641,7 @@ TEST_F(TextWriterTest, customEscapeCharTest) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Configure SerDeOptions with comma as field delimiter and escaping enabled
   const auto serDeOptions = dwio::common::SerDeOptions(
@@ -1700,7 +1702,7 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Configure SerDeOptions with comma as field delimiter and escaping enabled
   const auto serDeOptions = dwio::common::SerDeOptions(
@@ -1766,7 +1768,7 @@ TEST_F(TextWriterTest, headerTest) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Use comma as field delimiter to match header format
   const auto serDeOptions = dwio::common::SerDeOptions(',', '|', '#');
@@ -1829,7 +1831,7 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
   auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
 
   auto sink = std::make_unique<dwio::common::LocalFileSink>(
-      filePath, dwio::common::FileSink::Options{.pool = pool_.get()});
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
 
   // Use comma as field delimiter to match header format
   const auto serDeOptions = dwio::common::SerDeOptions(',', '|', '#');
