@@ -190,7 +190,7 @@ class LocalFileTest : public ::testing::TestWithParam<bool> {
   const bool useFaultyFs_;
   const std::unique_ptr<folly::CPUThreadPoolExecutor> executor_ =
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::max(1, static_cast<int32_t>(folly::hardware_concurrency() / 2)),
+          std::max(1, static_cast<int32_t>(folly::available_concurrency() / 2)),
           std::make_shared<folly::NamedThreadFactory>(
               "LocalFileReadAheadTest"));
 };
