@@ -1015,9 +1015,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
                 cudf::data_type{cudf::type_id::BOOL8},
                 stream,
                 get_temp_mr());
-            // binary_operation is async on `stream`; the old column destructs via
-            // cudaFreeAsync on its allocation stream (not `stream`), so the free
-            // can race the kernel. Drain `stream` before the move-assign.
+            // binary_operation is async on `stream`; the old column destructs
+            // via cudaFreeAsync on its allocation stream (not `stream`), so the
+            // free can race the kernel. Drain `stream` before the move-assign.
             stream.synchronize();
             rightMatchedFlags = std::move(updatedFlags);
             return std::move(joinedCols);
