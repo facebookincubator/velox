@@ -702,6 +702,16 @@ void WriterOptions::processConfigs(
     createdBy =
         getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
   }
+
+  if (!compressionKind) {
+    if (auto codec = session.get<std::string>(kParquetSessionCompressionCodec)
+                         .has_value()
+            ? session.get<std::string>(kParquetSessionCompressionCodec)
+            : connectorConfig.get<std::string>(
+                  kParquetConnectorCompressionCodec)) {
+      compressionKind = common::stringToCompressionKind(codec.value());
+    }
+  }
 }
 
 } // namespace facebook::velox::parquet

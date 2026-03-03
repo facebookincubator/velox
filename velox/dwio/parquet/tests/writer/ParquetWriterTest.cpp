@@ -662,6 +662,55 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
       TimestampPrecision::kMilliseconds);
 }
 
+TEST_F(ParquetWriterTest, updateWriterOptionsCompressionCodec) {
+  constexpr int64_t kRows = 20'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+
+  auto getCompressedSizeAndVerify = [&](const std::string& codec,
+                                        CompressionKind expectedKind) {
+    std::unordered_map<std::string, std::string> configFromFile = {
+        {parquet::WriterOptions::kParquetConnectorCompressionCodec, codec}};
+    const config::ConfigBase connectorConfig(std::move(configFromFile));
+    const config::ConfigBase connectorSessionProperties({});
+
+    parquet::WriterOptions options;
+    options.processConfigs(connectorConfig, connectorSessionProperties);
+    EXPECT_EQ(options.compressionKind.value(), expectedKind);
+
+    options.memoryPool = rootPool_.get();
+    options.enableDictionary = false;
+
+    auto* sinkPtr = write(data, options);
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+    EXPECT_EQ(reader->numberOfRows(), kRows);
+    auto compressionType =
+        reader->fileMetaData().rowGroup(0).columnChunk(0).compression();
+    EXPECT_EQ(compressionType, expectedKind);
+    return reader->fileMetaData()
+        .rowGroup(0)
+        .columnChunk(0)
+        .totalCompressedSize();
+  };
+
+  const auto uncompressedSize =
+      getCompressedSizeAndVerify("none", CompressionKind_NONE);
+  const auto zstdSize =
+      getCompressedSizeAndVerify("zstd", CompressionKind_ZSTD);
+  ASSERT_GT(uncompressedSize, zstdSize);
+
+  const auto snappySize =
+      getCompressedSizeAndVerify("snappy", CompressionKind_SNAPPY);
+  ASSERT_GT(uncompressedSize, snappySize);
+
+  VELOX_ASSERT_THROW(
+      getCompressedSizeAndVerify("invalid_codec", CompressionKind_NONE),
+      "Not support compression kind invalid_codec");
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
   SCOPED_TESTVALUE_SET(
