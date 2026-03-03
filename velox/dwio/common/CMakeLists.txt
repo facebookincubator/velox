@@ -36,7 +36,7 @@ velox_add_library(
   DirectBufferedInput.cpp
   DirectDecoder.cpp
   DirectInputStream.cpp
-  MetricsLog.cpp
+  DwioMetricsLog.cpp
   ExecutorBarrier.cpp
   FileSink.cpp
   FlatMapHelper.cpp

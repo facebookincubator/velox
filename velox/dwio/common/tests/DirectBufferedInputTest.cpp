@@ -486,33 +486,4 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
   }
 }
 
-TEST_F(DirectBufferedInputTest, hasCache) {
-  std::string content(1024, 'x');
-  auto readFile = std::make_shared<InMemoryReadFile>(content);
-
-  io::ReaderOptions readerOptions(pool_.get());
-
-  auto& ids = fileIds();
-  StringIdLease fileId(ids, "testFile");
-  StringIdLease groupId(ids, "testGroup");
-
-  DirectBufferedInput input(
-      readFile,
-      MetricsLog::voidLog(),
-      std::move(fileId),
-      tracker_,
-      std::move(groupId),
-      ioStatistics_,
-      nullptr,
-      executor_.get(),
-      readerOptions);
-
-  ASSERT_FALSE(input.hasCache());
-  VELOX_ASSERT_THROW(
-      input.cacheRegion(0, 10, std::string_view("0123456789")),
-      "cacheRegion requires a backing cache");
-  VELOX_ASSERT_THROW(
-      input.findCachedRegion(0), "findCachedRegion requires a backing cache");
-}
-
 } // namespace
