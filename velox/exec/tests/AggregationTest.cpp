@@ -3934,6 +3934,108 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
   waitForAllTasksToBeDeleted();
 }
 
+DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
+  const int numInputs = 8;
+  std::vector<RowVectorPtr> vectors =
+      createVectors(numInputs, rowType_, fuzzerOpts_);
+  createDuckDbTable(vectors);
+
+  struct {
+    bool spillEnabled;
+    bool compactionEnabled;
+    uint64_t compactBytes;
+    bool expectedReclaimable;
+    bool expectSpill;
+
+    std::string debugString() const {
+      return fmt::format(
+          "spillEnabled {}, compactionEnabled {}, compactBytes {},"
+          " expectedReclaimable {}, expectSpill {}",
+          spillEnabled,
+          compactionEnabled,
+          compactBytes,
+          expectedReclaimable,
+          expectSpill);
+    }
+  } testSettings[] = {
+      // Spill enabled, compaction enabled, compaction frees enough bytes -> no
+      // spill.
+      {true, true, 1UL << 30, true, false},
+      // Spill enabled, compaction enabled, compaction frees 0 bytes -> spill.
+      {true, true, 0, true, true},
+      // Spill enabled, compaction disabled -> reclaimable via spill.
+      {true, false, 0, true, true},
+      // Spill disabled, compaction enabled -> non-reclaimable (no compactable
+      // aggregates with array_agg).
+      {false, true, 0, false, false},
+      // Spill disabled, compaction disabled -> non-reclaimable.
+      {false, false, 0, false, false},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::atomic_int inputCount{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::HashAggregation::reclaim::compact",
+        std::function<void(uint64_t*)>(([&](uint64_t* compactedBytes) {
+          *compactedBytes = testData.compactBytes;
+        })));
+
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::addInput",
+        std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
+          if (op->operatorCtx()->operatorType() != "Aggregation") {
+            return;
+          }
+          if (++inputCount != numInputs / 2) {
+            return;
+          }
+          ASSERT_EQ(op->canReclaim(), testData.expectedReclaimable);
+          if (testData.expectedReclaimable) {
+            testingRunArbitration(op->pool());
+          } else {
+            // When neither spill nor compaction can reclaim memory, calling
+            // reclaim() directly would fail the canReclaim() check. Under real
+            // memory pressure this operator would cause the query to OOM.
+            memory::MemoryReclaimer::Stats reclaimStats;
+            VELOX_ASSERT_THROW(op->reclaim(0, reclaimStats), "");
+          }
+        })));
+
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    core::PlanNodeId aggrNodeId;
+    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+    queryBuilder.config(
+        core::QueryConfig::kAggregationMemoryCompactionReclaimEnabled,
+        testData.compactionEnabled);
+    if (testData.spillEnabled) {
+      queryBuilder.spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kAggregationSpillEnabled, true);
+    }
+    auto task =
+        queryBuilder
+            .plan(
+                PlanBuilder()
+                    .values(vectors)
+                    .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                    .capturePlanNodeId(aggrNodeId)
+                    .planNode())
+            .assertResults(
+                "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    auto& planStats = taskStats.at(aggrNodeId);
+    if (testData.expectSpill) {
+      ASSERT_GT(planStats.spilledBytes, 0);
+    } else {
+      ASSERT_EQ(planStats.spilledBytes, 0);
+    }
+    task.reset();
+    waitForAllTasksToBeDeleted();
+  }
+}
+
 TEST_F(AggregationTest, ignoreNullKeys) {
   // Some keys are null.
   auto data = makeRowVector({

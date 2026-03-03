@@ -215,7 +215,7 @@ class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
                 scanSpec,
                 dwio::common::flatmap::FlatMapOutput::kStruct)) {
     VELOX_CHECK(
-        !keyNodes_.empty(),
+        !scanSpec.children().empty(),
         "For struct encoding, keys to project must be configured");
     children_.resize(keyNodes_.size());
     for (auto& childSpec : scanSpec.children()) {
