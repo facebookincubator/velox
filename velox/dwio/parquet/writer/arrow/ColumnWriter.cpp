@@ -1884,10 +1884,15 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     numBufferedEncodedValues_ += numValues;
     numBufferedNulls_ += numNulls;
 
-    if (checkPageSize &&
-        currentEncoder_->estimatedDataEncodedSize() >=
-            properties_->dataPagesize()) {
-      addDataPage();
+    if (checkPageSize) {
+      const bool sizeLimitExceeded =
+          currentEncoder_->estimatedDataEncodedSize() >=
+          properties_->dataPagesize();
+      const bool rowLimitExceeded = properties_->dataPageRowNumberLimit() > 0 &&
+          numBufferedRows_ >= properties_->dataPageRowNumberLimit();
+      if (sizeLimitExceeded || rowLimitExceeded) {
+        addDataPage();
+      }
     }
   }
 
