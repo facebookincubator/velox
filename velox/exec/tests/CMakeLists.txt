@@ -69,6 +69,8 @@ add_executable(
   MergeJoinTest.cpp
   MergeTest.cpp
   MergerTest.cpp
+  MixedUnionTest.cpp
+  MixedUnionWithTableScanTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
