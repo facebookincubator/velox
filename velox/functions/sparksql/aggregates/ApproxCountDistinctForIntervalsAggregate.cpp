@@ -24,7 +24,6 @@
 
 #include <fmt/format.h>
 
-#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/SparseHll.h"
@@ -32,7 +31,9 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
-#include "velox/functions/lib/HllAccumulator.h"
+#include "velox/functions/sparksql/XxHash64.h"
+#include "velox/functions/sparksql/aggregates/HyperLogLogPlusPlusHelper.h"
+#include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
@@ -43,150 +44,7 @@
 namespace facebook::velox::functions::aggregate::sparksql {
 namespace {
 
-constexpr double kDefaultRelativeSD = 0.05;
 constexpr uint64_t kXxHash64Seed = 42;
-
-class SparkXxHash64 final {
- public:
-  static uint64_t hashInt32(int32_t input, uint64_t seed) {
-    int64_t hash = static_cast<int64_t>(seed + kPrime64_5 + 4L);
-    hash ^= static_cast<int64_t>((static_cast<uint32_t>(input)) * kPrime64_1);
-    hash = bits::rotateLeft64(hash, 23) * kPrime64_2 + kPrime64_3;
-    return fmix(hash);
-  }
-
-  static uint64_t hashInt64(int64_t input, uint64_t seed) {
-    int64_t hash = static_cast<int64_t>(seed + kPrime64_5 + 8L);
-    hash ^= bits::rotateLeft64(input * kPrime64_2, 31) * kPrime64_1;
-    hash = bits::rotateLeft64(hash, 27) * kPrime64_1 + kPrime64_4;
-    return fmix(hash);
-  }
-
-  static uint64_t hashFloat(float input, uint64_t seed) {
-    if (input == 0.0f) {
-      input = 0.0f;
-    }
-    uint32_t bits = 0;
-    if (std::isnan(input)) {
-      bits = 0x7fc00000U;
-    } else {
-      bits = *reinterpret_cast<uint32_t*>(&input);
-    }
-    return hashInt32(static_cast<int32_t>(bits), seed);
-  }
-
-  static uint64_t hashDouble(double input, uint64_t seed) {
-    if (input == 0.0) {
-      input = 0.0;
-    }
-    uint64_t bits = 0;
-    if (std::isnan(input)) {
-      bits = 0x7ff8000000000000ULL;
-    } else {
-      bits = *reinterpret_cast<uint64_t*>(&input);
-    }
-    return hashInt64(static_cast<int64_t>(bits), seed);
-  }
-
-  static uint64_t hashBytes(const StringView& input, uint64_t seed) {
-    const char* const end = input.data() + input.size();
-    uint64_t hash = hashBytesByWords(input, seed);
-    auto length = static_cast<uint32_t>(input.size());
-    const char* offset = input.data() + (length & -8);
-    if (offset + 4L <= end) {
-      hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFFFFFFFL) *
-          kPrime64_1;
-      hash = bits::rotateLeft64(hash, 23) * kPrime64_2 + kPrime64_3;
-      offset += 4L;
-    }
-
-    while (offset < end) {
-      hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFL) * kPrime64_5;
-      hash = bits::rotateLeft64(hash, 11) * kPrime64_1;
-      ++offset;
-    }
-    return fmix(hash);
-  }
-
-  static uint64_t hashDecimal(int128_t input, uint64_t seed) {
-    char out[sizeof(int128_t)];
-    auto length = DecimalUtil::toByteArray(input, out);
-    return hashBytes(StringView(out, length), seed);
-  }
-
- private:
-  static constexpr uint64_t kPrime64_1 = 0x9E3779B185EBCA87L;
-  static constexpr uint64_t kPrime64_2 = 0xC2B2AE3D27D4EB4FL;
-  static constexpr uint64_t kPrime64_3 = 0x165667B19E3779F9L;
-  static constexpr uint64_t kPrime64_4 = 0x85EBCA77C2B2AE63L;
-  static constexpr uint64_t kPrime64_5 = 0x27D4EB2F165667C5L;
-
-  static uint64_t fmix(uint64_t hash) {
-    hash ^= hash >> 33;
-    hash *= kPrime64_2;
-    hash ^= hash >> 29;
-    hash *= kPrime64_3;
-    hash ^= hash >> 32;
-    return hash;
-  }
-
-  static uint64_t hashBytesByWords(const StringView& input, uint64_t seed) {
-    const char* i = input.data();
-    const char* const end = input.data() + input.size();
-    auto length = static_cast<uint32_t>(input.size());
-    uint64_t hash;
-    if (length >= 32) {
-      uint64_t v1 = seed + kPrime64_1 + kPrime64_2;
-      uint64_t v2 = seed + kPrime64_2;
-      uint64_t v3 = seed;
-      uint64_t v4 = seed - kPrime64_1;
-      const char* const limit = end - 32;
-      while (i <= limit) {
-        v1 = bits::rotateLeft64(
-                 v1 + *reinterpret_cast<const uint64_t*>(i) * kPrime64_2, 31) *
-            kPrime64_1;
-        i += 8;
-        v2 = bits::rotateLeft64(
-                 v2 + *reinterpret_cast<const uint64_t*>(i) * kPrime64_2, 31) *
-            kPrime64_1;
-        i += 8;
-        v3 = bits::rotateLeft64(
-                 v3 + *reinterpret_cast<const uint64_t*>(i) * kPrime64_2, 31) *
-            kPrime64_1;
-        i += 8;
-        v4 = bits::rotateLeft64(
-                 v4 + *reinterpret_cast<const uint64_t*>(i) * kPrime64_2, 31) *
-            kPrime64_1;
-        i += 8;
-      }
-      hash = bits::rotateLeft64(v1, 1) + bits::rotateLeft64(v2, 7) +
-          bits::rotateLeft64(v3, 12) + bits::rotateLeft64(v4, 18);
-      v1 *= kPrime64_2;
-      v1 = bits::rotateLeft64(v1, 31);
-      v1 *= kPrime64_1;
-      hash ^= v1;
-      hash = hash * kPrime64_1 + kPrime64_4;
-      v2 *= kPrime64_2;
-      v2 = bits::rotateLeft64(v2, 31);
-      v2 *= kPrime64_1;
-      hash ^= v2;
-      hash = hash * kPrime64_1 + kPrime64_4;
-      v3 *= kPrime64_2;
-      v3 = bits::rotateLeft64(v3, 31);
-      v3 *= kPrime64_1;
-      hash ^= v3;
-      hash = hash * kPrime64_1 + kPrime64_4;
-      v4 *= kPrime64_2;
-      v4 = bits::rotateLeft64(v4, 31);
-      v4 *= kPrime64_1;
-      hash ^= v4;
-      hash = hash * kPrime64_1 + kPrime64_4;
-    } else {
-      hash = seed + kPrime64_5;
-    }
-    return hash + length;
-  }
-};
 
 int8_t computeIndexBitLength(double relativeSD) {
   VELOX_USER_CHECK(
@@ -250,11 +108,32 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
 
     decodedValues_.decode(*args[0], rows);
     const auto mayHaveNulls = decodedValues_.mayHaveNulls();
-    rows.applyToSelected([&](auto row) {
-      if (mayHaveNulls && decodedValues_.isNullAt(row)) {
-        return;
-      }
+    if (mayHaveNulls) {
+      rows.applyToSelected([&](auto row) {
+        if (decodedValues_.isNullAt(row)) {
+          return;
+        }
 
+        const double inputValue = toDouble(decodedValues_, row, inputType_);
+        if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
+          return;
+        }
+
+        const auto intervalIndex = std::isnan(inputValue)
+            ? (intervalCount_ - 1)
+            : findIntervalIndex(inputValue);
+        auto* group = groups[row];
+        auto tracker = trackRowSize(group);
+        auto* accumulator = value<Accumulator>(group);
+        accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
+        const uint64_t hash = hashValue(decodedValues_, row, inputType_);
+        accumulator->hlls[intervalIndex].insertHash(hash);
+        clearNull(group);
+      });
+      return;
+    }
+
+    rows.applyToSelected([&](auto row) {
       const double inputValue = toDouble(decodedValues_, row, inputType_);
       if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
         return;
@@ -290,10 +169,27 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     const auto mayHaveNulls = decodedValues_.mayHaveNulls();
     auto tracker = trackRowSize(group);
     auto* accumulator = value<Accumulator>(group);
+    if (mayHaveNulls) {
+      rows.applyToSelected([&](auto row) {
+        if (decodedValues_.isNullAt(row)) {
+          return;
+        }
+        const double inputValue = toDouble(decodedValues_, row, inputType_);
+        if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
+          return;
+        }
+        const auto intervalIndex = std::isnan(inputValue)
+            ? (intervalCount_ - 1)
+            : findIntervalIndex(inputValue);
+        accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
+        const uint64_t hash = hashValue(decodedValues_, row, inputType_);
+        accumulator->hlls[intervalIndex].insertHash(hash);
+        clearNull(group);
+      });
+      return;
+    }
+
     rows.applyToSelected([&](auto row) {
-      if (mayHaveNulls && decodedValues_.isNullAt(row)) {
-        return;
-      }
       const double inputValue = toDouble(decodedValues_, row, inputType_);
       if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
         return;
@@ -507,9 +403,7 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
 
  private:
   struct Accumulator {
-    std::vector<
-        common::hll::HllAccumulator<int64_t, false, HashStringAllocator>>
-        hlls;
+    std::vector<HyperLogLogPlusPlusHelper> hlls;
 
     void ensureSize(
         HashStringAllocator* allocator,
@@ -539,21 +433,21 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     if (indexBitLength_ >= 0) {
       return;
     }
-    double relativeSD = kDefaultRelativeSD;
-    if (args.size() >= 3) {
-      SelectivityVector rows(args[2]->size());
-      rows.setAll();
-      DecodedVector decoded;
-      decoded.decode(*args[2], rows);
-      VELOX_USER_CHECK(
-          decoded.isConstantMapping(),
-          "relativeSD must be constant for "
-          "approx_count_distinct_for_intervals");
-      VELOX_USER_CHECK(
-          !decoded.isNullAt(decoded.index(0)),
-          "relativeSD must not be null for approx_count_distinct_for_intervals");
-      relativeSD = decoded.valueAt<double>(decoded.index(0));
-    }
+    VELOX_USER_CHECK_EQ(
+        args.size(),
+        3,
+        "approx_count_distinct_for_intervals requires relativeSD");
+    SelectivityVector rows(args[2]->size());
+    rows.setAll();
+    DecodedVector decoded;
+    decoded.decode(*args[2], rows);
+    VELOX_USER_CHECK(
+        decoded.isConstantMapping(),
+        "relativeSD must be constant for approx_count_distinct_for_intervals");
+    VELOX_USER_CHECK(
+        !decoded.isNullAt(decoded.index(0)),
+        "relativeSD must not be null for approx_count_distinct_for_intervals");
+    double relativeSD = decoded.valueAt<double>(decoded.index(0));
     indexBitLength_ = computeIndexBitLength(relativeSD);
     ensureEmptyHll();
   }
@@ -671,6 +565,13 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       const DecodedVector& decoded,
       vector_size_t row,
       const TypePtr& type) {
+    auto toDoubleWithConverter = [](auto value) {
+      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(value);
+      VELOX_USER_CHECK(
+          converted.hasValue(), "Failed to convert value to DOUBLE");
+      return converted.value();
+    };
+
     if (type->isDate()) {
       return static_cast<double>(decoded.valueAt<int32_t>(row));
     }
@@ -693,17 +594,17 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
 
     switch (type->kind()) {
       case TypeKind::TINYINT:
-        return static_cast<double>(decoded.valueAt<int8_t>(row));
+        return toDoubleWithConverter(decoded.valueAt<int8_t>(row));
       case TypeKind::SMALLINT:
-        return static_cast<double>(decoded.valueAt<int16_t>(row));
+        return toDoubleWithConverter(decoded.valueAt<int16_t>(row));
       case TypeKind::INTEGER:
-        return static_cast<double>(decoded.valueAt<int32_t>(row));
+        return toDoubleWithConverter(decoded.valueAt<int32_t>(row));
       case TypeKind::BIGINT:
-        return static_cast<double>(decoded.valueAt<int64_t>(row));
+        return toDoubleWithConverter(decoded.valueAt<int64_t>(row));
       case TypeKind::REAL:
-        return static_cast<double>(decoded.valueAt<float>(row));
+        return toDoubleWithConverter(decoded.valueAt<float>(row));
       case TypeKind::DOUBLE:
-        return decoded.valueAt<double>(row);
+        return toDoubleWithConverter(decoded.valueAt<double>(row));
       case TypeKind::TIMESTAMP:
         return static_cast<double>(decoded.valueAt<Timestamp>(row).toMicros());
       case TypeKind::HUGEINT:
@@ -720,52 +621,53 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       vector_size_t row,
       const TypePtr& type) {
     if (type->isDate()) {
-      return SparkXxHash64::hashInt32(
+      return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
           decoded.valueAt<int32_t>(row), kXxHash64Seed);
     }
     if (type->isIntervalYearMonth()) {
-      return SparkXxHash64::hashInt32(
+      return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
           decoded.valueAt<int32_t>(row), kXxHash64Seed);
     }
     if (type->isIntervalDayTime()) {
-      return SparkXxHash64::hashInt64(
+      return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
           decoded.valueAt<int64_t>(row), kXxHash64Seed);
     }
     if (type->isShortDecimal()) {
       auto value = decoded.valueAt<int64_t>(row);
-      return SparkXxHash64::hashDecimal(
+      return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
           static_cast<int128_t>(value), kXxHash64Seed);
     }
     if (type->isLongDecimal()) {
       auto value = decoded.valueAt<int128_t>(row);
-      return SparkXxHash64::hashDecimal(value, kXxHash64Seed);
+      return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
+          value, kXxHash64Seed);
     }
 
     switch (type->kind()) {
       case TypeKind::TINYINT:
-        return SparkXxHash64::hashInt32(
+        return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
             static_cast<int32_t>(decoded.valueAt<int8_t>(row)), kXxHash64Seed);
       case TypeKind::SMALLINT:
-        return SparkXxHash64::hashInt32(
+        return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
             static_cast<int32_t>(decoded.valueAt<int16_t>(row)), kXxHash64Seed);
       case TypeKind::INTEGER:
-        return SparkXxHash64::hashInt32(
+        return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
             decoded.valueAt<int32_t>(row), kXxHash64Seed);
       case TypeKind::BIGINT:
-        return SparkXxHash64::hashInt64(
+        return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
             decoded.valueAt<int64_t>(row), kXxHash64Seed);
       case TypeKind::REAL:
-        return SparkXxHash64::hashFloat(
+        return ::facebook::velox::functions::sparksql::XxHash64::hashFloat(
             decoded.valueAt<float>(row), kXxHash64Seed);
       case TypeKind::DOUBLE:
-        return SparkXxHash64::hashDouble(
+        return ::facebook::velox::functions::sparksql::XxHash64::hashDouble(
             decoded.valueAt<double>(row), kXxHash64Seed);
       case TypeKind::TIMESTAMP:
-        return SparkXxHash64::hashInt64(
-            decoded.valueAt<Timestamp>(row).toMicros(), kXxHash64Seed);
+        return ::facebook::velox::functions::sparksql::XxHash64::hashTimestamp(
+            decoded.valueAt<Timestamp>(row), kXxHash64Seed);
       case TypeKind::HUGEINT:
-        return SparkXxHash64::hashDecimal(
-            decoded.valueAt<int128_t>(row), kXxHash64Seed);
+        return ::facebook::velox::functions::sparksql::XxHash64::
+            hashLongDecimal(decoded.valueAt<int128_t>(row), kXxHash64Seed);
       default:
         VELOX_UNSUPPORTED(
             "Unsupported type for approx_count_distinct_for_intervals: {}",
@@ -827,10 +729,8 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
   const std::vector<std::string> endpointTypes = valueTypes;
 
   auto addSignature = [&](exec::AggregateFunctionSignatureBuilder builder) {
-    auto withRelative = builder;
+    builder.constantArgumentType("double");
     signatures.push_back(builder.build());
-    withRelative.argumentType("double");
-    signatures.push_back(withRelative.build());
   };
 
   for (const auto& valueType : valueTypes) {
@@ -840,7 +740,7 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
               .returnType(returnType)
               .intermediateType(intermediateType)
               .argumentType(valueType)
-              .argumentType(fmt::format("array({})", endpointType)));
+              .constantArgumentType(fmt::format("array({})", endpointType)));
     }
     addSignature(
         exec::AggregateFunctionSignatureBuilder()
@@ -849,7 +749,7 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
             .returnType(returnType)
             .intermediateType(intermediateType)
             .argumentType(valueType)
-            .argumentType("array(DECIMAL(b_precision, b_scale))"));
+            .constantArgumentType("array(DECIMAL(b_precision, b_scale))"));
   }
 
   for (const auto& endpointType : endpointTypes) {
@@ -860,7 +760,7 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
             .returnType(returnType)
             .intermediateType(intermediateType)
             .argumentType("DECIMAL(a_precision, a_scale)")
-            .argumentType(fmt::format("array({})", endpointType)));
+            .constantArgumentType(fmt::format("array({})", endpointType)));
   }
 
   addSignature(
@@ -872,7 +772,7 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
           .returnType(returnType)
           .intermediateType(intermediateType)
           .argumentType("DECIMAL(a_precision, a_scale)")
-          .argumentType("array(DECIMAL(b_precision, b_scale))"));
+          .constantArgumentType("array(DECIMAL(b_precision, b_scale))"));
 
   return exec::registerAggregateFunction(
       name,
@@ -884,9 +784,8 @@ exec::AggregateRegistrationResult registerApproxCountDistinctForIntervals(
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK(
-            argTypes.size() == 1 || argTypes.size() == 2 ||
-                argTypes.size() == 3,
-            "{} takes 2 or 3 arguments",
+            argTypes.size() == 1 || argTypes.size() == 3,
+            "{} takes 3 arguments",
             name);
         return std::make_unique<ApproxCountDistinctForIntervalsAggregate>(
             resultType, argTypes);
