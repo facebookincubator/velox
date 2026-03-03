@@ -36,6 +36,7 @@ velox_add_library(
   MathematicalOperatorsRegistration.cpp
   ProbabilityTrigonometricFunctionsRegistration.cpp
   RegistrationFunctions.cpp
+  S2FunctionsRegistration.cpp
   SetDigestFunctionsRegistration.cpp
   SfmSketchFunctionsRegistration.cpp
   StringFunctionsRegistration.cpp
@@ -72,6 +73,7 @@ velox_link_libraries(
   velox_is_null_functions
   velox_functions_sfm
   simdjson::simdjson
+  s2geometry::s2geometry
 )
 
 if(NOT VELOX_MONO_LIBRARY)

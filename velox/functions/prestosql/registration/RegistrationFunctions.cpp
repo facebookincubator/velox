@@ -52,6 +52,7 @@ extern void registerBingTileFunctions(const std::string& prefix);
 extern void registerGeometryFunctions(const std::string& prefix);
 extern void registerSphericalGeographyFunctions();
 #endif
+extern void registerS2Functions(const std::string& prefix);
 extern void registerInternalArrayFunctions();
 
 namespace prestosql {
@@ -123,6 +124,10 @@ void registerSphericalGeographyFunctions() {
 }
 #endif
 
+void registerS2Functions(const std::string& prefix) {
+  functions::registerS2Functions(prefix);
+}
+
 void registerGeneralFunctions(const std::string& prefix) {
   functions::registerGeneralFunctions(prefix);
 }
@@ -169,6 +174,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerGeometryFunctions(prefix);
   registerSphericalGeographyFunctions();
 #endif
+  registerS2Functions(prefix);
   registerGeneralFunctions(prefix);
   registerDateTimeFunctions(prefix);
   registerURLFunctions(prefix);
