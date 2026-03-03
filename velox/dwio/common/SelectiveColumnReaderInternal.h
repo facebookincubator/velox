@@ -28,6 +28,7 @@
 #include "velox/vector/FlatVector.h"
 
 #include <numeric>
+#include <type_traits>
 
 namespace facebook::velox::dwio::common {
 
@@ -98,6 +99,32 @@ void SelectiveColumnReader::getFlatValues(
     VectorPtr* result,
     const TypePtr& type,
     bool isFinal) {
+  static_assert(
+      std::is_trivially_copyable_v<T>, "T must be a trivially copyable type");
+  static_assert(
+      std::is_trivially_copyable_v<TVector>,
+      "TVector must be a trivially copyable type");
+
+  // When T and TVector differ, both must be numeric scalars. This prevents
+  // accidental cross-domain copies such as Timestamp<->int64_t or
+  // StringView<->int128_t.
+  if constexpr (!std::is_same_v<T, TVector>) {
+    constexpr bool kTIsNumeric = std::is_arithmetic_v<T> ||
+        std::is_same_v<T, int128_t> || std::is_same_v<T, uint128_t>;
+    constexpr bool kTVectorIsNumeric = std::is_arithmetic_v<TVector> ||
+        std::is_same_v<TVector, int128_t> || std::is_same_v<TVector, uint128_t>;
+    static_assert(
+        kTIsNumeric && kTVectorIsNumeric,
+        "Cross-type getFlatValues requires both T and TVector to be numeric");
+    // Same-size cross-domain conversions (e.g., int32_t -> float) would be
+    // strict-aliasing violations in compactScalarValues. These are not
+    // supported; schema validation must reject them before reaching here.
+    static_assert(
+        sizeof(T) != sizeof(TVector) ||
+            std::is_floating_point_v<T> == std::is_floating_point_v<TVector>,
+        "Same-size cross-domain conversions (e.g., int32 -> float) are not "
+        "supported. Reject at schema validation time.");
+  }
   VELOX_CHECK_NE(valueSize_, kNoValueSize);
   VELOX_CHECK(mayGetValues_);
   if (isFinal) {
@@ -111,12 +138,12 @@ void SelectiveColumnReader::getFlatValues(
       } else {
         flatMapValueConstantNullValues_ =
             std::make_shared<ConstantVector<TVector>>(
-                memoryPool_, rows.size(), true, type, T());
+                memoryPool_, rows.size(), true, type, TVector());
       }
       *result = flatMapValueConstantNullValues_;
     } else {
       *result = std::make_shared<ConstantVector<TVector>>(
-          memoryPool_, rows.size(), true, type, T());
+          memoryPool_, rows.size(), true, type, TVector());
     }
     return;
   }
