@@ -157,6 +157,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   properties = properties->maxRowGroupLength(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codecOptions(options.codecOptions);
+  if (options.compressionLevel.has_value()) {
+    properties = properties->compressionLevel(options.compressionLevel.value());
+  }
   properties = properties->enableStoreDecimalAsInteger();
   if (options.useParquetDataPageV2.value_or(false)) {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
@@ -701,6 +704,22 @@ void WriterOptions::processConfigs(
   if (!createdBy) {
     createdBy =
         getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
+  }
+
+  if (!compressionLevel) {
+    if (auto level =
+            session.get<int>(kParquetSessionCompressionLevel).has_value()
+            ? session.get<int>(kParquetSessionCompressionLevel)
+            : connectorConfig.get<int>(kParquetHiveConnectorCompressionLevel)) {
+      compressionLevel = level.value();
+    }
+  }
+
+  if (compressionLevel.has_value()) {
+    if (!codecOptions) {
+      codecOptions = std::make_shared<CodecOptions>();
+    }
+    codecOptions->compressionLevel = compressionLevel.value();
   }
 }
 
