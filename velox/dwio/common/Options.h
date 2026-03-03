@@ -475,6 +475,15 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
+  bool collectColumnStats() const {
+    return collectColumnStats_;
+  }
+
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    collectColumnStats_ = collect;
+    return *this;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -539,6 +548,7 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
+  bool collectColumnStats_{false};
 };
 
 /// Options for creating a Reader.

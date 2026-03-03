@@ -41,8 +41,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::ColumnReaderStatistics>
-          columnReaderStatistics,
+      std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -51,7 +50,7 @@ class DwrfUnit : public LoadUnit {
       : stripeReaderBase_{readerBase},
         memoryPool_(readerBase->memoryPool().shared_from_this()),
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStatistics_{std::move(columnReaderStatistics)},
+        columnReaderStats_{std::move(columnReaderStats)},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
         projectedNodes_{std::move(projectedNodes)},
@@ -101,7 +100,7 @@ class DwrfUnit : public LoadUnit {
   const StrideIndexProvider& strideIndexProvider_;
 
   const std::shared_ptr<dwio::common::ColumnReaderStatistics>
-      columnReaderStatistics_;
+      columnReaderStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -166,7 +165,8 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.offset(),
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
-      stripeIndex_);
+      stripeIndex_,
+      columnReaderStats_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -182,7 +182,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        *columnReaderStatistics_,
+        *columnReaderStats_,
         scanSpec,
         flatMapContext,
         /*isRoot=*/true);
@@ -265,9 +265,12 @@ DwrfRowReader::DwrfRowReader(
                     reader->schema()))},
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
-      columnReaderStatistics_{
-          std::make_shared<dwio::common::ColumnReaderStatistics>()},
+      columnReaderStats_(
+          std::make_shared<dwio::common::ColumnReaderStatistics>()),
       currentUnit_{nullptr} {
+  if (options_.collectColumnStats()) {
+    columnReaderStats_->columnMetricsSet.emplace();
+  }
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -357,7 +360,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_unique<DwrfUnit>(
             /*readerBase=*/readerBaseShared(),
             /*strideIndexProvider=*/*this,
-            columnReaderStatistics_,
+            columnReaderStats_,
             stripe,
             columnSelector_,
             projectedNodes_,
@@ -722,7 +725,6 @@ bool DwrfRowReader::shouldReadNode(
 }
 
 namespace {
-
 template <typename T>
 std::optional<uint64_t> getStringOrBinaryColumnSize(
     const dwio::common::ColumnStatistics& stats) {
