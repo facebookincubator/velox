@@ -42,6 +42,24 @@
   <section id="miscellaneous-functions">
 <h1>Miscellaneous Functions<a class="headerlink" href="#miscellaneous-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="assert_not_null">
+<span class="sig-name descname"><span class="pre">assert_not_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">value</span></span></span><a class="headerlink" href="#assert_not_null" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the input <code class="docutils literal notranslate"><span class="pre">value</span></code> if it is not null. Throws an error if
+<code class="docutils literal notranslate"><span class="pre">value</span></code> is null. Used to enforce NOT NULL column constraints during
+table inserts.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">assert_not_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">errMsg</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">value</span></span></span></dt>
+<dd><blockquote>
+<div><p>A version of <code class="docutils literal notranslate"><span class="pre">assert_not_null</span></code> that uses a custom error message.
+<code class="docutils literal notranslate"><span class="pre">errMsg</span></code> is a constant VARCHAR specifying the error message to throw
+when <code class="docutils literal notranslate"><span class="pre">value</span></code> is null.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="at_least_n_non_nulls">
 <span class="sig-name descname"><span class="pre">at_least_n_non_nulls</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valueN</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bool</span></span></span><a class="headerlink" href="#at_least_n_non_nulls" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if there are at least <code class="docutils literal notranslate"><span class="pre">n</span></code> non-null and non-NaN values,
@@ -140,6 +158,7 @@ from Pseudo-Random Numbers with the seed by combining user-specified
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Miscellaneous Functions</a><ul>
+<li><a class="reference internal" href="#assert_not_null"><code class="docutils literal notranslate"><span class="pre">assert_not_null()</span></code></a></li>
 <li><a class="reference internal" href="#at_least_n_non_nulls"><code class="docutils literal notranslate"><span class="pre">at_least_n_non_nulls()</span></code></a></li>
 <li><a class="reference internal" href="#get_array_struct_fields"><code class="docutils literal notranslate"><span class="pre">get_array_struct_fields()</span></code></a></li>
 <li><a class="reference internal" href="#get_struct_field"><code class="docutils literal notranslate"><span class="pre">get_struct_field()</span></code></a></li>
