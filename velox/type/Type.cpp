@@ -41,8 +41,8 @@ struct hash<facebook::velox::TypeKind> {
 namespace facebook::velox {
 namespace {
 bool isColumnNameRequiringEscaping(const std::string& name) {
-  static const std::string re("^[a-zA-Z_][a-zA-Z0-9_]*$");
-  return !RE2::FullMatch(name, re);
+  static const re2::RE2 kPattern("^[a-zA-Z_][a-zA-Z0-9_]*$");
+  return !RE2::FullMatch(name, kPattern);
 }
 
 const auto& typeKindNames() {
