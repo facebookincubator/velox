@@ -18,7 +18,7 @@
 
 namespace facebook::velox {
 
-int128_t HugeInt::parse(const std::string& str) {
+int128_t HugeInt::parse(std::string_view str) {
   int128_t result = 0;
   bool negative = false;
   size_t idx = 0;
