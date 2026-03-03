@@ -33,6 +33,7 @@
 #include "velox/functions/prestosql/aggregates/EntropyAggregates.h"
 #include "velox/functions/prestosql/aggregates/GeometricMeanAggregate.h"
 #include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
+#include "velox/functions/prestosql/aggregates/InternalVariadicVectorSumAggregate.h"
 #include "velox/functions/prestosql/aggregates/KHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionAggregate.h"
@@ -479,6 +480,10 @@ void registerInternalAggregateFunctions(const std::string& prefix) {
       {prefix + "$internal$count_distinct"}, withCompanionFunctions, overwrite);
   registerInternalArrayAggAggregate(
       {prefix + "$internal$array_agg"}, withCompanionFunctions, overwrite);
+  registerInternalVariadicVectorSumAggregate(
+      {prefix + "$internal$variadic_vector_sum"},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
