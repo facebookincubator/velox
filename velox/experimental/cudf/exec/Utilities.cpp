@@ -94,10 +94,9 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  if (tables.size() == 1) {
-    return tables[0]->release();
-  }
-
+  // We can't exit early for `tables.size() == 1` because we require the output
+  // to be safe to use on `stream`, which may be a different stream than the
+  // input table was allocated on. Instead, we must copy the input on `stream`.
   auto output = cudf::concatenate(tableViews, stream, mr);
   stream.synchronize();
   return output;
