@@ -124,6 +124,8 @@ void registerMathFunctions(const std::string& prefix) {
   registerDecimalMultiply(prefix);
   registerDecimalDivide(prefix);
   registerDecimalIntegralDivide(prefix);
+  registerDecimalRemainder(prefix);
+  registerDecimalPmod(prefix);
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 
