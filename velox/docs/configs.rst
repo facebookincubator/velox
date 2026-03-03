@@ -263,6 +263,12 @@ Expression Evaluation Configuration
      - boolean
      - false
      - Whether to use the simplified expression evaluation path.
+   * - expression.eval_flat_no_nulls
+     - boolean
+     - true
+     - Whether to enable the FlatNoNulls fast path for expression evaluation. When enabled, expressions skip null
+       checking and vector decoding when all inputs are flat-encoded with no nulls. Set to false to disable this
+       optimization.
    * - expression.track_cpu_usage
      - boolean
      - false
