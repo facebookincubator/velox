@@ -352,9 +352,12 @@ void registerCudf() {
     registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
   }
 
+  // Temporarily disable JIT evaluator due to known failures.
+#if 0
   if (CudfConfig::getInstance().jitExpressionEnabled) {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
+#endif
 
   isCudfRegistered = true;
 }

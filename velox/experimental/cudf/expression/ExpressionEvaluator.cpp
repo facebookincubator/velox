@@ -43,6 +43,8 @@
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
+#include <cctype>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -137,6 +139,21 @@ static bool matchCallAgainstSignatures(
     return true;
   }
   return false;
+}
+
+bool endsWith(const std::string& value, const std::string& suffix) {
+  return value.size() >= suffix.size() &&
+      value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string normalizeDateTruncUnit(std::string unit) {
+  if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
+    unit = unit.substr(1, unit.size() - 2);
+  }
+  for (auto& ch : unit) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return unit;
 }
 
 } // namespace
@@ -348,6 +365,185 @@ class BinaryFunction : public CudfFunction {
   const cudf::data_type type_;
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
+};
+
+class LogicalAndFunction : public CudfFunction {
+ public:
+  explicit LogicalAndFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_GE(expr->inputs().size(), 2, "and expects at least 2 inputs");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_GE(inputColumns.size(), 2, "and expects at least 2 inputs");
+    ColumnOrView result = asView(inputColumns[0]);
+    for (size_t i = 1; i < inputColumns.size(); ++i) {
+      result = cudf::binary_operation(
+          asView(result),
+          asView(inputColumns[i]),
+          cudf::binary_operator::LOGICAL_AND,
+          cudf::data_type(cudf::type_id::BOOL8),
+          stream,
+          mr);
+    }
+    return result;
+  }
+};
+
+class LogicalOrFunction : public CudfFunction {
+ public:
+  explicit LogicalOrFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_GE(expr->inputs().size(), 2, "or expects at least 2 inputs");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_GE(inputColumns.size(), 2, "or expects at least 2 inputs");
+    ColumnOrView result = asView(inputColumns[0]);
+    for (size_t i = 1; i < inputColumns.size(); ++i) {
+      result = cudf::binary_operation(
+          asView(result),
+          asView(inputColumns[i]),
+          cudf::binary_operator::LOGICAL_OR,
+          cudf::data_type(cudf::type_id::BOOL8),
+          stream,
+          mr);
+    }
+    return result;
+  }
+};
+
+class NotFunction : public CudfFunction {
+ public:
+  explicit NotFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "not expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "not expects 1 input");
+    return cudf::unary_operation(
+        asView(inputColumns[0]), cudf::unary_operator::NOT, stream, mr);
+  }
+};
+
+class IsNullFunction : public CudfFunction {
+ public:
+  explicit IsNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
+    return cudf::is_null(asView(inputColumns[0]), stream, mr);
+  }
+};
+
+class IsNotNullFunction : public CudfFunction {
+ public:
+  explicit IsNotNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "isnotnull expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
+    return cudf::is_valid(asView(inputColumns[0]), stream, mr);
+  }
+};
+
+class BetweenFunction : public CudfFunction {
+ public:
+  explicit BetweenFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "between expects exactly 3 inputs");
+    int nextIndex = 0;
+    for (size_t i = 0; i < 3; ++i) {
+      const auto& input = expr->inputs()[i];
+      if (auto constExpr =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+        auto constValue = constExpr->value();
+        scalars_[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createCudfScalar, constValue->typeKind(), constValue);
+      } else {
+        inputIndices_[i] = nextIndex++;
+      }
+    }
+    VELOX_CHECK(
+        scalars_[0] == nullptr,
+        "between expects first argument to be non-literal");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(
+        inputIndices_[0], 0, "between expects first argument at index 0");
+    auto valueCol = asView(inputColumns[inputIndices_[0]]);
+    auto ge = compare(
+        valueCol,
+        inputColumns,
+        /*otherIdx=*/1,
+        cudf::binary_operator::GREATER_EQUAL,
+        stream,
+        mr);
+    auto le = compare(
+        valueCol,
+        inputColumns,
+        /*otherIdx=*/2,
+        cudf::binary_operator::LESS_EQUAL,
+        stream,
+        mr);
+    return cudf::binary_operation(
+        asView(ge),
+        asView(le),
+        cudf::binary_operator::LOGICAL_AND,
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        mr);
+  }
+
+ private:
+  ColumnOrView compare(
+      cudf::column_view valueCol,
+      std::vector<ColumnOrView>& inputColumns,
+      size_t otherIdx,
+      cudf::binary_operator op,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const {
+    if (scalars_[otherIdx]) {
+      return cudf::binary_operation(
+          valueCol,
+          *scalars_[otherIdx],
+          op,
+          cudf::data_type(cudf::type_id::BOOL8),
+          stream,
+          mr);
+    }
+    VELOX_CHECK_NE(inputIndices_[otherIdx], -1, "between missing input");
+    return cudf::binary_operation(
+        valueCol,
+        asView(inputColumns[inputIndices_[otherIdx]]),
+        op,
+        cudf::data_type(cudf::type_id::BOOL8),
+        stream,
+        mr);
+  }
+
+  std::unique_ptr<cudf::scalar> scalars_[3];
+  int inputIndices_[3]{-1, -1, -1};
 };
 
 class SwitchFunction : public CudfFunction {
@@ -590,6 +786,58 @@ class YearFunction : public CudfFunction {
     return cudf::datetime::extract_datetime_component(
         inputCol, cudf::datetime::datetime_component::YEAR, stream, mr);
   }
+};
+
+class MonthFunction : public CudfFunction {
+ public:
+  explicit MonthFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "month expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::datetime::extract_datetime_component(
+        inputCol, cudf::datetime::datetime_component::MONTH, stream, mr);
+  }
+};
+
+class DateTruncFunction : public CudfFunction {
+ public:
+  explicit DateTruncFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "date_trunc expects exactly 2 inputs");
+    auto unitExpr =
+        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(unitExpr, "date_trunc unit must be a constant");
+    unit_ = normalizeDateTruncUnit(unitExpr->value()->toString(0));
+    VELOX_CHECK(
+        unit_ == "day", "date_trunc currently supports only 'day'");
+    auto inputType = expr->inputs()[1]->type();
+    VELOX_CHECK(
+        inputType->isTimestamp() || inputType->isDate(),
+        "date_trunc only supports date or timestamp inputs");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto dayType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
+    auto dayCol = cudf::cast(inputCol, dayType, stream, mr);
+    if (inputCol.type() == dayType) {
+      return dayCol;
+    }
+    return cudf::cast(dayCol->view(), inputCol.type(), stream, mr);
+  }
+
+ private:
+  std::string unit_;
 };
 
 class LengthFunction : public CudfFunction {
@@ -930,6 +1178,20 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .build()});
 
   registerCudfFunction(
+      prefix + "month",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<MonthFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("integer")
+           .argumentType("date")
+           .build()});
+
+  registerCudfFunction(
       prefix + "length",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<LengthFunction>(expr);
@@ -974,16 +1236,136 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // all, we're testing if input types can be casted to double. Coersion will
   // pass because all numerics can be casted to double.
   // TODO (dm): This could break for decimal
+  const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("double")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("timestamp")
+          .argumentType("timestamp")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("date")
+          .argumentType("date")
+          .build()};
+
   registerCudfFunctions(
       {prefix + "greaterthan", prefix + "gt"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<BinaryFunction>(
             expr, cudf::binary_operator::GREATER);
       },
+      comparisonSignatures);
+
+  registerCudfFunctions(
+      {prefix + "greaterthanorequal", prefix + "gte"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::GREATER_EQUAL);
+      },
+      comparisonSignatures);
+
+  registerCudfFunctions(
+      {prefix + "lessthan", prefix + "lt"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::LESS);
+      },
+      comparisonSignatures);
+
+  registerCudfFunctions(
+      {prefix + "lessthanorequal", prefix + "lte"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::LESS_EQUAL);
+      },
+      comparisonSignatures);
+
+  registerCudfFunctions(
+      {prefix + "equalto", prefix + "eq"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::EQUAL);
+      },
+      comparisonSignatures);
+
+  registerCudfFunctions(
+      {prefix + "notequalto", prefix + "neq"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::NOT_EQUAL);
+      },
+      comparisonSignatures);
+
+  registerCudfFunction(
+      "and",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalAndFunction>(expr);
+      },
       {FunctionSignatureBuilder()
            .returnType("boolean")
-           .argumentType("double")
-           .argumentType("double")
+           .argumentType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "or",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalOrFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "not",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<NotFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "is_null",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
+  registerCudfFunction(
+      "isnotnull",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNotNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
+  registerCudfFunction(
+      "between",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BetweenFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .argumentType("T")
+           .argumentType("T")
            .build()});
 
   registerCudfFunction(
@@ -1021,6 +1403,22 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {
           // Cast needs special handling dynamically using cudf.
       });
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .build()});
 
   registerCudfFunction(
       prefix + "date_add",
@@ -1128,6 +1526,33 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     auto src = cudf::data_type(cudf_velox::veloxToCudfTypeId(srcType));
     auto dst = cudf::data_type(cudf_velox::veloxToCudfTypeId(dstType));
     return cudf::is_supported_cast(src, dst);
+  }
+
+  if (opName == "and" || opName == "or") {
+    if (expr->inputs().size() < 2) {
+      return false;
+    }
+    for (const auto& input : expr->inputs()) {
+      if (input->type()->kind() != TypeKind::BOOLEAN) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (endsWith(opName, "date_trunc")) {
+    if (expr->inputs().size() != 2) {
+      return false;
+    }
+    auto unitExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+        expr->inputs()[0]);
+    if (!unitExpr || unitExpr->value()->isNullAt(0)) {
+      return false;
+    }
+    auto unit = normalizeDateTruncUnit(unitExpr->value()->toString(0));
+    if (unit != "day") {
+      return false;
+    }
   }
 
   auto& registry = getCudfFunctionRegistry();

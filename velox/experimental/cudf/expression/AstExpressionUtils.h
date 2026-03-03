@@ -29,6 +29,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
 
+#include <functional>
 #include <cudf/ast/detail/operators.hpp>
 #include <cudf/ast/expressions.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -228,6 +229,24 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
+
+  // Timestamp expressions are routed through function evaluators for now.
+  std::function<bool(const std::shared_ptr<velox::exec::Expr>&)>
+      hasTimestampType =
+          [&](const std::shared_ptr<velox::exec::Expr>& node) {
+            if (node->type()->isTimestamp()) {
+              return true;
+            }
+            for (const auto& input : node->inputs()) {
+              if (hasTimestampType(input)) {
+                return true;
+              }
+            }
+            return false;
+          };
+  if (hasTimestampType(expr)) {
+    return false;
+  }
 
   // Literals and field references are always supported
   auto isSupportedLiteral = [&](const TypePtr& type) {
