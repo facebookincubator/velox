@@ -30,6 +30,13 @@ int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
 
 namespace {
 
+std::unordered_map<std::pair<std::string, std::string>, Coercion>&
+dynamicCoercions() {
+  static std::unordered_map<std::pair<std::string, std::string>, Coercion>
+      coercions;
+  return coercions;
+}
+
 std::unordered_map<std::pair<std::string, std::string>, Coercion>
 allowedCoercions() {
   std::unordered_map<std::pair<std::string, std::string>, Coercion> coercions;
@@ -66,6 +73,17 @@ allowedCoercions() {
 } // namespace
 
 // static
+void TypeCoercer::registerCoercion(
+    const TypePtr& fromType,
+    const TypePtr& toType,
+    int32_t cost) {
+  dynamicCoercions().emplace(
+      std::make_pair<std::string, std::string>(
+          fromType->name(), toType->name()),
+      Coercion{.type = toType, .cost = cost});
+}
+
+// static
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const std::string& toTypeName) {
@@ -74,9 +92,16 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
     return Coercion{.type = fromType, .cost = 0};
   }
 
-  auto it = kAllowedCoercions.find({fromType->name(), toTypeName});
+  auto key = std::make_pair(fromType->name(), toTypeName);
+
+  auto it = kAllowedCoercions.find(key);
   if (it != kAllowedCoercions.end()) {
     return it->second;
+  }
+
+  auto dynamicIt = dynamicCoercions().find(key);
+  if (dynamicIt != dynamicCoercions().end()) {
+    return dynamicIt->second;
   }
 
   return std::nullopt;
