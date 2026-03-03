@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::parquet {
 
@@ -61,6 +62,14 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
       getUnsignedIntValues(rows, requestedType_, result);
     } else {
       getIntValues(rows, requestedType_, result);
+      // For INT->Decimal widening in Parquet, apply scale adjustment.
+      // Integer values stored in Parquet need to be multiplied by 10^scale
+      // when read as DecimalType. This is Parquet-specific because ORC decimal
+      // data is already properly scaled.
+      if (requestedType_->isDecimal() && *result) {
+        auto [precision, scale] = getDecimalPrecisionScale(*requestedType_);
+        scaleDecimalValues(*result, static_cast<int32_t>(scale));
+      }
     }
   }
 
@@ -81,6 +90,53 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   template <typename ColumnVisitor>
   void readWithVisitor(const RowSet& rows, ColumnVisitor visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
+  }
+
+ private:
+  // Multiplies all non-null decimal values by 10^scaleExp. No-op when
+  // scaleExp == 0. Dispatches to the appropriate integer width based on
+  // whether requestedType_ is short (int64_t) or long (int128_t) decimal.
+  void scaleDecimalValues(const VectorPtr& result, int32_t scaleExp) const {
+    VELOX_DCHECK_GE(
+        scaleExp, 0, "Expected non-negative scale exponent: {}", scaleExp);
+    VELOX_DCHECK_LE(
+        scaleExp,
+        LongDecimalType::kMaxPrecision,
+        "Scale exponent exceeds max decimal precision: {}",
+        scaleExp);
+    if (scaleExp == 0) {
+      return;
+    }
+    if (requestedType_->isShortDecimal()) {
+      // Safe to cast: for short decimal, scaleExp <= maxPrecision(18) - 10 = 8,
+      // so kPowersOfTen[scaleExp] <= 10^8 which fits in int64_t.
+      applyDecimalScaleMultiplier<int64_t>(
+          result, static_cast<int64_t>(DecimalUtil::kPowersOfTen[scaleExp]));
+    } else {
+      applyDecimalScaleMultiplier<int128_t>(
+          result, DecimalUtil::kPowersOfTen[scaleExp]);
+    }
+  }
+
+  // Multiplies all non-null values in result by multiplier.
+  template <typename T>
+  void applyDecimalScaleMultiplier(const VectorPtr& result, T multiplier)
+      const {
+    auto* flat = result->asUnchecked<FlatVector<T>>();
+    auto* rawValues = flat->mutableRawValues();
+    const auto* rawNulls = flat->rawNulls();
+    const auto size = flat->size();
+    if (!rawNulls) {
+      for (vector_size_t i = 0; i < size; ++i) {
+        rawValues[i] *= multiplier;
+      }
+    } else {
+      for (vector_size_t i = 0; i < size; ++i) {
+        if (bits::isBitSet(rawNulls, i)) {
+          rawValues[i] *= multiplier;
+        }
+      }
+    }
   }
 };
 
