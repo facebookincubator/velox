@@ -641,11 +641,61 @@ RowTypePtr getGroupIdOutputType(
   return ROW(std::move(names), std::move(types));
 }
 
+// Resolves output column names to indices into groupingKeyInfos.
+std::vector<std::vector<int32_t>> resolveGroupingSetIndices(
+    const std::vector<std::vector<std::string>>& groupingSets,
+    const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos) {
+  std::unordered_map<std::string, int32_t> outputNameToIndex;
+  for (int32_t i = 0; i < groupingKeyInfos.size(); ++i) {
+    outputNameToIndex[groupingKeyInfos[i].output] = i;
+  }
+
+  std::vector<std::vector<int32_t>> result;
+  result.reserve(groupingSets.size());
+  for (const auto& set : groupingSets) {
+    std::vector<int32_t> indexSet;
+    indexSet.reserve(set.size());
+    for (const auto& name : set) {
+      auto it = outputNameToIndex.find(name);
+      VELOX_USER_CHECK(
+          it != outputNameToIndex.end(),
+          "Grouping set key not found in grouping keys: {}",
+          name);
+      indexSet.push_back(it->second);
+    }
+    result.push_back(std::move(indexSet));
+  }
+  return result;
+}
+
 } // namespace
 
 GroupIdNode::GroupIdNode(
     PlanNodeId id,
-    std::vector<std::vector<std::string>> groupingSets,
+    const std::vector<std::vector<std::string>>& groupingSets,
+    std::vector<GroupingKeyInfo> groupingKeyInfos,
+    std::vector<FieldAccessTypedExprPtr> aggregationInputs,
+    std::string groupIdName,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      sources_{source},
+      outputType_(getGroupIdOutputType(
+          groupingKeyInfos,
+          aggregationInputs,
+          groupIdName)),
+      groupingSets_(resolveGroupingSetIndices(groupingSets, groupingKeyInfos)),
+      groupingKeyInfos_(std::move(groupingKeyInfos)),
+      aggregationInputs_(std::move(aggregationInputs)),
+      groupIdName_(std::move(groupIdName)) {
+  VELOX_USER_CHECK_GE(
+      groupingSets_.size(),
+      2,
+      "GroupIdNode requires two or more grouping sets.");
+}
+
+GroupIdNode::GroupIdNode(
+    PlanNodeId id,
+    std::vector<std::vector<int32_t>> groupingSets,
     std::vector<GroupingKeyInfo> groupingKeyInfos,
     std::vector<FieldAccessTypedExprPtr> aggregationInputs,
     std::string groupIdName,
@@ -672,7 +722,7 @@ void GroupIdNode::addDetails(std::stringstream& stream) const {
     stream << "[";
     for (auto j = 0; j < groupingSets_[i].size(); j++) {
       appendComma(j, stream);
-      stream << groupingSets_[i][j];
+      stream << groupingKeyInfos_[groupingSets_[i][j]].output;
     }
     stream << "]";
   }
@@ -715,7 +765,7 @@ PlanNodePtr GroupIdNode::create(const folly::dynamic& obj, void* context) {
   }
 
   auto groupingSets =
-      ISerializable::deserialize<std::vector<std::vector<std::string>>>(
+      ISerializable::deserialize<std::vector<std::vector<int32_t>>>(
           obj["groupingSets"]);
   return std::make_shared<GroupIdNode>(
       deserializePlanNodeId(obj),

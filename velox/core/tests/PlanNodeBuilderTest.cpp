@@ -461,19 +461,27 @@ TEST_F(PlanNodeBuilderTest, groupIdNode) {
   const std::vector<std::vector<std::string>> groupingSets{{"a"}, {"b"}};
   const std::vector<GroupIdNode::GroupingKeyInfo> groupingKeyInfos{
       GroupIdNode::GroupingKeyInfo{
-          .output = "xyz",
-          .input = std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c0")}};
+          .output = "a",
+          .input = std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c0")},
+      GroupIdNode::GroupingKeyInfo{
+          .output = "b",
+          .input = std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c1")}};
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs{
-      std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c1")};
+      std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c2")};
   std::string groupIdName = "group_id";
+
+  const std::vector<std::vector<int32_t>> expectedIndexGroupingSets{{0}, {1}};
 
   const auto verify = [&](const std::shared_ptr<const GroupIdNode>& node) {
     EXPECT_EQ(node->id(), id);
-    EXPECT_EQ(node->groupingSets(), groupingSets);
-    EXPECT_EQ(node->groupingKeyInfos().size(), 1);
+    EXPECT_EQ(node->groupingSets(), expectedIndexGroupingSets);
+    EXPECT_EQ(node->groupingKeyInfos().size(), 2);
     EXPECT_EQ(
         node->groupingKeyInfos()[0].serialize(),
         groupingKeyInfos[0].serialize());
+    EXPECT_EQ(
+        node->groupingKeyInfos()[1].serialize(),
+        groupingKeyInfos[1].serialize());
     EXPECT_EQ(node->aggregationInputs(), aggregationInputs);
     EXPECT_EQ(node->groupIdName(), groupIdName);
     EXPECT_EQ(node->sources(), std::vector<PlanNodePtr>{source_});
@@ -491,6 +499,36 @@ TEST_F(PlanNodeBuilderTest, groupIdNode) {
 
   const auto node2 = GroupIdNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, groupIdNodeWithIndices) {
+  const PlanNodeId id{"group_id_node_id"};
+  const std::vector<GroupIdNode::GroupingKeyInfo> groupingKeyInfos{
+      GroupIdNode::GroupingKeyInfo{
+          .output = "a",
+          .input = std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c0")},
+      GroupIdNode::GroupingKeyInfo{
+          .output = "b",
+          .input = std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c1")}};
+  const std::vector<FieldAccessTypedExprPtr> aggregationInputs{
+      std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c2")};
+  std::string groupIdName{"group_id"};
+
+  const std::vector<std::vector<int32_t>> indexGroupingSets{{0}, {1}};
+
+  const auto node = std::make_shared<GroupIdNode>(
+      id,
+      indexGroupingSets,
+      groupingKeyInfos,
+      aggregationInputs,
+      groupIdName,
+      source_);
+
+  EXPECT_EQ(node->id(), id);
+  EXPECT_EQ(node->groupingSets(), indexGroupingSets);
+  EXPECT_EQ(node->groupingKeyInfos().size(), 2);
+  EXPECT_EQ(node->aggregationInputs(), aggregationInputs);
+  EXPECT_EQ(node->groupIdName(), groupIdName);
 }
 
 TEST_F(PlanNodeBuilderTest, exchangeNode) {
