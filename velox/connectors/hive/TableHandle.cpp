@@ -107,7 +107,6 @@ void HiveColumnHandle::registerSerDe() {
 HiveTableHandle::HiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
-    bool filterPushdownEnabled,
     common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
@@ -117,7 +116,6 @@ HiveTableHandle::HiveTableHandle(
     double sampleRate)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
-      filterPushdownEnabled_(filterPushdownEnabled),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
       sampleRate_(sampleRate),
@@ -132,7 +130,6 @@ HiveTableHandle::HiveTableHandle(
 HiveTableHandle::HiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
-    bool filterPushdownEnabled,
     common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
@@ -142,7 +139,6 @@ HiveTableHandle::HiveTableHandle(
     : HiveTableHandle(
           std::move(connectorId),
           tableName,
-          filterPushdownEnabled,
           std::move(subfieldFilters),
           remainingFilter,
           dataColumns,
@@ -213,7 +209,6 @@ std::string HiveTableHandle::toString() const {
 folly::dynamic HiveTableHandle::serialize() const {
   folly::dynamic obj = ConnectorTableHandle::serializeBase("HiveTableHandle");
   obj["tableName"] = tableName_;
-  obj["filterPushdownEnabled"] = filterPushdownEnabled_;
 
   folly::dynamic subfieldFilters = folly::dynamic::array;
   for (const auto& [subfield, filter] : subfieldFilters_) {
@@ -263,7 +258,6 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     void* context) {
   auto connectorId = obj["connectorId"].asString();
   auto tableName = obj["tableName"].asString();
-  auto filterPushdownEnabled = obj["filterPushdownEnabled"].asBool();
 
   core::TypedExprPtr remainingFilter;
   if (auto it = obj.find("remainingFilter"); it != obj.items().end()) {
@@ -316,7 +310,6 @@ ConnectorTableHandlePtr HiveTableHandle::create(
   return std::make_shared<const HiveTableHandle>(
       connectorId,
       tableName,
-      filterPushdownEnabled,
       std::move(subfieldFilters),
       remainingFilter,
       dataColumns,
