@@ -26,9 +26,6 @@
 
 #include "velox/tpcds/gen/dsdgen/include/config.h"
 #include "velox/tpcds/gen/dsdgen/include/porting.h"
-#ifndef USE_STDLIB_H
-#include <malloc.h>
-#endif
 #include <stdio.h>
 #include "velox/tpcds/gen/dsdgen/include/genrand.h"
 
@@ -46,24 +43,20 @@
  * Side Effects:
  * TODO: None
  */
-int* makePermutation(int nSize, int nStream, DSDGenContext& dsdGenContext) {
-  int i, nTemp, nIndex, *pInt;
-
+std::vector<int32_t>
+makePermutation(int nSize, int nStream, DSDGenContext& dsdGenContext) {
   if (nSize <= 0)
-    return (NULL);
+    return {};
 
-  std::vector<int32_t> nNumberSet(nSize);
-  pInt = nNumberSet.data();
-  for (i = 0; i < nSize; i++)
-    *pInt++ = i;
+  std::vector<int32_t> perm(nSize);
+  for (int i = 0; i < nSize; i++)
+    perm[i] = i;
 
-  for (i = 0; i < nSize; i++) {
-    nIndex = genrand_integer(
+  for (int i = 0; i < nSize; i++) {
+    int nIndex = genrand_integer(
         NULL, DIST_UNIFORM, 0, nSize - 1, 0, nStream, dsdGenContext);
-    nTemp = nNumberSet[i];
-    nNumberSet[i] = nNumberSet[nIndex];
-    nNumberSet[nIndex] = nTemp;
+    std::swap(perm[i], perm[nIndex]);
   }
 
-  return std::move(nNumberSet.data());
+  return perm;
 }
