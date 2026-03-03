@@ -358,6 +358,8 @@ macro names are always upper-snake-case. Also:
     the interface. Only if someone needs to understand your implementation
     should opening the `-inl.h` be necessary (or the .cpp file, for that
     matter).
+  * Add `#pragma once` and `#include header.h` in `header-inl.h`, otherwise
+    clangd based autocomplete won't work.
 
 ## Function Arguments
 
