@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <future>
+
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -3393,6 +3395,272 @@ TEST_P(MultiFragmentTest, batchBytes) {
     // With 1GB limit: All rows fit in one batch
     test(100, 100, 1ULL << 30, 1);
   }
+}
+
+// Exchange source whose close() blocks until explicitly unblocked.
+// Used to simulate UnsortedBlockFetcher::close() blocking on background
+// coroutines stuck in memory arbitration (see P2183074494).
+class BlockingCloseSource : public ExchangeSource {
+ public:
+  BlockingCloseSource(
+      const std::string& taskId,
+      int dest,
+      std::shared_ptr<ExchangeQueue> q,
+      memory::MemoryPool* p,
+      std::atomic<bool>& unblock,
+      folly::EventCount& event,
+      std::atomic<bool>& completed)
+      : ExchangeSource(taskId, dest, std::move(q), p),
+        unblockClose_(unblock),
+        closeEvent_(event),
+        closeCompleted_(completed) {}
+
+  bool shouldRequestLocked() override {
+    if (atEnd_ || requestPending_) {
+      return false;
+    }
+    requestPending_ = true;
+    return true;
+  }
+
+  folly::SemiFuture<Response> request(uint32_t, std::chrono::microseconds)
+      override {
+    requestPending_ = false;
+    atEnd_ = true;
+    return folly::makeSemiFuture(Response{0, true, {}});
+  }
+
+  folly::SemiFuture<Response> requestDataSizes(
+      std::chrono::microseconds) override {
+    requestPending_ = false;
+    atEnd_ = true;
+    return folly::makeSemiFuture(Response{0, true, {}});
+  }
+
+  folly::F14FastMap<std::string, int64_t> stats() const override {
+    return {};
+  }
+
+  void close() override {
+    // Simulate UnsortedBlockFetcher::close() blocking on
+    // backgroundScope_.joinAsync() while coroutines are stuck
+    // on arbitration.
+    closeEvent_.await([&]() { return unblockClose_.load(); });
+    closeCompleted_.store(true);
+  }
+
+ private:
+  std::atomic<bool>& unblockClose_;
+  folly::EventCount& closeEvent_;
+  std::atomic<bool>& closeCompleted_;
+};
+
+// Registers a factory that creates BlockingCloseSource for "blocking://"
+// prefixed task IDs. The factory is inserted at the front so it takes
+// priority over the default local exchange source factory.
+void registerBlockingCloseFactory(
+    std::atomic<bool>& unblockClose,
+    folly::EventCount& closeEvent,
+    std::atomic<bool>& closeCompleted) {
+  exec::ExchangeSource::factories().insert(
+      exec::ExchangeSource::factories().begin(),
+      [&](const std::string& remoteTaskId,
+          int destination,
+          std::shared_ptr<ExchangeQueue> queue,
+          memory::MemoryPool* pool) -> std::shared_ptr<ExchangeSource> {
+        if (remoteTaskId.find("blocking://") != 0) {
+          return nullptr;
+        }
+        return std::make_shared<BlockingCloseSource>(
+            remoteTaskId,
+            destination,
+            std::move(queue),
+            pool,
+            unblockClose,
+            closeEvent,
+            closeCompleted);
+      });
+}
+
+// Reproduces the deadlock scenario from P2183074494:
+//
+// 1. A background coroutine (UnsortedBlockFetcher::readChunk) allocates memory,
+//    triggering arbitration (Op A).
+// 2. With a single task, Op A must self-reclaim. Spill fails -> exception ->
+//    reclaimTask() catch -> setError() -> Task::terminate().
+// 3. terminate() calls ExchangeClient::close() -> source->close() ->
+//    UnsortedBlockFetcher::close() ->
+//    blockingWait(backgroundScope_.joinAsync())
+// 4. Other background coroutines (readChunk) are stuck in startArbitration()
+//    waiting for Op A to finish.
+// 5. Op A can't finish because it's blocked in blockingWait -> DEADLOCK.
+//
+// The fix: with kExchangeClientAsyncCloseEnabled=true, terminate() defers the
+// close to a background thread and returns immediately, allowing arbitration to
+// complete, which unblocks the coroutines, which allows the deferred close to
+// succeed.
+//
+// This test simulates the blocking source close and verifies that async close
+// prevents the deadlock.
+DEBUG_ONLY_TEST_P(MultiFragmentTest, asyncExchangeClientClosePreventDeadlock) {
+  // Controls when the exchange source's close() can complete.
+  // Simulates UnsortedBlockFetcher::close() blocking on background coroutines
+  // that are stuck waiting for arbitration.
+  std::atomic<bool> unblockClose{false};
+  folly::EventCount closeEvent;
+  std::atomic<bool> closeCompleted{false};
+
+  registerBlockingCloseFactory(unblockClose, closeEvent, closeCompleted);
+
+  // Ensure close is unblocked on scope exit to prevent test hangs.
+  auto guard = folly::makeGuard([&] {
+    unblockClose.store(true);
+    closeEvent.notifyAll();
+  });
+
+  // Block the driver thread so it doesn't interfere with our controlled
+  // sequence of: addSplit -> setError -> terminate -> async close.
+  std::atomic<bool> unblockDriver{false};
+  folly::EventCount driverEvent;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal",
+      std::function<void(const Driver*)>([&](const Driver*) {
+        driverEvent.await([&]() { return unblockDriver.load(); });
+      }));
+
+  auto plan = PlanBuilder().exchange(rowType_, GetParam().serdeKind).planNode();
+
+  // Enable lazy fetching to avoid triggering pickSourcesToRequestLocked()
+  // during addSplit. Enable async close to test the deadlock fix.
+  std::unordered_map<std::string, std::string> extraConfigs{
+      {core::QueryConfig::kExchangeClientAsyncCloseEnabled, "true"},
+      {core::QueryConfig::kExchangeLazyFetchingEnabled, "true"}};
+  auto task = makeTask("root-task", plan, extraConfigs);
+  task->start(1);
+
+  // Add our blocking source. With lazy fetching, no request is issued yet.
+  task->addSplit(
+      "0",
+      exec::Split(
+          std::make_shared<RemoteConnectorSplit>("blocking://source-0")));
+
+  // Trigger task failure: setError() -> terminate() -> ExchangeClient::close().
+  // With async close enabled, terminate() defers close to the executor and
+  // returns immediately. Without async close, this would deadlock because
+  // source->close() blocks (simulating coroutines stuck on arbitration).
+  try {
+    VELOX_FAIL("Simulated reclaim failure");
+  } catch (const VeloxException&) {
+    task->setError(std::current_exception());
+  }
+
+  // If we reach here, setError() -> terminate() returned without blocking.
+  // This is the key assertion: with synchronous close, terminate() would have
+  // blocked forever inside source->close() (deadlock). With async close,
+  // terminate() deferred the close and returned immediately.
+
+  // Now unblock the close and the driver so everything can finish cleanly.
+  // We must unblock close before waiting for the task to complete because
+  // the driver's Exchange::close() also calls exchangeClient_->close(),
+  // which will block on the source close if the async close lambda hasn't
+  // run yet. The ExchangeClient::close() is idempotent so whichever path
+  // gets there first does the actual close; the other returns immediately.
+  unblockClose.store(true);
+  closeEvent.notifyAll();
+  guard.dismiss();
+
+  // Unblock the driver so it can see the failed state and exit cleanly.
+  unblockDriver.store(true);
+  driverEvent.notifyAll();
+
+  // Wait for task failure. Both the async close lambda and the driver's
+  // Exchange::close() can now proceed since closeEvent is unblocked.
+  ASSERT_TRUE(waitForTaskFailure(task.get(), 5'000'000));
+
+  // Wait for the async close to complete on the executor thread.
+  while (!closeCompleted.load()) {
+    std::this_thread::yield();
+  }
+}
+
+// Demonstrates the deadlock that occurs with synchronous exchange client close.
+// Same scenario as asyncExchangeClientClosePreventDeadlock, but with
+// kExchangeClientAsyncCloseEnabled=false (the default). With sync close,
+// terminate() blocks inside source->close() on the calling thread. Since the
+// calling thread is also the one that would need to unblock the close (by
+// completing the arbitration operation), we get a self-deadlock.
+//
+// This test calls setError() on a background thread and verifies it does NOT
+// return within a timeout, proving the deadlock. It then unblocks everything
+// to allow clean test shutdown.
+DEBUG_ONLY_TEST_P(MultiFragmentTest, syncExchangeClientCloseDeadlock) {
+  std::atomic<bool> unblockClose{false};
+  folly::EventCount closeEvent;
+  std::atomic<bool> closeCompleted{false};
+
+  registerBlockingCloseFactory(unblockClose, closeEvent, closeCompleted);
+
+  // Ensure close is unblocked on scope exit to prevent test hangs.
+  auto guard = folly::makeGuard([&] {
+    unblockClose.store(true);
+    closeEvent.notifyAll();
+  });
+
+  // Block the driver thread so it doesn't interfere.
+  std::atomic<bool> unblockDriver{false};
+  folly::EventCount driverEvent;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal",
+      std::function<void(const Driver*)>([&](const Driver*) {
+        driverEvent.await([&]() { return unblockDriver.load(); });
+      }));
+
+  auto plan = PlanBuilder().exchange(rowType_, GetParam().serdeKind).planNode();
+
+  // Async close DISABLED (default) — sync close will deadlock.
+  // Lazy fetching enabled to avoid triggering source requests during addSplit.
+  std::unordered_map<std::string, std::string> extraConfigs{
+      {core::QueryConfig::kExchangeLazyFetchingEnabled, "true"}};
+  auto task = makeTask("root-task", plan, extraConfigs);
+  task->start(1);
+
+  task->addSplit(
+      "0",
+      exec::Split(
+          std::make_shared<RemoteConnectorSplit>("blocking://source-0")));
+
+  // Call setError on a background thread. With sync close, terminate() will
+  // block inside exchangeClient->close() -> source->close() because the
+  // source blocks on closeEvent. This simulates the production deadlock where
+  // the arbitration thread is stuck in terminate() while coroutines wait for
+  // that same arbitration to complete.
+  auto setErrorFuture = std::async(std::launch::async, [&]() {
+    try {
+      VELOX_FAIL("Simulated reclaim failure");
+    } catch (const VeloxException&) {
+      task->setError(std::current_exception());
+    }
+  });
+
+  // Verify setError() is stuck (deadlocked). It should NOT complete within
+  // a reasonable time because terminate() is blocked in source->close().
+  auto status = setErrorFuture.wait_for(std::chrono::seconds(3));
+  ASSERT_EQ(status, std::future_status::timeout)
+      << "setError() returned with sync close — expected it to be blocked "
+         "(deadlocked) inside source->close()";
+
+  // Unblock everything to allow the test to shut down cleanly.
+  unblockClose.store(true);
+  closeEvent.notifyAll();
+  guard.dismiss();
+
+  unblockDriver.store(true);
+  driverEvent.notifyAll();
+
+  // Now setError/terminate can complete since close is unblocked.
+  setErrorFuture.get();
+
+  ASSERT_TRUE(waitForTaskFailure(task.get(), 5'000'000));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
