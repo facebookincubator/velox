@@ -524,7 +524,14 @@ void CudfHashJoinProbe::noMoreInput() {
     if (hashObject_.has_value()) {
       auto stream = cudfGlobalStreamPool().get_stream();
 
-      // Synchronize with all drivers' probe streams before reading their flags.
+      // The allPeersFinished barrier above synchronizes CPU threads, but not
+      // GPU streams. A driver's CPU thread may return from getOutput() while
+      // its GPU work (updating rightMatchedFlags_) is still in flight.
+      // join_streams establishes GPU-side ordering so that all probe stream
+      // operations complete before the BITWISE_OR reads below.
+      // Drivers without lastProbeStream_ (no probe batches) are skipped:
+      // their flags are all-false from host-synchronized init with no pending
+      // GPU work.
       std::vector<rmm::cuda_stream_view> inputStreams;
       if (lastProbeStream_.has_value()) {
         inputStreams.push_back(lastProbeStream_.value());
