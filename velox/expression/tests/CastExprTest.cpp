@@ -2828,6 +2828,51 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
       "Cast from VARCHAR to INTERVAL DAY TO SECOND is not supported");
 }
 
+TEST_F(CastExprTest, intervalDayTimeMicrosToVarchar) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(
+          {kMicrosInDay,
+           kMicrosInHour,
+           kMicrosInMinute,
+           kMicrosInSecond,
+           5 * kMicrosInDay + 14 * kMicrosInHour + 20 * kMicrosInMinute +
+               52 * kMicrosInSecond + 88000,
+           -(kMicrosInDay + kMicrosInHour + kMicrosInMinute + kMicrosInSecond +
+             88000),
+           // Sub-millisecond precision is preserved.
+           kMicrosInDay + 567890,
+           std::numeric_limits<int64_t>::min()},
+          INTERVAL_DAY_TIME_MICROS()),
+  });
+
+  auto result = evaluate("cast(c0 as varchar)", data);
+  auto expected = makeFlatVector<std::string>({
+      "1 00:00:00.000000",
+      "0 01:00:00.000000",
+      "0 00:01:00.000000",
+      "0 00:00:01.000000",
+      "5 14:20:52.088000",
+      "-1 01:01:01.088000",
+      "1 00:00:00.567890",
+      "-106751991 04:00:54.775808",
+  });
+
+  assertEqualVectors(expected, result);
+
+  // Reverse cast (VARCHAR -> INTERVAL DAY TO SECOND MICROS) is not supported.
+  // Use makeCastExpr directly since DuckDB's SQL parser does not recognize
+  // our custom type name.
+  auto varcharInput = makeRowVector({
+      makeFlatVector<std::string>({"5 14:20:52.088000"}),
+  });
+  auto inputField =
+      std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+  auto castExpr = makeCastExpr(inputField, INTERVAL_DAY_TIME_MICROS(), false);
+  VELOX_ASSERT_THROW(
+      evaluate(castExpr, varcharInput),
+      "Cast from VARCHAR to INTERVAL DAY TO SECOND MICROS is not supported");
+}
+
 class BigintTypeWithCustomComparisonCastOperator final
     : public exec::CastOperator {
   BigintTypeWithCustomComparisonCastOperator() = default;
