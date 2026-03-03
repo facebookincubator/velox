@@ -937,39 +937,23 @@ TypePtr ReaderBase::convertType(
               kTypeMappingErrorFmtStr,
               "DECIMAL",
               requestedType->toString());
-          // Reading short decimals with a long decimal requested type is not
-          // yet possible. To allow for correct interpretation of the values,
-          // the scale of the file type and requested type must match while
-          // precision may be larger.
-          if (requestedType->isShortDecimal()) {
-            VELOX_CHECK(
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [&](const TypePtr& type) {
-                      return type->isShortDecimal() &&
-                          type->asShortDecimal().precision() >=
-                          schemaElementPrecision &&
-                          type->asShortDecimal().scale() == schemaElementScale;
-                    }),
-                kTypeMappingErrorFmtStr,
-                type->toString(),
-                requestedType->toString());
-          } else {
-            VELOX_CHECK(
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [&](const TypePtr& type) {
-                      return type->isLongDecimal() &&
-                          type->asLongDecimal().precision() >=
-                          schemaElementPrecision &&
-                          type->asLongDecimal().scale() == schemaElementScale;
-                    }),
-                kTypeMappingErrorFmtStr,
-                type->toString(),
-                requestedType->toString());
-          }
+          // Allow decimal widening: precision may be larger and scale may
+          // increase as long as precisionIncrease >= scaleIncrease (matching
+          // Spark's isDecimalTypeMatched rule). Short-to-long decimal crossing
+          // is handled by getDecimalValues via the upcast path.
+          VELOX_CHECK(
+              isCompatible(
+                  requestedType,
+                  isRepeated,
+                  [&](const TypePtr& type) {
+                    auto [precision, scale] = getDecimalPrecisionScale(*type);
+                    auto precInc = precision - schemaElementPrecision;
+                    auto scaleInc = scale - schemaElementScale;
+                    return scaleInc >= 0 && precInc >= scaleInc;
+                  }),
+              kTypeMappingErrorFmtStr,
+              type->toString(),
+              requestedType->toString());
         }
         return type;
       }
