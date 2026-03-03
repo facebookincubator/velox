@@ -263,7 +263,7 @@ jobs:
           ( \
             cd $CUDF_DIR/cudf-libs && \
             echo "$lndeps" | \
-            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}
+            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {} \
           ) && \
           tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
 
@@ -313,8 +313,11 @@ jobs:
           grep "Source directory" $CUDF_DIR/tests/CTestTestfile.cmake
           grep "Build directory" $CUDF_DIR/tests/CTestTestfile.cmake
           (cd  $CUDF_DIR && tar -xf cudf-libs.tar)
-          # Patch test executables
-          for exe in $CUDF_DIR/tests/velox_cudf_*; do \
+          # Patch test executables.
+          # ldfconfig causes system wide changes. Since we are copying some system libraries from
+          # the build machine, we need to use patchelf to add the copied libraries path only to
+          # the test executables.
+          for exe in $CUDF_DIR/tests/velox_cudf_*; do
             patchelf --force-rpath --set-rpath '$ORIGIN/../cudf-libs' "$exe"
             chmod +x "$exe"
             ls -l "$exe"
