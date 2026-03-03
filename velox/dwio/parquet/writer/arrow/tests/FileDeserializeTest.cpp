@@ -338,11 +338,24 @@ void checkDataPageHeader(
 
   const DataPageV1* dataPage = static_cast<const DataPageV1*>(page);
   ASSERT_EQ(expected.num_values, dataPage->numValues());
-  ASSERT_EQ(expected.encoding, dataPage->encoding());
+  // The encoding enum for thrift::DataPageHeader isn't the same as in
+  // DataPageV1::parquet::thrift::Encoding::type vs
+  // parquet::arrow::Encoding::type.
   ASSERT_EQ(
-      expected.definition_level_encoding, dataPage->definitionLevelEncoding());
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          dataPage->encoding()));
   ASSERT_EQ(
-      expected.repetition_level_encoding, dataPage->repetitionLevelEncoding());
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.definition_level_encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          dataPage->definitionLevelEncoding()));
+  ASSERT_EQ(
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.repetition_level_encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          dataPage->repetitionLevelEncoding()));
   checkStatistics(expected, dataPage->statistics());
 }
 
@@ -356,7 +369,14 @@ void checkDataPageHeader(
   ASSERT_EQ(expected.num_values, dataPage->numValues());
   ASSERT_EQ(expected.num_nulls, dataPage->numNulls());
   ASSERT_EQ(expected.num_rows, dataPage->numRows());
-  ASSERT_EQ(expected.encoding, dataPage->encoding());
+  // The encoding enum for thrift::DataPageHeader isn't the same as in
+  // DataPageV2::parquet::thrift::Encoding::type vs
+  // parquet::arrow::Encoding::type.
+  ASSERT_EQ(
+      static_cast<std::underlying_type_t<thrift::Encoding::type>>(
+          expected.encoding),
+      static_cast<std::underlying_type_t<Encoding::type>>(
+          dataPage->encoding()));
   ASSERT_EQ(
       expected.definition_levels_byte_length,
       dataPage->definitionLevelsByteLength());
