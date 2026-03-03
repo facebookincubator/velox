@@ -516,6 +516,7 @@ uint64_t IntegerColumnWriter<T>::writeDict(
   writeNulls(decodedVector, ranges);
   // make sure we have enough space
   rows_.reserve(rows_.size() + ranges.size());
+  dictEncoder_.reserveAdditionalCapacity(static_cast<uint32_t>(ranges.size()));
   auto processRow = [&](vector_size_t pos) {
     T value = decodedVector.valueAt<T>(pos);
     rows_.unsafeAppend(dictEncoder_.addKey(value));
