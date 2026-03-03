@@ -85,6 +85,7 @@ TypePtr getAvgResultType(const TypePtr& rawInputType) {
       std::min<uint8_t>(LongDecimalType::kMaxPrecision, s + 4));
 }
 
+template <bool throwOnOverflow = false>
 std::unique_ptr<exec::Aggregate> getDecimalAverageAggregate(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
@@ -95,15 +96,16 @@ std::unique_ptr<exec::Aggregate> getDecimalAverageAggregate(
   if (inputType->isShortDecimal()) {
     if (avgType->isShortDecimal()) {
       return std::make_unique<exec::SimpleAggregateAdapter<
-          DecimalAverageAggregate<int64_t, int64_t>>>(
+          DecimalAverageAggregate<int64_t, int64_t, throwOnOverflow>>>(
           step, argTypes, resultType);
     }
     return std::make_unique<exec::SimpleAggregateAdapter<
-        DecimalAverageAggregate<int64_t, int128_t>>>(
+        DecimalAverageAggregate<int64_t, int128_t, throwOnOverflow>>>(
         step, argTypes, resultType);
   }
   return std::make_unique<exec::SimpleAggregateAdapter<
-      DecimalAverageAggregate<int128_t, int128_t>>>(step, argTypes, resultType);
+      DecimalAverageAggregate<int128_t, int128_t, throwOnOverflow>>>(
+      step, argTypes, resultType);
 }
 
 } // namespace
@@ -227,6 +229,93 @@ exec::AggregateRegistrationResult registerAverage(
               return std::make_unique<exec::SimpleAggregateAdapter<
                   DecimalAverageAggregate<int128_t /*unused*/, int128_t>>>(
                   step, argTypes, resultType);
+            default:
+              VELOX_FAIL(
+                  "Unsupported result type for final aggregation: {}",
+                  resultType->kindName());
+          }
+        }
+      },
+      withCompanionFunctions,
+      overwrite);
+}
+
+exec::AggregateRegistrationResult registerCheckedAverage(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
+
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("i_precision", "min(38, a_precision + 10)")
+          .integerVariable("r_precision", "min(38, a_precision + 4)")
+          .integerVariable("r_scale", "min(38, a_scale + 4)")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("ROW(DECIMAL(i_precision, a_scale), BIGINT)")
+          .returnType("DECIMAL(r_precision, r_scale)")
+          .build());
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_LE(
+            argTypes.size(), 1, "{} takes at most one argument", name);
+        const auto& inputType = argTypes[0];
+        if (exec::isRawInput(step)) {
+          switch (inputType->kind()) {
+            case TypeKind::BIGINT: {
+              VELOX_USER_CHECK(inputType->isShortDecimal());
+              return getDecimalAverageAggregate<true>(
+                  step, argTypes, resultType);
+            }
+            case TypeKind::HUGEINT: {
+              VELOX_USER_CHECK(inputType->isLongDecimal());
+              return getDecimalAverageAggregate<true>(
+                  step, argTypes, resultType);
+            }
+            default:
+              VELOX_FAIL(
+                  "Unknown input type for {} aggregation {}",
+                  name,
+                  inputType->kindName());
+          }
+        } else {
+          checkAvgIntermediateType(inputType);
+          switch (resultType->kind()) {
+            case TypeKind::DOUBLE:
+            case TypeKind::ROW:
+              if (inputType->childAt(0)->isDecimal()) {
+                return std::make_unique<exec::SimpleAggregateAdapter<
+                    DecimalAverageAggregate<
+                        int128_t /*unused*/,
+                        int128_t /*unused*/,
+                        true>>>(step, argTypes, resultType);
+              }
+              VELOX_FAIL(
+                  "Unsupported intermediate type for {}: {}",
+                  name,
+                  inputType->kindName());
+            case TypeKind::BIGINT:
+              VELOX_USER_CHECK(resultType->isShortDecimal());
+              return std::make_unique<exec::SimpleAggregateAdapter<
+                  DecimalAverageAggregate<int64_t /*unused*/, int64_t, true>>>(
+                  step, argTypes, resultType);
+            case TypeKind::HUGEINT:
+              VELOX_USER_CHECK(resultType->isLongDecimal());
+              return std::make_unique<exec::SimpleAggregateAdapter<
+                  DecimalAverageAggregate<
+                      int128_t /*unused*/,
+                      int128_t,
+                      true>>>(step, argTypes, resultType);
             default:
               VELOX_FAIL(
                   "Unsupported result type for final aggregation: {}",
