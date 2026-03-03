@@ -133,10 +133,8 @@ class BloomFilter {
   static int64_t optimalNumOfBits(
       int64_t expectedNumItems,
       int64_t maxNumItems) {
-    double fpp = std::min(
-        static_cast<double>(expectedNumItems) /
-            (static_cast<double>(maxNumItems) / kDefaultFpp),
-        kDefaultFpp);
+    double ratio = static_cast<double>(expectedNumItems) / maxNumItems;
+    double fpp = kDefaultFpp * std::min(ratio, 1.0);
     return optimalNumOfBits(expectedNumItems, fpp);
   }
 
