@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/time/CpuWallTimer.h"
@@ -93,6 +95,14 @@ struct OperatorStats {
   /// blocked time) for this operator. The max field will contain the CPU time
   /// from the longest running single driver.
   static constexpr const char* kDriverCpuTime = "driverCpuTimeNanos";
+
+  /// Running time metrics from CpuWallTiming structures, aggregated per thread.
+  static constexpr std::string_view kRunningAddInputWallNanos =
+      "runningAddInputWallNanos";
+  static constexpr std::string_view kRunningGetOutputWallNanos =
+      "runningGetOutputWallNanos";
+  static constexpr std::string_view kRunningFinishWallNanos =
+      "runningFinishWallNanos";
 
   /// Initial ordinal position in the operator's pipeline.
   int32_t operatorId = 0;

@@ -208,6 +208,12 @@ class HiveConfig {
   static constexpr const char* kPreserveFlatMapsInMemorySession =
       "hive.preserve_flat_maps_in_memory";
 
+  /// Whether to use the cluster index for filter-based row pruning.
+  /// When enabled, filters from ScanSpec are converted to index bounds for
+  /// efficient row skipping based on the file's cluster index.
+  static constexpr const char* kIndexEnabled = "index-enabled";
+  static constexpr const char* kIndexEnabledSession = "index_enabled";
+
   /// Maximum number of output rows to return per index lookup request.
   /// The limit is applied to the actual output rows after filtering.
   /// 0 means no limit (default).
@@ -300,6 +306,9 @@ class HiveConfig {
   /// Whether to preserve flat maps in memory as FlatMapVectors instead of
   /// converting them to MapVectors.
   bool preserveFlatMapsInMemory(const config::ConfigBase* session) const;
+
+  /// Whether to use the cluster index for filter-based row pruning.
+  bool indexEnabled(const config::ConfigBase* session) const;
 
   /// Returns the maximum number of rows to read per index lookup request.
   /// 0 means no limit (default).

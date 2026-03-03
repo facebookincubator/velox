@@ -1522,9 +1522,11 @@ void MergeJoin::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "matchedLeftRows", RuntimeCounter(matchedLeftRows_));
+        std::string(MergeJoin::kMatchedLeftRows),
+        RuntimeCounter(matchedLeftRows_));
     lockedStats->addRuntimeStat(
-        "matchedRightRows", RuntimeCounter(matchedRightRows_));
+        std::string(MergeJoin::kMatchedRightRows),
+        RuntimeCounter(matchedRightRows_));
   }
   if (rightSource_) {
     rightSource_->close();

@@ -19,6 +19,8 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+using namespace facebook::velox::common::testutil;
+
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
@@ -27,7 +29,7 @@ namespace {
 class IcebergInsertTest : public test::IcebergTestBase {
  protected:
   void test(const RowTypePtr& rowType, double nullRatio = 0.0) {
-    const auto outputDirectory = exec::test::TempDirectoryPath::create();
+    const auto outputDirectory = TempDirectoryPath::create();
     const auto dataPath = outputDirectory->getPath();
     constexpr int32_t numBatches = 10;
     constexpr int32_t vectorSize = 5'000;
@@ -94,7 +96,7 @@ TEST_F(IcebergInsertTest, singleColumnPartition) {
       {"c8", TIMESTAMP()}};
 
   for (const auto& testCase : testCases) {
-    const auto outputDirectory = exec::test::TempDirectoryPath::create();
+    const auto outputDirectory = TempDirectoryPath::create();
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 50;
     auto rowType = ROW({testCase.name}, {testCase.type});
@@ -142,7 +144,7 @@ TEST_F(IcebergInsertTest, partitionNullColumn) {
       {"c8", TIMESTAMP()}};
 
   for (const auto& testCase : testCases) {
-    const auto outputDirectory = exec::test::TempDirectoryPath::create();
+    const auto outputDirectory = TempDirectoryPath::create();
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 100;
     auto rowType = ROW({testCase.name}, {testCase.type});
@@ -194,7 +196,7 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
   };
 
   for (const auto& combination : columnCombinations) {
-    const auto outputDirectory = exec::test::TempDirectoryPath::create();
+    const auto outputDirectory = TempDirectoryPath::create();
     constexpr int32_t numBatches = 2;
     constexpr int32_t vectorSize = 50;
 

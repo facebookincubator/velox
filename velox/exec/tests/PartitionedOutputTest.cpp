@@ -206,6 +206,76 @@ TEST_P(PartitionedOutputTest, keyChannelNotAtBeginningWithNulls) {
           .count()));
 }
 
+// This test verifies that the Destination properly handles multiple
+// flush-then-append cycles. After flush(), the VectorStreamGroup must be
+// properly reset so that subsequent advance() calls create a fresh serializer
+// with proper initialization via createStreamTree(). This test exercises
+// the fix for T254261397 where crashes occurred due to improper state after
+// flush when current_->clear() was called instead of current_.reset().
+TEST_P(PartitionedOutputTest, multipleFlushCycles) {
+  // Create input data where each row is large enough to trigger a flush
+  // (exceeds kMinDestinationSize), but we have many batches to ensure
+  // multiple flush-then-advance cycles occur for the same destination.
+  const auto largeString =
+      std::string(PartitionedOutput::kMinDestinationSize * 2, 'x');
+
+  auto input = makeRowVector(
+      {"p1", "v1"},
+      {// All rows go to partition 0 to ensure multiple flushes on same dest.
+       makeFlatVector<int32_t>({0, 0, 0, 0}),
+       makeFlatVector<std::string>(
+           {largeString, largeString, largeString, largeString})});
+
+  core::PlanNodeId partitionNodeId;
+  // Use 20 batches to ensure many flush cycles (each row triggers a flush).
+  auto plan = PlanBuilder()
+                  .values({input}, false, 20)
+                  .partitionedOutput(
+                      {"p1"}, 2, std::vector<std::string>{"v1"}, GetParam())
+                  .capturePlanNodeId(partitionNodeId)
+                  .planNode();
+
+  auto taskId = "local://test-partitioned-output-multiple-flush-cycles-0";
+  auto task = Task::create(
+      taskId,
+      core::PlanFragment{plan},
+      0,
+      createQueryContext(
+          {{core::QueryConfig::kMaxPartitionedOutputBufferSize,
+            std::to_string(PartitionedOutput::kMinDestinationSize * 2)}}),
+      Task::ExecutionMode::kParallel);
+  task->start(1);
+
+  const auto partition0 = getAllData(taskId, 0);
+  const auto partition1 = getAllData(taskId, 1);
+
+  const auto taskWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::seconds{10})
+                              .count();
+  auto future = task->taskCompletionFuture()
+                    .within(std::chrono::microseconds(taskWaitUs))
+                    .via(executor_.get());
+  future.wait();
+
+  ASSERT_TRUE(waitForTaskDriversToFinish(task.get(), taskWaitUs));
+
+  // With 20 batches * 4 rows per batch = 80 rows going to partition 0.
+  // Each row exceeds the flush threshold, so we expect many pages (~80).
+  // The exact count may vary due to targetSizePct randomization, but we
+  // should have at least 40 pages (assuming some batching).
+  ASSERT_GE(partition0.size(), 40);
+
+  // Partition 1 should have no data (or just the final flush marker).
+  ASSERT_LE(partition1.size(), 1);
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto serdeKindRuntimsStats =
+      planStats.at(partitionNodeId).customStats.at(Operator::kShuffleSerdeKind);
+  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+  ASSERT_EQ(serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam()));
+  ASSERT_EQ(serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam()));
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     PartitionedOutputTest,
     PartitionedOutputTest,

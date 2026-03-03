@@ -38,14 +38,16 @@ class BufferedInput {
       velox::IoStats* ioStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {})
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      bool cacheable = true)
       : BufferedInput(
             std::make_shared<ReadFileInputStream>(
                 std::move(readFile),
                 metricsLog,
                 stats,
                 ioStats,
-                std::move(fileReadOps)),
+                std::move(fileReadOps),
+                cacheable),
             pool,
             maxMergeDistance,
             wsVRLoad) {}

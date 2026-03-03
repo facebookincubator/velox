@@ -22,6 +22,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/HiveConfig.h"
 
 #include "velox/expression/FieldReference.h"
@@ -485,27 +486,32 @@ HiveDataSource::getRuntimeStats() {
              RuntimeCounter::Unit::kNanos)});
   }
   res.insert(
-      {{"numPrefetch", RuntimeMetric(ioStatistics_->prefetch().count())},
-       {"prefetchBytes",
+      {{std::string(kNumPrefetch),
+        RuntimeMetric(ioStatistics_->prefetch().count())},
+       {std::string(kPrefetchBytes),
         RuntimeMetric(
             ioStatistics_->prefetch().sum(),
             ioStatistics_->prefetch().count(),
             ioStatistics_->prefetch().min(),
             ioStatistics_->prefetch().max(),
             RuntimeCounter::Unit::kBytes)},
-       {"totalScanTime",
+       {std::string(kTotalScanTime),
         RuntimeMetric(
             ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
        {Connector::kTotalRemainingFilterTime,
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
-       {"overreadBytes",
+       {Connector::kTotalRemainingFilterCpuTime,
+        RuntimeMetric(
+            totalRemainingFilterCpuTime_.load(std::memory_order_relaxed),
+            RuntimeCounter::Unit::kNanos)},
+       {std::string(kOverreadBytes),
         RuntimeMetric(
             ioStatistics_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
   if (ioStatistics_->read().count() > 0) {
     res.insert(
-        {"storageReadBytes",
+        {std::string(kStorageReadBytes),
          RuntimeMetric(
              ioStatistics_->read().sum(),
              ioStatistics_->read().count(),
@@ -515,9 +521,10 @@ HiveDataSource::getRuntimeStats() {
   }
   if (ioStatistics_->ssdRead().count() > 0) {
     res.insert(
-        {"numLocalRead", RuntimeMetric(ioStatistics_->ssdRead().count())});
+        {std::string(kNumLocalRead),
+         RuntimeMetric(ioStatistics_->ssdRead().count())});
     res.insert(
-        {"localReadBytes",
+        {std::string(kLocalReadBytes),
          RuntimeMetric(
              ioStatistics_->ssdRead().sum(),
              ioStatistics_->ssdRead().count(),
@@ -526,9 +533,11 @@ HiveDataSource::getRuntimeStats() {
              RuntimeCounter::Unit::kBytes)});
   }
   if (ioStatistics_->ramHit().count() > 0) {
-    res.insert({"numRamRead", RuntimeMetric(ioStatistics_->ramHit().count())});
     res.insert(
-        {"ramReadBytes",
+        {std::string(kNumRamRead),
+         RuntimeMetric(ioStatistics_->ramHit().count())});
+    res.insert(
+        {std::string(kRamReadBytes),
          RuntimeMetric(
              ioStatistics_->ramHit().sum(),
              ioStatistics_->ramHit().count(),
@@ -537,7 +546,9 @@ HiveDataSource::getRuntimeStats() {
              RuntimeCounter::Unit::kBytes)});
   }
   if (numBucketConversion_ > 0) {
-    res.insert({"numBucketConversion", RuntimeMetric(numBucketConversion_)});
+    res.insert(
+        {std::string(kNumBucketConversion),
+         RuntimeMetric(numBucketConversion_)});
   }
 
   const auto ioStatsMap = ioStats_->stats();
@@ -591,17 +602,19 @@ vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
         filterLazyDecoded_,
         filterLazyBaseRows_);
   }
-  uint64_t filterTimeUs{0};
+  CpuWallTiming filterTiming;
   vector_size_t rowsRemaining{0};
   {
-    MicrosecondTimer timer(&filterTimeUs);
+    CpuWallTimer timer(filterTiming);
     expressionEvaluator_->evaluate(
         remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
     rowsRemaining = exec::processFilterResults(
         filterResult_, filterRows_, filterEvalCtx_, pool_);
   }
   totalRemainingFilterTime_.fetch_add(
-      filterTimeUs * 1000, std::memory_order_relaxed);
+      filterTiming.wallNanos, std::memory_order_relaxed);
+  totalRemainingFilterCpuTime_.fetch_add(
+      filterTiming.cpuNanos, std::memory_order_relaxed);
   return rowsRemaining;
 }
 

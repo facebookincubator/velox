@@ -96,4 +96,21 @@ Split SplitsStore::getSplit(
   return split;
 }
 
+bool SplitsStore::tryGetBarrier(
+    std::optional<uint32_t> driverId,
+    Split& split) {
+  if (!driverId.has_value()) {
+    barrierSplits_.clear();
+    return false;
+  }
+  // Delivers a barrier exactly once for each driver from the same plan node.
+  auto it = barrierSplits_.find(*driverId);
+  if (it == barrierSplits_.end()) {
+    return false;
+  }
+  split = it->second;
+  barrierSplits_.erase(it);
+  return true;
+}
+
 } // namespace facebook::velox::exec

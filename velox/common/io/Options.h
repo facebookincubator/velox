@@ -139,12 +139,12 @@ class ReaderOptions {
     return prefetchRowGroups_;
   }
 
-  bool noCacheRetention() const {
-    return noCacheRetention_;
+  bool cacheable() const {
+    return cacheable_;
   }
 
-  void setNoCacheRetention(bool noCacheRetention) {
-    noCacheRetention_ = noCacheRetention;
+  void setCacheable(bool cacheable) {
+    cacheable_ = cacheable;
   }
 
  protected:
@@ -155,6 +155,6 @@ class ReaderOptions {
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
   int32_t prefetchRowGroups_{kDefaultPrefetchRowGroups};
-  bool noCacheRetention_{false};
+  bool cacheable_{true};
 };
 } // namespace facebook::velox::io

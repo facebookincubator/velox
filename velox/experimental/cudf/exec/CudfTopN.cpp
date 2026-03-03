@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfQueryConfig.h"
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
@@ -42,9 +43,8 @@ CudfTopN::CudfTopN(
           fmt::format("[{}]", topNNode->id())),
       count_(topNNode->count()),
       topNNode_(topNNode),
+      kBatchSize_(CudfConfig::getInstance().topNBatchSize),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  kBatchSize_ = driverCtx->queryConfig().get<int32_t>(
-      CudfQueryConfig::kCudfTopNBatchSize, kBatchSize_);
   const auto numColumns{outputType_->children().size()};
   const auto numSortingKeys{topNNode->sortingKeys().size()};
   std::vector<bool> isSortingKey(numColumns);
@@ -132,7 +132,7 @@ CudfVectorPtr CudfTopN::getTopKBatch(CudfVectorPtr cudfInput, int32_t k) {
     return nullptr;
   }
   auto stream = cudfInput->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto values = cudfInput->getTableView();
   auto result = getTopK(values, k, stream, mr);
   auto const size = result->num_rows();
@@ -162,7 +162,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
       });
   if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
-    auto mr = cudf::get_current_device_resource_ref();
+    auto mr = get_output_mr();
 
     auto result = mergeTopK(topNBatches_, count_, stream, mr);
     topNBatches_.clear();
@@ -181,7 +181,7 @@ RowVectorPtr CudfTopN::getOutput() {
   }
 
   auto stream = topNBatches_[0]->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto result = mergeTopK(topNBatches_, count_, stream, mr);
   topNBatches_.clear();
   finished_ = noMoreInput_ && topNBatches_.empty();

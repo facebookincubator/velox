@@ -108,16 +108,13 @@ void addSubfields(
     }
   }
   subfields.resize(newSize);
+
   switch (type.kind()) {
     case TypeKind::ROW: {
       folly::F14FastMap<std::string, std::vector<SubfieldSpec>> required;
       for (auto& subfield : subfields) {
         auto* element = subfield.subfield->path()[level].get();
-        auto* nestedField = element->as<common::Subfield::NestedField>();
-        VELOX_CHECK(
-            nestedField,
-            "Unsupported for row subfields pruning: {}",
-            element->toString());
+        auto* nestedField = element->asChecked<common::Subfield::NestedField>();
         required[nestedField->name()].push_back(subfield);
       }
       const auto& rowType = type.asRow();
@@ -631,7 +628,7 @@ void configureReaderOptions(
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
-  readerOptions.setNoCacheRetention(!hiveSplit->cacheable);
+  readerOptions.setCacheable(hiveSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {
     const auto timezone = tz::locateZone(sessionTzName);
@@ -687,6 +684,8 @@ void configureRowReaderOptions(
         hiveConfig->preserveFlatMapsInMemory(sessionProperties));
     rowReaderOptions.setParallelUnitLoadCount(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
+    rowReaderOptions.setIndexEnabled(
+        hiveConfig->indexEnabled(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
@@ -869,16 +868,7 @@ core::CallTypedExprPtr replaceInputs(
 }
 
 bool endWith(const std::string& str, const char* suffix) {
-  int len = strlen(suffix);
-  if (str.size() < len) {
-    return false;
-  }
-  for (int i = 0, j = str.size() - len; i < len; ++i, ++j) {
-    if (str[j] != suffix[i]) {
-      return false;
-    }
-  }
-  return true;
+  return str.ends_with(suffix);
 }
 
 bool isNotExpr(

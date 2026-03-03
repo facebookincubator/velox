@@ -23,6 +23,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::velox::connector::hive {
 namespace {

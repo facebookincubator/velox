@@ -36,6 +36,7 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::test;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -892,6 +893,76 @@ TEST_F(HiveIcebergTest, partitionColumnsFromHive) {
                   .endTableScan()
                   .planNode();
   AssertQueryBuilder(plan).splits(icebergSplits).assertResults(expectedVectors);
+}
+
+// Test that positional delete files are skipped when their position upper bound
+// is before the split offset. When a delete file's upperBound is less than the
+// split's starting row, all deletes in that file are not relevant to this
+// split.
+TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+
+  // Create a data file with 100 rows.
+  auto dataFilePath = TempFilePath::create();
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {makeFlatVector<int64_t>(makeContinuousIncreasingValues(0, 100))})};
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  // Create a delete file targeting positions 0, 1, 2.
+  auto deleteFilePath = TempFilePath::create();
+  std::vector<RowVectorPtr> deleteVectors = {makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {makeFlatVector<std::string>(
+           3, [&](auto) { return dataFilePath->getPath(); }),
+       makeFlatVector<int64_t>({0, 1, 2})})};
+  writeToFile(deleteFilePath->getPath(), deleteVectors);
+
+  // upperBound "2" is the max position in the delete file.
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      3,
+      testing::internal::GetFileSize(
+          std::fopen(deleteFilePath->getPath().c_str(), "r")),
+      {},
+      {},
+      {{posColumn->id, "2"}});
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(ROW({"c0"}, {BIGINT()}))
+                  .endTableScan()
+                  .planNode();
+
+  // Create a split that starts at the middle of the file. The split offset
+  // will be greater than the delete file's upper bound (2), so the delete
+  // file should be skipped completely.
+  auto file = filesystems::getFileSystem(dataFilePath->getPath(), nullptr)
+                  ->openFileForRead(dataFilePath->getPath());
+  const int64_t fileSize = file->size();
+  std::vector<IcebergDeleteFile> deleteFiles = {deleteFile};
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      dataFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      static_cast<uint64_t>(fileSize / 2),
+      static_cast<uint64_t>(fileSize / 2),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      std::shared_ptr<std::string>{},
+      true,
+      deleteFiles);
+
+  // The second half of the file should be returned with no rows deleted.
+  createDuckDbTable({makeRowVector(
+      {makeFlatVector<int64_t>(makeContinuousIncreasingValues(50, 50))})});
+  assertQuery(plan, {split}, "SELECT * FROM tmp", 0);
 }
 
 #ifdef VELOX_ENABLE_PARQUET

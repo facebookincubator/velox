@@ -19,14 +19,16 @@
 #include <memory>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::exec::test {
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 constexpr int64_t KB = 1024L;
 constexpr int64_t MB = 1024L * KB;

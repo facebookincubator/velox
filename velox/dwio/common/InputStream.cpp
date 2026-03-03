@@ -65,9 +65,10 @@ ReadFileInputStream::ReadFileInputStream(
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats,
     velox::IoStats* ioStats,
-    folly::F14FastMap<std::string, std::string> fileOpts)
+    folly::F14FastMap<std::string, std::string> fileOpts,
+    bool cacheable)
     : InputStream(readFile->getName(), metricsLog, stats, ioStats),
-      fileIoContext_(ioStats, std::move(fileOpts)),
+      fileIoContext_(ioStats, std::move(fileOpts), nullptr, cacheable),
       readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(

@@ -259,6 +259,11 @@ bool HiveConfig::preserveFlatMapsInMemory(
       config_->get<bool>(kPreserveFlatMapsInMemory, false));
 }
 
+bool HiveConfig::indexEnabled(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
+}
+
 uint32_t HiveConfig::maxRowsPerIndexRequest(
     const config::ConfigBase* session) const {
   return session->get<uint32_t>(

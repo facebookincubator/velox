@@ -38,8 +38,8 @@
 #include "velox/dwio/parquet/writer/Writer.h"
 #endif
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::connector::hive {
@@ -741,7 +741,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     std::unique_ptr<SpillConfig> spillConfig;
     if (testData.writerSpillEnabled) {
-      spillDirectory = exec::test::TempDirectoryPath::create();
+      spillDirectory = TempDirectoryPath::create();
       spillConfig = getSpillConfig(
           spillDirectory->getPath(), testData.writerFlushThreshold);
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
@@ -883,7 +883,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     std::unique_ptr<SpillConfig> spillConfig;
     if (testData.writerSpillEnabled) {
-      spillDirectory = exec::test::TempDirectoryPath::create();
+      spillDirectory = TempDirectoryPath::create();
       spillConfig = getSpillConfig(spillDirectory->getPath(), 0);
       auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
           opPool_.get(),
@@ -1019,7 +1019,7 @@ TEST_F(HiveDataSinkTest, sortWriterMemoryReclaimDuringFinish) {
           std::make_shared<HiveSortingColumn>(
               "c1", core::SortOrder{false, false})});
   std::shared_ptr<TempDirectoryPath> spillDirectory =
-      exec::test::TempDirectoryPath::create();
+      TempDirectoryPath::create();
   std::unique_ptr<SpillConfig> spillConfig =
       getSpillConfig(spillDirectory->getPath(), 1);
   connectorSessionProperties_->set(
@@ -1086,7 +1086,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
           std::make_shared<HiveSortingColumn>(
               "c1", core::SortOrder{false, false})});
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
-      exec::test::TempDirectoryPath::create();
+      TempDirectoryPath::create();
   std::unique_ptr<SpillConfig> spillConfig =
       getSpillConfig(spillDirectory->getPath(), 0);
   // Triggers the memory reservation in sort buffer.
@@ -1748,7 +1748,7 @@ TEST_F(HiveDataSinkTest, fileRotationWithMemoryReclaim) {
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
 
   // Setup memory pools with spill config to enable reclaim
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
   auto spillConfig = getSpillConfig(spillDirectory->getPath(), 1 << 30);
   auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
       opPool_.get(),

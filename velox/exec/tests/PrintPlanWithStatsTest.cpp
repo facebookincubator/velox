@@ -15,17 +15,18 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
 #include <re2/re2.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 using facebook::velox::exec::test::PlanBuilder;
 
@@ -243,6 +244,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          storageReadBytes    [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"          storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
         true},
+       {"          totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"          totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"          totalScanTime       [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"          unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
@@ -354,6 +356,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
         {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
          true},
+        {"        totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"}};
@@ -394,6 +397,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
         {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
          true},
+        {"        totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
@@ -492,6 +496,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
           {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
           {"        storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
            true},
+          {"        totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
           {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
           {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
           {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},

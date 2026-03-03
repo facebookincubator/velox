@@ -223,6 +223,14 @@ class QueryConfig {
   static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
       "aggregation_compaction_unused_memory_ratio";
 
+  /// If true, enables lightweight memory compaction before spilling during
+  /// memory reclaim in aggregation. When enabled, the aggregation operator
+  /// will try to compact aggregate function state (e.g., free dead strings)
+  /// before resorting to spilling.
+  /// Disabled by default.
+  static constexpr const char* kAggregationMemoryCompactionReclaimEnabled =
+      "aggregation_memory_compaction_reclaim_enabled";
+
   static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
       "abandon_partial_topn_row_number_min_rows";
 
@@ -297,6 +305,12 @@ class QueryConfig {
   /// limit'.
   static constexpr const char* kTableScanGetOutputTimeLimitMs =
       "table_scan_getoutput_time_limit_ms";
+
+  /// If non-zero, overrides the number of rows in each output batch produced
+  /// by the TableScan operator, bypassing the dynamic batch size calculation.
+  /// Zero means 'no override'.
+  static constexpr const char* kTableScanOutputBatchRowsOverride =
+      "table_scan_output_batch_rows_override";
 
   /// If false, the 'group by' code is forced to use generic hash mode
   /// hashtable.
@@ -929,6 +943,10 @@ class QueryConfig {
     return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
   }
 
+  bool aggregationMemoryCompactionReclaimEnabled() const {
+    return get<bool>(kAggregationMemoryCompactionReclaimEnabled, false);
+  }
+
   int32_t abandonPartialTopNRowNumberMinRows() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinRows, 100'000);
   }
@@ -1050,6 +1068,10 @@ class QueryConfig {
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
     return get<uint64_t>(kTableScanGetOutputTimeLimitMs, 5'000);
+  }
+
+  uint32_t tableScanOutputBatchRowsOverride() const {
+    return get<uint32_t>(kTableScanOutputBatchRowsOverride, 0);
   }
 
   bool hashAdaptivityEnabled() const {

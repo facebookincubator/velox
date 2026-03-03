@@ -145,7 +145,8 @@ TEST_F(MapUnionSumTest, tinyintOverflow) {
                   .planNode();
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()), "Value 140 exceeds 127");
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Arithmetic overflow in MAP_UNION_SUM: Value 140 exceeds 127");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int8_t>({
@@ -162,7 +163,7 @@ TEST_F(MapUnionSumTest, tinyintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -140 is less than -128");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -140 is less than -128");
 }
 
 TEST_F(MapUnionSumTest, smallintOverflow) {
@@ -183,7 +184,7 @@ TEST_F(MapUnionSumTest, smallintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value 32787 exceeds 32767");
+      "Arithmetic overflow in MAP_UNION_SUM: Value 32787 exceeds 32767");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int16_t>({
@@ -200,7 +201,7 @@ TEST_F(MapUnionSumTest, smallintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -32788 is less than -32768");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -32788 is less than -32768");
 }
 
 TEST_F(MapUnionSumTest, integerOverflow) {
@@ -221,7 +222,7 @@ TEST_F(MapUnionSumTest, integerOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value 2147483667 exceeds 2147483647");
+      "Arithmetic overflow in MAP_UNION_SUM: Value 2147483667 exceeds 2147483647");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int32_t>({
@@ -238,7 +239,7 @@ TEST_F(MapUnionSumTest, integerOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -2147483668 is less than -2147483648");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -2147483668 is less than -2147483648");
 }
 
 TEST_F(MapUnionSumTest, bigintOverflow) {
@@ -259,7 +260,7 @@ TEST_F(MapUnionSumTest, bigintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value 9223372036854775827 exceeds 9223372036854775807");
+      "Arithmetic overflow in MAP_UNION_SUM: Value 9223372036854775827 exceeds 9223372036854775807");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
@@ -276,7 +277,7 @@ TEST_F(MapUnionSumTest, bigintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -9223372036854775828 is less than -9223372036854775808");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -9223372036854775828 is less than -9223372036854775808");
 }
 
 TEST_F(MapUnionSumTest, floatNan) {

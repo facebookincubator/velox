@@ -19,7 +19,7 @@ set_target_properties(velox_cudf_exec_test_lib PROPERTIES CUDA_ARCHITECTURES nat
 target_link_libraries(
   velox_cudf_exec_test_lib
   velox_vector_test_lib
-  velox_temp_path
+  velox_test_util
   velox_cursor
   cudf::cudf
   velox_cudf_exec
