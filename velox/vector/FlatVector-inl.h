@@ -73,10 +73,10 @@ Range<T> FlatVector<T>::asRange() const {
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
-xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
+simd::xbatch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
   auto mem = reinterpret_cast<uint8_t*>(rawValues_) + byteOffset;
   if constexpr (std::is_same_v<T, bool>) {
-    return xsimd::batch<T>(xsimd::load_unaligned(mem));
+    return xsimd::load_unaligned(mem);
   } else {
     return xsimd::load_unaligned(reinterpret_cast<T*>(mem));
   }
@@ -130,7 +130,7 @@ bool FlatVector<T>::useSimdEquality(size_t numCmpVals) const {
     // whether or not to pursue the SIMD path or the fallback path.
     auto fallbackCost = SET_CMP_COST * BaseVector::length_;
     auto simdCost = SIMD_CMP_COST * numCmpVals * BaseVector::length_ /
-        xsimd::batch<T>::size;
+        simd::xbatch<T>::size;
     return simdCost <= fallbackCost;
   }
 }
