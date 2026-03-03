@@ -4621,7 +4621,7 @@ TEST_F(GeometryFunctionsTest, testGooglePolylineFunctions) {
     facebook::velox::test::assertEqualVectors(expected, output);
   };
 
-    // Test with single point.
+  // Test with single point.
   testEncode({{"POINT (38.5 -120.2)"}},
               "_p~iF~ps|U");
 
@@ -4639,8 +4639,19 @@ TEST_F(GeometryFunctionsTest, testGooglePolylineFunctions) {
               "POINT (37.76781 -122.42538)","POINT (37.76835 -122.45422)",
               "POINT (37.78327 -122.43877)"}},
               "mpreFhyhjVrwCoTo]s{CoXl}A??kBfsDg|Aq_B");
-   // Test empty array returns empty string.
+
+  // Test empty array returns empty string.
   testEncode(std::vector<std::optional<std::string>>{}, "");
+
+  // Error case: Non-POINT geometry types should fail.
+  VELOX_ASSERT_THROW(testEncode({{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"}},
+                                std::nullopt),
+                    "Non-point geometry in google_polyline_encode input at index 0.");
+
+  // Error case: Mixed POINT and non-POINT geometries.
+  VELOX_ASSERT_THROW(testEncode({{"POINT (38.5 -120.2)", "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"}},
+                                std::nullopt),
+                    "Non-point geometry in google_polyline_encode input at index 1.");
 
   // Test encoding with custom precision.
   testCustomEncode({{"POINT (38.5 -120.2)", "POINT (40.7 -120.95)", "POINT (43.252 -126.453)"}},
@@ -4655,19 +4666,18 @@ TEST_F(GeometryFunctionsTest, testGooglePolylineFunctions) {
                      5,
                      "_p~iF~ps|U_ulLnnqC_mqNvxq`@");
 
-  // Error case
+  // Error cases.
+  VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
+                                      0,
+                                      std::nullopt),
+                     "Minimum Polyline precision exponent should be 1");
 
-VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
-                                    0,
-                                    std::nullopt),
-                   "Minimum Polyline precision exponent should be 1");
+  VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
+                                      -5,
+                                      std::nullopt),
+                     "Minimum Polyline precision exponent should be 1");
 
-VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
-                                    -5,
-                                    std::nullopt),
-                   "Minimum Polyline precision exponent should be 1");
-
-  // Test with single point
+  // Test with single point.
   testDecode("_p~iF~ps|U", 
             {{"POINT (38.5 -120.2)"}});
 
@@ -4682,7 +4692,7 @@ VELOX_ASSERT_THROW(testCustomEncode({{"POINT (37.78327 -122.43877)"}},
   // Test empty string.
   testDecode("", std::vector<std::optional<std::string>>{});
 
-   // Test duplicatse points.
+  // Test duplicate points.
   testDecode("mpreFhyhjVrwCoTo]s{CoXl}A??kBfsDg|Aq_B",
              {{"POINT (37.78327 -122.43877)", "POINT (37.75885 -122.43533)",
                "POINT (37.76373 -122.41027)", "POINT (37.76781 -122.42538)",
