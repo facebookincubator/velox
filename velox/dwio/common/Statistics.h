@@ -28,6 +28,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -569,6 +570,9 @@ auto withDecompressStats(io::IoCounter* counter, F&& func)
 /// different types of measurements (decompression, encoding, etc.).
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
 struct ColumnMetrics {
+  explicit ColumnMetrics(TypeKind type = TypeKind::INVALID) : typeKind(type) {}
+
+  TypeKind typeKind;
   io::IoCounter decompressCPUTimeNanos;
 
   /// Merges stats from another ColumnMetrics instance.
@@ -580,12 +584,15 @@ struct ColumnMetrics {
 /// Thread-safe collection of per-column metrics keyed by nodeId.
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
 struct ColumnMetricsSet {
-  /// Gets or creates a ColumnMetrics for a column.
-  ColumnMetrics* getOrCreate(uint32_t nodeId) {
+  /// Gets or creates a ColumnMetrics for a column. Sets typeKind when creating.
+  ColumnMetrics* getOrCreate(
+      uint32_t nodeId,
+      TypeKind typeKind = TypeKind::INVALID) {
     auto locked = map_.wlock();
     auto it = locked->find(nodeId);
     if (it == locked->end()) {
-      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>(typeKind))
+               .first;
     }
     return it->second.get();
   }
@@ -599,6 +606,7 @@ struct ColumnMetricsSet {
       if (it == dstLocked->end()) {
         it =
             dstLocked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+        it->second->typeKind = srcStats->typeKind;
       }
       it->second->merge(*srcStats);
     }
@@ -614,7 +622,10 @@ struct ColumnMetricsSet {
         continue;
       }
       result.emplace(
-          fmt::format("column_{}.decompressCPUTimeNanos", nodeId),
+          fmt::format(
+              "column.{}.{}.decompressCPUTimeNanos",
+              TypeKindName::toName(stats->typeKind),
+              nodeId),
           RuntimeMetric{
               static_cast<int64_t>(counter.sum()),
               static_cast<int64_t>(counter.count()),
@@ -625,8 +636,6 @@ struct ColumnMetricsSet {
   }
 
  private:
-  // Per-column stats keyed by nodeId. Uses unique_ptr because IoCounter
-  // contains std::atomic and is not copyable.
   folly::Synchronized<
       folly::F14FastMap<uint32_t, std::unique_ptr<ColumnMetrics>>>
       map_;
