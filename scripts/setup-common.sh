@@ -47,7 +47,13 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
+  # Enable coroutine support for GCC. Required for folly::coro::AsyncGenerator.
+  local SAVED_EXTRA_PKG_CXXFLAGS="${EXTRA_PKG_CXXFLAGS}"
+  if [[ ${CXX:-} == *"g++"* ]] || [[ "$(${CXX:-g++} --version 2>/dev/null)" == *"GCC"* ]]; then
+    EXTRA_PKG_CXXFLAGS="${EXTRA_PKG_CXXFLAGS} -fcoroutines -DFOLLY_HAS_COROUTINES=1"
+  fi
   cmake_install_dir folly -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  EXTRA_PKG_CXXFLAGS="${SAVED_EXTRA_PKG_CXXFLAGS}"
 }
 
 function install_fizz {
