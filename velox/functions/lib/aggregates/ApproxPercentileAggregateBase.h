@@ -444,8 +444,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
             static_cast<bool&&>(percentiles_->isArray));
 
     bool isDefaultAccuracy = AccuracyPolicy::isDefaultAccuracy(accuracy_);
-    auto accuracyIntermediateValue =
-        static_cast<AccuracyIntermediateType>(accuracy_);
+    auto accuracyIntermediateValue = accuracy_;
     rowResult->childAt(static_cast<int>(Idx::kAccuracy)) =
         std::make_shared<ConstantVector<AccuracyIntermediateType>>(
             pool,
@@ -518,7 +517,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   const bool hasAccuracy_;
   const std::optional<uint32_t> fixedRandomSeed_;
 
-  double accuracy_{AccuracyPolicy::kDefaultAccuracy};
+  AccuracyIntermediateType accuracy_{AccuracyPolicy::kDefaultAccuracy};
 
   std::optional<Percentiles> percentiles_;
   DecodedVector decodedValue_;
@@ -863,7 +862,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
 
         if (!accuracy->isNullAt(i)) {
           AccuracyPolicy::checkAndSetFromIntermediate(
-              accuracy_, static_cast<double>(accuracy->valueAt(i)));
+              accuracy_, accuracy->valueAt(i));
         }
       }
       if constexpr (kSingleGroup) {
