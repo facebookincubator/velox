@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [8-core-ubuntu, macos-13, macos-14]
+        os: [8-core-ubuntu, macos-15-intel, macos-15]
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -83,6 +83,7 @@ jobs:
           echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
           echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
           echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "$INSTALL_PREFIX/bin" >> "$GITHUB_PATH"
 
           source scripts/setup-macos.sh
           install_build_prerequisites
