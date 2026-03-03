@@ -493,14 +493,13 @@ TEST_F(TextReaderTest, projectComplexTypesWithCustomDelimiters) {
           type, std::vector<std::string>({"col_string", "col_map"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
-  VectorPtr result = BaseVector::create(type, 0, pool());
+  auto outputType =
+      ROW({"ds", "col_string", "col_map"},
+          {VARCHAR(), VARCHAR(), MAP(BIGINT(), BOOLEAN())});
+  VectorPtr result = BaseVector::create(outputType, 0, pool());
 
   ASSERT_EQ(rowReader->next(13, result), 13);
-  ASSERT_EQ(
-      *result->type(),
-      *ROW(
-          {"ds", "col_string", "col_map"},
-          {VARCHAR(), VARCHAR(), MAP(BIGINT(), BOOLEAN())}));
+  ASSERT_EQ(*result->type(), *outputType);
 
   const vector_size_t length = 13;
   const auto keyVector = makeFlatVector<int64_t>(
@@ -595,13 +594,11 @@ TEST_F(TextReaderTest, projectPrimitiveTypes) {
           std::vector<std::string>({"col_tiny", "col_int", "col_double"})));
   auto rowReader = reader->createRowReader(rowOptions);
 
-  VectorPtr result = BaseVector::create(type, 0, pool());
+  auto outputType = ROW(
+      {"col_tiny", "col_int", "col_double"}, {TINYINT(), INTEGER(), DOUBLE()});
+  VectorPtr result = BaseVector::create(outputType, 0, pool());
   ASSERT_EQ(rowReader->next(20, result), 16);
-  ASSERT_EQ(
-      *result->type(),
-      *ROW(
-          {"col_tiny", "col_int", "col_double"},
-          {TINYINT(), INTEGER(), DOUBLE()}));
+  ASSERT_EQ(*result->type(), *outputType);
 
   auto expected = makeRowVector({
       makeFlatVector<int8_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
@@ -658,9 +655,10 @@ TEST_F(TextReaderTest, projectColumns) {
       std::make_shared<dwio::common::ColumnSelector>(
           type, std::vector<std::string>({"col_float"})));
   auto rowReader = reader->createRowReader(rowOptions);
-  VectorPtr result = BaseVector::create(type, 0, pool());
+  auto outputType = ROW({"ds", "col_float"}, {VARCHAR(), DOUBLE()});
+  VectorPtr result = BaseVector::create(outputType, 0, pool());
   ASSERT_EQ(rowReader->next(10, result), 10);
-  ASSERT_EQ(*result->type(), *ROW({"ds", "col_float"}, {VARCHAR(), DOUBLE()}));
+  ASSERT_EQ(*result->type(), *outputType);
   auto expected = makeRowVector({
       std::make_shared<ConstantVector<StringView>>(
           pool(), 10, false, VARCHAR(), "2023-07-18"),
@@ -782,9 +780,10 @@ TEST_F(TextReaderTest, compressedFilter) {
   rowOptions.select(
       std::make_shared<dwio::common::ColumnSelector>(type, type->names()));
   auto rowReader = reader->createRowReader(rowOptions);
-  VectorPtr result = BaseVector::create(type, 0, pool());
-  ASSERT_EQ(rowReader->next(10, result), 10);
-  ASSERT_EQ(*result->type(), *ROW({"ds", "col_int"}, {VARCHAR(), INTEGER()}));
+  auto outputType = ROW({"ds", "col_int"}, {VARCHAR(), INTEGER()});
+  VectorPtr result = BaseVector::create(outputType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, result), 12);
+  ASSERT_EQ(*result->type(), *outputType);
   auto expected = makeRowVector({
       std::make_shared<ConstantVector<StringView>>(
           pool(), 4, false, VARCHAR(), "2023-07-18"),
@@ -830,12 +829,12 @@ TEST_F(TextReaderTest, filter) {
       std::make_shared<dwio::common::ColumnSelector>(type, type->names()));
 
   auto rowReader = reader->createRowReader(rowOptions);
-  VectorPtr result = BaseVector::create(type, 0, pool());
+  auto outputType = ROW({"ds", "col_big_int"}, {VARCHAR(), BIGINT()});
+  VectorPtr result = BaseVector::create(outputType, 0, pool());
 
   ASSERT_EQ(rowReader->next(15, result), 13);
 
-  ASSERT_EQ(
-      *result->type(), *ROW({"ds", "col_big_int"}, {VARCHAR(), BIGINT()}));
+  ASSERT_EQ(*result->type(), *outputType);
   auto expected = makeRowVector({
       std::make_shared<ConstantVector<StringView>>(
           pool(), 7, false, VARCHAR(), "2023-07-18"),
