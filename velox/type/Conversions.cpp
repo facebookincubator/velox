@@ -99,4 +99,16 @@ std::string_view trimWhiteSpace(const char* data, size_t length) {
   return std::string_view(data + startIndex, endIndex - startIndex + charSize);
 }
 
+/// Removes trailing floating-point type suffix ('f', 'F', 'd', 'D') from the
+/// input.
+StringView trimFloatSuffix(const StringView& view) {
+  if (!view.empty()) {
+    char last = *(view.end() - 1);
+    if (last == 'f' || last == 'F' || last == 'd' || last == 'D') {
+      return StringView(view.data(), view.size() - 1);
+    }
+  }
+  return view;
+}
+
 } // namespace facebook::velox::util
