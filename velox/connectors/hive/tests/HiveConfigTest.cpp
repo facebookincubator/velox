@@ -56,6 +56,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.loadQuantum(emptySession.get()), 8 << 20);
   ASSERT_FALSE(hiveConfig.preserveFlatMapsInMemory(emptySession.get()));
   ASSERT_FALSE(hiveConfig.indexEnabled(emptySession.get()));
+  ASSERT_FALSE(hiveConfig.fileMetadataCacheEnabled(emptySession.get()));
 }
 
 TEST(HiveConfigTest, overrideConfig) {
@@ -80,7 +81,8 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kLoadQuantum, std::to_string(4 << 20)},
       {HiveConfig::kMaxBucketCount, std::to_string(100'000)},
       {HiveConfig::kPreserveFlatMapsInMemory, "true"},
-      {HiveConfig::kIndexEnabled, "true"}};
+      {HiveConfig::kIndexEnabled, "true"},
+      {HiveConfig::kFileMetadataCacheEnabled, "true"}};
   HiveConfig hiveConfig(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)));
   auto emptySession = std::make_shared<config::ConfigBase>(
@@ -113,6 +115,7 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(hiveConfig.maxBucketCount(emptySession.get()), 100'000);
   ASSERT_TRUE(hiveConfig.preserveFlatMapsInMemory(emptySession.get()));
   ASSERT_TRUE(hiveConfig.indexEnabled(emptySession.get()));
+  ASSERT_TRUE(hiveConfig.fileMetadataCacheEnabled(emptySession.get()));
 }
 
 TEST(HiveConfigTest, overrideSession) {
@@ -134,6 +137,7 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kLoadQuantumSession, std::to_string(4 << 20)},
       {HiveConfig::kPreserveFlatMapsInMemorySession, "true"},
       {HiveConfig::kIndexEnabledSession, "true"},
+      {HiveConfig::kFileMetadataCacheEnabledSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -162,4 +166,5 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.loadQuantum(session.get()), 4 << 20);
   ASSERT_TRUE(hiveConfig.preserveFlatMapsInMemory(session.get()));
   ASSERT_TRUE(hiveConfig.indexEnabled(session.get()));
+  ASSERT_TRUE(hiveConfig.fileMetadataCacheEnabled(session.get()));
 }
