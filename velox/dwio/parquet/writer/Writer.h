@@ -157,6 +157,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch-size";
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
+  static constexpr const char* kParquetSessionCompressionCodec =
+      "hive.parquet.writer.compression_codec";
+  static constexpr const char* kParquetHiveConnectorCompressionCodec =
+      "hive.parquet.writer.compression-codec";
 
   // Use the same property name from HiveConfig::kMaxTargetFileSize.
   static constexpr const char* kParquetConnectorMaxTargetFileSize =
@@ -176,6 +180,55 @@ struct WriterOptions : public dwio::common::WriterOptions {
   void processConfigs(
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) override;
+
+ private:
+  class Builder {
+   public:
+    Builder(
+        WriterOptions& options,
+        const config::ConfigBase& connectorConfig,
+        const config::ConfigBase& sessionConfig);
+
+    Builder* timestampUnit(std::optional<TimestampPrecision>& option);
+    Builder* enableDictionary(std::optional<bool>& option);
+    Builder* dictionaryPageSizeLimit(std::optional<int64_t>& option);
+    Builder* dataPageVersion(std::optional<bool>& option);
+    Builder* dataPageSize(std::optional<int64_t>& option);
+    Builder* batchSize(std::optional<int64_t>& option);
+    Builder* createdBy(std::optional<std::string>& option);
+
+    // Applies max target file size by capping row-group flush bytes when
+    // flushPolicyFactory is not already set.
+    Builder* maxTargetFileSize();
+    Builder* compressionKind(std::optional<common::CompressionKind>& option);
+
+   private:
+    template <typename T>
+    using Getter = std::optional<T> (*)(const config::ConfigBase&, const char*);
+
+    template <typename T>
+    Builder* setIfMissing(
+        std::optional<T>& option,
+        Getter<T> getter,
+        const char* sessionKey,
+        const char* connectorKey);
+
+    template <typename T>
+    Builder* setFromConnectorOnly(
+        std::optional<T>& option,
+        Getter<T> getter,
+        const char* connectorKey);
+
+    template <typename T>
+    std::optional<T> getSessionOrConnector(
+        Getter<T> getter,
+        const char* sessionKey,
+        const char* connectorKey) const;
+
+    WriterOptions& options_;
+    const config::ConfigBase& connectorConfig_;
+    const config::ConfigBase& sessionConfig_;
+  };
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.

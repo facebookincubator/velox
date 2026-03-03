@@ -18,6 +18,7 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include "velox/common/Casts.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
@@ -369,13 +370,156 @@ std::optional<int64_t> getParquetBatchSize(
 std::optional<std::string> getParquetCreatedBy(
     const config::ConfigBase& config,
     const char* configKey) {
-  if (config.get<std::string>(configKey).has_value()) {
-    return config.get<std::string>(configKey).value();
+  if (const auto createdBy = config.get<std::string>(configKey)) {
+    return createdBy.value();
+  }
+  return std::nullopt;
+}
+
+std::optional<common::CompressionKind> getParquetCompressionKind(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto codec = config.get<std::string>(configKey)) {
+    return common::stringToCompressionKind(codec.value());
   }
   return std::nullopt;
 }
 
 } // namespace
+
+WriterOptions::Builder::Builder(
+    WriterOptions& options,
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session)
+    : options_(options),
+      connectorConfig_(connectorConfig),
+      sessionConfig_(session) {}
+
+template <typename T>
+WriterOptions::Builder* WriterOptions::Builder::setIfMissing(
+    std::optional<T>& option,
+    Getter<T> getter,
+    const char* sessionKey,
+    const char* connectorKey) {
+  if (!option) {
+    option = getSessionOrConnector<T>(getter, sessionKey, connectorKey);
+  }
+  return this;
+}
+
+template <typename T>
+WriterOptions::Builder* WriterOptions::Builder::setFromConnectorOnly(
+    std::optional<T>& option,
+    Getter<T> getter,
+    const char* connectorKey) {
+  if (!option) {
+    option = getter(connectorConfig_, connectorKey);
+  }
+  return this;
+}
+
+template <typename T>
+std::optional<T> WriterOptions::Builder::getSessionOrConnector(
+    Getter<T> getter,
+    const char* sessionKey,
+    const char* connectorKey) const {
+  if (auto value = getter(sessionConfig_, sessionKey)) {
+    return value;
+  }
+  return getter(connectorConfig_, connectorKey);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::timestampUnit(
+    std::optional<TimestampPrecision>& option) {
+  return setIfMissing(
+      option,
+      getTimestampUnit,
+      kParquetSessionWriteTimestampUnit,
+      kParquetHiveConnectorWriteTimestampUnit);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::enableDictionary(
+    std::optional<bool>& option) {
+  return setIfMissing(
+      option,
+      isParquetEnableDictionary,
+      kParquetSessionEnableDictionary,
+      kParquetHiveConnectorEnableDictionary);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::dictionaryPageSizeLimit(
+    std::optional<int64_t>& option) {
+  return setIfMissing(
+      option,
+      getParquetPageSize,
+      kParquetSessionDictionaryPageSizeLimit,
+      kParquetHiveConnectorDictionaryPageSizeLimit);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::dataPageVersion(
+    std::optional<bool>& option) {
+  return setIfMissing(
+      option,
+      getParquetDataPageVersion,
+      kParquetSessionDataPageVersion,
+      kParquetHiveConnectorDataPageVersion);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::dataPageSize(
+    std::optional<int64_t>& option) {
+  return setIfMissing(
+      option,
+      getParquetPageSize,
+      kParquetSessionWritePageSize,
+      kParquetHiveConnectorWritePageSize);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::batchSize(
+    std::optional<int64_t>& option) {
+  return setIfMissing(
+      option,
+      getParquetBatchSize,
+      kParquetSessionWriteBatchSize,
+      kParquetHiveConnectorWriteBatchSize);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::createdBy(
+    std::optional<std::string>& option) {
+  return setFromConnectorOnly(
+      option, getParquetCreatedBy, kParquetHiveConnectorCreatedBy);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::compressionKind(
+    std::optional<common::CompressionKind>& option) {
+  return setIfMissing(
+      option,
+      getParquetCompressionKind,
+      kParquetSessionCompressionCodec,
+      kParquetHiveConnectorCompressionCodec);
+}
+
+WriterOptions::Builder* WriterOptions::Builder::maxTargetFileSize() {
+  auto maxTargetFileSize = getSessionOrConnector<int64_t>(
+      getParquetPageSize,
+      kParquetSessionMaxTargetFileSize,
+      kParquetConnectorMaxTargetFileSize);
+
+  // Parquet only updates ioStats_->rawBytesWritten() when a row group is
+  // flushed. With the default flush policy (1M rows / 128MB), small
+  // maxTargetFileBytes would never trigger rotation because rawBytesWritten()
+  // stays at 0 while data is buffered. To honor maxTargetFileBytes, cap the
+  // row group byte threshold so we flush earlier and rawBytesWritten() grows
+  // during writes.
+  if (maxTargetFileSize.has_value() && !options_.flushPolicyFactory) {
+    auto bytesInRowGroup = std::min<int64_t>(
+        DefaultFlushPolicy::kDefaultBytesInRowGroup, maxTargetFileSize.value());
+    options_.flushPolicyFactory = [bytesInRowGroup]() {
+      return std::make_unique<DefaultFlushPolicy>(
+          DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
+    };
+  }
+  return this;
+}
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
@@ -622,10 +766,9 @@ ParquetWriterFactory::createWriterOptions() {
 void WriterOptions::processConfigs(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) {
-  auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
+  auto parquetWriterOptions = checkedPointerCast<WriterOptions>(this);
   VELOX_CHECK_NOT_NULL(
       parquetWriterOptions, "Expected a Parquet WriterOptions object.");
-
   // Check serdeParameters for timestamp settings first (highest priority).
   auto serdeTimestampUnitIt = serdeParameters.find(kParquetSerdeTimestampUnit);
   if (serdeTimestampUnitIt != serdeParameters.end()) {
@@ -644,86 +787,21 @@ void WriterOptions::processConfigs(
     }
   }
 
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit =
-        getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
-        ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
-        : getTimestampUnit(
-              connectorConfig, kParquetHiveConnectorWriteTimestampUnit);
-  }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
   }
 
-  if (!enableDictionary) {
-    enableDictionary =
-        isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
-            .has_value()
-        ? isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
-        : isParquetEnableDictionary(
-              connectorConfig, kParquetHiveConnectorEnableDictionary);
-  }
+  Builder optionBuilder(*parquetWriterOptions, connectorConfig, session);
 
-  if (!dictionaryPageSizeLimit) {
-    dictionaryPageSizeLimit =
-        getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
-            .has_value()
-        ? getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
-        : getParquetPageSize(
-              connectorConfig, kParquetHiveConnectorDictionaryPageSizeLimit);
-  }
-
-  if (!useParquetDataPageV2) {
-    useParquetDataPageV2 =
-        getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
-            .has_value()
-        ? getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
-        : getParquetDataPageVersion(
-              connectorConfig, kParquetHiveConnectorDataPageVersion);
-  }
-
-  if (!dataPageSize) {
-    dataPageSize =
-        getParquetPageSize(session, kParquetSessionWritePageSize).has_value()
-        ? getParquetPageSize(session, kParquetSessionWritePageSize)
-        : getParquetPageSize(
-              connectorConfig, kParquetHiveConnectorWritePageSize);
-  }
-
-  if (!batchSize) {
-    batchSize =
-        getParquetBatchSize(session, kParquetSessionWriteBatchSize).has_value()
-        ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
-        : getParquetBatchSize(
-              connectorConfig, kParquetHiveConnectorWriteBatchSize);
-  }
-
-  if (!createdBy) {
-    createdBy =
-        getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
-  }
-
-  // Parquet only updates ioStats_->rawBytesWritten() when a row group is
-  // flushed. With the default flush policy (1M rows / 128MB), small
-  // maxTargetFileBytes_ would never trigger rotation because rawBytesWritten()
-  // stays at 0 while data is buffered. To honor maxTargetFileBytes_, cap the
-  // row group byte threshold so we flush earlier and rawBytesWritten() grows
-  // during writes.
-  auto maxTargetFileSize =
-      getParquetPageSize(session, kParquetSessionMaxTargetFileSize).has_value()
-      ? getParquetPageSize(session, kParquetSessionMaxTargetFileSize)
-      : getParquetPageSize(connectorConfig, kParquetConnectorMaxTargetFileSize);
-  if (maxTargetFileSize.has_value()) {
-    if (!flushPolicyFactory) {
-      auto bytesInRowGroup = std::min<int64_t>(
-          DefaultFlushPolicy::kDefaultBytesInRowGroup,
-          maxTargetFileSize.value());
-      flushPolicyFactory = [bytesInRowGroup]() {
-        return std::make_unique<DefaultFlushPolicy>(
-            DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
-      };
-    }
-  }
+  optionBuilder.timestampUnit(parquetWriteTimestampUnit)
+      ->enableDictionary(enableDictionary)
+      ->dictionaryPageSizeLimit(dictionaryPageSizeLimit)
+      ->dataPageVersion(useParquetDataPageV2)
+      ->dataPageSize(dataPageSize)
+      ->batchSize(batchSize)
+      ->createdBy(createdBy)
+      ->compressionKind(compressionKind)
+      ->maxTargetFileSize();
 }
 
 } // namespace facebook::velox::parquet
