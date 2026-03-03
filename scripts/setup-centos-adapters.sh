@@ -119,6 +119,7 @@ function install_adapters {
   run_and_time install_gcs_sdk_cpp
   run_and_time install_azure_storage_sdk_cpp
   run_and_time install_hdfs_deps
+  run_and_time install_avro_cpp
 }
 
 (return 2>/dev/null) && return # If script was sourced, don't run commands.
