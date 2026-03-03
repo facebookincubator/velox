@@ -1263,11 +1263,21 @@ bool registerAggregationFunctionForStep(
   return true;
 }
 
+namespace {
+void registerAggregationFunctionForStep(
+    const std::string& name,
+    core::AggregationNode::Step step,
+    const exec::FunctionSignaturePtr& signature) {
+  facebook::velox::cudf_velox::registerAggregationFunctionForStep(name, step, {signature});
+}
+} // namespace
+
 // Register step-aware builtin aggregation functions
 bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
-  // Register sum function (split by aggregation step)
+  // ===== Register sum function (split by aggregation step) =====
+  // Common signatures for integer and double types (same for Spark and Presto).
   auto sumSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .returnType("bigint")
@@ -1284,10 +1294,6 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       FunctionSignatureBuilder()
           .returnType("bigint")
           .argumentType("bigint")
-          .build(),
-      FunctionSignatureBuilder()
-          .returnType("real")
-          .argumentType("real")
           .build(),
       FunctionSignatureBuilder()
           .returnType("double")
@@ -1318,12 +1324,9 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .build(),
       FunctionSignatureBuilder()
           .returnType("double")
-          .argumentType("real")
-          .build(),
-      FunctionSignatureBuilder()
-          .returnType("double")
           .argumentType("double")
           .build()};
+
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kPartial,
@@ -1338,6 +1341,7 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("double")
           .argumentType("double")
           .build()};
+
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kFinal,
@@ -1473,19 +1477,10 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .argumentType("bigint")
           .build(),
       FunctionSignatureBuilder()
-          .returnType("real")
-          .argumentType("real")
-          .build(),
-      FunctionSignatureBuilder()
           .returnType("double")
           .argumentType("double")
           .build()};
-  registerAggregationFunctionForStep(
-      prefix + "avg",
-      core::AggregationNode::Step::kSingle,
-      avgSingleSignatures);
 
-  // Partial step: avg(input_type) -> row(sum input_type, count bigint)
   auto avgPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .returnType("row(double,bigint)")
@@ -1646,6 +1641,93 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
       prefix + "approx_distinct",
       core::AggregationNode::Step::kFinal,
       approxDistinctFinalSignatures);
+
+  // ===== Engine-specific signatures for SUM(REAL) and AVG(REAL) =====
+  // SUM(REAL):
+  //   Spark:  single REAL->DOUBLE, partial REAL->DOUBLE,
+  //           final/intermediate DOUBLE->DOUBLE (already covered above)
+  //   Presto: single REAL->REAL,   partial REAL->DOUBLE,
+  //           final/intermediate DOUBLE->REAL
+  // AVG(REAL):
+  //   Spark:  single REAL->DOUBLE,
+  //           final row(DOUBLE,BIGINT)->DOUBLE (already covered above)
+  //   Presto: single REAL->REAL,
+  //           final row(DOUBLE,BIGINT)->REAL
+  // AVG partial REAL->row(DOUBLE,BIGINT) and intermediate are the same for
+  // both engines and are already registered above.
+
+  if (CudfConfig::getInstance().functionEngine == "spark") {
+    // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
+    registerAggregationFunctionForStep(
+        prefix + "sum",
+        core::AggregationNode::Step::kSingle,
+        FunctionSignatureBuilder()
+            .returnType("double")
+            .argumentType("real")
+            .build());
+    registerAggregationFunctionForStep(
+        prefix + "sum",
+        core::AggregationNode::Step::kPartial,
+        FunctionSignatureBuilder()
+            .returnType("double")
+            .argumentType("real")
+            .build());
+    // SUM final/intermediate: DOUBLE->DOUBLE already registered.
+
+    registerAggregationFunctionForStep(
+        prefix + "avg",
+        core::AggregationNode::Step::kSingle,
+        FunctionSignatureBuilder()
+            .returnType("double")
+            .argumentType("real")
+            .build());
+    // AVG final: row(DOUBLE,BIGINT)->DOUBLE already registered.
+  } else {
+    // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL
+    registerAggregationFunctionForStep(
+        prefix + "sum",
+        core::AggregationNode::Step::kSingle,
+        FunctionSignatureBuilder()
+            .returnType("real")
+            .argumentType("real")
+            .build());
+    registerAggregationFunctionForStep(
+        prefix + "sum",
+        core::AggregationNode::Step::kPartial,
+        FunctionSignatureBuilder()
+            .returnType("double")
+            .argumentType("real")
+            .build());
+    registerAggregationFunctionForStep(
+        prefix + "sum",
+        core::AggregationNode::Step::kFinal,
+        FunctionSignatureBuilder()
+            .returnType("real")
+            .argumentType("double")
+            .build());
+    registerAggregationFunctionForStep(
+        prefix + "sum",
+        core::AggregationNode::Step::kIntermediate,
+        FunctionSignatureBuilder()
+            .returnType("real")
+            .argumentType("double")
+            .build());
+
+    registerAggregationFunctionForStep(
+        prefix + "avg",
+        core::AggregationNode::Step::kSingle,
+        FunctionSignatureBuilder()
+            .returnType("real")
+            .argumentType("real")
+            .build());
+    registerAggregationFunctionForStep(
+        prefix + "avg",
+        core::AggregationNode::Step::kFinal,
+        FunctionSignatureBuilder()
+            .returnType("real")
+            .argumentType("row(double,bigint)")
+            .build());
+  }
 
   return true;
 }
