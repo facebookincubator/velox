@@ -103,9 +103,8 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
-        auto scalar =
-            std::make_unique<cudf::duration_scalar<CudfDurationType>>(
-                value, !isNull, stream, mr);
+        auto scalar = std::make_unique<cudf::duration_scalar<CudfDurationType>>(
+            value, !isNull, stream, mr);
         stream.synchronize();
         return scalar;
       }
@@ -119,17 +118,16 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       }
     } else if (toType.has_value()) {
       if (toType == cudf::type_id::DURATION_DAYS) {
-        auto scalar =
-            std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
-                value, !isNull, stream, mr);
+        auto scalar = std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
+            value, !isNull, stream, mr);
         stream.synchronize();
         return scalar;
       }
       VELOX_FAIL(
           "Unsupported result type {}", static_cast<int32_t>(toType.value()));
     } else {
-      auto scalar = std::make_unique<cudf::numeric_scalar<T>>(
-          value, !isNull, stream, mr);
+      auto scalar =
+          std::make_unique<cudf::numeric_scalar<T>>(value, !isNull, stream, mr);
       stream.synchronize();
       return scalar;
     }
