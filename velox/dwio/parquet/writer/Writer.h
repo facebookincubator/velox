@@ -153,6 +153,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch-size";
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
+  static constexpr const char* kParquetSessionCompressionCodec =
+      "parquet.writer.compression_codec";
+  static constexpr const char* kParquetConnectorCompressionCodec =
+      "parquet.writer.compression-codec";
 
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
