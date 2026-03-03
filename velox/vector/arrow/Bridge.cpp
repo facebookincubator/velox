@@ -262,6 +262,11 @@ const char* exportArrowFormatStr(
     const TypePtr& type,
     const ArrowOptions& options,
     std::string& formatBuffer) {
+  if (const char* arrowFormatString =
+          getCustomArrowFormatString(type->name())) {
+    return arrowFormatString;
+  }
+
   if (type->isDecimal()) {
     // Decimal types encode the precision and scale values.
     const auto& [precision, scale] = getDecimalPrecisionScale(*type);
@@ -1339,6 +1344,12 @@ TypePtr importFromArrowImpl(
     const char* format,
     const ArrowSchema& arrowSchema) {
   VELOX_CHECK_NOT_NULL(format);
+  for (const auto& name : getCustomTypeNames()) {
+    const char* arrowFormatString = getCustomArrowFormatString(name);
+    if (arrowFormatString && strcmp(format, arrowFormatString) == 0) {
+      return getCustomType(name, {});
+    }
+  }
 
   switch (format[0]) {
     case 'b':

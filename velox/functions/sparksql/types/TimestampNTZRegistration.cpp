@@ -99,6 +99,10 @@ class TimestampNTZTypeFactory : public CustomTypeFactory {
     return std::make_shared<fuzzer::RandomInputGenerator<int64_t>>(
         config.seed_, TIMESTAMP_NTZ(), config.nullRatio_);
   }
+
+  const char* getArrowFormatString() const override {
+    return "ts_ntz";
+  }
 };
 
 } // namespace
