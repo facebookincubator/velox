@@ -18,7 +18,7 @@ General Aggregate Functions
     When all inputs are nulls, the intermediate result is ROW(0, 0),
     and the final result is null.
 
-.. spark:function:: approx_count_distinct_for_intervals(x, endpoints [, relativeSD]) -> array(bigint)
+.. spark:function:: approx_count_distinct_for_intervals(x, endpoints, relativeSD) -> array(bigint)
 
     Returns approximate distinct counts per interval defined by ``endpoints``.
     Given an array of sorted endpoints (e1, e2, ..., eN), the result contains
@@ -29,7 +29,7 @@ General Aggregate Functions
     (e.g. (5, 5]), the result is 1.
 
     ``endpoints`` must be a constant (foldable) array with at least two values.
-    ``relativeSD`` is optional with default 0.05 and must be constant as well.
+    ``relativeSD`` must be constant as well.
 
     Supported input types are numeric, date, timestamp, interval, and decimal.
     Endpoints can be any of these types and do not need to match the input type.
