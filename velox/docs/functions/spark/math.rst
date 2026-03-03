@@ -307,6 +307,8 @@ Mathematical Functions
     Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode.
     In HALF_UP rounding, the digit 5 is rounded up.
     Supported types for ``x`` are integral and floating point types.
+    For integral types with negative ``d``, an error is thrown if the rounded
+    result overflows the type when ``spark.sql.ansi.enabled`` is set to true.
 
 .. spark:function:: sec(x) -> double
 
