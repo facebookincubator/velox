@@ -27,6 +27,7 @@ add_executable(
   ArrayShuffleTest.cpp
   ArrayUnionTest.cpp
   ArgTypesGeneratorTest.cpp
+  AssertNotNullTest.cpp
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
   BitwiseTest.cpp
