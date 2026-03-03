@@ -232,8 +232,13 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   // emits. This value is set true only for that driver. See noMoreInput
   bool isLastDriver_{false};
 
-  /// Last probe stream used for rightMatchedFlags_ updates (for cross-driver
-  /// sync).
+  /// CUDA stream used during the last getOutput() probe operation. Set only
+  /// for right/full joins, and only for drivers that process at least one probe
+  /// batch. Used in noMoreInput() to synchronize GPU streams across drivers
+  /// before combining rightMatchedFlags_. Drivers with no probe input are safe
+  /// to skip: the driver loop guarantees all addInput batches are consumed by
+  /// getOutput() before noMoreInput() fires, and unset flags remain in their
+  /// host-synchronized all-false init state with no pending GPU work.
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
