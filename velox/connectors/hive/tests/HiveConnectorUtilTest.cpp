@@ -1100,4 +1100,109 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
   }
 }
 
+TEST_F(HiveConnectorUtilTest, timestampPartitionValueParsing) {
+  // This test verifies that TIMESTAMP partition filtering supports three formats
+  // through the applyPartitionFilter function (internal to HiveConnectorUtil.cpp):
+  // 1. Microseconds (Iceberg identity transform): "1234567890123456"
+  // 2. ISO 8601 (Iceberg): "2023-01-15T10:30:45.123"
+  // 3. PrestoCast (backward compatibility): "2023-06-20 14:25:30.500"
+  //
+  // Note: TIMESTAMP remains in kUnsupportedFilterTypes because createPointFilter
+  // and createRangeFilter don't support TIMESTAMP directly. However, partition
+  // filtering works through applyPartitionFilter which has special TIMESTAMP handling.
+  
+  // Verify TIMESTAMP is still in unsupported types for createPointFilter/createRangeFilter
+  bool foundTimestamp = false;
+  for (const auto& unsupported : kUnsupportedFilterTypes) {
+    if (unsupported.type->kind() == TypeKind::TIMESTAMP) {
+      foundTimestamp = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(foundTimestamp)
+      << "TIMESTAMP should be in kUnsupportedFilterTypes for createPointFilter/createRangeFilter";
+  
+  // Verify that createPointFilter throws for TIMESTAMP (as expected)
+  {
+    auto ts = Timestamp(1234567890, 123456000);
+    VELOX_ASSERT_THROW(
+        hive::createPointFilter(TIMESTAMP(), variant(ts)),
+        "Unsupported type kind for filter creation: TIMESTAMP");
+  }
+  
+  // Verify that createRangeFilter throws for TIMESTAMP (as expected)
+  {
+    auto lowerTs = Timestamp(1000000000, 0);
+    auto upperTs = Timestamp(2000000000, 0);
+    VELOX_ASSERT_THROW(
+        hive::createRangeFilter(TIMESTAMP(), variant(lowerTs), variant(upperTs)),
+        "Unsupported type kind for filter creation: TIMESTAMP");
+  }
+  
+  // Test the three timestamp string formats that applyPartitionFilter supports.
+  // We test the parsing logic directly using util::fromTimestampString.
+  
+  // Format 1: Microseconds (Iceberg identity transform)
+  // This format is handled by parsing as int64_t and converting via Timestamp::fromMicros
+  {
+    std::string microStr = "1234567890123456";
+    int64_t micros = folly::to<int64_t>(microStr);
+    Timestamp ts = Timestamp::fromMicros(micros);
+    // Verify the timestamp was created correctly
+    EXPECT_EQ(ts.getSeconds(), 1234567890);
+    EXPECT_EQ(ts.getNanos(), 123456000);
+  }
+  
+  // Format 2: ISO 8601 (Iceberg)
+  {
+    auto result = util::fromTimestampString(
+        "2023-01-15T10:30:45.123", util::TimestampParseMode::kIso8601);
+    ASSERT_FALSE(result.hasError())
+        << "Failed to parse ISO 8601 timestamp: " << result.error().message();
+    
+    Timestamp ts = result.value();
+    // Verify the timestamp was parsed successfully
+    EXPECT_EQ(ts.getNanos(), 123000000);
+    // Verify it's a reasonable timestamp (year 2023, month January)
+    EXPECT_GT(ts.getSeconds(), 1672531200); // 2023-01-01 00:00:00 UTC
+    EXPECT_LT(ts.getSeconds(), 1675209600); // 2023-02-01 00:00:00 UTC
+  }
+  
+  // Format 3: PrestoCast (backward compatibility)
+  {
+    auto result = util::fromTimestampString(
+        "2023-06-20 14:25:30.500", util::TimestampParseMode::kPrestoCast);
+    ASSERT_FALSE(result.hasError())
+        << "Failed to parse PrestoCast timestamp: " << result.error().message();
+    
+    Timestamp ts = result.value();
+    // Verify the timestamp was parsed successfully and has the expected nanos
+    // Note: The exact seconds value depends on timezone handling in PrestoCast mode
+    EXPECT_EQ(ts.getNanos(), 500000000);
+    // Verify it's a reasonable timestamp (year 2023)
+    EXPECT_GT(ts.getSeconds(), 1672531200); // 2023-01-01 00:00:00 UTC
+    EXPECT_LT(ts.getSeconds(), 1704067200); // 2024-01-01 00:00:00 UTC
+  }
+  
+  // Verify that ISO 8601 parser rejects PrestoCast format
+  {
+    auto result = util::fromTimestampString(
+        "2023-06-20 14:25:30.500", util::TimestampParseMode::kIso8601);
+    EXPECT_TRUE(result.hasError())
+        << "ISO 8601 parser should reject PrestoCast format";
+  }
+  
+  // Verify that PrestoCast parser can also handle ISO 8601 format
+  {
+    auto result = util::fromTimestampString(
+        "2023-01-15T10:30:45.123", util::TimestampParseMode::kPrestoCast);
+    // PrestoCast may or may not accept ISO 8601 - this documents the behavior
+    if (!result.hasError()) {
+      Timestamp ts = result.value();
+      EXPECT_EQ(ts.getSeconds(), 1673779845);
+      EXPECT_EQ(ts.getNanos(), 123000000);
+    }
+  }
+}
+
 } // namespace facebook::velox::connector

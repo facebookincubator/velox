@@ -750,13 +750,34 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
-      auto result = util::fromTimestampString(
-          StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
-      VELOX_CHECK(!result.hasError());
-      if (asLocalTime) {
-        result.value().toGMT(Timestamp::defaultTimezone());
+      // Try to parse as microseconds timestamp first (Iceberg identity transform).
+      try {
+        int64_t micros = folly::to<int64_t>(partitionValue);
+        // Convert microseconds to Timestamp.
+        // Iceberg identity transform stores timestamps in UTC, no timezone conversion needed.
+        Timestamp ts = Timestamp::fromMicros(micros);
+        return applyFilter(*filter, ts);
+      } catch (const std::exception& e) {
+        // Fall back to string parsing - try ISO 8601 first (for Iceberg), then PrestoCast.
+        auto result = util::fromTimestampString(
+            StringView(partitionValue), util::TimestampParseMode::kIso8601);
+        
+        // If ISO 8601 fails, try PrestoCast for backward compatibility.
+        if (result.hasError()) {
+          result = util::fromTimestampString(
+              StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
+        }
+        
+        VELOX_CHECK(
+            !result.hasError(),
+            "Failed to parse TIMESTAMP partition value '{}': {}",
+            partitionValue,
+            result.error().message());
+        if (asLocalTime) {
+          result.value().toGMT(Timestamp::defaultTimezone());
+        }
+        return applyFilter(*filter, result.value());
       }
-      return applyFilter(*filter, result.value());
     }
     case TypeKind::VARCHAR: {
       return applyFilter(*filter, partitionValue);
