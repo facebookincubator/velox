@@ -6663,6 +6663,102 @@ TEST_F(DateTimeFunctionsTest, localtime) {
   EXPECT_EQ(localVal, 32400000); // 9 AM UTC
 }
 
+TEST_F(DateTimeFunctionsTest, localTimestamp) {
+  const auto localTimestamp = [&](int64_t sessionStartTime,
+                                  const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    return evaluateOnce<Timestamp>(
+        "localtimestamp()", makeRowVector(ROW({}), 1));
+  };
+
+  // ============================================================
+  // 1. Basic behavior (no timezone)
+  // ============================================================
+
+  // Epoch — zero nanos
+  {
+    auto tsUtc = localTimestamp(0, std::nullopt);
+    ASSERT_TRUE(tsUtc.has_value());
+    EXPECT_EQ(tsUtc->getSeconds(), 0);
+    EXPECT_EQ(tsUtc->getNanos(), 0);
+  }
+
+  // ============================================================
+  // 2. Basic behavior with timezone
+  // ============================================================
+
+  // Exact second boundary
+  {
+    const int64_t millis = 1758499200000; // exact second
+    auto tsExact = localTimestamp(millis, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsExact.has_value());
+    EXPECT_EQ(tsExact.value().getSeconds(), millis / 1000);
+    EXPECT_EQ(tsExact.value().getNanos(), 0);
+  }
+
+  // Fractional milliseconds (nanos test)
+  {
+    const int64_t millisWithFraction = 1758499200123; // +123 ms
+    auto tsWithNanos =
+        localTimestamp(millisWithFraction, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsWithNanos.has_value());
+    EXPECT_EQ(tsWithNanos.value().getSeconds(), millisWithFraction / 1000);
+    EXPECT_EQ(tsWithNanos.value().getNanos(), 123'000'000);
+  }
+
+  // ============================================================
+  // 3. DST FORWARD (Spring transition)
+  // America/Los_Angeles
+  // 2023-03-12 01:59:59 PST  →  03:00:00 PDT
+  // ============================================================
+
+  {
+    const int64_t beforeForward = 1678615199000; // 2023-03-12T09:59:59Z
+    auto tsBeforeForward = localTimestamp(beforeForward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsBeforeForward.has_value());
+    EXPECT_EQ(tsBeforeForward.value().getSeconds(), beforeForward / 1000);
+    EXPECT_EQ(tsBeforeForward.value().getNanos(), 0);
+
+    const int64_t afterForward = 1678615200000; // 2023-03-12T10:00:00Z
+    auto tsAfterForward = localTimestamp(afterForward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsAfterForward.has_value());
+    EXPECT_EQ(tsAfterForward.value().getSeconds(), afterForward / 1000);
+    EXPECT_EQ(tsAfterForward.value().getNanos(), 0);
+  }
+
+  // ============================================================
+  // 4. DST BACKWARD (Fall transition)
+  // America/Los_Angeles
+  // 2023-11-05 01:59:59 PDT  →  01:00:00 PST (repeated hour)
+  // ============================================================
+
+  {
+    const int64_t beforeBackward = 1699174799000; // 2023-11-05T08:59:59Z
+    auto tsBeforeBackward =
+        localTimestamp(beforeBackward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsBeforeBackward.has_value());
+    EXPECT_EQ(tsBeforeBackward.value().getSeconds(), beforeBackward / 1000);
+    EXPECT_EQ(tsBeforeBackward.value().getNanos(), 0);
+
+    const int64_t afterBackward = 1699174800000; // 2023-11-05T09:00:00Z
+    auto tsAfterBackward = localTimestamp(afterBackward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsAfterBackward.has_value());
+    EXPECT_EQ(tsAfterBackward.value().getSeconds(), afterBackward / 1000);
+    EXPECT_EQ(tsAfterBackward.value().getNanos(), 0);
+  }
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffTime) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int64_t> time1,

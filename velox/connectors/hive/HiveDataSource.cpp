@@ -22,6 +22,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/HiveConfig.h"
 
 #include "velox/expression/FieldReference.h"
@@ -501,6 +502,10 @@ HiveDataSource::getRuntimeStats() {
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},
+       {Connector::kTotalRemainingFilterCpuTime,
+        RuntimeMetric(
+            totalRemainingFilterCpuTime_.load(std::memory_order_relaxed),
+            RuntimeCounter::Unit::kNanos)},
        {std::string(kOverreadBytes),
         RuntimeMetric(
             ioStatistics_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
@@ -597,17 +602,19 @@ vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
         filterLazyDecoded_,
         filterLazyBaseRows_);
   }
-  uint64_t filterTimeUs{0};
+  CpuWallTiming filterTiming;
   vector_size_t rowsRemaining{0};
   {
-    MicrosecondTimer timer(&filterTimeUs);
+    CpuWallTimer timer(filterTiming);
     expressionEvaluator_->evaluate(
         remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
     rowsRemaining = exec::processFilterResults(
         filterResult_, filterRows_, filterEvalCtx_, pool_);
   }
   totalRemainingFilterTime_.fetch_add(
-      filterTimeUs * 1000, std::memory_order_relaxed);
+      filterTiming.wallNanos, std::memory_order_relaxed);
+  totalRemainingFilterCpuTime_.fetch_add(
+      filterTiming.cpuNanos, std::memory_order_relaxed);
   return rowsRemaining;
 }
 

@@ -18,8 +18,6 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
-#include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
 
@@ -41,40 +39,29 @@ class TransformFunctionBase : public exec::VectorFunction {
     auto& decodedArray = *arrayDecoder.get();
 
     auto flatArray = flattenArray(rows, args[0], decodedArray);
-    auto newNumElements = flatArray->elements()->size();
 
+    auto numElements = flatArray->elements()->size();
     std::vector<VectorPtr> lambdaArgs = {flatArray->elements()};
 
     // Allow subclasses to add additional lambda arguments (e.g., index vector).
-    addIndexVector(args, flatArray, newNumElements, context, lambdaArgs);
+    addIndexVector(args, flatArray, numElements, context, lambdaArgs);
 
     SelectivityVector validRowsInReusedResult =
-        toElementRows<ArrayVector>(newNumElements, rows, flatArray.get());
+        toElementRows<ArrayVector>(numElements, rows, flatArray.get());
 
     // Transformed elements.
     VectorPtr newElements;
 
-    auto elementToTopLevelRows = getElementToTopLevelRows(
-        newNumElements, rows, flatArray.get(), context.pool());
-
-    // Loop over lambda functions and apply these to elements of the base array.
-    // In most cases there will be only one function and the loop will run once.
-    auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
-    while (auto entry = it.next()) {
-      auto elementRows = toElementRows<ArrayVector>(
-          newNumElements, *entry.rows, flatArray.get());
-      auto wrapCapture = toWrapCapture<ArrayVector>(
-          newNumElements, entry.callable, *entry.rows, flatArray);
-
-      entry.callable->apply(
-          elementRows,
-          &validRowsInReusedResult,
-          wrapCapture,
-          &context,
-          lambdaArgs,
-          elementToTopLevelRows,
-          &newElements);
-    }
+    // Apply lambda to elements.
+    applyLambdaToElements<ArrayVector>(
+        args[1],
+        rows,
+        numElements,
+        flatArray,
+        lambdaArgs,
+        validRowsInReusedResult,
+        context,
+        newElements);
 
     // Set nulls for rows not present in 'rows'.
     BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
