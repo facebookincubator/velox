@@ -262,12 +262,12 @@ facebook::velox::RowVectorPtr toVeloxColumn(
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
-    const facebook::velox::RowTypePtr& expectedType,
+    const facebook::velox::RowTypePtr& outputType,
     std::string namePrefix,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
-  return toVeloxColumn(table, pool, metadata, &expectedType, stream, mr);
+  return toVeloxColumn(table, pool, metadata, &outputType, stream, mr);
 }
 
 RowVectorPtr toVeloxColumn(
