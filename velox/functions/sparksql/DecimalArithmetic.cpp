@@ -181,7 +181,14 @@ struct DecimalAddSubtractBase {
 
     // Scale up the whole part and scale down the fraction part to combine them.
     fraction = reduceScale(TResult(fraction), higherScale - rScale);
-    const auto whole = TResult(aWhole) + TResult(bWhole) + TResult(carryToLeft);
+    // Use __builtin_add_overflow to avoid undefined behavior from signed
+    // integer overflow when both whole parts are large.
+    TResult whole;
+    if (__builtin_add_overflow(TResult(aWhole), TResult(bWhole), &whole) ||
+        __builtin_add_overflow(whole, TResult(carryToLeft), &whole)) {
+      overflow = true;
+      return 0;
+    }
     return decimalAddResult(whole, TResult(fraction), rScale, overflow);
   }
 
