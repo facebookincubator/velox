@@ -664,7 +664,7 @@ std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
 std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
   std::unordered_map<std::string, RuntimeMetric> stats;
   if (remainingFilterTimeNs_ != 0) {
-    stats[Connector::kTotalRemainingFilterTime] =
+    stats[std::string(Connector::kTotalRemainingFilterTime)] =
         RuntimeMetric(remainingFilterTimeNs_, RuntimeCounter::Unit::kNanos);
   }
   return stats;

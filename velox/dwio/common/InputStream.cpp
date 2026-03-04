@@ -75,7 +75,7 @@ void ReadFileInputStream::read(
     void* buf,
     uint64_t length,
     uint64_t offset,
-    MetricsLog::MetricsType purpose) {
+    MetricsLog::Type purpose) {
   VELOX_CHECK_NOT_NULL(buf);
   logRead(offset, length, purpose);
   uint64_t readTimeUs{0};

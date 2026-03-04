@@ -20,7 +20,6 @@
 #include <gtest/gtest.h>
 
 #include "dwio/nimble/encodings/EncodingLayout.h"
-#include "dwio/nimble/encodings/EncodingLayoutCapture.h"
 #include "dwio/nimble/encodings/EncodingSelectionPolicy.h"
 #include "dwio/nimble/tablet/TabletReader.h"
 #include "velox/experimental/wave/dwio/nimble/NimbleFileFormat.h"

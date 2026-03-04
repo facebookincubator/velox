@@ -19,6 +19,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec::test;
@@ -456,6 +457,34 @@ TEST_F(ArbitraryTest, shortDecimal) {
            40000000000000000},
           DECIMAL(15, 2)),
   });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
+TEST_F(ArbitraryTest, ipAddress) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       // IPADDRESS values
+       makeNullableFlatVector<int128_t>(
+           {ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
+           IPADDRESS())});
+
+  auto expectedResult = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeNullableFlatVector<int128_t>(
+           {ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            std::nullopt,
+            ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
+           IPADDRESS())});
 
   testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
 }

@@ -123,6 +123,10 @@ GroupingSet::GroupingSet(
     } else {
       distinctAggregations_.push_back(nullptr);
     }
+
+    if (aggregate.function->supportsCompact()) {
+      hasCompactableAggregates_ = true;
+    }
   }
 }
 
@@ -230,6 +234,38 @@ bool GroupingSet::hasSpilled() const {
     return true;
   }
   return outputSpiller_ != nullptr;
+}
+
+uint64_t GroupingSet::compact() {
+  VELOX_CHECK(hasCompactableAggregates_);
+
+  uint64_t freedBytes = 0;
+
+  if (isGlobal_) {
+    if (globalAggregationInitialized_) {
+      VELOX_CHECK_NOT_NULL(lookup_);
+      VELOX_CHECK_EQ(lookup_->hits.size(), 1);
+      char* group = lookup_->hits[0];
+      for (auto& aggregate : aggregates_) {
+        freedBytes += aggregate.function->compact(folly::Range(&group, 1));
+      }
+    }
+  } else if (table_ != nullptr) {
+    auto* rows = table_->rows();
+    if (rows != nullptr && rows->numRows() > 0) {
+      RowContainerIterator iter;
+      std::vector<char*> groups(1'000);
+      while (const auto numRows = rows->listRows(
+                 &iter, static_cast<int32_t>(groups.size()), groups.data())) {
+        for (auto& aggregate : aggregates_) {
+          freedBytes +=
+              aggregate.function->compact(folly::Range(groups.data(), numRows));
+        }
+      }
+    }
+  }
+
+  return freedBytes;
 }
 
 bool GroupingSet::hasOutput() {

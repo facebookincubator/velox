@@ -156,7 +156,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// The name for background cpu time metric if operator has background cpu
   /// usages outside its driver thread.
-  static inline const std::string kBackgroundCpuTimeNanos =
+  static constexpr std::string_view kBackgroundCpuTimeNanos =
       "backgroundCpuTimeNanos";
 
   /// The name of the runtime spill stats collected and reported by operators
@@ -165,34 +165,34 @@ class Operator : public BaseRuntimeStatWriter {
   /// This indicates the spill not supported for a spillable operator when the
   /// spill config is enabled. This is due to the spill limitation in certain
   /// plan node config such as unpartition window operator.
-  static inline const std::string kSpillNotSupported{"spillNotSupported"};
+  static constexpr std::string_view kSpillNotSupported{"spillNotSupported"};
   /// The spill write stats.
-  static inline const std::string kSpillFillTime{"spillFillWallNanos"};
-  static inline const std::string kSpillSortTime{"spillSortWallNanos"};
-  static inline const std::string kSpillExtractVectorTime{
+  static constexpr std::string_view kSpillFillTime{"spillFillWallNanos"};
+  static constexpr std::string_view kSpillSortTime{"spillSortWallNanos"};
+  static constexpr std::string_view kSpillExtractVectorTime{
       "spillExtractVectorWallNanos"};
-  static inline const std::string kSpillSerializationTime{
+  static constexpr std::string_view kSpillSerializationTime{
       "spillSerializationWallNanos"};
-  static inline const std::string kSpillFlushTime{"spillFlushWallNanos"};
-  static inline const std::string kSpillWrites{"spillWrites"};
-  static inline const std::string kSpillWriteTime{"spillWriteWallNanos"};
-  static inline const std::string kSpillRuns{"spillRuns"};
-  static inline const std::string kExceededMaxSpillLevel{
+  static constexpr std::string_view kSpillFlushTime{"spillFlushWallNanos"};
+  static constexpr std::string_view kSpillWrites{"spillWrites"};
+  static constexpr std::string_view kSpillWriteTime{"spillWriteWallNanos"};
+  static constexpr std::string_view kSpillRuns{"spillRuns"};
+  static constexpr std::string_view kExceededMaxSpillLevel{
       "exceededMaxSpillLevel"};
   /// The spill read stats.
-  static inline const std::string kSpillReadBytes{"spillReadBytes"};
-  static inline const std::string kSpillReads{"spillReads"};
-  static inline const std::string kSpillReadTime{"spillReadWallNanos"};
-  static inline const std::string kSpillDeserializationTime{
+  static constexpr std::string_view kSpillReadBytes{"spillReadBytes"};
+  static constexpr std::string_view kSpillReads{"spillReads"};
+  static constexpr std::string_view kSpillReadTime{"spillReadWallNanos"};
+  static constexpr std::string_view kSpillDeserializationTime{
       "spillDeserializationWallNanos"};
 
   /// The vector serde kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.
-  static inline const std::string kShuffleSerdeKind{"shuffleSerdeKind"};
+  static constexpr std::string_view kShuffleSerdeKind{"shuffleSerdeKind"};
 
   /// The compression kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.
-  static inline const std::string kShuffleCompressionKind{
+  static constexpr std::string_view kShuffleCompressionKind{
       "shuffleCompressionKind"};
 
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
@@ -348,7 +348,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Add a single runtime stat to the operator stats under the write lock.
   /// This member overrides BaseRuntimeStatWriter's member.
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     stats_.wlock()->addRuntimeStat(name, value);
   }
