@@ -15,6 +15,11 @@
  */
 
 #include "velox/exec/StreamingAggregation.h"
+#include "velox/common/testutil/TestValue.h"
+
+using facebook::velox::common::testutil::TestValue;
+
+#include "velox/exec/OperatorType.h"
 
 namespace facebook::velox::exec {
 
@@ -28,8 +33,8 @@ StreamingAggregation::StreamingAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation"),
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation),
       maxOutputBatchSize_{outputBatchRows()},
       minOutputBatchSize_{
           operatorCtx_->driverCtx()
@@ -183,6 +188,14 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
     } else {
       function->extractValues(groups_.data(), numGroups, &result);
     }
+
+    // Clear any state the aggregations may be holding onto and return them
+    // to a valid initial state.
+    function->destroy(folly::Range<char**>(groups_.data(), numGroups));
+    std::vector<vector_size_t> newGroups;
+    newGroups.resize(numGroups);
+    std::iota(newGroups.begin(), newGroups.end(), 0);
+    function->initializeNewGroups(groups_.data(), newGroups);
   }
 
   if (sortedAggregations_) {
@@ -196,6 +209,9 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
           folly::Range<char**>(groups_.data(), numGroups), output);
     }
   }
+
+  TestValue::adjust(
+      "facebook::velox::exec::StreamingAggregation::createOutput", this);
 
   std::rotate(groups_.begin(), groups_.begin() + numGroups, groups_.end());
   numGroups_ -= numGroups;

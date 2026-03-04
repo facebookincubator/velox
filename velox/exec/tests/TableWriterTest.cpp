@@ -20,6 +20,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
@@ -29,7 +30,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <re2/re2.h>
@@ -41,6 +41,8 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 
 namespace velox::exec::test {
+using namespace facebook::velox::common::testutil;
+
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
 
 class BasicTableWriterTestBase : public HiveConnectorTestBase {};
@@ -1558,10 +1560,16 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     }
     ASSERT_EQ(
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
-    ASSERT_EQ(stats[1].runtimeStats[TableWriter::kNumWrittenFiles].sum, 1);
-    ASSERT_EQ(stats[1].runtimeStats[TableWriter::kNumWrittenFiles].count, 1);
-    ASSERT_GE(stats[1].runtimeStats[TableWriter::kWriteIOTime].sum, 0);
-    ASSERT_EQ(stats[1].runtimeStats[TableWriter::kWriteIOTime].count, 1);
+    ASSERT_EQ(
+        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].sum,
+        1);
+    ASSERT_EQ(
+        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].count,
+        1);
+    ASSERT_GE(
+        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].sum, 0);
+    ASSERT_EQ(
+        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].count, 1);
   }
 }
 
@@ -2350,17 +2358,17 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
       fixedWrittenBytes);
   ASSERT_EQ(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(TableWriter::kNumWrittenFiles)
+          ->customStats.at(std::string(TableWriter::kNumWrittenFiles))
           .sum,
       numWrittenFiles);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(TableWriter::kWriteIOTime)
+          ->customStats.at(std::string(TableWriter::kWriteIOTime))
           .sum,
       0);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(TableWriter::kRunningWallNanos)
+          ->customStats.at(std::string(TableWriter::kRunningWallNanos))
           .sum,
       0);
 }
@@ -2509,14 +2517,16 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   // One spilled partition per each written files.
   const int numWrittenFiles = stats.customStats["numWrittenFiles"].sum;
   ASSERT_GE(stats.spilledPartitions, numWrittenFiles);
-  ASSERT_GT(stats.customStats[Operator::kSpillRuns].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillFillTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillSortTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillExtractVectorTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillSerializationTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillFlushTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillWrites].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillWriteTime].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillRuns)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillFillTime)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillSortTime)].sum, 0);
+  ASSERT_GT(
+      stats.customStats[std::string(Operator::kSpillExtractVectorTime)].sum, 0);
+  ASSERT_GT(
+      stats.customStats[std::string(Operator::kSpillSerializationTime)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillFlushTime)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillWrites)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillWriteTime)].sum, 0);
 }
 
 DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {

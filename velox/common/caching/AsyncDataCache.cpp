@@ -162,6 +162,50 @@ std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntryLocked() {
   return newEntry;
 }
 
+std::optional<CachePin> CacheShard::lookupLocked(
+    RawFileCacheKey key,
+    uint64_t size,
+    folly::SemiFuture<bool>* wait) {
+  ++eventCounter_;
+  auto it = entryMap_.find(key);
+  if (it == entryMap_.end()) {
+    return std::nullopt;
+  }
+  auto* foundEntry = it->second;
+  if (foundEntry->isExclusive()) {
+    ++numWaitExclusive_;
+    if (wait != nullptr) {
+      *wait = foundEntry->getFutureLocked();
+    }
+    return CachePin{};
+  }
+  // size=0 (from find()) always passes since entry size is non-negative.
+  if (foundEntry->size() < size) {
+    // This can happen if different load quanta apply to access via different
+    // connectors. This is not an error but still worth logging.
+    VELOX_CACHE_LOG_EVERY_MS(WARNING, 1'000)
+        << "Requested larger entry. Found size " << foundEntry->size()
+        << " requested size " << size;
+    RECORD_METRIC_VALUE(kMetricMemoryCacheNumStaleEntries);
+    ++numStales_;
+    foundEntry->key_.fileNum.clear();
+    entryMap_.erase(it);
+    return std::nullopt;
+  }
+  foundEntry->touch();
+  if (foundEntry->isPrefetch()) {
+    foundEntry->isFirstUse_ = true;
+    foundEntry->setPrefetch(false);
+  } else {
+    ++numHit_;
+    hitBytes_ += foundEntry->size();
+  }
+  ++foundEntry->numPins_;
+  CachePin pin;
+  pin.setEntry(foundEntry);
+  return pin;
+}
+
 CachePin CacheShard::findOrCreate(
     RawFileCacheKey key,
     uint64_t size,
@@ -169,47 +213,9 @@ CachePin CacheShard::findOrCreate(
   AsyncDataCacheEntry* entryToInit = nullptr;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    ++eventCounter_;
-    auto it = entryMap_.find(key);
-    if (it != entryMap_.end()) {
-      auto* foundEntry = it->second;
-      if (foundEntry->isExclusive()) {
-        ++numWaitExclusive_;
-        if (wait != nullptr) {
-          *wait = foundEntry->getFutureLocked();
-        }
-        return CachePin();
-      }
-
-      if (foundEntry->size() >= size) {
-        foundEntry->touch();
-        // The entry is in a readable state. Add a pin.
-        if (foundEntry->isPrefetch()) {
-          foundEntry->isFirstUse_ = true;
-          foundEntry->setPrefetch(false);
-        } else {
-          ++numHit_;
-          hitBytes_ += foundEntry->size();
-        }
-        ++foundEntry->numPins_;
-        CachePin pin;
-        pin.setEntry(foundEntry);
-        return pin;
-      }
-
-      // TODO: add stats to report or send alert in production.
-
-      // This can happen if different load quanta apply to access via different
-      // connectors. This is not an error but still worth logging.
-      VELOX_CACHE_LOG_EVERY_MS(WARNING, 1'000)
-          << "Requested larger entry. Found size " << foundEntry->size()
-          << " requested size " << size;
-      // The old entry is superseded. Possible readers of the old entry still
-      // retain a valid read pin.
-      RECORD_METRIC_VALUE(kMetricMemoryCacheNumStaleEntries);
-      ++numStales_;
-      foundEntry->key_.fileNum.clear();
-      entryMap_.erase(it);
+    auto result = lookupLocked(key, size, wait);
+    if (result.has_value()) {
+      return std::move(result.value());
     }
 
     auto newEntry = getFreeEntryLocked();
@@ -232,6 +238,15 @@ CachePin CacheShard::findOrCreate(
     entryToInit->isFirstUse_ = true;
   }
   return initEntry(key, entryToInit);
+}
+
+std::optional<CachePin> CacheShard::find(
+    RawFileCacheKey key,
+    folly::SemiFuture<bool>* wait) {
+  std::lock_guard<std::mutex> l(mutex_);
+  // size=0 means any cached entry size is acceptable, so lookupLocked will
+  // never trigger the stale-entry eviction path.
+  return lookupLocked(key, 0, wait);
 }
 
 void CacheShard::makeEvictable(RawFileCacheKey key) {
@@ -750,6 +765,13 @@ CachePin AsyncDataCache::findOrCreate(
   return shards_[shard]->findOrCreate(key, size, wait);
 }
 
+std::optional<CachePin> AsyncDataCache::find(
+    RawFileCacheKey key,
+    folly::SemiFuture<bool>* waitFuture) {
+  const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
+  return shards_[shard]->find(key, waitFuture);
+}
+
 void AsyncDataCache::makeEvictable(RawFileCacheKey key) {
   const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
   return shards_[shard]->makeEvictable(key);
@@ -955,7 +977,7 @@ void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
 void AsyncDataCache::saveToSsd(bool saveAll) {
   std::vector<CachePin> pins;
   VELOX_CHECK(ssdCache_->writeInProgress());
-  ssdSaveable_ = 0;
+  ssdSaveable_ = false;
   for (auto& shard : shards_) {
     shard->appendSsdSaveable(saveAll, pins);
   }

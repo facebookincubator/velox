@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/CachedBufferedInput.h"
+#include "folly/io/Cursor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/process/TraceContext.h"
@@ -59,7 +60,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       region,
       input_,
       fileNum_.id(),
-      options_.noCacheRetention(),
+      options_.cacheable(),
       tracker_,
       id,
       groupId_.id(),
@@ -520,7 +521,7 @@ void CachedBufferedInput::readRegions(
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
-            [pendingLoad = load, ssdSavable = !options_.noCacheRetention()]() {
+            [pendingLoad = load, ssdSavable = options_.cacheable()]() {
               process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
@@ -579,7 +580,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       Region{offset, length},
       input_,
       fileNum_.id(),
-      options_.noCacheRetention(),
+      options_.cacheable(),
       nullptr,
       TrackingId(),
       0,
@@ -597,6 +598,91 @@ bool CachedBufferedInput::prefetch(Region region) {
   // cache entry will be accessed.
   coalescedLoad(stream.get());
   return true;
+}
+
+void CachedBufferedInput::cacheRegion(
+    uint64_t offset,
+    uint64_t length,
+    std::string_view data) {
+  VELOX_CHECK_EQ(data.size(), length);
+  auto iobuf = folly::IOBuf::wrapBufferAsValue(data.data(), data.size());
+  cacheRegion(offset, length, iobuf, 0);
+}
+
+void CachedBufferedInput::cacheRegion(
+    uint64_t offset,
+    uint64_t length,
+    const folly::IOBuf& buffer,
+    uint64_t bufferOffset) {
+  auto pin = cache_->findOrCreate(
+      RawFileCacheKey{fileNum_.id(), offset}, length, nullptr);
+  // Empty pin means the cache is at capacity and cannot accept new entries.
+  // Non-exclusive means another thread already cached this region; skip the
+  // duplicate write.
+  if (pin.empty() || !pin.checkedEntry()->isExclusive()) {
+    return;
+  }
+
+  folly::io::Cursor cursor(&buffer);
+  cursor.skip(bufferOffset);
+  VELOX_CHECK_GE(
+      cursor.totalLength(),
+      length,
+      "IOBuf has {} bytes after offset {}, need {}",
+      cursor.totalLength(),
+      bufferOffset,
+      length);
+
+  auto* entry = pin.checkedEntry();
+  if (entry->size() < cache::AsyncDataCacheEntry::kTinyDataSize) {
+    cursor.pull(entry->tinyData(), length);
+  } else {
+    auto& allocation = entry->data();
+    uint64_t copyBytes = 0;
+    for (int i = 0; i < allocation.numRuns() && copyBytes < length; ++i) {
+      const auto run = allocation.runAt(i);
+      const uint64_t copySize =
+          std::min<uint64_t>(run.numBytes(), length - copyBytes);
+      cursor.pull(run.data(), copySize);
+      copyBytes += copySize;
+    }
+    VELOX_CHECK_EQ(copyBytes, length);
+  }
+
+  // Clear the first-use flag since this entry is being populated externally
+  // (not loaded on-demand). The first findCachedRegion access should count
+  // as a cache hit.
+  entry->getAndClearFirstUseFlag();
+  entry->setExclusiveToShared();
+}
+
+std::optional<CachedRegion> CachedBufferedInput::findCachedRegion(
+    uint64_t offset) const {
+  const cache::RawFileCacheKey key{fileNum_.id(), offset};
+  for (;;) {
+    folly::SemiFuture<bool> waitFuture(false);
+    auto result = cache_->find(key, &waitFuture);
+    if (!result.has_value()) {
+      return std::nullopt;
+    }
+    if (!result->empty()) {
+      auto* entry = result->checkedEntry();
+      if (!entry->getAndClearFirstUseFlag()) {
+        ioStatistics_->ramHit().increment(entry->size());
+      }
+      return CachedRegion{std::move(*result)};
+    }
+    // Entry is exclusive — wait for it to become shared, then retry.
+    uint64_t waitUs{0};
+    {
+      MicrosecondTimer timer(&waitUs);
+      std::move(waitFuture)
+          .via(&folly::QueuedImmediateExecutor::instance())
+          .wait();
+    }
+    ioStatistics_->queryThreadIoLatencyUs().increment(waitUs);
+    ioStatistics_->cacheWaitLatencyUs().increment(waitUs);
+  }
 }
 
 } // namespace facebook::velox::dwio::common

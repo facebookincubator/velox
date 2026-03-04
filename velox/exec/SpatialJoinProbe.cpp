@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/SpatialJoinProbe.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/Task.h"
@@ -152,7 +153,7 @@ SpatialJoinProbe::SpatialJoinProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "SpatialJoinProbe"),
+          OperatorType::kSpatialJoinProbe),
       joinType_(joinNode->joinType()),
       outputBatchSize_{outputBatchRows()},
       joinNode_(joinNode),

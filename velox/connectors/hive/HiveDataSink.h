@@ -706,6 +706,10 @@ class HiveDataSink : public DataSink {
   // the newly created writer in 'writers_'.
   uint32_t appendWriter(const HiveWriterId& id);
 
+  // Creates a writer for the given index using the current file sequence.
+  std::unique_ptr<facebook::velox::dwio::common::Writer> createWriterForIndex(
+      size_t writerIndex);
+
   // Creates and configures WriterOptions based on file format.
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
@@ -727,6 +731,7 @@ class HiveDataSink : public DataSink {
 
   std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
+      size_t writerIndex,
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
 
   // Records a row index for a specific partition. This method maintains the

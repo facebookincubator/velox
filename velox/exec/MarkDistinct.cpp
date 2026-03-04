@@ -16,6 +16,7 @@
 
 #include "velox/exec/MarkDistinct.h"
 #include "velox/common/base/Range.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/vector/FlatVector.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ MarkDistinct::MarkDistinct(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "MarkDistinct") {
+          OperatorType::kMarkDistinct) {
   const auto& inputType = planNode->sources()[0]->outputType();
 
   // Set all input columns as identity projection.

@@ -63,7 +63,7 @@ Exchange::Exchange(
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
     std::shared_ptr<ExchangeClient> exchangeClient,
-    const std::string& operatorType)
+    std::string_view operatorType)
     : SourceOperator(
           driverCtx,
           exchangeNode->outputType(),
@@ -101,7 +101,13 @@ void Exchange::getSplits(ContinueFuture* future) {
   for (;;) {
     exec::Split split;
     const auto reason = operatorCtx_->task()->getSplitOrFuture(
-        operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
+        operatorCtx_->driverCtx()->driverId,
+        operatorCtx_->driverCtx()->splitGroupId,
+        planNodeId(),
+        /*maxPreloadSplits=*/0,
+        /*preload=*/nullptr,
+        split,
+        *future);
     if (reason != BlockingReason::kNotBlocked) {
       addRemoteTaskIds(remoteTaskIds);
       return;
@@ -361,7 +367,8 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  const auto iter = exchangeClientStats.find(Operator::kBackgroundCpuTimeNanos);
+  const auto iter =
+      exchangeClientStats.find(std::string(Operator::kBackgroundCpuTimeNanos));
   if (iter != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
         static_cast<uint64_t>(iter->second.count),

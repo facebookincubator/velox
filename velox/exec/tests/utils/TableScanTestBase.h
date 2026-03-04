@@ -27,6 +27,8 @@
 
 namespace facebook::velox::exec::test {
 
+using TempFilePath = common::testutil::TempFilePath;
+
 class TableScanTestBase : public HiveConnectorTestBase {
  protected:
   void SetUp() override;

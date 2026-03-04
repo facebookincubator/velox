@@ -27,6 +27,10 @@
 namespace facebook::velox::exec::test {
 namespace {
 
+std::vector<TypePtr> nullTypes(size_t n) {
+  return std::vector<TypePtr>(n, nullptr);
+}
+
 std::string toString(const std::vector<TypePtr>& types) {
   std::stringstream out;
 
@@ -34,10 +38,20 @@ std::string toString(const std::vector<TypePtr>& types) {
     if (i > 0) {
       out << ", ";
     }
-    out << types.at(i)->toString();
+    out << (types[i] ? types[i]->toString() : "null");
   }
 
   return out.str();
+}
+
+std::vector<TypePtr> extractCoercionTypes(
+    const std::vector<Coercion>& coercions) {
+  std::vector<TypePtr> types;
+  types.reserve(coercions.size());
+  for (const auto& c : coercions) {
+    types.push_back(c.type);
+  }
+  return types;
 }
 
 void testSignatureBinder(
@@ -56,10 +70,7 @@ void testSignatureBinder(
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
 
-  ASSERT_EQ(coercions.size(), actualTypes.size());
-  for (const auto& coercion : coercions) {
-    ASSERT_TRUE(coercion.type == nullptr);
-  }
+  ASSERT_EQ(extractCoercionTypes(coercions), nullTypes(actualTypes.size()));
 
   auto returnType = binder.tryResolveReturnType();
   ASSERT_TRUE(returnType != nullptr);
@@ -100,10 +111,7 @@ void assertCannotResolve(
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
 
-  ASSERT_EQ(coercions.size(), actualTypes.size());
-  for (const auto& coercion : coercions) {
-    ASSERT_TRUE(coercion.type == nullptr);
-  }
+  ASSERT_EQ(extractCoercionTypes(coercions), nullTypes(actualTypes.size()));
 
   auto returnType = binder.tryResolveReturnType();
   ASSERT_TRUE(returnType == nullptr);
@@ -1123,8 +1131,7 @@ void testCoercions(
 
   ASSERT_EQ(expectedCoercions.size(), coercions.size());
   for (auto i = 0; i < expectedCoercions.size(); ++i) {
-    const auto& coercionType = coercions[i].type;
-    VELOX_ASSERT_EQ_TYPES(coercionType, expectedCoercions[i]);
+    VELOX_ASSERT_EQ_TYPES(coercions[i].type, expectedCoercions[i]);
   }
 
   auto returnType = binder.tryResolveReturnType();
@@ -1157,10 +1164,7 @@ void testNoCoercions(
     ASSERT_TRUE(returnType != nullptr);
     ASSERT_EQ(*expectedReturnType, *returnType);
 
-    ASSERT_EQ(actualTypes.size(), coercions.size());
-    for (auto i = 0; i < actualTypes.size(); ++i) {
-      ASSERT_TRUE(coercions[i].type == nullptr);
-    }
+    ASSERT_EQ(extractCoercionTypes(coercions), nullTypes(actualTypes.size()));
   }
 }
 
@@ -1634,6 +1638,96 @@ TEST(SignatureBinderTest, unknownInComplexTypes) {
         {ARRAY(MAP(UNKNOWN(), UNKNOWN()))},
         {ARRAY(MAP(BIGINT(), VARCHAR()))},
         BOOLEAN());
+  }
+}
+
+TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
+  auto makeSignature = [](const std::string& returnType,
+                          const std::vector<std::string>& argTypes) {
+    exec::FunctionSignatureBuilder builder;
+    builder.returnType(returnType);
+    for (const auto& argType : argTypes) {
+      builder.argumentType(argType);
+    }
+    return builder.build();
+  };
+
+  // No signatures returns nullptr.
+  {
+    std::vector<TypePtr> coercions;
+    auto type =
+        exec::tryResolveReturnTypeWithCoercions({}, {BIGINT()}, coercions);
+    ASSERT_EQ(type, nullptr);
+  }
+
+  // Exact match: no coercions.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        makeSignature("bigint", {"bigint", "bigint"}),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {BIGINT(), BIGINT()}, coercions);
+    VELOX_ASSERT_EQ_TYPES(type, BIGINT());
+    ASSERT_EQ(coercions.size(), 2);
+    ASSERT_EQ(coercions[0], nullptr);
+    ASSERT_EQ(coercions[1], nullptr);
+  }
+
+  // No matching signature returns nullptr.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        makeSignature("bigint", {"bigint", "bigint"}),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {VARCHAR(), BIGINT()}, coercions);
+    ASSERT_EQ(type, nullptr);
+  }
+
+  // Exact match preferred over coerced match.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        makeSignature("integer", {"integer", "integer"}),
+        makeSignature("bigint", {"bigint", "bigint"}),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {BIGINT(), BIGINT()}, coercions);
+    VELOX_ASSERT_EQ_TYPES(type, BIGINT());
+    ASSERT_EQ(coercions.size(), 2);
+    ASSERT_EQ(coercions[0], nullptr);
+    ASSERT_EQ(coercions[1], nullptr);
+  }
+
+  // Coercion: lowest cost selected.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        makeSignature("integer", {"integer", "integer"}),
+        makeSignature("bigint", {"bigint", "bigint"}),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {TINYINT(), TINYINT()}, coercions);
+    // integer(integer, integer) is lower cost than bigint(bigint, bigint).
+    VELOX_ASSERT_EQ_TYPES(type, INTEGER());
+    ASSERT_EQ(coercions.size(), 2);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], INTEGER());
+    VELOX_ASSERT_EQ_TYPES(coercions[1], INTEGER());
+  }
+
+  // Partial coercion: one arg needs coercion, the other doesn't.
+  {
+    std::vector<exec::FunctionSignaturePtr> signatures{
+        makeSignature("bigint", {"bigint", "bigint"}),
+    };
+    std::vector<TypePtr> coercions;
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        signatures, {TINYINT(), BIGINT()}, coercions);
+    VELOX_ASSERT_EQ_TYPES(type, BIGINT());
+    ASSERT_EQ(coercions.size(), 2);
+    VELOX_ASSERT_EQ_TYPES(coercions[0], BIGINT());
+    ASSERT_EQ(coercions[1], nullptr);
   }
 }
 

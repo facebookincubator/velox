@@ -1360,12 +1360,31 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(TaskCursor*)> addSplits,
     uint64_t maxWaitMicros) {
+  return readCursorAsync(
+      params,
+      [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
+        addSplitsVoid(cursor);
+        return ContinueFuture::makeEmpty();
+      },
+      maxWaitMicros);
+}
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursorAsync(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
   auto cursor = TaskCursor::create(params);
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
+  cursor->start();
+  auto future = ContinueFuture::makeEmpty();
   while (!cursor->noMoreSplits()) {
-    addSplits(cursor.get());
+    if (future.valid()) {
+      future.wait();
+    }
+    future = addSplits(cursor.get());
     while (cursor->moveNext()) {
       auto vector = cursor->current();
       vector->loadedVector();

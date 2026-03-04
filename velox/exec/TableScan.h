@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ScaledScanController.h"
@@ -61,8 +63,34 @@ class TableScan : public SourceOperator {
   ///
   /// NOTE: we only report the number of running scan drivers at the point that
   /// all the splits have been dispatched.
-  static inline const std::string kNumRunningScaleThreads{
-      "numRunningScaleThreads"};
+  static constexpr std::string_view kNumRunningScaleThreads =
+      "numRunningScaleThreads";
+
+  /// Time spent reading from the data source.
+  static constexpr std::string_view kDataSourceReadWallNanos =
+      "dataSourceReadWallNanos";
+
+  /// Number of splits that started background preload.
+  static constexpr std::string_view kPreloadedSplits = "preloadedSplits";
+
+  /// Number of preloaded splits that finished before being read.
+  static constexpr std::string_view kReadyPreloadedSplits =
+      "readyPreloadedSplits";
+
+  /// Size of the connector split.
+  static constexpr std::string_view kConnectorSplitSize = "connectorSplitSize";
+
+  /// Time waiting for a preloaded split to become available.
+  static constexpr std::string_view kWaitForPreloadSplitNanos =
+      "waitForPreloadSplitNanos";
+
+  /// Time for preload split preparation.
+  static constexpr std::string_view kPreloadSplitPrepareTimeNanos =
+      "preloadSplitPrepareTimeNanos";
+
+  /// Time spent adding a split to the data source.
+  static constexpr std::string_view kDataSourceAddSplitWallNanos =
+      "dataSourceAddSplitWallNanos";
 
   std::shared_ptr<ScaledScanController> testingScaledController() const {
     return scaledController_;
@@ -118,6 +146,8 @@ class TableScan : public SourceOperator {
   // Exits getOutput() method after this many milliseconds. Zero means 'no
   // limit'.
   const size_t getOutputTimeLimitMs_{0};
+
+  const uint32_t outputBatchRowsOverride_;
 
   // If set, used for scan scale processing. It is shared by all the scan
   // operators instantiated from the same table scan node.

@@ -439,12 +439,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// so many of splits at the head of the queue are preloading. If
   /// they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
+      uint32_t driverId,
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload,
       exec::Split& split,
-      ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      const ConnectorSplitPreloadFunc& preload = nullptr);
+      ContinueFuture& future);
 
   /// Returns the scaled scan controller for a given table scan node if the
   /// query has configured.
@@ -1220,6 +1221,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {

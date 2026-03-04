@@ -30,6 +30,7 @@
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -45,7 +46,6 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TableScanTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/type/Timestamp.h"
@@ -63,6 +63,7 @@ using namespace facebook::velox::tests::utils;
 DECLARE_int32(cache_prefetch_min_pct);
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 void verifyCacheStats(
     const FileHandleCacheStats& cacheStats,
@@ -509,6 +510,30 @@ DEBUG_ONLY_TEST_F(TableScanTest, timeLimitInGetOutput) {
   // We should have at least 12 splits (20/3*2) producing empty results and
   // after each of them we should bail thanks to our 'sleep' injection.
   EXPECT_GE(numBailed, 12);
+}
+
+TEST_F(TableScanTest, outputBatchRowsOverride) {
+  auto vectors = makeVectors(1, 500);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  constexpr uint32_t kBatchRowsOverride{100};
+  auto plan = tableScanNode();
+  auto batches = AssertQueryBuilder(duckDbQueryRunner_)
+                     .plan(plan)
+                     .splits(makeHiveConnectorSplits({filePath}))
+                     .config(
+                         QueryConfig::kTableScanOutputBatchRowsOverride,
+                         folly::to<std::string>(kBatchRowsOverride))
+                     .copyResultBatches(pool_.get());
+
+  ASSERT_FALSE(batches.empty());
+  for (auto i = 0; i + 1 < batches.size(); ++i) {
+    EXPECT_EQ(batches[i]->size(), kBatchRowsOverride);
+  }
+  EXPECT_LE(batches.back()->size(), kBatchRowsOverride);
+
+  assertEqualResults(vectors, batches);
 }
 
 TEST_F(TableScanTest, subfieldPruningRowType) {
@@ -5331,6 +5356,42 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
   AssertQueryBuilder(plan).split(split).assertResults(expected);
 }
 
+// Test reading flatmap as struct when none of the requested keys exist in the
+// file.  All projected struct fields should be null.
+TEST_F(TableScanTest, readFlatMapAsStructNoMatchingKeys) {
+  constexpr int kSize = 10;
+  std::vector<std::string> keys = {"1", "2", "3"};
+  auto c0 = makeRowVector(
+      keys,
+      {
+          makeFlatVector<int64_t>(kSize, folly::identity),
+          makeFlatVector<int64_t>(kSize, folly::identity),
+          makeFlatVector<int64_t>(kSize, folly::identity),
+      });
+  auto vector = makeRowVector({c0});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  config->set<const std::vector<std::vector<std::string>>>(
+      dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, {keys});
+  auto file = TempFilePath::create();
+  auto writeSchema = ROW({"c0"}, {MAP(INTEGER(), BIGINT())});
+  writeToFile(file->getPath(), {vector}, config, writeSchema);
+
+  // Request keys "4" and "5" which don't exist in the file.
+  auto readSchema = ROW({"c0"}, {ROW({"4", "5"}, {BIGINT(), BIGINT()})});
+  auto plan =
+      PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();
+  auto split = makeHiveConnectorSplit(file->getPath());
+  auto expected = makeRowVector({makeRowVector(
+      {"4", "5"},
+      {
+          makeNullConstant(TypeKind::BIGINT, kSize),
+          makeNullConstant(TypeKind::BIGINT, kSize),
+      })});
+  AssertQueryBuilder(plan).split(split).assertResults(expected);
+}
+
 TEST_F(TableScanTest, flatMapReadOffset) {
   auto vector = makeRowVector(
       {makeNullableMapVector<int64_t, int64_t>({std::nullopt, {{{1, 2}}}})});
@@ -5660,7 +5721,7 @@ TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
           .planNode();
 
   std::thread queryThread([&]() {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto task = assertQuery(
         op,
         filePaths,

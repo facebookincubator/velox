@@ -72,7 +72,8 @@ class CachedBufferedInput : public BufferedInput {
             ioStats.get(),
             kMaxMergeDistance,
             std::nullopt,
-            std::move(fileReadOps)),
+            std::move(fileReadOps),
+            readerOptions.cacheable()),
         cache_(cache),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
@@ -82,6 +83,7 @@ class CachedBufferedInput : public BufferedInput {
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {
+    VELOX_CHECK_NOT_NULL(cache_, "CachedBufferedInput requires a cache");
     checkLoadQuantum();
   }
 
@@ -105,6 +107,7 @@ class CachedBufferedInput : public BufferedInput {
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {
+    VELOX_CHECK_NOT_NULL(cache_, "CachedBufferedInput requires a cache");
     checkLoadQuantum();
   }
 
@@ -162,6 +165,21 @@ class CachedBufferedInput : public BufferedInput {
   cache::AsyncDataCache* cache() const {
     return cache_;
   }
+
+  bool hasCache() const override {
+    return true;
+  }
+
+  void cacheRegion(uint64_t offset, uint64_t length, std::string_view data)
+      override;
+
+  void cacheRegion(
+      uint64_t offset,
+      uint64_t length,
+      const folly::IOBuf& buffer,
+      uint64_t bufferOffset) override;
+
+  std::optional<CachedRegion> findCachedRegion(uint64_t offset) const override;
 
   /// Returns the CoalescedLoad that contains the correlated loads for 'stream'
   /// or nullptr if none. Returns nullptr on all but first call for 'stream'

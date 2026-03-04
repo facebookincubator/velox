@@ -70,7 +70,7 @@ class ColumnStatsCollectorTest : public OperatorTestBase {
         agg.rawInputTypes.push_back(input->type());
       }
 
-      VELOX_CHECK_NULL(untypedExpr.maskExpr);
+      VELOX_CHECK_NULL(untypedExpr.filter);
       VELOX_CHECK(!untypedExpr.distinct);
       VELOX_CHECK(untypedExpr.orderBy.empty());
 

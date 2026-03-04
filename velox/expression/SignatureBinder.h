@@ -199,4 +199,14 @@ class SignatureBinder : private SignatureBinderBase {
   const std::vector<TypePtr>& actualTypes_;
 };
 
+/// Try to resolve the return type from a list of function signatures with
+/// coercion support. Returns the resolved return type if a matching signature
+/// is found, nullptr otherwise. On success, 'coercions' contains one entry per
+/// argument: nullptr if no coercion needed, or the target type if coercion is
+/// required. Exact matches (no coercions) are preferred over coerced matches.
+TypePtr tryResolveReturnTypeWithCoercions(
+    const std::vector<FunctionSignaturePtr>& signatures,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions);
+
 } // namespace facebook::velox::exec

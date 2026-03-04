@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSourceHelpers.hpp"
 
 #include "velox/dwio/common/BufferedInput.h"
