@@ -361,13 +361,13 @@ depth-first order. For each node a sequence of operations is performed.</p>
 </section>
 <section id="flat-no-nulls-fast-path">
 <span id="expr-flat-no-nulls"></span><h4>Flat No-Nulls Fast Path<a class="headerlink" href="#flat-no-nulls-fast-path" title="Link to this heading">¶</a></h4>
-<p>When evaluating simple expressions on short vectors (&lt; 1000 rows), the overhead
-of handling nulls and encodings is visible. To optimize these use cases,
-expression evaluation takes flat-no-nulls fast path
-(Expr::evalFlatNoNulls). This path applies automatically when inputs are flat
-vectors or constants with no nulls and all sub-expressions are guaranteed to
-produce flat-or-constant-no-nulls results given flat-or-constant-no-nulls
-inputs.</p>
+<p>When evaluating simple expressions, the overhead of handling nulls and encodings
+is visible. To optimize these use cases, expression evaluation takes
+flat-no-nulls fast path (Expr::evalFlatNoNulls). This path applies automatically
+when inputs are flat vectors or constants with no nulls and all sub-expressions
+are guaranteed to produce flat-or-constant-no-nulls results given
+flat-or-constant-no-nulls inputs. The optimization can be disabled by setting the
+<code class="docutils literal notranslate"><span class="pre">expression.eval_flat_no_nulls</span></code> configuration property to false.</p>
 <p>An example of a workload that benefits from this optimization is basic arithmetic
 over non-null floats found in many machine learning pre-processing workloads.</p>
 <p>All simple functions are guaranteed to return flat-or-constant-no-nulls result

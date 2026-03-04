@@ -362,13 +362,20 @@ explicitly enable it.</p></td>
 <td><p>false</p></td>
 <td><p>Whether to use the simplified expression evaluation path.</p></td>
 </tr>
-<tr class="row-odd"><td><p>expression.track_cpu_usage</p></td>
+<tr class="row-odd"><td><p>expression.eval_flat_no_nulls</p></td>
+<td><p>boolean</p></td>
+<td><p>true</p></td>
+<td><p>Whether to enable the FlatNoNulls fast path for expression evaluation. When enabled, expressions skip null
+checking and vector decoding when all inputs are flat-encoded with no nulls. Set to false to disable this
+optimization.</p></td>
+</tr>
+<tr class="row-even"><td><p>expression.track_cpu_usage</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>Whether to track CPU usage for individual expressions (supported by call and cast expressions). Can be expensive
 when processing small batches, e.g. &lt; 10K rows.</p></td>
 </tr>
-<tr class="row-even"><td><p>expression.track_cpu_usage_for_functions</p></td>
+<tr class="row-odd"><td><p>expression.track_cpu_usage_for_functions</p></td>
 <td><p>string</p></td>
 <td><p>“”</p></td>
 <td><p>Comma-separated list of function names to selectively track CPU usage for. Only applicable when
@@ -376,53 +383,53 @@ when processing small batches, e.g. &lt; 10K rows.</p></td>
 to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
 be monitored.</p></td>
 </tr>
-<tr class="row-odd"><td><p>legacy_cast</p></td>
+<tr class="row-even"><td><p>legacy_cast</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Enables legacy CAST semantics if set to true. CAST(timestamp AS varchar) uses ‘T’ as separator between date and
 time (instead of a space), and the year part is not padded.</p></td>
 </tr>
-<tr class="row-even"><td><p>cast_match_struct_by_name</p></td>
+<tr class="row-odd"><td><p>cast_match_struct_by_name</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.</p></td>
 </tr>
-<tr class="row-odd"><td><p>expression.max_array_size_in_reduce</p></td>
+<tr class="row-even"><td><p>expression.max_array_size_in_reduce</p></td>
 <td><p>integer</p></td>
 <td><p>100000</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Reduce</span></code> function will throw an error if encountered an array of size greater than this.</p></td>
 </tr>
-<tr class="row-even"><td><p>expression.max_compiled_regexes</p></td>
+<tr class="row-odd"><td><p>expression.max_compiled_regexes</p></td>
 <td><p>integer</p></td>
 <td><p>100</p></td>
 <td><p>Controls maximum number of compiled regular expression patterns per batch.</p></td>
 </tr>
-<tr class="row-odd"><td><p>debug_disable_expression_with_peeling</p></td>
+<tr class="row-even"><td><p>debug_disable_expression_with_peeling</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to peel common dictionary layer from inputs. Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug_disable_common_sub_expressions</p></td>
+<tr class="row-odd"><td><p>debug_disable_common_sub_expressions</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to re-use cached results for common sub-expressions. Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-odd"><td><p>debug_disable_expression_with_memoization</p></td>
+<tr class="row-even"><td><p>debug_disable_expression_with_memoization</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to re-use cached results between subsequent input batches that are dictionary encoded and have the same alphabet(underlying flat vector). Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug_disable_expression_with_lazy_inputs</p></td>
+<tr class="row-odd"><td><p>debug_disable_expression_with_lazy_inputs</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.</p></td>
 </tr>
-<tr class="row-odd"><td><p>debug_lambda_function_evaluation_batch_size</p></td>
+<tr class="row-even"><td><p>debug_lambda_function_evaluation_batch_size</p></td>
 <td><p>integer</p></td>
 <td><p>10000</p></td>
 <td><p>Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.</p></td>
 </tr>
-<tr class="row-even"><td><p>debug_bing_tile_children_max_zoom_shift</p></td>
+<tr class="row-odd"><td><p>debug_bing_tile_children_max_zoom_shift</p></td>
 <td><p>integer</p></td>
 <td><p>5</p></td>
 <td><p>The UDF <cite>bing_tile_children</cite> generates the children of a Bing tile based on a specified target zoom level. The number of children produced is determined by the difference between the target zoom level and the zoom level of the input tile. This configuration limits the number of children by capping the maximum zoom level difference, with a default value set to 5. This cap is necessary to prevent excessively large array outputs, which can exceed the size limits of the elements vector in the Velox array vector.</p></td>
@@ -1057,6 +1064,14 @@ execution stats.</p></td>
 <td><p>Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
 after filtering. 0 means no limit (default).</p></td>
 </tr>
+<tr class="row-even"><td><p>file-metadata-cache-enabled</p></td>
+<td><p>file_metadata_cache_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
+the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
+serve metadata from cache with zero file IO. Currently only supported by Nimble format.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="orc-file-format-configuration">
@@ -1509,23 +1524,27 @@ function.</p></td>
 <td><p>1000000</p></td>
 <td><p>The default number of expected items for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.bloom_filter.num_bits</p></td>
+<tr class="row-odd"><td><p>spark.bloom_filter.max_num_items</p></td>
+<td><p>integer</p></td>
+<td><p>4000000</p></td>
+<td><p>The maximum number of items for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
+</tr>
+<tr class="row-even"><td><p>spark.bloom_filter.num_bits</p></td>
 <td><p>integer</p></td>
 <td><p>8388608</p></td>
 <td><p>The default number of bits to use for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.bloom_filter.max_num_bits</p></td>
+<tr class="row-odd"><td><p>spark.bloom_filter.max_num_bits</p></td>
 <td><p>integer</p></td>
-<td><p>4194304</p></td>
-<td><p>The maximum number of bits to use for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function,
-the value of this config can not exceed the default value.</p></td>
+<td><p>67108864</p></td>
+<td><p>The maximum number of bits to use for the bloom filter in <a class="reference internal" href="functions/spark/aggregate.html#id1" title="bloom_filter_agg"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bloom_filter_agg()</span></code></a> function.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.partition_id</p></td>
+<tr class="row-even"><td><p>spark.partition_id</p></td>
 <td><p>integer</p></td>
 <td></td>
 <td><p>The current task’s Spark partition ID. It’s set by the query engine (Spark) prior to task execution.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.legacy_date_formatter</p></td>
+<tr class="row-odd"><td><p>spark.legacy_date_formatter</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, <a class="reference external" href="https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html">Simple Date Format</a> is used for time formatting and parsing. Joda date formatter is used by default.
@@ -1533,13 +1552,13 @@ Joda date formatter performs strict checking of its input and uses different pat
 For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
 Another example is that the ‘W’ pattern, which means week in month, is not supported. For more differences, see <a class="reference external" href="https://github.com/facebookincubator/velox/issues/10354">#10354</a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.legacy_statistical_aggregate</p></td>
+<tr class="row-even"><td><p>spark.legacy_statistical_aggregate</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
 var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.json_ignore_null_fields</p></td>
+<tr class="row-odd"><td><p>spark.json_ignore_null_fields</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.</p></td>
