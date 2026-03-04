@@ -391,6 +391,24 @@ Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE, DECIMAL input 
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="sequence">
+<span class="sig-name descname"><span class="pre">sequence</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#sequence" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">sequence</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span></em><span class="sig-paren">)</span></dt>
+<dd><p>Generates an array of elements from <code class="docutils literal notranslate"><span class="pre">start</span></code> to <code class="docutils literal notranslate"><span class="pre">stop</span></code>, incrementing by
+<code class="docutils literal notranslate"><span class="pre">step</span></code> (default 1 if <code class="docutils literal notranslate"><span class="pre">start</span> <span class="pre">&lt;=</span> <span class="pre">stop</span></code>, otherwise -1).</p>
+<p>Supports tinyint, smallint, integer, and bigint types for start, stop, and
+step, preserving the input type in the result array. Also supports date
+inputs with day-to-second or year-to-month interval step, and timestamp
+inputs with interval step.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">sequence</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">sequence</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">sequence</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">10</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="shuffle">
 <span class="sig-name descname"><span class="pre">shuffle</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#shuffle" title="Link to this definition">¶</a></dt>
 <dd><p>Generates a random permutation of the given <code class="docutils literal notranslate"><span class="pre">array</span></code> using a seed derived
@@ -519,6 +537,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#flatten"><code class="docutils literal notranslate"><span class="pre">flatten()</span></code></a></li>
 <li><a class="reference internal" href="#get"><code class="docutils literal notranslate"><span class="pre">get()</span></code></a></li>
 <li><a class="reference internal" href="#in"><code class="docutils literal notranslate"><span class="pre">in()</span></code></a></li>
+<li><a class="reference internal" href="#sequence"><code class="docutils literal notranslate"><span class="pre">sequence()</span></code></a></li>
 <li><a class="reference internal" href="#shuffle"><code class="docutils literal notranslate"><span class="pre">shuffle()</span></code></a></li>
 <li><a class="reference internal" href="#size"><code class="docutils literal notranslate"><span class="pre">size()</span></code></a></li>
 <li><a class="reference internal" href="#slice"><code class="docutils literal notranslate"><span class="pre">slice()</span></code></a></li>
