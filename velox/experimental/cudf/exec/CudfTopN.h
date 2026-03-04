@@ -75,5 +75,6 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   std::vector<CudfVectorPtr> topNBatches_;
   int32_t kBatchSize_;
   bool finished_ = false;
+  uint64_t queuedInputBytes_{0};
 };
 } // namespace facebook::velox::cudf_velox

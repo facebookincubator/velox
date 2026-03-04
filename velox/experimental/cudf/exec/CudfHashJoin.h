@@ -113,6 +113,7 @@ class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::vector<CudfVectorPtr> inputs_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
+  uint64_t queuedInputBytes_{0};
 };
 
 /**
@@ -186,6 +187,7 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   // Batched probe inputs needed for right join
   std::vector<CudfVectorPtr> inputs_;
+  uint64_t queuedInputBytes_{0};
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
   /** @brief Column indices for join keys in left (probe) table */
