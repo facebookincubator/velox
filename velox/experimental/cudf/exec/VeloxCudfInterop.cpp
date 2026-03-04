@@ -174,11 +174,55 @@ void setArrowSchemaFormat(ArrowSchema* schema, const char* format) {
   }
 }
 
+void applyExpectedArrowFormat(
+    ArrowSchema* schema,
+    const TypePtr& type) {
+  if (!schema || !schema->format) {
+    return;
+  }
+  switch (type->kind()) {
+    case TypeKind::ROW: {
+      if (schema->n_children != static_cast<int64_t>(type->size())) {
+        return;
+      }
+      for (size_t i = 0; i < type->size(); ++i) {
+        applyExpectedArrowFormat(schema->children[i], type->childAt(i));
+      }
+      return;
+    }
+    case TypeKind::ARRAY: {
+      if (schema->n_children < 1) {
+        return;
+      }
+      applyExpectedArrowFormat(schema->children[0], type->childAt(0));
+      return;
+    }
+    case TypeKind::MAP: {
+      if (schema->n_children < 1) {
+        return;
+      }
+      auto* entry = schema->children[0];
+      if (!entry || entry->n_children < 2) {
+        return;
+      }
+      applyExpectedArrowFormat(entry->children[0], type->childAt(0));
+      applyExpectedArrowFormat(entry->children[1], type->childAt(1));
+      return;
+    }
+    case TypeKind::VARBINARY: {
+      setArrowSchemaFormat(schema, "z");
+      return;
+    }
+    default:
+      return;
+  }
+}
+
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata,
-    const RowTypePtr* expectedType,
+    const RowTypePtr* outputType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   // To avoid ownership issues, we make copies of the Arrow objects
@@ -200,51 +244,13 @@ RowVectorPtr toVeloxColumn(
   ArrowSchema schemaCopy = *arrowSchema;
   arrowSchema->release = nullptr;
 
-  if (expectedType) {
-    auto applyExpectedArrowFormat =
-        [&](auto&& self, ArrowSchema* schema, const TypePtr& type) -> void {
-      if (!schema || !schema->format) {
-        return;
-      }
-      switch (type->kind()) {
-        case TypeKind::ROW: {
-          if (schema->n_children != static_cast<int64_t>(type->size())) {
-            return;
-          }
-          for (size_t i = 0; i < type->size(); ++i) {
-            self(self, schema->children[i], type->childAt(i));
-          }
-          return;
-        }
-        case TypeKind::ARRAY: {
-          if (schema->n_children < 1) {
-            return;
-          }
-          self(self, schema->children[0], type->childAt(0));
-          return;
-        }
-        case TypeKind::MAP: {
-          if (schema->n_children < 1) {
-            return;
-          }
-          auto* entry = schema->children[0];
-          if (!entry || entry->n_children < 2) {
-            return;
-          }
-          self(self, entry->children[0], type->childAt(0));
-          self(self, entry->children[1], type->childAt(1));
-          return;
-        }
-        case TypeKind::VARBINARY: {
-          setArrowSchemaFormat(schema, "z");
-          return;
-        }
-        default:
-          return;
-      }
-    };
-    applyExpectedArrowFormat(
-        applyExpectedArrowFormat, &schemaCopy, *expectedType);
+  // Override schema type recursively with outputType if provided.
+  // This is needed for some types like VARBINARY which are exported as
+  // STRING, because CUDF does not have a VARBINARY type, but which
+  // should be re-imported as VARBINARY.
+  // @TODO Add a proper VARBINARY type to CUDF.
+  if (outputType) {
+    applyExpectedArrowFormat(&schemaCopy, *outputType);
   }
 
   auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
