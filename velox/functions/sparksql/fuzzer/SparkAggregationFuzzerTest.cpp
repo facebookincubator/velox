@@ -78,6 +78,10 @@ int main(int argc, char** argv) {
   // following names.
   std::unordered_set<std::string> skipFunctions = {
       "bloom_filter_agg",
+      // Crashes with SIGSEGV during streaming aggregation + LocalMerge +
+      // abandon-partial-aggregation with complex ROW group-by keys.
+      // https://github.com/facebookincubator/velox/issues/16632
+      "first",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",
