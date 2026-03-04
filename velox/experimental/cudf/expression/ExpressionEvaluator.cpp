@@ -854,40 +854,6 @@ class HashFunction : public CudfFunction {
   uint32_t seedValue_;
 };
 
-class YearFunction : public CudfFunction {
- public:
-  explicit YearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    VELOX_CHECK_EQ(
-        expr->inputs().size(), 1, "year expects exactly 1 input column");
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::extract_datetime_component(
-        inputCol, cudf::datetime::datetime_component::YEAR, stream, mr);
-  }
-};
-
-class MonthFunction : public CudfFunction {
- public:
-  explicit MonthFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    VELOX_CHECK_EQ(
-        expr->inputs().size(), 1, "month expects exactly 1 input column");
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::extract_datetime_component(
-        inputCol, cudf::datetime::datetime_component::MONTH, stream, mr);
-  }
-};
-
 class ExtractComponentFunction : public CudfFunction {
  public:
   ExtractComponentFunction(
@@ -1558,41 +1524,28 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .build()});
 
-  registerCudfFunction(
-      prefix + "year",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<YearFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("timestamp")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("date")
-           .build()});
-
-  // new, keep
-  registerCudfFunction(
-      prefix + "month",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<MonthFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("timestamp")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("date")
-           .build()});
-
   const std::vector<exec::FunctionSignaturePtr> timestampDateIntegerSignatures{
       FunctionSignatureBuilder()
           .returnType("integer")
           .argumentType("timestamp")
           .build(),
       FunctionSignatureBuilder().returnType("integer").argumentType("date").build()};
+
+  registerCudfFunction(
+      prefix + "year",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::YEAR);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "month",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::MONTH);
+      },
+      timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "day",
