@@ -83,7 +83,6 @@ class BloomFilter {
     if (size == 0) {
       return;
     }
-    bits_.resize(size);
     auto bitsdata =
         reinterpret_cast<const uint64_t*>(serialized + stream.offset());
 
@@ -91,7 +90,7 @@ class BloomFilter {
       bits_.assign(bitsdata, bitsdata + size);
       return;
     }
-    VELOX_DCHECK_EQ(bits_.size(), size);
+    bits_.resize(size);
     bits::orBits(bits_.data(), bitsdata, 0, 64 * size);
   }
 
