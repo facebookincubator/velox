@@ -976,10 +976,25 @@ TypePtr ReaderBase::convertType(
             requestedType->toString());
         return VARCHAR();
       }
+      case thrift::ConvertedType::TIME_MILLIS:
+        VELOX_CHECK_EQ(
+            schemaElement.type,
+            thrift::Type::INT32,
+            "TIME_MILLIS converted type can only be set for value of thrift::Type::INT32");
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) { return type->isTime(); }),
+            kTypeMappingErrorFmtStr,
+            "TIME",
+            requestedType->toString());
+        return TIME();
+
       case thrift::ConvertedType::MAP:
       case thrift::ConvertedType::MAP_KEY_VALUE:
       case thrift::ConvertedType::LIST:
-      case thrift::ConvertedType::TIME_MILLIS:
       case thrift::ConvertedType::TIME_MICROS:
       case thrift::ConvertedType::JSON:
       case thrift::ConvertedType::BSON:
