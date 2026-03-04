@@ -1010,4 +1010,69 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
       std::string_view(differentData));
 }
 
+TEST_F(CachedBufferedInputTest, prefetchScope) {
+  constexpr int32_t kContentSize = 32 << 20;
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "testFile");
+  StringIdLease groupId(ids, "testGroup");
+
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  // Enqueue non-prefetch requests (with stream IDs).
+  constexpr int32_t kNumRequests = 3;
+  constexpr uint64_t kRequestSize = 500;
+  std::vector<std::unique_ptr<StreamIdentifier>> streamIds;
+  for (int32_t i = 0; i < kNumRequests; ++i) {
+    streamIds.push_back(std::make_unique<StreamIdentifier>(i));
+  }
+  for (int32_t i = 0; i < kNumRequests; ++i) {
+    input.enqueue(
+        {static_cast<uint64_t>(i * 1000), kRequestSize}, streamIds[i].get());
+  }
+  input.load(LogType::TEST);
+
+  // There should be exactly 1 non-prefetch CoalescedLoad in kPlanned state.
+  const auto& loadsBeforePrefetch = input.testingCoalescedLoads();
+  ASSERT_EQ(loadsBeforePrefetch.size(), 1);
+  ASSERT_EQ(loadsBeforePrefetch[0]->state(), CoalescedLoad::State::kPlanned);
+
+  // Enqueue prefetch requests (without stream IDs).
+  constexpr int32_t kMB = 1 << 20;
+  for (int32_t i = 0; i < kNumRequests; ++i) {
+    input.enqueue(
+        {static_cast<uint64_t>(10 * kMB + i * 1000), kRequestSize}, nullptr);
+  }
+  input.load(LogType::TEST);
+
+  // Wait for executor to complete all submitted tasks.
+  executor_->join();
+
+  const auto& loadsAfterPrefetch = input.testingCoalescedLoads();
+  ASSERT_EQ(loadsAfterPrefetch.size(), 2);
+  EXPECT_EQ(loadsAfterPrefetch[0]->state(), CoalescedLoad::State::kPlanned)
+      << "Non-prefetch load should NOT be submitted to executor";
+  EXPECT_EQ(loadsAfterPrefetch[1]->state(), CoalescedLoad::State::kLoaded)
+      << "Prefetch load should be submitted and completed by executor";
+
+  EXPECT_EQ(ioStatistics_->prefetch().sum(), kNumRequests * kRequestSize);
+}
 } // namespace
