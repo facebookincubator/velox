@@ -18,7 +18,8 @@
 
 namespace facebook::velox::cudf_velox {
 
-bool containsAstUnsupportedType(const std::shared_ptr<velox::exec::Expr>& expr) {
+bool containsAstUnsupportedType(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
   if (!expr) {
     return false;
   }

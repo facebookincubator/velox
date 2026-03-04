@@ -40,8 +40,8 @@
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/slice.hpp>
-#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/split/split.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
@@ -170,10 +170,8 @@ enum class DateTruncUnit {
   kYear
 };
 
-DateTruncUnit parseDateTruncUnit(
-    const std::string& unit,
-    bool isTimestamp,
-    bool isDate) {
+DateTruncUnit
+parseDateTruncUnit(const std::string& unit, bool isTimestamp, bool isDate) {
   if (unit == "second") {
     VELOX_CHECK(isTimestamp, "date_trunc second requires timestamp input");
     return DateTruncUnit::kSecond;
@@ -577,42 +575,38 @@ class BetweenFunction : public CudfFunction {
     // return (value >= min) && (value <= max)
     std::unique_ptr<cudf::column> geResultColumn, leResultColumn;
     if (minLiteral_) {
-      geResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              *minLiteral_,
-              cudf::binary_operator::GREATER_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      geResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          *minLiteral_,
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     } else {
-      geResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              asView(inputColumns[1]),
-              cudf::binary_operator::GREATER_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      geResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[1]),
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     }
     if (maxLiteral_) {
-      leResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              *maxLiteral_,
-              cudf::binary_operator::LESS_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      leResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          *maxLiteral_,
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     } else {
-      leResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              asView(inputColumns[2]),
-              cudf::binary_operator::LESS_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      leResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[2]),
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     }
     return cudf::binary_operation(
         geResultColumn->view(),
@@ -935,7 +929,9 @@ class YearOfWeekFunction : public CudfFunction {
  public:
   explicit YearOfWeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
     VELOX_CHECK_EQ(
-        expr->inputs().size(), 1, "year_of_week expects exactly 1 input column");
+        expr->inputs().size(),
+        1,
+        "year_of_week expects exactly 1 input column");
   }
 
   ColumnOrView eval(
@@ -959,8 +955,7 @@ class DateTruncFunction : public CudfFunction {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "date_trunc expects exactly 2 inputs");
-    auto unitExpr =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
+    auto unitExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(unitExpr, "date_trunc unit must be a constant");
     auto inputType = expr->inputs()[1]->type();
     isTimestamp_ = inputType->isTimestamp();
@@ -993,8 +988,8 @@ class DateTruncFunction : public CudfFunction {
     auto castToDurationDays = [&](cudf::column_view col) {
       return cudf::cast(col, durationDayType, stream, mr);
     };
-    auto castDaysToOutput = [&](std::unique_ptr<cudf::column> daysCol)
-        -> ColumnOrView {
+    auto castDaysToOutput =
+        [&](std::unique_ptr<cudf::column> daysCol) -> ColumnOrView {
       if (daysCol->type() == outputType) {
         return daysCol;
       }
@@ -1399,8 +1394,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunction(
       "and",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LogicalFunction>(expr,
-            cudf::binary_operator::LOGICAL_AND);
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_AND);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -1412,8 +1407,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunction(
       "or",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LogicalFunction>(expr,
-            cudf::binary_operator::LOGICAL_OR);
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_OR);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -1529,7 +1524,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
           .returnType("integer")
           .argumentType("timestamp")
           .build(),
-      FunctionSignatureBuilder().returnType("integer").argumentType("date").build()};
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("date")
+          .build()};
 
   registerCudfFunction(
       prefix + "year",
@@ -1911,8 +1909,8 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     if (expr->inputs().size() != 2) {
       return false;
     }
-    auto unitExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-        expr->inputs()[0]);
+    auto unitExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
     if (!unitExpr || unitExpr->value()->isNullAt(0)) {
       return false;
     }

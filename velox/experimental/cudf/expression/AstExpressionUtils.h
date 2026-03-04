@@ -20,8 +20,8 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
-#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/AstTypeUtils.h"
+#include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
 

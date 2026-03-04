@@ -492,8 +492,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
   void assertProjectMatchesVelox(
       const std::vector<RowVectorPtr>& input,
       const std::vector<std::string>& projections) {
-    auto plan =
-        PlanBuilder().values(input).project(projections).planNode();
+    auto plan = PlanBuilder().values(input).project(projections).planNode();
     assertPlanMatchesVelox(plan);
   }
 
@@ -640,7 +639,7 @@ TEST_F(CudfFilterProjectTest, timestampLiteralFilter) {
       Timestamp(1736942400, 0), // 2025-01-15 12:00:00
       Timestamp(1738367999, 0), // 2025-01-31 23:59:59
       Timestamp(1738368000, 0), // 2025-02-01 00:00:00
-      Timestamp(1738454400, 0)  // 2025-02-02 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
   };
 
   auto data = makeRowVector(
@@ -668,7 +667,7 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
       Timestamp(1736942400, 0), // 2025-01-15 12:00:00
       Timestamp(1738367999, 0), // 2025-01-31 23:59:59
       Timestamp(1738368000, 0), // 2025-02-01 00:00:00
-      Timestamp(1738454400, 0)  // 2025-02-02 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
   };
 
   auto data = makeRowVector(
@@ -872,13 +871,12 @@ TEST_F(CudfFilterProjectTest, extractGroupByOrderBy) {
     orderByKeys.push_back(key + " ASC NULLS LAST");
   }
 
-  auto plan =
-      PlanBuilder()
-          .values(vectors)
-          .project(projections)
-          .singleAggregation(groupingKeys, {"count(1) AS events"})
-          .orderBy(orderByKeys, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
 
   assertPlanMatchesVelox(plan);
 }
@@ -918,17 +916,14 @@ TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
       "date_trunc('year', event_ts) AS year"};
   const std::vector<std::string> groupingKeys{"year", "month", "day"};
   const std::vector<std::string> orderByKeys{
-      "year ASC NULLS LAST",
-      "month ASC NULLS LAST",
-      "day ASC NULLS LAST"};
+      "year ASC NULLS LAST", "month ASC NULLS LAST", "day ASC NULLS LAST"};
 
-  auto plan =
-      PlanBuilder()
-          .values(vectors)
-          .project(projections)
-          .singleAggregation(groupingKeys, {"count(1) AS events"})
-          .orderBy(orderByKeys, false)
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
 
   assertPlanMatchesVelox(plan);
 }
