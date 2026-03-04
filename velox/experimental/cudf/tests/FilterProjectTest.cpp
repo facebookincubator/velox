@@ -1200,4 +1200,105 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   EXPECT_EQ(tryCast, -214);
 }
 
+TEST_F(CudfFilterProjectTest, dateDiffDayDate) {
+  // Days since epoch: 2025-02-01=20120, 2025-02-10=20129, 2025-02-11=20130,
+  // 2025-01-01=20089, 2025-03-01=20148
+  auto dates = makeRowVector({
+      makeFlatVector<int32_t>({20120, 20129, 20089}, DATE()),
+      makeFlatVector<int32_t>({20130, 20129, 20148}, DATE()),
+  });
+  createDuckDbTable({dates});
+
+  auto plan = PlanBuilder()
+                  .values({dates})
+                  .project({"date_diff('day', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('day', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateDiffMonthDate) {
+  // 2019-02-28=17955, 2020-03-28=18349, 2023-06-15=19523, 2025-03-01=20148
+  auto dates = makeRowVector({
+      makeFlatVector<int32_t>({17955, 19523}, DATE()),
+      makeFlatVector<int32_t>({18349, 20148}, DATE()),
+  });
+  createDuckDbTable({dates});
+
+  auto plan = PlanBuilder()
+                  .values({dates})
+                  .project({"date_diff('month', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('month', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateDiffDayTimestamp) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738381800, 0), Timestamp(1739955900, 0)}),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738556100, 0), Timestamp(1739987400, 0)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan = PlanBuilder()
+                  .values({timestamps})
+                  .project({"date_diff('day', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('day', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateDiffSecondTimestamp) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(1740733200, 500000000)}),
+      makeFlatVector<Timestamp>({Timestamp(1740819600, 500000000)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan = PlanBuilder()
+                  .values({timestamps})
+                  .project({"date_diff('second', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('second', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtime) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738568700, 0), Timestamp(0, 0), Timestamp(1740718800, 0)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan = PlanBuilder()
+                  .values({timestamps})
+                  .project({"to_unixtime(c0) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT to_unixtime(c0) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtimeEpochDayPattern) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738568700, 0),
+           Timestamp(1739520600, 0),
+           Timestamp(1740555000, 0)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan =
+      PlanBuilder()
+          .values({timestamps})
+          .project(
+              {"cast(to_unixtime(c0) / 86400.0 as bigint) AS result"})
+          .planNode();
+
+  runTest(
+      plan,
+      "SELECT cast(to_unixtime(c0) / 86400.0 as bigint) AS result FROM tmp");
+}
+
 } // namespace
