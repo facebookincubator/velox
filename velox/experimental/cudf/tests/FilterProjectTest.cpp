@@ -25,6 +25,8 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
+#include <folly/ScopeGuard.h>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -430,6 +432,70 @@ class CudfFilterProjectTest : public OperatorTestBase {
         "SELECT 'standalone_string' AS str_literal, 42 AS int_literal, c2 = 'comparison_string' AS bool_result FROM tmp");
   }
 
+  void assertFilterIds(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<int32_t>& expectedIds) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .filter(filter)
+                    .project({"event_id"})
+                    .planNode();
+    auto expected = makeRowVector({makeFlatVector<int32_t>(expectedIds)});
+    assertQuery(plan, expected);
+  }
+
+  int32_t toDateDays(const std::string& dateStr) const {
+    return DATE()->toDays(dateStr);
+  }
+
+  RowVectorPtr runFilterPlan(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .filter(filter)
+                    .project(projections)
+                    .planNode();
+    return AssertQueryBuilder(plan).copyResults(pool());
+  }
+
+  void assertFilterMatchesVelox(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<std::string>& projections = {"event_id"}) {
+    auto cudfResult = runFilterPlan(input, filter, projections);
+
+    cudf_velox::unregisterCudf();
+    SCOPE_EXIT {
+      cudf_velox::registerCudf();
+    };
+    auto veloxResult = runFilterPlan(input, filter, projections);
+    facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
+  }
+
+  RowVectorPtr runPlan(const core::PlanNodePtr& plan) {
+    return AssertQueryBuilder(plan).copyResults(pool());
+  }
+
+  void assertPlanMatchesVelox(const core::PlanNodePtr& plan) {
+    auto cudfResult = runPlan(plan);
+    cudf_velox::unregisterCudf();
+    SCOPE_EXIT {
+      cudf_velox::registerCudf();
+    };
+    auto veloxResult = runPlan(plan);
+    facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
+  }
+
+  void assertProjectMatchesVelox(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder().values(input).project(projections).planNode();
+    assertPlanMatchesVelox(plan);
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -447,6 +513,33 @@ class CudfFilterProjectTest : public OperatorTestBase {
       vectors.push_back(vector);
     }
     return vectors;
+  }
+
+  std::vector<RowVectorPtr> makeTimestampExtractVectors() {
+    std::vector<std::optional<Timestamp>> timestamps = {
+        Timestamp(1609459199, 0), // 2020-12-31 23:59:59
+        Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+        Timestamp(1609718400, 0), // 2021-01-04 00:00:00
+        Timestamp(1709183167, 0), // 2024-02-29 05:06:07
+        Timestamp(1736942461, 123000000), // 2025-01-15 12:01:01.123
+        Timestamp(1738367999, 999000000), // 2025-01-31 23:59:59.999
+        std::nullopt};
+
+    std::vector<std::optional<int32_t>> dates = {
+        toDateDays("2020-12-31"),
+        toDateDays("2021-01-01"),
+        toDateDays("2021-01-04"),
+        toDateDays("2024-02-29"),
+        toDateDays("2025-01-15"),
+        toDateDays("2025-01-31"),
+        std::nullopt};
+
+    auto data = makeRowVector(
+        {"event_id", "event_ts", "event_date"},
+        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+         makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
+         makeNullableFlatVector<int32_t>(dates, DATE())});
+    return {data};
   }
 
   folly::Random::DefaultGenerator rng_;
@@ -537,6 +630,302 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
 
   createDuckDbTable(vectors);
   testYearFunction(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, timestampLiteralFilter) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .filter(
+              "event_ts >= TIMESTAMP '2025-01-01 00:00:00' AND event_ts < TIMESTAMP '2025-02-01 00:00:00'")
+          .project({"event_id"})
+          .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>({2, 3, 4})});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.filter);
+    assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
+  std::vector<int32_t> dates = {
+      toDateDays("2024-12-31"),
+      toDateDays("2025-01-01"),
+      toDateDays("2025-01-15"),
+      toDateDays("2025-01-31"),
+      toDateDays("2025-02-01"),
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_date"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<int32_t>(dates, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_date = DATE '2025-01-01'", {2}},
+      {"event_date <> DATE '2025-01-01'", {1, 3, 4, 5}},
+      {"event_date < DATE '2025-01-01'", {1}},
+      {"event_date <= DATE '2025-01-01'", {1, 2}},
+      {"event_date > DATE '2025-01-31'", {5}},
+      {"event_date >= DATE '2025-01-31'", {4, 5}},
+      {"event_date >= DATE '2025-01-01' AND event_date < DATE '2025-02-01'",
+       {2, 3, 4}}};
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.filter);
+    assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, timestampBetweenAndNullSemantics) {
+  std::vector<std::optional<Timestamp>> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      std::nullopt,
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      std::nullopt,
+      Timestamp(1738367999, 0) // 2025-01-31 23:59:59
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> filters{
+      "event_ts BETWEEN TIMESTAMP '2025-01-01 00:00:00' AND TIMESTAMP '2025-01-31 23:59:59'",
+      "event_ts NOT BETWEEN TIMESTAMP '2025-01-01 00:00:00' AND TIMESTAMP '2025-01-31 23:59:59'",
+      "event_ts IS NULL",
+      "event_ts IS NOT NULL",
+      "event_ts < TIMESTAMP '2025-01-01 00:00:00'",
+      "event_ts >= TIMESTAMP '2025-01-15 12:00:00'"};
+
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox(vectors, filter);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateBetweenAndNullSemantics) {
+  std::vector<std::optional<int32_t>> dates = {
+      toDateDays("2024-12-31"),
+      std::nullopt,
+      toDateDays("2025-01-01"),
+      toDateDays("2025-01-15"),
+      std::nullopt,
+      toDateDays("2025-01-31"),
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_date"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<int32_t>(dates, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> filters{
+      "event_date BETWEEN DATE '2025-01-01' AND DATE '2025-01-31'",
+      "event_date NOT BETWEEN DATE '2025-01-01' AND DATE '2025-01-31'",
+      "event_date IS NULL",
+      "event_date IS NOT NULL",
+      "event_date < DATE '2025-01-01'",
+      "event_date >= DATE '2025-01-15'"};
+
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox(vectors, filter);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_ts) AS year",
+      "quarter(event_ts) AS quarter",
+      "month(event_ts) AS month",
+      "week(event_ts) AS week",
+      "week_of_year(event_ts) AS week_of_year",
+      "day(event_ts) AS day",
+      "day_of_week(event_ts) AS day_of_week",
+      "dow(event_ts) AS dow",
+      "day_of_year(event_ts) AS day_of_year",
+      "doy(event_ts) AS doy",
+      "year_of_week(event_ts) AS year_of_week",
+      "yow(event_ts) AS yow",
+      "hour(event_ts) AS hour",
+      "minute(event_ts) AS minute",
+      "second(event_ts) AS second",
+      "millisecond(event_ts) AS millisecond"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, extractDateComponents) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_date) AS year",
+      "quarter(event_date) AS quarter",
+      "month(event_date) AS month",
+      "week(event_date) AS week",
+      "week_of_year(event_date) AS week_of_year",
+      "day(event_date) AS day",
+      "day_of_week(event_date) AS day_of_week",
+      "dow(event_date) AS dow",
+      "day_of_year(event_date) AS day_of_year",
+      "doy(event_date) AS doy",
+      "year_of_week(event_date) AS year_of_week",
+      "yow(event_date) AS yow",
+      "hour(event_date) AS hour",
+      "minute(event_date) AS minute",
+      "second(event_date) AS second",
+      "millisecond(event_date) AS millisecond"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, extractGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_ts) AS year",
+      "quarter(event_ts) AS quarter",
+      "month(event_ts) AS month",
+      "week(event_ts) AS week",
+      "day(event_ts) AS day",
+      "day_of_week(event_ts) AS dow",
+      "day_of_year(event_ts) AS doy",
+      "year_of_week(event_ts) AS yow",
+      "hour(event_ts) AS hour",
+      "minute(event_ts) AS minute",
+      "second(event_ts) AS second",
+      "millisecond(event_ts) AS millisecond"};
+
+  const std::vector<std::string> groupingKeys{
+      "year",
+      "quarter",
+      "month",
+      "week",
+      "day",
+      "dow",
+      "doy",
+      "yow",
+      "hour",
+      "minute",
+      "second",
+      "millisecond"};
+
+  std::vector<std::string> orderByKeys;
+  orderByKeys.reserve(groupingKeys.size());
+  for (const auto& key : groupingKeys) {
+    orderByKeys.push_back(key + " ASC NULLS LAST");
+  }
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('second', event_ts) AS second",
+      "date_trunc('minute', event_ts) AS minute",
+      "date_trunc('hour', event_ts) AS hour",
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('week', event_ts) AS week",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('quarter', event_ts) AS quarter",
+      "date_trunc('year', event_ts) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncDateUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_date) AS day",
+      "date_trunc('week', event_date) AS week",
+      "date_trunc('month', event_date) AS month",
+      "date_trunc('quarter', event_date) AS quarter",
+      "date_trunc('year', event_date) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('year', event_ts) AS year"};
+  const std::vector<std::string> groupingKeys{"year", "month", "day"};
+  const std::vector<std::string> orderByKeys{
+      "year ASC NULLS LAST", "month ASC NULLS LAST", "day ASC NULLS LAST"};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
 }
 
 // The result mismatches.

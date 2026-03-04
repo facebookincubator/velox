@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/type/Timestamp.h"
 
 #include <cmath>
 
@@ -206,6 +207,49 @@ TEST_F(AggregationTest, global) {
       "SELECT sum(c1), sum(c2), sum(c4), sum(c5), "
       "min(c1), min(c2), min(c3), min(c4), min(c5), "
       "max(c1), max(c2), max(c3), max(c4), max(c5) FROM tmp");
+}
+
+TEST_F(AggregationTest, minMaxTimestampGlobal) {
+  std::vector<std::optional<Timestamp>> timestamps = {
+      Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+      Timestamp(1609459200, 500000000), // 2021-01-01 00:00:00.500
+      Timestamp(1609545600, 0), // 2021-01-02 00:00:00
+      std::nullopt,
+      Timestamp(1609459199, 900000000) // 2020-12-31 23:59:59.900
+  };
+
+  auto data = makeRowVector(
+      {makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"min(c0)", "max(c0)"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT min(c0), max(c0) FROM tmp");
+}
+
+TEST_F(AggregationTest, minMaxTimestampGroupBy) {
+  std::vector<std::optional<Timestamp>> timestamps = {
+      Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+      std::nullopt,
+      Timestamp(1609545600, 0), // 2021-01-02 00:00:00
+      Timestamp(1609459199, 0), // 2020-12-31 23:59:59
+      Timestamp(1609632000, 0) // 2021-01-03 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 2, 2, 2}),
+       makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"min(c1)", "max(c1)"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT c0, min(c1), max(c1) FROM tmp GROUP BY c0");
 }
 
 TEST_F(AggregationTest, singleBigintKey) {

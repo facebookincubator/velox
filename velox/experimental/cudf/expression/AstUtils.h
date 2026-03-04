@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/expression/ConstantExpr.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -23,6 +24,7 @@
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -79,7 +81,12 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
-  if constexpr (cudf::is_fixed_width<T>()) {
+  if constexpr (std::is_same_v<T, Timestamp>) {
+    using CudfTimestampType = cudf::timestamp_ns;
+    auto nanos = isNull ? 0 : value.toNanos();
+    return std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+        CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+  } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       VELOX_FAIL("Decimal not supported");
       /* TODO: enable after rewriting using binary ops

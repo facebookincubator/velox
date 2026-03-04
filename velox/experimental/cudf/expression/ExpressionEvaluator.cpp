@@ -36,12 +36,17 @@
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
 #include <cudf/strings/contains.hpp>
+#include <cudf/strings/convert/convert_datetime.hpp>
+#include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
+
+#include <cctype>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -137,6 +142,69 @@ static bool matchCallAgainstSignatures(
     return true;
   }
   return false;
+}
+
+bool endsWith(const std::string& value, const std::string& suffix) {
+  return value.size() >= suffix.size() &&
+      value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string normalizeDateTruncUnit(std::string unit) {
+  if (unit.size() >= 2 && unit.front() == '\'' && unit.back() == '\'') {
+    unit = unit.substr(1, unit.size() - 2);
+  }
+  for (auto& ch : unit) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return unit;
+}
+
+enum class DateTruncUnit {
+  kSecond,
+  kMinute,
+  kHour,
+  kDay,
+  kWeek,
+  kMonth,
+  kQuarter,
+  kYear
+};
+
+DateTruncUnit
+parseDateTruncUnit(const std::string& unit, bool isTimestamp, bool isDate) {
+  if (unit == "second") {
+    VELOX_CHECK(isTimestamp, "date_trunc second requires timestamp input");
+    return DateTruncUnit::kSecond;
+  }
+  if (unit == "minute") {
+    VELOX_CHECK(isTimestamp, "date_trunc minute requires timestamp input");
+    return DateTruncUnit::kMinute;
+  }
+  if (unit == "hour") {
+    VELOX_CHECK(isTimestamp, "date_trunc hour requires timestamp input");
+    return DateTruncUnit::kHour;
+  }
+  if (unit == "day") {
+    return DateTruncUnit::kDay;
+  }
+  if (unit == "week") {
+    return DateTruncUnit::kWeek;
+  }
+  if (unit == "month") {
+    return DateTruncUnit::kMonth;
+  }
+  if (unit == "quarter") {
+    return DateTruncUnit::kQuarter;
+  }
+  if (unit == "year") {
+    return DateTruncUnit::kYear;
+  }
+  VELOX_CHECK(
+      false,
+      "date_trunc does not support unit '{}' for {} input",
+      unit,
+      isTimestamp ? "timestamp" : (isDate ? "date" : "unknown"));
+  return DateTruncUnit::kDay;
 }
 
 } // namespace
@@ -348,6 +416,209 @@ class BinaryFunction : public CudfFunction {
   const cudf::data_type type_;
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
+};
+
+class LogicalFunction : public CudfFunction {
+ public:
+  LogicalFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::binary_operator op)
+      : op_(op) {
+    VELOX_CHECK_GE(
+        expr->inputs().size(), 2, "Logical function expects at least 2 inputs");
+    literals_.reserve(expr->inputs().size());
+    for (const auto& input : expr->inputs()) {
+      auto constExpr =
+          std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input);
+      if (constExpr) {
+        literals_.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createCudfScalar,
+            constExpr->value()->typeKind(),
+            constExpr->value()));
+      } else {
+        literals_.push_back(nullptr);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    size_t rowCount = 0;
+    if (!inputColumns.empty()) {
+      rowCount = asView(inputColumns[0]).size();
+    }
+    if (rowCount == 0 && inputColumns.empty()) {
+      rowCount = 1;
+    }
+
+    std::vector<std::unique_ptr<cudf::column>> literalColumns;
+    literalColumns.reserve(literals_.size());
+    std::vector<cudf::column_view> operands;
+    operands.reserve(literals_.size());
+
+    size_t columnIndex = 0;
+    for (const auto& literal : literals_) {
+      if (literal) {
+        auto column = cudf::make_column_from_scalar(*literal, rowCount, stream);
+        operands.push_back(column->view());
+        literalColumns.push_back(std::move(column));
+      } else {
+        VELOX_CHECK_LT(columnIndex, inputColumns.size());
+        operands.push_back(asView(inputColumns[columnIndex++]));
+      }
+    }
+
+    VELOX_CHECK(!operands.empty());
+    if (operands.size() == 1) {
+      if (!literalColumns.empty()) {
+        return std::move(literalColumns[0]);
+      }
+      return operands[0];
+    }
+
+    auto result = cudf::binary_operation(
+        operands[0], operands[1], op_, kBoolType, stream, mr);
+    for (size_t i = 2; i < operands.size(); ++i) {
+      result = cudf::binary_operation(
+          result->view(), operands[i], op_, kBoolType, stream, mr);
+    }
+    return result;
+  }
+
+ private:
+  static constexpr cudf::data_type kBoolType{cudf::type_id::BOOL8};
+  const cudf::binary_operator op_;
+  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+};
+
+class NotFunction : public CudfFunction {
+ public:
+  explicit NotFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "not expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "not expects 1 input");
+    return cudf::unary_operation(
+        asView(inputColumns[0]), cudf::unary_operator::NOT, stream, mr);
+  }
+};
+
+class IsNullFunction : public CudfFunction {
+ public:
+  explicit IsNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
+    return cudf::is_null(asView(inputColumns[0]), stream, mr);
+  }
+};
+
+class IsNotNullFunction : public CudfFunction {
+ public:
+  explicit IsNotNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "isnotnull expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
+    return cudf::is_valid(asView(inputColumns[0]), stream, mr);
+  }
+};
+
+class BetweenFunction : public CudfFunction {
+ public:
+  BetweenFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    // must have exactly three inputs: value, min, max
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 3, "Between function expects exactly 3 inputs");
+    // value must not be a literal
+    auto constExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NULL(
+        constExpr, "Between function with literal input is not supported");
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[1])) {
+      // min is a literal
+      auto constValue = constExpr->value();
+      minLiteral_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[2])) {
+      // max is a literal
+      auto constValue = constExpr->value();
+      maxLiteral_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          createCudfScalar, constValue->typeKind(), constValue);
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // return (value >= min) && (value <= max)
+    std::unique_ptr<cudf::column> geResultColumn, leResultColumn;
+    if (minLiteral_) {
+      geResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          *minLiteral_,
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr);
+    } else {
+      geResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[1]),
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr);
+    }
+    if (maxLiteral_) {
+      leResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          *maxLiteral_,
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr);
+    } else {
+      leResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[2]),
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr);
+    }
+    return cudf::binary_operation(
+        geResultColumn->view(),
+        leResultColumn->view(),
+        cudf::binary_operator::LOGICAL_AND,
+        kBoolType,
+        stream,
+        mr);
+  }
+
+ private:
+  static constexpr cudf::data_type kBoolType{cudf::type_id::BOOL8};
+  std::unique_ptr<cudf::scalar> minLiteral_;
+  std::unique_ptr<cudf::scalar> maxLiteral_;
 };
 
 class SwitchFunction : public CudfFunction {
@@ -575,11 +846,14 @@ class HashFunction : public CudfFunction {
   uint32_t seedValue_;
 };
 
-class YearFunction : public CudfFunction {
+class ExtractComponentFunction : public CudfFunction {
  public:
-  explicit YearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  ExtractComponentFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::datetime::datetime_component component)
+      : component_(component) {
     VELOX_CHECK_EQ(
-        expr->inputs().size(), 1, "year expects exactly 1 input column");
+        expr->inputs().size(), 1, "extract expects exactly 1 input column");
   }
 
   ColumnOrView eval(
@@ -588,8 +862,275 @@ class YearFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::datetime::extract_datetime_component(
-        inputCol, cudf::datetime::datetime_component::YEAR, stream, mr);
+        inputCol, component_, stream, mr);
   }
+
+ private:
+  cudf::datetime::datetime_component component_;
+};
+
+class QuarterFunction : public CudfFunction {
+ public:
+  explicit QuarterFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "quarter expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::datetime::extract_quarter(inputCol, stream, mr);
+  }
+};
+
+class DayOfYearFunction : public CudfFunction {
+ public:
+  explicit DayOfYearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "day_of_year expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::datetime::day_of_year(inputCol, stream, mr);
+  }
+};
+
+class WeekFunction : public CudfFunction {
+ public:
+  explicit WeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "week expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto weekStrings = cudf::strings::from_timestamps(
+        inputCol, "%V", cudf::strings_column_view{}, stream, mr);
+    return cudf::strings::to_integers(
+        cudf::strings_column_view(weekStrings->view()),
+        cudf::data_type(cudf::type_id::INT32),
+        stream,
+        mr);
+  }
+};
+
+class YearOfWeekFunction : public CudfFunction {
+ public:
+  explicit YearOfWeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(),
+        1,
+        "year_of_week expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto yearStrings = cudf::strings::from_timestamps(
+        inputCol, "%G", cudf::strings_column_view{}, stream, mr);
+    return cudf::strings::to_integers(
+        cudf::strings_column_view(yearStrings->view()),
+        cudf::data_type(cudf::type_id::INT32),
+        stream,
+        mr);
+  }
+};
+
+class DateTruncFunction : public CudfFunction {
+ public:
+  explicit DateTruncFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "date_trunc expects exactly 2 inputs");
+    auto unitExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(unitExpr, "date_trunc unit must be a constant");
+    auto inputType = expr->inputs()[1]->type();
+    isTimestamp_ = inputType->isTimestamp();
+    isDate_ = inputType->isDate();
+    VELOX_CHECK(
+        isTimestamp_ || isDate_,
+        "date_trunc only supports date or timestamp inputs");
+    unit_ = parseDateTruncUnit(
+        normalizeDateTruncUnit(unitExpr->value()->toString(0)),
+        isTimestamp_,
+        isDate_);
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto outputType = inputCol.type();
+    auto dayType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
+    auto intType = cudf::data_type(cudf::type_id::INT32);
+    auto durationDayType = cudf::data_type(cudf::type_id::DURATION_DAYS);
+
+    auto castToDay = [&](cudf::column_view col) {
+      return cudf::cast(col, dayType, stream, mr);
+    };
+    auto castToInt32 = [&](cudf::column_view col) {
+      return cudf::cast(col, intType, stream, mr);
+    };
+    auto castToDurationDays = [&](cudf::column_view col) {
+      return cudf::cast(col, durationDayType, stream, mr);
+    };
+    auto castDaysToOutput =
+        [&](std::unique_ptr<cudf::column> daysCol) -> ColumnOrView {
+      if (daysCol->type() == outputType) {
+        return daysCol;
+      }
+      return cudf::cast(daysCol->view(), outputType, stream, mr);
+    };
+
+    auto makeScalar = [&](int32_t value) {
+      return cudf::numeric_scalar<int32_t>(value, true, stream, mr);
+    };
+
+    switch (unit_) {
+      case DateTruncUnit::kSecond:
+        return cudf::datetime::floor_datetimes(
+            inputCol, cudf::datetime::rounding_frequency::SECOND, stream, mr);
+      case DateTruncUnit::kMinute:
+        return cudf::datetime::floor_datetimes(
+            inputCol, cudf::datetime::rounding_frequency::MINUTE, stream, mr);
+      case DateTruncUnit::kHour:
+        return cudf::datetime::floor_datetimes(
+            inputCol, cudf::datetime::rounding_frequency::HOUR, stream, mr);
+      case DateTruncUnit::kDay: {
+        auto dayCol = castToDay(inputCol);
+        return castDaysToOutput(std::move(dayCol));
+      }
+      case DateTruncUnit::kWeek: {
+        auto dayCol = castToDay(inputCol);
+        auto dowCol = cudf::datetime::extract_datetime_component(
+            dayCol->view(),
+            cudf::datetime::datetime_component::WEEKDAY,
+            stream,
+            mr);
+        auto dowInt = castToInt32(dowCol->view());
+        auto oneScalar = makeScalar(1);
+        auto offset = cudf::binary_operation(
+            dowInt->view(),
+            oneScalar,
+            cudf::binary_operator::SUB,
+            intType,
+            stream,
+            mr);
+        auto offsetDur = castToDurationDays(offset->view());
+        auto weekStartDay = cudf::binary_operation(
+            dayCol->view(),
+            offsetDur->view(),
+            cudf::binary_operator::SUB,
+            dayType,
+            stream,
+            mr);
+        return castDaysToOutput(std::move(weekStartDay));
+      }
+      case DateTruncUnit::kMonth:
+      case DateTruncUnit::kQuarter:
+      case DateTruncUnit::kYear: {
+        auto dayCol = castToDay(inputCol);
+        auto dayOfMonth = cudf::datetime::extract_datetime_component(
+            dayCol->view(),
+            cudf::datetime::datetime_component::DAY,
+            stream,
+            mr);
+        auto dayOfMonthInt = castToInt32(dayOfMonth->view());
+        auto oneScalar = makeScalar(1);
+        auto dayOffset = cudf::binary_operation(
+            dayOfMonthInt->view(),
+            oneScalar,
+            cudf::binary_operator::SUB,
+            intType,
+            stream,
+            mr);
+        auto dayOffsetDur = castToDurationDays(dayOffset->view());
+        auto monthStartDay = cudf::binary_operation(
+            dayCol->view(),
+            dayOffsetDur->view(),
+            cudf::binary_operator::SUB,
+            dayType,
+            stream,
+            mr);
+
+        if (unit_ == DateTruncUnit::kMonth) {
+          return castDaysToOutput(std::move(monthStartDay));
+        }
+
+        auto monthCol = cudf::datetime::extract_datetime_component(
+            dayCol->view(),
+            cudf::datetime::datetime_component::MONTH,
+            stream,
+            mr);
+        auto monthInt = castToInt32(monthCol->view());
+        auto monthIndex = cudf::binary_operation(
+            monthInt->view(),
+            oneScalar,
+            cudf::binary_operator::SUB,
+            intType,
+            stream,
+            mr);
+
+        std::unique_ptr<cudf::column> monthsToSubtract;
+        if (unit_ == DateTruncUnit::kYear) {
+          monthsToSubtract = std::move(monthIndex);
+        } else {
+          auto threeScalar = makeScalar(3);
+          auto quarterIndex = cudf::binary_operation(
+              monthIndex->view(),
+              threeScalar,
+              cudf::binary_operator::FLOOR_DIV,
+              intType,
+              stream,
+              mr);
+          auto quarterStart = cudf::binary_operation(
+              quarterIndex->view(),
+              threeScalar,
+              cudf::binary_operator::MUL,
+              intType,
+              stream,
+              mr);
+          monthsToSubtract = cudf::binary_operation(
+              monthIndex->view(),
+              quarterStart->view(),
+              cudf::binary_operator::SUB,
+              intType,
+              stream,
+              mr);
+        }
+
+        auto negOneScalar = makeScalar(-1);
+        auto negMonths = cudf::binary_operation(
+            monthsToSubtract->view(),
+            negOneScalar,
+            cudf::binary_operator::MUL,
+            intType,
+            stream,
+            mr);
+        auto truncated = cudf::datetime::add_calendrical_months(
+            monthStartDay->view(), negMonths->view(), stream, mr);
+        return castDaysToOutput(std::move(truncated));
+      }
+    }
+    VELOX_UNREACHABLE();
+  }
+
+ private:
+  DateTruncUnit unit_;
+  bool isTimestamp_{false};
+  bool isDate_{false};
 };
 
 class LengthFunction : public CudfFunction {
@@ -847,6 +1388,67 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("T")
            .build()});
 
+
+  registerCudfFunction(
+      "and",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_AND);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+
+  registerCudfFunction(
+      "or",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<LogicalFunction>(
+            expr, cudf::binary_operator::LOGICAL_OR);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+
+  registerCudfFunction(
+      "not",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<NotFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+
+  registerCudfFunction(
+      "is_null",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
+
+  registerCudfFunction(
+      "isnotnull",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNotNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
   registerCudfFunction(
       prefix + "hash_with_seed",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -915,19 +1517,107 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .build()});
 
+  const std::vector<exec::FunctionSignaturePtr> timestampDateIntegerSignatures{
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("timestamp")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("date")
+          .build()};
+
   registerCudfFunction(
       prefix + "year",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<YearFunction>(expr);
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::YEAR);
       },
-      {FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("timestamp")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("date")
-           .build()});
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "month",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::MONTH);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "day",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::DAY);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "dow", prefix + "day_of_week"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::WEEKDAY);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "doy", prefix + "day_of_year"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DayOfYearFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "week", prefix + "week_of_year"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<WeekFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "quarter",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<QuarterFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "yow", prefix + "year_of_week"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<YearOfWeekFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "hour",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::HOUR);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "minute",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::MINUTE);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "second",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::SECOND);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "millisecond",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ExtractComponentFunction>(
+            expr, cudf::datetime::datetime_component::MILLISECOND);
+      },
+      timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "length",
@@ -968,34 +1658,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("boolean")
            .argumentType("varchar")
            .constantArgumentType("varchar")
-           .build()});
-
-  // Our cudf binary ops can take all numeric types but instead of listing them
-  // all, we're testing if input types can be casted to double. Coersion will
-  // pass because all numerics can be casted to double.
-  // TODO (dm): This could break for decimal
-  registerCudfFunctions(
-      {prefix + "greaterthan", prefix + "gt"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<BinaryFunction>(
-            expr, cudf::binary_operator::GREATER);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("boolean")
-           .argumentType("double")
-           .argumentType("double")
-           .build()});
-
-  registerCudfFunction(
-      prefix + "divide",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<BinaryFunction>(
-            expr, cudf::binary_operator::DIV);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("double")
-           .argumentType("double")
-           .argumentType("double")
            .build()});
 
   // No prefix because switch and if are special form
@@ -1041,6 +1703,93 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("date")
            .argumentType("date")
            .constantArgumentType("integer")
+           .build()});
+
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "divide",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BinaryFunction>(
+            expr, cudf::binary_operator::DIV);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .argumentType("double")
+           .build()});
+
+  const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("double")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("timestamp")
+          .argumentType("timestamp")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("date")
+          .argumentType("date")
+          .build()};
+
+  auto registerComparisonOp = [&](const std::vector<std::string>& aliases,
+                                  cudf::binary_operator op) {
+    registerCudfFunctions(
+        aliases,
+        [op](
+            const std::string&,
+            const std::shared_ptr<velox::exec::Expr>& expr) {
+          return std::make_shared<BinaryFunction>(expr, op);
+        },
+        comparisonSignatures);
+  };
+
+  registerComparisonOp(
+      {prefix + "equalto", prefix + "eq"}, cudf::binary_operator::EQUAL);
+  registerComparisonOp(
+      {prefix + "notequalto", prefix + "neq"},
+      cudf::binary_operator::NOT_EQUAL);
+  registerComparisonOp(
+      {prefix + "greaterthanorequal", prefix + "gte"},
+      cudf::binary_operator::GREATER_EQUAL);
+  registerComparisonOp(
+      {prefix + "lessthanorequal", prefix + "lte"},
+      cudf::binary_operator::LESS_EQUAL);
+  registerComparisonOp(
+      {prefix + "greaterthan", prefix + "gt"}, cudf::binary_operator::GREATER);
+  registerComparisonOp(
+      {prefix + "lessthan", prefix + "lt"}, cudf::binary_operator::LESS);
+
+  registerCudfFunction(
+      "between",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<BetweenFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .argumentType("T")
+           .argumentType("T")
            .build()});
 
   return true;
@@ -1128,6 +1877,44 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     auto src = cudf::data_type(cudf_velox::veloxToCudfTypeId(srcType));
     auto dst = cudf::data_type(cudf_velox::veloxToCudfTypeId(dstType));
     return cudf::is_supported_cast(src, dst);
+  }
+
+  if (opName == "and" || opName == "or") {
+    if (expr->inputs().size() < 2) {
+      return false;
+    }
+    for (const auto& input : expr->inputs()) {
+      if (input->type()->kind() != TypeKind::BOOLEAN) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (endsWith(opName, "date_trunc")) {
+    if (expr->inputs().size() != 2) {
+      return false;
+    }
+    auto unitExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
+    if (!unitExpr || unitExpr->value()->isNullAt(0)) {
+      return false;
+    }
+    auto unit = normalizeDateTruncUnit(unitExpr->value()->toString(0));
+    const auto& inputType = expr->inputs()[1]->type();
+    const bool isTimestamp = inputType->isTimestamp();
+    const bool isDate = inputType->isDate();
+    if (!isTimestamp && !isDate) {
+      return false;
+    }
+    if (unit == "second" || unit == "minute" || unit == "hour") {
+      return isTimestamp;
+    }
+    if (unit == "day" || unit == "week" || unit == "month" ||
+        unit == "quarter" || unit == "year") {
+      return true;
+    }
+    return false;
   }
 
   auto& registry = getCudfFunctionRegistry();

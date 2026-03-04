@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstTypeUtils.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
@@ -224,6 +225,13 @@ bool isOpAndInputsSupported(
 bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
+
+  // Reject expressions with types not yet supported in AST/JIT.
+  // TODO: Implement TIMESTAMP and DECIMAL support in AST and JIT.
+  if (containsAstUnsupportedType(expr)) {
+    LOG(WARNING) << "Expression not supported by AST/JIT: " << expr->toString();
+    return false;
+  }
 
   const auto name =
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
