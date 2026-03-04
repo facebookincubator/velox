@@ -96,8 +96,12 @@ class CudfToVelox : public exec::Operator, public NvtxHelper {
  private:
   bool isPassthroughMode() const;
   std::optional<uint64_t> averageRowSize();
+  // Convert inputs_.front() to Velox once; slice it CPU-side per batch.
+  RowVectorPtr convertFrontToVelox(rmm::cuda_stream_view stream);
   std::optional<uint64_t> averageRowSize_;
   std::deque<CudfVectorPtr> inputs_;
+  RowVectorPtr veloxBuffer_;
+  vector_size_t veloxOffset_{0};
   bool finished_ = false;
 };
 
