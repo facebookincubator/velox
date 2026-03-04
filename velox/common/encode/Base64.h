@@ -21,8 +21,8 @@
 #include <array>
 #include <string>
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Status.h"
+#include "velox/common/encode/BaseEncoderUtils.h"
 
 namespace facebook::velox::encoding {
 
@@ -139,28 +139,10 @@ class Base64 {
   static size_t calculateMimeEncodedSize(size_t inputSize);
 
  private:
-  // Padding character used in encoding.
-  static const char kPadding = '=';
-
   // Soft Line breaks used in mime encoding as defined in RFC 2045, section 6.8:
   // https://www.rfc-editor.org/rfc/rfc2045#section-6.8
   inline static const std::string kNewline{"\r\n"};
   static const size_t kMaxLineLength = 76;
-
-  // Checks if the input Base64 string is padded.
-  static inline bool isPadded(const char* input, size_t inputSize) {
-    return (inputSize > 0 && input[inputSize - 1] == kPadding);
-  }
-
-  // Counts the number of padding characters in encoded input.
-  static inline size_t numPadding(const char* input, size_t inputSize) {
-    size_t numPadding{0};
-    while (inputSize > 0 && input[inputSize - 1] == kPadding) {
-      numPadding++;
-      inputSize--;
-    }
-    return numPadding;
-  }
 
   // Reverse lookup helper function to get the original index of a Base64
   // character.
@@ -188,9 +170,6 @@ class Base64 {
       char* outputBuffer,
       size_t outputSize,
       const ReverseIndex& reverseIndex);
-
-  VELOX_FRIEND_TEST(Base64Test, checksPadding);
-  VELOX_FRIEND_TEST(Base64Test, countsPaddingCorrectly);
 };
 
 } // namespace facebook::velox::encoding
