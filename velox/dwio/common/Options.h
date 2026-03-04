@@ -53,6 +53,7 @@ enum class FileFormat {
   ORC = 9,
   SST = 10, // rocksdb sst format
   FLUX = 11,
+  AVRO = 12,
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -74,6 +75,10 @@ enum class SerDeSeparator {
 
 class SerDeOptions {
  public:
+  // JSON-based Avro schema defined by the Avro specification.
+  inline static const std::string kAvroSchema{"avro.schema.literal"};
+  std::optional<std::string> avroSchema{std::nullopt};
+
   /// The following members control how data is separated in TEXT format files:
   ///
   /// - 'separators': An array of separator characters used to delimit columns
