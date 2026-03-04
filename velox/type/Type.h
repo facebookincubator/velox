@@ -2342,6 +2342,8 @@ class CustomTypeFactory {
   virtual AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const = 0;
 
+  /// Returns the Arrow format string used in Velox-Arrow conversion for this
+  /// custom type.
   virtual const char* getArrowFormatString() const {
     return nullptr;
   };

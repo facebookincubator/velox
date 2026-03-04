@@ -12,19 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_spark_types_test
-  SparkArrowBridgeArrayTest.cpp
-  SparkArrowBridgeSchemaTest.cpp
-  TimestampNTZCastTest.cpp
-  TimestampNTZTypeTest.cpp
-)
+add_executable(velox_spark_types_test TimestampNTZCastTest.cpp TimestampNTZTypeTest.cpp)
 
 target_link_libraries(
   velox_spark_types_test
   velox_spark_types
   velox_vector_test_lib
-  velox_arrow_bridge
-  arrow
   GTest::gtest_main
 )
