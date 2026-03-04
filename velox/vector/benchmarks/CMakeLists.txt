@@ -45,3 +45,13 @@ target_link_libraries(
   gflags::gflags
   glog::glog
 )
+
+add_executable(velox_vector_partitioned_vector_benchmark PartitionedVectorBenchmark.cpp)
+target_link_libraries(
+  velox_vector_partitioned_vector_benchmark
+  velox_dwio_common_test_utils
+  velox_vector
+  velox_vector_test_lib
+  Folly::folly
+  Folly::follybenchmark
+)
