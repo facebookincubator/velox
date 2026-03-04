@@ -173,9 +173,6 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
-  EXPECT_EQ(
-      readerOptions.fileMetadataCacheEnabled(),
-      hiveConfig->fileMetadataCacheEnabled(&sessionProperties));
 
   // Modify field delimiter and change the file format.
   clearDynamicParameters(FileFormat::TEXT);
@@ -266,7 +263,6 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kFooterEstimatedSize] = "1111";
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
-  customHiveConfigProps[hive::HiveConfig::kFileMetadataCacheEnabled] = "true";
   hiveConfig = std::make_shared<hive::HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(customHiveConfigProps)));
   performConfigure();
@@ -286,60 +282,12 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
-  EXPECT_TRUE(readerOptions.fileMetadataCacheEnabled());
   clearDynamicParameters(FileFormat::ORC);
   performConfigure();
   checkUseColumnNamesForColumnMapping();
   clearDynamicParameters(FileFormat::PARQUET);
   performConfigure();
   checkUseColumnNamesForColumnMapping();
-}
-
-TEST_F(HiveConnectorUtilTest, fileMetadataCacheEnabledSessionOverride) {
-  // Verify default is off.
-  dwio::common::ReaderOptions defaultOptions(pool_.get());
-  ASSERT_FALSE(defaultOptions.fileMetadataCacheEnabled());
-
-  for (bool enabled : {true, false}) {
-    SCOPED_TRACE(fmt::format("fileMetadataCacheEnabled={}", enabled));
-
-    config::ConfigBase sessionProperties(
-        std::unordered_map<std::string, std::string>{
-            {hive::HiveConfig::kFileMetadataCacheEnabledSession,
-             enabled ? "true" : "false"}});
-    auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        &sessionProperties,
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.HiveConnectorUtilTest",
-        "task.HiveConnectorUtilTest",
-        "planNodeId.HiveConnectorUtilTest",
-        0,
-        "");
-    auto hiveConfig =
-        std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
-            std::unordered_map<std::string, std::string>()));
-    dwio::common::ReaderOptions readerOptions(pool_.get());
-
-    auto tableHandle = std::make_shared<hive::HiveTableHandle>(
-        "testConnectorId",
-        "testTable",
-        false,
-        common::SubfieldFilters{},
-        nullptr,
-        nullptr,
-        std::vector<std::string>{},
-        std::unordered_map<std::string, std::string>{});
-    auto split = std::make_shared<hive::HiveConnectorSplit>(
-        "testConnectorId", "/tmp/", FileFormat::DWRF);
-    configureReaderOptions(
-        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
-    ASSERT_EQ(readerOptions.fileMetadataCacheEnabled(), enabled);
-  }
 }
 
 TEST_F(HiveConnectorUtilTest, cacheRetention) {

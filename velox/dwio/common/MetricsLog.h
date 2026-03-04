@@ -26,8 +26,7 @@ class MetricsLog {
   static constexpr std::string_view LIB_VERSION_STRING{"1.1"};
   static constexpr std::string_view WRITE_OPERATION{"WRITE"};
 
-  /// Identifies the type of metadata being read or logged for metrics purposes.
-  enum class Type {
+  enum class MetricsType {
     HEADER,
     FOOTER,
     FILE,
@@ -37,7 +36,6 @@ class MetricsLog {
     STREAM,
     STREAM_BUNDLE,
     GROUP,
-    GROUP_INDEX,
     BLOCK,
     TEST
   };
@@ -53,7 +51,7 @@ class MetricsLog {
       uint64_t footerSize,
       uint64_t readOffset,
       uint64_t readSize,
-      Type type,
+      MetricsType type,
       uint32_t numFileRead,
       uint32_t numStripeCache) const {}
 
@@ -126,17 +124,45 @@ class MetricsLog {
 
   virtual void logFileClose(const FileCloseMetrics& /* metrics */) const {}
 
-  static std::shared_ptr<const MetricsLog> voidLog();
+  static std::shared_ptr<const MetricsLog> voidLog() {
+    static const MetricsLog kInstance{{}};
+    return {std::shared_ptr<const MetricsLog>{}, &kInstance};
+  }
 
  protected:
   MetricsLog(const std::string& file) : file_{file} {}
 
-  static std::string getMetricTypeName(Type type);
+  static std::string getMetricTypeName(MetricsType type) {
+    switch (type) {
+      case MetricsType::HEADER:
+        return "HEADER";
+      case MetricsType::FOOTER:
+        return "FOOTER";
+      case MetricsType::FILE:
+        return "FILE";
+      case MetricsType::STRIPE:
+        return "STRIPE";
+      case MetricsType::STRIPE_INDEX:
+        return "STRIPE_INDEX";
+      case MetricsType::STRIPE_FOOTER:
+        return "STRIPE_FOOTER";
+      case MetricsType::STREAM:
+        return "STREAM";
+      case MetricsType::STREAM_BUNDLE:
+        return "STREAM_BUNDLE";
+      case MetricsType::GROUP:
+        return "GROUP";
+      case MetricsType::BLOCK:
+        return "BLOCK";
+      case MetricsType::TEST:
+        return "TEST";
+    }
+  }
 
   std::string file_;
 };
 
-using LogType = MetricsLog::Type;
+using LogType = MetricsLog::MetricsType;
 using MetricsLogPtr = std::shared_ptr<const MetricsLog>;
 
 class DwioMetricsLogFactory {
