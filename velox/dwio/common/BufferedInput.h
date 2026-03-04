@@ -39,7 +39,7 @@ class BufferedInput {
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt,
       folly::F14FastMap<std::string, std::string> fileReadOps = {},
-      bool cacheable = true)
+      bool cacheable = false)
       : BufferedInput(
             std::make_shared<ReadFileInputStream>(
                 std::move(readFile),
