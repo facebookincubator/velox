@@ -317,6 +317,18 @@ struct FromBase64Function {
   }
 };
 
+template <typename T>
+struct ToBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& input) {
+    result.resize(encoding::Base32::calculateEncodedSize(input.size()));
+    encoding::Base32::encode(input.data(), input.size(), result.data());
+  }
+};
+
 template <typename TExec>
 struct FromBase32Function {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);

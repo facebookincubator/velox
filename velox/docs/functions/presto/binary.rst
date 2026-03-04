@@ -49,6 +49,11 @@ Binary Functions
 
     Decodes ``string`` data from the base64 encoded representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_ into a varbinary.
 
+.. function:: from_base32(string) -> varbinary
+
+    Decodes a Base32-encoded ``string`` back into its original binary form using the `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet (A-Z, 2-7).
+    Supports both padded and unpadded input. Lowercase letters are not supported.
+
 .. function:: from_big_endian_32(varbinary) -> integer
 
     Decodes ``integer`` value from a 32-bit 2’s complement big endian ``binary``.
@@ -147,6 +152,10 @@ Binary Functions
 .. function:: to_base64url(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_.
+
+.. function:: to_base32(binary) -> varchar
+
+    Encodes ``binary`` into a base32 string representation using the `RFC 4648 <https://www.rfc-editor.org/rfc/rfc4648#section-6>`_ alphabet (A-Z, 2-7).
 
  .. function:: to_big_endian_32(integer) -> varbinary
 
