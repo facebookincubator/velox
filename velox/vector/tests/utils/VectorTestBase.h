@@ -857,9 +857,9 @@ class VectorTestBase {
 
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
  public:
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
-    stats_.emplace_back(name, value);
+    stats_.emplace_back(std::string(name), value);
   }
 
   const std::vector<std::pair<std::string, RuntimeCounter>>& stats() const {
