@@ -23,8 +23,6 @@ using Idx = ApproxPercentileIntermediateTypeChildIndex;
 
 namespace {
 
-constexpr const char* kApproxPercentile = "approx_percentile";
-
 /// Spark accuracy policy: accuracy is an int32 representing the reciprocal
 /// of epsilon (e.g., 10000 means epsilon = 1/10000).
 struct SparkAccuracyPolicy {
@@ -49,12 +47,12 @@ struct SparkAccuracyPolicy {
       const SelectivityVector& rows,
       int32_t& accuracy) {
     if (decodedAccuracy.isConstantMapping()) {
-      VELOX_USER_CHECK(!decodedAccuracy.isNullAt(0), "Accuracy cannot be null");
+      VELOX_USER_CHECK(!decodedAccuracy.isNullAt(0), "The accuracy must not be null.");
       checkAndSet(accuracy, decodedAccuracy.valueAt<int32_t>(0));
     } else {
       rows.applyToSelected([&](auto row) {
         VELOX_USER_CHECK(
-            !decodedAccuracy.isNullAt(row), "Accuracy cannot be null");
+            !decodedAccuracy.isNullAt(row), "The accuracy must not be null.");
         const auto currentAccuracy = decodedAccuracy.valueAt<int32_t>(row);
         if (accuracy == kDefaultAccuracy) {
           checkAndSet(accuracy, currentAccuracy);
@@ -76,8 +74,7 @@ struct SparkAccuracyPolicy {
     VELOX_USER_CHECK(
         inputAccuracy > 0 &&
             inputAccuracy <= std::numeric_limits<int32_t>::max(),
-        "Accuracy must be greater than 0 and less than or equal to "
-        "Int32.MaxValue, got {}",
+        "The accuracy must be between (0, 2147483647], got {}",
         inputAccuracy);
     accuracy = inputAccuracy;
   }
@@ -168,7 +165,7 @@ exec::AggregateRegistrationResult registerApproxPercentileAggregate(
     addSignatures(inputType, signatures);
   }
 
-  auto functionName = prefix + kApproxPercentile;
+  auto functionName = prefix + "approx_percentile";
   return exec::registerAggregateFunction(
       functionName,
       std::move(signatures),
