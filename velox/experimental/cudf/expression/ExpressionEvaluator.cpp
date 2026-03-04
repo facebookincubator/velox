@@ -478,6 +478,18 @@ class CoalesceFunction : public CudfFunction {
           numColumnsBeforeLiteral_ = i;
           break;
         }
+      } else if (input->distinctFields().empty() && !input->inputs().empty()) {
+        // Handle constant expressions that weren't folded (e.g., cast of
+        // literal).
+        if (auto innerConst =
+                std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+                    input->inputs()[0])) {
+          if (!innerConst->value()->isNullAt(0)) {
+            literalScalar_ = makeScalarFromConstantExpr(innerConst);
+            numColumnsBeforeLiteral_ = i;
+            break;
+          }
+        }
       }
     }
   }

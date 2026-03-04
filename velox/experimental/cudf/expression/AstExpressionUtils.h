@@ -454,13 +454,11 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto value = c->value();
     VELOX_CHECK(value->isConstantEncoding());
 
-    // Special case: VARCHAR literals cannot be handled by cudf::compute_column
-    // as the final output due to variable-width output limitation.
-    // However, if this is part of a larger expression tree (e.g., string
-    // comparison), then cudf can handle it fine since the final output won't be
-    // VARCHAR. We only need special handling when this literal will be the
-    // final output.
-    if (expr->type()->kind() == TypeKind::VARCHAR && expr == rootExpr) {
+    // TODO: There is a scalar stream synchronization bug that causes
+    // cudf::compute_column to produce spurious nulls for standalone
+    // literal expressions.  Work around it by materialising via
+    // make_column_from_scalar instead.
+    if (expr == rootExpr) {
       // convert to cudf scalar and store it
       createLiteral(value, scalars);
       // The scalar index is scalars.size() - 1 since we just added it
@@ -631,7 +629,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
       auto scalarIndex =
           std::stoi(ins_name.substr(5)); // "fill " is 5 characters
       auto newColumn = cudf::make_column_from_scalar(
-          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
+          *scalars[scalarIndex],
           inputColumnViews[dependent_column_index].size(),
           stream,
           get_output_mr());
