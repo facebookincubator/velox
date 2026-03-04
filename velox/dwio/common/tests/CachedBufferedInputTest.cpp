@@ -1020,6 +1020,23 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
   auto readFile = std::make_shared<InMemoryReadFile>(content);
 
   io::ReaderOptions readerOptions(pool_.get());
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "testFile");
+  StringIdLease groupId(ids, "testGroup");
+
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
   // Enqueue non-prefetch requests (with stream IDs).
   constexpr int32_t kNumRequests = 3;
   constexpr uint64_t kRequestSize = 500;
@@ -1058,5 +1075,4 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
 
   EXPECT_EQ(ioStatistics_->prefetch().sum(), kNumRequests * kRequestSize);
 }
-
 } // namespace

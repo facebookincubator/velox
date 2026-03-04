@@ -531,10 +531,10 @@ void CachedBufferedInput::readRegions(
             });
       }
     }
-    // Remove completed loads from the entire vector. This cleans up loads from
-    // previous cycles that have completed asynchronously.
+    // Remove the loads that were complete. There can be done loads if the same
+    // CachedBufferedInput has multiple cycles of enqueues and loads.
     std::vector<int32_t> doneIndices;
-    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
+    for (int32_t i = 0; i < startIndex; ++i) {
       if (coalescedLoads_[i]->state() != CoalescedLoad::State::kPlanned) {
         doneIndices.push_back(i);
       }
