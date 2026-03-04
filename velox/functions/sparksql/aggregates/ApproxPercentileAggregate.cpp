@@ -47,7 +47,8 @@ struct SparkAccuracyPolicy {
       const SelectivityVector& rows,
       int32_t& accuracy) {
     if (decodedAccuracy.isConstantMapping()) {
-      VELOX_USER_CHECK(!decodedAccuracy.isNullAt(0), "The accuracy must not be null.");
+      VELOX_USER_CHECK(
+          !decodedAccuracy.isNullAt(0), "The accuracy must not be null.");
       checkAndSet(accuracy, decodedAccuracy.valueAt<int32_t>(0));
     } else {
       rows.applyToSelected([&](auto row) {
