@@ -157,64 +157,33 @@ std::unique_ptr<cudf::table> toCudfTable(
 
 namespace {
 
-void setArrowSchemaFormat(ArrowSchema* schema, const char* format) {
-  if (!schema) {
-    return;
-  }
-  if (schema->format != nullptr) {
-    std::free(const_cast<char*>(schema->format));
-    schema->format = nullptr;
-  }
-  if (format != nullptr) {
-    const size_t size = std::strlen(format) + 1;
-    auto* buffer = static_cast<char*>(std::malloc(size));
-    VELOX_CHECK_NOT_NULL(buffer);
-    std::memcpy(buffer, format, size);
-    schema->format = buffer;
-  }
-}
-
-void applyExpectedArrowFormat(
-    ArrowSchema* schema,
-    const TypePtr& type) {
-  if (!schema || !schema->format) {
-    return;
-  }
+void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ROW: {
       if (schema->n_children != static_cast<int64_t>(type->size())) {
-        return;
+        break;
       }
       for (size_t i = 0; i < type->size(); ++i) {
-        applyExpectedArrowFormat(schema->children[i], type->childAt(i));
+        setArrowFormatBackToVarbinary(schema->children[i], type->childAt(i));
       }
-      return;
-    }
-    case TypeKind::ARRAY: {
-      if (schema->n_children < 1) {
-        return;
-      }
-      applyExpectedArrowFormat(schema->children[0], type->childAt(0));
-      return;
-    }
-    case TypeKind::MAP: {
-      if (schema->n_children < 1) {
-        return;
-      }
-      auto* entry = schema->children[0];
-      if (!entry || entry->n_children < 2) {
-        return;
-      }
-      applyExpectedArrowFormat(entry->children[0], type->childAt(0));
-      applyExpectedArrowFormat(entry->children[1], type->childAt(1));
-      return;
+      break;
     }
     case TypeKind::VARBINARY: {
-      setArrowSchemaFormat(schema, "z");
-      return;
+      // Replace any format string with "z" to indicate VARBINARY.
+      static constexpr const char* kVarbinaryArrowFormat = "z";
+      if (schema->format != nullptr) {
+        std::free(const_cast<char*>(schema->format));
+        schema->format = nullptr;
+      }
+      const size_t bufferLen = std::strlen(kVarbinaryArrowFormat) + 1;
+      auto* buffer = static_cast<char*>(std::malloc(bufferLen));
+      VELOX_CHECK_NOT_NULL(buffer);
+      std::memcpy(buffer, kVarbinaryArrowFormat, bufferLen);
+      schema->format = buffer;
+      break;
     }
     default:
-      return;
+      break;
   }
 }
 
@@ -244,13 +213,15 @@ RowVectorPtr toVeloxColumn(
   ArrowSchema schemaCopy = *arrowSchema;
   arrowSchema->release = nullptr;
 
-  // Override schema type recursively with outputType if provided.
-  // This is needed for some types like VARBINARY which are exported as
-  // STRING, because CUDF does not have a VARBINARY type, but which
-  // should be re-imported as VARBINARY.
+  // Override schema type recursively with outputType if provided. This is
+  // needed for some types like VARBINARY which are exported as STRING (the
+  // format is overridden to "z" when the exportVarbinaryAsString option is set
+  // to true in the exportToArrow() call) because CUDF does not have a VARBINARY
+  // type. This code implements the other side of the conversion, to change the
+  // format back to "z" so that the data re-imports as VARBINARY.
   // @TODO Add a proper VARBINARY type to CUDF.
   if (outputType) {
-    applyExpectedArrowFormat(&schemaCopy, *outputType);
+    setArrowFormatBackToVarbinary(&schemaCopy, *outputType);
   }
 
   auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
