@@ -270,6 +270,12 @@ DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="current_time">
+<span class="sig-name descname"><span class="pre">current_time</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#current_time" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the current time since midnight with the session timezoneReturns the current time since midnight with the session timezone, based on the query session start time.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="current_timezone">
 <span class="sig-name descname"><span class="pre">current_timezone</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#current_timezone" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the current session time zone as a varchar.</p>
@@ -829,6 +835,7 @@ list of supported timezones follow the definition <a class="reference external" 
 <li><a class="reference internal" href="#to_iso8601"><code class="docutils literal notranslate"><span class="pre">to_iso8601()</span></code></a></li>
 <li><a class="reference internal" href="#to_milliseconds"><code class="docutils literal notranslate"><span class="pre">to_milliseconds()</span></code></a></li>
 <li><a class="reference internal" href="#to_unixtime"><code class="docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a></li>
+<li><a class="reference internal" href="#current_time"><code class="docutils literal notranslate"><span class="pre">current_time()</span></code></a></li>
 <li><a class="reference internal" href="#current_timezone"><code class="docutils literal notranslate"><span class="pre">current_timezone()</span></code></a></li>
 <li><a class="reference internal" href="#current_timestamp"><code class="docutils literal notranslate"><span class="pre">current_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#now"><code class="docutils literal notranslate"><span class="pre">now()</span></code></a></li>
