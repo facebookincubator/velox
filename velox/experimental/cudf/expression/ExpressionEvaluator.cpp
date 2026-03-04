@@ -418,8 +418,6 @@ class BinaryFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> right_;
 };
 
-// Unary goes here
-
 class LogicalFunction : public CudfFunction {
  public:
   LogicalFunction(
@@ -1390,7 +1388,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("T")
            .build()});
 
-  // also in decimal branch
+
   registerCudfFunction(
       "and",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1403,7 +1401,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .build()});
 
-  // also in decimal branch
+
   registerCudfFunction(
       "or",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1416,7 +1414,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .build()});
 
-  // new, keep
+
   registerCudfFunction(
       "not",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1427,7 +1425,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .build()});
 
-  // new, keep
+
   registerCudfFunction(
       "is_null",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1439,7 +1437,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()});
 
-  // new, keep
+
   registerCudfFunction(
       "isnotnull",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1707,7 +1705,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .build()});
 
-  // new, keep
+
   registerCudfFunction(
       prefix + "date_trunc",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1724,8 +1722,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("date")
            .build()});
 
-  // @TODO Binary operators go here, including replacement for existing divide()
-
   registerCudfFunction(
       prefix + "divide",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1737,9 +1733,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("double")
            .argumentType("double")
            .build()});
-
-  // Comparison operators
-  // @TODO add decimal signature below
 
   const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
       FunctionSignatureBuilder()
@@ -1786,9 +1779,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerComparisonOp(
       {prefix + "lessthan", prefix + "lt"}, cudf::binary_operator::LESS);
 
-  // @TODO Unary operators go here
-
-  // new, replaces version in decimal branch
   registerCudfFunction(
       "between",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1801,10 +1791,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .argumentType("T")
            .build()});
-
-  // @TODO greatest goes here
-
-  // @TODO least goes here
 
   return true;
 }

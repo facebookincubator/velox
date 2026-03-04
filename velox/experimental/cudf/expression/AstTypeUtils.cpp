@@ -26,7 +26,6 @@ bool containsAstUnsupportedType(
   if (expr->type() && expr->type()->isTimestamp()) {
     return true;
   }
-  // isDecimal() check goes here
   for (const auto& input : expr->inputs()) {
     if (containsAstUnsupportedType(input)) {
       return true;

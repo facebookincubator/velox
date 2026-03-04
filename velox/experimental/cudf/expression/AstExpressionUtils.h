@@ -226,8 +226,8 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
-  // reject anything with TIMESTAMP for now
-  // @TODO implement TIMESTAMP in AST and JIT
+  // Reject expressions with types not yet supported in AST/JIT.
+  // TODO: Implement TIMESTAMP and DECIMAL support in AST and JIT.
   if (containsAstUnsupportedType(expr)) {
     LOG(WARNING) << "Expression not supported by AST/JIT: " << expr->toString();
     return false;
