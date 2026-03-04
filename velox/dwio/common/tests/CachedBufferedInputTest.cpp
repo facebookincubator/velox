@@ -663,9 +663,21 @@ TEST_P(CacheRegionTest, smallEntry) {
 
   cacheRegionWithApi(input, kOffset, kSize, content.data() + kOffset);
 
+  // First findCachedRegion after cacheRegion should count as a cache hit since
+  // cacheRegion clears the first-use flag (data was populated externally, not
+  // loaded on-demand).
+  EXPECT_EQ(ioStatistics_->ramHit().count(), 0);
   auto result = input.findCachedRegion(kOffset);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->size(), kSize);
+  EXPECT_EQ(ioStatistics_->ramHit().count(), 1);
+  EXPECT_EQ(ioStatistics_->ramHit().sum(), kSize);
+
+  // Second findCachedRegion is also a cache hit.
+  auto result2 = input.findCachedRegion(kOffset);
+  ASSERT_TRUE(result2.has_value());
+  EXPECT_EQ(ioStatistics_->ramHit().count(), 2);
+  EXPECT_EQ(ioStatistics_->ramHit().sum(), 2 * kSize);
 
   // Small entry should have exactly one contiguous range.
   const auto& ranges = result->ranges();
@@ -885,6 +897,10 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   ASSERT_FALSE(exclusivePin.empty());
   ASSERT_TRUE(exclusivePin.entry()->isExclusive());
 
+  // Verify latency counters are initially zero.
+  EXPECT_EQ(ioStatistics_->cacheWaitLatencyUs().count(), 0);
+  EXPECT_EQ(ioStatistics_->queryThreadIoLatencyUs().count(), 0);
+
   // Spawn a thread that calls findCachedRegion — it will block waiting for
   // the exclusive entry to become shared.
   std::atomic_bool findFinished{false};
@@ -908,6 +924,12 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
   // The findCachedRegion thread should now complete.
   findThread.join();
   ASSERT_TRUE(findFinished.load(std::memory_order_acquire));
+
+  // Verify the latency counters were incremented.
+  EXPECT_EQ(ioStatistics_->cacheWaitLatencyUs().count(), 1);
+  EXPECT_GT(ioStatistics_->cacheWaitLatencyUs().sum(), 0);
+  EXPECT_EQ(ioStatistics_->queryThreadIoLatencyUs().count(), 1);
+  EXPECT_GT(ioStatistics_->queryThreadIoLatencyUs().sum(), 0);
 
   // Verify the returned CachedRegion has correct data.
   ASSERT_TRUE(findResult.has_value());

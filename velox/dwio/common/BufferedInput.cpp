@@ -45,8 +45,7 @@ CachedRegion::CachedRegion(cache::CachePin pin) : pin_(std::move(pin)) {
       const uint64_t bytes =
           run.numPages() * memory::AllocationTraits::kPageSize;
       const uint64_t readSize = std::min(bytes, size_ - offset);
-      ranges_.push_back(
-          folly::Range<const char*>(run.data<const char>(), readSize));
+      ranges_.emplace_back(run.data<const char>(), readSize);
       offset += readSize;
     }
   }

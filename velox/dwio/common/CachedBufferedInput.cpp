@@ -649,6 +649,10 @@ void CachedBufferedInput::cacheRegion(
     VELOX_CHECK_EQ(copyBytes, length);
   }
 
+  // Clear the first-use flag since this entry is being populated externally
+  // (not loaded on-demand). The first findCachedRegion access should count
+  // as a cache hit.
+  entry->getAndClearFirstUseFlag();
   entry->setExclusiveToShared();
 }
 
@@ -669,7 +673,15 @@ std::optional<CachedRegion> CachedBufferedInput::findCachedRegion(
       return CachedRegion{std::move(*result)};
     }
     // Entry is exclusive — wait for it to become shared, then retry.
-    std::move(waitFuture).wait();
+    uint64_t waitUs{0};
+    {
+      MicrosecondTimer timer(&waitUs);
+      std::move(waitFuture)
+          .via(&folly::QueuedImmediateExecutor::instance())
+          .wait();
+    }
+    ioStatistics_->queryThreadIoLatencyUs().increment(waitUs);
+    ioStatistics_->cacheWaitLatencyUs().increment(waitUs);
   }
 }
 
