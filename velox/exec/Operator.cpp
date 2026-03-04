@@ -538,7 +538,7 @@ std::vector<column_index_t> calculateOutputChannels(
 }
 
 void OperatorStats::addRuntimeStat(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value) {
   addOperatorRuntimeStats(name, value, runtimeStats);
 }
