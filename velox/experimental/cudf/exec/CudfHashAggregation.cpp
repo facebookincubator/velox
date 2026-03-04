@@ -898,8 +898,8 @@ void CudfHashAggregation::initialize() {
       aggregationNode_->step(),
       outputType_,
       aggregationInput.constants);
-  streamingEnabled_ = !hasCompanionAggregates(aggregationNode_->aggregates()) &&
-      !isGlobal_;
+  streamingEnabled_ =
+      !hasCompanionAggregates(aggregationNode_->aggregates()) && !isGlobal_;
 
   // Make aggregators for intermediate step when streaming is enabled.
   // Distinct does not need any aggregators.
