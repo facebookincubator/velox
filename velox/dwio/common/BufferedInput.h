@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "folly/io/IOBuf.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/dwio/common/SeekableInputStream.h"
@@ -25,6 +27,37 @@
 DECLARE_bool(wsVRLoad);
 
 namespace facebook::velox::dwio::common {
+
+/// Provides read-only access to cached data without copying. Holds a
+/// shared-mode pin on the cache entry, keeping it alive while the caller
+/// accesses the data buffers.
+class CachedRegion {
+ public:
+  /// The pin must be non-empty and in shared (non-exclusive) mode.
+  explicit CachedRegion(cache::CachePin pin);
+
+  uint64_t size() const {
+    return size_;
+  }
+
+  /// Returns buffer ranges covering the cached data. For small entries the
+  /// result is a single contiguous range; for larger entries there may be
+  /// multiple non-contiguous ranges from the backing allocation.
+  const std::vector<folly::Range<const char*>>& ranges() const {
+    return ranges_;
+  }
+
+  /// Returns an IOBuf chain wrapping the cached data ranges without copying.
+  /// The returned IOBuf references memory owned by this CachedRegion, so
+  /// the caller must not outlive this object.
+  folly::IOBuf toIOBuf() const;
+
+ private:
+  cache::CachePin pin_;
+  // Cached data size in bytes.
+  uint64_t size_{0};
+  std::vector<folly::Range<const char*>> ranges_;
+};
 
 class BufferedInput {
  public:
@@ -151,6 +184,42 @@ class BufferedInput {
 
   virtual folly::Executor* executor() const {
     return nullptr;
+  }
+
+  /// Returns true if this BufferedInput has a backing cache (e.g.,
+  /// AsyncDataCache). When true, callers may skip their own caching of raw
+  /// bytes since the BufferedInput will handle caching.
+  virtual bool hasCache() const {
+    return false;
+  }
+
+  /// Offers pre-read data for a file region to the backing cache. Throws if
+  /// hasCache() is false. Override in subclasses with a backing cache.
+  virtual void cacheRegion(
+      uint64_t /*offset*/,
+      uint64_t /*length*/,
+      std::string_view /*data*/) {
+    VELOX_UNSUPPORTED("cacheRegion requires a backing cache");
+  }
+
+  /// Overload that copies from an IOBuf (possibly chained) into the cache
+  /// entry, avoiding the need to coalesce the IOBuf first. 'bufferOffset' is
+  /// the byte offset within the IOBuf chain where the region data starts.
+  /// Throws if hasCache() is false.
+  virtual void cacheRegion(
+      uint64_t /*offset*/,
+      uint64_t /*length*/,
+      const folly::IOBuf& /*buffer*/,
+      uint64_t /*bufferOffset*/) {
+    VELOX_UNSUPPORTED("cacheRegion requires a backing cache");
+  }
+
+  /// Finds a cached region at the given offset. Returns a CachedRegion holding
+  /// a shared-mode pin on the cache entry if found, or std::nullopt on cache
+  /// miss. Throws if hasCache() is false.
+  virtual std::optional<CachedRegion> findCachedRegion(
+      uint64_t /*offset*/) const {
+    VELOX_UNSUPPORTED("findCachedRegion requires a backing cache");
   }
 
   virtual uint64_t nextFetchSize() const;
