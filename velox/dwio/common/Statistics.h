@@ -574,10 +574,12 @@ struct ColumnMetrics {
 
   TypeKind typeKind;
   io::IoCounter decompressCPUTimeNanos;
+  io::IoCounter decodeCPUTimeNanos;
 
   /// Merges stats from another ColumnMetrics instance.
   void merge(const ColumnMetrics& other) {
     decompressCPUTimeNanos.merge(other.decompressCPUTimeNanos);
+    decodeCPUTimeNanos.merge(other.decodeCPUTimeNanos);
   }
 };
 
@@ -617,21 +619,36 @@ struct ColumnMetricsSet {
       std::unordered_map<std::string, RuntimeMetric>& result) const {
     auto statsLocked = map_.rlock();
     for (const auto& [nodeId, stats] : *statsLocked) {
-      const auto& counter = stats->decompressCPUTimeNanos;
-      if (counter.count() == 0) {
-        continue;
+      // Export decompression timing.
+      const auto& decompressCounter = stats->decompressCPUTimeNanos;
+      if (decompressCounter.count() > 0) {
+        result.emplace(
+            fmt::format(
+                "column_{}.{}.decompressCPUTimeNanos",
+                nodeId,
+                TypeKindName::toName(stats->typeKind)),
+            RuntimeMetric{
+                static_cast<int64_t>(decompressCounter.sum()),
+                static_cast<int64_t>(decompressCounter.count()),
+                static_cast<int64_t>(decompressCounter.min()),
+                static_cast<int64_t>(decompressCounter.max()),
+                RuntimeCounter::Unit::kNanos});
       }
-      result.emplace(
-          fmt::format(
-              "column.{}.{}.decompressCPUTimeNanos",
-              TypeKindName::toName(stats->typeKind),
-              nodeId),
-          RuntimeMetric{
-              static_cast<int64_t>(counter.sum()),
-              static_cast<int64_t>(counter.count()),
-              static_cast<int64_t>(counter.min()),
-              static_cast<int64_t>(counter.max()),
-              RuntimeCounter::Unit::kNanos});
+      // Export decode timing.
+      const auto& decodeCounter = stats->decodeCPUTimeNanos;
+      if (decodeCounter.count() > 0) {
+        result.emplace(
+            fmt::format(
+                "column_{}.{}.decodeCPUTimeNanos",
+                nodeId,
+                TypeKindName::toName(stats->typeKind)),
+            RuntimeMetric{
+                static_cast<int64_t>(decodeCounter.sum()),
+                static_cast<int64_t>(decodeCounter.count()),
+                static_cast<int64_t>(decodeCounter.min()),
+                static_cast<int64_t>(decodeCounter.max()),
+                RuntimeCounter::Unit::kNanos});
+      }
     }
   }
 

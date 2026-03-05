@@ -214,6 +214,13 @@ class HiveConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
   static constexpr const char* kIndexEnabledSession = "index_enabled";
 
+  /// Whether to collect per-column timing stats (decode/decompress CPU time).
+  /// Disabled by default to avoid overhead (~100ns per operation).
+  static constexpr const char* kReaderCollectColumnStats =
+      "hive.reader.collect-column-stats";
+  static constexpr const char* kReaderCollectColumnStatsSession =
+      "hive.reader.collect_column_stats";
+
   /// Maximum number of output rows to return per index lookup request.
   /// The limit is applied to the actual output rows after filtering.
   /// 0 means no limit (default).
@@ -318,6 +325,10 @@ class HiveConfig {
 
   /// Whether to use the cluster index for filter-based row pruning.
   bool indexEnabled(const config::ConfigBase* session) const;
+
+  /// Whether to collect per-column timing stats (decode/decompress CPU time).
+  /// Disabled by default to avoid overhead (~100ns per operation).
+  bool readerCollectColumnStats(const config::ConfigBase* session) const;
 
   /// Returns the maximum number of rows to read per index lookup request.
   /// 0 means no limit (default).

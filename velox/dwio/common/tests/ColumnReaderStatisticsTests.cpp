@@ -95,8 +95,8 @@ TEST(ColumnMetricsSetTest, GetOrCreateWithTypeKind) {
   // Verify types are used in toRuntimeMetrics.
   std::unordered_map<std::string, RuntimeMetric> metrics;
   metricsSet.toRuntimeMetrics(metrics);
-  EXPECT_EQ(metrics["column.BIGINT.1.decompressCPUTimeNanos"].sum, 1'000);
-  EXPECT_EQ(metrics["column.VARCHAR.2.decompressCPUTimeNanos"].sum, 2'000);
+  EXPECT_EQ(metrics["column_1.BIGINT.decompressCPUTimeNanos"].sum, 1'000);
+  EXPECT_EQ(metrics["column_2.VARCHAR.decompressCPUTimeNanos"].sum, 2'000);
 }
 
 TEST(ColumnMetricsSetTest, ToRuntimeMetrics) {
@@ -122,18 +122,18 @@ TEST(ColumnMetricsSetTest, ToRuntimeMetrics) {
   metricsSet.toRuntimeMetrics(result);
 
   // RuntimeMetric has sum/count/min/max, metric name includes type.
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 8'000);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].count, 2);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].min, 3'000);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].max, 5'000);
-  EXPECT_EQ(result["column.VARCHAR.42.decompressCPUTimeNanos"].sum, 2'000);
-  EXPECT_EQ(result["column.VARCHAR.42.decompressCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 8'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].count, 2);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].min, 3'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].max, 5'000);
+  EXPECT_EQ(result["column_42.VARCHAR.decompressCPUTimeNanos"].sum, 2'000);
+  EXPECT_EQ(result["column_42.VARCHAR.decompressCPUTimeNanos"].count, 1);
 
   // Zero values are not included.
   metricsSet.getOrCreate(99);
   result.clear();
   metricsSet.toRuntimeMetrics(result);
-  EXPECT_EQ(result.count("column.DOUBLE.99.decompressCPUTimeNanos"), 0);
+  EXPECT_EQ(result.count("column_99.DOUBLE.decompressCPUTimeNanos"), 0);
 }
 
 TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithInvalidType) {
@@ -147,7 +147,35 @@ TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithInvalidType) {
   metricsSet.toRuntimeMetrics(result);
 
   // Should use INVALID as type name.
-  EXPECT_EQ(result["column.INVALID.1.decompressCPUTimeNanos"].sum, 5'000);
+  EXPECT_EQ(result["column_1.INVALID.decompressCPUTimeNanos"].sum, 5'000);
+}
+
+TEST(ColumnMetricsSetTest, ToRuntimeMetricsWithDecodeTime) {
+  ColumnMetricsSet metricsSet;
+
+  // Add both decompress and decode timing data.
+  auto* col1 = metricsSet.getOrCreate(1, TypeKind::BIGINT);
+  col1->decompressCPUTimeNanos.increment(5'000);
+  col1->decodeCPUTimeNanos.increment(10'000);
+  col1->decodeCPUTimeNanos.increment(8'000);
+
+  auto* col2 = metricsSet.getOrCreate(2, TypeKind::VARCHAR);
+  col2->decodeCPUTimeNanos.increment(3'000);
+
+  std::unordered_map<std::string, RuntimeMetric> result;
+  metricsSet.toRuntimeMetrics(result);
+
+  // Column 1 has both decompress and decode metrics.
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].sum, 18'000);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 2);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].min, 8'000);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].max, 10'000);
+
+  // Column 2 has only decode metrics.
+  EXPECT_EQ(result.count("column_2.VARCHAR.decompressCPUTimeNanos"), 0);
+  EXPECT_EQ(result["column_2.VARCHAR.decodeCPUTimeNanos"].sum, 3'000);
+  EXPECT_EQ(result["column_2.VARCHAR.decodeCPUTimeNanos"].count, 1);
 }
 
 TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
@@ -169,6 +197,7 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   auto* colMetrics = stats.columnReaderStats.columnMetricsSet->getOrCreate(
       1, TypeKind::BIGINT);
   colMetrics->decompressCPUTimeNanos.increment(5'000);
+  colMetrics->decodeCPUTimeNanos.increment(12'000);
 
   auto result = stats.toRuntimeMetricMap();
 
@@ -178,8 +207,10 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   EXPECT_EQ(result["processedStrides"].sum, 30);
   EXPECT_EQ(result["numStripes"].sum, 4);
   EXPECT_EQ(result["flattenStringDictionaryValues"].sum, 1'000);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 5'000);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].sum, 12'000);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 1);
 }
 
 TEST(ColumnMetricsSetConcurrencyTest, ConcurrentGetOrCreate) {
@@ -210,7 +241,7 @@ TEST(ColumnMetricsSetConcurrencyTest, ConcurrentGetOrCreate) {
   metricsSet.toRuntimeMetrics(result);
 
   for (uint32_t colId = 0; colId < kNumColumns; ++colId) {
-    auto key = fmt::format("column.BIGINT.{}.decompressCPUTimeNanos", colId);
+    auto key = fmt::format("column_{}.BIGINT.decompressCPUTimeNanos", colId);
     EXPECT_EQ(result[key].sum, kNumThreads * 100);
     EXPECT_EQ(result[key].count, kNumThreads);
   }
@@ -235,23 +266,30 @@ TEST(ColumnMetricsSetTest, MergeFromWithOverlappingNodeIds) {
   auto* srcCol1 = src.getOrCreate(1, TypeKind::BIGINT);
   srcCol1->decompressCPUTimeNanos.increment(5'000);
   srcCol1->decompressCPUTimeNanos.increment(3'000);
+  srcCol1->decodeCPUTimeNanos.increment(10'000);
 
   auto* srcCol2 = src.getOrCreate(2, TypeKind::VARCHAR);
   srcCol2->decompressCPUTimeNanos.increment(2'000);
+  srcCol2->decodeCPUTimeNanos.increment(4'000);
 
   ColumnMetricsSet dst;
   auto* dstCol1 = dst.getOrCreate(1, TypeKind::BIGINT);
   dstCol1->decompressCPUTimeNanos.increment(1'000);
+  dstCol1->decodeCPUTimeNanos.increment(6'000);
 
   dst.mergeFrom(src);
 
   std::unordered_map<std::string, RuntimeMetric> result;
   dst.toRuntimeMetrics(result);
 
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 9'000);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].count, 3);
-  EXPECT_EQ(result["column.VARCHAR.2.decompressCPUTimeNanos"].sum, 2'000);
-  EXPECT_EQ(result["column.VARCHAR.2.decompressCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 9'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].count, 3);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].sum, 16'000);
+  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 2);
+  EXPECT_EQ(result["column_2.VARCHAR.decompressCPUTimeNanos"].sum, 2'000);
+  EXPECT_EQ(result["column_2.VARCHAR.decompressCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result["column_2.VARCHAR.decodeCPUTimeNanos"].sum, 4'000);
+  EXPECT_EQ(result["column_2.VARCHAR.decodeCPUTimeNanos"].count, 1);
 }
 
 TEST(ColumnMetricsSetTest, MergeFromWithDisjointNodeIds) {
@@ -274,10 +312,10 @@ TEST(ColumnMetricsSetTest, MergeFromWithDisjointNodeIds) {
   std::unordered_map<std::string, RuntimeMetric> result;
   dst.toRuntimeMetrics(result);
 
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 1'000);
-  EXPECT_EQ(result["column.VARCHAR.2.decompressCPUTimeNanos"].sum, 2'000);
-  EXPECT_EQ(result["column.DOUBLE.3.decompressCPUTimeNanos"].sum, 3'000);
-  EXPECT_EQ(result["column.BOOLEAN.4.decompressCPUTimeNanos"].sum, 4'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 1'000);
+  EXPECT_EQ(result["column_2.VARCHAR.decompressCPUTimeNanos"].sum, 2'000);
+  EXPECT_EQ(result["column_3.DOUBLE.decompressCPUTimeNanos"].sum, 3'000);
+  EXPECT_EQ(result["column_4.BOOLEAN.decompressCPUTimeNanos"].sum, 4'000);
 }
 
 TEST(ColumnMetricsSetTest, MergeFromEmpty) {
@@ -291,14 +329,14 @@ TEST(ColumnMetricsSetTest, MergeFromEmpty) {
 
   std::unordered_map<std::string, RuntimeMetric> result;
   nonEmpty.toRuntimeMetrics(result);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 5'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
 
   ColumnMetricsSet empty2;
   empty2.mergeFrom(nonEmpty);
 
   result.clear();
   empty2.toRuntimeMetrics(result);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 5'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromWithColumnMetrics) {
@@ -318,7 +356,7 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithColumnMetrics) {
 
   std::unordered_map<std::string, RuntimeMetric> result;
   dst.columnMetricsSet->toRuntimeMetrics(result);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 1'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 1'000);
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromBothWithColumnMetrics) {
@@ -341,7 +379,7 @@ TEST(ColumnReaderStatisticsTest, MergeFromBothWithColumnMetrics) {
 
   std::unordered_map<std::string, RuntimeMetric> result;
   dst.columnMetricsSet->toRuntimeMetrics(result);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 3'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 3'000);
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromWithoutColumnMetrics) {
@@ -361,5 +399,5 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithoutColumnMetrics) {
 
   std::unordered_map<std::string, RuntimeMetric> result;
   dst.columnMetricsSet->toRuntimeMetrics(result);
-  EXPECT_EQ(result["column.BIGINT.1.decompressCPUTimeNanos"].sum, 1'000);
+  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 1'000);
 }
