@@ -824,6 +824,20 @@ Each query can override the config by setting corresponding query session proper
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
+  * - hive.max-rows-per-index-request
+    - hive.max_rows_per_index_request
+    - integer
+    - 0
+    - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
+      after filtering. 0 means no limit (default).
+  * - hive.reader.collect-column-stats
+    - hive.reader.collect_column_stats
+    - bool
+    - false
+    - If true, enables collection of per-column timing statistics during file reading. This includes
+      decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
+      ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
+      Useful for performance analysis and identifying slow columns.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
