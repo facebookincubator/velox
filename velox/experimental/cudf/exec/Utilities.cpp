@@ -94,11 +94,17 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  // We can't exit early for `tables.size() == 1` because we require the output
-  // to be safe to use on `stream`, which may be a different stream than the
-  // input table was allocated on. Instead, we must copy the input on `stream`.
+  // Even for a single input table we must concatenate (copy) rather than
+  // release in-place: the output is owned by `stream` but the input buffer was
+  // allocated on a different stream, so releasing it would bind deallocation to
+  // the wrong stream.
   auto output = cudf::concatenate(tableViews, stream, mr);
-  stream.synchronize();
+
+  // Order input deallocations after the concatenate read.
+  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
+  for (auto& s : inputStreams) {
+    cudf::detail::join_streams(outputStreams, s);
+  }
   return output;
 }
 
@@ -127,11 +133,6 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   }
 
   cudf::detail::join_streams(inputStreams, stream);
-
-  if (tables.size() == 1) {
-    concatTables.push_back(tables[0]->release());
-    return concatTables;
-  }
 
   std::vector<std::unique_ptr<cudf::table>> outputTables;
   auto const maxRows =
@@ -163,7 +164,11 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             stream,
             mr));
   }
-  stream.synchronize();
+  // Order input deallocations after the concatenate reads.
+  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
+  for (auto& s : inputStreams) {
+    cudf::detail::join_streams(outputStreams, s);
+  }
   return outputTables;
 }
 
