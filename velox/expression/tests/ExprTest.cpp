@@ -2693,6 +2693,60 @@ TEST_F(ExprTest, constantEqualsNullConsistency) {
   EXPECT_TRUE(nullVariantToExpr->equals(*nullBaseVectorToExpr));
 }
 
+TEST_F(ExprTest, constantEqualsNullHandlingMode) {
+  // {1: null} == {1: null} is
+  //  - indeterminate for kNullAsIndeterminate mode.
+  //  - true for kNullAsValue mode.
+  const auto type = MAP(BIGINT(), BIGINT());
+  auto assertNullComparison = [this](
+                                  const core::ConstantTypedExprPtr& a,
+                                  const core::ConstantTypedExprPtr& b) {
+    EXPECT_EQ(
+        a->equals(
+            *b, CompareFlags::NullHandlingMode::kNullAsIndeterminate, pool()),
+        std::nullopt);
+    EXPECT_EQ(
+        a->equals(*b, CompareFlags::NullHandlingMode::kNullAsValue, pool()),
+        true);
+  };
+
+  // Test Variant - Variant comparison.
+  auto mapVariant =
+      Variant::map({{Variant(1LL), Variant::null(TypeKind::BIGINT)}});
+  auto a = std::make_shared<core::ConstantTypedExpr>(type, mapVariant);
+  auto b = std::make_shared<core::ConstantTypedExpr>(type, mapVariant);
+  assertNullComparison(a, b);
+
+  // Test Vector - Vector comparison.
+  auto mapVector = BaseVector::wrapInConstant(
+      1, 0, makeMapVectorFromJson<int64_t, int64_t>({"{1: null}"}));
+  a = std::make_shared<core::ConstantTypedExpr>(mapVector);
+  b = std::make_shared<core::ConstantTypedExpr>(mapVector);
+  assertNullComparison(a, b);
+
+  // Test Variant - Vector comparison.
+  a = std::make_shared<core::ConstantTypedExpr>(type, mapVariant);
+  b = std::make_shared<core::ConstantTypedExpr>(mapVector);
+  assertNullComparison(a, b);
+
+  // {1: null, 2: 2} = {1: null, 2: 3} is false for both kNullAsValue and
+  // kNullAsIndeterminate modes.
+  a = std::make_shared<core::ConstantTypedExpr>(
+      type,
+      Variant::map(
+          {{Variant(1LL), Variant::null(TypeKind::BIGINT)}, {2LL, 2LL}}));
+  mapVector = BaseVector::wrapInConstant(
+      1, 0, makeMapVectorFromJson<int32_t, int32_t>({"{1: null, 2: 3}"}));
+  b = std::make_shared<core::ConstantTypedExpr>(mapVector);
+  EXPECT_EQ(
+      a->equals(
+          *b, CompareFlags::NullHandlingMode::kNullAsIndeterminate, pool()),
+      false);
+  EXPECT_EQ(
+      a->equals(*b, CompareFlags::NullHandlingMode::kNullAsValue, pool()),
+      false);
+}
+
 // Verify consistency of ConstantTypeExpr::toString/hash/equals APIs. The
 // outcome should not depend on whether expression was created using a Variant
 // of a Vector.
