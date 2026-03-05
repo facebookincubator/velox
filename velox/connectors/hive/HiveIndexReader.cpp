@@ -23,6 +23,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -86,7 +87,7 @@ HiveIndexReader::HiveIndexReader(
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const RowTypePtr& requestType,
     const RowTypePtr& outputType,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
@@ -107,43 +108,50 @@ HiveIndexReader::HiveIndexReader(
       scanSpec_{scanSpec},
       fileReader_{createFileReader()},
       indexReader_{createIndexReader()},
-      joinConditions_{joinConditions} {
-  parseJoinConditions();
+      indexLookupConditions_{indexLookupConditions} {
+  parseIndexLookupConditions();
 }
 
-void HiveIndexReader::parseJoinConditions() {
-  VELOX_CHECK(!joinConditions_.empty(), "Join conditions cannot be empty");
+void HiveIndexReader::parseIndexLookupConditions() {
+  VELOX_CHECK(
+      !indexLookupConditions_.empty(),
+      "Index lookup conditions cannot be empty");
   const auto& indexColumns = tableHandle_->indexColumns();
   VELOX_CHECK(
       !indexColumns.empty(), "Index columns not set in hive table handle");
-  VELOX_CHECK_LE(joinConditions_.size(), indexColumns.size());
+  VELOX_CHECK_LE(indexLookupConditions_.size(), indexColumns.size());
   VELOX_CHECK_LE(
-      joinConditions_.size(), indexColumns.size(), "Too many join conditions");
-  const auto numJoinConditions = joinConditions_.size();
-  requestColumnIndices_.resize(numJoinConditions);
-  constantBoundValues_.resize(numJoinConditions);
+      indexLookupConditions_.size(),
+      indexColumns.size(),
+      "Too many index lookup conditions");
+  const auto numIndexLookupConditions = indexLookupConditions_.size();
+  requestColumnIndices_.resize(numIndexLookupConditions);
+  constantBoundValues_.resize(numIndexLookupConditions);
 
   // For building indexBoundType_ during condition processing.
   std::vector<std::string> indexColumnNames;
-  indexColumnNames.reserve(numJoinConditions);
+  indexColumnNames.reserve(numIndexLookupConditions);
   std::vector<TypePtr> indexColumnTypes;
-  indexColumnTypes.reserve(numJoinConditions);
+  indexColumnTypes.reserve(numIndexLookupConditions);
 
-  // Validate and process join conditions:
-  // - Join conditions combined with index filters must cover all table index
+  // Validate and process index lookup conditions:
+  // - Index lookup conditions combined with index filters must cover all table
+  // index
   //   columns in order.
-  // - For each index column, it must have either a join condition OR a filter
+  // - For each index column, it must have either an index lookup condition OR a
+  // filter
   //   in the scan spec, but not both.
-  // - At least one join condition must have a non-constant value (field access
+  // - At least one index lookup condition must have a non-constant value (field
+  // access
   //   from probe side).
   // - For between conditions, at least one bound must be non-constant.
   // - Processing stops when we encounter a range filter or between condition.
-  size_t numValidJoinConditions{0};
+  size_t numValidIndexLookupConditions{0};
   bool hasNonConstantCondition{false};
-  for (size_t i = 0; i < joinConditions_.size(); ++i) {
+  for (size_t i = 0; i < indexLookupConditions_.size(); ++i) {
     const auto& indexColumn = indexColumns[i];
-    // Process the join condition for this index column.
-    const auto& condition = joinConditions_[i];
+    // Process the index lookup condition for this index column.
+    const auto& condition = indexLookupConditions_[i];
     // Validate that the condition's key column matches the expected index
     // column.
     const auto& conditionKeyName =
@@ -151,12 +159,12 @@ void HiveIndexReader::parseJoinConditions() {
     VELOX_CHECK_EQ(
         conditionKeyName,
         indexColumn,
-        "Join condition key column does not match expected index column at position {}. Join conditions must follow index column order.",
+        "Index lookup condition key column does not match expected index column at position {}. Index lookup conditions must follow index column order.",
         i);
     const auto* spec = scanSpec_->childByName(indexColumn);
     VELOX_CHECK(
         spec == nullptr || !spec->hasFilter(),
-        "Index column '{}' cannot have both a join condition and a filter at position {}",
+        "Index column '{}' cannot have both an index lookup condition and a filter at position {}",
         indexColumn,
         i);
 
@@ -191,7 +199,7 @@ void HiveIndexReader::parseJoinConditions() {
       // Collect column name and type for indexBoundType_.
       indexColumnNames.push_back(indexColumn);
       indexColumnTypes.push_back(condition->key->type());
-      ++numValidJoinConditions;
+      ++numValidIndexLookupConditions;
       continue;
     }
 
@@ -225,17 +233,18 @@ void HiveIndexReader::parseJoinConditions() {
       // Collect column name and type for indexBoundType_.
       indexColumnNames.push_back(indexColumn);
       indexColumnTypes.push_back(condition->key->type());
-      ++numValidJoinConditions;
+      ++numValidIndexLookupConditions;
       // Between condition is a range condition, stop processing further.
       break;
     }
 
-    VELOX_FAIL("Unsupported join condition type: {}", condition->toString());
+    VELOX_FAIL(
+        "Unsupported index lookup condition type: {}", condition->toString());
   }
-  VELOX_CHECK_EQ(numValidJoinConditions, joinConditions_.size());
+  VELOX_CHECK_EQ(numValidIndexLookupConditions, indexLookupConditions_.size());
   VELOX_CHECK(
       hasNonConstantCondition,
-      "At least one join condition must have a non-constant value");
+      "At least one index lookup condition must have a non-constant value");
 
   // Build and cache the index bound row type.
   indexBoundType_ =
@@ -324,11 +333,11 @@ serializer::IndexBounds HiveIndexReader::buildRequestIndexBounds(
   const auto numRows = request->size();
 
   // Resize and clear reusable column vectors.
-  lowerBoundColumns_.resize(joinConditions_.size());
-  upperBoundColumns_.resize(joinConditions_.size());
+  lowerBoundColumns_.resize(indexLookupConditions_.size());
+  upperBoundColumns_.resize(indexLookupConditions_.size());
 
-  for (size_t i = 0; i < joinConditions_.size(); ++i) {
-    const auto& condition = joinConditions_[i];
+  for (size_t i = 0; i < indexLookupConditions_.size(); ++i) {
+    const auto& condition = indexLookupConditions_[i];
     const auto& type = condition->key->type();
 
     if (auto equalCondition =
@@ -370,7 +379,8 @@ serializer::IndexBounds HiveIndexReader::buildRequestIndexBounds(
         upperBoundColumns_[i] = request->childAt(colIdx);
       }
     } else {
-      VELOX_FAIL("Unsupported join condition type: {}", condition->toString());
+      VELOX_FAIL(
+          "Unsupported index lookup condition type: {}", condition->toString());
     }
   }
 
@@ -382,7 +392,7 @@ serializer::IndexBounds HiveIndexReader::buildRequestIndexBounds(
 
   // Collect column names for indexBounds.
   std::vector<std::string> indexColumnNames;
-  indexColumnNames.reserve(joinConditions_.size());
+  indexColumnNames.reserve(indexLookupConditions_.size());
   for (const auto& col : indexBoundType_->names()) {
     indexColumnNames.push_back(col);
   }

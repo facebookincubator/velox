@@ -21,7 +21,7 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -32,6 +32,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::serializer;
+using namespace facebook::velox::common::testutil;
 
 enum class SerdeType { kPresto, kCompactRow, kUnsafeRow };
 
@@ -57,7 +58,7 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
 
     setupSerde(params.serdeType);
     filesystems::registerLocalFileSystem();
-    tempDirPath_ = exec::test::TempDirectoryPath::create();
+    tempDirPath_ = TempDirectoryPath::create();
     compressionKind_ = params.compressionKind;
   }
 
@@ -122,7 +123,7 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
   }
 
   VectorSerde* serde_{nullptr};
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirPath_;
+  std::shared_ptr<TempDirectoryPath> tempDirPath_;
   common::CompressionKind compressionKind_;
 };
 

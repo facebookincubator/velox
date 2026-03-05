@@ -18,7 +18,9 @@
 #include "velox/common/base/Crc.h"
 #include "velox/type/HugeInt.h"
 
-#include <unordered_set>
+#include <cstring>
+#include <limits>
+#include <span>
 
 #include <boost/crc.hpp>
 #include <fmt/format.h>
@@ -946,6 +948,291 @@ TEST_F(BitUtilTest, divRoundUp) {
         bits::divRoundUp(testData.value, testData.factor), testData.expected);
   }
 }
+TEST_F(BitUtilTest, bitsRequired) {
+  EXPECT_EQ(bitsRequired(0), 1);
+  EXPECT_EQ(bitsRequired(1), 1);
+  EXPECT_EQ(bitsRequired(2), 2);
+  EXPECT_EQ(bitsRequired(3), 2);
+  EXPECT_EQ(bitsRequired(4), 3);
+  EXPECT_EQ(bitsRequired(7), 3);
+  EXPECT_EQ(bitsRequired(8), 4);
+  EXPECT_EQ(bitsRequired(15), 4);
+  EXPECT_EQ(bitsRequired(16), 5);
+  EXPECT_EQ(bitsRequired(255), 8);
+  EXPECT_EQ(bitsRequired(256), 9);
+  EXPECT_EQ(bitsRequired(0xFFFFFFFF), 32);
+  EXPECT_EQ(bitsRequired(0x100000000ULL), 33);
+  EXPECT_EQ(bitsRequired(std::numeric_limits<uint64_t>::max()), 64);
+  // Powers of two.
+  for (int i = 0; i < 63; ++i) {
+    EXPECT_EQ(bitsRequired(1ULL << i), i + 1);
+  }
+}
+
+TEST_F(BitUtilTest, maybeSetBit) {
+  uint8_t bytes[16];
+  memset(bytes, 0, sizeof(bytes));
+
+  // Setting with value=true should set the bit.
+  maybeSetBit(bytes, 0, true);
+  EXPECT_TRUE(isBitSet(bytes, 0));
+
+  maybeSetBit(bytes, 7, true);
+  EXPECT_TRUE(isBitSet(bytes, 7));
+
+  maybeSetBit(bytes, 64, true);
+  EXPECT_TRUE(isBitSet(bytes, 64));
+
+  // Setting with value=false should be a no-op (bit stays as-is).
+  maybeSetBit(bytes, 5, false);
+  EXPECT_FALSE(isBitSet(bytes, 5));
+
+  // Already-set bit stays set even with value=false (OR semantics).
+  maybeSetBit(bytes, 0, false);
+  EXPECT_TRUE(isBitSet(bytes, 0));
+
+  // Verify untouched bits are still clear.
+  EXPECT_FALSE(isBitSet(bytes, 1));
+  EXPECT_FALSE(isBitSet(bytes, 6));
+
+  // Test with uint64_t pointer type.
+  uint64_t words[2] = {0, 0};
+  maybeSetBit(words, 3, true);
+  EXPECT_TRUE(isBitSet(words, 3));
+  maybeSetBit(words, 3, false);
+  EXPECT_TRUE(isBitSet(words, 3)); // OR semantics, stays set.
+  maybeSetBit(words, 100, true);
+  EXPECT_TRUE(isBitSet(words, 100));
+}
+
+TEST_F(BitUtilTest, packBitmap) {
+  // Pack 128 bools into a bitmap.
+  bool boolArray[128];
+  for (int i = 0; i < 128; ++i) {
+    boolArray[i] = (i % 3 == 0);
+  }
+
+  char bitmap[16];
+  memset(bitmap, 0, sizeof(bitmap));
+  packBitmap(std::span<const bool>(boolArray, 128), bitmap);
+
+  for (int i = 0; i < 128; ++i) {
+    EXPECT_EQ(
+        isBitSet(reinterpret_cast<const uint8_t*>(bitmap), i), (i % 3 == 0))
+        << "at bit " << i;
+  }
+
+  // Test empty span.
+  char emptyBitmap[8];
+  memset(emptyBitmap, 0, sizeof(emptyBitmap));
+  packBitmap(std::span<const bool>(), emptyBitmap);
+  for (int i = 0; i < 64; ++i) {
+    EXPECT_FALSE(isBitSet(reinterpret_cast<const uint8_t*>(emptyBitmap), i));
+  }
+
+  // Test non-64-aligned count (e.g., 100 bools).
+  bool bools100[100];
+  for (int i = 0; i < 100; ++i) {
+    bools100[i] = (i % 7 == 0);
+  }
+  char bitmap100[16];
+  memset(bitmap100, 0, sizeof(bitmap100));
+  packBitmap(std::span<const bool>(bools100, 100), bitmap100);
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_EQ(
+        isBitSet(reinterpret_cast<const uint8_t*>(bitmap100), i), (i % 7 == 0))
+        << "at bit " << i;
+  }
+
+  // Test OR semantics: pre-existing bits are preserved.
+  char bitmapOr[8];
+  memset(bitmapOr, 0, sizeof(bitmapOr));
+  setBit(reinterpret_cast<uint8_t*>(bitmapOr), 1);
+  bool boolsOr[8] = {true, false, false, true, false, false, false, false};
+  packBitmap(std::span<const bool>(boolsOr, 8), bitmapOr);
+  EXPECT_TRUE(isBitSet(reinterpret_cast<const uint8_t*>(bitmapOr), 0));
+  EXPECT_TRUE(
+      isBitSet(reinterpret_cast<const uint8_t*>(bitmapOr), 1)); // preserved
+  EXPECT_TRUE(isBitSet(reinterpret_cast<const uint8_t*>(bitmapOr), 3));
+}
+
+TEST_F(BitUtilTest, findSetBit) {
+  // Build a bitmap with known set bits.
+  uint64_t words[4] = {0, 0, 0, 0};
+  auto bitmap = reinterpret_cast<char*>(words);
+
+  // Set bits at positions 5, 10, 15, 64, 100, 200.
+  setBit(words, 5);
+  setBit(words, 10);
+  setBit(words, 15);
+  setBit(words, 64);
+  setBit(words, 100);
+  setBit(words, 200);
+
+  // Find the 1st set bit starting from 0.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 1), 5u);
+  // Find the 2nd set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 2), 10u);
+  // Find the 3rd set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 3), 15u);
+  // Find the 4th set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 4), 64u);
+  // Find the 5th set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 5), 100u);
+  // Find the 6th set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 6), 200u);
+  // 7th set bit doesn't exist.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 7), 256u);
+
+  // Search starting from a non-zero begin.
+  EXPECT_EQ(findSetBit(bitmap, 6, 256, 1), 10u);
+  EXPECT_EQ(findSetBit(bitmap, 11, 256, 1), 15u);
+  EXPECT_EQ(findSetBit(bitmap, 16, 256, 1), 64u);
+
+  // Search with restricted end.
+  EXPECT_EQ(findSetBit(bitmap, 0, 14, 3), 14u); // Only 2 set bits in [0,14)
+
+  // Edge cases.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 0), 0u); // n=0 returns begin
+  EXPECT_EQ(findSetBit(bitmap, 10, 10, 1), 10u); // begin==end returns begin
+  EXPECT_EQ(findSetBit(bitmap, 20, 10, 1), 20u); // begin>end returns begin
+
+  // All bits set in a word.
+  uint64_t allSet[2] = {~0ULL, ~0ULL};
+  auto allSetBitmap = reinterpret_cast<char*>(allSet);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 1), 0u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 64), 63u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 65), 64u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 128), 127u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 129), 128u);
+}
+
+TEST_F(BitUtilTest, printBitsTest) {
+  // uint8_t: 0 should be all zeros.
+  EXPECT_EQ(printBits(static_cast<uint8_t>(0)), "0000 0000");
+  // uint8_t: 0xFF should be all ones.
+  EXPECT_EQ(printBits(static_cast<uint8_t>(0xFF)), "1111 1111");
+  // uint8_t: 0xA5 = 1010 0101.
+  EXPECT_EQ(printBits(static_cast<uint8_t>(0xA5)), "1010 0101");
+  // uint16_t.
+  EXPECT_EQ(printBits(static_cast<uint16_t>(0x00FF)), "0000 0000 1111 1111");
+  // uint32_t: 1.
+  EXPECT_EQ(
+      printBits(static_cast<uint32_t>(1)),
+      "0000 0000 0000 0000 0000 0000 0000 0001");
+}
+
+TEST_F(BitUtilTest, bitmap) {
+  uint8_t data[16];
+  memset(data, 0, sizeof(data));
+  setBit(data, 0);
+  setBit(data, 7);
+  setBit(data, 8);
+  setBit(data, 63);
+  setBit(data, 64);
+  setBit(data, 127);
+
+  Bitmap bm(data, 128);
+  EXPECT_EQ(bm.size(), 128u);
+  EXPECT_EQ(bm.bits(), data);
+  EXPECT_TRUE(bm.test(0));
+  EXPECT_FALSE(bm.test(1));
+  EXPECT_TRUE(bm.test(7));
+  EXPECT_TRUE(bm.test(8));
+  EXPECT_FALSE(bm.test(9));
+  EXPECT_TRUE(bm.test(63));
+  EXPECT_TRUE(bm.test(64));
+  EXPECT_FALSE(bm.test(65));
+  EXPECT_TRUE(bm.test(127));
+}
+
+TEST_F(BitUtilTest, bitmapBuilder) {
+  uint8_t data[16];
+  memset(data, 0, sizeof(data));
+
+  BitmapBuilder builder(data, 128);
+
+  // Test single-bit set.
+  builder.set(5);
+  EXPECT_TRUE(builder.test(5));
+  EXPECT_FALSE(builder.test(4));
+
+  // Test maybeSet.
+  builder.maybeSet(10, true);
+  EXPECT_TRUE(builder.test(10));
+  builder.maybeSet(11, false);
+  EXPECT_FALSE(builder.test(11));
+
+  // Test range set.
+  builder.set(20, 30);
+  for (uint32_t i = 20; i < 30; ++i) {
+    EXPECT_TRUE(builder.test(i)) << "at " << i;
+  }
+  EXPECT_FALSE(builder.test(19));
+  EXPECT_FALSE(builder.test(30));
+
+  // Test range clear.
+  builder.clear(22, 28);
+  EXPECT_TRUE(builder.test(20));
+  EXPECT_TRUE(builder.test(21));
+  for (uint32_t i = 22; i < 28; ++i) {
+    EXPECT_FALSE(builder.test(i)) << "at " << i;
+  }
+  EXPECT_TRUE(builder.test(28));
+  EXPECT_TRUE(builder.test(29));
+}
+
+TEST_F(BitUtilTest, bitmapBuilderCopy) {
+  uint8_t src[16];
+  uint8_t dst[16];
+  memset(src, 0, sizeof(src));
+  memset(dst, 0, sizeof(dst));
+
+  // Set some bits in src.
+  setBit(src, 0);
+  setBit(src, 3);
+  setBit(src, 7);
+  setBit(src, 8);
+  setBit(src, 15);
+  setBit(src, 50);
+  setBit(src, 63);
+  setBit(src, 64);
+  setBit(src, 100);
+
+  // Set a bit in dst that is before the copy range; it should be preserved.
+  setBit(dst, 1);
+
+  Bitmap srcBm(src, 128);
+  BitmapBuilder dstBuilder(dst, 128);
+
+  // Copy range [3, 101).
+  dstBuilder.copy(srcBm, 3, 101);
+
+  // Bit 1 in dst should still be set (before copy range).
+  EXPECT_TRUE(isBitSet(dst, 1));
+  // Bits from src in [3, 101) should now be in dst.
+  EXPECT_TRUE(isBitSet(dst, 3));
+  EXPECT_TRUE(isBitSet(dst, 7));
+  EXPECT_TRUE(isBitSet(dst, 8));
+  EXPECT_TRUE(isBitSet(dst, 15));
+  EXPECT_TRUE(isBitSet(dst, 50));
+  EXPECT_TRUE(isBitSet(dst, 63));
+  EXPECT_TRUE(isBitSet(dst, 64));
+  EXPECT_TRUE(isBitSet(dst, 100));
+
+  // Bits that are not set in src within the range should be clear in dst.
+  EXPECT_FALSE(isBitSet(dst, 4));
+  EXPECT_FALSE(isBitSet(dst, 9));
+  EXPECT_FALSE(isBitSet(dst, 65));
+
+  // Copy byte-aligned range.
+  memset(dst, 0xFF, sizeof(dst));
+  dstBuilder.copy(srcBm, 0, 128);
+  for (int i = 0; i < 128; ++i) {
+    EXPECT_EQ(isBitSet(dst, i), isBitSet(src, i)) << "at bit " << i;
+  }
+}
+
 } // namespace bits
 } // namespace velox
 } // namespace facebook

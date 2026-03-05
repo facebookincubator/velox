@@ -57,7 +57,8 @@ Window::Window(
   if (spillConfig == nullptr &&
       operatorCtx_->driverCtx()->queryConfig().windowSpillEnabled()) {
     auto lockedStats = stats_.wlock();
-    lockedStats->runtimeStats.emplace(kSpillNotSupported, RuntimeMetric(1));
+    lockedStats->runtimeStats.emplace(
+        std::string(kSpillNotSupported), RuntimeMetric(1));
   }
   if (windowNode->inputsSorted()) {
     if (supportRowsStreaming()) {

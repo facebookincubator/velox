@@ -67,8 +67,8 @@ class SubfieldFilterAstTest : public OperatorTestBase {
     auto mr = cudf::get_current_device_resource_ref();
 
     {
-      auto cudfTable =
-          cudf_velox::with_arrow::toCudfTable(vector, pool_.get(), stream);
+      auto cudfTable = cudf_velox::with_arrow::toCudfTable(
+          vector, pool_.get(), stream, cudf::get_current_device_resource_ref());
       ASSERT_NE(cudfTable, nullptr);
 
       auto cudfResult =
@@ -88,7 +88,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
       resultTable = std::make_unique<cudf::table>(std::move(cols));
 
       auto veloxBoolRow = cudf_velox::with_arrow::toVeloxColumn(
-          resultTable->view(), pool_.get(), "cmp_", stream);
+          resultTable->view(),
+          pool_.get(),
+          "cmp_",
+          stream,
+          cudf::get_current_device_resource_ref());
       auto boolVector = veloxBoolRow->childAt(0)->asFlatVector<bool>();
       boolVector->loadedVector();
 
@@ -530,8 +534,8 @@ TEST_F(SubfieldFilterAstTest, MultipleSubfieldFilters) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
-  auto cudfTable =
-      cudf_velox::with_arrow::toCudfTable(vec, pool_.get(), stream);
+  auto cudfTable = cudf_velox::with_arrow::toCudfTable(
+      vec, pool_.get(), stream, cudf::get_current_device_resource_ref());
   ASSERT_NE(cudfTable, nullptr);
   auto cudfResult =
       cudf::compute_column(cudfTable->view(), combinedExpr, stream, mr);
@@ -547,7 +551,11 @@ TEST_F(SubfieldFilterAstTest, MultipleSubfieldFilters) {
       std::move(const_cast<std::unique_ptr<cudf::column>&>(cudfResult)));
   resultTable = std::make_unique<cudf::table>(std::move(cols));
   auto veloxBoolRow = cudf_velox::with_arrow::toVeloxColumn(
-      resultTable->view(), pool_.get(), "cmp_", stream);
+      resultTable->view(),
+      pool_.get(),
+      "cmp_",
+      stream,
+      cudf::get_current_device_resource_ref());
   auto boolVector = veloxBoolRow->childAt(0)->asFlatVector<bool>();
   boolVector->loadedVector();
 

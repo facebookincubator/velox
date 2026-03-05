@@ -21,17 +21,18 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
 #include "velox/core/QueryConfig.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/external/hdfs/ArrowHdfsInternal.h"
 
 #include <unistd.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 
 using filesystems::arrow::io::internal::LibHdfsShim;
 
@@ -94,8 +95,8 @@ class HdfsFileSystemTest : public testing::Test {
   static std::string fullDestinationPath_;
 
  private:
-  static std::shared_ptr<::exec::test::TempFilePath> createFile() {
-    auto tempFile = exec::test::TempFilePath::create();
+  static std::shared_ptr<TempFilePath> createFile() {
+    auto tempFile = TempFilePath::create();
     tempFile->append("aaaaa");
     tempFile->append("bbbbb");
     tempFile->append(std::string(kOneMB, 'c'));

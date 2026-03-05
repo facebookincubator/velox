@@ -18,18 +18,19 @@
 
 #include <utility>
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TaskTraceReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 #include "velox/tool/trace/TraceReplayTaskRunner.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::tool::trace {
 OperatorReplayerBase::OperatorReplayerBase(
@@ -87,9 +88,9 @@ RowVectorPtr OperatorReplayerBase::run(
     bool copyResults,
     bool cursorCopyResult) {
   auto queryCtx = createQueryCtx();
-  std::shared_ptr<exec::test::TempDirectoryPath> localSpillDirectory;
+  std::shared_ptr<TempDirectoryPath> localSpillDirectory;
   if (queryCtx->queryConfig().spillEnabled() && spillBaseDir_.empty()) {
-    localSpillDirectory = exec::test::TempDirectoryPath::create();
+    localSpillDirectory = TempDirectoryPath::create();
   }
 
   TraceReplayTaskRunner traceTaskRunner(createPlan(), std::move(queryCtx));

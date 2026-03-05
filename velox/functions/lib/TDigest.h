@@ -568,7 +568,7 @@ static_assert(folly::kIsLittleEndian);
 
 template <typename T>
 void write(T value, char*& out) {
-  folly::storeUnaligned(out, value);
+  folly::storeUnaligned<T>(out, value);
   out += sizeof(T);
 }
 

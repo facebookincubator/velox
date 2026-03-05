@@ -20,10 +20,10 @@
 
 #include "arrow/testing/builder.h"
 
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 using arrow::default_memory_pool;
 using arrow::MemoryPool;
@@ -32,6 +32,7 @@ using arrow::util::SafeCopy;
 namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
+using namespace facebook::velox::common::testutil;
 
 using schema::GroupNode;
 using schema::NodePtr;
@@ -40,7 +41,7 @@ using schema::PrimitiveNode;
 namespace test {
 namespace {
 void writeToFile(
-    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<TempFilePath> filePath,
     std::shared_ptr<::arrow::Buffer> buffer) {
   auto localWriteFile =
       std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
@@ -477,7 +478,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
 
     // Write the buffer to a temp file.
-    auto filePath = exec::test::TempFilePath::create();
+    auto filePath = TempFilePath::create();
     writeToFile(filePath, buffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
@@ -1022,7 +1023,7 @@ class TestStatisticsSortOrder : public ::testing::Test {
     ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
     // Write the pbuffer to a temp file.
-    auto filePath = exec::test::TempFilePath::create();
+    auto filePath = TempFilePath::create();
     writeToFile(filePath, pbuffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
@@ -1317,7 +1318,7 @@ TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
   ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
   // Write the pbuffer to a temp file.
-  auto filePath = exec::test::TempFilePath::create();
+  auto filePath = TempFilePath::create();
   writeToFile(filePath, pbuffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =

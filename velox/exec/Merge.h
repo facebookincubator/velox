@@ -61,12 +61,12 @@ class Merge : public SourceOperator {
   /// The running wall time of the merge operator reading from the streaming
   /// source. If spilling is enabled for local merge, this also includes the
   /// time that writes to the spilled source.
-  static inline const std::string kStreamingSourceReadWallNanos{
+  static constexpr std::string_view kStreamingSourceReadWallNanos{
       "streamingSourceReadWallNanos"};
   /// The running wall time of the merge operator reading from the spilled
   /// source to produce the final output. This only applies when spilling is
   /// enabled for local merge.
-  static inline const std::string kSpilledSourceReadWallNanos{
+  static constexpr std::string_view kSpilledSourceReadWallNanos{
       "spilledSourceReadWallNanos"};
 
  protected:
@@ -167,6 +167,10 @@ class SourceMerger {
  private:
   void setOutputBatchSize();
 
+  /// Creates the output vector. If a template is available from input data,
+  /// creates output children with matching encodings to support FlatMapVector.
+  RowVectorPtr createOutputVector();
+
   const RowTypePtr type_;
   const vector_size_t maxOutputBatchRows_;
   const uint64_t maxOutputBatchBytes_;
@@ -209,6 +213,12 @@ class SourceStream final : public MergeStream {
 
   bool hasData() const override {
     return !atEnd_;
+  }
+
+  /// Returns the current data batch from the source. Used for encoding
+  /// detection to create output vectors with matching encodings.
+  const RowVector* data() const {
+    return data_.get();
   }
 
   // Returns the estimated row size based on the vector received from the
