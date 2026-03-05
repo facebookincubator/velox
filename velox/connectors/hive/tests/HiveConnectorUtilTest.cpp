@@ -327,7 +327,6 @@ TEST_F(HiveConnectorUtilTest, fileMetadataCacheEnabledSessionOverride) {
     auto tableHandle = std::make_shared<hive::HiveTableHandle>(
         "testConnectorId",
         "testTable",
-        false,
         common::SubfieldFilters{},
         nullptr,
         nullptr,
