@@ -27,6 +27,7 @@ velox_add_library(
   DecimalCeil.cpp
   DecimalCompare.cpp
   Hash.cpp
+  XxHash64.cpp
   In.cpp
   LeastGreatest.cpp
   MakeTimestamp.cpp

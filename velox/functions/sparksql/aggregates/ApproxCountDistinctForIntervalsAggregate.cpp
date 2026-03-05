@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -50,8 +49,8 @@ int8_t computeIndexBitLength(double relativeSD) {
   VELOX_USER_CHECK(
       std::isfinite(relativeSD) && relativeSD > 0.0,
       "relativeSD must be a positive finite value");
-  const double p =
-      std::ceil(2.0 * std::log(1.106 / relativeSD) / std::log(2.0));
+  const int32_t p = static_cast<int32_t>(
+      std::ceil(2.0 * std::log(1.106 / relativeSD) / std::log(2.0)));
   VELOX_USER_CHECK(
       p >= 4,
       "HLL++ requires at least 4 bits for addressing. Use a lower error, "
@@ -67,6 +66,30 @@ inline double decimalToDouble(int128_t value, uint8_t scale) {
   long double divisor =
       static_cast<long double>(DecimalUtil::kPowersOfTen[scale]);
   return static_cast<double>(scaled / divisor);
+}
+
+template <TypeKind kind>
+double toDoubleDispatch(
+    const DecodedVector& decoded,
+    vector_size_t row,
+    const TypePtr& type) {
+  if constexpr (kind == TypeKind::TIMESTAMP) {
+    return static_cast<double>(decoded.valueAt<Timestamp>(row).toMicros());
+  } else if constexpr (kind == TypeKind::HUGEINT) {
+    return static_cast<double>(decoded.valueAt<int128_t>(row));
+  } else if constexpr (
+      kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
+    auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(
+        decoded.valueAt<typename TypeTraits<kind>::NativeType>(row));
+    VELOX_USER_CHECK(converted.hasValue(), "Failed to convert value to DOUBLE");
+    return converted.value();
+  } else {
+    VELOX_UNSUPPORTED(
+        "Unsupported type for approx_count_distinct_for_intervals: {}",
+        type->toString());
+  }
 }
 
 class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
@@ -108,32 +131,7 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
 
     decodedValues_.decode(*args[0], rows);
     const auto mayHaveNulls = decodedValues_.mayHaveNulls();
-    if (mayHaveNulls) {
-      rows.applyToSelected([&](auto row) {
-        if (decodedValues_.isNullAt(row)) {
-          return;
-        }
-
-        const double inputValue = toDouble(decodedValues_, row, inputType_);
-        if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
-          return;
-        }
-
-        const auto intervalIndex = std::isnan(inputValue)
-            ? (intervalCount_ - 1)
-            : findIntervalIndex(inputValue);
-        auto* group = groups[row];
-        auto tracker = trackRowSize(group);
-        auto* accumulator = value<Accumulator>(group);
-        accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
-        const uint64_t hash = hashValue(decodedValues_, row, inputType_);
-        accumulator->hlls[intervalIndex].insertHash(hash);
-        clearNull(group);
-      });
-      return;
-    }
-
-    rows.applyToSelected([&](auto row) {
+    auto updateRow = [&](auto row, char* group) {
       const double inputValue = toDouble(decodedValues_, row, inputType_);
       if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
         return;
@@ -142,14 +140,24 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       const auto intervalIndex = std::isnan(inputValue)
           ? (intervalCount_ - 1)
           : findIntervalIndex(inputValue);
-      auto* group = groups[row];
       auto tracker = trackRowSize(group);
       auto* accumulator = value<Accumulator>(group);
       accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
       const uint64_t hash = hashValue(decodedValues_, row, inputType_);
       accumulator->hlls[intervalIndex].insertHash(hash);
       clearNull(group);
-    });
+    };
+
+    if (mayHaveNulls) {
+      rows.applyToSelected([&](auto row) {
+        if (decodedValues_.isNullAt(row)) {
+          return;
+        }
+        updateRow(row, groups[row]);
+      });
+    } else {
+      rows.applyToSelected([&](auto row) { updateRow(row, groups[row]); });
+    }
   }
 
   void addSingleGroupRawInput(
@@ -169,27 +177,7 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     const auto mayHaveNulls = decodedValues_.mayHaveNulls();
     auto tracker = trackRowSize(group);
     auto* accumulator = value<Accumulator>(group);
-    if (mayHaveNulls) {
-      rows.applyToSelected([&](auto row) {
-        if (decodedValues_.isNullAt(row)) {
-          return;
-        }
-        const double inputValue = toDouble(decodedValues_, row, inputType_);
-        if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
-          return;
-        }
-        const auto intervalIndex = std::isnan(inputValue)
-            ? (intervalCount_ - 1)
-            : findIntervalIndex(inputValue);
-        accumulator->ensureSize(allocator_, intervalCount_, indexBitLength_);
-        const uint64_t hash = hashValue(decodedValues_, row, inputType_);
-        accumulator->hlls[intervalIndex].insertHash(hash);
-        clearNull(group);
-      });
-      return;
-    }
-
-    rows.applyToSelected([&](auto row) {
+    auto updateRow = [&](auto row) {
       const double inputValue = toDouble(decodedValues_, row, inputType_);
       if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
         return;
@@ -201,7 +189,18 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       const uint64_t hash = hashValue(decodedValues_, row, inputType_);
       accumulator->hlls[intervalIndex].insertHash(hash);
       clearNull(group);
-    });
+    };
+
+    if (mayHaveNulls) {
+      rows.applyToSelected([&](auto row) {
+        if (decodedValues_.isNullAt(row)) {
+          return;
+        }
+        updateRow(row);
+      });
+    } else {
+      rows.applyToSelected([&](auto row) { updateRow(row); });
+    }
   }
 
   void addIntermediateResults(
@@ -420,12 +419,7 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
         }
         return;
       }
-      VELOX_USER_CHECK_EQ(
-          hlls.size(),
-          targetSize,
-          "HLL size {} does not match endpoints size {}",
-          hlls.size(),
-          targetSize);
+      VELOX_USER_CHECK_EQ(hlls.size(), targetSize);
     }
   };
 
@@ -516,15 +510,9 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
 
   void setEndpoints(const std::vector<double>& endpoints) {
     if (endpointsSet_) {
-      VELOX_USER_CHECK_EQ(
-          endpoints_.size(),
-          endpoints.size(),
-          "Endpoints size {} does not match existing size {}",
-          endpoints.size(),
-          endpoints_.size());
+      VELOX_USER_CHECK_EQ(endpoints_.size(), endpoints.size());
       for (size_t i = 0; i < endpoints.size(); ++i) {
-        VELOX_USER_CHECK(
-            endpoints_[i] == endpoints[i], "Endpoints mismatch at index {}", i);
+        VELOX_USER_CHECK_EQ(endpoints_[i], endpoints[i]);
       }
       return;
     }
@@ -565,13 +553,6 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       const DecodedVector& decoded,
       vector_size_t row,
       const TypePtr& type) {
-    auto toDoubleWithConverter = [](auto value) {
-      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(value);
-      VELOX_USER_CHECK(
-          converted.hasValue(), "Failed to convert value to DOUBLE");
-      return converted.value();
-    };
-
     if (type->isDate()) {
       return static_cast<double>(decoded.valueAt<int32_t>(row));
     }
@@ -591,29 +572,8 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       auto scale = type->asLongDecimal().scale();
       return decimalToDouble(value, scale);
     }
-
-    switch (type->kind()) {
-      case TypeKind::TINYINT:
-        return toDoubleWithConverter(decoded.valueAt<int8_t>(row));
-      case TypeKind::SMALLINT:
-        return toDoubleWithConverter(decoded.valueAt<int16_t>(row));
-      case TypeKind::INTEGER:
-        return toDoubleWithConverter(decoded.valueAt<int32_t>(row));
-      case TypeKind::BIGINT:
-        return toDoubleWithConverter(decoded.valueAt<int64_t>(row));
-      case TypeKind::REAL:
-        return toDoubleWithConverter(decoded.valueAt<float>(row));
-      case TypeKind::DOUBLE:
-        return toDoubleWithConverter(decoded.valueAt<double>(row));
-      case TypeKind::TIMESTAMP:
-        return static_cast<double>(decoded.valueAt<Timestamp>(row).toMicros());
-      case TypeKind::HUGEINT:
-        return static_cast<double>(decoded.valueAt<int128_t>(row));
-      default:
-        VELOX_UNSUPPORTED(
-            "Unsupported type for approx_count_distinct_for_intervals: {}",
-            type->toString());
-    }
+    return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+        toDoubleDispatch, type->kind(), decoded, row, type);
   }
 
   static uint64_t hashValue(
