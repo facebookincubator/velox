@@ -1163,6 +1163,22 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
 }
 
+// This test is to verify filterRowGroups() doesn't fail if offset is 0
+// Offset can be zero if the parquet file does not have 'magic number'
+TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
+  auto rowType = ROW({"IDX"}, {INTEGER()});
+  const dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  const std::string zeroOffsetPath(
+      getExampleFilePath("zero_offset_row_group.parquet"));
+
+  auto reader = createReader(zeroOffsetPath, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 1L);
+}
+
 TEST_F(ParquetReaderTest, parseLongTagged) {
   // This is a case for long with annonation read
   const std::string sample(getExampleFilePath("tagged_long.parquet"));
