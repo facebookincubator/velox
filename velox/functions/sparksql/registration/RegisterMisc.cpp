@@ -15,6 +15,7 @@
  */
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/AssertNotNull.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/MonotonicallyIncreasingId.h"
 #include "velox/functions/sparksql/RaiseError.h"
@@ -24,6 +25,11 @@
 
 namespace facebook::velox::functions::sparksql {
 void registerMiscFunctions(const std::string& prefix) {
+  exec::registerStatefulVectorFunction(
+      prefix + "assert_not_null",
+      assertNotNullSignatures(),
+      makeAssertNotNull,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
   registerFunction<MonotonicallyIncreasingIdFunction, int64_t>(
       {prefix + "monotonically_increasing_id"});
   registerFunction<RaiseErrorFunction, UnknownValue, Varchar>(

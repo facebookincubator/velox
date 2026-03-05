@@ -6691,22 +6691,22 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
         auto opStats = toOperatorStats(task->taskStats());
         ASSERT_EQ(
             opStats.at("HashProbe")
-                .runtimeStats[Operator::kExceededMaxSpillLevel]
+                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
                 .sum,
             8);
         ASSERT_EQ(
             opStats.at("HashProbe")
-                .runtimeStats[Operator::kExceededMaxSpillLevel]
+                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
                 .count,
             1);
         ASSERT_EQ(
             opStats.at("HashBuild")
-                .runtimeStats[Operator::kExceededMaxSpillLevel]
+                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
                 .sum,
             8);
         ASSERT_EQ(
             opStats.at("HashBuild")
-                .runtimeStats[Operator::kExceededMaxSpillLevel]
+                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
                 .count,
             1);
       })
@@ -7028,7 +7028,9 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
         auto opStats = toOperatorStats(task->taskStats());
         ASSERT_GT(
-            opStats.at("HashBuild").runtimeStats[Operator::kSpillWrites].sum,
+            opStats.at("HashBuild")
+                .runtimeStats[std::string(Operator::kSpillWrites)]
+                .sum,
             0);
       })
       .run();
@@ -7865,12 +7867,12 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
           }
           ASSERT_GT(
               opStats.at("HashProbe")
-                  .runtimeStats[Operator::kExceededMaxSpillLevel]
+                  .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
                   .sum,
               0);
           ASSERT_GT(
               opStats.at("HashBuild")
-                  .runtimeStats[Operator::kExceededMaxSpillLevel]
+                  .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
                   .sum,
               0);
         })

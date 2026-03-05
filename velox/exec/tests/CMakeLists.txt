@@ -69,6 +69,8 @@ add_executable(
   MergeJoinTest.cpp
   MergeTest.cpp
   MergerTest.cpp
+  MixedUnionTest.cpp
+  MixedUnionWithTableScanTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
@@ -306,7 +308,13 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_library(velox_simple_aggregate SimpleAverageAggregate.cpp SimpleArrayAggAggregate.cpp)
+add_library(
+  velox_simple_aggregate
+  SimpleAverageAggregate.cpp
+  SimpleArrayAggAggregate.cpp
+  SimpleVariadicArrayAggAggregate.cpp
+  SimpleVariadicSumAggregate.cpp
+)
 
 target_link_libraries(
   velox_simple_aggregate

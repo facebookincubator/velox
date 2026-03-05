@@ -239,11 +239,13 @@ TEST_F(RowNumberTest, spill) {
         task->taskStats().pipelineStats.back().operatorStats.at(1);
     auto runtimeStats = operatorStats.runtimeStats;
     ASSERT_EQ(
-        runtimeStats.at(Operator::kSpillReadBytes).sum,
+        runtimeStats.at(std::string(Operator::kSpillReadBytes)).sum,
         operatorStats.spilledBytes);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillReads).sum, 0);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillReadTime).sum, 0);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillDeserializationTime).sum, 0);
+    ASSERT_GT(runtimeStats.at(std::string(Operator::kSpillReads)).sum, 0);
+    ASSERT_GT(runtimeStats.at(std::string(Operator::kSpillReadTime)).sum, 0);
+    ASSERT_GT(
+        runtimeStats.at(std::string(Operator::kSpillDeserializationTime)).sum,
+        0);
 
     task.reset();
     waitForAllTasksToBeDeleted();

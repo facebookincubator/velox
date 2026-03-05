@@ -1132,7 +1132,7 @@ TEST_F(TableScanTest, missingColumns) {
   common::SubfieldFilters filters;
   filters[common::Subfield("c1")] = lessThanOrEqualDouble(1050.0, true);
   auto tableHandle = std::make_shared<HiveTableHandle>(
-      kHiveConnectorId, "tmp", true, std::move(filters), nullptr, dataColumns);
+      kHiveConnectorId, "tmp", std::move(filters), nullptr, dataColumns);
   connector::ColumnHandleMap assignments;
   assignments["c0"] = regularColumn("c0", BIGINT());
   op = PlanBuilder(pool_.get())
@@ -2017,7 +2017,7 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
         18506, std::numeric_limits<int64_t>::max(), false);
 
     auto tableHandle = std::make_shared<HiveTableHandle>(
-        "test-hive", "hive_table", true, std::move(filters), nullptr, nullptr);
+        "test-hive", "hive_table", std::move(filters), nullptr, nullptr);
     auto op = std::make_shared<TableScanNode>(
         "0",
         std::move(outputType),
@@ -2203,12 +2203,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
       filters[common::Subfield("pkey")] =
           std::make_unique<common::TimestampRange>(lower, lower, false);
       auto tableHandle = std::make_shared<HiveTableHandle>(
-          "test-hive",
-          "hive_table",
-          true,
-          std::move(filters),
-          nullptr,
-          nullptr);
+          "test-hive", "hive_table", std::move(filters), nullptr, nullptr);
 
       return PlanBuilder()
           .startTableScan()

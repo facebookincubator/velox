@@ -4533,29 +4533,29 @@ TEST_F(VectorTest, createEmptyLikeComplexTypes) {
       makeFlatVector<int64_t>({1, 2}),
       makeFlatVector<StringView>({"a"_sv, "b"_sv}),
   });
-  auto emptyRow = BaseVector::createEmptyLike(rowVector.get(), 5, pool());
+  auto emptyRow =
+      BaseVector::createEmptyLike<RowVector>(rowVector.get(), 5, pool());
   EXPECT_EQ(emptyRow->size(), 5);
   EXPECT_EQ(emptyRow->type()->kind(), TypeKind::ROW);
-  auto emptyRowVector = emptyRow->as<RowVector>();
-  EXPECT_EQ(emptyRowVector->childrenSize(), 2);
-  EXPECT_EQ(emptyRowVector->childAt(0)->size(), 5);
-  EXPECT_EQ(emptyRowVector->childAt(1)->size(), 5);
+  EXPECT_EQ(emptyRow->childrenSize(), 2);
+  EXPECT_EQ(emptyRow->childAt(0)->size(), 5);
+  EXPECT_EQ(emptyRow->childAt(1)->size(), 5);
 
   auto arrayVector = makeArrayVector<int32_t>({{1, 2}, {3}});
-  auto emptyArray = BaseVector::createEmptyLike(arrayVector.get(), 3, pool());
+  auto emptyArray =
+      BaseVector::createEmptyLike<ArrayVector>(arrayVector.get(), 3, pool());
   EXPECT_EQ(emptyArray->size(), 3);
   EXPECT_EQ(emptyArray->type()->kind(), TypeKind::ARRAY);
-  auto emptyArrayVector = emptyArray->as<ArrayVector>();
-  EXPECT_EQ(emptyArrayVector->elements()->size(), 0);
+  EXPECT_EQ(emptyArray->elements()->size(), 0);
 
   auto mapVector = makeMapVector<int32_t, StringView>({{{1, "a"_sv}}});
-  auto emptyMap = BaseVector::createEmptyLike(mapVector.get(), 4, pool());
+  auto emptyMap =
+      BaseVector::createEmptyLike<MapVector>(mapVector.get(), 4, pool());
   EXPECT_EQ(emptyMap->size(), 4);
   EXPECT_EQ(emptyMap->type()->kind(), TypeKind::MAP);
   EXPECT_EQ(emptyMap->encoding(), VectorEncoding::Simple::MAP);
-  auto emptyMapVector = emptyMap->as<MapVector>();
-  EXPECT_EQ(emptyMapVector->mapKeys()->size(), 0);
-  EXPECT_EQ(emptyMapVector->mapValues()->size(), 0);
+  EXPECT_EQ(emptyMap->mapKeys()->size(), 0);
+  EXPECT_EQ(emptyMap->mapValues()->size(), 0);
 }
 
 TEST_F(VectorTest, createEmptyLikeFlatMap) {
@@ -4583,14 +4583,12 @@ TEST_F(VectorTest, createEmptyLikeNestedFlatMap) {
       flatMapVector,
   });
 
-  auto emptyRow = BaseVector::createEmptyLike(rowWithFlatMap.get(), 3, pool());
+  auto emptyRow =
+      BaseVector::createEmptyLike<RowVector>(rowWithFlatMap.get(), 3, pool());
   EXPECT_EQ(emptyRow->size(), 3);
-  auto emptyRowVector = emptyRow->as<RowVector>();
-  EXPECT_EQ(emptyRowVector->childrenSize(), 2);
-  EXPECT_EQ(
-      emptyRowVector->childAt(0)->encoding(), VectorEncoding::Simple::FLAT);
-  EXPECT_EQ(
-      emptyRowVector->childAt(1)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  EXPECT_EQ(emptyRow->childrenSize(), 2);
+  EXPECT_EQ(emptyRow->childAt(0)->encoding(), VectorEncoding::Simple::FLAT);
+  EXPECT_EQ(emptyRow->childAt(1)->encoding(), VectorEncoding::Simple::FLAT_MAP);
 
   // ARRAY of FlatMapVector.
   auto arrayType = ARRAY(MAP(BIGINT(), BIGINT()));
@@ -4603,13 +4601,11 @@ TEST_F(VectorTest, createEmptyLikeNestedFlatMap) {
       allocateSizes(2, pool()),
       flatMapVector);
 
-  auto emptyArray =
-      BaseVector::createEmptyLike(arrayOfFlatMaps.get(), 4, pool());
+  auto emptyArray = BaseVector::createEmptyLike<ArrayVector>(
+      arrayOfFlatMaps.get(), 4, pool());
   EXPECT_EQ(emptyArray->size(), 4);
-  auto emptyArrayVector = emptyArray->as<ArrayVector>();
   EXPECT_EQ(
-      emptyArrayVector->elements()->encoding(),
-      VectorEncoding::Simple::FLAT_MAP);
+      emptyArray->elements()->encoding(), VectorEncoding::Simple::FLAT_MAP);
 }
 
 } // namespace
