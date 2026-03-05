@@ -16,6 +16,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <cmath>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
@@ -1587,13 +1588,97 @@ bool Expr::applyFunctionWithPeeling(
   return true;
 }
 
+std::unique_ptr<CpuWallTimer> Expr::cpuWallTimer(const EvalCtx& context) {
+  // 1. Compile-time tracking always wins.
+  if (trackCpuUsage_) {
+    return std::make_unique<CpuWallTimer>(stats_.timing);
+  }
+
+  // 2. Adaptive per-function sampling.
+  if (context.adaptiveCpuSamplingEnabled()) {
+    switch (adaptiveState_) {
+      case AdaptiveCpuSamplingState::kWarmup:
+        // Warmup batch: just run the function, no timing.
+        return nullptr;
+      case AdaptiveCpuSamplingState::kCalibrating: {
+        // Directly measure the cost of creating and destroying a CpuWallTimer
+        // (heap alloc + 2x clock_gettime + heap dealloc). This is the exact
+        // overhead that CPU tracking adds per function invocation.
+        CpuWallTiming dummyTiming;
+        auto overheadStart = std::chrono::steady_clock::now();
+        {
+          auto dummy = std::make_unique<CpuWallTimer>(dummyTiming);
+        }
+        auto overheadEnd = std::chrono::steady_clock::now();
+        calibrationTimerOverheadNanos_ +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                overheadEnd - overheadStart)
+                .count();
+
+        // Now measure function execution time (without CpuWallTimer).
+        adaptiveWallStart_ = std::chrono::steady_clock::now();
+        return nullptr;
+      }
+      case AdaptiveCpuSamplingState::kAlwaysTrack:
+        return std::make_unique<CpuWallTimer>(stats_.timing);
+      case AdaptiveCpuSamplingState::kSampling:
+        if (++adaptiveSamplingCounter_ % adaptiveSamplingRate_ == 0) {
+          return std::make_unique<CpuWallTimer>(stats_.timing);
+        }
+        return nullptr;
+    }
+  }
+
+  return nullptr;
+}
+
+void Expr::finalizeAdaptiveCalibration(double maxOverheadPct) {
+  switch (adaptiveState_) {
+    case AdaptiveCpuSamplingState::kWarmup: {
+      adaptiveState_ = AdaptiveCpuSamplingState::kCalibrating;
+      break;
+    }
+    case AdaptiveCpuSamplingState::kCalibrating: {
+      calibrationFunctionWallNanos_ +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - adaptiveWallStart_)
+              .count();
+
+      if (++calibrationBatchCount_ < kCalibrationBatches) {
+        break;
+      }
+
+      if (calibrationFunctionWallNanos_ > 0) {
+        double overheadPct = 100.0 *
+            static_cast<double>(calibrationTimerOverheadNanos_) /
+            static_cast<double>(calibrationFunctionWallNanos_);
+
+        if (overheadPct > maxOverheadPct) {
+          adaptiveSamplingRate_ =
+              static_cast<uint32_t>(std::ceil(overheadPct / maxOverheadPct));
+          adaptiveState_ = AdaptiveCpuSamplingState::kSampling;
+        } else {
+          adaptiveState_ = AdaptiveCpuSamplingState::kAlwaysTrack;
+        }
+      } else {
+        // Function ~0ns — timer dominates. Aggressive sampling.
+        adaptiveSamplingRate_ = 100;
+        adaptiveState_ = AdaptiveCpuSamplingState::kSampling;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 void Expr::applyFunction(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
   stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
-  auto timer = cpuWallTimer();
+  auto timer = cpuWallTimer(context);
 
   computeIsAsciiForInputs(vectorFunction_.get(), inputValues_, rows);
   auto isAscii = type()->isVarchar()
@@ -1633,6 +1718,12 @@ void Expr::applyFunction(
     result->asUnchecked<SimpleVector<StringView>>()->setIsAscii(
         isAscii.value(), rows);
   }
+
+  // Only do Adaptive Calibration if the adaptive sampling is on and we are in
+  // warmup or calibrating state.
+  if (context.adaptiveCpuSamplingEnabled() && isCalibrating()) {
+    finalizeAdaptiveCalibration(context.adaptiveCpuSamplingMaxOverheadPct());
+  }
 }
 
 void Expr::evalSpecialFormWithStats(
@@ -1641,9 +1732,15 @@ void Expr::evalSpecialFormWithStats(
     VectorPtr& result) {
   stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
-  auto timer = cpuWallTimer();
+  auto timer = cpuWallTimer(context);
 
   evalSpecialForm(rows, context, result);
+
+  // Only do Adaptive Calibration if the adaptive sampling is on and we are in
+  // warmup or calibrating state.
+  if (context.adaptiveCpuSamplingEnabled() && isCalibrating()) {
+    finalizeAdaptiveCalibration(context.adaptiveCpuSamplingMaxOverheadPct());
+  }
 }
 
 namespace {
@@ -1873,7 +1970,14 @@ ExprSet::ExprSet(
     core::ExecCtx* execCtx,
     bool enableConstantFolding,
     bool lazyDereference)
-    : execCtx_(execCtx), lazyDereference_(lazyDereference) {
+    : execCtx_(execCtx),
+      lazyDereference_(lazyDereference),
+      adaptiveCpuSampling_(
+          execCtx->queryCtx()->queryConfig().exprAdaptiveCpuSampling()),
+      adaptiveCpuSamplingMaxOverheadPct_(
+          execCtx->queryCtx()
+              ->queryConfig()
+              .exprAdaptiveCpuSamplingMaxOverheadPct()) {
   exprs_ = compileExpressions(sources, execCtx, this, enableConstantFolding);
   if (lazyDereference_) {
     validateLazyDereference(exprs_);
@@ -1904,7 +2008,21 @@ void addStats(
   bool emptyStats =
       !expr.stats().numProcessedRows && !expr.stats().defaultNullRowsSkipped;
   if (!emptyStats && !excludeSplFormExpr) {
-    stats[expr.name()].add(expr.stats());
+    // For functions in adaptive sampling mode, extrapolate timing to
+    // approximate full-population stats.
+    if (expr.isAdaptiveSampling() && expr.stats().timing.count > 0) {
+      exec::ExprStats adjusted = expr.stats();
+      double ratio = static_cast<double>(adjusted.numProcessedVectors) /
+          static_cast<double>(adjusted.timing.count);
+      adjusted.timing.cpuNanos = static_cast<uint64_t>(
+          static_cast<double>(adjusted.timing.cpuNanos) * ratio);
+      adjusted.timing.wallNanos = static_cast<uint64_t>(
+          static_cast<double>(adjusted.timing.wallNanos) * ratio);
+      adjusted.timing.count = adjusted.numProcessedVectors;
+      stats[expr.name()].add(adjusted);
+    } else {
+      stats[expr.name()].add(expr.stats());
+    }
   }
 
   for (const auto& input : expr.inputs()) {
@@ -2027,6 +2145,13 @@ void ExprSet::eval(
   result.resize(exprs_.size());
   if (initialize) {
     clearSharedSubexprs();
+  }
+
+  // Apply adaptive per-function CPU sampling if configured.
+  if (adaptiveCpuSampling_) {
+    context.setAdaptiveCpuSamplingEnabled(true);
+    context.setAdaptiveCpuSamplingMaxOverheadPct(
+        adaptiveCpuSamplingMaxOverheadPct_);
   }
 
   if (!lazyDereference_) {

@@ -406,6 +406,16 @@ class Expr {
     return stats_;
   }
 
+  /// Returns true if this expression is in adaptive sampling mode.
+  bool isAdaptiveSampling() const {
+    return adaptiveState_ == AdaptiveCpuSamplingState::kSampling;
+  }
+
+  /// Returns the adaptive sampling rate (0 = always track, N = sample 1/N).
+  uint32_t adaptiveSamplingRate() const {
+    return adaptiveSamplingRate_;
+  }
+
   void addNulls(
       const SelectivityVector& rows,
       const uint64_t* rawNulls,
@@ -592,11 +602,24 @@ class Expr {
       EvalCtx& context,
       VectorPtr& result);
 
-  /// Returns an instance of CpuWallTimer if cpu usage tracking is enabled. Null
-  /// otherwise.
-  std::unique_ptr<CpuWallTimer> cpuWallTimer() {
-    return trackCpuUsage_ ? std::make_unique<CpuWallTimer>(stats_.timing)
-                          : nullptr;
+  /// Returns an instance of CpuWallTimer based on the tracking mode:
+  /// 1. Compile-time tracking (trackCpuUsage_) — always creates timer
+  /// 2. Adaptive per-function sampling — creates timer based on calibration
+  ///    state and per-function overhead
+  std::unique_ptr<CpuWallTimer> cpuWallTimer(const EvalCtx& context);
+
+  /// Finalizes adaptive calibration after function execution. Called from
+  /// applyFunction() and evalSpecialFormWithStats() when adaptive sampling
+  /// is enabled. Transitions the per-function state machine based on
+  /// measured overhead.
+  void finalizeAdaptiveCalibration(double maxOverheadPct);
+
+  /// Returns true if adaptive calibration is still in progress (warmup or
+  /// calibrating). Used to skip the finalizeAdaptiveCalibration() call on
+  /// the hot path once calibration is complete.
+  bool isCalibrating() const {
+    return adaptiveState_ == AdaptiveCpuSamplingState::kWarmup ||
+        adaptiveState_ == AdaptiveCpuSamplingState::kCalibrating;
   }
 
   // Should be called only after computeMetadata() has been called on 'inputs_'.
@@ -709,6 +732,36 @@ class Expr {
 
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
+
+  /// Per-function adaptive CPU sampling state machine.
+  enum class AdaptiveCpuSamplingState : uint8_t {
+    /// First batch: warm up caches, discard timing.
+    kWarmup,
+    /// Next N batches: measure CpuWallTimer overhead and function cost.
+    kCalibrating,
+    /// Calibration complete: overhead is acceptable, always track.
+    kAlwaysTrack,
+    /// Calibration complete: overhead is too high, sample at computed rate.
+    kSampling,
+  };
+
+  /// Number of calibration batches (more batches = less noise).
+  static constexpr uint32_t kCalibrationBatches = 5;
+
+  AdaptiveCpuSamplingState adaptiveState_{AdaptiveCpuSamplingState::kWarmup};
+  /// Wall time snapshot for measuring function execution time.
+  std::chrono::steady_clock::time_point adaptiveWallStart_;
+  /// Accumulated CpuWallTimer overhead (creation + destruction) during
+  /// calibration.
+  uint64_t calibrationTimerOverheadNanos_{0};
+  /// Accumulated function wall time (without timer) during calibration.
+  uint64_t calibrationFunctionWallNanos_{0};
+  /// Counter for calibration batches.
+  uint32_t calibrationBatchCount_{0};
+  /// Computed sampling rate: 0 = always track, N = track every N-th batch.
+  uint32_t adaptiveSamplingRate_{0};
+  /// Counter for sampling cadence.
+  uint32_t adaptiveSamplingCounter_{0};
 
   // If true computeMetaData returns, otherwise meta data is computed and the
   // flag is set to true.
@@ -835,6 +888,10 @@ class ExprSet {
   std::unordered_set<Expr*> memoizingExprs_;
   core::ExecCtx* const execCtx_;
   const bool lazyDereference_;
+
+  // Cached from QueryConfig at construction time to avoid repeated map lookups.
+  const bool adaptiveCpuSampling_;
+  const double adaptiveCpuSamplingMaxOverheadPct_;
 };
 
 class ExprSetSimplified : public ExprSet {

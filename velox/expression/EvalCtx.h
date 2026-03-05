@@ -539,6 +539,24 @@ class EvalCtx {
     return execCtx_->optimizationParams().dictionaryMemoizationEnabled;
   }
 
+  /// Returns true if adaptive per-function CPU sampling is enabled.
+  bool adaptiveCpuSamplingEnabled() const {
+    return adaptiveCpuSamplingEnabled_;
+  }
+
+  void setAdaptiveCpuSamplingEnabled(bool enabled) {
+    adaptiveCpuSamplingEnabled_ = enabled;
+  }
+
+  /// Returns the maximum acceptable overhead pct for adaptive sampling.
+  double adaptiveCpuSamplingMaxOverheadPct() const {
+    return adaptiveCpuSamplingMaxOverheadPct_;
+  }
+
+  void setAdaptiveCpuSamplingMaxOverheadPct(double pct) {
+    adaptiveCpuSamplingMaxOverheadPct_ = pct;
+  }
+
   /// Returns the maximum number of distinct inputs to cache results for in a
   /// given shared subexpression.
   uint32_t maxSharedSubexprResultsCached() const {
@@ -610,6 +628,12 @@ class EvalCtx {
   // If 'captureErrorDetails()' is false, stores flags indicating which rows had
   // errors without storing actual exceptions.
   EvalErrorsPtr errors_;
+
+  // Whether adaptive per-function CPU sampling is enabled.
+  bool adaptiveCpuSamplingEnabled_{false};
+
+  // Maximum acceptable overhead percentage for adaptive CPU sampling.
+  double adaptiveCpuSamplingMaxOverheadPct_{1.0};
 };
 
 /// Utility wrapper struct that is used to temporarily reset the value of the

@@ -281,6 +281,18 @@ Expression Evaluation Configuration
        ``expression.track_cpu_usage`` is set to false. Function names are case-insensitive and will be normalized
        to lowercase. This allows fine-grained control over CPU tracking overhead when only specific functions need to
        be monitored.
+   * - expression.adaptive_cpu_sampling
+     - boolean
+     - false
+     - Whether to enable adaptive CPU sampling for expression evaluation. Adaptive CPU sampling is a technique that
+       dynamically adjusts the sampling rate based on the observed CPU usage. It is designed to balance the trade-off
+       between accuracy and overhead.
+   * - expression.adaptive_cpu_sampling_max_overhead_pct
+     - float
+     - 1.0
+     - The maximum overhead percentage allowed for adaptive CPU sampling. The default value is 1.0, which means that the
+       sampling will be enabled by default if the overhead is less than 1%. If the overhead exceeds this threshold, the
+       sampling will be decided by adaptive_cpu_sampling_max_overhead_pct / overhead.
    * - legacy_cast
      - bool
      - false
