@@ -30,12 +30,12 @@ namespace facebook::velox::functions {
 
 namespace {
 
-/// Encode a single delta value using Google Polyline encoding
+/// Encode a single delta value using Google Polyline encoding.
 /// https://developers.google.com/maps/documentation/utilities/polylinealgorithm
 /// Algorithm:
-/// 1. Convert signed to unsigned
-/// 2. Encode in 5 bit lumps
-/// 3. Add 63 to each lump to make it printable ASCII
+/// 1. Convert signed to unsigned.
+/// 2. Encode in 5 bit lumps.
+/// 3. Add 63 to each lump to make it printable ASCII.
 inline void encodeNextDelta(int64_t delta, std::string& result) {
   int64_t unsignedDelta = delta << 1;
   if (delta < 0) {
@@ -53,9 +53,9 @@ inline void encodeNextDelta(int64_t delta, std::string& result) {
 
 /// https://developers.google.com/maps/documentation/utilities/polylinealgorithm
 /// Algorithm:
-/// 1. Read 5 bit lumps until continuation bit is not set
-/// 2. Combine lumps into unsigned value
-/// 3. Convert unsigned to signed
+/// 1. Read 5 bit lumps until continuation bit is not set.
+/// 2. Combine lumps into unsigned value.
+/// 3. Convert unsigned to signed.
 inline int64_t decodeNextDelta(const std::string& encoded, size_t& index) {
   int64_t result = 0;
   int shift = 0;
@@ -77,27 +77,27 @@ inline int64_t decodeNextDelta(const std::string& encoded, size_t& index) {
 
 } // namespace
 
-// Default and minimum precision values for Google Polyline encoding
+// Default and minimum precision values for Google Polyline encoding.
 constexpr int64_t kDefaultPrecisionExponent = 5;
 constexpr int64_t kMinimumPrecisionExponent = 1;
 
 /// Google Polyline Encode Function
 /// Encodes an array of Point geometries into a Google Polyline encoded string.
-/// Input: array(Geometry) :Array of Point geometries
-/// Output: varchar :Google Polyline encoded string
-/// Optional: precision exponent
+/// Input: array(Geometry) :Array of Point geometries.
+/// Output: varchar :Google Polyline encoded string.
+/// Optional: precision exponent.
 template <typename T>
 struct GooglePolylineEncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // Encode array of Point geometries with default precision
+  // Encode array of Point geometries with default precision.
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Array<Geometry>>& points) {
     callImpl(result, points, kDefaultPrecisionExponent);
   }
 
-  // Encode array of Point geometries with custom precision
+  // Encode array of Point geometries with custom precision.
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Array<Geometry>>& points,
@@ -146,11 +146,11 @@ struct GooglePolylineEncodeFunction {
 }
 };
 
-/// Google Polyline Decode Function
+/// Google Polyline Decode Function.
 /// Decodes a Google Polyline encoded string into an array of Point geometries.
-/// Input: varchar :Google Polyline encoded string
-/// Output: array(Geometry) :Array of Point geometries
-/// Optional: precision exponent
+/// Input: varchar :Google Polyline encoded string.
+/// Output: array(Geometry) :Array of Point geometries.
+/// Optional: precision exponent.
 template <typename T>
 struct GooglePolylineDecodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -158,14 +158,14 @@ struct GooglePolylineDecodeFunction {
   GooglePolylineDecodeFunction() {
     factory_ = geos::geom::GeometryFactory::create();
   }
-  // Decode polyline to array of Point geometries with default precision
+  // Decode polyline to array of Point geometries with default precision.
   FOLLY_ALWAYS_INLINE void call(
       out_type<Array<Geometry>>& result,
       const arg_type<Varchar>& encoded) {
     callImpl(result, encoded, kDefaultPrecisionExponent);
   }
 
-  // Decode polyline to array of Point geometries with custom precision
+  // Decode polyline to array of Point geometries with custom precision.
   FOLLY_ALWAYS_INLINE void call(
       out_type<Array<Geometry>>& result,
       const arg_type<Varchar>& encoded,
