@@ -172,9 +172,19 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   return outputTables;
 }
 
+void streamsWaitForStream(
+    CudaEvent& event,
+    const std::vector<rmm::cuda_stream_view>& streams,
+    rmm::cuda_stream_view stream) {
+  event.recordFrom(stream);
+  for (const auto& strm : streams) {
+    event.waitOn(strm);
+  }
+}
+
 CudaEvent::CudaEvent(unsigned int flags) {
   cudaEvent_t ev{};
-  cudaEventCreateWithFlags(&ev, flags);
+  CUDF_CUDA_TRY(cudaEventCreateWithFlags(&ev, flags));
   event_ = ev;
 }
 
@@ -190,12 +200,12 @@ CudaEvent::CudaEvent(CudaEvent&& other) noexcept : event_(other.event_) {
 }
 
 const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
-  cudaEventRecord(event_, stream.value());
+  CUDF_CUDA_TRY(cudaEventRecord(event_, stream.value()));
   return *this;
 }
 
 const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
-  cudaStreamWaitEvent(stream.value(), event_, 0);
+  CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
   return *this;
 }
 

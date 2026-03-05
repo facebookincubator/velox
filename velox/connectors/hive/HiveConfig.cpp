@@ -264,6 +264,13 @@ bool HiveConfig::indexEnabled(const config::ConfigBase* session) const {
       kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
 }
 
+bool HiveConfig::readerCollectColumnStats(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kReaderCollectColumnStatsSession,
+      config_->get<bool>(kReaderCollectColumnStats, false));
+}
+
 uint32_t HiveConfig::maxRowsPerIndexRequest(
     const config::ConfigBase* session) const {
   return session->get<uint32_t>(

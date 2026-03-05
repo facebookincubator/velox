@@ -824,6 +824,20 @@ Each query can override the config by setting corresponding query session proper
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
+  * - hive.max-rows-per-index-request
+    - hive.max_rows_per_index_request
+    - integer
+    - 0
+    - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
+      after filtering. 0 means no limit (default).
+  * - hive.reader.collect-column-stats
+    - hive.reader.collect_column_stats
+    - bool
+    - false
+    - If true, enables collection of per-column timing statistics during file reading. This includes
+      decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
+      ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
+      Useful for performance analysis and identifying slow columns.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1282,3 +1296,7 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.
+   * - cudf.function_engine
+     - string
+     - presto
+     - Register the function for a specific engine. The optional values are presto or spark.

@@ -688,6 +688,8 @@ void configureRowReaderOptions(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         hiveConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setCollectColumnStats(
+        hiveConfig->readerCollectColumnStats(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }

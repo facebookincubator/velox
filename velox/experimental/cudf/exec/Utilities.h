@@ -147,4 +147,20 @@ class CudaEvent {
  private:
   cudaEvent_t event_{};
 };
+
+/**
+ * @brief Makes all target streams wait for a source stream's pending work.
+ *
+ * Records an event on @p stream, then makes each stream in @p streams wait
+ * for that event. This is useful when multiple streams hold resources that
+ * must not be freed until work on @p stream has completed.
+ *
+ * @param event   A reusable CudaEvent (avoids per-call creation overhead)
+ * @param streams The streams that should wait
+ * @param stream  The stream whose pending work must complete first
+ */
+void streamsWaitForStream(
+    CudaEvent& event,
+    const std::vector<rmm::cuda_stream_view>& streams,
+    rmm::cuda_stream_view stream);
 } // namespace facebook::velox::cudf_velox
