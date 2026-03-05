@@ -15,7 +15,6 @@
  */
 
 #include <cmath>
-#include <limits>
 #include <vector>
 
 #include <fmt/format.h>
@@ -88,6 +87,22 @@ class ApproxCountDistinctForIntervalsAggregateTest
           std::abs(ndv / static_cast<double>(expectedNdv) - 1.0);
       EXPECT_LE(error, rsd * 3.0) << "Index " << i;
     }
+  }
+
+  template <typename T>
+  void runIntegerInputTypeTest(
+      const std::vector<int32_t>& valuesData,
+      const std::vector<int32_t>& endpointsData,
+      const std::vector<int64_t>& expected) {
+    std::vector<T> values(valuesData.begin(), valuesData.end());
+    std::vector<T> endpoints(endpointsData.begin(), endpointsData.end());
+    auto valuesVector = makeFlatVector<T>(values);
+    auto endpointsVector =
+        makeEndpointsVector<T>(valuesVector->size(), endpoints);
+    auto data = makeRowVector({valuesVector, endpointsVector});
+    auto ndvs = runGlobalAggregation(
+        data, "approx_count_distinct_for_intervals(c0, c1, 0.05)", true);
+    checkNdvs(ndvs, expected, 0.05);
   }
 };
 
@@ -234,79 +249,11 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, inputTypes) {
   const std::vector<int32_t> valuesData = {0, 60, 30, 100, 60, 50, 60, 33};
   const std::vector<int64_t> expected = {3, 2, 1, 1, 1};
 
-  // Tinyint.
-  {
-    std::vector<int8_t> valuesDataTiny;
-    std::vector<int8_t> endpointsDataTiny;
-    valuesDataTiny.reserve(valuesData.size());
-    endpointsDataTiny.reserve(endpointsData.size());
-    for (auto value : valuesData) {
-      valuesDataTiny.push_back(static_cast<int8_t>(value));
-    }
-    for (auto value : endpointsData) {
-      endpointsDataTiny.push_back(static_cast<int8_t>(value));
-    }
-    auto values = makeFlatVector<int8_t>(valuesDataTiny);
-    auto endpoints =
-        makeEndpointsVector<int8_t>(values->size(), endpointsDataTiny);
-    auto data = makeRowVector({values, endpoints});
-    auto ndvs = runGlobalAggregation(
-        data, "approx_count_distinct_for_intervals(c0, c1, 0.05)", true);
-    checkNdvs(ndvs, expected, 0.05);
-  }
-
-  // Smallint.
-  {
-    std::vector<int16_t> valuesDataSmall;
-    std::vector<int16_t> endpointsDataSmall;
-    valuesDataSmall.reserve(valuesData.size());
-    endpointsDataSmall.reserve(endpointsData.size());
-    for (auto value : valuesData) {
-      valuesDataSmall.push_back(static_cast<int16_t>(value));
-    }
-    for (auto value : endpointsData) {
-      endpointsDataSmall.push_back(static_cast<int16_t>(value));
-    }
-    auto values = makeFlatVector<int16_t>(valuesDataSmall);
-    auto endpoints =
-        makeEndpointsVector<int16_t>(values->size(), endpointsDataSmall);
-    auto data = makeRowVector({values, endpoints});
-    auto ndvs = runGlobalAggregation(
-        data, "approx_count_distinct_for_intervals(c0, c1, 0.05)", true);
-    checkNdvs(ndvs, expected, 0.05);
-  }
-
-  // Integer.
-  {
-    auto values = makeFlatVector<int32_t>(valuesData);
-    auto endpoints =
-        makeEndpointsVector<int32_t>(values->size(), endpointsData);
-    auto data = makeRowVector({values, endpoints});
-    auto ndvs = runGlobalAggregation(
-        data, "approx_count_distinct_for_intervals(c0, c1, 0.05)", true);
-    checkNdvs(ndvs, expected, 0.05);
-  }
-
-  // Bigint.
-  {
-    std::vector<int64_t> valuesDataBig;
-    std::vector<int64_t> endpointsDataBig;
-    valuesDataBig.reserve(valuesData.size());
-    endpointsDataBig.reserve(endpointsData.size());
-    for (auto value : valuesData) {
-      valuesDataBig.push_back(static_cast<int64_t>(value));
-    }
-    for (auto value : endpointsData) {
-      endpointsDataBig.push_back(static_cast<int64_t>(value));
-    }
-    auto values = makeFlatVector<int64_t>(valuesDataBig);
-    auto endpoints =
-        makeEndpointsVector<int64_t>(values->size(), endpointsDataBig);
-    auto data = makeRowVector({values, endpoints});
-    auto ndvs = runGlobalAggregation(
-        data, "approx_count_distinct_for_intervals(c0, c1, 0.05)", true);
-    checkNdvs(ndvs, expected, 0.05);
-  }
+  // Integer types.
+  runIntegerInputTypeTest<int8_t>(valuesData, endpointsData, expected);
+  runIntegerInputTypeTest<int16_t>(valuesData, endpointsData, expected);
+  runIntegerInputTypeTest<int32_t>(valuesData, endpointsData, expected);
+  runIntegerInputTypeTest<int64_t>(valuesData, endpointsData, expected);
 
   // Date.
   {
