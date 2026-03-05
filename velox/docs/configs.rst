@@ -817,6 +817,13 @@ Each query can override the config by setting corresponding query session proper
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
        after filtering. 0 means no limit (default).
+   * - file-metadata-cache-enabled
+     - file_metadata_cache_enabled
+     - bool
+     - false
+     - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
+       the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
+       serve metadata from cache with zero file IO. Currently only supported by Nimble format.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1154,15 +1161,18 @@ Spark-specific Configuration
      - integer
      - 1000000
      - The default number of expected items for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.max_num_items
+     - integer
+     - 4000000
+     - The maximum number of items for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.bloom_filter.num_bits
      - integer
      - 8388608
      - The default number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.bloom_filter.max_num_bits
      - integer
-     - 4194304
-     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
-       the value of this config can not exceed the default value.
+     - 67108864
+     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.partition_id
      - integer
      -

@@ -638,6 +638,8 @@ void configureReaderOptions(
       connectorQueryCtx->adjustTimestampToTimezone());
   readerOptions.setSelectiveNimbleReaderEnabled(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
+  readerOptions.setFileMetadataCacheEnabled(
+      hiveConfig->fileMetadataCacheEnabled(sessionProperties));
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
