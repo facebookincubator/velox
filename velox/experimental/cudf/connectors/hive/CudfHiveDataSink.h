@@ -308,7 +308,8 @@ class CudfHiveDataSink : public DataSink {
  private:
   // Creates a new cudf chunked parquet writer.
   std::unique_ptr<cudf::io::chunked_parquet_writer> createCudfWriter(
-      cudf::table_view cudfTable);
+      cudf::table_view cudfTable,
+      rmm::cuda_stream_view stream);
   cudf::io::table_input_metadata createCudfTableInputMetadata(
       cudf::table_view cudfTable);
 

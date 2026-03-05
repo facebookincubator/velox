@@ -38,6 +38,7 @@ struct CudfConfig {
       "cudf.jit_expression_enabled"};
   static constexpr const char* kCudfJitExpressionPriority{
       "cudf.jit_expression_priority"};
+  static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
   static constexpr const char* kCudfBatchSizeMinThreshold{
@@ -46,6 +47,11 @@ struct CudfConfig {
       "cudf.batch_size_max_threshold"};
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
+  // The value could be either spark or presto.
+  static constexpr const char* kCudfFunctionEngine{"cudf.function_engine"};
+
+  /// Query session configs for the cuDF Operators.
+  static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -71,6 +77,11 @@ struct CudfConfig {
   /// The initial percent of GPU memory to allocate for pool or arena memory
   /// resources.
   int32_t memoryPercent{50};
+
+  /// Memory resource for output vectors. When set to a value different from
+  /// memoryResource, a separate MR is created for output allocations.
+  /// When empty, the main memoryResource is used.
+  std::string outputMemoryResource;
 
   /// Register all the functions with the functionNamePrefix.
   std::string functionNamePrefix;
@@ -112,6 +123,12 @@ struct CudfConfig {
   /// Maximum rows allowed in a concatenated batch (user configurable).
   /// When not set, cuDF's own `size_type::max()` is used.
   std::optional<int32_t> batchSizeMaxThreshold;
+  // Query config key for the TopN batch size in the cuDF TopN operator.
+  int32_t topNBatchSize{5};
+
+  // Register the Spark or Presto functions, the value could be either spark or
+  // presto.
+  std::string functionEngine{"presto"};
 };
 
 } // namespace facebook::velox::cudf_velox
