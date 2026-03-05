@@ -179,8 +179,8 @@ core::FieldAccessTypedExprPtr renameFieldAccess(
   return std::make_shared<core::FieldAccessTypedExpr>(field->type(), newName);
 }
 
-// Converts a join condition's key name from input column name to table column
-// name. Returns a new condition with the converted key name.
+// Converts an index lookup condition's key name from input column name to table
+// column name. Returns a new condition with the converted key name.
 core::IndexLookupConditionPtr convertConditionKeyName(
     const core::IndexLookupConditionPtr& condition,
     const connector::ColumnHandleMap& assignments) {
@@ -376,7 +376,7 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
 
 HiveIndexSource::HiveIndexSource(
     const RowTypePtr& requestType,
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const RowTypePtr& outputType,
     HiveTableHandlePtr tableHandle,
     const ColumnHandleMap& columnHandles,
@@ -397,49 +397,53 @@ HiveIndexSource::HiveIndexSource(
       executor_(executor),
       ioStatistics_(std::make_shared<io::IoStatistics>()),
       ioStats_(std::make_shared<IoStats>()) {
-  init(columnHandles, joinConditions);
+  init(columnHandles, indexLookupConditions);
 }
 
-void HiveIndexSource::initJoinConditions(
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+void HiveIndexSource::initIndexLookupConditions(
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const ColumnHandleMap& assignments) {
   const auto& indexColumns = tableHandle_->indexColumns();
   const auto& dataColumns = tableHandle_->dataColumns();
 
-  // Build a map from join condition key name to condition for quick lookup.
-  // The key name in IndexLookupCondition references input column name, we need
-  // to convert it to the table column name using assignments.
+  // Build a map from index lookup condition key name to condition for quick
+  // lookup. The key name in IndexLookupCondition references input column name,
+  // we need to convert it to the table column name using assignments.
   folly::F14FastMap<std::string, core::IndexLookupConditionPtr>
-      joinConditionMap;
-  for (const auto& condition : joinConditions) {
+      indexLookupConditionMap;
+  for (const auto& condition : indexLookupConditions) {
     auto convertedCondition = convertConditionKeyName(condition, assignments);
     const auto& columnName = convertedCondition->key->name();
     VELOX_USER_CHECK(
-        joinConditionMap.emplace(columnName, std::move(convertedCondition))
+        indexLookupConditionMap
+            .emplace(columnName, std::move(convertedCondition))
             .second,
-        "Duplicate join key found in joinConditions: {}",
+        "Duplicate lookup key found in indexLookupConditions: {}",
         columnName);
   }
 
-  joinConditions_.reserve(indexColumns.size());
-  size_t numValidJoinConditions{0};
-  // Process index columns in order, converting filters to join conditions
-  // where possible. A range filter/condition stops further processing.
+  indexLookupConditions_.reserve(indexColumns.size());
+  size_t numValidIndexLookupConditions{0};
+  // Process index columns in order, converting filters to index lookup
+  // conditions where possible. A range filter/condition stops further
+  // processing.
   for (const auto& indexColumn : indexColumns) {
     const common::Subfield subfield(indexColumn);
     const auto filterIt = filters_.find(subfield);
     const bool hasFilter = filterIt != filters_.end();
-    const auto conditionIt = joinConditionMap.find(indexColumn);
-    const bool hasJoinCondition = conditionIt != joinConditionMap.end();
+    const auto conditionIt = indexLookupConditionMap.find(indexColumn);
+    const bool hasIndexLookupCondition =
+        conditionIt != indexLookupConditionMap.end();
 
-    // Cannot have both a filter and a join condition on the same column.
+    // Cannot have both a filter and an index lookup condition on the same
+    // column.
     VELOX_CHECK(
-        !(hasFilter && hasJoinCondition),
-        "Cannot have both filter and join condition on index column {}",
+        !(hasFilter && hasIndexLookupCondition),
+        "Cannot have both filter and index lookup condition on index column {}",
         indexColumn);
 
-    if (!hasFilter && !hasJoinCondition) {
-      // No filter or join condition on this column - stop processing.
+    if (!hasFilter && !hasIndexLookupCondition) {
+      // No filter or index lookup condition on this column - stop processing.
       break;
     }
 
@@ -450,12 +454,12 @@ void HiveIndexSource::initJoinConditions(
         "Index column {} not found in data columns",
         indexColumn);
 
-    if (hasJoinCondition) {
-      // Use the existing join condition as-is.
+    if (hasIndexLookupCondition) {
+      // Use the existing index lookup condition as-is.
       const auto& condition = conditionIt->second;
-      joinConditions_.push_back(condition);
+      indexLookupConditions_.push_back(condition);
       VELOX_CHECK(!condition->isFilter());
-      ++numValidJoinConditions;
+      ++numValidIndexLookupConditions;
 
       // Check if this is a range condition (Between) - stops further
       // processing.
@@ -466,7 +470,7 @@ void HiveIndexSource::initJoinConditions(
       continue;
     }
 
-    // Has filter - try to convert to join condition.
+    // Has filter - try to convert to index lookup condition.
     VELOX_CHECK(hasFilter);
     const auto& columnType = dataColumns->childAt(*typeIdx);
     const auto* filter = filterIt->second.get();
@@ -475,7 +479,7 @@ void HiveIndexSource::initJoinConditions(
     if (pointValue.has_value()) {
       auto condition = createEqualConditionWithConstant(
           indexColumn, columnType, pointValue.value());
-      joinConditions_.push_back(condition);
+      indexLookupConditions_.push_back(condition);
       // Remove converted filter from filters_ map.
       filters_.erase(filterIt);
       continue;
@@ -486,7 +490,7 @@ void HiveIndexSource::initJoinConditions(
     if (rangeBounds.has_value()) {
       auto condition = createBetweenConditionWithConstants(
           indexColumn, columnType, rangeBounds->first, rangeBounds->second);
-      joinConditions_.push_back(condition);
+      indexLookupConditions_.push_back(condition);
       // Remove converted filter from filters_ map.
       filters_.erase(filterIt);
       // Range condition stops further processing.
@@ -499,9 +503,9 @@ void HiveIndexSource::initJoinConditions(
   }
 
   VELOX_CHECK_EQ(
-      numValidJoinConditions,
-      joinConditions.size(),
-      "Not all join conditions were processed");
+      numValidIndexLookupConditions,
+      indexLookupConditions.size(),
+      "Not all index lookup conditions were processed");
 }
 
 void HiveIndexSource::initRemainingFilter(
@@ -562,7 +566,7 @@ void HiveIndexSource::initRemainingFilter(
 
 void HiveIndexSource::init(
     const ColumnHandleMap& assignments,
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions) {
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions) {
   VELOX_CHECK_NOT_NULL(tableHandle_);
 
   folly::F14FastMap<std::string_view, const HiveColumnHandle*> columnHandles;
@@ -619,7 +623,7 @@ void HiveIndexSource::init(
 
   initRemainingFilter(readColumnNames, readColumnTypes);
 
-  initJoinConditions(joinConditions, assignments);
+  initIndexLookupConditions(indexLookupConditions, assignments);
 
   readerOutputType_ =
       ROW(std::move(readColumnNames), std::move(readColumnTypes));
@@ -734,7 +738,7 @@ void HiveIndexSource::createHiveIndexReader(
       connectorQueryCtx_,
       hiveConfig_,
       scanSpec_,
-      joinConditions_,
+      indexLookupConditions_,
       requestType_,
       readerOutputType_,
       ioStatistics_,
