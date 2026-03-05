@@ -384,18 +384,17 @@ class DecimalUtil {
           // This is consistent with Spark's behavior.
           const auto digits = countDigits(unscaledValue);
           auto coefficientBuf = std::vector<char>(digits);
+          const auto coefficient = std::to_chars(
+              coefficientBuf.data(),
+              coefficientBuf.data() + digits,
+              unscaledValue);
           VELOX_DCHECK_EQ(
-              [&]() {
-                return std::to_chars(
-                           coefficientBuf.data(),
-                           coefficientBuf.data() + digits,
-                           unscaledValue)
-                    .ec;
-              }(),
+              coefficient.ec,
               std::errc(),
               "Failed to cast coefficient to varchar.");
+          VELOX_DCHECK_EQ(coefficient.ptr, coefficientBuf.data() + digits);
           *writePosition++ = coefficientBuf[0];
-          if (digits > 1) {
+          if (coefficient.ptr - coefficientBuf.data() > 1) {
             *writePosition++ = '.';
             size_t toCopy = digits - 1;
             std::memcpy(writePosition, coefficientBuf.data() + 1, toCopy);
