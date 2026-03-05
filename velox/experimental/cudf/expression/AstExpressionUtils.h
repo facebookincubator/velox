@@ -31,6 +31,7 @@
 
 #include <cudf/ast/detail/operators.hpp>
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column_factories.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
@@ -331,6 +332,8 @@ struct AstContext {
   const std::vector<RowTypePtr> inputRowSchema;
   const std::vector<std::reference_wrapper<std::vector<PrecomputeInstruction>>>
       precomputeInstructions;
+  const std::shared_ptr<velox::exec::Expr>
+      rootExpr; // Track the root expression
   bool allowPureAstOnly;
 
   cudf::ast::expression const& pushExprToTree(
@@ -450,6 +453,21 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
     auto value = c->value();
     VELOX_CHECK(value->isConstantEncoding());
+
+    // TODO: There is a scalar stream synchronization bug that causes
+    // cudf::compute_column to produce spurious nulls for standalone
+    // literal expressions.  Work around it by materialising via
+    // make_column_from_scalar instead.
+    if (expr == rootExpr) {
+      // convert to cudf scalar and store it
+      createLiteral(value, scalars);
+      // The scalar index is scalars.size() - 1 since we just added it
+      std::string fillExpr = "fill " + std::to_string(scalars.size() - 1);
+      // For literals, we use the first column just to get the size, but create
+      // a new column The new column will be appended after the original input
+      // columns
+      return addPrecomputeInstruction(inputRowSchema[0]->nameOf(0), fillExpr);
+    }
 
     return tree.push(createLiteral(value, scalars));
   } else if (binaryOps.find(name) != binaryOps.end()) {
@@ -607,7 +625,16 @@ std::vector<ColumnOrView> precomputeSubexpressions(
       precomputedColumns.push_back(std::move(result));
       continue;
     }
-    if (ins_name == "nested_column") {
+    if (ins_name.rfind("fill", 0) == 0) {
+      auto scalarIndex =
+          std::stoi(ins_name.substr(5)); // "fill " is 5 characters
+      auto newColumn = cudf::make_column_from_scalar(
+          *scalars[scalarIndex],
+          inputColumnViews[dependent_column_index].size(),
+          stream,
+          get_output_mr());
+      precomputedColumns.push_back(std::move(newColumn));
+    } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.
       auto view = inputColumnViews[dependent_column_index].child(
           nested_dependent_column_indices[0]);
