@@ -20,6 +20,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/Murmur3Hash32Base.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::sparksql {

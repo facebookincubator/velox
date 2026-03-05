@@ -19,6 +19,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 

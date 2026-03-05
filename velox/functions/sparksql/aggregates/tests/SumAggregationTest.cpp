@@ -21,6 +21,7 @@
 #include "velox/functions/lib/aggregates/tests/SumTestBase.h"
 #include "velox/functions/sparksql/aggregates/DecimalSumAggregate.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/DecimalUtil.h"
 
 using facebook::velox::exec::test::PlanBuilder;
 using namespace facebook::velox::exec::test;

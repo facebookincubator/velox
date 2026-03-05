@@ -28,7 +28,6 @@
 #include <glog/logging.h>
 
 #include "velox/functions/lib/string/StringCore.h"
-#include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/row/UnsafeRowFast.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::row {

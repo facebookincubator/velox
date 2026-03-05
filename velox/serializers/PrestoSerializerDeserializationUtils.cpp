@@ -16,6 +16,7 @@
 #include "velox/serializers/PrestoSerializerDeserializationUtils.h"
 
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::serializer::presto::detail {
 namespace {

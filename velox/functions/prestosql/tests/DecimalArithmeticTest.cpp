@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;

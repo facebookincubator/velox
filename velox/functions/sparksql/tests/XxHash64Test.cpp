@@ -16,6 +16,7 @@
 
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <stdint.h>
 
