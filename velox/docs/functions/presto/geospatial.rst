@@ -628,7 +628,7 @@ for more details.
 .. function:: google_polyline_decode(encoded: varchar) -> points: array(geometry)
 
     Decodes a Google Polyline encoded string into an array of Point geometries.
-    Uses the default precision exponent of 5. The precision used for decoding is 10^precision_exponent
+    Uses the default precision exponent of 5. The precision used for decoding is 10^precision_exponent.
     See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
     for details on the encoding format.
 
@@ -641,7 +641,7 @@ for more details.
 .. function:: google_polyline_encode(points: array(Geometry)) -> encoded: varchar
 
     Encodes an array of Point geometries into a Google Polyline encoded string.
-    Uses the default precision exponent of 5. The precision used for decoding is 10^precision_exponent
+    Uses the default precision exponent of 5. The precision used for decoding is 10^precision_exponent.
     See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
     for details on the encoding format.
 
