@@ -53,11 +53,8 @@ getArgTypes(const TypePtr& dataType, int32_t accuracy, bool isArray) {
 }
 
 // Build a function call string for spark_approx_percentile.
-std::string functionCall(
-    bool keyed,
-    double percentile,
-    int32_t accuracy,
-    bool isArray) {
+std::string
+functionCall(bool keyed, double percentile, int32_t accuracy, bool isArray) {
   std::ostringstream buf;
   // Use fixed notation with enough precision to ensure double values
   // are correctly parsed (e.g., 0.5 instead of 5e-1).
