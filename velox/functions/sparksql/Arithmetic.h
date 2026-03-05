@@ -666,4 +666,38 @@ struct CheckedIntegralDivideFunction {
   }
 };
 
+template <typename TExec>
+struct CheckedPModIntFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a, const TInput n)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
+    VELOX_USER_RETURN_EQ(n, 0, "Division by zero");
+    // INT_MIN % -1 could crash due to hardware trap. Result is always 0.
+    if (UNLIKELY(n == 1 || n == -1)) {
+      result = 0;
+      return Status::OK();
+    }
+    TInput r = a % n;
+    result = (r > 0) ? r : (r + n) % n;
+    return Status::OK();
+  }
+};
+
+template <typename TExec>
+struct CheckedPModFloatFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput a, const TInput n) {
+    VELOX_USER_RETURN_EQ(n, 0, "Division by zero");
+    TInput r = std::fmod(a, n);
+    result = (r > 0) ? r : std::fmod(r + n, n);
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
