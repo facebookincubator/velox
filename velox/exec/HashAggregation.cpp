@@ -16,10 +16,13 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -47,6 +50,8 @@ HashAggregation::HashAggregation(
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      memoryCompactionEnabled_(
+          driverCtx->queryConfig().aggregationMemoryCompactionReclaimEnabled()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       abandonPartialAggregationMinRows_(
@@ -121,6 +126,8 @@ void HashAggregation::initialize() {
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),
       spillStats_.get());
+
+  hasCompactableAggregates_ = groupingSet_->hasCompactableAggregates();
 
   aggregationNode_.reset();
 }
@@ -241,13 +248,13 @@ void HashAggregation::updateRuntimeStats() {
     }
   }
 
-  runtimeStats[BaseHashTable::kCapacity] =
+  runtimeStats[std::string(BaseHashTable::kCapacity)] =
       RuntimeMetric(hashTableStats.capacity);
-  runtimeStats[BaseHashTable::kNumRehashes] =
+  runtimeStats[std::string(BaseHashTable::kNumRehashes)] =
       RuntimeMetric(hashTableStats.numRehashes);
-  runtimeStats[BaseHashTable::kNumDistinct] =
+  runtimeStats[std::string(BaseHashTable::kNumDistinct)] =
       RuntimeMetric(hashTableStats.numDistinct);
-  runtimeStats[BaseHashTable::kNumTombstones] =
+  runtimeStats[std::string(BaseHashTable::kNumTombstones)] =
       RuntimeMetric(hashTableStats.numTombstones);
 }
 
@@ -272,10 +279,13 @@ void HashAggregation::resetPartialOutputIfNeed() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "flushRowCount", RuntimeCounter(numOutputRows_));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
+        std::string(HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(static_cast<int64_t>(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
@@ -299,7 +309,9 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat("abandonedPartialAggregation", RuntimeCounter(1));
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregation),
+        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
@@ -463,6 +475,28 @@ void HashAggregation::reclaim(
   }
 
   updateEstimatedOutputRowSize();
+
+  // Try lightweight compaction first before spilling.
+  if (memoryCompactionEnabled_) {
+    uint64_t compactedBytes{0};
+    if (hasCompactableAggregates_) {
+      compactedBytes = groupingSet_->compact();
+    }
+    TestValue::adjust(
+        "facebook::velox::exec::HashAggregation::reclaim::compact",
+        &compactedBytes);
+    if (compactedBytes > 0) {
+      stats.reclaimedBytes += compactedBytes;
+      pool()->release();
+      if (compactedBytes >= targetBytes) {
+        return;
+      }
+    }
+  }
+
+  if (!canSpill()) {
+    return;
+  }
 
   if (noMoreInput_) {
     if (groupingSet_->hasSpilled()) {

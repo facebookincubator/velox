@@ -292,23 +292,30 @@ class SharedArbitrationTest : public testing::WithParamInterface<TestParam>,
     if (expectGlobalArbitration) {
       VELOX_CHECK_EQ(
           stats.customStats.count(
-              SharedArbitrator::kGlobalArbitrationWaitCount),
+              std::string(SharedArbitrator::kGlobalArbitrationWaitCount)),
           1);
       VELOX_CHECK_GE(
-          stats.customStats.at(SharedArbitrator::kGlobalArbitrationWaitCount)
+          stats.customStats
+              .at(std::string(SharedArbitrator::kGlobalArbitrationWaitCount))
               .sum,
           1);
       VELOX_CHECK_EQ(
-          stats.customStats.count(SharedArbitrator::kLocalArbitrationCount), 0);
+          stats.customStats.count(
+              std::string(SharedArbitrator::kLocalArbitrationCount)),
+          0);
     } else {
       VELOX_CHECK_EQ(
-          stats.customStats.count(SharedArbitrator::kLocalArbitrationCount), 1);
+          stats.customStats.count(
+              std::string(SharedArbitrator::kLocalArbitrationCount)),
+          1);
       VELOX_CHECK_EQ(
-          stats.customStats.at(SharedArbitrator::kLocalArbitrationCount).sum,
+          stats.customStats
+              .at(std::string(SharedArbitrator::kLocalArbitrationCount))
+              .sum,
           1);
       VELOX_CHECK_EQ(
           stats.customStats.count(
-              SharedArbitrator::kGlobalArbitrationWaitCount),
+              std::string(SharedArbitrator::kGlobalArbitrationWaitCount)),
           0);
     }
   }
@@ -358,7 +365,7 @@ DEBUG_ONLY_TEST_P(
         queryCtxStateChecked = true;
       })));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   TestScopedSpillInjection scopedSpillInjection(100);
   core::PlanNodeId aggregationNodeId;
   newQueryBuilder()
@@ -407,7 +414,7 @@ DEBUG_ONLY_TEST_P(
       })));
 
   std::thread queryThread([&] {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     core::PlanNodeId aggregationNodeId;
     auto plan = PlanBuilder()
                     .values(vectors)
@@ -486,7 +493,7 @@ DEBUG_ONLY_TEST_P(
                              .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                              .planNode();
   std::thread spillableThread([&]() {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     newQueryBuilder(spillPlan)
         .queryCtx(queryCtx)
         .spillDirectory(spillDirectory->getPath())
@@ -946,7 +953,7 @@ DEBUG_ONLY_TEST_P(
       })));
 
   const int numDrivers = 1;
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   std::thread queryThread([&]() {
     VELOX_ASSERT_THROW(
         newQueryBuilder()
@@ -1020,7 +1027,7 @@ DEBUG_ONLY_TEST_P(
             [&]() { return aggregationAllocationUnblocked.load(); });
       })));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   std::shared_ptr<Task> task;
   std::thread queryThread([&]() {
     task = newQueryBuilder()
@@ -1091,7 +1098,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
             values->pool()->free(buffer, fakeAllocationSize);
           })));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   const auto outputDirectory = TempDirectoryPath::create();
   const auto queryCtx =
       newQueryCtx(memoryManager_.get(), executor_.get(), memoryCapacity);

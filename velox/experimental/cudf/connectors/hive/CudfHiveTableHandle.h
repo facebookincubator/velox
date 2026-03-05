@@ -74,17 +74,12 @@ class CudfHiveTableHandle : public ConnectorTableHandle {
   CudfHiveTableHandle(
       std::string connectorId,
       const std::string& tableName,
-      bool filterPushdownEnabled,
       const core::TypedExprPtr& subfieldFilterExpr,
       const core::TypedExprPtr& remainingFilter = nullptr,
       const RowTypePtr& dataColumns = nullptr);
 
   const std::string& name() const override {
     return tableName_;
-  }
-
-  bool isFilterPushdownEnabled() const {
-    return filterPushdownEnabled_;
   }
 
   const core::TypedExprPtr& subfieldFilterExpr() const {
@@ -108,7 +103,6 @@ class CudfHiveTableHandle : public ConnectorTableHandle {
 
  private:
   const std::string tableName_;
-  const bool filterPushdownEnabled_;
   // This expression is used for predicate pushdown.
   const core::TypedExprPtr subfieldFilterExpr_;
   // This expression is used for post-scan filtering.

@@ -35,7 +35,7 @@ target_link_libraries(
     velox_file
     velox_file_test_utils
     velox_memory
-    velox_temp_path
+    velox_test_util
     velox_flag_definitions
     Folly::folly
     glog::glog

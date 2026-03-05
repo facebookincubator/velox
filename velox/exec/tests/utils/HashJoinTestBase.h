@@ -19,18 +19,19 @@
 #include <fmt/format.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -74,13 +75,13 @@ std::pair<exec::SpillStats, exec::SpillStats> taskSpilledStats(
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
-      if (op.operatorType == "HashBuild") {
+      if (op.operatorType == OperatorType::kHashBuild) {
         buildStats.spilledInputBytes += op.spilledInputBytes;
         buildStats.spilledBytes += op.spilledBytes;
         buildStats.spilledRows += op.spilledRows;
         buildStats.spilledPartitions += op.spilledPartitions;
         buildStats.spilledFiles += op.spilledFiles;
-      } else if (op.operatorType == "HashProbe") {
+      } else if (op.operatorType == OperatorType::kHashProbe) {
         probeStats.spilledInputBytes += op.spilledInputBytes;
         probeStats.spilledBytes += op.spilledBytes;
         probeStats.spilledRows += op.spilledRows;
@@ -98,55 +99,90 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
-      if ((op.operatorType == "HashBuild") ||
-          (op.operatorType == "HashProbe")) {
+      if ((op.operatorType == OperatorType::kHashBuild) ||
+          (op.operatorType == OperatorType::kHashProbe)) {
         if (!expectedSpill) {
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillRuns].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillFillTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].count, 0);
           ASSERT_EQ(
-              op.runtimeStats[Operator::kSpillExtractVectorTime].count, 0);
+              op.runtimeStats[std::string(Operator::kSpillRuns)].count, 0);
           ASSERT_EQ(
-              op.runtimeStats[Operator::kSpillSerializationTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillFlushTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillWrites].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillWriteTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillReadBytes].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillReads].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillReadTime].count, 0);
+              op.runtimeStats[std::string(Operator::kSpillFillTime)].count, 0);
           ASSERT_EQ(
-              op.runtimeStats[Operator::kSpillDeserializationTime].count, 0);
+              op.runtimeStats[std::string(Operator::kSpillSortTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillExtractVectorTime)]
+                  .count,
+              0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillSerializationTime)]
+                  .count,
+              0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillFlushTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillWrites)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillWriteTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillReadBytes)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillReads)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillReadTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillDeserializationTime)]
+                  .count,
+              0);
         } else {
-          if (op.operatorType == "HashBuild") {
-            ASSERT_GT(op.runtimeStats[Operator::kSpillRuns].count, 0);
-            ASSERT_GT(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
+          if (op.operatorType == OperatorType::kHashBuild) {
             ASSERT_GT(
-                op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
+                op.runtimeStats[std::string(Operator::kSpillRuns)].count, 0);
+            ASSERT_GT(
+                op.runtimeStats[std::string(Operator::kSpillFillTime)].sum, 0);
+            ASSERT_GT(
+                op.runtimeStats[std::string(Operator::kSpillExtractVectorTime)]
+                    .sum,
+                0);
           } else {
             // The table spilling might also be triggered from hash probe side.
-            ASSERT_GE(op.runtimeStats[Operator::kSpillRuns].count, 0);
-            ASSERT_GE(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
             ASSERT_GE(
-                op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
+                op.runtimeStats[std::string(Operator::kSpillRuns)].count, 0);
+            ASSERT_GE(
+                op.runtimeStats[std::string(Operator::kSpillFillTime)].sum, 0);
+            ASSERT_GE(
+                op.runtimeStats[std::string(Operator::kSpillExtractVectorTime)]
+                    .sum,
+                0);
           }
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].sum, 0);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillSerializationTime].sum, 0);
-          ASSERT_GE(op.runtimeStats[Operator::kSpillFlushTime].sum, 0);
-          // NOTE: spill flush might take less than one microsecond.
-          ASSERT_GE(
-              op.runtimeStats[Operator::kSpillSerializationTime].count,
-              op.runtimeStats[Operator::kSpillFlushTime].count);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillWrites].sum, 0);
-          ASSERT_GE(op.runtimeStats[Operator::kSpillWriteTime].sum, 0);
-          // NOTE: spill flush might take less than one microsecond.
-          ASSERT_GE(
-              op.runtimeStats[Operator::kSpillWrites].count,
-              op.runtimeStats[Operator::kSpillWriteTime].count);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillReadBytes].sum, 0);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillReads].sum, 0);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillReadTime].sum, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillSortTime)].sum, 0);
           ASSERT_GT(
-              op.runtimeStats[Operator::kSpillDeserializationTime].sum, 0);
+              op.runtimeStats[std::string(Operator::kSpillSerializationTime)]
+                  .sum,
+              0);
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillFlushTime)].sum, 0);
+          // NOTE: spill flush might take less than one microsecond.
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillSerializationTime)]
+                  .count,
+              op.runtimeStats[std::string(Operator::kSpillFlushTime)].count);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillWrites)].sum, 0);
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillWriteTime)].sum, 0);
+          // NOTE: spill flush might take less than one microsecond.
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillWrites)].count,
+              op.runtimeStats[std::string(Operator::kSpillWriteTime)].count);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillReadBytes)].sum, 0);
+          ASSERT_GT(op.runtimeStats[std::string(Operator::kSpillReads)].sum, 0);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillReadTime)].sum, 0);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillDeserializationTime)]
+                  .sum,
+              0);
         }
       }
     }
@@ -172,12 +208,15 @@ int32_t maxHashBuildSpillLevel(const exec::Task& task) {
   int32_t maxSpillLevel = -1;
   for (auto& pipelineStat : task.taskStats().pipelineStats) {
     for (auto& operatorStat : pipelineStat.operatorStats) {
-      if (operatorStat.operatorType == "HashBuild") {
-        if (operatorStat.runtimeStats.count("maxSpillLevel") == 0) {
+      if (operatorStat.operatorType == OperatorType::kHashBuild) {
+        if (operatorStat.runtimeStats.count(
+                std::string(HashBuild::kMaxSpillLevel)) == 0) {
           continue;
         }
         maxSpillLevel = std::max<int32_t>(
-            maxSpillLevel, operatorStat.runtimeStats["maxSpillLevel"].max);
+            maxSpillLevel,
+            operatorStat.runtimeStats[std::string(HashBuild::kMaxSpillLevel)]
+                .max);
       }
     }
   }
@@ -192,11 +231,11 @@ std::pair<int32_t, int32_t> numTaskSpillFiles(const exec::Task& task) {
       if (operatorStat.runtimeStats.count("spillFileSize") == 0) {
         continue;
       }
-      if (operatorStat.operatorType == "HashBuild") {
+      if (operatorStat.operatorType == OperatorType::kHashBuild) {
         numBuildFiles += operatorStat.runtimeStats["spillFileSize"].count;
         continue;
       }
-      if (operatorStat.operatorType == "HashProbe") {
+      if (operatorStat.operatorType == OperatorType::kHashProbe) {
         numProbeFiles += operatorStat.runtimeStats["spillFileSize"].count;
       }
     }
@@ -642,7 +681,7 @@ class HashJoinBuilder {
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     int32_t spillPct{0};
     if (injectSpill) {
-      spillDirectory = exec::test::TempDirectoryPath::create();
+      spillDirectory = TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->getPath());
       config(core::QueryConfig::kSpillEnabled, "true");
       config(core::QueryConfig::kMaxSpillLevel, std::to_string(maxSpillLevel));

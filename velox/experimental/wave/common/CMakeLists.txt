@@ -24,6 +24,8 @@ add_library(
   ResultStaging.cpp
 )
 
+target_compile_options(velox_wave_common PRIVATE ${VELOX_CUDA_DEBUG_FLAGS})
+
 target_link_libraries(
   velox_wave_common
   velox_exception

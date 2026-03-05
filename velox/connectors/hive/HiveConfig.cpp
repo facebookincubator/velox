@@ -259,11 +259,30 @@ bool HiveConfig::preserveFlatMapsInMemory(
       config_->get<bool>(kPreserveFlatMapsInMemory, false));
 }
 
+bool HiveConfig::indexEnabled(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
+}
+
+bool HiveConfig::readerCollectColumnStats(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kReaderCollectColumnStatsSession,
+      config_->get<bool>(kReaderCollectColumnStats, false));
+}
+
 uint32_t HiveConfig::maxRowsPerIndexRequest(
     const config::ConfigBase* session) const {
   return session->get<uint32_t>(
       kMaxRowsPerIndexRequestSession,
       config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
+}
+
+bool HiveConfig::fileMetadataCacheEnabled(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kFileMetadataCacheEnabledSession,
+      config_->get<bool>(kFileMetadataCacheEnabled, false));
 }
 
 std::string HiveConfig::user(const config::ConfigBase* session) const {
