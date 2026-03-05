@@ -241,4 +241,31 @@ class PartitionedFlatVector : public PartitionedVector {
   }
 };
 
+/// Partitions a RowVector in-place so that rows belonging to the same
+/// partition occupy a contiguous range. Recursively partitions each child
+/// column using PartitionedVector.
+class PartitionedRowVector : public PartitionedVector {
+ public:
+  PartitionedRowVector(
+      const VectorPtr& rowVector,
+      uint32_t numPartitions,
+      const BufferPtr& partitionOffsets,
+      velox::memory::MemoryPool* pool)
+      : PartitionedVector(rowVector, numPartitions, partitionOffsets, pool) {}
+
+  void partition(
+      const std::vector<uint32_t>& partitions,
+      PartitionBuildContext& ctx) override;
+
+  VectorPtr partitionAt(uint32_t partition) const override;
+
+  const vector_size_t* rawSizes() override {
+    VELOX_UNREACHABLE("PartitionedRowVector does not implement rawSizes()");
+  }
+
+ private:
+  /// Partitioned child columns, one per child of the underlying RowVector.
+  std::vector<PartitionedVectorPtr> partitionedChildren_;
+};
+
 } // namespace facebook::velox

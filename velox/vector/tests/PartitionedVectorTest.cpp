@@ -159,6 +159,48 @@ TEST_P(PartitioningVectorTest, testFlatVector) {
   testVectorPartitioning(makeAllNullFlatVector<int>(numValues));
 }
 
+TEST_P(PartitioningVectorTest, testRowVector) {
+  const int numValues = GetParam();
+
+  // Two flat columns, no nulls at any level.
+  testVectorPartitioning(makeRowVector({
+      makeFlatVector<int32_t>(numValues, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(numValues, [](auto row) { return row * 10; }),
+  }));
+
+  // Two flat columns with nullable children.
+  testVectorPartitioning(makeRowVector({
+      makeFlatVector<int32_t>(
+          numValues, [](auto row) { return row; }, nullEvery(2)),
+      makeFlatVector<int64_t>(
+          numValues, [](auto row) { return row * 10; }, nullEvery(3)),
+  }));
+
+  // Row-level nulls with no child nulls.
+  testVectorPartitioning(makeRowVector(
+      {makeFlatVector<int32_t>(numValues, [](auto row) { return row; })},
+      nullEvery(2)));
+
+  // Row-level nulls combined with nullable children.
+  testVectorPartitioning(makeRowVector(
+      {makeFlatVector<int32_t>(
+          numValues, [](auto row) { return row; }, nullEvery(3))},
+      nullEvery(2)));
+
+  // All rows null.
+  testVectorPartitioning(makeRowVector(
+      {makeFlatVector<int32_t>(numValues, [](auto row) { return row; })},
+      [](auto /*row*/) { return true; }));
+
+  // Nested RowVector.
+  testVectorPartitioning(makeRowVector({
+      makeFlatVector<int32_t>(numValues, [](auto row) { return row; }),
+      makeRowVector({
+          makeFlatVector<int64_t>(numValues, [](auto row) { return row; }),
+      }),
+  }));
+}
+
 // Test with different vector sizes, including edge cases like 0 and 1.
 INSTANTIATE_TEST_SUITE_P(
     FlatVectorSizes,

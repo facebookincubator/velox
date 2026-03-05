@@ -211,6 +211,26 @@ PartitionedVectorPtr createPartitionedFlatVector(
   return partitionedFlatVector;
 }
 
+PartitionedVectorPtr createPartitionedRowVector(
+    VectorPtr vector,
+    const std::vector<uint32_t>& partitions,
+    uint32_t numPartitions,
+    const BufferPtr& endPartitionOffsets,
+    PartitionBuildContext& ctx,
+    velox::memory::MemoryPool* pool) {
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(vector);
+  VELOX_CHECK_NOT_NULL(rowVector);
+
+  auto partitionedRowVector = std::make_shared<PartitionedRowVector>(
+      rowVector, numPartitions, endPartitionOffsets, pool);
+
+  // Always call partition() to initialize partitionedChildren_, even when
+  // numPartitions == 1, so that partitionAt() can reconstruct the RowVector.
+  partitionedRowVector->partition(partitions, ctx);
+
+  return partitionedRowVector;
+}
+
 } // namespace
 
 PartitionedVector::~PartitionedVector() = default;
@@ -272,7 +292,11 @@ PartitionedVectorPtr PartitionedVector::create(
       return partitionedFlatVector;
     }
 
-    case VectorEncoding::Simple::ROW:
+    case VectorEncoding::Simple::ROW: {
+      return createPartitionedRowVector(
+          vector, partitions, numPartitions, endPartitionOffsets, ctx, pool);
+    }
+
     case VectorEncoding::Simple::ARRAY:
     case VectorEncoding::Simple::MAP:
     case VectorEncoding::Simple::DICTIONARY:
@@ -338,6 +362,59 @@ VectorPtr PartitionedFlatVector<T>::partitionAt(uint32_t partition) const {
       rawEndPartitionOffsets_[partition] - beginOffset;
 
   return vector_->slice(beginOffset, numRowsInPartition);
+}
+
+void PartitionedRowVector::partition(
+    const std::vector<uint32_t>& partitions,
+    PartitionBuildContext& ctx) {
+  auto* rowVector = vector_->as<RowVector>();
+  partitionedChildren_.reserve(rowVector->childrenSize());
+
+  for (const auto& child : rowVector->children()) {
+    partitionedChildren_.push_back(PartitionedVector::create(
+        child, partitions, numPartitions_, endPartitionOffsets_, ctx, pool_));
+  }
+
+  if (numPartitions_ > 1) {
+    Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
+    if (rawNulls) {
+      partitionBitsInPlace(
+          rawNulls, partitions, numPartitions_, ctx, endPartitionOffsets_, pool_);
+    }
+  }
+}
+
+VectorPtr PartitionedRowVector::partitionAt(uint32_t partition) const {
+  VELOX_CHECK_LT(partition, numPartitions_);
+
+  vector_size_t beginOffset =
+      partition == 0 ? 0 : rawEndPartitionOffsets_[partition - 1];
+  vector_size_t numRowsInPartition =
+      rawEndPartitionOffsets_[partition] - beginOffset;
+
+  std::vector<VectorPtr> children;
+  children.reserve(partitionedChildren_.size());
+  for (const auto& child : partitionedChildren_) {
+    children.push_back(child->partitionAt(partition));
+  }
+
+  BufferPtr nulls = nullptr;
+  if (numRowsInPartition > 0 && vector_->rawNulls()) {
+    nulls = AlignedBuffer::allocate<bool>(numRowsInPartition, pool_);
+    bits::copyBits(
+        vector_->rawNulls(),
+        beginOffset,
+        nulls->asMutable<uint64_t>(),
+        0,
+        numRowsInPartition);
+  }
+
+  return std::make_shared<RowVector>(
+      pool_,
+      vector_->type(),
+      std::move(nulls),
+      numRowsInPartition,
+      std::move(children));
 }
 
 } // namespace facebook::velox
