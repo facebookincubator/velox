@@ -204,6 +204,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARBINARY(),
       TIMESTAMP(),
       TIMESTAMP_WITH_TIME_ZONE(),
+      IPADDRESS(),
   };
   return kScalarTypes;
 }
@@ -212,6 +213,12 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
   if (type->isDate() || type->isIntervalDayTime() || type->isUnknown() ||
       isGeometryType(type)) {
+    return false;
+  }
+
+  // Block IPADDRESS in containers due to Presto's Int128ArrayBlock
+  // not supporting compareTo().
+  if (containsIPAddress(type)) {
     return false;
   }
 
@@ -362,7 +369,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
       usesTypeName(signature, "p4hyperloglog") ||
-      usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
 }

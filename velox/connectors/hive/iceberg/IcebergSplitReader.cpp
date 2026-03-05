@@ -16,6 +16,9 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
+#include <folly/lang/Bits.h>
+
+#include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -82,11 +85,19 @@ void IcebergSplitReader::prepareSplit(
         // Skip the delete file if all delete positions are before this split.
         // TODO: Skip delete files where all positions are after the split, if
         // split row count becomes available.
-        auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
-        if (auto posUpperBoundIt = deleteFile.upperBounds.find(posColumn->id);
-            posUpperBoundIt != deleteFile.upperBounds.end()) {
-          auto deleteUpperBound = folly::to<uint64_t>(posUpperBoundIt->second);
-          if (deleteUpperBound < splitOffset_) {
+        if (auto iter =
+                deleteFile.upperBounds.find(IcebergMetadataColumn::kPosId);
+            iter != deleteFile.upperBounds.end()) {
+          auto decodedBound = encoding::Base64::decode(iter->second);
+          VELOX_CHECK_EQ(
+              decodedBound.size(),
+              sizeof(uint64_t),
+              "Unexpected decoded size for positional delete upper bound.");
+          uint64_t posDeleteUpperBound;
+          std::memcpy(
+              &posDeleteUpperBound, decodedBound.data(), sizeof(uint64_t));
+          posDeleteUpperBound = folly::Endian::little(posDeleteUpperBound);
+          if (posDeleteUpperBound < splitOffset_) {
             continue;
           }
         }

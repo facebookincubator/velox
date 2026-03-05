@@ -161,7 +161,7 @@ class PrefixSort {
 
   /// The runtime stats name collected for prefix sort.
   /// The number of prefix sort keys.
-  static inline const std::string kNumPrefixSortKeys{"numPrefixSortKeys"};
+  static constexpr std::string_view kNumPrefixSortKeys{"numPrefixSortKeys"};
 
  private:
   /// Fallback to stdSort when prefix sort conditions such as config and memory

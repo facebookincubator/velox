@@ -717,7 +717,7 @@ class Connector {
 
   /// The name of the common runtime stats collected and reported by connector
   /// data/index sources.
-  static inline const std::string kTotalRemainingFilterTime{
+  static constexpr std::string_view kTotalRemainingFilterTime{
       "totalRemainingFilterWallNanos"};
 
   /// Total CPU time spent on remaining filter evaluation.
@@ -726,25 +726,26 @@ class Connector {
 
   /// Total time spent waiting for synchronously issued IO or for an in-progress
   /// read-ahead to finish.
-  static inline const std::string kIoWaitWallNanos{"ioWaitWallNanos"};
+  static constexpr std::string_view kIoWaitWallNanos{"ioWaitWallNanos"};
 
   /// Time spent waiting for remote storage reads (S3, HDFS, etc.)
-  static inline const std::string kStorageReadWallNanos{"storageReadWallNanos"};
+  static constexpr std::string_view kStorageReadWallNanos{
+      "storageReadWallNanos"};
 
   /// Time spent waiting for SSD cache reads.
-  static inline const std::string kSsdCacheReadWallNanos{
+  static constexpr std::string_view kSsdCacheReadWallNanos{
       "ssdCacheReadWallNanos"};
 
   /// Time spent waiting for EXCLUSIVE cache entries (another thread is
   /// loading).
-  static inline const std::string kCacheWaitWallNanos{"cacheWaitWallNanos"};
+  static constexpr std::string_view kCacheWaitWallNanos{"cacheWaitWallNanos"};
 
   /// Time spent waiting for coalesced loads from SSD cache.
-  static inline const std::string kCoalescedSsdLoadWallNanos{
+  static constexpr std::string_view kCoalescedSsdLoadWallNanos{
       "coalescedSsdLoadWallNanos"};
 
   /// Time spent waiting for coalesced loads from remote storage.
-  static inline const std::string kCoalescedStorageLoadWallNanos{
+  static constexpr std::string_view kCoalescedStorageLoadWallNanos{
       "coalescedStorageLoadWallNanos"};
 
  private:

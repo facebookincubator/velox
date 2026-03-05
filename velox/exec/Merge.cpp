@@ -439,8 +439,8 @@ RowVectorPtr SourceMerger::createOutputVector() {
   const RowVector* source = nullptr;
   for (const auto* stream : streams_) {
     if (stream->hasData() && (source = stream->data())) {
-      return std::static_pointer_cast<RowVector>(
-          BaseVector::createEmptyLike(source, outputBatchRows_, pool_));
+      return BaseVector::createEmptyLike<RowVector>(
+          source, outputBatchRows_, pool_);
     }
   }
 
