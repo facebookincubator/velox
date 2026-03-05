@@ -36,10 +36,10 @@ namespace {
 constexpr int32_t kSparkDefaultAccuracy = 10000;
 
 std::vector<TypePtr>
-getArgTypes(const TypePtr& dataType, int32_t accuracy, int percentileCount) {
+getArgTypes(const TypePtr& dataType, int32_t accuracy, bool isArray) {
   std::vector<TypePtr> argTypes;
   argTypes.push_back(dataType);
-  if (percentileCount == -1) {
+  if (!isArray) {
     argTypes.push_back(DOUBLE());
   } else {
     argTypes.push_back(ARRAY(DOUBLE()));
@@ -57,19 +57,19 @@ std::string functionCall(
     bool keyed,
     double percentile,
     int32_t accuracy,
-    int percentileCount) {
+    bool isArray) {
   std::ostringstream buf;
   // Use fixed notation with enough precision to ensure double values
-  // are correctly parsed (e.g., 0.5 instead of 5e-1)
+  // are correctly parsed (e.g., 0.5 instead of 5e-1).
   buf << std::fixed << std::setprecision(6);
   int columnIndex = keyed ? 1 : 0;
   buf << "spark_approx_percentile(c" << columnIndex++;
   buf << ", ";
-  if (percentileCount == -1) {
+  if (!isArray) {
     buf << percentile;
   } else {
     buf << "ARRAY[";
-    for (int i = 0; i < percentileCount; ++i) {
+    for (int i = 0; i < 3; ++i) {
       buf << (i == 0 ? "" : ",") << percentile;
     }
     buf << ']';
@@ -138,20 +138,20 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
           fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value());
     }
 
-    // Test single percentile
+    // Test single percentile.
     enableTestStreaming();
     testAggregations(
         {rows},
         {},
-        {functionCall(false, percentile, accuracy, -1)},
+        {functionCall(false, percentile, accuracy, false)},
         expected,
         queryConfig_);
 
-    // Test percentile array (3 identical percentiles)
+    // Test percentile array (3 identical percentiles).
     testAggregations(
         {rows},
         {},
-        {functionCall(false, percentile, accuracy, 3)},
+        {functionCall(false, percentile, accuracy, true)},
         expectedArray,
         queryConfig_);
 
@@ -162,8 +162,8 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
         {rows},
         [](PlanBuilder& /*builder*/) {},
         {},
-        {functionCall(false, percentile, accuracy, -1)},
-        {getArgTypes(values->type(), accuracy, -1)},
+        {functionCall(false, percentile, accuracy, false)},
+        {getArgTypes(values->type(), accuracy, false)},
         {},
         expected,
         queryConfig_);
@@ -185,7 +185,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
         return (T)row;
     });
 
-    // Test various percentiles with special floating point values
+    // Test various percentiles with special floating point values.
     testGlobalAgg<T>(values, 0.05, 10000, -std::numeric_limits<T>::infinity());
     testGlobalAgg<T>(values, 0.11, 10000, 0.0);
     testGlobalAgg<T>(values, 0.55, 10000, 4.0);
@@ -206,7 +206,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     testAggregations(
         {rows},
         {"c0"},
-        {functionCall(true, percentile, accuracy, -1)},
+        {functionCall(true, percentile, accuracy, false)},
         {expectedResult},
         queryConfig_);
 
@@ -217,13 +217,13 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
         {rows},
         [](PlanBuilder& /*builder*/) {},
         {"c0"},
-        {functionCall(true, percentile, accuracy, -1)},
-        {getArgTypes(values->type(), accuracy, -1)},
+        {functionCall(true, percentile, accuracy, false)},
+        {getArgTypes(values->type(), accuracy, false)},
         {},
         {expectedResult},
         queryConfig_);
 
-    // Test percentile array
+    // Test percentile array.
     {
       SCOPED_TRACE("Percentile array");
       auto resultValues = expectedResult->childAt(1);
@@ -265,7 +265,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
       testAggregations(
           {rows},
           {"c0"},
-          {functionCall(true, percentile, accuracy, 3)},
+          {functionCall(true, percentile, accuracy, true)},
           {expected},
           queryConfig_);
     }
@@ -281,14 +281,14 @@ TEST_F(ApproxPercentileAggregateTest, globalAgg) {
   auto values =
       makeFlatVector<int32_t>(size, [](auto row) { return row % 23; });
 
-  // Test with default accuracy
+  // Test with default accuracy.
   testGlobalAgg<int32_t>(values, 0.5, 0, 11);
-  // Test with explicit accuracy (10000 is Spark default)
+  // Test with explicit accuracy (10000 is Spark default).
   testGlobalAgg<int32_t>(values, 0.5, 10000, 11);
-  // Test with higher accuracy
+  // Test with higher accuracy.
   testGlobalAgg<int32_t>(values, 0.5, 20000, 11);
 
-  // Test with null values
+  // Test with null values.
   auto valuesWithNulls = makeFlatVector<int32_t>(
       size, [](auto row) { return row % 23; }, nullEvery(7));
 
@@ -303,14 +303,14 @@ TEST_F(ApproxPercentileAggregateTest, groupByAgg) {
   auto values = makeFlatVector<int32_t>(
       size, [](auto row) { return (row / 7) % 23 + row % 7; });
 
-  // Test with default accuracy
+  // Test with default accuracy.
   auto expectedResult = makeRowVector(
       {makeFlatVector(std::vector<int32_t>{0, 1, 2, 3, 4, 5, 6}),
        makeFlatVector(std::vector<int32_t>{11, 12, 13, 14, 15, 16, 17})});
   testGroupByAgg(keys, values, 0.5, 0, expectedResult);
   testGroupByAgg(keys, values, 0.5, 10000, expectedResult);
 
-  // Test with null values
+  // Test with null values.
   auto valuesWithNulls = makeFlatVector<int32_t>(
       size, [](auto row) { return (row / 7) % 23 + row % 7; }, nullEvery(11));
 
@@ -345,7 +345,7 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
       }),
   };
 
-  // Build partial + final aggregation plan
+  // Build partial + final aggregation plan.
   params.planNode =
       PlanBuilder()
           .values(data)
@@ -364,12 +364,12 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
 
 // Test Partial + Final group-by aggregation.
 TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
-  // Build test data with two groups
+  // Build test data with two groups.
   auto groupKeys = makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2});
   auto values = makeFlatVector<int32_t>({3, 6, 9, 7, 10, 8});
   auto inputRows = makeRowVector({groupKeys, values});
 
-  // Build Partial + Final plan with group-by
+  // Build Partial + Final plan with group-by.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
       PlanBuilder(planNodeIdGenerator)
@@ -378,7 +378,7 @@ TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
           .finalAggregation()
           .planNode();
 
-  // Expected: group 1 -> 6, group 2 -> 8
+  // Expected: group 1 -> 6, group 2 -> 8.
   auto expectedResult = makeRowVector(
       {makeFlatVector<int32_t>({1, 2}), makeFlatVector<int32_t>({6, 8})});
 
@@ -391,7 +391,7 @@ TEST_F(ApproxPercentileAggregateTest, finalAggregateAccuracy) {
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
-  // Create 10 partial aggregation sources
+  // Create 10 partial aggregation sources.
   for (int i = 0; i < 10; ++i) {
     sources.push_back(PlanBuilder(planNodeIdGenerator)
                           .values({batch})
@@ -399,7 +399,7 @@ TEST_F(ApproxPercentileAggregateTest, finalAggregateAccuracy) {
                               {}, {"spark_approx_percentile(c0, 0.005, 10000)"})
                           .planNode());
   }
-  // Merge all partial results in final aggregation
+  // Merge all partial results in final aggregation.
   auto op = PlanBuilder(planNodeIdGenerator)
                 .localPartitionRoundRobin(sources)
                 .finalAggregation()
@@ -440,10 +440,10 @@ TEST_F(ApproxPercentileAggregateTest, noInput) {
   auto values = makeFlatVector<int32_t>(size, [](auto row) { return row % 6; });
   auto nullValues = makeNullConstant(TypeKind::INTEGER, size);
 
-  // Test global aggregation with all nulls
+  // Test global aggregation with all nulls.
   testGlobalAgg<int32_t>(nullValues, 0.5, 0, std::nullopt);
 
-  // Test group-by aggregation with all nulls
+  // Test group-by aggregation with all nulls.
   {
     auto expected = makeRowVector(
         {makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6}),
@@ -452,7 +452,7 @@ TEST_F(ApproxPercentileAggregateTest, noInput) {
     testGroupByAgg(keys, nullValues, 0.5, 0, expected);
   }
 
-  // Test when all inputs are masked out
+  // Test when all inputs are masked out.
   {
     auto testWithMask = [&](bool groupBy, const RowVectorPtr& expected) {
       std::vector<std::string> groupingKeys;
@@ -476,7 +476,7 @@ TEST_F(ApproxPercentileAggregateTest, noInput) {
       AssertQueryBuilder(plan).assertResults(expected);
     };
 
-    // Global aggregation with mask
+    // Global aggregation with mask.
     std::vector<VectorPtr> children{4};
     std::fill_n(children.begin(), 2, makeNullConstant(TypeKind::INTEGER, 1));
     std::fill_n(
@@ -486,7 +486,7 @@ TEST_F(ApproxPercentileAggregateTest, noInput) {
     auto expected1 = makeRowVector(children);
     testWithMask(false, expected1);
 
-    // Group-by aggregation with mask
+    // Group-by aggregation with mask.
     children.resize(5);
     children[0] = makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6});
     std::fill_n(
@@ -506,21 +506,21 @@ TEST_F(ApproxPercentileAggregateTest, nullPercentile) {
   auto percentileOfDouble = makeConstant<double>(std::nullopt, 4);
   auto rows = makeRowVector({values, percentileOfDouble});
 
-  // Test null percentile for spark_approx_percentile(value, percentile)
+  // Test null percentile for spark_approx_percentile(value, percentile).
   VELOX_ASSERT_THROW(
       testAggregations(
           {rows}, {}, {"spark_approx_percentile(c0, c1)"}, "SELECT NULL"),
       "Percentile cannot be null");
 
   // Test null array percentile (entire array is null, not array with null
-  // elements) Note: Spark does not allow null elements within the percentile
+  // elements). Note: Spark does not allow null elements within the percentile
   // array. The percentile array itself can be null, which should throw an
   // error.
   auto percentileOfArrayOfDouble =
       BaseVector::createNullConstant(ARRAY(DOUBLE()), 4, pool());
   rows = makeRowVector({values, percentileOfArrayOfDouble});
 
-  // Test null array percentile for spark_approx_percentile(value, percentiles)
+  // Test null array percentile for spark_approx_percentile(value, percentiles).
   // When the entire percentile array is null, it triggers the null check
   // in ArrayVector and throws "Percentile array cannot contain nulls".
   VELOX_ASSERT_THROW(
@@ -539,32 +539,32 @@ TEST_F(ApproxPercentileAggregateTest, nanPercentile) {
 // KLL sketch uses std::upper_bound to estimate percentile, so for 10 elements
 // {1,2,3,4,5,6,7,8,9,10}, the 50th percentile (weight=5) returns 6.
 TEST_F(ApproxPercentileAggregateTest, numericTypes) {
-  // Test TINYINT
+  // Test TINYINT.
   {
     auto values = makeFlatVector<int8_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
     testGlobalAgg<int8_t>(values, 0.5, 0, 6);
   }
 
-  // Test SMALLINT
+  // Test SMALLINT.
   {
     auto values = makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
     testGlobalAgg<int16_t>(values, 0.5, 0, 6);
   }
 
-  // Test BIGINT
+  // Test BIGINT.
   {
     auto values = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
     testGlobalAgg<int64_t>(values, 0.5, 0, 6);
   }
 
-  // Test REAL (float)
+  // Test REAL (float).
   {
     auto values = makeFlatVector<float>(
         {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f});
     testGlobalAgg<float>(values, 0.5, 0, 6.0f);
   }
 
-  // Test DOUBLE
+  // Test DOUBLE.
   {
     auto values = makeFlatVector<double>(
         {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0});
@@ -576,16 +576,16 @@ TEST_F(ApproxPercentileAggregateTest, numericTypes) {
 TEST_F(ApproxPercentileAggregateTest, percentileEdgeCases) {
   auto values = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
 
-  // Test percentile = 0.0 (minimum)
+  // Test percentile = 0.0 (minimum).
   testGlobalAgg<int32_t>(values, 0.0, 0, 1);
 
-  // Test percentile = 1.0 (maximum)
+  // Test percentile = 1.0 (maximum).
   testGlobalAgg<int32_t>(values, 1.0, 0, 10);
 
-  // Test percentile = 0.25 (Q1)
+  // Test percentile = 0.25 (Q1).
   testGlobalAgg<int32_t>(values, 0.25, 0, 3);
 
-  // Test percentile = 0.75 (Q3)
+  // Test percentile = 0.75 (Q3).
   testGlobalAgg<int32_t>(values, 0.75, 0, 8);
 }
 
@@ -594,7 +594,7 @@ TEST_F(ApproxPercentileAggregateTest, accuracyBoundary) {
   auto values = makeFlatVector<int32_t>(1000, [](auto row) { return row; });
   auto rows = makeRowVector({values});
 
-  // Test with minimum valid accuracy - allow 480-520 range due to low accuracy
+  // Test with minimum valid accuracy - allow 480-520 range due to low accuracy.
   {
     auto plan =
         PlanBuilder()
@@ -610,7 +610,7 @@ TEST_F(ApproxPercentileAggregateTest, accuracyBoundary) {
         << "Result " << resultValue << " is above maximum expected 520";
   }
 
-  // Test with high accuracy - should be more precise
+  // Test with high accuracy - should be more precise.
   testGlobalAgg<int32_t>(values, 0.5, 100000, 500);
 }
 
@@ -623,13 +623,13 @@ TEST_F(ApproxPercentileAggregateTest, multiplePercentiles) {
       BaseVector::wrapInConstant(100, 0, percentiles),
   });
 
-  // Test with array of different percentiles [0.1, 0.5, 0.9]
+  // Test with array of different percentiles [0.1, 0.5, 0.9].
   auto plan = PlanBuilder()
                   .values({rows})
                   .singleAggregation({}, {"spark_approx_percentile(c0, c1)"})
                   .planNode();
 
-  // Expected: approximately [10, 50, 90]
+  // Expected: approximately [10, 50, 90].
   auto expected = makeRowVector({makeArrayVector<int32_t>({{10, 50, 90}})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
@@ -639,11 +639,11 @@ TEST_F(ApproxPercentileAggregateTest, invalidAccuracy) {
   auto values = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto rows = makeRowVector({values});
 
-  // Accuracy = 0 is invalid
+  // Accuracy = 0 is invalid.
   VELOX_ASSERT_THROW(
       testAggregations(
           {rows}, {}, {"spark_approx_percentile(c0, 0.5, 0)"}, "SELECT 3"),
-      "Accuracy must be greater than 0");
+      "The accuracy must be between (0, 2147483647]");
 }
 
 // Test single row input.
@@ -660,7 +660,7 @@ TEST_F(ApproxPercentileAggregateTest, largeDataset) {
   auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
   auto rows = makeRowVector({values});
 
-  // Median of 0..99999 should be approximately 50000, allow ±5 error
+  // Median of 0..99999 should be approximately 50000, allow ±5 error.
   auto plan =
       PlanBuilder()
           .values({rows})
