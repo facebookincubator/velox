@@ -1932,6 +1932,17 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
+TEST_F(HiveDataSinkTest, sanitizeFileName) {
+  auto sanitizeFileName = [](std::string fileName) {
+    HiveInsertFileNameGenerator::sanitizeFileName(fileName);
+    return fileName;
+  };
+  ASSERT_EQ(sanitizeFileName("abc"), "abc");
+  ASSERT_EQ(sanitizeFileName("abc_.-ABC012"), "abc_.-ABC012");
+  ASSERT_EQ(sanitizeFileName("abc_.-ABC012\\/"), "abc_.-ABC012__");
+  ASSERT_EQ(sanitizeFileName("local://abc/bcd/"), "local___abc_bcd_");
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive
 

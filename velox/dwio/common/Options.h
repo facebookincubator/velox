@@ -733,6 +733,18 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  /// Whether to cache file metadata (footer, stripes, index) in the
+  /// process-wide AsyncDataCache. When enabled, the first reader performs a
+  /// speculative tail read and populates the cache; subsequent readers on the
+  /// same file initialize from the cache with zero additional IO.
+  bool fileMetadataCacheEnabled() const {
+    return fileMetadataCacheEnabled_;
+  }
+
+  void setFileMetadataCacheEnabled(bool value) {
+    fileMetadataCacheEnabled_ = value;
+  }
+
   bool allowEmptyFile() const {
     return allowEmptyFile_;
   }
@@ -758,6 +770,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool fileMetadataCacheEnabled_{false};
   bool allowEmptyFile_{false};
 };
 

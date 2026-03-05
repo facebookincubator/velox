@@ -7076,6 +7076,31 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(DateTimeFunctionsTest, currentTime) {
+  auto testCurrentTime = [&](int64_t sessionStartTime,
+                             const std::string& zone,
+                             int64_t expectedMillis,
+                             int16_t expectedOffset) {
+    setSessionStartTimeAndTimeZone(sessionStartTime, zone);
+
+    auto packed = evaluateOnce<int64_t>(
+        "current_time()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        TIME_WITH_TIME_ZONE());
+
+    ASSERT_TRUE(packed.has_value());
+
+    EXPECT_EQ(util::unpackMillisUtc(packed.value()), expectedMillis);
+    EXPECT_EQ(util::unpackZoneOffset(packed.value()), expectedOffset);
+  };
+
+  testCurrentTime(1710064800000, "UTC", 36000000, 0);
+  testCurrentTime(1710064800000, "Asia/Kolkata", 55800000, 1170);
+  testCurrentTime(1705312800000, "America/Los_Angeles", 7200000, 361);
+  testCurrentTime(1717243200000, "America/Los_Angeles", 18000000, 421);
+}
+
 TEST_F(DateTimeFunctionsTest, currentTimezone) {
   {
     setQueryTimeZone("Asia/Kolkata");

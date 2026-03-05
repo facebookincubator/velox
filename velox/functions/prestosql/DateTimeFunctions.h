@@ -2131,4 +2131,39 @@ struct LocalTimestampFunction {
   Timestamp ts_;
 };
 
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
+    // Java/Presto session always provides a timezone (TimeZoneKey is required).
+    VELOX_CHECK_NOT_NULL(timeZone);
+
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+
+    auto localMillis =
+        timeZone->to_local(std::chrono::milliseconds{sessionStartTimeMs});
+    auto localMillisSinceMidnight =
+        localMillis - std::chrono::floor<std::chrono::days>(localMillis);
+
+    auto currentOffset = localMillis.count() - sessionStartTimeMs;
+    // Safe since timezone offsets are bounded [-840, 840] minutes
+    auto currentOffsetMinutes =
+        static_cast<int16_t>(currentOffset / (60 * 1000));
+
+    auto encodedOffset = util::biasEncode(currentOffsetMinutes);
+    currentTime_ = util::pack(localMillisSinceMidnight.count(), encodedOffset);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    result = currentTime_;
+  }
+
+ private:
+  int64_t currentTime_{0};
+};
+
 } // namespace facebook::velox::functions
