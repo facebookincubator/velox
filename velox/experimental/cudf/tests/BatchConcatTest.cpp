@@ -61,9 +61,7 @@ class CudfBatchConcatTest : public OperatorTestBase {
     for (const auto& vec : vectors) {
       sources.push_back(PlanBuilder(generator).values({vec}).planNode());
     }
-    return PlanBuilder(generator)
-        .localPartitionRoundRobin(sources)
-        .planNode();
+    return PlanBuilder(generator).localPartitionRoundRobin(sources).planNode();
   }
 
   // Returns the per-operator-type stats for CudfBatchConcat within the given
@@ -110,11 +108,10 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .maxDrivers(1)
-          .assertResults("SELECT sum(c0) FROM tmp");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT sum(c0) FROM tmp");
 
   auto planStats = toPlanStats(task->taskStats());
   auto& nodeStats = planStats.at(aggNodeId);
@@ -152,11 +149,10 @@ TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .maxDrivers(1)
-          .assertResults("SELECT sum(c0) FROM tmp");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT sum(c0) FROM tmp");
 
   auto planStats = toPlanStats(task->taskStats());
   auto& nodeStats = planStats.at(aggNodeId);
@@ -187,11 +183,10 @@ TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .maxDrivers(1)
-          .assertResults("SELECT sum(c0) FROM tmp");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT sum(c0) FROM tmp");
 
   auto planStats = toPlanStats(task->taskStats());
   auto& nodeStats = planStats.at(aggNodeId);
@@ -229,11 +224,10 @@ TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
                   .capturePlanNodeId(aggNodeId)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .maxDrivers(1)
-          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
   auto planStats = toPlanStats(task->taskStats());
   auto& nodeStats = planStats.at(aggNodeId);

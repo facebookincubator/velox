@@ -16,8 +16,8 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_velox {
@@ -63,8 +63,8 @@ RowVectorPtr CudfBatchConcat::getOutput() {
   if (!buffer_.empty() && (currentNumRows_ >= targetRows_ || noMoreInput_)) {
     // Use stream from existing buffer vectors
     outputQueueStream_ = buffer_[0]->stream();
-    auto tables =
-        getConcatenatedTableBatched(buffer_, outputType_, outputQueueStream_, get_output_mr());
+    auto tables = getConcatenatedTableBatched(
+        buffer_, outputType_, outputQueueStream_, get_output_mr());
 
     buffer_.clear();
     currentNumRows_ = 0;
