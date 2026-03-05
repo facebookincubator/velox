@@ -18,6 +18,7 @@ velox_add_library(
   ArrayGetFunction.cpp
   ArraySort.cpp
   AssertNotNull.cpp
+  SequenceFunction.cpp
   Transform.cpp
   CharVarcharUtils.cpp
   Comparisons.cpp

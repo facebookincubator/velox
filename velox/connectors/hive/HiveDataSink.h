@@ -232,6 +232,9 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       void* context);
 
   std::string toString() const override;
+
+  /// Replaces potentially unsafe characters in a file name with underscores
+  static void sanitizeFileName(std::string& name);
 };
 
 /// Represents a request for Hive write.

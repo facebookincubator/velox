@@ -32,6 +32,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <re2/re2.h>
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -1240,6 +1241,8 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
         connectorQueryCtx.queryId(),
         hiveConfig->maxBucketCount(connectorQueryCtx.sessionProperties()),
         bucketId.value());
+    // queryId may contain unsafe characters.
+    sanitizeFileName(targetFileName);
   } else if (generateFileName) {
     // targetFileName includes planNodeId and Uuid. As a result, different
     // table writers run by the same task driver or the same table writer
@@ -1250,7 +1253,10 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
         connectorQueryCtx.driverId(),
         connectorQueryCtx.planNodeId(),
         makeUuid());
+    // taskId, planNodeId may contain unsafe characters.
+    sanitizeFileName(targetFileName);
   }
+  // do not try to sanitize user provided targetFileName
   VELOX_CHECK(!targetFileName.empty());
   const std::string writeFileName = commitRequired
       ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
@@ -1262,6 +1268,11 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
         fmt::format("{}{}", writeFileName, ".parquet")};
   }
   return {targetFileName, writeFileName};
+}
+
+void HiveInsertFileNameGenerator::sanitizeFileName(std::string& name) {
+  static const re2::RE2 re("[^a-zA-Z0-9._-]");
+  re2::RE2::GlobalReplace(&name, re, "_");
 }
 
 folly::dynamic HiveInsertFileNameGenerator::serialize() const {
