@@ -15,6 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -62,7 +64,7 @@ RowVectorPtr CudfBatchConcat::getOutput() {
     // Use stream from existing buffer vectors
     outputQueueStream_ = buffer_[0]->stream();
     auto tables =
-        getConcatenatedTableBatched(buffer_, outputType_, outputQueueStream_);
+        getConcatenatedTableBatched(buffer_, outputType_, outputQueueStream_, get_output_mr());
 
     buffer_.clear();
     currentNumRows_ = 0;
