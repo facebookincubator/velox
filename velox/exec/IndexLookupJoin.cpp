@@ -1391,15 +1391,18 @@ void IndexLookupJoin::recordConnectorStats() {
     lockedStats->runtimeStats.erase(name);
     lockedStats->runtimeStats.emplace(name, std::move(value));
   }
-  if (connectorStats.count(kConnectorLookupWallTime) != 0) {
+  if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(connectorStats[kConnectorLookupWallTime].count),
-        static_cast<uint64_t>(connectorStats[kConnectorLookupWallTime].sum),
+        static_cast<uint64_t>(
+            connectorStats[std::string(kConnectorLookupWallTime)].count),
+        static_cast<uint64_t>(
+            connectorStats[std::string(kConnectorLookupWallTime)].sum),
         // NOTE: this might not be accurate as it doesn't include the time
         // spent inside the index storage client.
-        static_cast<uint64_t>(connectorStats[kConnectorResultPrepareTime].sum) +
-            connectorStats[kClientRequestProcessTime].sum +
-            connectorStats[kClientResultProcessTime].sum};
+        static_cast<uint64_t>(
+            connectorStats[std::string(kConnectorResultPrepareTime)].sum) +
+            connectorStats[std::string(kClientRequestProcessTime)].sum +
+            connectorStats[std::string(kClientResultProcessTime)].sum};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }

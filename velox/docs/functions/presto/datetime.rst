@@ -161,6 +161,10 @@ Date and Time Functions
     using ``hours`` and ``minutes`` for the time zone offset.
     The offset must be in [-14:00, 14:00] range.
 
+.. function:: localtimestamp -> timestamp
+
+    Returns the timestamp as of the start of the query.
+
 .. function:: to_iso8601(x) -> varchar
 
     Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are:
@@ -179,6 +183,10 @@ Date and Time Functions
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
+
+.. function:: current_time() -> time with time zone
+
+    Returns the current time since midnight with the session timezoneReturns the current time since midnight with the session timezone, based on the query session start time.
 
 .. function:: current_timezone() -> varchar
 
