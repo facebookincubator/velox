@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/compression/Compression.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/encryption/Encryption.h"
 
@@ -98,6 +99,7 @@ struct CompressionOptions {
  * @param options The compression options to use
  * @param useRawDecompression Specify whether to perform raw decompression
  * @param compressedLength The compressed block length for raw decompression
+ * @param decompressCounter Optional IoCounter for tracking decompression stats
  */
 std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     facebook::velox::common::CompressionKind kind,
@@ -108,7 +110,8 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     const std::string& streamDebugInfo,
     const dwio::common::encryption::Decrypter* decryptr = nullptr,
     bool useRawDecompression = false,
-    size_t compressedLength = 0);
+    size_t compressedLength = 0,
+    io::IoCounter* decompressCounter = nullptr);
 
 /**
  * Create a compressor for the given compression kind.

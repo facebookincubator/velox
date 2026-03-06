@@ -77,15 +77,15 @@ class TableWriter : public Operator {
 
   /// The name of runtime stats specific to table writer.
   /// The running wall time of a writer operator from creation to close.
-  static inline const std::string kRunningWallNanos{"runningWallNanos"};
+  static constexpr std::string_view kRunningWallNanos{"runningWallNanos"};
   /// The number of files written by this writer operator.
-  static inline const std::string kNumWrittenFiles{"numWrittenFiles"};
+  static constexpr std::string_view kNumWrittenFiles{"numWrittenFiles"};
   /// The file write IO walltime.
-  static inline const std::string kWriteIOTime{"writeIOWallNanos"};
+  static constexpr std::string_view kWriteIOTime{"writeIOWallNanos"};
   /// The walltime spend on file write data recoding.
-  static inline const std::string kWriteRecodeTime{"writeRecodeWallNanos"};
+  static constexpr std::string_view kWriteRecodeTime{"writeRecodeWallNanos"};
   /// The walltime spent on file write data compression.
-  static inline const std::string kWriteCompressionTime{
+  static constexpr std::string_view kWriteCompressionTime{
       "writeCompressionWallNanos"};
 
  private:

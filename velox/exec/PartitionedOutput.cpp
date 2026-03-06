@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
@@ -75,11 +76,7 @@ BlockingReason Destination::advance(
   }
 
   // Serialize
-  if (current_ == nullptr) {
-    current_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
-    const auto rowType = asRowType(output->type());
-    current_->createStreamTree(rowType, rowsInCurrent_, serdeOptions_);
-  }
+  createVectorStreamGroup(output);
 
   const auto rows = folly::Range(&rows_[firstRow], rowIdx_ - firstRow);
   if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
@@ -103,6 +100,26 @@ BlockingReason Destination::advance(
   return BlockingReason::kNotBlocked;
 }
 
+void Destination::createVectorStreamGroup(const RowVectorPtr& output) {
+  if (current_ == nullptr || needsStreamTreeRecreation_) {
+    if (current_ == nullptr) {
+      current_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
+    }
+    const auto rowType = asRowType(output->type());
+    current_->createStreamTree(rowType, rowsInCurrent_, serdeOptions_);
+    needsStreamTreeRecreation_ = false;
+  }
+}
+
+void Destination::clearVectorStreamGroup() {
+  current_->clear();
+  // Signal that createStreamTree() must be called before the next append
+  // to properly reinitialize the serializer with a fresh stream tree.
+  // This fixes a crash where the serializer was in an invalid state after
+  // clear() due to stale references to freed StreamArena memory.
+  needsStreamTreeRecreation_ = true;
+}
+
 BlockingReason Destination::flush(
     OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
@@ -121,7 +138,20 @@ BlockingReason Destination::flush(
   const int64_t flushedRows = rowsInCurrent_;
 
   current_->flush(&stream);
-  current_->clear();
+
+  // Accumulate stats from the current serializer BEFORE clear() to preserve
+  // compression metrics across flushes.
+  const auto currentStats = current_->runtimeStats();
+  for (const auto& [name, counter] : currentStats) {
+    auto it = accumulatedStats_.find(name);
+    if (it != accumulatedStats_.end()) {
+      it->second.value += counter.value;
+    } else {
+      accumulatedStats_.emplace(name, counter);
+    }
+  }
+
+  clearVectorStreamGroup();
 
   const int64_t flushedBytes = stream.tellp();
 
@@ -144,11 +174,18 @@ BlockingReason Destination::flush(
 
 void Destination::updateStats(Operator* op) {
   VELOX_CHECK(finished_);
+  auto lockedStats = op->stats().wlock();
+
+  // First add accumulated stats from previous serialization cycles.
+  for (const auto& [name, counter] : accumulatedStats_) {
+    lockedStats->addRuntimeStat(name, counter);
+  }
+
+  // Then add stats from the current serializer (if any).
   if (current_) {
     const auto serializerStats = current_->runtimeStats();
-    auto lockedStats = op->stats().wlock();
-    for (auto& pair : serializerStats) {
-      lockedStats->addRuntimeStat(pair.first, pair.second);
+    for (const auto& [name, counter] : serializerStats) {
+      lockedStats->addRuntimeStat(name, counter);
     }
   }
 }
@@ -165,7 +202,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "PartitionedOutput"),
+          OperatorType::kPartitionedOutput),
       keyChannels_(toChannels(planNode->inputType(), planNode->keys())),
       numDestinations_(planNode->numPartitions()),
       replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),

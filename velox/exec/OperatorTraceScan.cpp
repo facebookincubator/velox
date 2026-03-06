@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/OperatorTraceScan.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/trace/TraceUtil.h"
 
 namespace facebook::velox::exec::trace {
@@ -28,7 +29,7 @@ OperatorTraceScan::OperatorTraceScan(
           traceScanNode->outputType(),
           operatorId,
           traceScanNode->id(),
-          "OperatorTraceScan") {
+          OperatorType::kOperatorTraceScan) {
   traceReader_ = std::make_unique<OperatorTraceInputReader>(
       getOpTraceDirectory(
           traceScanNode->traceDir(),

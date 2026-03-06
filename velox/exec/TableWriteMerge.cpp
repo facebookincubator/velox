@@ -17,6 +17,7 @@
 #include "velox/exec/TableWriteMerge.h"
 
 #include "HashAggregation.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Task.h"
 
@@ -57,7 +58,7 @@ TableWriteMerge::TableWriteMerge(
           tableWriteMergeNode->outputType(),
           operatorId,
           tableWriteMergeNode->id(),
-          "TableWriteMerge") {
+          OperatorType::kTableWriteMerge) {
   if (tableWriteMergeNode->outputType()->size() == 1) {
     VELOX_USER_CHECK(!tableWriteMergeNode->hasColumnStatsSpec());
   } else {

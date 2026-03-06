@@ -458,6 +458,18 @@ Array Functions
         SELECT transform(ARRAY ['x', 'abc', 'z'], x -> x || '0'); -- ['x0', 'abc0', 'z0']
         SELECT transform(ARRAY [ARRAY [1, NULL, 2], ARRAY[3, NULL]], a -> filter(a, x -> x IS NOT NULL)); -- [[1, 2], [3]]
 
+.. function:: transform_with_index(array(T), function(T,bigint,U)) -> array(U)
+
+    Returns an array that is the result of applying ``function`` to each element of ``array``.
+    The lambda function receives both the element and its 1-based index as arguments.
+    This is useful for transformations that need to know the position of each element::
+
+        SELECT transform_with_index(ARRAY [], (x, i) -> x + i); -- []
+        SELECT transform_with_index(ARRAY [5, 6, 7], (x, i) -> x * i); -- [5, 12, 21]
+        SELECT transform_with_index(ARRAY ['a', 'b', 'c'], (x, i) -> concat(x, cast(i as varchar))); -- ['a1', 'b2', 'c3']
+        SELECT transform_with_index(ARRAY [10, 20, 30], (x, i) -> i); -- [1, 2, 3]
+        SELECT transform_with_index(ARRAY [1, 2, 3], (x, i) -> if(i % 2 = 1, x, x * 2)); -- [1, 4, 3]
+
 .. function:: trim_array(x, n) -> array
 
     Remove n elements from the end of ``array``::

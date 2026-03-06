@@ -263,6 +263,12 @@ Expression Evaluation Configuration
      - boolean
      - false
      - Whether to use the simplified expression evaluation path.
+   * - expression.eval_flat_no_nulls
+     - boolean
+     - true
+     - Whether to enable the FlatNoNulls fast path for expression evaluation. When enabled, expressions skip null
+       checking and vector decoding when all inputs are flat-encoded with no nulls. Set to false to disable this
+       optimization.
    * - expression.track_cpu_usage
      - boolean
      - false
@@ -546,6 +552,13 @@ Aggregation
        The value is in the range of [0, 1). Currently only applies to approx_most_frequent
        aggregate with StringView type during global aggregation. May be extended
        to other aggregation types on-demand.
+   * - aggregation_memory_compaction_reclaim_enabled
+     - bool
+     - false
+     - If true, enables lightweight memory compaction before spilling during
+       memory reclaim in aggregation. When enabled, the aggregation operator
+       will try to compact aggregate function state (e.g., free dead strings)
+       before resorting to spilling.
    * - streaming_aggregation_min_output_batch_rows
      - integer
      - 0
@@ -584,6 +597,13 @@ Table Scan
        increasing the number of running scan threads, and stop once exceeds this
        ratio. The value is in the range of [0, 1]. This only applies if
        'table_scan_scaled_processing_enabled' is true.
+   * - table_scan_output_batch_rows_override
+     - integer
+     - 0
+     - If non-zero, overrides the number of rows in each output batch produced
+       by the TableScan operator, bypassing the dynamic batch size calculation.
+       This is useful for correctness testing where a fixed batch size is needed
+       to produce deterministic results. Zero means 'no override'.
 
 Table Writer
 ------------
@@ -797,6 +817,27 @@ Each query can override the config by setting corresponding query session proper
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
        after filtering. 0 means no limit (default).
+   * - file-metadata-cache-enabled
+     - file_metadata_cache_enabled
+     - bool
+     - false
+     - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
+       the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
+       serve metadata from cache with zero file IO. Currently only supported by Nimble format.
+  * - hive.max-rows-per-index-request
+    - hive.max_rows_per_index_request
+    - integer
+    - 0
+    - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
+      after filtering. 0 means no limit (default).
+  * - hive.reader.collect-column-stats
+    - hive.reader.collect_column_stats
+    - bool
+    - false
+    - If true, enables collection of per-column timing statistics during file reading. This includes
+      decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
+      ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
+      Useful for performance analysis and identifying slow columns.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -990,6 +1031,11 @@ Each query can override the config by setting corresponding query session proper
      -
      - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
        The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
+   * - hive.s3.aws-imds-enabled
+     - bool
+     - true
+     - AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
+       We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
@@ -1129,15 +1175,18 @@ Spark-specific Configuration
      - integer
      - 1000000
      - The default number of expected items for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.max_num_items
+     - integer
+     - 4000000
+     - The maximum number of items for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.bloom_filter.num_bits
      - integer
      - 8388608
      - The default number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.bloom_filter.max_num_bits
      - integer
-     - 4194304
-     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
-       the value of this config can not exceed the default value.
+     - 67108864
+     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.partition_id
      - integer
      -
@@ -1247,3 +1296,7 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, log a reason for falling back to Velox CPU execution, when an operation is not supported in cuDF execution.
+   * - cudf.function_engine
+     - string
+     - presto
+     - Register the function for a specific engine. The optional values are presto or spark.

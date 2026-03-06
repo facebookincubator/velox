@@ -57,7 +57,7 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
       std::unordered_map<std::string, RuntimeMetric>& stats)
       : stats_{stats} {}
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     addOperatorRuntimeStats(name, value, stats_);
   }
@@ -269,7 +269,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     rng_.seed(1);
     const bool asyncRead = folly::Random::oneIn(2);
     LOG(INFO) << "Async read " << asyncRead;
-    tempDirPath_ = exec::test::TempDirectoryPath::create(true);
+    tempDirPath_ = TempDirectoryPath::create(true);
     fs_ = filesystems::getFileSystem(tempDirPath_->getPath(), nullptr);
     faultyFs_ = static_cast<tests::utils::FaultyFileSystem*>(fs_.get());
     fsExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(32);

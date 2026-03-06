@@ -1334,9 +1334,24 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
       bool inserted{false};
       for (int64_t numProbedBuckets = 0; numProbedBuckets < numBuckets();
            ++numProbedBuckets) {
+        // We are populating a newly allocated table during rehash(), so
+        // here each tag is either empty (zero) or in-use (high bit set)
+        // and never a tombstone (0x7f, high bit unset). Therefore, the two
+        // approaches below are equivalent:
+        // - On x86 with SSE2, we benefit from a single instruction that builds
+        //   a bit mask by combining top bits of the tags in a vector, so we
+        //   pass the raw tags to simd::toBitMask().
+        // - On all architectures, the universally robust way is to call
+        //   simd::toBitMask() with an intermediate xsimd::batch_bool
+        //   generated from a comparison between the tags and an empty batch.
         MaskType free =
             ~simd::toBitMask(
-                BaseHashTable::TagVector::batch_bool_type(tagsInTable)) &
+#if XSIMD_WITH_SSE2
+                BaseHashTable::TagVector::batch_bool_type(tagsInTable)
+#else
+                tagsInTable != TagVector::broadcast(ProbeState::kEmptyTag)
+#endif
+                    ) &
             ProbeState::kFullMask;
         if (free) {
           auto freeOffset = bits::getAndClearLastSetBit(free);

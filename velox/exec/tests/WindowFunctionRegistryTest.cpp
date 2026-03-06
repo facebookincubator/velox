@@ -15,13 +15,19 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/AggregateRegistryTestUtil.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 namespace facebook::velox::exec::test {
 
 namespace {
+std::vector<TypePtr> nullTypes(size_t n) {
+  return std::vector<TypePtr>(n, nullptr);
+}
+
 void registerWindowFunction(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
@@ -50,6 +56,7 @@ class WindowFunctionRegistryTest : public testing::Test {
   WindowFunctionRegistryTest() {
     registerWindowFunction("window_func");
     registerWindowFunction("window_Func_Alias");
+    registerAggregateFunc("agg_func");
   }
 
   TypePtr resolveWindowFunction(
@@ -76,6 +83,33 @@ class WindowFunctionRegistryTest : public testing::Test {
       EXPECT_EQ(*actualType, *expectedType);
     } else {
       EXPECT_EQ(actualType, nullptr);
+    }
+  }
+
+  void testNoCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType) {
+    VELOX_EXPECT_EQ_TYPES(
+        resolveWindowResultType(name, argTypes), expectedReturnType);
+
+    std::vector<TypePtr> coercions;
+    auto type = resolveWindowResultTypeWithCoercions(name, argTypes, coercions);
+    VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
+    EXPECT_EQ(coercions, nullTypes(argTypes.size()));
+  }
+
+  void testCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      const std::vector<TypePtr>& expectedCoercions) {
+    std::vector<TypePtr> coercions;
+    auto type = resolveWindowResultTypeWithCoercions(name, argTypes, coercions);
+    VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
+    EXPECT_EQ(coercions.size(), expectedCoercions.size());
+    for (auto i = 0; i < coercions.size(); ++i) {
+      VELOX_EXPECT_EQ_TYPES(coercions[i], expectedCoercions[i]);
     }
   }
 };
@@ -132,6 +166,77 @@ TEST_F(WindowFunctionRegistryTest, prefix) {
     EXPECT_EQ(prefix, entry.first.substr(0, prefix.size()));
     EXPECT_EQ(1, windowFuncMapBase.count(entry.first.substr(prefix.size())));
   }
+}
+
+TEST_F(WindowFunctionRegistryTest, resolveResultType) {
+  testNoCoercions("window_func", {BIGINT(), DOUBLE()}, BIGINT());
+  testNoCoercions("window_func", {DOUBLE(), DOUBLE()}, DOUBLE());
+  testNoCoercions("window_func", {}, DATE());
+
+  // Aggregate function registered as a window function.
+  testNoCoercions("agg_func", {BIGINT(), DOUBLE()}, BIGINT());
+  testNoCoercions("agg_func", {}, DATE());
+}
+
+TEST_F(WindowFunctionRegistryTest, resolveResultTypeErrors) {
+  // Wrong function name.
+  VELOX_ASSERT_THROW(
+      resolveWindowResultType("nonexistent_func", {BIGINT(), DOUBLE()}),
+      "Window function not registered");
+
+  // Wrong signature for a window function.
+  VELOX_ASSERT_THROW(
+      resolveWindowResultType("window_func", {BIGINT()}),
+      "Window function signature is not supported");
+
+  // resolveWindowResultTypeWithCoercions: wrong function name.
+  {
+    std::vector<TypePtr> coercions;
+    VELOX_ASSERT_THROW(
+        resolveWindowResultTypeWithCoercions(
+            "nonexistent_func", {BIGINT(), DOUBLE()}, coercions),
+        "Window function not registered");
+  }
+
+  // resolveWindowResultTypeWithCoercions: wrong signature.
+  {
+    std::vector<TypePtr> coercions;
+    VELOX_ASSERT_THROW(
+        resolveWindowResultTypeWithCoercions(
+            "window_func", {VARCHAR()}, coercions),
+        "Window function signature is not supported");
+  }
+
+  // resolveWindowResultTypeWithCoercions: correct name and arg count, but
+  // incompatible types (VARCHAR cannot be coerced to match any signature).
+  {
+    std::vector<TypePtr> coercions;
+    VELOX_ASSERT_THROW(
+        resolveWindowResultTypeWithCoercions(
+            "window_func", {VARCHAR(), BIGINT()}, coercions),
+        "Window function signature is not supported");
+  }
+}
+
+TEST_F(WindowFunctionRegistryTest, resolveResultTypeWithCoercions) {
+  // Exact match: no coercions needed.
+  testNoCoercions("window_func", {BIGINT(), DOUBLE()}, BIGINT());
+
+  // Window function signature with coercion: (double, bigint) doesn't
+  // exactly match (bigint, double) or (T, T), but (T, T) matches with
+  // coercion.
+  testCoercions(
+      "window_func", {DOUBLE(), BIGINT()}, DOUBLE(), {nullptr, DOUBLE()});
+
+  // Coercion with smaller integer types.
+  testCoercions(
+      "window_func", {TINYINT(), BIGINT()}, BIGINT(), {BIGINT(), nullptr});
+
+  // Aggregate function registered as a window function.
+  testNoCoercions("agg_func", {BIGINT(), DOUBLE()}, BIGINT());
+
+  testCoercions(
+      "agg_func", {DOUBLE(), BIGINT()}, DOUBLE(), {nullptr, DOUBLE()});
 }
 
 } // namespace facebook::velox::exec::test
