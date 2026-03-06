@@ -1780,7 +1780,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {prefix + "lessthan", prefix + "lt"}, cudf::binary_operator::LESS);
 
   registerCudfFunction(
-      "between",
+      prefix + "between",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<BetweenFunction>(expr);
       },
