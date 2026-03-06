@@ -82,6 +82,7 @@ add_library(
   ${GRPC_SRCS}
   SparkQueryRunner.cpp
   SparkQueryRunnerToSqlPlanNodeVisitor.cpp
+  SparkSql.cpp
 )
 
 target_include_directories(velox_spark_query_runner PUBLIC ${PROJECT_BINARY_DIR}/spark/connect/)

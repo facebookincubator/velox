@@ -71,6 +71,9 @@ target_link_libraries(
   spark_expression_fuzzer_test
   velox_expression_fuzzer
   velox_constrained_input_generators
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_spark_query_runner
   velox_fuzzer_util
   velox_hive_connector
   velox_functions_spark
