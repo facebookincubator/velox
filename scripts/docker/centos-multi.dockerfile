@@ -125,6 +125,10 @@ RUN bash -c 'source /setup-centos9.sh && install_build_prerequisites'
 RUN bash /setup-centos-adapters.sh install_adapters && \
     find $INSTALL_PREFIX/lib/cmake -type f -name '*.cmake' -exec sed -i 's|/deps/|/usr/local/|g' {} \;
 
+# Installed by install_hdfs_deps in setup-centos9.sh.
+# Used for testing. Can be removed once Haddop is updated to 3.4.2 which includes the fix for the minicluster.
+ENV export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
+
 ########################
 # Stage: Adapters      #
 ########################
