@@ -1264,11 +1264,12 @@ bool registerAggregationFunctionForStep(
 }
 
 namespace {
-void registerAggregationFunctionForStep(
+void appendRegisterAggregationFunctionForStep(
     const std::string& name,
     core::AggregationNode::Step step,
     const exec::FunctionSignaturePtr& signature) {
-  facebook::velox::cudf_velox::registerAggregationFunctionForStep(name, step, {signature});
+  auto& registry = getStepAwareAggregationRegistry();
+  registry[name][step].push_back(signature);
 }
 } // namespace
 
@@ -1326,7 +1327,6 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("double")
           .argumentType("double")
           .build()};
-
   registerAggregationFunctionForStep(
       prefix + "sum",
       core::AggregationNode::Step::kPartial,
@@ -1658,14 +1658,14 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
 
   if (CudfConfig::getInstance().functionEngine == "spark") {
     // Spark: SUM(REAL) -> DOUBLE, AVG(REAL) -> DOUBLE
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "sum",
         core::AggregationNode::Step::kSingle,
         FunctionSignatureBuilder()
             .returnType("double")
             .argumentType("real")
             .build());
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "sum",
         core::AggregationNode::Step::kPartial,
         FunctionSignatureBuilder()
@@ -1674,7 +1674,7 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
             .build());
     // SUM final/intermediate: DOUBLE->DOUBLE already registered.
 
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "avg",
         core::AggregationNode::Step::kSingle,
         FunctionSignatureBuilder()
@@ -1684,28 +1684,28 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
     // AVG final: row(DOUBLE,BIGINT)->DOUBLE already registered.
   } else {
     // Presto (default): SUM(REAL) -> REAL, AVG(REAL) -> REAL
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "sum",
         core::AggregationNode::Step::kSingle,
         FunctionSignatureBuilder()
             .returnType("real")
             .argumentType("real")
             .build());
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "sum",
         core::AggregationNode::Step::kPartial,
         FunctionSignatureBuilder()
             .returnType("double")
             .argumentType("real")
             .build());
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "sum",
         core::AggregationNode::Step::kFinal,
         FunctionSignatureBuilder()
             .returnType("real")
             .argumentType("double")
             .build());
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "sum",
         core::AggregationNode::Step::kIntermediate,
         FunctionSignatureBuilder()
@@ -1713,14 +1713,14 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
             .argumentType("double")
             .build());
 
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "avg",
         core::AggregationNode::Step::kSingle,
         FunctionSignatureBuilder()
             .returnType("real")
             .argumentType("real")
             .build());
-    registerAggregationFunctionForStep(
+    appendRegisterAggregationFunctionForStep(
         prefix + "avg",
         core::AggregationNode::Step::kFinal,
         FunctionSignatureBuilder()
