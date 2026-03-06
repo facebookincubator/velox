@@ -130,7 +130,7 @@ void UnsafeRowVectorSerde::registerVectorSerde() {
 // static
 void UnsafeRowVectorSerde::registerNamedVectorSerde() {
   velox::registerNamedVectorSerde(
-      VectorSerde::Kind::kUnsafeRow, std::make_unique<UnsafeRowVectorSerde>());
+      "UnsafeRow", std::make_unique<UnsafeRowVectorSerde>());
 }
 
 } // namespace facebook::velox::serializer::spark
