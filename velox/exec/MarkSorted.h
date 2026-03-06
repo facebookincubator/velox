@@ -61,9 +61,42 @@ class MarkSorted : public Operator {
       const RowVectorPtr& prevData,
       vector_size_t prevIndex);
 
+  /// Copy only the key columns from the last row of input for cross-batch
+  /// comparison. Used when batch size exceeds zeroCopyThreshold_.
+  void copyLastRowKeyColumns();
+
+  /// Check if the fast comparison path can be applied to the current input.
+  bool canApplyFastPathToInput() const;
+
+  /// Apply direct comparison for single primitive key, avoiding virtual
+  /// compare() dispatch overhead.
+  template <typename T>
+  void applyFastPathComparison(
+      const T* data,
+      vector_size_t size,
+      bool ascending,
+      uint64_t* resultBits);
+
   const std::string markerName_;
   std::vector<column_index_t> sortingKeyChannels_;
   std::vector<CompareFlags> compareFlags_;
-  RowVectorPtr lastRow_;
+
+  /// Zero-copy mode: holds entire previous batch for cross-batch comparison.
+  /// Used when input batch size < zeroCopyThreshold_.
+  RowVectorPtr prevInput_;
+
+  /// Copy mode: holds only key columns of last row for cross-batch comparison.
+  /// Used when input batch size >= zeroCopyThreshold_.
+  RowVectorPtr lastRowCopy_;
+
+  /// Threshold for zero-copy vs copy optimization.
+  int32_t zeroCopyThreshold_;
+
+  /// Whether the fast comparison path can be used (single key, primitive type,
+  /// nulls-last ordering).
+  bool canUseFastPath_{false};
+
+  /// Type kind of the single sorting key (if canUseFastPath_ is true).
+  TypeKind fastPathKeyTypeKind_{TypeKind::INVALID};
 };
 } // namespace facebook::velox::exec
