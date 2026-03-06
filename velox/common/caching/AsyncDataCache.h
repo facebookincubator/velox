@@ -574,6 +574,15 @@ class CacheShard {
       uint64_t size,
       folly::SemiFuture<bool>* readyFuture);
 
+  /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
+  /// exists and is not exclusive. Returns an empty pin (inside optional) if
+  /// the entry is exclusive; if 'waitFuture' is not nullptr it is set to a
+  /// future realized when the entry is no longer exclusive. Returns
+  /// std::nullopt on miss. Does not create entries.
+  std::optional<CachePin> find(
+      RawFileCacheKey key,
+      folly::SemiFuture<bool>* waitFuture = nullptr);
+
   /// Marks the cache entry with given cache 'key' as immediate evictable.
   void makeEvictable(RawFileCacheKey key);
 
@@ -652,6 +661,16 @@ class CacheShard {
   std::unique_ptr<AsyncDataCacheEntry> getFreeEntryLocked();
 
   CachePin initEntry(RawFileCacheKey key, AsyncDataCacheEntry* entry);
+
+  // Looks up 'key' in the cache under mutex_. 'size' is the minimum acceptable
+  // entry size: pass 0 from find() to accept any size, or the required size
+  // from findOrCreate() to trigger stale-entry eviction when too small.
+  // Returns std::nullopt on miss (or after evicting a stale entry),
+  // an empty CachePin if the entry is exclusive, or a shared CachePin on hit.
+  std::optional<CachePin> lookupLocked(
+      RawFileCacheKey key,
+      uint64_t size,
+      folly::SemiFuture<bool>* waitFuture);
 
   void freeAllocations(std::vector<memory::Allocation>& allocations);
 
@@ -806,6 +825,15 @@ class AsyncDataCache : public memory::Cache {
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
+      folly::SemiFuture<bool>* waitFuture = nullptr);
+
+  /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
+  /// exists and is not exclusive. Returns an empty pin (inside optional) if
+  /// the entry is exclusive; if 'waitFuture' is not nullptr it is set to a
+  /// future realized when the entry is no longer exclusive. Returns
+  /// std::nullopt on miss.
+  std::optional<CachePin> find(
+      RawFileCacheKey key,
       folly::SemiFuture<bool>* waitFuture = nullptr);
 
   /// Marks the cache entry with given cache 'key' as immediate evictable.

@@ -32,6 +32,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
 #include <cudf/join/filtered_join.hpp>
@@ -522,6 +523,33 @@ void CudfHashJoinProbe::noMoreInput() {
     isLastDriver_ = true;
     if (hashObject_.has_value()) {
       auto stream = cudfGlobalStreamPool().get_stream();
+
+      // The allPeersFinished barrier above synchronizes CPU threads, but not
+      // GPU streams. A driver's CPU thread may return from getOutput() while
+      // its GPU work (updating rightMatchedFlags_) is still in flight.
+      // join_streams establishes GPU-side ordering so that all probe stream
+      // operations complete before the BITWISE_OR reads below.
+      // Drivers without lastProbeStream_ (no probe batches) are skipped:
+      // their flags are all-false from host-synchronized init with no pending
+      // GPU work.
+      std::vector<rmm::cuda_stream_view> inputStreams;
+      if (lastProbeStream_.has_value()) {
+        inputStreams.push_back(lastProbeStream_.value());
+      }
+      for (auto& peer : peers) {
+        if (peer.get() == operatorCtx_->driver()) {
+          continue;
+        }
+        auto op = peer->findOperator(planNodeId());
+        auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
+        if (probe != nullptr && probe->lastProbeStream_.has_value()) {
+          inputStreams.push_back(probe->lastProbeStream_.value());
+        }
+      }
+      if (!inputStreams.empty()) {
+        cudf::detail::join_streams(inputStreams, stream);
+      }
+
       for (auto& peer : peers) {
         if (peer.get() == operatorCtx_->driver()) {
           continue;
@@ -543,6 +571,10 @@ void CudfHashJoinProbe::noMoreInput() {
               cudf::data_type{cudf::type_id::BOOL8},
               stream,
               get_temp_mr());
+          // binary_operation is async on `stream`; the old column destructs via
+          // cudaFreeAsync on its allocation stream (not `stream`), so the free
+          // can race the kernel. Drain `stream` before the move-assign.
+          stream.synchronize();
           rightMatchedFlags_[p] = std::move(or_result);
         }
       }
@@ -918,6 +950,10 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
           get_temp_mr());
+      // binary_operation is async on `stream`; the old column destructs via
+      // cudaFreeAsync on its allocation stream (not `stream`), so the free
+      // can race the kernel. Drain `stream` before the move-assign.
+      stream.synchronize();
       rightMatchedFlags_[i] = std::move(updatedFlags);
     }
 
@@ -979,6 +1015,10 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::rightJoin(
                 cudf::data_type{cudf::type_id::BOOL8},
                 stream,
                 get_temp_mr());
+            // binary_operation is async on `stream`; the old column destructs
+            // via cudaFreeAsync on its allocation stream (not `stream`), so the
+            // free can race the kernel. Drain `stream` before the move-assign.
+            stream.synchronize();
             rightMatchedFlags = std::move(updatedFlags);
             return std::move(joinedCols);
           };
@@ -1055,6 +1095,10 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
           get_temp_mr());
+      // binary_operation is async on `stream`; the old column destructs via
+      // cudaFreeAsync on its allocation stream (not `stream`), so the free
+      // can race the kernel. Drain `stream` before the move-assign.
+      stream.synchronize();
       rightMatchedFlags_[i] = std::move(updatedFlags);
     }
 
@@ -1108,6 +1152,10 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
           get_temp_mr());
+      // binary_operation is async on `stream`; the old column destructs via
+      // cudaFreeAsync on its allocation stream (not `stream`), so the free
+      // can race the kernel. Drain `stream` before the move-assign.
+      stream.synchronize();
       rightMatchedFlags = std::move(updatedFlags);
 
       // Build output using filtered indices
@@ -1447,6 +1495,11 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       break;
     default:
       VELOX_FAIL("Unsupported join type: ", joinNode_->joinType());
+  }
+
+  // Record probe stream for cross-driver synchronization in noMoreInput().
+  if (joinNode_->isRightJoin() || joinNode_->isFullJoin()) {
+    lastProbeStream_ = stream;
   }
 
   // Release input CudfVector to free GPU memory before creating output.

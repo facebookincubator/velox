@@ -41,6 +41,7 @@ add_executable(
   DecimalUtilTest.cpp
   ElementAtTest.cpp
   FactorialTest.cpp
+  FilterTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
   GetArrayStructFieldsTest.cpp
@@ -66,6 +67,7 @@ add_executable(
   RandTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
+  SequenceTest.cpp
   SliceTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp

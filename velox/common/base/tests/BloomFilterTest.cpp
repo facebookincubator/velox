@@ -122,3 +122,28 @@ TEST_F(BloomFilterTest, merge) {
 
   EXPECT_EQ(bloom.serializedSize(), merge.serializedSize());
 }
+
+TEST_F(BloomFilterTest, optimalNumOfBitsWithFpp) {
+  EXPECT_EQ(BloomFilter<>::optimalNumOfBits(1000, 0.03), 7298);
+  EXPECT_EQ(BloomFilter<>::optimalNumOfBits(1000000, 0.01), 9585058);
+  EXPECT_EQ(BloomFilter<>::optimalNumOfBits(1, 0.5), 1);
+  EXPECT_EQ(BloomFilter<>::optimalNumOfBits(1000, 0.001), 14377);
+}
+
+TEST_F(BloomFilterTest, optimalNumOfBitsWithMaxItems) {
+  constexpr int64_t kMaxNumItems = 4'000'000L;
+
+  EXPECT_EQ(
+      BloomFilter<>::optimalNumOfBits(kMaxNumItems, kMaxNumItems), 29'193'763);
+
+  EXPECT_EQ(
+      BloomFilter<>::optimalNumOfBits(1'000'000L, kMaxNumItems), 10'183'830);
+
+  EXPECT_EQ(BloomFilter<>::optimalNumOfBits(100L, kMaxNumItems), 2935);
+
+  EXPECT_EQ(
+      BloomFilter<>::optimalNumOfBits(5'000'000L, kMaxNumItems), 36'492'204);
+
+  EXPECT_EQ(
+      BloomFilter<>::optimalNumOfBits(10'000'000L, kMaxNumItems), 72'984'408);
+}

@@ -638,6 +638,8 @@ void configureReaderOptions(
       connectorQueryCtx->adjustTimestampToTimezone());
   readerOptions.setSelectiveNimbleReaderEnabled(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
+  readerOptions.setFileMetadataCacheEnabled(
+      hiveConfig->fileMetadataCacheEnabled(sessionProperties));
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
@@ -686,6 +688,8 @@ void configureRowReaderOptions(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         hiveConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setCollectColumnStats(
+        hiveConfig->readerCollectColumnStats(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }

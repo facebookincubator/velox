@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -94,12 +95,17 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  if (tables.size() == 1) {
-    return tables[0]->release();
-  }
-
+  // Even for a single input table we must concatenate (copy) rather than
+  // release in-place: the output is owned by `stream` but the input buffer was
+  // allocated on a different stream, so releasing it would bind deallocation to
+  // the wrong stream.
   auto output = cudf::concatenate(tableViews, stream, mr);
-  stream.synchronize();
+
+  // Order input deallocations after the concatenate read.
+  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
+  for (auto& s : inputStreams) {
+    cudf::detail::join_streams(outputStreams, s);
+  }
   return output;
 }
 
@@ -129,14 +135,11 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  if (tables.size() == 1) {
-    concatTables.push_back(tables[0]->release());
-    return concatTables;
-  }
-
   std::vector<std::unique_ptr<cudf::table>> outputTables;
-  auto const maxRows =
-      static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+  const auto& cudfConfig = CudfConfig::getInstance();
+  auto const maxRows = cudfConfig.batchSizeMaxThreshold
+      ? static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value())
+      : static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
   size_t startpos = 0;
   size_t runningRows = 0;
   for (size_t i = 0; i < tableViews.size(); ++i) {
@@ -164,13 +167,27 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             stream,
             mr));
   }
-  stream.synchronize();
+  // Order input deallocations after the concatenate reads.
+  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
+  for (auto& s : inputStreams) {
+    cudf::detail::join_streams(outputStreams, s);
+  }
   return outputTables;
+}
+
+void streamsWaitForStream(
+    CudaEvent& event,
+    const std::vector<rmm::cuda_stream_view>& streams,
+    rmm::cuda_stream_view stream) {
+  event.recordFrom(stream);
+  for (const auto& strm : streams) {
+    event.waitOn(strm);
+  }
 }
 
 CudaEvent::CudaEvent(unsigned int flags) {
   cudaEvent_t ev{};
-  cudaEventCreateWithFlags(&ev, flags);
+  CUDF_CUDA_TRY(cudaEventCreateWithFlags(&ev, flags));
   event_ = ev;
 }
 
@@ -186,12 +203,12 @@ CudaEvent::CudaEvent(CudaEvent&& other) noexcept : event_(other.event_) {
 }
 
 const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
-  cudaEventRecord(event_, stream.value());
+  CUDF_CUDA_TRY(cudaEventRecord(event_, stream.value()));
   return *this;
 }
 
 const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
-  cudaStreamWaitEvent(stream.value(), event_, 0);
+  CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
   return *this;
 }
 

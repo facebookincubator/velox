@@ -36,13 +36,11 @@ std::string CudfHiveColumnHandle::toString() const {
 CudfHiveTableHandle::CudfHiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
-    bool filterPushdownEnabled,
     const core::TypedExprPtr& subfieldFilterExpr,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
-      filterPushdownEnabled_(filterPushdownEnabled),
       subfieldFilterExpr_(subfieldFilterExpr),
       remainingFilter_(remainingFilter),
       dataColumns_(dataColumns) {}
