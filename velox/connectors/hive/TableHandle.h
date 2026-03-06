@@ -171,7 +171,8 @@ class HiveTableHandle : public ConnectorTableHandle {
       std::vector<std::string> indexColumns = {},
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
-      double sampleRate = 1.0);
+      double sampleRate = 1.0,
+      std::string dbName = "");
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
@@ -273,6 +274,12 @@ class HiveTableHandle : public ConnectorTableHandle {
     return filterColumnHandles_;
   }
 
+  /// Database or namespace name for this table. Used to pass per-table identity
+  /// through the Velox pipeline for token dispatch.
+  const std::string& dbName() const {
+    return dbName_;
+  }
+
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -292,6 +299,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   const std::vector<std::string> indexColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
+  const std::string dbName_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
