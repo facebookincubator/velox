@@ -185,30 +185,6 @@ class HiveTableHandle : public ConnectorTableHandle {
       std::vector<HiveColumnHandlePtr> filterColumnHandles,
       double sampleRate = 1.0);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Backward-compatible constructors that accept and ignore the deprecated
-  /// 'filterPushdownEnabled' param.
-  HiveTableHandle(
-      std::string connectorId,
-      const std::string& tableName,
-      bool /*filterPushdownEnabled*/,
-      common::SubfieldFilters subfieldFilters,
-      const core::TypedExprPtr& remainingFilter,
-      const RowTypePtr& dataColumns = nullptr,
-      const std::unordered_map<std::string, std::string>& tableParameters = {},
-      std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
-      double sampleRate = 1.0)
-      : HiveTableHandle(
-            std::move(connectorId),
-            tableName,
-            std::move(subfieldFilters),
-            remainingFilter,
-            dataColumns,
-            tableParameters,
-            std::move(filterColumnHandles),
-            sampleRate) {}
-#endif
-
   const std::string& tableName() const {
     return tableName_;
   }
