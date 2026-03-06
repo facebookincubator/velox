@@ -253,7 +253,7 @@ void SelectiveListColumnReader::read(
           std::numeric_limits<vector_size_t>::max();
   makeNestedRowSet(activeRows, rows.back());
   if (child_ && !nestedRows_.empty()) {
-    child_->read(child_->readOffset(), nestedRows_, nullptr);
+    child_->readWithTiming(child_->readOffset(), nestedRows_, nullptr);
     nestedRowsAllSelected_ = nestedRowsAllSelected_ &&
         nestedRows_.size() == child_->outputRows().size();
     nestedRows_ = child_->outputRows();
@@ -327,12 +327,13 @@ void SelectiveMapColumnReaderBase::read(
       std::numeric_limits<vector_size_t>::max());
   makeNestedRowSet(activeRows, rows.back());
   if (keyReader_ && elementReader_ && !nestedRows_.empty()) {
-    keyReader_->read(keyReader_->readOffset(), nestedRows_, nullptr);
+    keyReader_->readWithTiming(keyReader_->readOffset(), nestedRows_, nullptr);
     nestedRowsAllSelected_ = nestedRowsAllSelected_ &&
         nestedRows_.size() == keyReader_->outputRows().size();
     nestedRows_ = keyReader_->outputRows();
     if (!nestedRows_.empty()) {
-      elementReader_->read(elementReader_->readOffset(), nestedRows_, nullptr);
+      elementReader_->readWithTiming(
+          elementReader_->readOffset(), nestedRows_, nullptr);
       nestedRowsAllSelected_ = nestedRowsAllSelected_ &&
           nestedRows_.size() == elementReader_->outputRows().size();
       nestedRows_ = elementReader_->outputRows();

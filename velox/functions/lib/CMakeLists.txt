@@ -44,6 +44,7 @@ velox_add_library(
   MapFromEntries.cpp
   Re2Functions.cpp
   Repeat.cpp
+  Sequence.cpp
   Slice.cpp
   SimpleComparisonMatcher.cpp
   StringEncodingUtils.cpp

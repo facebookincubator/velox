@@ -427,7 +427,7 @@ std::unordered_map<std::string, RuntimeMetric>
 HiveDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
   res.insert(
-      {Connector::kIoWaitWallNanos,
+      {std::string(Connector::kIoWaitWallNanos),
        RuntimeMetric(
            ioStatistics_->queryThreadIoLatencyUs().sum() * 1'000,
            ioStatistics_->queryThreadIoLatencyUs().count(),
@@ -437,7 +437,7 @@ HiveDataSource::getRuntimeStats() {
   // Breakdown of ioWaitWallNanos by I/O type
   if (ioStatistics_->storageReadLatencyUs().count() > 0) {
     res.insert(
-        {Connector::kStorageReadWallNanos,
+        {std::string(Connector::kStorageReadWallNanos),
          RuntimeMetric(
              ioStatistics_->storageReadLatencyUs().sum() * 1'000,
              ioStatistics_->storageReadLatencyUs().count(),
@@ -447,7 +447,7 @@ HiveDataSource::getRuntimeStats() {
   }
   if (ioStatistics_->ssdCacheReadLatencyUs().count() > 0) {
     res.insert(
-        {Connector::kSsdCacheReadWallNanos,
+        {std::string(Connector::kSsdCacheReadWallNanos),
          RuntimeMetric(
              ioStatistics_->ssdCacheReadLatencyUs().sum() * 1'000,
              ioStatistics_->ssdCacheReadLatencyUs().count(),
@@ -457,7 +457,7 @@ HiveDataSource::getRuntimeStats() {
   }
   if (ioStatistics_->cacheWaitLatencyUs().count() > 0) {
     res.insert(
-        {Connector::kCacheWaitWallNanos,
+        {std::string(Connector::kCacheWaitWallNanos),
          RuntimeMetric(
              ioStatistics_->cacheWaitLatencyUs().sum() * 1'000,
              ioStatistics_->cacheWaitLatencyUs().count(),
@@ -467,7 +467,7 @@ HiveDataSource::getRuntimeStats() {
   }
   if (ioStatistics_->coalescedSsdLoadLatencyUs().count() > 0) {
     res.insert(
-        {Connector::kCoalescedSsdLoadWallNanos,
+        {std::string(Connector::kCoalescedSsdLoadWallNanos),
          RuntimeMetric(
              ioStatistics_->coalescedSsdLoadLatencyUs().sum() * 1'000,
              ioStatistics_->coalescedSsdLoadLatencyUs().count(),
@@ -477,7 +477,7 @@ HiveDataSource::getRuntimeStats() {
   }
   if (ioStatistics_->coalescedStorageLoadLatencyUs().count() > 0) {
     res.insert(
-        {Connector::kCoalescedStorageLoadWallNanos,
+        {std::string(Connector::kCoalescedStorageLoadWallNanos),
          RuntimeMetric(
              ioStatistics_->coalescedStorageLoadLatencyUs().sum() * 1'000,
              ioStatistics_->coalescedStorageLoadLatencyUs().count(),
@@ -498,7 +498,7 @@ HiveDataSource::getRuntimeStats() {
        {std::string(kTotalScanTime),
         RuntimeMetric(
             ioStatistics_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
-       {Connector::kTotalRemainingFilterTime,
+       {std::string(Connector::kTotalRemainingFilterTime),
         RuntimeMetric(
             totalRemainingFilterTime_.load(std::memory_order_relaxed),
             RuntimeCounter::Unit::kNanos)},

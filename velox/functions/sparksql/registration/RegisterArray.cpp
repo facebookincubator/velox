@@ -254,6 +254,7 @@ void registerArrayFunctions(const std::string& prefix) {
       makeArrayShuffleWithCustomSeed,
       getMetadataForArrayShuffle());
   registerIntegerSliceFunction(prefix);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_sequence, prefix + "sequence");
   registerFunction<
       ArrayAppendFunction,
       Array<Generic<T1>>,
