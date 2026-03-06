@@ -601,7 +601,7 @@ TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
           .build();
 
   auto tableHandle = makeTableHandle(
-      "parquet_table", rowType, true, std::move(subfieldFilters), nullptr);
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
 
   auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
