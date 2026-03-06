@@ -41,8 +41,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - boolean
      - real
      - double
-     - varchar
-     - varbinary
+     - varchar\ :superscript:`1`
+     - varbinary\ :superscript:`1`
      - timestamp
      - timestamp with time zone
      - date
@@ -475,6 +475,42 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
 
+:superscript:`1` This includes the varcharN and varbinaryN types which represents the varchar and varbinary type with a defined maximum length N respectively.
+Any conversion into a length restricted type may result in silent truncation if the type
+length does not equal or exceed the result data length.
+
+Type Information Preservation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+VarcharN and VarbinaryN types are designed to preserve exact type information
+during expression optimization and constant folding in query processing.
+
+When Velox evaluates expressions that originate from Presto, type information
+must be maintained throughout the optimization process. For example, if a Presto
+query constant folds an expression at optimization time and produces an intermediate
+constant, that constant must retain its original type constraint. When the
+optimized Velox expression is converted back to Presto for plan serialization,
+the type information must be available and accurate.
+
+Without length-constrained types for varchar and varbinary, this information
+would be lost during intermediate processing steps:
+
+1. Presto sends expression with ``varchar(50)`` to Velox
+2. Velox evaluates and constant folds to unbounded ``varchar``
+3. When converting back to Presto, type information is lost
+4. Type mismatch causes validation failures
+
+VarcharN and VarbinaryN solve this by allowing:
+
+- Exact type preservation through the entire optimization pipeline
+- Proper schema validation during INSERT and column operations
+- Compatible type checking when expressions span multiple SQL engines
+- Enforcement of maximum length constraints during casting (with silent truncation)
+
+This design enables seamless integration between Presto and Velox while
+maintaining strict type safety and enabling complex optimizations that involve
+multiple systems.
+
 Cast to Integral Types
 ----------------------
 
@@ -725,17 +761,22 @@ Invalid example
 Cast to VARCHAR
 ---------------
 
-Casting from scalar types to string is allowed.
+Casting from scalar types to string is allowed. The target type may be created with a maximum allowed length.
+If the specified length is exceeded by the possible result, the result is truncated without warning.
 
 Valid examples
 
 ::
 
   SELECT cast(123 as varchar); -- '123'
+  SELECT cast(123 as varchar(10)); -- '123'
+  SELECT cast(123 as varchar(2)); -- '12' (truncation ocurred)
   SELECT cast(123.45 as varchar); -- '123.45'
   SELECT cast(123.0 as varchar); -- '123.0'
   SELECT cast(nan() as varchar); -- 'NaN'
   SELECT cast(infinity() as varchar); -- 'Infinity'
+  SELECT cast(infinity() as varchar(4)); -- 'Infi' (truncation ocurred)
+  SELECT cast(infinity() as varchar(30)); -- 'Infinity'
   SELECT cast(true as varchar); -- 'true'
   SELECT cast(timestamp '1970-01-01 00:00:00' as varchar); -- '1970-01-01 00:00:00.000'
   SELECT cast(timestamp '2024-06-01 11:37:15.123 America/New_York' as varchar); -- '2024-06-01 11:37:15.123 America/New_York'
@@ -903,6 +944,9 @@ IPv4 mapped IPv6:
 
 Cast to VARBINARY
 -----------------
+
+The same rules that apply to varcharN also apply to varbinaryN. If the target type of the cast results in a type definition where the
+specified length is exceeded by the result length, the data is silently truncated.
 
 From IPADDRESS
 ^^^^^^^^^^^^^^

@@ -111,6 +111,8 @@ class VectorFuzzerTest : public testing::Test {
 
 TEST_F(VectorFuzzerTest, flatPrimitive) {
   VectorFuzzer::Options opts;
+  opts.stringVariableLength = true;
+  opts.stringLength = 100;
   opts.nullRatio = 0.5;
   VectorFuzzer fuzzer(opts, pool());
   VectorPtr vector;
@@ -128,7 +130,8 @@ TEST_F(VectorFuzzerTest, flatPrimitive) {
       INTERVAL_DAY_TIME(),
       UNKNOWN(),
       fuzzer.randShortDecimalType(),
-      fuzzer.randLongDecimalType()};
+      fuzzer.randLongDecimalType(),
+      fuzzer.randVarcharType()};
 
   for (const auto& type : types) {
     vector = fuzzer.fuzzFlat(type);
@@ -306,6 +309,7 @@ TEST_F(VectorFuzzerTest, dictionary) {
 
 TEST_F(VectorFuzzerTest, constants) {
   VectorFuzzer::Options opts;
+  opts.stringLength = 100;
   opts.nullRatio = 0;
   VectorFuzzer fuzzer(opts, pool());
 
@@ -314,6 +318,16 @@ TEST_F(VectorFuzzerTest, constants) {
   ASSERT_TRUE(vector->type()->kindEquals(INTEGER()));
   ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
   ASSERT_FALSE(vector->mayHaveNulls());
+
+  opts.stringVariableLength = true;
+  fuzzer.setOptions(opts);
+  auto varcharType = fuzzer.randVarcharType();
+  vector = fuzzer.fuzzConstant(varcharType);
+  ASSERT_TRUE(vector->type()->kindEquals(VARCHAR()));
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
+  ASSERT_FALSE(vector->mayHaveNulls());
+  opts.stringVariableLength = false;
+  fuzzer.setOptions(opts);
 
   vector = fuzzer.fuzzConstant(VARCHAR());
   ASSERT_TRUE(vector->type()->kindEquals(VARCHAR()));
@@ -485,10 +499,12 @@ TEST_F(VectorFuzzerTest, mapKeys) {
   EXPECT_NO_THROW(
       fuzzer.fuzzMap(nullableVector, fuzzer.fuzzFlat(BIGINT(), 1000), 10));
   opts.normalizeMapKeys = true;
+  opts.stringVariableLength = true;
   fuzzer.setOptions(opts);
 
+  auto varcharType = fuzzer.randVarcharType();
   std::vector<TypePtr> types = {
-      TINYINT(), SMALLINT(), BIGINT(), DOUBLE(), VARCHAR()};
+      TINYINT(), SMALLINT(), BIGINT(), DOUBLE(), VARCHAR(), varcharType};
 
   for (const auto& keyType : types) {
     for (size_t i = 0; i < 10; ++i) {
