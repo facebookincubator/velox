@@ -53,8 +53,11 @@ makeHiveInsertTableHandle(
           : std::make_shared<connector::hive::HiveBucketProperty>(
                 *tracedHandle->bucketProperty()),
       compressionKind,
-      std::unordered_map<std::string, std::string>{},
-      writerOptions);
+      std::unordered_map<std::string, std::string>{}, // serdeParameters
+      writerOptions,
+      tracedHandle->ensureFiles(),
+      tracedHandle->fileNameGenerator(),
+      tracedHandle->storageParameters());
 }
 
 std::shared_ptr<core::InsertTableHandle> createInsertTableHanlde(

@@ -230,6 +230,11 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
       {"key2", "value2"},
   };
 
+  std::unordered_map<std::string, std::string> storageParameters = {
+      {"key3", "value3"},
+      {"key4", "value4"},
+  };
+
   auto hiveInsertTableHandle =
       exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
           tableColumnNames,
@@ -239,7 +244,10 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
           locationHandle,
           dwio::common::FileFormat::NIMBLE,
           common::CompressionKind::CompressionKind_SNAPPY,
-          serdeParameters);
+          serdeParameters,
+          nullptr, // writerOptions
+          false, // ensureFiles
+          storageParameters);
   testSerde(*hiveInsertTableHandle);
 }
 
