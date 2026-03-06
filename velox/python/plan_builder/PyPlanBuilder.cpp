@@ -23,6 +23,8 @@
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/python/vector/PyVector.h"
 #include "velox/tpch/gen/TpchGen.h"
 
@@ -317,6 +319,33 @@ PyPlanBuilder& PyPlanBuilder::sortedMerge(
   }
 
   planBuilder_.localMerge(keys, std::move(sources));
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::markSorted(
+    const std::string& markerKey,
+    const std::vector<std::string>& sortingKeys) {
+  // Parse sorting keys using the DuckDB parser (same as orderBy).
+  std::vector<std::string> keyNames;
+  std::vector<core::SortOrder> sortingOrders;
+
+  for (const auto& key : sortingKeys) {
+    auto orderBy = parse::DuckSqlExpressionsParser().parseOrderByExpr(key);
+    auto typedExpr = core::Expressions::inferTypes(
+        orderBy.expr, planBuilder_.planNode()->outputType(), pool_.get());
+
+    auto fieldExpr =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    if (!fieldExpr) {
+      throw std::runtime_error(
+          "markSorted sorting key must be a column reference: " + key);
+    }
+
+    keyNames.push_back(fieldExpr->name());
+    sortingOrders.emplace_back(orderBy.ascending, orderBy.nullsFirst);
+  }
+
+  planBuilder_.markSorted(markerKey, keyNames, sortingOrders);
   return *this;
 }
 

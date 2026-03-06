@@ -344,6 +344,20 @@ class PyPlanBuilder {
       const std::vector<std::string>& keys,
       const std::vector<std::optional<PyPlanNode>>& sources);
 
+  /// Adds a MarkSorted node that validates sortedness of input data.
+  /// For each input row, adds a boolean column indicating whether the row
+  /// is in sorted order relative to the previous row (based on the specified
+  /// sorting keys).
+  ///
+  /// @param markerKey The name of the output boolean column.
+  /// @param sortingKeys List of columns that define the sort order. The
+  /// strings can be column names and optionally contain the sort orientation
+  /// and null handling (e.g., "col", "col DESC", "col NULLS FIRST",
+  /// "col DESC NULLS FIRST").
+  PyPlanBuilder& markSorted(
+      const std::string& markerKey,
+      const std::vector<std::string>& sortingKeys);
+
   /// Generates TPC-H data on the fly using dbgen. Note that generating data on
   /// the fly is not terribly efficient, so for performance evaluation one
   /// should generate data using this node, write it to output storage files,
