@@ -412,13 +412,13 @@ function install_uv {
     export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
     export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
 
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    curl -LsSf https://astral.sh/uv/install.sh | $SUDO sh
     uv tool update-shell
   fi
 }
 
 function uv_install {
-  uv tool install "$@" || {
+  $SUDO uv tool install "$@" || {
     ret=$?
     # exit code 2 means the binary already exists, so we can ignore that
     [ "$ret" -eq 2 ] || exit "$ret"
