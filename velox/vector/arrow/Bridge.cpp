@@ -1297,7 +1297,7 @@ int32_t parseDecimalBitWidthOrDefault(const std::string_view format) {
 }
 
 TypePtr parseDecimalFormat(const std::string_view format) {
-  const std::string_view invalidFormatMsg =
+  const char* invalidFormatMsg =
       "Unable to convert '{}' ArrowSchema decimal format to Velox decimal";
   try {
     std::string_view::size_type sz;
