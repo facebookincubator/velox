@@ -35,7 +35,7 @@ class CacheInputStream : public SeekableInputStream {
       const velox::common::Region& region,
       std::shared_ptr<ReadFileInputStream> input,
       uint64_t fileNum,
-      bool noCacheRetention,
+      bool cacheable,
       std::shared_ptr<cache::ScanTracker> tracker,
       cache::TrackingId trackingId,
       uint64_t groupId,
@@ -72,7 +72,7 @@ class CacheInputStream : public SeekableInputStream {
         region_,
         input_,
         fileNum_,
-        noCacheRetention_,
+        cacheable_,
         tracker_,
         trackingId_,
         groupId_,
@@ -98,8 +98,8 @@ class CacheInputStream : public SeekableInputStream {
     prefetchPct_ = pct;
   }
 
-  bool testingNoCacheRetention() const {
-    return noCacheRetention_;
+  bool testingCacheable() const {
+    return cacheable_;
   }
 
  private:
@@ -120,7 +120,7 @@ class CacheInputStream : public SeekableInputStream {
       cache::AsyncDataCacheEntry& entry);
 
   // Invoked to clear the cache pin of the accessed cache entry and mark it as
-  // immediate evictable if 'noCacheRetention_' flag is set.
+  // immediate evictable if 'cacheable_' is false.
   void clearCachePin();
 
   void makeCacheEvictable();
@@ -131,10 +131,10 @@ class CacheInputStream : public SeekableInputStream {
 
   CachedBufferedInput* const bufferedInput_;
   cache::AsyncDataCache* const cache_;
-  // True if a pin should be set to the lowest retention score after
+  // False if a pin should be set to the lowest retention score after
   // unpinning. This applies to sequential reads where second access
   // to the page is not expected.
-  const bool noCacheRetention_;
+  const bool cacheable_;
   // The region of 'input' 'this' ranges over.
   const velox::common::Region region_;
   const uint64_t fileNum_;

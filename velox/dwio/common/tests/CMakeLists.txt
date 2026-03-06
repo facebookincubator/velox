@@ -49,6 +49,7 @@ add_executable(
   ReaderTest.cpp
   RetryTests.cpp
   ScanSpecTest.cpp
+  SelectiveColumnReaderTest.cpp
   SortingWriterTest.cpp
   StreamUtilTest.cpp
   BufferedInputTest.cpp
@@ -65,7 +66,7 @@ target_link_libraries(
   velox_dwio_common_test
   velox_dwio_common_test_utils
   velox_hive_connector
-  velox_temp_path
+  velox_test_util
   velox_vector_test_lib
   velox_link_libs
   Folly::folly

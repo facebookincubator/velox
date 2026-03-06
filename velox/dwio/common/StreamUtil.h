@@ -159,15 +159,15 @@ inline void loopOverBuffers(
   int32_t rowOffset = initialRow;
   int32_t rowIndex = 0;
   while (rowIndex < rows.size()) {
-    auto available = (bufferEnd - bufferStart) / sizeof(T);
-    auto numRowsInBuffer = rows.back() - rowOffset < available
+    const auto available = (bufferEnd - bufferStart) / sizeof(T);
+    const auto numRowsInBuffer = rows.back() - rowOffset < available
         ? rows.size() - rowIndex
         : numBelow(
               folly::Range<const int32_t*>(
                   &rows[rowIndex], rows.size() - rowIndex),
               rowOffset + available);
 
-    if (!numRowsInBuffer) {
+    if (numRowsInBuffer == 0) {
       skipBytes(
           (rows[rowIndex] - rowOffset) * sizeof(T),
           &input,

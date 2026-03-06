@@ -35,7 +35,7 @@ concurrency:
 jobs:
   build_docs:
     name: Build and Push
-    runs-on: 8-core-ubuntu
+    runs-on: 16-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     env:
       CCACHE_DIR: /tmp/ccache
@@ -48,13 +48,16 @@ jobs:
         id: restore-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-docs-8-core-ubuntu
+          key: ccache-docs-16-core-ubuntu
 
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           fetch-depth: 0
           persist-credentials: true
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Install System Dependencies
         run: |
@@ -63,10 +66,53 @@ jobs:
       - name: CCache Stats Before
         run: ccache -sz
 
-      - name: Install Python Dependencies
+      - name: Install uv
         run: |
-          # Install pyvelox to generate it's docs
-          uv sync --extra docs
+          pip install --upgrade uv
+          uv --version
+
+      - name: Check for pyvelox changes
+        id: check-pyvelox
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }}..HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1..HEAD)
+          fi
+          if echo "$CHANGED" | grep -qE '^(python/|velox/python/)'; then
+            echo "Building pyvelox: python/ files changed."
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "Skipping pyvelox build: no python/ files changed."
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Python Dependencies
+        timeout-minutes: 30
+        env:
+          PYVELOX_CHANGED: ${{ steps.check-pyvelox.outputs.changed }}
+        run: |
+          # When python/ files haven't changed, skip building pyvelox
+          # from C++ source (slow) and only install doc dependencies.
+          EXTRA_FLAGS=""
+          if [ "$PYVELOX_CHANGED" != "true" ]; then
+            echo "Skipping pyvelox C++ build (no changes in python/)."
+            EXTRA_FLAGS="--no-install-project"
+          fi
+          # Retry up to 3 times to handle transient network issues
+          # (pip/uv hangs, registry timeouts).
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3..."
+            if uv sync --extra docs $EXTRA_FLAGS --verbose; then
+              echo "Python dependencies installed successfully."
+              exit 0
+            fi
+            echo "Attempt $attempt failed. Cleaning up and retrying in 10 seconds..."
+            rm -rf .venv uv.lock
+            sleep 10
+          done
+          echo "All 3 attempts failed."
+          exit 1
 
       - name: CCache Stats After
         run: ccache -s
@@ -75,7 +121,7 @@ jobs:
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-docs-8-core-ubuntu
+          key: ccache-docs-16-core-ubuntu
 
       - name: Build Documentation
         run: |
@@ -92,7 +138,6 @@ jobs:
         run: |
           git config --global user.email "velox@users.noreply.github.com"
           git config --global user.name "velox"
-          git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Push Documentation
         if: ${{ github.event_name == 'push' && github.repository == 'facebookincubator/velox'}}

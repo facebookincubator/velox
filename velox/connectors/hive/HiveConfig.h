@@ -214,6 +214,13 @@ class HiveConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
   static constexpr const char* kIndexEnabledSession = "index_enabled";
 
+  /// Whether to collect per-column timing stats (decode/decompress CPU time).
+  /// Disabled by default to avoid overhead (~100ns per operation).
+  static constexpr const char* kReaderCollectColumnStats =
+      "hive.reader.collect-column-stats";
+  static constexpr const char* kReaderCollectColumnStatsSession =
+      "hive.reader.collect_column_stats";
+
   /// Maximum number of output rows to return per index lookup request.
   /// The limit is applied to the actual output rows after filtering.
   /// 0 means no limit (default).
@@ -221,6 +228,15 @@ class HiveConfig {
       "hive.max-rows-per-index-request";
   static constexpr const char* kMaxRowsPerIndexRequestSession =
       "hive.max_rows_per_index_request";
+
+  /// Whether to cache file metadata (footer, stripes, index) in the
+  /// process-wide AsyncDataCache. When enabled, the first reader performs a
+  /// speculative tail read and populates the cache; subsequent readers on the
+  /// same file hit the cache for zero-IO metadata init.
+  static constexpr const char* kFileMetadataCacheEnabled =
+      "file-metadata-cache-enabled";
+  static constexpr const char* kFileMetadataCacheEnabledSession =
+      "file_metadata_cache_enabled";
 
   static constexpr const char* kUser = "user";
   static constexpr const char* kSource = "source";
@@ -310,9 +326,16 @@ class HiveConfig {
   /// Whether to use the cluster index for filter-based row pruning.
   bool indexEnabled(const config::ConfigBase* session) const;
 
+  /// Whether to collect per-column timing stats (decode/decompress CPU time).
+  /// Disabled by default to avoid overhead (~100ns per operation).
+  bool readerCollectColumnStats(const config::ConfigBase* session) const;
+
   /// Returns the maximum number of rows to read per index lookup request.
   /// 0 means no limit (default).
   uint32_t maxRowsPerIndexRequest(const config::ConfigBase* session) const;
+
+  /// Whether to cache file metadata in the process-wide AsyncDataCache.
+  bool fileMetadataCacheEnabled(const config::ConfigBase* session) const;
 
   /// User of the query. Used for storage logging.
   std::string user(const config::ConfigBase* session) const;

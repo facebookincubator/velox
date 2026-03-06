@@ -25,6 +25,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -33,7 +34,6 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/VectorSaver.h"
@@ -76,6 +76,7 @@ using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::test;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 namespace {
 using facebook::velox::filesystems::FileSystem;
@@ -416,8 +417,8 @@ void WriterFuzzer::go() {
     }
     auto input = generateInputData(names, types, partitionOffset);
 
-    const auto outputDirPath = exec::test::TempDirectoryPath::create(
-        FLAGS_file_system_error_injection);
+    const auto outputDirPath =
+        TempDirectoryPath::create(FLAGS_file_system_error_injection);
 
     verifyWriter(
         input,
@@ -435,8 +436,7 @@ void WriterFuzzer::go() {
     // File rotation only works when bucketCount == 0 and sortBy is empty.
     if (bucketCount == 0 && sortBy.empty()) {
       const auto fileRotationOutputDirPath =
-          exec::test::TempDirectoryPath::create(
-              FLAGS_file_system_error_injection);
+          TempDirectoryPath::create(FLAGS_file_system_error_injection);
       verifyFileRotation(
           input,
           names,

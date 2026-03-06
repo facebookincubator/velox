@@ -27,6 +27,8 @@
 
 namespace facebook::velox::dwio::common {
 
+struct ColumnMetrics;
+
 using ScanSpec = velox::common::ScanSpec;
 
 /// Generalized representation of a set of distinct values for dictionary
@@ -130,6 +132,10 @@ struct ScanState {
   RawScanState rawState;
 };
 
+inline bool isDense(const RowSet& rows) {
+  return rows.empty() || rows.size() == rows.back() + 1;
+}
+
 class SelectiveColumnReader {
  public:
   static constexpr uint64_t kStringBufferSize = 16 * 1024;
@@ -170,6 +176,14 @@ class SelectiveColumnReader {
   // constant between this and the next call to read.
   virtual void
   read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls) = 0;
+
+  /// Wraps read() to collect decode timing stats for leaf columns.
+  /// Only times primitive types to avoid double-counting in complex types
+  /// (struct/map/array) which recursively call children's readWithTiming.
+  void readWithTiming(
+      int64_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls);
 
   virtual uint64_t skip(uint64_t numValues) {
     return formatData_->skip(numValues);
@@ -644,6 +658,10 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* const scanSpec_;
+
+  // Per-column metrics for timing stats. May be nullptr if collection is
+  // disabled.
+  ColumnMetrics* columnMetrics_{nullptr};
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.

@@ -189,20 +189,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
   return diffTimestamp(unit, fromTimestamp, toTimestamp);
 }
 
-FOLLY_ALWAYS_INLINE
-int64_t diffDate(
-    const DateTimeUnit unit,
-    const int32_t fromDate,
-    const int32_t toDate) {
-  if (fromDate == toDate) {
-    return 0;
-  }
-  return diffTimestamp(
-      unit,
-      // prevent overflow
-      Timestamp((int64_t)fromDate * util::kSecsPerDay, 0),
-      Timestamp((int64_t)toDate * util::kSecsPerDay, 0));
-}
+// diffDate is defined in velox/functions/lib/DateTimeUtil.h
 
 FOLLY_ALWAYS_INLINE
 int64_t diffTime(

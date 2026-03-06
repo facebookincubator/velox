@@ -439,8 +439,8 @@ RowVectorPtr SourceMerger::createOutputVector() {
   const RowVector* source = nullptr;
   for (const auto* stream : streams_) {
     if (stream->hasData() && (source = stream->data())) {
-      return std::static_pointer_cast<RowVector>(
-          BaseVector::createEmptyLike(source, outputBatchRows_, pool_));
+      return BaseVector::createEmptyLike<RowVector>(
+          source, outputBatchRows_, pool_);
     }
   }
 
@@ -506,7 +506,8 @@ void SourceStream::copyToOutput(RowVectorPtr& output) {
 
 bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
   ContinueFuture future;
-  auto reason = source_->next(data_, &future);
+  bool drained{false};
+  auto reason = source_->next(data_, &future, drained);
   if (reason != BlockingReason::kNotBlocked) {
     needData_ = true;
     futures.emplace_back(std::move(future));

@@ -386,7 +386,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     tableHandle_ = std::make_shared<HiveTableHandle>(
         connectorId_,
         tableName_,
-        true,
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
         dataColumns_,

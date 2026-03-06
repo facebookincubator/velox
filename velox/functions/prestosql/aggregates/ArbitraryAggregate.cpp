@@ -19,6 +19,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -206,8 +207,13 @@ class NonNumericArbitrary : public exec::Aggregate {
           result->get()->copyRanges(currentSource->get(), copyRanges_);
         } else {
           if (copyRanges_.size() == 1 && copyRanges_[0].count == numGroups) {
-            *result = currentSource->get()->slice(
-                copyRanges_[0].sourceIndex, copyRanges_[0].count);
+            if (copyRanges_[0].sourceIndex == 0 &&
+                currentSource->get()->size() == numGroups) {
+              *result = *currentSource;
+            } else {
+              *result = currentSource->get()->slice(
+                  copyRanges_[0].sourceIndex, copyRanges_[0].count);
+            }
           } else {
             prepareGroupIndices(numGroups, result->get()->pool());
             applyToEachRange(
@@ -448,7 +454,7 @@ void registerArbitraryAggregate(
           case TypeKind::BIGINT:
             return std::make_unique<ArbitraryAggregate<int64_t>>(inputType);
           case TypeKind::HUGEINT:
-            if (inputType->isLongDecimal()) {
+            if (inputType->isLongDecimal() || isIPAddressType(inputType)) {
               return std::make_unique<ArbitraryAggregate<int128_t>>(inputType);
             }
             VELOX_NYI();

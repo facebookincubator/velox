@@ -628,7 +628,7 @@ void configureReaderOptions(
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
-  readerOptions.setNoCacheRetention(!hiveSplit->cacheable);
+  readerOptions.setCacheable(hiveSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {
     const auto timezone = tz::locateZone(sessionTzName);
@@ -638,6 +638,8 @@ void configureReaderOptions(
       connectorQueryCtx->adjustTimestampToTimezone());
   readerOptions.setSelectiveNimbleReaderEnabled(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
+  readerOptions.setFileMetadataCacheEnabled(
+      hiveConfig->fileMetadataCacheEnabled(sessionProperties));
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
@@ -686,6 +688,8 @@ void configureRowReaderOptions(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         hiveConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setCollectColumnStats(
+        hiveConfig->readerCollectColumnStats(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
@@ -868,16 +872,7 @@ core::CallTypedExprPtr replaceInputs(
 }
 
 bool endWith(const std::string& str, const char* suffix) {
-  int len = strlen(suffix);
-  if (str.size() < len) {
-    return false;
-  }
-  for (int i = 0, j = str.size() - len; i < len; ++i, ++j) {
-    if (str[j] != suffix[i]) {
-      return false;
-    }
-  }
-  return true;
+  return str.ends_with(suffix);
 }
 
 bool isNotExpr(
