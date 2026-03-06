@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
   // List of functions that have known bugs that cause crashes or failures.
-  static const std::unordered_set<std::string> skipFunctions = {
+  std::unordered_set<std::string> skipFunctions = {
       // https://github.com/prestodb/presto/issues/24936
       "classification_fall_out",
       "classification_precision",
@@ -174,8 +174,17 @@ int main(int argc, char** argv) {
       "convex_hull_agg_merge",
       "convex_hull_agg_extract",
       "convex_hull_agg_merge_extract",
-
   };
+  if (!FLAGS_presto_url.empty()) {
+    skipFunctions.insert({
+        // Velox-only function, not available in Presto.
+        "array_union_sum",
+        "array_union_sum_partial",
+        "array_union_sum_merge",
+        "array_union_sum_extract",
+        "array_union_sum_merge_extract",
+    });
+  }
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
       "tdigest_agg",
