@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 #include <folly/Random.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -1015,8 +1016,127 @@ TEST(ExceptionTest, exceptionMacroInlining) {
   // Inlined with the method that passes the errorStr and the next argument via
   // fmt::vformat. Should throw format_error.
   try {
-    VELOX_USER_FAIL(errorStr, "definitely");
+    VELOX_USER_FAIL(errorStr.c_str(), "definitely");
   } catch (const std::exception& e) {
     ASSERT_TRUE(std::string_view{e.what()}.starts_with("argument not found"));
+  }
+}
+
+TEST(ExceptionTest, messageTemplate) {
+  using testing::Property;
+  using testing::StrEq;
+  using testing::Throws;
+
+  auto noMsg = [] { VELOX_FAIL(); };
+  EXPECT_THAT(
+      noMsg,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq(""))));
+
+  auto plainMsg = [] { VELOX_FAIL("Something went wrong"); };
+  EXPECT_THAT(
+      plainMsg,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("Something went wrong"))));
+
+  // message() is interpolated, messageTemplate() is not.
+  auto fmtMsg = [] { VELOX_FAIL("Error: {} vs {}", 42, 99); };
+  EXPECT_THAT(
+      fmtMsg,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("Error: {} vs {}"))));
+  EXPECT_THAT(
+      fmtMsg,
+      Throws<VeloxException>(
+          Property(&VeloxException::message, StrEq("Error: 42 vs 99"))));
+
+  auto userFail = [] { VELOX_USER_FAIL("Not supported: {}", "rank"); };
+  EXPECT_THAT(
+      userFail,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("Not supported: {}"))));
+
+  auto checkFail = [] { VELOX_CHECK(false, "Bad state: {}", "disconnected"); };
+  EXPECT_THAT(
+      checkFail,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq("Bad state: {}"))));
+
+  auto checkEq = [] { VELOX_CHECK_EQ(1, 2); };
+  EXPECT_THAT(
+      checkEq,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq("({} vs. {})"))));
+
+  auto checkLt = [] { VELOX_CHECK_LT(10, 5, "Expected smaller"); };
+  EXPECT_THAT(
+      checkLt,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate,
+          StrEq("({} vs. {}) Expected smaller"))));
+
+  auto unsupported = [] { VELOX_UNSUPPORTED("{} not supported", "merge"); };
+  EXPECT_THAT(
+      unsupported,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("{} not supported"))));
+
+  auto nyi = [] { VELOX_NYI("{} not implemented", "windowing"); };
+  EXPECT_THAT(
+      nyi,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("{} not implemented"))));
+
+  // Wrapped exception has no explicit template, so messageTemplate() returns
+  // the message itself.
+  {
+    auto exceptionPtr =
+        std::make_exception_ptr(std::invalid_argument("wrapped"));
+    VeloxUserError ve(exceptionPtr, "wrapped", false);
+    EXPECT_EQ(ve.messageTemplate(), "wrapped");
+  }
+
+  // messageTemplate not in what().
+  try {
+    VELOX_FAIL("Count: {}", 42);
+    FAIL() << "Expected an exception";
+  } catch (const VeloxException& e) {
+    EXPECT_EQ(e.messageTemplate(), "Count: {}");
+    EXPECT_EQ(
+        std::string(e.what()).find("Message Template:"), std::string::npos);
+  }
+
+  // No message arg.
+  auto checkNotNull = [] {
+    int* ptr = nullptr;
+    VELOX_CHECK_NOT_NULL(ptr);
+  };
+  EXPECT_THAT(
+      checkNotNull,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq(""))));
+
+  // VELOX_CHECK_EQ with user-provided format args.
+  auto checkEqFmt = [] { VELOX_CHECK_EQ(1, 2, "Expected {} == {}", 1, 2); };
+  EXPECT_THAT(
+      checkEqFmt,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate,
+          StrEq("({} vs. {}) Expected {} == {}"))));
+
+  // Exception copy preserves messageTemplate.
+  try {
+    VELOX_FAIL("Copy test: {}", 42);
+    FAIL() << "Expected an exception";
+  } catch (const VeloxException& e) {
+    VeloxException copy = e;
+    EXPECT_EQ(copy.messageTemplate(), "Copy test: {}");
+
+    auto rethrown = std::current_exception();
+    try {
+      std::rethrow_exception(rethrown);
+    } catch (const VeloxException& e2) {
+      EXPECT_EQ(e2.messageTemplate(), "Copy test: {}");
+    }
   }
 }

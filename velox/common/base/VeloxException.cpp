@@ -103,6 +103,35 @@ VeloxException::VeloxException(
       })) {}
 
 VeloxException::VeloxException(
+    const char* file,
+    size_t line,
+    const char* function,
+    std::string_view failingExpression,
+    std::string_view message,
+    std::string_view errorSource,
+    std::string_view errorCode,
+    bool isRetriable,
+    std::string_view messageTemplate,
+    Type exceptionType,
+    std::string_view exceptionName)
+    : VeloxException(State::make(exceptionType, [&](auto& state) {
+        state.exceptionType = exceptionType;
+        state.exceptionName = exceptionName;
+        state.file = file;
+        state.line = line;
+        state.function = function;
+        state.failingExpression = failingExpression;
+        state.message = message;
+        state.messageTemplate = messageTemplate.data();
+        state.errorSource = errorSource;
+        state.errorCode = errorCode;
+        state.context = getExceptionContext().message(exceptionType);
+        state.additionalContext =
+            getAdditionalExceptionContextString(exceptionType, state.context);
+        state.isRetriable = isRetriable;
+      })) {}
+
+VeloxException::VeloxException(
     const std::exception_ptr& e,
     std::string_view message,
     std::string_view errorSource,
