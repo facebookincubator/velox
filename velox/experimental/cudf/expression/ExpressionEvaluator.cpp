@@ -843,42 +843,38 @@ class BetweenFunction : public CudfFunction {
     // return (value >= min) && (value <= max)
     std::unique_ptr<cudf::column> geResultColumn, leResultColumn;
     if (minLiteral_) {
-      geResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              *minLiteral_,
-              cudf::binary_operator::GREATER_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      geResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          *minLiteral_,
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     } else {
-      geResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              asView(inputColumns[1]),
-              cudf::binary_operator::GREATER_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      geResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[1]),
+          cudf::binary_operator::GREATER_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     }
     if (maxLiteral_) {
-      leResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              *maxLiteral_,
-              cudf::binary_operator::LESS_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      leResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          *maxLiteral_,
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     } else {
-      leResultColumn = 
-          cudf::binary_operation(
-              asView(inputColumns[0]),
-              asView(inputColumns[2]),
-              cudf::binary_operator::LESS_EQUAL,
-              kBoolType,
-              stream,
-              mr);
+      leResultColumn = cudf::binary_operation(
+          asView(inputColumns[0]),
+          asView(inputColumns[2]),
+          cudf::binary_operator::LESS_EQUAL,
+          kBoolType,
+          stream,
+          mr);
     }
     return cudf::binary_operation(
         geResultColumn->view(),

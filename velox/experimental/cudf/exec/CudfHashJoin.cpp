@@ -825,8 +825,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::innerJoin(
                 cudf::column_view filterColumn) {
               auto filterTable =
                   std::make_unique<cudf::table>(std::move(joinedCols));
-              auto filteredTable =
-                  cudf::apply_boolean_mask(*filterTable, filterColumn, stream, get_output_mr());
+              auto filteredTable = cudf::apply_boolean_mask(
+                  *filterTable, filterColumn, stream, get_output_mr());
               return filteredTable->release();
             };
         cudfOutputs.push_back(filteredOutput(
@@ -920,8 +920,8 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftJoin(
                 cudf::column_view filterColumn) {
               auto filterTable =
                   std::make_unique<cudf::table>(std::move(joinedCols));
-              auto filteredTable =
-                  cudf::apply_boolean_mask(*filterTable, filterColumn, stream, get_output_mr());
+              auto filteredTable = cudf::apply_boolean_mask(
+                  *filterTable, filterColumn, stream, get_output_mr());
               return filteredTable->release();
             };
         cudfOutputs.push_back(filteredOutput(
@@ -1458,8 +1458,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           auto probeChannel = leftColumnIndicesToGather_[li];
           auto leftCudfDataType =
               veloxToCudfDataType(probeType_->childAt(probeChannel));
-          auto nullScalar =
-              cudf::make_default_constructed_scalar(leftCudfDataType, stream, get_temp_mr());
+          auto nullScalar = cudf::make_default_constructed_scalar(
+              leftCudfDataType, stream, get_temp_mr());
           outCols[outIdx] = cudf::make_column_from_scalar(
               *nullScalar, m, stream, get_output_mr());
         }
