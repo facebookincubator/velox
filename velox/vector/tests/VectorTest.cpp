@@ -4608,5 +4608,45 @@ TEST_F(VectorTest, createEmptyLikeNestedFlatMap) {
       emptyArray->elements()->encoding(), VectorEncoding::Simple::FLAT_MAP);
 }
 
+TEST_F(VectorTest, createMapOfArraysVectorWithNullRows) {
+  // Row 0: {1 → [10, 20]}
+  // Row 1: null
+  // Row 2: {2 → [30]}
+  auto vector = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, {{10, 20}}}}, {}, {{2, {{30}}}}}, {1});
+
+  ASSERT_EQ(vector->size(), 3);
+  auto* map = vector->as<MapVector>();
+  ASSERT_NE(map, nullptr);
+
+  // Row 0: non-null, size 1.
+  EXPECT_FALSE(map->isNullAt(0));
+  EXPECT_EQ(map->sizeAt(0), 1);
+
+  // Row 1: null.
+  EXPECT_TRUE(map->isNullAt(1));
+
+  // Row 2: non-null, size 1.
+  EXPECT_FALSE(map->isNullAt(2));
+  EXPECT_EQ(map->sizeAt(2), 1);
+
+  // Verify keys and values.
+  auto* keys = map->mapKeys()->as<FlatVector<int64_t>>();
+  EXPECT_EQ(keys->valueAt(0), 1);
+  EXPECT_EQ(keys->valueAt(1), 2);
+
+  auto* arrays = map->mapValues()->as<ArrayVector>();
+  auto* elements = arrays->elements()->as<FlatVector<int64_t>>();
+
+  // Row 0, key 1 → [10, 20].
+  EXPECT_EQ(arrays->sizeAt(0), 2);
+  EXPECT_EQ(elements->valueAt(arrays->offsetAt(0)), 10);
+  EXPECT_EQ(elements->valueAt(arrays->offsetAt(0) + 1), 20);
+
+  // Row 2, key 2 → [30].
+  EXPECT_EQ(arrays->sizeAt(1), 1);
+  EXPECT_EQ(elements->valueAt(arrays->offsetAt(1)), 30);
+}
+
 } // namespace
 } // namespace facebook::velox

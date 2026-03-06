@@ -26,6 +26,7 @@ velox_add_library(
   DecimalArithmetic.cpp
   DecimalCeil.cpp
   DecimalCompare.cpp
+  FilterFunction.cpp
   Hash.cpp
   XxHash64.cpp
   In.cpp
@@ -36,6 +37,7 @@ velox_add_library(
   Size.cpp
   String.cpp
   TimestampUtils.cpp
+  Transform.cpp
   UnscaledValueFunction.cpp
 )
 

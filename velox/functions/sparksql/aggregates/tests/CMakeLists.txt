@@ -15,6 +15,7 @@
 add_executable(
   velox_functions_spark_aggregates_test
   ApproxCountDistinctForIntervalsAggregateTest.cpp
+  ApproxPercentileAggregateTest.cpp
   AverageAggregationTest.cpp
   BitwiseXorAggregationTest.cpp
   BloomFilterAggAggregateTest.cpp

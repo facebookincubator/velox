@@ -23,15 +23,11 @@
 
 namespace facebook::velox::exec::test {
 
-class PartitionedOutputTest
-    : public OperatorTestBase,
-      public testing::WithParamInterface<VectorSerde::Kind> {
+class PartitionedOutputTest : public OperatorTestBase,
+                              public testing::WithParamInterface<std::string> {
  public:
-  static std::vector<VectorSerde::Kind> getTestParams() {
-    const std::vector<VectorSerde::Kind> kinds(
-        {VectorSerde::Kind::kPresto,
-         VectorSerde::Kind::kCompactRow,
-         VectorSerde::Kind::kUnsafeRow});
+  static std::vector<std::string> getTestParams() {
+    const std::vector<std::string> kinds({"Presto", "CompactRow", "UnsafeRow"});
     return kinds;
   }
 
@@ -162,8 +158,12 @@ TEST_P(PartitionedOutputTest, flush) {
       planStats.at(partitionNodeId)
           .customStats.at(std::string(Operator::kShuffleSerdeKind));
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
-  ASSERT_EQ(serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam()));
-  ASSERT_EQ(serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam()));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
 }
 
 TEST_P(PartitionedOutputTest, keyChannelNotAtBeginningWithNulls) {
@@ -274,8 +274,12 @@ TEST_P(PartitionedOutputTest, multipleFlushCycles) {
       planStats.at(partitionNodeId)
           .customStats.at(std::string(Operator::kShuffleSerdeKind));
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
-  ASSERT_EQ(serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam()));
-  ASSERT_EQ(serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam()));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max,
+      static_cast<int64_t>(VectorSerde::kindByName(GetParam())));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

@@ -41,13 +41,10 @@ using namespace facebook::velox::common::testutil;
 namespace facebook::velox::tool::trace::test {
 class PartitionedOutputReplayerTest
     : public HiveConnectorTestBase,
-      public testing::WithParamInterface<VectorSerde::Kind> {
+      public testing::WithParamInterface<std::string> {
  public:
-  static std::vector<VectorSerde::Kind> getTestParams() {
-    const std::vector<VectorSerde::Kind> kinds(
-        {VectorSerde::Kind::kPresto,
-         VectorSerde::Kind::kCompactRow,
-         VectorSerde::Kind::kUnsafeRow});
+  static std::vector<std::string> getTestParams() {
+    const std::vector<std::string> kinds({"Presto", "CompactRow", "UnsafeRow"});
     return kinds;
   }
 

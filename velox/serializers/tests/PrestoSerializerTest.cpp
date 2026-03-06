@@ -1971,13 +1971,11 @@ class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
     if (!isRegisteredVectorSerde()) {
       serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    ASSERT_EQ(getVectorSerde()->kind(), VectorSerde::Kind::kPresto);
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    ASSERT_EQ(getVectorSerde()->kind(), "Presto");
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
-    ASSERT_EQ(
-        getNamedVectorSerde(VectorSerde::Kind::kPresto)->kind(),
-        VectorSerde::Kind::kPresto);
+    ASSERT_EQ(getNamedVectorSerde("Presto")->kind(), "Presto");
 
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }

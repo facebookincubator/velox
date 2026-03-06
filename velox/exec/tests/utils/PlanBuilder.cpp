@@ -519,7 +519,7 @@ PlanBuilder& PlanBuilder::traceScan(
 
 PlanBuilder& PlanBuilder::exchange(
     const RowTypePtr& outputType,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ = std::make_shared<core::ExchangeNode>(
       nextPlanNodeId(), outputType, serdeKind);
@@ -559,7 +559,7 @@ parseOrderByClauses(
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
     const std::vector<std::string>& keys,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NULL(planNode_, "MergeExchange must be the source node");
   auto [sortingKeys, sortingOrders] =
       parseOrderByClauses(keys, outputType, pool_);
@@ -1447,7 +1447,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<std::string>& keys,
     int numPartitions,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   return partitionedOutput(keys, numPartitions, false, outputLayout, serdeKind);
 }
 
@@ -1456,7 +1456,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     int numPartitions,
     bool replicateNullsAndAny,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
 
@@ -1476,7 +1476,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     bool replicateNullsAndAny,
     core::PartitionFunctionSpecPtr partitionFunctionSpec,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1498,7 +1498,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
 
 PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1512,7 +1512,7 @@ PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
 
 PlanBuilder& PlanBuilder::partitionedOutputArbitrary(
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
