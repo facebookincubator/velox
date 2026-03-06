@@ -17,7 +17,7 @@ add_executable(velox_parquet_writer_sink_test SinkTests.cpp)
 add_test(
   NAME velox_parquet_writer_sink_test
   COMMAND velox_parquet_writer_sink_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -38,7 +38,7 @@ add_executable(velox_parquet_writer_test ParquetWriterFieldIdTest.cpp ParquetWri
 add_test(
   NAME velox_parquet_writer_test
   COMMAND velox_parquet_writer_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(

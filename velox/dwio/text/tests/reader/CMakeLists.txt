@@ -17,7 +17,7 @@ add_executable(velox_text_reader_test TextReaderTest.cpp)
 add_test(
   NAME velox_text_reader_test
   COMMAND velox_text_reader_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(velox_text_reader_test velox_dwio_text_reader_register ${TEST_LINK_LIBS})

@@ -18,7 +18,7 @@ add_executable(velox_exec_prefixsort_test PrefixSortAlgorithmTest.cpp PrefixEnco
 add_test(
   NAME velox_exec_prefixsort_test
   COMMAND velox_exec_prefixsort_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 set_tests_properties(velox_exec_prefixsort_test PROPERTIES TIMEOUT 3000)

@@ -32,7 +32,7 @@ add_executable(
 add_test(
   NAME velox_tool_trace_test
   COMMAND velox_tool_trace_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 set_tests_properties(velox_tool_trace_test PROPERTIES TIMEOUT 3000)
