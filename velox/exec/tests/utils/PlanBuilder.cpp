@@ -2541,6 +2541,28 @@ PlanBuilder& PlanBuilder::streamingEnforceDistinct(
   return enforceDistinct(distinctKeys, std::move(errorMessage), distinctKeys);
 }
 
+PlanBuilder& PlanBuilder::markSorted(
+    const std::string& markerKey,
+    const std::vector<std::string>& sortingKeys,
+    const std::vector<core::SortOrder>& sortingOrders) {
+  VELOX_CHECK_NOT_NULL(planNode_, "MarkSorted cannot be the source node");
+  VELOX_CHECK_EQ(sortingKeys.size(), sortingOrders.size());
+
+  std::vector<core::FieldAccessTypedExprPtr> keyExprs;
+  for (const auto& key : sortingKeys) {
+    keyExprs.push_back(field(planNode_->outputType(), key));
+  }
+
+  planNode_ = core::MarkSortedNode::Builder()
+                  .id(nextPlanNodeId())
+                  .markerName(markerKey)
+                  .sortingKeys(keyExprs)
+                  .sortingOrders(sortingOrders)
+                  .source(planNode_)
+                  .build();
+  return *this;
+}
+
 core::PlanNodeId PlanBuilder::nextPlanNodeId() {
   return planNodeIdGenerator_->next();
 }
