@@ -84,6 +84,7 @@ function install_build_prerequisites {
     ninja-build \
     checkinstall \
     git \
+    patch \
     pkg-config \
     libtool \
     wget
@@ -242,7 +243,6 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_xsimd
   run_and_time install_simdjson

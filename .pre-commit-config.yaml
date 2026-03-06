@@ -60,7 +60,7 @@ repos:
         require_serial: true
         exclude: |
           (?x)^(
-          CMake/Find(Snappy|Sodium|Thrift|double-conversion)\.cmake|
+          CMake/Find(Snappy|Sodium|double-conversion)\.cmake|
           velox/docs/affiliations_map.txt|
           velox/.*/bitpacking\.(cpp|h)|
           velox/.*/Lemire/.*|

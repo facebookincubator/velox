@@ -162,6 +162,8 @@ class PARQUET_EXPORT ColumnChunkMetaData {
   // Column chunk.
   int64_t fileOffset() const;
 
+  bool has_file_path() const;
+
   // Parameter is only used when a dataset is spread across multiple files.
   const std::string& filePath() const;
 

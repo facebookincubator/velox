@@ -633,10 +633,14 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     }
 
     if (!encodedMin.empty()) {
-      plainDecode(encodedMin, &min_);
+      T decoded_min;
+      plainDecode(encodedMin, &decoded_min);
+      copy(decoded_min, &min_, minBuffer_.get());
     }
     if (!encodedMax.empty()) {
-      plainDecode(encodedMax, &max_);
+      T decoded_max;
+      plainDecode(encodedMax, &decoded_max);
+      copy(decoded_max, &max_, maxBuffer_.get());
     }
     hasMinMax_ = hasMinMax;
   }

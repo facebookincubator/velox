@@ -137,10 +137,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     set(LIB_TYPE STATIC)
   endif ()
 
-  add_library(
-    "${LIB_NAME}" ${LIB_TYPE}
-    ${generated_sources}
-  )
+  add_library("${LIB_NAME}" STATIC ${generated_sources})
 
   target_include_directories(
     "${LIB_NAME}"
