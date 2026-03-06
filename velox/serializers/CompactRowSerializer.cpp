@@ -174,8 +174,7 @@ void CompactRowVectorSerde::registerVectorSerde() {
 // static
 void CompactRowVectorSerde::registerNamedVectorSerde() {
   velox::registerNamedVectorSerde(
-      VectorSerde::Kind::kCompactRow,
-      std::make_unique<CompactRowVectorSerde>());
+      "CompactRow", std::make_unique<CompactRowVectorSerde>());
 }
 
 } // namespace facebook::velox::serializer
