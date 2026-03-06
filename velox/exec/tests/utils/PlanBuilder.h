@@ -682,9 +682,13 @@ class PlanBuilder {
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
   /// @param serdekind The kind of seralized data format.
-  PlanBuilder& exchange(
-      const RowTypePtr& outputType,
-      VectorSerde::Kind serdekind);
+  PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& exchange(const RowTypePtr& outputType, VectorSerde::Kind kind) {
+    return exchange(outputType, VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
@@ -697,7 +701,16 @@ class PlanBuilder {
   PlanBuilder& mergeExchange(
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
-      VectorSerde::Kind serdekind);
+      std::string serdekind);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& mergeExchange(
+      const RowTypePtr& outputType,
+      const std::vector<std::string>& keys,
+      VectorSerde::Kind kind) {
+    return mergeExchange(outputType, keys, VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Add a ProjectNode using specified SQL expressions.
   ///
@@ -1178,14 +1191,41 @@ class PlanBuilder {
       int numPartitions,
       bool replicateNullsAndAny,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& partitionedOutput(
+      const std::vector<std::string>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      const std::vector<std::string>& outputLayout,
+      VectorSerde::Kind kind) {
+    return partitionedOutput(
+        keys,
+        numPartitions,
+        replicateNullsAndAny,
+        outputLayout,
+        VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Same as above, but assumes 'replicateNullsAndAny' is false.
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& partitionedOutput(
+      const std::vector<std::string>& keys,
+      int numPartitions,
+      const std::vector<std::string>& outputLayout,
+      VectorSerde::Kind kind) {
+    return partitionedOutput(
+        keys, numPartitions, outputLayout, VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Same as above, but allows to provide custom partition function.
   PlanBuilder& partitionedOutput(
@@ -1194,7 +1234,25 @@ class PlanBuilder {
       bool replicateNullsAndAny,
       core::PartitionFunctionSpecPtr partitionFunctionSpec,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& partitionedOutput(
+      const std::vector<std::string>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      core::PartitionFunctionSpecPtr partitionFunctionSpec,
+      const std::vector<std::string>& outputLayout,
+      VectorSerde::Kind kind) {
+    return partitionedOutput(
+        keys,
+        numPartitions,
+        replicateNullsAndAny,
+        std::move(partitionFunctionSpec),
+        outputLayout,
+        VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Adds a PartitionedOutputNode to broadcast the input data.
   ///
@@ -1204,12 +1262,30 @@ class PlanBuilder {
   /// duplicated in the output.
   PlanBuilder& partitionedOutputBroadcast(
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& partitionedOutputBroadcast(
+      const std::vector<std::string>& outputLayout,
+      VectorSerde::Kind kind) {
+    return partitionedOutputBroadcast(
+        outputLayout, VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Adds a PartitionedOutputNode to put data into arbitrary buffer.
   PlanBuilder& partitionedOutputArbitrary(
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  PlanBuilder& partitionedOutputArbitrary(
+      const std::vector<std::string>& outputLayout,
+      VectorSerde::Kind kind) {
+    return partitionedOutputArbitrary(
+        outputLayout, VectorSerde::kindName(kind));
+  }
+#endif
 
   /// Adds a LocalPartitionNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction. Number of partitions is determined

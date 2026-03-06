@@ -66,9 +66,9 @@ std::unique_ptr<VectorSerde>& getVectorSerdeImpl() {
   return serde;
 }
 
-std::unordered_map<VectorSerde::Kind, std::unique_ptr<VectorSerde>>&
+std::unordered_map<std::string, std::unique_ptr<VectorSerde>>&
 getNamedVectorSerdeImpl() {
-  static std::unordered_map<VectorSerde::Kind, std::unique_ptr<VectorSerde>>
+  static std::unordered_map<std::string, std::unique_ptr<VectorSerde>>
       namedSerdes;
   return namedSerdes;
 }
@@ -147,7 +147,7 @@ bool isRegisteredVectorSerde() {
 
 /// Named serde helper functions.
 void registerNamedVectorSerde(
-    VectorSerde::Kind kind,
+    const std::string& kind,
     std::unique_ptr<VectorSerde> serdeToRegister) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   VELOX_CHECK(
@@ -157,17 +157,17 @@ void registerNamedVectorSerde(
   namedSerdeMap[kind] = std::move(serdeToRegister);
 }
 
-void deregisterNamedVectorSerde(VectorSerde::Kind kind) {
+void deregisterNamedVectorSerde(const std::string& kind) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   namedSerdeMap.erase(kind);
 }
 
-bool isRegisteredNamedVectorSerde(VectorSerde::Kind kind) {
+bool isRegisteredNamedVectorSerde(const std::string& kind) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   return namedSerdeMap.find(kind) != namedSerdeMap.end();
 }
 
-VectorSerde* getNamedVectorSerde(VectorSerde::Kind kind) {
+VectorSerde* getNamedVectorSerde(const std::string& kind) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   auto it = namedSerdeMap.find(kind);
   VELOX_CHECK(
