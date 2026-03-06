@@ -294,6 +294,7 @@ const char* exportArrowFormatStr(
       return "i"; // int32
     case TypeKind::BIGINT:
       if (type->isTime()) {
+        VELOX_DCHECK(type->equivalent(*TIME()));
         // TIME is stored as milliseconds since midnight in Velox.
         // Export as Arrow time32 with milliseconds unit.
         return "ttm";
@@ -744,6 +745,7 @@ size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
   } else if (type->isTimestamp()) {
     return sizeof(int64_t);
   } else if (type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     // TIME is exported as Arrow time32 (int32_t).
     return sizeof(int32_t);
   }
@@ -778,6 +780,7 @@ void exportValues(
   if (type->kind() == TypeKind::TIMESTAMP) {
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
   } else if (type->kind() == TypeKind::BIGINT && type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     gatherFromTimeBuffer(vec, rows, *values);
   } else {
     gatherFromBuffer(*type, *vec.values(), rows, options, *values);
@@ -2254,6 +2257,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.length,
         arrowArray.null_count);
   } else if (type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     auto timeUnit = getTimeUnit(arrowSchema);
     bool isTime32 =
         (timeUnit == TimeUnit::kSecond || timeUnit == TimeUnit::kMilli);
