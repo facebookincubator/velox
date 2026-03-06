@@ -475,8 +475,8 @@ void HashBuild::addInput(RowVectorPtr input) {
           *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
     }
   } else {
-    for (auto i = 0; i < dependentChannels_.size(); ++i) {
-      input->childAt(dependentChannels_[i])->loadedVector();
+    for (const auto channel : dependentChannels_) {
+      input->childAt(channel)->loadedVector();
     }
   }
 
