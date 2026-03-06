@@ -20,6 +20,7 @@
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 

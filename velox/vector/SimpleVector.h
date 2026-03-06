@@ -27,7 +27,6 @@
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
 
-#include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -309,33 +308,7 @@ class SimpleVector : public BaseVector {
   /// present. Returns computed value.
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, bool>
-  computeAndSetIsAscii(const SelectivityVector& rows) {
-    if (rows.isSubset(*asciiInfo.readLockedAsciiComputedRows())) {
-      return asciiInfo.isAllAscii();
-    }
-    ensureIsAsciiCapacity();
-    bool isAllAscii = true;
-    rows.applyToSelected([&](auto row) {
-      if (!isNullAt(row)) {
-        auto string = valueAt(row);
-        isAllAscii &=
-            functions::stringCore::isAscii(string.data(), string.size());
-      }
-    });
-
-    // Set isAllAscii flag, it will unset if we encounter any utf.
-    auto wlockedAsciiComputedRows = asciiInfo.writeLockedAsciiComputedRows();
-    if (!wlockedAsciiComputedRows->hasSelections()) {
-      asciiInfo.setIsAllAscii(isAllAscii);
-    } else {
-      asciiInfo.setIsAllAscii(asciiInfo.isAllAscii() & isAllAscii);
-    }
-
-    wlockedAsciiComputedRows->select(rows);
-    asciiInfo.setAsciiComputedRowsEmpty(
-        !wlockedAsciiComputedRows->hasSelections());
-    return asciiInfo.isAllAscii();
-  }
+  computeAndSetIsAscii(const SelectivityVector& rows);
 
   /// Clears asciiness state.
   template <typename U = T>
