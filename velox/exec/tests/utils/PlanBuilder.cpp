@@ -386,7 +386,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     tableHandle_ = std::make_shared<HiveTableHandle>(
         connectorId_,
         tableName_,
-        true,
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
         dataColumns_,
@@ -520,7 +519,7 @@ PlanBuilder& PlanBuilder::traceScan(
 
 PlanBuilder& PlanBuilder::exchange(
     const RowTypePtr& outputType,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ = std::make_shared<core::ExchangeNode>(
       nextPlanNodeId(), outputType, serdeKind);
@@ -560,7 +559,7 @@ parseOrderByClauses(
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
     const std::vector<std::string>& keys,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NULL(planNode_, "MergeExchange must be the source node");
   auto [sortingKeys, sortingOrders] =
       parseOrderByClauses(keys, outputType, pool_);
@@ -1046,10 +1045,10 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
       agg.rawInputTypes = rawInputTypes[i];
     }
 
-    if (untypedExpr.maskExpr != nullptr) {
+    if (untypedExpr.filter != nullptr) {
       auto maskExpr =
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-              inferTypes(untypedExpr.maskExpr));
+              inferTypes(untypedExpr.filter));
       VELOX_CHECK_NOT_NULL(
           maskExpr,
           "FILTER clause must use a column name, not an expression: {}",
@@ -1448,7 +1447,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<std::string>& keys,
     int numPartitions,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   return partitionedOutput(keys, numPartitions, false, outputLayout, serdeKind);
 }
 
@@ -1457,7 +1456,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     int numPartitions,
     bool replicateNullsAndAny,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
 
@@ -1477,7 +1476,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     bool replicateNullsAndAny,
     core::PartitionFunctionSpecPtr partitionFunctionSpec,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1499,7 +1498,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
 
 PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1513,7 +1512,7 @@ PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
 
 PlanBuilder& PlanBuilder::partitionedOutputArbitrary(
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -2246,26 +2245,26 @@ class WindowTypeResolver {
 };
 
 const core::WindowNode::Frame createWindowFrame(
-    const duckdb::IExprWindowFrame& windowFrame,
+    const parse::WindowFrame& windowFrame,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
   core::WindowNode::Frame frame;
-  frame.type = (windowFrame.type == duckdb::WindowType::kRows)
+  frame.type = (windowFrame.type == parse::WindowType::kRows)
       ? core::WindowNode::WindowType::kRows
       : core::WindowNode::WindowType::kRange;
 
   auto boundTypeConversion =
-      [](duckdb::BoundType boundType) -> core::WindowNode::BoundType {
+      [](parse::BoundType boundType) -> core::WindowNode::BoundType {
     switch (boundType) {
-      case duckdb::BoundType::kCurrentRow:
+      case parse::BoundType::kCurrentRow:
         return core::WindowNode::BoundType::kCurrentRow;
-      case duckdb::BoundType::kFollowing:
+      case parse::BoundType::kFollowing:
         return core::WindowNode::BoundType::kFollowing;
-      case duckdb::BoundType::kPreceding:
+      case parse::BoundType::kPreceding:
         return core::WindowNode::BoundType::kPreceding;
-      case duckdb::BoundType::kUnboundedFollowing:
+      case parse::BoundType::kUnboundedFollowing:
         return core::WindowNode::BoundType::kUnboundedFollowing;
-      case duckdb::BoundType::kUnboundedPreceding:
+      case parse::BoundType::kUnboundedPreceding:
         return core::WindowNode::BoundType::kUnboundedPreceding;
     }
     VELOX_UNREACHABLE();
@@ -2282,7 +2281,7 @@ const core::WindowNode::Frame createWindowFrame(
 }
 
 std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
-    const duckdb::IExprWindowFunction& windowExpr,
+    const parse::WindowExpr& windowExpr,
     const std::string& windowString,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
@@ -2305,7 +2304,7 @@ std::pair<
     std::vector<core::FieldAccessTypedExprPtr>,
     std::vector<core::SortOrder>>
 parseOrderByKeys(
-    const duckdb::IExprWindowFunction& windowExpr,
+    const parse::WindowExpr& windowExpr,
     const std::string& windowString,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {

@@ -68,6 +68,51 @@ std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
   return std::nullopt;
 }
 
+TypePtr resolveWindowResultType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  auto sanitizedName = sanitizeName(name);
+
+  if (auto signatures = getWindowFunctionSignatures(sanitizedName)) {
+    for (const auto& signature : signatures.value()) {
+      SignatureBinder binder(*signature, argTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveReturnType();
+      }
+    }
+
+    VELOX_USER_FAIL(
+        "Window function signature is not supported: {}. Supported signatures: {}.",
+        toString(sanitizedName, argTypes),
+        toString(signatures.value()));
+  }
+
+  VELOX_USER_FAIL("Window function not registered: {}", name);
+}
+
+TypePtr resolveWindowResultTypeWithCoercions(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions) {
+  coercions.clear();
+
+  auto sanitizedName = sanitizeName(name);
+
+  if (auto signatures = getWindowFunctionSignatures(sanitizedName)) {
+    if (auto type = tryResolveReturnTypeWithCoercions(
+            signatures.value(), argTypes, coercions)) {
+      return type;
+    }
+
+    VELOX_USER_FAIL(
+        "Window function signature is not supported: {}. Supported signatures: {}.",
+        toString(sanitizedName, argTypes),
+        toString(signatures.value()));
+  }
+
+  VELOX_USER_FAIL("Window function not registered: {}", name);
+}
+
 std::unique_ptr<WindowFunction> WindowFunction::create(
     const std::string& name,
     const std::vector<WindowFunctionArg>& args,

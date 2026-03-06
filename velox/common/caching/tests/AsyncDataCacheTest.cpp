@@ -25,8 +25,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/ScopedTestTime.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
@@ -144,7 +144,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       // second creation of cache must find the checkpoint of the
       // previous one.
       if (tempDirectory_ == nullptr || eraseCheckpoint) {
-        tempDirectory_ = exec::test::TempDirectoryPath::create();
+        tempDirectory_ = TempDirectoryPath::create();
       }
       SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
@@ -158,7 +158,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       ssdCache = std::make_unique<SsdCache>(config);
       if (ssdCache != nullptr) {
         ssdCacheHelper_ =
-            std::make_unique<test::SsdCacheTestHelper>(ssdCache.get());
+            std::make_unique<cache::test::SsdCacheTestHelper>(ssdCache.get());
         ASSERT_EQ(ssdCacheHelper_->numShards(), kNumSsdShards);
       }
     }
@@ -173,7 +173,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     cache_ =
         AsyncDataCache::create(allocator_, std::move(ssdCache), cacheOptions);
     asyncDataCacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     if (filenames_.empty()) {
       for (auto i = 0; i < kNumFiles; ++i) {
         auto name = fmt::format("testing_file_{}", i);
@@ -313,12 +313,12 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
     }
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
   std::unique_ptr<memory::MemoryManager> manager_;
   memory::MemoryAllocator* allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
-  std::unique_ptr<test::SsdCacheTestHelper> ssdCacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
+  std::unique_ptr<cache::test::SsdCacheTestHelper> ssdCacheHelper_;
   std::vector<StringIdLease> filenames_;
   std::unique_ptr<folly::IOThreadPoolExecutor> loadExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ssdExecutor_;
@@ -1423,7 +1423,7 @@ TEST_P(AsyncDataCacheTest, makeEvictable) {
     const auto cacheEntries = asyncDataCacheHelper_->cacheEntries();
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
-          test::AsyncDataCacheEntryTestHelper(cacheEntry);
+          cache::test::AsyncDataCacheEntryTestHelper(cacheEntry);
       ASSERT_EQ(cacheEntry->ssdSaveable(), !evictable);
       ASSERT_EQ(cacheEntryHelper.accessStats().numUses, 0);
       if (evictable) {
@@ -1677,6 +1677,191 @@ TEST_P(AsyncDataCacheTest, numShardsInvalid) {
         initializeCache(kRamBytes, 0, 0, false, options),
         "numShards must be positive");
   }
+}
+
+TEST_P(AsyncDataCacheTest, findMiss) {
+  constexpr int64_t kRamBytes = 32 << 20;
+  initializeMemoryManager(kRamBytes);
+  initializeCache(kRamBytes);
+
+  RawFileCacheKey key{filenames_[0].id(), 0};
+  auto result = cache_->find(key);
+  ASSERT_FALSE(result.has_value());
+}
+
+TEST_P(AsyncDataCacheTest, findHit) {
+  constexpr int64_t kRamBytes = 32 << 20;
+  constexpr int32_t kEntrySize = 4096;
+  initializeMemoryManager(kRamBytes);
+  initializeCache(kRamBytes);
+
+  RawFileCacheKey key{filenames_[0].id(), 1000};
+
+  // Populate the entry via findOrCreate.
+  {
+    auto pin = cache_->findOrCreate(key, kEntrySize, nullptr);
+    ASSERT_FALSE(pin.empty());
+    ASSERT_TRUE(pin.entry()->isExclusive());
+    initializeContents(key.offset + key.fileNum, pin.entry()->data());
+    pin.entry()->setExclusiveToShared();
+  }
+
+  // find should return a shared pin with correct data.
+  auto result = cache_->find(key);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result->empty());
+  auto* entry = result->checkedEntry();
+  ASSERT_TRUE(entry->isShared());
+  ASSERT_EQ(entry->size(), kEntrySize);
+  checkContents(*entry);
+}
+
+TEST_P(AsyncDataCacheTest, findExclusiveWithWait) {
+  constexpr int64_t kRamBytes = 32 << 20;
+  constexpr int32_t kEntrySize = 4096;
+  initializeMemoryManager(kRamBytes);
+  initializeCache(kRamBytes);
+
+  RawFileCacheKey key{filenames_[0].id(), 2000};
+
+  // Create an exclusive entry.
+  auto exclusivePin = cache_->findOrCreate(key, kEntrySize, nullptr);
+  ASSERT_FALSE(exclusivePin.empty());
+  ASSERT_TRUE(exclusivePin.entry()->isExclusive());
+
+  // find without wait returns empty pin (entry exists but is exclusive).
+  {
+    auto result = cache_->find(key);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->empty());
+  }
+
+  // find with wait returns empty pin and sets a future.
+  folly::SemiFuture<bool> waitFuture(false);
+  {
+    auto result = cache_->find(key, &waitFuture);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->empty());
+  }
+
+  // The future should not be ready while the entry is exclusive.
+  ASSERT_FALSE(waitFuture.isReady());
+
+  // Timed wait should time out while the entry is still exclusive.
+  {
+    auto waitCopy = std::move(waitFuture);
+    auto timedResult =
+        std::move(waitCopy).via(&folly::QueuedImmediateExecutor::instance());
+    ASSERT_FALSE(
+        std::move(timedResult).wait(std::chrono::seconds(1)).isReady());
+  }
+
+  // Re-issue find with wait after the timed-out future was consumed.
+  waitFuture = folly::SemiFuture<bool>(false);
+  {
+    auto result = cache_->find(key, &waitFuture);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->empty());
+  }
+  ASSERT_FALSE(waitFuture.isReady());
+
+  // Transition to shared makes the future ready.
+  initializeContents(key.offset + key.fileNum, exclusivePin.entry()->data());
+  exclusivePin.entry()->setExclusiveToShared();
+  exclusivePin.clear();
+
+  auto& exec = folly::QueuedImmediateExecutor::instance();
+  ASSERT_TRUE(std::move(waitFuture).via(&exec).wait().isReady());
+
+  // Now find should return a shared pin.
+  auto result = cache_->find(key);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_FALSE(result->empty());
+  checkContents(*result->checkedEntry());
+}
+
+TEST_P(AsyncDataCacheTest, fuzz) {
+  constexpr int64_t kRamBytes = 64 << 20;
+  constexpr int32_t kNumThreads = 8;
+  constexpr int32_t kNumFiles = 10;
+  constexpr int32_t kNumOffsets = 20;
+  constexpr int32_t kEntrySize = 4096;
+  constexpr int32_t kTestDurationMs = 10'000;
+
+  initializeMemoryManager(kRamBytes);
+  initializeCache(kRamBytes);
+
+  std::atomic_bool stop{false};
+
+  // Worker threads: findOrCreate/find entries, verify content.
+  auto workerFunc = [&](int32_t threadId) {
+    std::mt19937 rng(threadId);
+    while (!stop.load(std::memory_order_relaxed)) {
+      const auto fileIdx = rng() % kNumFiles;
+      const auto offsetIdx = rng() % kNumOffsets;
+      const uint64_t offset = offsetIdx * kEntrySize;
+      RawFileCacheKey key{filenames_[fileIdx].id(), offset};
+
+      // Randomly choose between find and findOrCreate.
+      if (rng() % 3 == 0) {
+        // find: lookup only.
+        auto result = cache_->find(key);
+        if (result.has_value() && !result->empty()) {
+          checkContents(*result->checkedEntry());
+        }
+      } else {
+        // findOrCreate: populate if new.
+        folly::SemiFuture<bool> waitFuture(false);
+        auto pin = cache_->findOrCreate(key, kEntrySize, &waitFuture);
+        if (pin.empty()) {
+          auto& exec = folly::QueuedImmediateExecutor::instance();
+          std::move(waitFuture).via(&exec).wait();
+          continue;
+        }
+        auto* entry = pin.checkedEntry();
+        if (entry->isExclusive()) {
+          initializeContents(key.offset + key.fileNum, entry->data());
+          entry->setExclusiveToShared();
+        }
+        checkContents(*entry);
+      }
+    }
+  };
+
+  // Eviction thread: periodically remove a subset of files.
+  auto evictFunc = [&]() {
+    std::mt19937 rng(kNumThreads + 1);
+    while (!stop.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50)); // NOLINT
+      folly::F14FastSet<uint64_t> filesToRemove;
+      // Remove a random subset of files.
+      const auto numToRemove = (rng() % kNumFiles) + 1;
+      for (uint32_t i = 0; i < numToRemove; ++i) {
+        filesToRemove.insert(filenames_[rng() % kNumFiles].id());
+      }
+      folly::F14FastSet<uint64_t> filesRetained;
+      cache_->removeFileEntries(filesToRemove, filesRetained);
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (int32_t i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back(workerFunc, i);
+  }
+  threads.emplace_back(evictFunc);
+
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kTestDurationMs)); // NOLINT
+  stop.store(true, std::memory_order_relaxed);
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  auto stats = cache_->refreshStats();
+  LOG(INFO) << "fuzz stats: " << stats.numEntries << " entries, "
+            << stats.numHit << " hits, " << stats.numNew << " new, "
+            << stats.numEvict << " evicts";
 }
 
 INSTANTIATE_TEST_SUITE_P(

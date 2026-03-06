@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
 using namespace facebook::velox::window::test;
@@ -459,6 +461,34 @@ TEST_F(ArbitraryTest, shortDecimal) {
   testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
 }
 
+TEST_F(ArbitraryTest, ipAddress) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       // IPADDRESS values
+       makeNullableFlatVector<int128_t>(
+           {ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
+           IPADDRESS())});
+
+  auto expectedResult = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeNullableFlatVector<int128_t>(
+           {ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            std::nullopt,
+            ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
+           IPADDRESS())});
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
 class ArbitraryWindowTest : public WindowTestBase {};
 
 TEST_F(ArbitraryWindowTest, basic) {
@@ -509,7 +539,7 @@ TEST_F(ArbitraryTest, spilling) {
   AssertQueryBuilder builder(plan);
 
   exec::TestScopedSpillInjection scopedSpillInjection(100);
-  spillDirectory = exec::test::TempDirectoryPath::create();
+  spillDirectory = TempDirectoryPath::create();
   builder.spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kAggregationSpillEnabled, "true")
@@ -612,6 +642,63 @@ TEST_F(ArbitraryTest, clusteredInputDictionaryEncodedWithNulls) {
         makeRowVector({keys, values, mask}),
         makeRowVector({keys, dictValues, mask}));
   });
+}
+
+// Tests the optimization in NonNumericArbitrary::extractValues where when the
+// source vector size equals numGroups for a single contiguous range, we assign
+// the source vector directly instead of slicing.
+TEST_F(ArbitraryTest, clusteredInputDirectVectorAssign) {
+  // Each batch has exactly one row per distinct group so that when
+  // extractValues runs, the source vector size matches numGroups, triggering
+  // the direct assignment path (no slice).
+  constexpr int kNumGroups = 100;
+  std::vector<RowVectorPtr> data;
+  data.push_back(makeRowVector({
+      makeFlatVector<int64_t>(kNumGroups, [](auto j) { return j; }),
+      makeFlatVector<std::string>(
+          kNumGroups, [](auto j) { return std::to_string(j * 10); }),
+  }));
+
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, kNumGroups)
+      .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 0)
+      .assertResults("select c0, first(c1) from tmp group by 1");
+}
+
+// Also verify the direct vector assign path with multiple batches where the
+// source vector size may differ from numGroups (exercises the slice fallback).
+TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
+  // Use a larger batch size than the number of groups so that the source
+  // vector size exceeds numGroups, exercising the existing slice path.
+  constexpr int kSize = 200;
+  constexpr int kGroupDivisor = 5;
+  std::vector<RowVectorPtr> data;
+  data.push_back(makeRowVector({
+      makeFlatVector<int64_t>(kSize, [](auto j) { return j / kGroupDivisor; }),
+      makeFlatVector<std::string>(
+          kSize, [](auto j) { return std::to_string(j); }),
+  }));
+
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, kSize)
+      .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 0)
+      .assertResults("select c0, first(c1) from tmp group by 1");
 }
 
 } // namespace

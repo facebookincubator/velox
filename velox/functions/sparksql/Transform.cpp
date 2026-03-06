@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BitUtil.h"
 #include "velox/functions/lib/TransformFunctionBase.h"
+#include "velox/functions/sparksql/LambdaIndexUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -60,37 +60,6 @@ class TransformFunction : public TransformFunctionBase {
       lambdaArgs.push_back(
           createIndexVector(flatArray, numElements, context.pool()));
     }
-  }
-
-  // Creates an index vector where each element contains its position within
-  // its respective array. For example, if we have arrays [a, b] and [c, d, e],
-  // the index vector will be [0, 1, 0, 1, 2].
-  // Spark uses IntegerType (32-bit) for the index.
-  static VectorPtr createIndexVector(
-      const ArrayVectorPtr& flatArray,
-      vector_size_t numElements,
-      memory::MemoryPool* pool) {
-    auto indexVector =
-        BaseVector::create<FlatVector<int32_t>>(INTEGER(), numElements, pool);
-
-    auto* rawOffsets = flatArray->rawOffsets();
-    auto* rawSizes = flatArray->rawSizes();
-    auto* rawNulls = flatArray->rawNulls();
-    auto* rawIndices = indexVector->mutableRawValues();
-
-    for (vector_size_t row = 0; row < flatArray->size(); ++row) {
-      // Skip null arrays.
-      if (rawNulls && bits::isBitNull(rawNulls, row)) {
-        continue;
-      }
-      auto offset = rawOffsets[row];
-      auto size = rawSizes[row];
-      for (vector_size_t i = 0; i < size; ++i) {
-        rawIndices[offset + i] = i;
-      }
-    }
-
-    return indexVector;
   }
 };
 

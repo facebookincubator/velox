@@ -55,7 +55,7 @@ OperatorTraceInputWriter::OperatorTraceInputWriter(
       traceDir_(std::move(traceDir)),
       fs_(filesystems::getFileSystem(traceDir_, nullptr)),
       pool_(pool),
-      serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
+      serde_(getNamedVectorSerde("Presto")),
       updateAndCheckTraceLimitCB_(std::move(updateAndCheckTraceLimitCB)) {
   traceFile_ = fs_->openFileForWrite(getOpTraceInputFilePath(traceDir_));
   VELOX_CHECK_NOT_NULL(traceFile_);

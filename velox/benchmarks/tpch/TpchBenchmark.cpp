@@ -16,6 +16,7 @@
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include <iostream>
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 
 using namespace facebook::velox;
@@ -99,7 +100,7 @@ void TpchBenchmark::runMain(
     int64_t rawInputBytes = 0;
     for (auto& pipeline : stats.pipelineStats) {
       auto& first = pipeline.operatorStats[0];
-      if (first.operatorType == "TableScan") {
+      if (first.operatorType == OperatorType::kTableScan) {
         rawInputBytes += first.rawInputBytes;
       }
     }

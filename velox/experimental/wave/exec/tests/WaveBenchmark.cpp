@@ -17,6 +17,7 @@
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/exec/ToWave.h"
@@ -413,7 +414,8 @@ class WaveBenchmark : public QueryBenchmarkBase {
       int64_t rawInputBytes = 0;
       for (auto& pipeline : stats.pipelineStats) {
         auto& first = pipeline.operatorStats[0];
-        if (first.operatorType == "TableScan" || first.operatorType == "Wave") {
+        if (first.operatorType == OperatorType::kTableScan ||
+            first.operatorType == "Wave") {
           rawInputBytes += first.rawInputBytes;
         }
       }

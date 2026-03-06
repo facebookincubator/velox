@@ -151,13 +151,13 @@ std::string makeOperatorSpillPath(
 
 /// Set a named runtime metric in operator 'stats'.
 void setOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
 /// Add a named runtime metric to operator 'stats'.
 void addOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
@@ -321,7 +321,17 @@ class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
 /// settings. Optionally configures minimum compression ratio.
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
-    VectorSerde::Kind kind,
+    const std::string& kind,
     std::optional<float> minCompressionRatio = std::nullopt);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+inline std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    common::CompressionKind compressionKind,
+    VectorSerde::Kind kind,
+    std::optional<float> minCompressionRatio = std::nullopt) {
+  return getVectorSerdeOptions(
+      compressionKind, VectorSerde::kindName(kind), minCompressionRatio);
+}
+#endif
 
 } // namespace facebook::velox::exec

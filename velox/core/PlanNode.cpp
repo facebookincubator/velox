@@ -285,8 +285,8 @@ void addSortingKeys(
   }
 }
 
-void addVectorSerdeKind(VectorSerde::Kind kind, std::stringstream& stream) {
-  stream << VectorSerde::kindName(kind);
+void addVectorSerdeKind(const std::string& kind, std::stringstream& stream) {
+  stream << kind;
 }
 } // namespace
 
@@ -1336,7 +1336,7 @@ void ExchangeNode::addDetails(std::stringstream& stream) const {
 folly::dynamic ExchangeNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["outputType"] = ExchangeNode::outputType()->serialize();
-  obj["serdeKind"] = VectorSerde::kindName(serdeKind_);
+  obj["serdeKind"] = serdeKind_;
   return obj;
 }
 
@@ -1351,7 +1351,7 @@ PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<ExchangeNode>(
       deserializePlanNodeId(obj),
       deserializeRowType(obj["outputType"]),
-      VectorSerde::kindByName(obj["serdeKind"].asString()));
+      obj["serdeKind"].asString());
 }
 
 UnnestNode::UnnestNode(
@@ -2929,8 +2929,8 @@ MergeExchangeNode::MergeExchangeNode(
     const RowTypePtr& type,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders,
-    VectorSerde::Kind serdeKind)
-    : ExchangeNode(id, type, serdeKind),
+    std::string serdeKind)
+    : ExchangeNode(id, type, std::move(serdeKind)),
       sortingKeys_(sortingKeys),
       sortingOrders_(sortingOrders) {}
 
@@ -2945,7 +2945,7 @@ folly::dynamic MergeExchangeNode::serialize() const {
   obj["outputType"] = ExchangeNode::outputType()->serialize();
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
-  obj["serdeKind"] = VectorSerde::kindName(serdeKind());
+  obj["serdeKind"] = serdeKind();
   return obj;
 }
 
@@ -2962,7 +2962,7 @@ PlanNodePtr MergeExchangeNode::create(
   const auto outputType = deserializeRowType(obj["outputType"]);
   const auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
   const auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
-  const auto serdeKind = VectorSerde::kindByName(obj["serdeKind"].asString());
+  const auto serdeKind = obj["serdeKind"].asString();
   return std::make_shared<MergeExchangeNode>(
       deserializePlanNodeId(obj),
       outputType,
@@ -3032,7 +3032,7 @@ PartitionedOutputNode::PartitionedOutputNode(
     bool replicateNullsAndAny,
     PartitionFunctionSpecPtr partitionFunctionSpec,
     RowTypePtr outputType,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     PlanNodePtr source)
     : PlanNode(id),
       kind_(kind),
@@ -3041,7 +3041,7 @@ PartitionedOutputNode::PartitionedOutputNode(
       numPartitions_(numPartitions),
       replicateNullsAndAny_(replicateNullsAndAny),
       partitionFunctionSpec_(std::move(partitionFunctionSpec)),
-      serdeKind_(serdeKind),
+      serdeKind_(std::move(serdeKind)),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK_GT(numPartitions_, 0);
   if (numPartitions_ == 1) {
@@ -3066,7 +3066,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::broadcast(
     const PlanNodeId& id,
     int numPartitions,
     RowTypePtr outputType,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     PlanNodePtr source) {
   std::vector<TypedExprPtr> noKeys;
   return std::make_shared<PartitionedOutputNode>(
@@ -3085,7 +3085,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::broadcast(
 std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::arbitrary(
     const PlanNodeId& id,
     RowTypePtr outputType,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     PlanNodePtr source) {
   std::vector<TypedExprPtr> noKeys;
   return std::make_shared<PartitionedOutputNode>(
@@ -3104,7 +3104,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::arbitrary(
 std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::single(
     const PlanNodeId& id,
     RowTypePtr outputType,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     PlanNodePtr source) {
   std::vector<TypedExprPtr> noKeys;
   return std::make_shared<PartitionedOutputNode>(
@@ -3186,7 +3186,7 @@ folly::dynamic PartitionedOutputNode::serialize() const {
   obj["keys"] = ISerializable::serialize(keys_);
   obj["replicateNullsAndAny"] = replicateNullsAndAny_;
   obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
-  obj["serdeKind"] = VectorSerde::kindName(serdeKind_);
+  obj["serdeKind"] = serdeKind_;
   obj["outputType"] = outputType_->serialize();
   return obj;
 }
@@ -3210,7 +3210,7 @@ PlanNodePtr PartitionedOutputNode::create(
       ISerializable::deserialize<PartitionFunctionSpec>(
           obj["partitionFunctionSpec"], context),
       deserializeRowType(obj["outputType"]),
-      VectorSerde::kindByName(obj["serdeKind"].asString()),
+      obj["serdeKind"].asString(),
       deserializeSingleSource(obj, context));
 }
 

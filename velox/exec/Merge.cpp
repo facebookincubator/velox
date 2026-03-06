@@ -439,8 +439,8 @@ RowVectorPtr SourceMerger::createOutputVector() {
   const RowVector* source = nullptr;
   for (const auto* stream : streams_) {
     if (stream->hasData() && (source = stream->data())) {
-      return std::static_pointer_cast<RowVector>(
-          BaseVector::createEmptyLike(source, outputBatchRows_, pool_));
+      return BaseVector::createEmptyLike<RowVector>(
+          source, outputBatchRows_, pool_);
     }
   }
 
@@ -506,7 +506,8 @@ void SourceStream::copyToOutput(RowVectorPtr& output) {
 
 bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
   ContinueFuture future;
-  auto reason = source_->next(data_, &future);
+  bool drained{false};
+  auto reason = source_->next(data_, &future, drained);
   if (reason != BlockingReason::kNotBlocked) {
     needData_ = true;
     futures.emplace_back(std::move(future));
@@ -860,7 +861,8 @@ void MergeExchange::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serde_->kind())));
+        RuntimeCounter(
+            static_cast<int64_t>(VectorSerde::kindByName(serde_->kind()))));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));

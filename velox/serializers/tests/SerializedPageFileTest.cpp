@@ -21,7 +21,7 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -32,6 +32,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::serializer;
+using namespace facebook::velox::common::testutil;
 
 enum class SerdeType { kPresto, kCompactRow, kUnsafeRow };
 
@@ -51,21 +52,21 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
     const auto& params = GetParam();
 
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kPresto);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+    deregisterNamedVectorSerde("Presto");
+    deregisterNamedVectorSerde("CompactRow");
+    deregisterNamedVectorSerde("UnsafeRow");
 
     setupSerde(params.serdeType);
     filesystems::registerLocalFileSystem();
-    tempDirPath_ = exec::test::TempDirectoryPath::create();
+    tempDirPath_ = TempDirectoryPath::create();
     compressionKind_ = params.compressionKind;
   }
 
   void TearDown() override {
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kPresto);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
-    deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+    deregisterNamedVectorSerde("Presto");
+    deregisterNamedVectorSerde("CompactRow");
+    deregisterNamedVectorSerde("UnsafeRow");
   }
 
   void setupSerde(SerdeType serdeType) {
@@ -73,17 +74,17 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
       case SerdeType::kPresto:
         serializer::presto::PrestoVectorSerde::registerVectorSerde();
         serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
-        serde_ = getNamedVectorSerde(VectorSerde::Kind::kPresto);
+        serde_ = getNamedVectorSerde("Presto");
         break;
       case SerdeType::kCompactRow:
         serializer::CompactRowVectorSerde::registerVectorSerde();
         serializer::CompactRowVectorSerde::registerNamedVectorSerde();
-        serde_ = getNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+        serde_ = getNamedVectorSerde("CompactRow");
         break;
       case SerdeType::kUnsafeRow:
         serializer::spark::UnsafeRowVectorSerde::registerVectorSerde();
         serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
-        serde_ = getNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+        serde_ = getNamedVectorSerde("UnsafeRow");
         break;
     }
   }
@@ -122,7 +123,7 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
   }
 
   VectorSerde* serde_{nullptr};
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirPath_;
+  std::shared_ptr<TempDirectoryPath> tempDirPath_;
   common::CompressionKind compressionKind_;
 };
 

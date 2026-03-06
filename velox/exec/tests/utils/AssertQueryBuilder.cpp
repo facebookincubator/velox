@@ -331,9 +331,9 @@ AssertQueryBuilder::readCursor() {
     }
   }
 
-  return test::readCursor(params_, [&](exec::TaskCursor* taskCursor) {
+  return test::readCursorAsync(params_, [&](exec::TaskCursor* taskCursor) {
     if (taskCursor->noMoreSplits()) {
-      return;
+      return ContinueFuture::makeEmpty();
     }
     auto& task = taskCursor->task();
     if (params_.barrierExecution) {
@@ -358,15 +358,9 @@ AssertQueryBuilder::readCursor() {
             numSplits,
             splits_.size(),
             "Barrier task execution mode requires all the sources have the same number of splits");
-        if (!params_.serialExecution) {
-          // TODO: Hold the future and wait it in the next round.
-          task->requestBarrier().wait();
-        } else {
-          task->requestBarrier();
-        }
-      } else {
-        taskCursor->setNoMoreSplits();
+        return task->requestBarrier();
       }
+      taskCursor->setNoMoreSplits();
     } else {
       for (auto& [nodeId, nodeSplits] : splits_) {
         for (auto& split : nodeSplits) {
@@ -381,6 +375,7 @@ AssertQueryBuilder::readCursor() {
       }
       taskCursor->setNoMoreSplits();
     }
+    return ContinueFuture::makeEmpty();
   });
 }
 } // namespace facebook::velox::exec::test
