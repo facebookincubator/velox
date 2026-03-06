@@ -20,6 +20,7 @@ velox_add_library(
   GetArrayStructFields.cpp
   GetStructField.cpp
   MakeDecimal.cpp
+  NamedStruct.cpp
   SparkCastExpr.cpp
   SparkCastHooks.cpp
 )
