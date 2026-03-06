@@ -83,7 +83,7 @@ function install_duckdb {
     # git version when building from a tarball, we define GIT_COMMIT_HASH to skip
     # that.
     cmake_install_dir duckdb \
-      -DGIT_COMMIT_HASH="6536a77" -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+      -DGIT_COMMIT_HASH="6ddac80" -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
       -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
   fi
 }
