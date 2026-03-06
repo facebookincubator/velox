@@ -27,7 +27,7 @@
 #include <string>
 #include <string_view>
 
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 

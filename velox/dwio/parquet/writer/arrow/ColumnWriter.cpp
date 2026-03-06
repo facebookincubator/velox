@@ -328,10 +328,10 @@ class SerializedPageWriter : public PageWriter {
       compressedData = page.buffer();
     }
 
-    facebook::velox::parquet::thrift::DictionaryPageHeader dictPageHeader;
-    dictPageHeader.__set_num_values(page.numValues());
-    dictPageHeader.__set_encoding(toThrift(page.encoding()));
-    dictPageHeader.__set_is_sorted(page.isSorted());
+    facebook::velox::parquet::thrift::DictionaryPageHeader dict_page_header;
+    dict_page_header.num_values() = page.numValues();
+    dict_page_header.encoding() = toThrift(page.encoding());
+    dict_page_header.is_sorted() = page.isSorted();
 
     const uint8_t* outputDataBuffer = compressedData->data();
     int32_t outputDataLen = static_cast<int32_t>(compressedData->size());
@@ -347,17 +347,17 @@ class SerializedPageWriter : public PageWriter {
       outputDataBuffer = encryptionBuffer_->data();
     }
 
-    facebook::velox::parquet::thrift::PageHeader pageHeader;
-    pageHeader.__set_type(
-        facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE);
-    pageHeader.__set_uncompressed_page_size(
-        static_cast<int32_t>(uncompressedSize));
-    pageHeader.__set_compressed_page_size(static_cast<int32_t>(outputDataLen));
-    pageHeader.__set_dictionary_page_header(dictPageHeader);
+    facebook::velox::parquet::thrift::PageHeader page_header;
+    page_header.type() =
+        facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE;
+    page_header.uncompressed_page_size() =
+        static_cast<int32_t>(uncompressedSize);
+    page_header.compressed_page_size() = static_cast<int32_t>(outputDataLen);
+    page_header.dictionary_page_header() = dict_page_header;
     if (pageChecksumVerification_) {
       uint32_t crc32 =
           internal::crc32(/* prev */ 0, outputDataBuffer, outputDataLen);
-      pageHeader.__set_crc(static_cast<int32_t>(crc32));
+      page_header.crc() = static_cast<int32_t>(crc32);
     }
 
     PARQUET_ASSIGN_OR_THROW(int64_t startPos, sink_->Tell());
@@ -369,7 +369,7 @@ class SerializedPageWriter : public PageWriter {
       updateEncryption(encryption::kDictionaryPageHeader);
     }
     const int64_t headerSize =
-        thriftSerializer_->serialize(&pageHeader, sink_.get(), metaEncryptor_);
+        thriftSerializer_->serialize(&page_header, sink_.get(), metaEncryptor_);
 
     PARQUET_THROW_NOT_OK(sink_->Write(outputDataBuffer, outputDataLen));
 
@@ -447,14 +447,14 @@ class SerializedPageWriter : public PageWriter {
     }
 
     facebook::velox::parquet::thrift::PageHeader pageHeader;
-    pageHeader.__set_uncompressed_page_size(
-        static_cast<int32_t>(uncompressedSize));
-    pageHeader.__set_compressed_page_size(static_cast<int32_t>(outputDataLen));
+    pageHeader.uncompressed_page_size() =
+        static_cast<int32_t>(uncompressedSize);
+    pageHeader.compressed_page_size() = static_cast<int32_t>(outputDataLen);
 
     if (pageChecksumVerification_) {
       uint32_t crc32 =
           internal::crc32(/* prev */ 0, outputDataBuffer, outputDataLen);
-      pageHeader.__set_crc(static_cast<int32_t>(crc32));
+      pageHeader.crc() = static_cast<int32_t>(crc32);
     }
 
     if (page.type() == PageType::kDataPage) {
@@ -512,47 +512,46 @@ class SerializedPageWriter : public PageWriter {
       facebook::velox::parquet::thrift::PageHeader& pageHeader,
       const DataPageV1& page) {
     facebook::velox::parquet::thrift::DataPageHeader dataPageHeader;
-    dataPageHeader.__set_num_values(page.numValues());
-    dataPageHeader.__set_encoding(toThrift(page.encoding()));
-    dataPageHeader.__set_definition_level_encoding(
-        toThrift(page.definitionLevelEncoding()));
-    dataPageHeader.__set_repetition_level_encoding(
-        toThrift(page.repetitionLevelEncoding()));
+    dataPageHeader.num_values() = page.numValues();
+    dataPageHeader.encoding() = toThrift(page.encoding());
+    dataPageHeader.definition_level_encoding() =
+        toThrift(page.definitionLevelEncoding());
+    dataPageHeader.repetition_level_encoding() =
+        toThrift(page.repetitionLevelEncoding());
 
     // Write page statistics only when page index is not enabled.
     if (columnIndexBuilder_ == nullptr) {
-      dataPageHeader.__set_statistics(toThrift(page.statistics()));
+      dataPageHeader.statistics() = toThrift(page.statistics());
     }
 
-    pageHeader.__set_type(
-        facebook::velox::parquet::thrift::PageType::DATA_PAGE);
-    pageHeader.__set_data_page_header(dataPageHeader);
+    pageHeader.type() = facebook::velox::parquet::thrift::PageType::DATA_PAGE;
+    pageHeader.data_page_header() = dataPageHeader;
   }
 
   void setDataPageV2Header(
       facebook::velox::parquet::thrift::PageHeader& pageHeader,
       const DataPageV2& page) {
     facebook::velox::parquet::thrift::DataPageHeaderV2 dataPageHeader;
-    dataPageHeader.__set_num_values(page.numValues());
-    dataPageHeader.__set_num_nulls(page.numNulls());
-    dataPageHeader.__set_num_rows(page.numRows());
-    dataPageHeader.__set_encoding(toThrift(page.encoding()));
+    dataPageHeader.num_values() = page.numValues();
+    dataPageHeader.num_nulls() = page.numNulls();
+    dataPageHeader.num_rows() = page.numRows();
+    dataPageHeader.encoding() = toThrift(page.encoding());
 
-    dataPageHeader.__set_definition_levels_byte_length(
-        page.definitionLevelsByteLength());
-    dataPageHeader.__set_repetition_levels_byte_length(
-        page.repetitionLevelsByteLength());
+    dataPageHeader.definition_levels_byte_length() =
+        page.definitionLevelsByteLength();
+    dataPageHeader.repetition_levels_byte_length() =
+        page.repetitionLevelsByteLength();
 
-    dataPageHeader.__set_is_compressed(page.isCompressed());
+    dataPageHeader.is_compressed() = page.isCompressed();
 
     // Write page statistics only when page index is not enabled.
     if (columnIndexBuilder_ == nullptr) {
-      dataPageHeader.__set_statistics(toThrift(page.statistics()));
+      dataPageHeader.statistics() = toThrift(page.statistics());
     }
 
-    pageHeader.__set_type(
-        facebook::velox::parquet::thrift::PageType::DATA_PAGE_V2);
-    pageHeader.__set_data_page_header_v2(dataPageHeader);
+    pageHeader.type() =
+        facebook::velox::parquet::thrift::PageType::DATA_PAGE_V2;
+    pageHeader.data_page_header_v2() = dataPageHeader;
   }
 
   /// \brief Finish page index builders and update the stream offset to adjust
