@@ -17,27 +17,10 @@
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/plan/CudfPlanNodeChecker.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
-
-namespace {
-// Simple wrapper for test compatibility - assumes kSingle step
-bool canAggregationBeEvaluatedByCudf(
-    const facebook::velox::core::CallTypedExpr& call,
-    facebook::velox::core::QueryCtx* queryCtx) {
-  // For tests, assume kSingle step and extract input types from the call
-  std::vector<facebook::velox::TypePtr> rawInputTypes;
-  for (const auto& input : call.inputs()) {
-    rawInputTypes.push_back(input->type());
-  }
-  return facebook::velox::cudf_velox::canAggregationBeEvaluatedByCudf(
-      call,
-      facebook::velox::core::AggregationNode::Step::kSingle,
-      rawInputTypes,
-      queryCtx);
-}
-} // namespace
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -128,7 +111,7 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
   auto aggregationNode = createAggregationNode(
       {"c0"}, {"sum(c1)", "count(c2)", "min(c3)", "max(c4)", "avg(c5)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test unsupported aggregation functions
@@ -136,7 +119,7 @@ TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"stddev(c1)", "variance(c2)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test mixed supported and unsupported functions - should reject if any
@@ -145,14 +128,14 @@ TEST_F(CudfAggregationSelectionTest, mixedSupportedUnsupportedFunctions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"sum(c1)", "stddev(c2)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test supported grouping key expressions (simple field references)
 TEST_F(CudfAggregationSelectionTest, supportedGroupingKeyExpressions) {
   auto aggregationNode = createAggregationNode({"c0", "c1"}, {"sum(c2)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test unsupported aggregation functions (using stddev as example)
@@ -160,7 +143,7 @@ TEST_F(CudfAggregationSelectionTest, unsupportedGroupingKeyExpressions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"sum(c1)", "stddev(c2)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test supported aggregation input expressions
@@ -168,14 +151,14 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationInputExpressions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"sum(c1 + c2)", "max(length(c6))"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test unsupported aggregation input expressions
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationInputExpressions) {
   auto aggregationNode = createAggregationNode({"c0"}, {"variance(c1)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test global aggregation (no group by)
@@ -183,14 +166,14 @@ TEST_F(CudfAggregationSelectionTest, globalAggregationSupported) {
   auto aggregationNode =
       createAggregationNode({}, {"sum(c1)", "count(c2)", "max(c3)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test global aggregation with unsupported functions
 TEST_F(CudfAggregationSelectionTest, globalAggregationUnsupported) {
   auto aggregationNode = createAggregationNode({}, {"stddev(c1)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test complex groupby clause with expressions
@@ -214,7 +197,7 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
   auto aggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(plan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test nested aggregation: allowed -> not allowed
@@ -247,7 +230,7 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationAllowedToNotAllowed) {
   auto outerAggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(outerAggregationNode.get()));
 }
 
 // Test nested aggregation: allowed -> allowed
@@ -280,7 +263,7 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationAllowedToAllowed) {
   auto outerAggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(outerAggregationNode.get()));
 }
 
 // Test nested aggregation: not allowed -> allowed
@@ -314,7 +297,7 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationNotAllowedToAllowed) {
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
   // Only validates the current (outer) aggregation node
-  ASSERT_TRUE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(outerAggregationNode.get()));
 }
 
 // Test nested aggregation: not allowed -> not allowed
@@ -347,7 +330,7 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationNotAllowedToNotAllowed) {
   auto outerAggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(outerAggregationNode.get()));
 }
 
 // Test unsupported aggregation function signatures
@@ -364,8 +347,10 @@ TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctionSignatures) {
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
       "variance");
 
-  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(*stddevExpr, queryCtx_.get()));
-  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(*varianceExpr, queryCtx_.get()));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *stddevExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *varianceExpr, core::AggregationNode::Step::kSingle));
 }
 
 // Test comprehensive type support validation - all registered CUDF aggregation
@@ -533,59 +518,72 @@ TEST_F(CudfAggregationSelectionTest, comprehensiveTypeSupportValidation) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c3")},
       "avg");
 
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*sumTinyintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*sumSmallintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*sumIntegerExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*sumBigintExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*sumRealExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*sumDoubleExpr, queryCtx_.get()));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *sumTinyintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *sumSmallintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *sumIntegerExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *sumBigintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *sumRealExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *sumDoubleExpr, core::AggregationNode::Step::kSingle));
 
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countTinyintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countSmallintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countIntegerExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countBigintExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*countRealExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countDoubleExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countVarcharExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*countBooleanExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*countStarExpr, queryCtx_.get()));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countTinyintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countSmallintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countIntegerExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countBigintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countRealExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countDoubleExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countVarcharExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countBooleanExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *countStarExpr, core::AggregationNode::Step::kSingle));
 
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*minTinyintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*minSmallintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*minIntegerExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*minBigintExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*minRealExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*minDoubleExpr, queryCtx_.get()));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *minTinyintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *minSmallintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *minIntegerExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *minBigintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *minRealExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *minDoubleExpr, core::AggregationNode::Step::kSingle));
 
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*maxTinyintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*maxSmallintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*maxIntegerExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*maxBigintExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*maxRealExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*maxDoubleExpr, queryCtx_.get()));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *maxTinyintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *maxSmallintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *maxIntegerExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *maxBigintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *maxRealExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *maxDoubleExpr, core::AggregationNode::Step::kSingle));
 
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*avgSmallintExpr, queryCtx_.get()));
-  ASSERT_TRUE(
-      canAggregationBeEvaluatedByCudf(*avgIntegerExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*avgBigintExpr, queryCtx_.get()));
-  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*avgDoubleExpr, queryCtx_.get()));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *avgSmallintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *avgIntegerExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *avgBigintExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_TRUE(canAggregationBeEvaluatedByCudf(
+      *avgDoubleExpr, core::AggregationNode::Step::kSingle));
 }
 
 // Test invalid aggregation signatures
@@ -616,14 +614,14 @@ TEST_F(CudfAggregationSelectionTest, invalidTypeCombinationsRejected) {
           std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c7")},
       "max");
 
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*avgVarcharExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*sumVarcharExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*minVarcharExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*maxBooleanExpr, queryCtx_.get()));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *avgVarcharExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *sumVarcharExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *minVarcharExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *maxBooleanExpr, core::AggregationNode::Step::kSingle));
 }
 
 // Test `distinct` aggregations should be rejected early (otherwise the throw
@@ -645,7 +643,7 @@ TEST_F(CudfAggregationSelectionTest, distinctAggregationsRejected) {
   auto aggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(plan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(aggregationNode.get()));
 }
 
 // Test `mask` clauses should be rejected
@@ -667,7 +665,7 @@ TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
   auto aggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(plan);
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(isAggregationNodeSupported(aggregationNode.get()));
 
   // Manually create a modified aggregation with a mask
   auto modifiedAggregates = aggregationNode->aggregates();
@@ -680,7 +678,7 @@ TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
                           .aggregates(std::move(modifiedAggregates))
                           .build();
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*modifiedNode, queryCtx_.get()));
+  ASSERT_FALSE(isAggregationNodeSupported(modifiedNode.get()));
 }
 
 // Test return type validation
@@ -722,14 +720,14 @@ TEST_F(
       "min");
 
   // Without return type validation, these would incorrectly pass
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*sumWrongReturnExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*avgWrongReturnExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*countWrongReturnExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*minWrongReturnExpr, queryCtx_.get()));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *sumWrongReturnExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *avgWrongReturnExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *countWrongReturnExpr, core::AggregationNode::Step::kSingle));
+  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(
+      *minWrongReturnExpr, core::AggregationNode::Step::kSingle));
 }
 
 } // namespace

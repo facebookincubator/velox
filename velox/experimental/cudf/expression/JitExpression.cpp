@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 namespace facebook::velox::cudf_velox {
@@ -75,6 +76,10 @@ ColumnOrView JitExpression::eval(
   return result;
 }
 
+bool JitExpression::canEvaluate(const velox::core::TypedExprPtr& expr) {
+  return ASTExpression::canEvaluate(expr);
+}
+
 bool JitExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   return ASTExpression::canEvaluate(expr);
 }
@@ -83,6 +88,9 @@ void registerJitEvaluator(int priority) {
   registerCudfExpressionEvaluator(
       kJitEvaluatorName,
       priority,
+      [](const velox::core::TypedExprPtr& expr) {
+        return JitExpression::canEvaluate(expr);
+      },
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return JitExpression::canEvaluate(expr);
       },
