@@ -80,6 +80,7 @@ LogicalType fromVeloxType(const TypePtr& type) {
         return LogicalType::INTERVAL;
       }
       if (type->isTime()) {
+        VELOX_DCHECK(type->equivalent(*TIME()));
         return LogicalType::TIME;
       }
       return LogicalType::BIGINT;
