@@ -5444,6 +5444,137 @@ class EnforceDistinctNode : public PlanNode {
 
 using EnforceDistinctNodePtr = std::shared_ptr<const EnforceDistinctNode>;
 
+/// The MarkSorted operator marks rows where the sort key changes.
+/// The result is put in a new markerName column alongside the original input.
+/// The first row is always marked true. Subsequent rows are marked true if
+/// they compare as sorted relative to the previous row based on sortingKeys
+/// and sortingOrders.
+/// @param markerName Name of the output marker channel.
+/// @param sortingKeys Keys to check for sorted order.
+/// @param sortingOrders Sort orders (ascending/descending, nulls first/last).
+class MarkSortedNode : public PlanNode {
+ public:
+  MarkSortedNode(
+      PlanNodeId id,
+      std::string markerName,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      PlanNodePtr source);
+
+  class Builder {
+   public:
+    Builder() = default;
+
+    explicit Builder(const MarkSortedNode& other) {
+      id_ = other.id();
+      markerName_ = other.markerName();
+      sortingKeys_ = other.sortingKeys();
+      sortingOrders_ = other.sortingOrders();
+      VELOX_CHECK_EQ(other.sources().size(), 1);
+      source_ = other.sources()[0];
+    }
+
+    Builder& id(PlanNodeId id) {
+      id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& markerName(std::string markerName) {
+      markerName_ = std::move(markerName);
+      return *this;
+    }
+
+    Builder& sortingKeys(std::vector<FieldAccessTypedExprPtr> sortingKeys) {
+      sortingKeys_ = std::move(sortingKeys);
+      return *this;
+    }
+
+    Builder& sortingOrders(std::vector<SortOrder> sortingOrders) {
+      sortingOrders_ = std::move(sortingOrders);
+      return *this;
+    }
+
+    Builder& source(PlanNodePtr source) {
+      source_ = std::move(source);
+      return *this;
+    }
+
+    std::shared_ptr<MarkSortedNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "MarkSortedNode id is not set");
+      VELOX_USER_CHECK(
+          markerName_.has_value(), "MarkSortedNode markerName is not set");
+      VELOX_USER_CHECK(
+          sortingKeys_.has_value(), "MarkSortedNode sortingKeys is not set");
+      VELOX_USER_CHECK(
+          sortingOrders_.has_value(),
+          "MarkSortedNode sortingOrders is not set");
+      VELOX_USER_CHECK(source_.has_value(), "MarkSortedNode source is not set");
+
+      return std::make_shared<MarkSortedNode>(
+          id_.value(),
+          markerName_.value(),
+          sortingKeys_.value(),
+          sortingOrders_.value(),
+          source_.value());
+    }
+
+   private:
+    std::optional<PlanNodeId> id_;
+    std::optional<std::string> markerName_;
+    std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
+    std::optional<std::vector<SortOrder>> sortingOrders_;
+    std::optional<PlanNodePtr> source_;
+  };
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  /// The outputType is the concatenation of the input columns and marker
+  /// column.
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "MarkSorted";
+  }
+
+  const std::string& markerName() const {
+    return markerName_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::string markerName_;
+
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
+
+  const std::vector<SortOrder> sortingOrders_;
+
+  const std::vector<PlanNodePtr> sources_;
+
+  const RowTypePtr outputType_;
+};
+
+using MarkSortedNodePtr = std::shared_ptr<const MarkSortedNode>;
+
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
@@ -5849,6 +5980,9 @@ class PlanNodeVisitor {
   virtual void visit(
       const EnforceDistinctNode& node,
       PlanNodeVisitorContext& ctx) const = 0;
+
+  virtual void visit(const MarkSortedNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
 
   virtual void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
