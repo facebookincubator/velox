@@ -76,6 +76,7 @@ jobs:
           install_velox_deps_from_brew
           install_gflags
           install_glog
+          install_protobuf
           # Needed for faiss to find BLAS
           install_faiss_deps
           install_double_conversion
