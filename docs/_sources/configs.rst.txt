@@ -779,12 +779,6 @@ Each query can override the config by setting corresponding query session proper
      - 8MB
      - Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests.
        The parameter controls the threshold when whole file is fetched.
-   * - footer-estimated-size
-     -
-     - integer
-     - 1MB
-     - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
-       The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
    * - cache.no_retention
      - cache.no_retention
      - bool
@@ -824,20 +818,35 @@ Each query can override the config by setting corresponding query session proper
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
-  * - hive.max-rows-per-index-request
-    - hive.max_rows_per_index_request
-    - integer
-    - 0
-    - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
-      after filtering. 0 means no limit (default).
-  * - hive.reader.collect-column-stats
-    - hive.reader.collect_column_stats
-    - bool
-    - false
-    - If true, enables collection of per-column timing statistics during file reading. This includes
-      decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
-      ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
-      Useful for performance analysis and identifying slow columns.
+   * - hive.reader.collect-column-stats
+     - hive.reader.collect_column_stats
+     - bool
+     - false
+     - If true, enables collection of per-column timing statistics during file reading. This includes
+       decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
+       ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
+       Useful for performance analysis and identifying slow columns.
+   * - hive.orc.footer-speculative-io-size
+     - orc_footer_speculative_io_size
+     - integer
+     - 256KB
+     - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
+       of the file to load the footer and nearby metadata in a single IO operation.
+       Set to 0 for adaptive mode.
+   * - hive.parquet.footer-speculative-io-size
+     - parquet_footer_speculative_io_size
+     - integer
+     - 256KB
+     - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
+       of the file to load the footer and nearby metadata in a single IO operation.
+       Set to 0 for adaptive mode.
+   * - hive.nimble.footer-speculative-io-size
+     - nimble_footer_speculative_io_size
+     - integer
+     - 8MB
+     - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
+       of the file to load the footer and nearby metadata in a single IO operation.
+       Set to 0 for adaptive mode.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

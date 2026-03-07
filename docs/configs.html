@@ -896,6 +896,210 @@ Each query can override the config by setting corresponding query session proper
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 15.4%" />
+<col style="width: 15.4%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 53.8%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
+<th class="head"><p>Session Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>hive.max-partitions-per-writers</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>100</p></td>
+<td><p>Maximum number of (bucketed) partitions per a single table writer instance.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.max-bucket-count</p></td>
+<td><p>hive.max_bucket_count</p></td>
+<td><p>integer</p></td>
+<td><p>100000</p></td>
+<td><p>Maximum number of buckets that a table writer is allowed to write to.</p></td>
+</tr>
+<tr class="row-even"><td><p>insert-existing-partitions-behavior</p></td>
+<td><p>insert_existing_partitions_behavior</p></td>
+<td><p>string</p></td>
+<td><p>ERROR</p></td>
+<td><p><strong>Allowed values:</strong> <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>, <code class="docutils literal notranslate"><span class="pre">ERROR</span></code>. The behavior on insert existing partitions. This property only derives
+the update mode field of the table writer operator output. <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>
+sets the update mode to indicate overwriting a partition if exists. <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate
+error throwing if writing to an existing partition.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.immutable-partitions</p></td>
+<td></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
+support appending to existing partitions.</p></td>
+</tr>
+<tr class="row-even"><td><p>file-column-names-read-as-lower-case</p></td>
+<td></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>True if reading the source file column names as lower case, and planner should guarantee
+the input column name and filter is also lower case to achive case-insensitive read.</p></td>
+</tr>
+<tr class="row-odd"><td><p>partition_path_as_lower_case</p></td>
+<td></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If true, the partition directory will be converted to lowercase when executing a table write operation.</p></td>
+</tr>
+<tr class="row-even"><td><p>allow-null-partition-keys</p></td>
+<td><p>allow_null_partition_keys</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Determines whether null values for partition keys are allowed or not. If not, fails with “Partition key must
+not be null” error message when writing data with null partition key.
+Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
+For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.</p></td>
+</tr>
+<tr class="row-odd"><td><p>ignore_missing_files</p></td>
+<td></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, splits that refer to missing files don’t generate errors and are processed as empty splits.</p></td>
+</tr>
+<tr class="row-even"><td><p>max-coalesced-bytes</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>128MB</p></td>
+<td><p>Maximum size in bytes to coalesce requests to be fetched in a single request.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max-coalesced-distance</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>512KB</p></td>
+<td><p>Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.</p></td>
+</tr>
+<tr class="row-even"><td><p>load-quantum</p></td>
+<td><p>load-quantum</p></td>
+<td><p>integer</p></td>
+<td><p>8MB</p></td>
+<td><p>Define the size of each coalesce load request. E.g. in Parquet scan, if it’s bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk</p></td>
+</tr>
+<tr class="row-odd"><td><p>num-cached-file-handles</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>20000</p></td>
+<td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
+indicates infinite cache capacity.</p></td>
+</tr>
+<tr class="row-even"><td><p>file-handle-cache-enabled</p></td>
+<td></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Enables caching of file handles if true. Disables caching if false. File handle cache should be
+disabled if files are not immutable, i.e. file content may change while file path stays the same.</p></td>
+</tr>
+<tr class="row-odd"><td><p>sort-writer-max-output-rows</p></td>
+<td><p>sort_writer_max_output_rows</p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
+</tr>
+<tr class="row-even"><td><p>sort-writer-max-output-bytes</p></td>
+<td><p>sort_writer_max_output_bytes</p></td>
+<td><p>string</p></td>
+<td><p>10MB</p></td>
+<td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
+</tr>
+<tr class="row-odd"><td><p>file-preload-threshold</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>8MB</p></td>
+<td><p>Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests.
+The parameter controls the threshold when whole file is fetched.</p></td>
+</tr>
+<tr class="row-even"><td><p>cache.no_retention</p></td>
+<td><p>cache.no_retention</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, evict out a query scanned data out of in-memory cache right after the access,
+and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+from the one-time table scan by large batch query when mixed running with interactive
+query which has high data locality.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
+<td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, disable the stats based filter reordering during the read processing, and the
+filter execution order is totally determined by the filter type. Otherwise, the file
+reader will dynamically adjust the filter execution order based on the past filter
+execution stats.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.reader.timestamp-partition-value-as-local-time</p></td>
+<td><p>hive.reader.timestamp_partition_value_as_local_time</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Reads timestamp partition value as local time if true. Otherwise, reads as UTC.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.preserve-flat-maps-in-memory</p></td>
+<td><p>hive.preserve_flat_maps_in_memory</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.max-rows-per-index-request</p></td>
+<td><p>hive.max_rows_per_index_request</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
+after filtering. 0 means no limit (default).</p></td>
+</tr>
+<tr class="row-odd"><td><p>file-metadata-cache-enabled</p></td>
+<td><p>file_metadata_cache_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
+the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
+serve metadata from cache with zero file IO. Currently only supported by Nimble format.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.reader.collect-column-stats</p></td>
+<td><p>hive.reader.collect_column_stats</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, enables collection of per-column timing statistics during file reading. This includes
+decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
+<code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decompressCPUTimeNanos</span></code> and <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decodeCPUTimeNanos</span></code>.
+Useful for performance analysis and identifying slow columns.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.orc.footer-speculative-io-size</p></td>
+<td><p>orc_footer_speculative_io_size</p></td>
+<td><p>integer</p></td>
+<td><p>256KB</p></td>
+<td><p>Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
+of the file to load the footer and nearby metadata in a single IO operation.
+Set to 0 for adaptive mode.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.parquet.footer-speculative-io-size</p></td>
+<td><p>parquet_footer_speculative_io_size</p></td>
+<td><p>integer</p></td>
+<td><p>256KB</p></td>
+<td><p>Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
+of the file to load the footer and nearby metadata in a single IO operation.
+Set to 0 for adaptive mode.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.nimble.footer-speculative-io-size</p></td>
+<td><p>nimble_footer_speculative_io_size</p></td>
+<td><p>integer</p></td>
+<td><p>8MB</p></td>
+<td><p>Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
+of the file to load the footer and nearby metadata in a single IO operation.
+Set to 0 for adaptive mode.</p></td>
+</tr>
+</tbody>
+</table>
 <section id="orc-file-format-configuration">
 <h3><code class="docutils literal notranslate"><span class="pre">ORC</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#orc-file-format-configuration" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
