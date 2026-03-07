@@ -1064,8 +1064,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerEstimatedSize()) {
-    memoryBytes = footerLength + readerBase.footerEstimatedSize();
+  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
+    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.
