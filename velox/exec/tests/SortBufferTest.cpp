@@ -711,10 +711,11 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
     // Sets an extreme large value to get output once to avoid test flakiness.
     sortBuffer->getOutput(1'000'000);
     if (spillEnabled) {
-      // Reserve memory for sort and getOutput.
-      ASSERT_EQ(numReserves, 2);
+      // Reserve memory for sort and getOutput and when prefix sort.
+      ASSERT_EQ(numReserves, enableSpillPrefixSort_ ? 3 : 2);
     } else {
-      ASSERT_EQ(numReserves, 0);
+      // Reserve memory when prefix sort.
+      ASSERT_EQ(numReserves, enableSpillPrefixSort_ ? 1 : 0);
     }
   }
 }
@@ -751,21 +752,20 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
     TestScopedSpillInjection scopedSpillInjection(0);
     sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
 
-    std::atomic_bool hasReserveMemory = false;
+    std::atomic_int numReserves{0};
     // Reserve memory for sort.
     SCOPED_TESTVALUE_SET(
         "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
         std::function<void(memory::MemoryPoolImpl*)>(
-            ([&](memory::MemoryPoolImpl* pool) {
-              hasReserveMemory.store(true);
-            })));
+            ([&](memory::MemoryPoolImpl* pool) { ++numReserves; })));
 
     sortBuffer->noMoreInput();
     if (spillEnabled) {
-      // Reserve memory for sort.
-      ASSERT_TRUE(hasReserveMemory);
+      // Reserve memory for sort and when prefix sort.
+      ASSERT_EQ(numReserves, enableSpillPrefixSort_ ? 2 : 1);
     } else {
-      ASSERT_FALSE(hasReserveMemory);
+      // Reserve memory when prefix sort.
+      ASSERT_EQ(numReserves, enableSpillPrefixSort_ ? 1 : 0);
     }
   }
 }
