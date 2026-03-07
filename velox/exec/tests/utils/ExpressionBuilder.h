@@ -296,7 +296,7 @@ inline detail::ExprWrapper col(std::string name) {
 
 /// Enable users to use a custom C++ literal to add a column reference.
 /// For example: "col"_c
-inline detail::ExprWrapper operator"" _c(const char* str, size_t len) {
+inline detail::ExprWrapper operator""_c(const char* str, size_t len) {
   return col(std::string(str, len));
 }
 
