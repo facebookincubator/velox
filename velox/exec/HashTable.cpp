@@ -2076,6 +2076,15 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
   size_t numOut = 0;
   auto maxOut = inputRows.size();
   uint64_t totalBytes{0};
+
+  // Try AMAC path for duplicate chains. Interleaved output order is
+  // incompatible with NoMatchDetector, so exclude includeMisses
+  // (LEFT/FULL/ANTI).
+  if (nextOffset_ && hasDuplicates_ && !includeMisses &&
+      iter.estimatedRowSize.has_value()) {
+    return listJoinResultsAmac(iter, inputRows, hits, maxBytes);
+  }
+
   while (iter.lastRowIndex < iter.rows->size()) {
     if (!iter.nextHit) {
       const auto row = (*iter.rows)[iter.lastRowIndex];
@@ -2119,6 +2128,99 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       }
     }
   }
+  return numOut;
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listJoinResultsAmac(
+    JoinResultIterator& iter,
+    folly::Range<vector_size_t*> inputRows,
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
+  constexpr int32_t kGroupSize = 6;
+  const auto bytesPerRow = iter.estimatedRowSize.value();
+  const auto maxOut = inputRows.size();
+  int32_t numOut{0};
+  uint64_t totalBytes{0};
+
+  struct Slot {
+    vector_size_t probeRow;
+    char* hit;
+  };
+  Slot slots[kGroupSize];
+  int32_t numSlots{0};
+
+  // Prefetches the next chain element to overlap memory latency.
+  auto prefetchNext = [&](char* hit) {
+    char* next = nextRow(hit);
+    if (next) {
+      __builtin_prefetch(reinterpret_cast<char*>(next) + nextOffset_);
+      __builtin_prefetch(next);
+    }
+  };
+
+  auto hasCapacity = [&]() {
+    return numOut < maxOut && totalBytes + bytesPerRow <= maxBytes;
+  };
+
+  auto emitRow = [&](vector_size_t probeRow, char* hit) {
+    inputRows[numOut] = probeRow;
+    hits[numOut] = hit;
+    totalBytes += bytesPerRow;
+    ++numOut;
+  };
+
+  // Fills slots from the probe row iterator, skipping miss rows.
+  auto fillSlots = [&]() {
+    while (numSlots < kGroupSize && iter.lastRowIndex < iter.rows->size()) {
+      const auto row = (*iter.rows)[iter.lastRowIndex++];
+      char* hit = (*iter.hits)[row]; // NOLINT
+      if (hit) {
+        slots[numSlots++] = {row, hit};
+        prefetchNext(hit);
+      }
+    }
+  };
+
+  // Restore saved slots from a previous call that hit the output budget.
+  for (int32_t i = 0; i < iter.numActiveChains; ++i) {
+    slots[numSlots++] = {iter.activeChainProbeRows[i], iter.activeChainHits[i]};
+    prefetchNext(iter.activeChainHits[i]);
+  }
+  iter.numActiveChains = 0;
+
+  fillSlots();
+
+  // Round-robin across active slots: emit one result per slot per round.
+  // While processing slot[i], prefetched data for slot[i+1..N] arrives,
+  // hiding DRAM latency of nextRow() pointer chasing.
+  while (numSlots > 0) {
+    for (int32_t i = 0; i < numSlots;) {
+      if (!hasCapacity()) {
+        // Save all remaining active slots.
+        for (int32_t j = 0; j < numSlots; ++j) {
+          iter.activeChainProbeRows[j] = slots[j].probeRow;
+          iter.activeChainHits[j] = slots[j].hit;
+        }
+        iter.numActiveChains = numSlots;
+        return numOut;
+      }
+
+      emitRow(slots[i].probeRow, slots[i].hit);
+
+      char* next = nextRow(slots[i].hit);
+      if (next) {
+        slots[i].hit = next;
+        prefetchNext(next);
+        ++i;
+      } else {
+        // Chain exhausted. Swap-remove with last slot and fill replacement.
+        slots[i] = slots[--numSlots];
+        fillSlots();
+      }
+    }
+  }
+
   return numOut;
 }
 

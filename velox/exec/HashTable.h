@@ -188,10 +188,12 @@ class BaseHashTable {
       hits = &lookup.hits;
       lastRowIndex = 0;
       nextHit = nullptr;
+      numActiveChains = 0;
     }
 
     bool atEnd() const {
-      return !rows || lastRowIndex == rows->size();
+      return (!rows || lastRowIndex == rows->size()) && numActiveChains == 0 &&
+          !nextHit;
     }
 
     /// The row size estimation of the projected output columns, if applicable.
@@ -207,6 +209,14 @@ class BaseHashTable {
 
     vector_size_t lastRowIndex{0};
     char* nextHit{nullptr};
+
+    /// AMAC (Asynchronous Memory Access Chaining) state: saves active
+    /// chain positions when the output buffer fills mid-group so they
+    /// can be resumed on the next call.
+    static constexpr int kMaxActiveChains = 6;
+    int numActiveChains{0};
+    vector_size_t activeChainProbeRows[kMaxActiveChains]{};
+    char* activeChainHits[kMaxActiveChains]{};
   };
 
   struct RowsIterator {
@@ -884,6 +894,18 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResultsFastPath(
       JoinResultIterator& iter,
       bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes);
+
+  /// Software-pipelined chain traversal (AMAC): prefetches up to 6
+  /// duplicate chains in round-robin to hide DRAM latency during nextRow()
+  /// pointer chasing. Output order is interleaved across probe rows, so
+  /// this path is only used when 'includeMisses' is false (inner, right,
+  /// semi joins). Requires: the table has duplicates and a fixed estimated
+  /// row size is known.
+  int32_t listJoinResultsAmac(
+      JoinResultIterator& iter,
       folly::Range<vector_size_t*> inputRows,
       folly::Range<char**> hits,
       uint64_t maxBytes);
