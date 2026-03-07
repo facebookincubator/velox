@@ -171,7 +171,9 @@ template <>
   auto size = arrayVector->sizeAt(arrayRow);
 
   if (size == 0) {
-    return ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(elements->type()));
+    return ::duckdb::Value::LIST(
+        duckdb::fromVeloxType(elements->type()),
+        ::duckdb::vector<::duckdb::Value>{});
   }
 
   ::duckdb::vector<::duckdb::Value> array;
