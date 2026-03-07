@@ -45,6 +45,7 @@ EnforceDistinct::EnforceDistinct(
           std::vector<core::TypedExprPtr>{
               planNode->preGroupedKeys().begin(),
               planNode->preGroupedKeys().end()}),
+      /*spillConfig=*/nullptr,
       operatorCtx_.get(),
       &nonReclaimableSection_);
 }
