@@ -726,12 +726,178 @@ TEST_F(ParquetTableScanTest, array) {
           makeArrayVector({0, 1, 2}, rowVector),
       });
 
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(plan)
       .connectorSessionProperty(
           kHiveConnectorId,
           connector::hive::HiveConfig::kParquetUseColumnNamesSession,
           "true")
       .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
+      .assertResults(expected);
+}
+
+TEST_F(ParquetTableScanTest, complex) {
+  std::vector<std::string> columnNames = {
+      "boolColumn",        "byteColumn",        "shortColumn",
+      "intColumn",         "longColumn",        "doubleColumn",
+      "binaryColumn",      "stringColumn",      "enumColumn",
+      "maybeBoolColumn",   "maybeByteColumn",   "maybeShortColumn",
+      "maybeIntColumn",    "maybeLongColumn",   "maybeDoubleColumn",
+      "maybeBinaryColumn", "maybeStringColumn", "maybeEnumColumn",
+      "stringsColumn",     "intSetColumn",      "intToStringColumn",
+      "complexColumn",
+  };
+
+  auto rowType =
+      ROW(columnNames,
+          {
+              BOOLEAN(),
+              INTEGER(),
+              INTEGER(),
+              INTEGER(),
+              BIGINT(),
+              DOUBLE(),
+              VARCHAR(),
+              VARCHAR(),
+              VARCHAR(),
+              BOOLEAN(),
+              INTEGER(),
+              INTEGER(),
+              INTEGER(),
+              BIGINT(),
+              DOUBLE(),
+              VARCHAR(),
+              VARCHAR(),
+              VARCHAR(),
+              ARRAY(VARCHAR()),
+              ARRAY(INTEGER()),
+              MAP(INTEGER(), VARCHAR()),
+              MAP(INTEGER(),
+                  ARRAY(
+                      ROW({"nestedIntsColumn", "nestedStringColumn"},
+                          {ARRAY(INTEGER()), VARCHAR()}))),
+          });
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  auto genOffsets = [](vector_size_t size) {
+    std::vector<vector_size_t> offsets;
+    for (auto i = 0; i < size; ++i) {
+      if (i % 3 == 0) {
+        offsets.emplace_back(i);
+      }
+    }
+    return offsets;
+  };
+
+  const vector_size_t size = 10;
+
+  // Construct the expected complex vector.
+  auto arrayOfInts = makeArrayVector(
+      genOffsets(size * 27), makeFlatVector<int32_t>(size * 27, [](auto row) {
+        return row / 27 + (row % 9) / 3 + row % 3;
+      }));
+  auto rowOfArray = makeRowVector(
+      {"nestedIntsColumn", "nestedStringColumn"},
+      {
+          arrayOfInts,
+          makeFlatVector<std::string>(
+              size * 9,
+              [](auto row) {
+                return "val_" + std::to_string(row / 9 + row % 3);
+              }),
+      });
+  auto arrayOfRow = makeArrayVector(genOffsets(size * 9), rowOfArray);
+  auto nestedMap = makeMapVector(
+      genOffsets(size * 3),
+      makeFlatVector<int32_t>(
+          size * 3, [](auto row) { return row / 3 + row % 3; }),
+      arrayOfRow);
+
+  const std::vector<std::string> suits = {
+      "SPADES", "HEARTS", "DIAMONDS", "CLUBS"};
+  auto expected = makeRowVector(
+      columnNames,
+      {
+          makeFlatVector<bool>(size, [](auto row) { return row % 2 == 0; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row + 1; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row + 2; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row * 10L; }),
+          makeFlatVector<double>(
+              size, [](auto row) { return static_cast<double>(row) + 0.2; }),
+          makeFlatVector<std::string>(
+              size, [](auto row) { return "val_" + std::to_string(row); }),
+          makeFlatVector<std::string>(
+              size, [](auto row) { return "val_" + std::to_string(row); }),
+          makeFlatVector<std::string>(
+              size, [&suits](auto row) { return suits[row % 4]; }),
+          makeFlatVector<bool>(
+              size,
+              [](auto row) { return row % 2 == 0; },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<int32_t>(
+              size,
+              [](auto row) { return row; },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<int32_t>(
+              size,
+              [](auto row) { return row + 1; },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<int32_t>(
+              size,
+              [](auto row) { return row + 2; },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<int64_t>(
+              size,
+              [](auto row) { return row * 10L; },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<double>(
+              size,
+              [](auto row) { return static_cast<double>(row) + 0.2; },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<std::string>(
+              size,
+              [](auto row) { return "val_" + std::to_string(row); },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<std::string>(
+              size,
+              [](auto row) { return "val_" + std::to_string(row); },
+              [](auto row) { return row % 3 == 0; }),
+          makeFlatVector<std::string>(
+              size,
+              [&suits](auto row) { return suits[row % 4]; },
+              [](auto row) { return row % 3 == 0; }),
+          makeArrayVector(
+              {0, 3, 6, 9, 12, 15, 18, 21, 24, 27},
+              makeFlatVector<std::string>(
+                  size * 3,
+                  [](auto row) {
+                    return "arr_" + std::to_string(row / 3 + row % 3);
+                  })),
+          makeArrayVector(
+              {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+              makeFlatVector<int32_t>(size, [](auto row) { return row; })),
+          makeMapVector(
+              {0, 3, 6, 9, 12, 15, 18, 21, 24, 27},
+              makeFlatVector<int32_t>(
+                  size * 3, [](auto row) { return row / 3 + row % 3; }),
+              makeFlatVector<std::string>(
+                  size * 3,
+                  [](auto row) {
+                    return "val_" + std::to_string(row / 3 + row % 3);
+                  })),
+          nestedMap,
+      });
+
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::kParquetUseColumnNamesSession,
+          "true")
+      .splits({makeSplit(
+          getExampleFilePath("parquet-thrift-compat.snappy.parquet"))})
       .assertResults(expected);
 }
 
