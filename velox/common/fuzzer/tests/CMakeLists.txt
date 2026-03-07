@@ -17,7 +17,7 @@ add_executable(velox_constrained_input_generators_test ConstrainedGeneratorsTest
 add_test(
   NAME velox_constrained_input_generators_test
   COMMAND velox_constrained_input_generators_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(

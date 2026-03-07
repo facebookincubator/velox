@@ -36,7 +36,7 @@ add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
 add_test(
   NAME velox_dwio_parquet_tpch_test
   COMMAND velox_dwio_parquet_tpch_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_link_libraries(
   velox_dwio_parquet_tpch_test

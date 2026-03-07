@@ -42,87 +42,87 @@ add_executable(velox_cudf_batch_concat_test Main.cpp BatchConcatTest.cpp)
 add_test(
   NAME velox_cudf_aggregation_test
   COMMAND velox_cudf_aggregation_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_assign_unique_id_test
   COMMAND velox_cudf_assign_unique_id_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_config_test
   COMMAND velox_cudf_config_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_expression_selection_test
   COMMAND velox_cudf_expression_selection_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_filter_project_test
   COMMAND velox_cudf_filter_project_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_hash_join_test
   COMMAND velox_cudf_hash_join_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_limit_test
   COMMAND velox_cudf_limit_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_local_partition_test
   COMMAND velox_cudf_local_partition_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_order_by_test
   COMMAND velox_cudf_order_by_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 if(VELOX_ENABLE_S3)
   add_test(
     NAME velox_cudf_s3_read_test
     COMMAND velox_cudf_s3_read_test
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
 endif()
 
 add_test(
   NAME velox_cudf_subfield_filter_ast_test
   COMMAND velox_cudf_subfield_filter_ast_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_table_scan_test
   COMMAND velox_cudf_table_scan_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 # add_test(
 #   NAME velox_cudf_table_write_test
 #   COMMAND velox_cudf_table_write_test
-#   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+#   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 # )
 
 add_test(
   NAME velox_cudf_topn_test
   COMMAND velox_cudf_topn_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_test(
   NAME velox_cudf_batch_concat_test
@@ -133,19 +133,19 @@ add_test(
 add_test(
   NAME velox_cudf_aggregation_selection_test
   COMMAND velox_cudf_aggregation_selection_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_tocudf_selection_test
   COMMAND velox_cudf_tocudf_selection_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_test(
   NAME velox_cudf_step_aware_aggregation_registry_test
   COMMAND velox_cudf_step_aware_aggregation_registry_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)

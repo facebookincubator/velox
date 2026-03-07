@@ -74,7 +74,7 @@ add_executable(velox_dwio_dwrf_decompression_test TestDecompression.cpp)
 add_test(
   NAME velox_dwio_dwrf_decompression_test
   COMMAND velox_dwio_dwrf_decompression_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -421,7 +421,7 @@ add_executable(velox_dwio_dwrf_reader_test ReaderTest.cpp)
 add_test(
   NAME velox_dwio_dwrf_reader_test
   COMMAND velox_dwio_dwrf_reader_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -626,3 +626,5 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS}
 )
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

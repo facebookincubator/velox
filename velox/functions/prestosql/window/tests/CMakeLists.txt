@@ -29,7 +29,7 @@ set(CMAKE_WINDOW_TEST_MAIN_FILES Main.cpp)
 
 add_executable(velox_windows_rank_test NtileTest.cpp RankTest.cpp ${CMAKE_WINDOW_TEST_MAIN_FILES})
 
-add_test(NAME velox_windows_rank_test COMMAND velox_windows_rank_test WORKING_DIRECTORY .)
+add_test(NAME velox_windows_rank_test COMMAND velox_windows_rank_test)
 
 target_link_libraries(velox_windows_rank_test ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})
 
@@ -40,12 +40,12 @@ add_executable(
   ${CMAKE_WINDOW_TEST_MAIN_FILES}
 )
 
-add_test(NAME velox_windows_value_test COMMAND velox_windows_value_test WORKING_DIRECTORY .)
+add_test(NAME velox_windows_value_test COMMAND velox_windows_value_test)
 
 target_link_libraries(velox_windows_value_test ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})
 
 add_executable(velox_windows_agg_test AggregateWindowTest.cpp ${CMAKE_WINDOW_TEST_MAIN_FILES})
 
-add_test(NAME velox_windows_agg_test COMMAND velox_windows_agg_test WORKING_DIRECTORY .)
+add_test(NAME velox_windows_agg_test COMMAND velox_windows_agg_test)
 
 target_link_libraries(velox_windows_agg_test ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})

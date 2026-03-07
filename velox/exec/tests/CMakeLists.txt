@@ -23,7 +23,7 @@ add_executable(
 add_test(
   NAME aggregate_companion_functions_test
   COMMAND aggregate_companion_functions_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -136,7 +136,7 @@ add_executable(
   TreeOfLosersTest.cpp
 )
 
-add_test(NAME velox_exec_test COMMAND velox_exec_test WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME velox_exec_test COMMAND velox_exec_test WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 # TODO: Revert back to 3000 once is fixed.
 # https://github.com/facebookincubator/velox/issues/13879
@@ -145,7 +145,7 @@ set_tests_properties(velox_exec_test PROPERTIES TIMEOUT 6000)
 add_test(
   NAME velox_exec_infra_test
   COMMAND velox_exec_infra_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -293,7 +293,7 @@ target_link_libraries(
 add_test(
   NAME velox_table_evolution_fuzzer_test
   COMMAND velox_table_evolution_fuzzer_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 add_executable(velox_aggregation_runner_test AggregationRunnerTest.cpp)
@@ -392,7 +392,9 @@ add_executable(velox_driver_test OperatorReplacementTest.cpp Main.cpp)
 add_test(
   NAME velox_driver_test
   COMMAND velox_driver_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(velox_driver_test velox_exec velox_exec_test_lib GTest::gtest)
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/data DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

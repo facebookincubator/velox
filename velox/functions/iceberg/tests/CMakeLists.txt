@@ -22,7 +22,7 @@ add_executable(
 add_test(
   NAME velox_functions_iceberg_test
   COMMAND velox_functions_iceberg_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
