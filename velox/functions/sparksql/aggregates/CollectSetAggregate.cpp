@@ -18,19 +18,254 @@
 namespace facebook::velox::functions::aggregate::sparksql {
 namespace {
 
-// Null inputs are excluded by setting 'ignoreNulls' as true.
-// Empty arrays are returned for empty groups by setting 'nullForEmpty'
-// as false.
-template <typename T>
-using SparkSetAggAggregate = SetAggAggregate<T, true, false>;
+// Spark collect_set aggregate with runtime ignoreNulls flag.
+// The ignoreNulls_ flag is initialized via setConstantInputs() from the
+// constant boolean argument provided at plan construction time.
+template <
+    typename T,
+    typename AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>>
+class SparkCollectSetAggregate
+    : public SetAggAggregate<T, false, false, AccumulatorType> {
+  using Base = SetAggAggregate<T, false, false, AccumulatorType>;
+  using SBase = SetBaseAggregate<T, false, false, AccumulatorType>;
 
-// NaN inputs are treated as distinct values.
-template <typename T>
-using FloatSetAggAggregateNaNUnaware = SetAggAggregate<
-    T,
-    true,
-    false,
-    velox::aggregate::prestosql::FloatSetAccumulatorNaNUnaware<T>>;
+ public:
+  explicit SparkCollectSetAggregate(const TypePtr& resultType)
+      : Base(resultType) {}
+
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override {
+    // In the raw input step, constantInputs has 2 entries: [data, boolean].
+    // In the intermediate/final step or companion functions, the boolean
+    // constant may not be present — skip in those cases.
+    if (constantInputs.size() >= 2 && constantInputs[1] != nullptr &&
+        !constantInputs[1]->isNullAt(0)) {
+      ignoreNulls_ = constantInputs[1]->as<ConstantVector<bool>>()->valueAt(0);
+    }
+  }
+
+  void addRawInput(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    SBase::decoded_.decode(*args[0], rows);
+    rows.applyToSelected([&](vector_size_t i) {
+      auto* group = groups[i];
+      SBase::clearNull(group);
+      auto tracker = SBase::trackRowSize(group);
+      if (ignoreNulls_) {
+        SBase::value(group)->addNonNullValue(
+            SBase::decoded_, i, SBase::allocator_);
+      } else {
+        SBase::value(group)->addValue(SBase::decoded_, i, SBase::allocator_);
+      }
+    });
+  }
+
+  void addSingleGroupRawInput(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    SBase::decoded_.decode(*args[0], rows);
+    SBase::clearNull(group);
+    auto* accumulator = SBase::value(group);
+    auto tracker = SBase::trackRowSize(group);
+    rows.applyToSelected([&](vector_size_t i) {
+      if (ignoreNulls_) {
+        accumulator->addNonNullValue(SBase::decoded_, i, SBase::allocator_);
+      } else {
+        accumulator->addValue(SBase::decoded_, i, SBase::allocator_);
+      }
+    });
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    // When ignoreNulls is true, we must not wrap null input values into
+    // [null] arrays, because the final/intermediate node uses the default
+    // ignoreNulls_=false and would preserve those null elements. Instead,
+    // output empty arrays for null elements so that addIntermediateResults
+    // sees no null elements to preserve.
+    if (!ignoreNulls_) {
+      Base::toIntermediate(rows, args, result);
+      return;
+    }
+
+    const auto& elements = args[0];
+    const auto numRows = rows.size();
+
+    auto* pool = SBase::allocator_->pool();
+    BufferPtr nulls = allocateNulls(numRows, pool);
+    memcpy(
+        nulls->asMutable<uint64_t>(),
+        rows.asRange().bits(),
+        bits::nbytes(numRows));
+
+    // For ignoreNulls=true: null input elements get size=0 (empty array),
+    // non-null elements get size=1 as usual.
+    BufferPtr offsets = allocateOffsets(numRows, pool);
+    auto* rawOffsets = offsets->asMutable<vector_size_t>();
+
+    BufferPtr sizes = allocateSizes(numRows, pool);
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+
+    vector_size_t offset = 0;
+    rows.applyToSelected([&](vector_size_t i) {
+      rawOffsets[i] = offset;
+      if (elements->isNullAt(i)) {
+        rawSizes[i] = 0;
+      } else {
+        rawSizes[i] = 1;
+        offset++;
+      }
+    });
+
+    // Build a compacted elements vector with only non-null values.
+    auto nonNullCount = offset;
+    auto compactedElements =
+        BaseVector::create(elements->type(), nonNullCount, pool);
+    vector_size_t idx = 0;
+    rows.applyToSelected([&](vector_size_t i) {
+      if (!elements->isNullAt(i)) {
+        compactedElements->copy(elements.get(), idx++, i, 1);
+      }
+    });
+
+    result = std::make_shared<ArrayVector>(
+        pool,
+        ARRAY(elements->type()),
+        nulls,
+        numRows,
+        offsets,
+        sizes,
+        std::move(compactedElements));
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    SBase::decoded_.decode(*args[0], rows);
+    auto baseArray = SBase::decoded_.base()->template as<ArrayVector>();
+    SBase::decodedElements_.decode(*baseArray->elements());
+    rows.applyToSelected([&](vector_size_t i) {
+      if (SBase::decoded_.isNullAt(i)) {
+        return;
+      }
+      auto* group = groups[i];
+      SBase::clearNull(group);
+      auto tracker = SBase::trackRowSize(group);
+      auto decodedIndex = SBase::decoded_.index(i);
+      if (ignoreNulls_) {
+        SBase::value(group)->addNonNullValues(
+            *baseArray,
+            decodedIndex,
+            SBase::decodedElements_,
+            SBase::allocator_);
+      } else {
+        SBase::value(group)->addValues(
+            *baseArray,
+            decodedIndex,
+            SBase::decodedElements_,
+            SBase::allocator_);
+      }
+    });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    SBase::decoded_.decode(*args[0], rows);
+    auto baseArray = SBase::decoded_.base()->template as<ArrayVector>();
+    SBase::decodedElements_.decode(*baseArray->elements());
+    auto* accumulator = SBase::value(group);
+    auto tracker = SBase::trackRowSize(group);
+    rows.applyToSelected([&](vector_size_t i) {
+      if (SBase::decoded_.isNullAt(i)) {
+        return;
+      }
+      SBase::clearNull(group);
+      auto decodedIndex = SBase::decoded_.index(i);
+      if (ignoreNulls_) {
+        accumulator->addNonNullValues(
+            *baseArray,
+            decodedIndex,
+            SBase::decodedElements_,
+            SBase::allocator_);
+      } else {
+        accumulator->addValues(
+            *baseArray,
+            decodedIndex,
+            SBase::decodedElements_,
+            SBase::allocator_);
+      }
+    });
+  }
+
+ private:
+  // Initialized via setConstantInputs() from the constant boolean argument.
+  // Default is false (conservative: keeps nulls). In partial+final mode,
+  // the final node doesn't receive the boolean constant, so it uses this
+  // default — which is safe because the partial node already handles null
+  // filtering based on the actual constant value.
+  bool ignoreNulls_{false};
+};
+
+std::unique_ptr<exec::Aggregate> createSetAgg(
+    const TypeKind typeKind,
+    const TypePtr& inputType,
+    const TypePtr& resultType) {
+  switch (typeKind) {
+    case TypeKind::BOOLEAN:
+      return std::make_unique<SparkCollectSetAggregate<bool>>(resultType);
+    case TypeKind::TINYINT:
+      return std::make_unique<SparkCollectSetAggregate<int8_t>>(resultType);
+    case TypeKind::SMALLINT:
+      return std::make_unique<SparkCollectSetAggregate<int16_t>>(resultType);
+    case TypeKind::INTEGER:
+      return std::make_unique<SparkCollectSetAggregate<int32_t>>(resultType);
+    case TypeKind::BIGINT:
+      return std::make_unique<SparkCollectSetAggregate<int64_t>>(resultType);
+    case TypeKind::HUGEINT:
+      VELOX_CHECK(
+          inputType->isLongDecimal(),
+          "Non-decimal use of HUGEINT is not supported");
+      return std::make_unique<SparkCollectSetAggregate<int128_t>>(resultType);
+    case TypeKind::REAL:
+      return std::make_unique<SparkCollectSetAggregate<
+          float,
+          velox::aggregate::prestosql::FloatSetAccumulatorNaNUnaware<float>>>(
+          resultType);
+    case TypeKind::DOUBLE:
+      return std::make_unique<SparkCollectSetAggregate<
+          double,
+          velox::aggregate::prestosql::FloatSetAccumulatorNaNUnaware<double>>>(
+          resultType);
+    case TypeKind::TIMESTAMP:
+      return std::make_unique<SparkCollectSetAggregate<Timestamp>>(resultType);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
+    case TypeKind::VARCHAR:
+      return std::make_unique<SparkCollectSetAggregate<StringView>>(resultType);
+    case TypeKind::ARRAY:
+      [[fallthrough]];
+    case TypeKind::ROW:
+      return std::make_unique<SparkCollectSetAggregate<ComplexType>>(
+          resultType);
+    case TypeKind::UNKNOWN:
+      return std::make_unique<SparkCollectSetAggregate<UnknownValue>>(
+          resultType);
+    default:
+      VELOX_UNSUPPORTED("Unsupported type {}", TypeKindName::toName(typeKind));
+  }
+}
 
 } // namespace
 
@@ -39,72 +274,26 @@ void registerCollectSetAggAggregate(
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
+      // collect_set(T, ignoreNulls) -> array(T): ignoreNulls flag controls
+      // whether null values are included in the result set.
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
           .returnType("array(T)")
           .intermediateType("array(T)")
           .argumentType("T")
+          .constantArgumentType("boolean")
           .build()};
 
-  auto name = prefix + "collect_set";
   exec::registerAggregateFunction(
-      name,
+      prefix + "collect_set",
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step /*step*/,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(argTypes.size(), 1);
-
-        const bool isRawInput = exec::isRawInput(step);
-        const TypePtr& inputType =
-            isRawInput ? argTypes[0] : argTypes[0]->childAt(0);
-        const TypeKind typeKind = inputType->kind();
-
-        switch (typeKind) {
-          case TypeKind::BOOLEAN:
-            return std::make_unique<SparkSetAggAggregate<bool>>(resultType);
-          case TypeKind::TINYINT:
-            return std::make_unique<SparkSetAggAggregate<int8_t>>(resultType);
-          case TypeKind::SMALLINT:
-            return std::make_unique<SparkSetAggAggregate<int16_t>>(resultType);
-          case TypeKind::INTEGER:
-            return std::make_unique<SparkSetAggAggregate<int32_t>>(resultType);
-          case TypeKind::BIGINT:
-            return std::make_unique<SparkSetAggAggregate<int64_t>>(resultType);
-          case TypeKind::HUGEINT:
-            VELOX_CHECK(
-                inputType->isLongDecimal(),
-                "Non-decimal use of HUGEINT is not supported");
-            return std::make_unique<SparkSetAggAggregate<int128_t>>(resultType);
-          case TypeKind::REAL:
-            return std::make_unique<FloatSetAggAggregateNaNUnaware<float>>(
-                resultType);
-          case TypeKind::DOUBLE:
-            return std::make_unique<FloatSetAggAggregateNaNUnaware<double>>(
-                resultType);
-          case TypeKind::TIMESTAMP:
-            return std::make_unique<SparkSetAggAggregate<Timestamp>>(
-                resultType);
-          case TypeKind::VARBINARY:
-            [[fallthrough]];
-          case TypeKind::VARCHAR:
-            return std::make_unique<SparkSetAggAggregate<StringView>>(
-                resultType);
-          case TypeKind::ARRAY:
-            [[fallthrough]];
-          case TypeKind::ROW:
-            return std::make_unique<SparkSetAggAggregate<ComplexType>>(
-                resultType);
-          case TypeKind::UNKNOWN:
-            return std::make_unique<SparkSetAggAggregate<UnknownValue>>(
-                resultType);
-          default:
-            VELOX_UNSUPPORTED(
-                "Unsupported type {}", TypeKindName::toName(typeKind));
-        }
+        const TypePtr& inputType = argTypes[0];
+        return createSetAgg(inputType->kind(), inputType, resultType);
       },
       {.ignoreDuplicates = true},
       withCompanionFunctions,

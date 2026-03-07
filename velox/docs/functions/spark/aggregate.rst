@@ -64,10 +64,15 @@ General Aggregate Functions
     behavior). In this mode, an all-null input produces an array of nulls
     instead of an empty array.
 
-.. spark:function:: collect_set(x) -> array<[same as x]>
+.. spark:function:: collect_set(x, ignoreNulls) -> array<[same as x]>
 
-    Returns an array consisting of all unique values from the input ``x`` elements excluding NULLs.
-    NaN values are considered distinct. Returns empty array if input is empty or all NULL.
+    Returns an array consisting of all unique values from the input ``x`` elements.
+    When ``ignoreNulls`` is ``true``, null inputs are excluded and an all-null
+    input returns an empty array. NaN values are considered distinct.
+
+    When ``ignoreNulls`` is set to ``false`` (RESPECT NULLS), null values are
+    included in the result set. In this mode, an all-null input produces an
+    array containing a single null instead of an empty array.
 
     Example::
 
