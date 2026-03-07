@@ -1187,6 +1187,10 @@ bool isSupportedBasicType(const TypePtr& type) {
 } // namespace
 
 bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
+  if (other->isDecimal()) {
+    return false;
+  }
+
   if (isSupportedBasicType(other)) {
     return true;
   }
