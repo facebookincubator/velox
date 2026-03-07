@@ -349,6 +349,10 @@ Mathematical Functions
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
 
+    For integral types, when ``x`` is the minimum value of its type, returns
+    the same value as ``x`` following the behavior when Spark ANSI mode is
+    disabled, and throws an exception when Spark ANSI mode is enabled.
+
 .. spark:function:: unhex(x) -> varbinary
 
     Converts hexadecimal varchar ``x`` to varbinary.
