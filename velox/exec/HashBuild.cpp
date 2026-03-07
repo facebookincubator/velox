@@ -462,9 +462,22 @@ void HashBuild::addInput(RowVectorPtr input) {
     }
   }
 
-  for (auto i = 0; i < dependentChannels_.size(); ++i) {
-    decoders_[i]->decode(
-        *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
+  // When spilling is active, all rows will be spilled and we never reach hash
+  // table row insertion. Skip decoding dependent columns unless they are needed
+  // by the anti-join null filter below. We still must call loadedVector() to
+  // materialize any lazy vectors since the spill serializer reads them
+  //directly.
+  const bool isSpilling =
+      canSpill() && spiller_ != nullptr && spiller_->spillTriggered();
+  if (!isSpilling || needsDependentDecodeForAntiJoinFilter()) {
+    for (auto i = 0; i < dependentChannels_.size(); ++i) {
+      decoders_[i]->decode(
+          *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
+    }
+  } else {
+    for (const auto channel : dependentChannels_) {
+      input->childAt(channel)->loadedVector();
+    }
   }
 
   if (isAntiJoin(joinType_) && joinNode_->filter()) {
