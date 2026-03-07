@@ -70,7 +70,8 @@ std::unique_ptr<dwio::common::FileSink> createHiveFileSink(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     memory::MemoryPool* sinkPool,
     io::IoStatistics* ioStats,
-    IoStats* fileSystemStats) {
+    IoStats* fileSystemStats,
+    const std::unordered_map<std::string, std::string>& storageParameters) {
   return dwio::common::FileSink::create(
       path,
       {
@@ -81,6 +82,7 @@ std::unique_ptr<dwio::common::FileSink> createHiveFileSink(
           .metricLogger = dwio::common::MetricsLog::voidLog(),
           .stats = ioStats,
           .fileSystemStats = fileSystemStats,
+          .storageParameters = storageParameters,
       });
 }
 
@@ -430,7 +432,8 @@ HiveInsertTableHandle::HiveInsertTableHandle(
     // if there's no data. This is useful when the table is bucketed, but the
     // engine handles ensuring a 1 to 1 mapping from task to bucket.
     const bool ensureFiles,
-    std::shared_ptr<const FileNameGenerator> fileNameGenerator)
+    std::shared_ptr<const FileNameGenerator> fileNameGenerator,
+    const std::unordered_map<std::string, std::string>& storageParameters)
     : inputColumns_(std::move(inputColumns)),
       locationHandle_(std::move(locationHandle)),
       storageFormat_(storageFormat),
@@ -440,6 +443,7 @@ HiveInsertTableHandle::HiveInsertTableHandle(
       writerOptions_(writerOptions),
       ensureFiles_(ensureFiles),
       fileNameGenerator_(std::move(fileNameGenerator)),
+      storageParameters_(storageParameters),
       partitionChannels_(computePartitionChannels(inputColumns_)),
       nonPartitionChannels_(computeNonPartitionChannels(inputColumns_)) {
   if (compressionKind.has_value()) {
@@ -1077,7 +1081,8 @@ std::unique_ptr<dwio::common::Writer> HiveDataSink::createWriterForIndex(
           hiveConfig_,
           info->sinkPool.get(),
           ioStats_[writerIndex].get(),
-          fileSystemStats_.get()),
+          fileSystemStats_.get(),
+          insertTableHandle_->storageParameters()),
       options);
   return maybeCreateBucketSortWriter(writerIndex, std::move(writer));
 }
@@ -1369,6 +1374,13 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
     params[key] = value;
   }
   obj["serdeParameters"] = params;
+
+  folly::dynamic storageParams = folly::dynamic::object;
+  for (const auto& [key, value] : storageParameters_) {
+    storageParams[key] = value;
+  }
+  obj["storageParameters"] = storageParams;
+
   obj["ensureFiles"] = ensureFiles_;
   obj["fileNameGenerator"] = fileNameGenerator_->serialize();
   return obj;
@@ -1400,6 +1412,13 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
     serdeParameters.emplace(pair.first.asString(), pair.second.asString());
   }
 
+  std::unordered_map<std::string, std::string> storageParameters;
+  if (obj.count("storageParameters") > 0) {
+    for (const auto& pair : obj["storageParameters"].items()) {
+      storageParameters.emplace(pair.first.asString(), pair.second.asString());
+    }
+  }
+
   bool ensureFiles = obj["ensureFiles"].asBool();
 
   auto fileNameGenerator =
@@ -1413,7 +1432,8 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
       serdeParameters,
       nullptr, // writerOptions is not serializable
       ensureFiles,
-      fileNameGenerator);
+      fileNameGenerator,
+      storageParameters);
 }
 
 void HiveInsertTableHandle::registerSerDe() {
