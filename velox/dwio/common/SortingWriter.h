@@ -42,7 +42,13 @@ class SortingWriter : public Writer {
   /// be flushed.
   void flush() override;
 
+  /// Closes the writer. Returns file metadata, or null if no metadata is
+  /// available (e.g. for an empty file).
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   void close() override;
+#else
+  std::unique_ptr<FileMetadata> close() override;
+#endif
 
   void abort() override;
 
