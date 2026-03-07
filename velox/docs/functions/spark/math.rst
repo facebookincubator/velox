@@ -349,6 +349,11 @@ Mathematical Functions
 
     Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
 
+    For integral types, when ``spark.ansi.enabled`` is true, throws an
+    arithmetic error if `x` is the minimum value of its type (e.g., -128 for
+    tinyint). When ``spark.ansi.enabled`` is false, returns the minimum value
+    unchanged.
+
 .. spark:function:: unhex(x) -> varbinary
 
     Converts hexadecimal varchar ``x`` to varbinary.
