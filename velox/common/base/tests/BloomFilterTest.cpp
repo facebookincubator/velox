@@ -147,3 +147,29 @@ TEST_F(BloomFilterTest, optimalNumOfBitsWithMaxItems) {
   EXPECT_EQ(
       BloomFilter<>::optimalNumOfBits(10'000'000L, kMaxNumItems), 72'984'408);
 }
+
+TEST_F(BloomFilterTest, bloomFilterView) {
+  constexpr int32_t kSize = 1024;
+  BloomFilter bloom;
+  bloom.reset(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    bloom.insert(folly::hasher<int32_t>()(i));
+  }
+
+  std::string serializedBloom;
+  serializedBloom.resize(bloom.serializedSize());
+  bloom.serialize(serializedBloom.data());
+
+  // Creates Bloom filter view from the serialized Bloom filter data.
+  BloomFilterView view(serializedBloom.data());
+  EXPECT_GT(view.size(), 0);
+
+  const uint64_t* bitsData = view.bitsData();
+  EXPECT_NE(bitsData, nullptr);
+
+  // Tests consistency with BloomFilter::mayContain.
+  for (auto i = 0; i < kSize * 5; ++i) {
+    uint64_t hash = folly::hasher<int32_t>()(i);
+    EXPECT_EQ(view.mayContain(hash), bloom.mayContain(hash));
+  }
+}
