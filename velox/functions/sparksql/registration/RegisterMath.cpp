@@ -101,11 +101,25 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "rand", prefix + "random"});
   registerFunction<SignFunction, double, double>({prefix + "sign"});
 
-  // Operators.
-  registerBinaryNumeric<PlusFunction>({prefix + "add"});
-  registerBinaryNumeric<MinusFunction>({prefix + "subtract"});
-  registerBinaryNumeric<MultiplyFunction>({prefix + "multiply"});
-  registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
+  // Operators - using Spark-specific ANSI-aware functions.
+  registerBinaryNumeric<sparksql::AddFunction>({prefix + "add"});
+  registerBinaryNumeric<sparksql::SubtractFunction>({prefix + "subtract"});
+  registerBinaryNumeric<sparksql::MultiplyFunction>({prefix + "multiply"});
+  // Floating point division (returns NULL on division by zero)
+  registerFunction<sparksql::DivideFunction, double, double, double>(
+      {prefix + "divide"});
+  registerFunction<sparksql::DivideFunction, float, float, float>(
+      {prefix + "divide"});
+
+  // Integer division with ANSI support
+  registerFunction<sparksql::IntegerDivideFunction, int8_t, int8_t, int8_t>(
+      {prefix + "divide"});
+  registerFunction<sparksql::IntegerDivideFunction, int16_t, int16_t, int16_t>(
+      {prefix + "divide"});
+  registerFunction<sparksql::IntegerDivideFunction, int32_t, int32_t, int32_t>(
+      {prefix + "divide"});
+  registerFunction<sparksql::IntegerDivideFunction, int64_t, int64_t, int64_t>(
+      {prefix + "divide"});
   registerBinaryNumeric<RemainderFunction>({prefix + "remainder"});
   registerBinaryIntegralWithTReturn<IntegralDivideFunction, int64_t>(
       {prefix + "div"});
@@ -118,6 +132,36 @@ void registerMathFunctions(const std::string& prefix) {
       UnaryMinusFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "unaryminus"});
+
+  // Interval arithmetic with ANSI support
+  registerFunction<
+      sparksql::IntervalDayTimeUnaryMinusFunction,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "unaryminus"});
+  registerFunction<
+      sparksql::IntervalYearMonthUnaryMinusFunction,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "unaryminus"});
+  registerFunction<
+      sparksql::IntervalDayTimeAddFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "add"});
+  registerFunction<
+      sparksql::IntervalYearMonthAddFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "add"});
+  registerFunction<
+      sparksql::IntervalDayTimeSubtractFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "subtract"});
+  registerFunction<
+      sparksql::IntervalYearMonthSubtractFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "subtract"});
 
   registerDecimalAdd(prefix);
   registerDecimalSubtract(prefix);
