@@ -1588,6 +1588,15 @@ class PlanBuilder {
       const std::vector<std::string>& distinctKeys,
       std::string errorMessage);
 
+  /// Add a MarkSortedNode to mark rows indicating sortedness.
+  /// @param markerKey Name of output marker column (boolean).
+  /// @param sortingKeys List of columns used for sorting.
+  /// @param sortingOrders Sort orders for each sorting key.
+  PlanBuilder& markSorted(
+      const std::string& markerKey,
+      const std::vector<std::string>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders);
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.
