@@ -119,13 +119,11 @@ RowVectorPtr TopN::getOutput() {
   auto result = BaseVector::create<RowVector>(
       outputType_, numRowsToReturn, operatorCtx_->pool());
 
-  for (auto i = 0; i < outputType_->size(); ++i) {
-    data_->extractColumn(
-        rows_.data() + numRowsReturned_,
-        numRowsToReturn,
-        i,
-        result->childAt(i));
-  }
+  data_->extractColumns(
+      rows_.data() + numRowsReturned_,
+      numRowsToReturn,
+      outputType_->size(),
+      result);
   numRowsReturned_ += numRowsToReturn;
   finished_ = (numRowsReturned_ == rows_.size());
   return result;

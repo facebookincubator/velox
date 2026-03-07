@@ -402,12 +402,23 @@ void SortBuffer::prepareOutput(vector_size_t batchSize) {
 
 void SortBuffer::getOutputWithoutSpill() {
   VELOX_DCHECK_EQ(numInputRows_, sortedRows_.size());
+  std::vector<column_index_t> colIndices;
+  std::vector<VectorPtr> colResults;
+  colIndices.reserve(columnMap_.size());
+  colResults.reserve(columnMap_.size());
   for (const auto& columnProjection : columnMap_) {
-    data_->extractColumn(
-        sortedRows_.data() + numOutputRows_,
-        output_->size(),
-        columnProjection.inputChannel,
-        output_->childAt(columnProjection.outputChannel));
+    colIndices.push_back(columnProjection.inputChannel);
+    colResults.push_back(output_->childAt(columnProjection.outputChannel));
+  }
+  data_->extractColumns(
+      sortedRows_.data() + numOutputRows_,
+      output_->size(),
+      colIndices,
+      0,
+      colResults);
+  int32_t idx = 0;
+  for (const auto& columnProjection : columnMap_) {
+    output_->childAt(columnProjection.outputChannel) = colResults[idx++];
   }
   numOutputRows_ += output_->size();
 }

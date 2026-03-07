@@ -62,6 +62,8 @@ RowTypePtr HashProbe::makeTableType(
 namespace {
 // Copy values from 'rows' of 'table' according to 'projections' in
 // 'result'. Reuses 'result' children where possible.
+// Uses tiled column-major extraction when there are enough rows and multiple
+// columns to improve cache locality.
 void extractColumns(
     BaseHashTable* table,
     folly::Range<char* const*> rows,
@@ -81,7 +83,38 @@ void extractColumns(
       child = BaseVector::create(resultTypes[resultChannel], rows.size(), pool);
     }
     child->resize(rows.size());
-    table->extractColumn(rows, projection.inputChannel, child);
+  }
+
+  const int32_t numRows = rows.size();
+  const int32_t numCols = projections.size();
+
+  if (numCols < 2) {
+    // Single column: no cross-column cache reuse benefit.
+    for (auto projection : projections) {
+      table->extractColumn(
+          rows,
+          projection.inputChannel,
+          resultVectors[projection.outputChannel]);
+    }
+  } else {
+    // Dynamic tile size based on row width and column count.
+    const int32_t tileSize =
+        RowContainer::computeTileSize(table->rows()->fixedRowSize());
+
+    // Tiled column-major extraction for cache efficiency.
+    for (int32_t base = 0; base < numRows; base += tileSize) {
+      const int32_t tileRows = std::min(tileSize, numRows - base);
+      for (auto projection : projections) {
+        auto& child = resultVectors[projection.outputChannel];
+        RowContainer::extractColumn(
+            rows.data() + base,
+            tileRows,
+            table->rows()->columnAt(projection.inputChannel),
+            /*columnHasNulls=*/true,
+            base,
+            child);
+      }
+    }
   }
 }
 
