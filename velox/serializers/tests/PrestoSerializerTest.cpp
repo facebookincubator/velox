@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/serializers/PrestoBatchVectorSerializer.h"
 #include "velox/serializers/PrestoVectorLexer.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 

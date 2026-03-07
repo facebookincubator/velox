@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {

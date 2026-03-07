@@ -19,6 +19,7 @@
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
