@@ -1204,6 +1204,15 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   return nullptr;
 }
 
+const char* getCustomArrowFormatString(const std::string& name) {
+  auto factory = getTypeFactory(name);
+  if (factory) {
+    return factory->getArrowFormatString();
+  }
+
+  return nullptr;
+};
+
 CustomTypeFactory::~CustomTypeFactory() = default;
 
 AbstractInputGenerator::~AbstractInputGenerator() = default;
