@@ -16,7 +16,6 @@
 #pragma once
 
 #include <folly/CPortability.h>
-#include <folly/Hash.h>
 #include <folly/Random.h>
 #include <folly/container/F14Set.h>
 #include <folly/dynamic.h>
