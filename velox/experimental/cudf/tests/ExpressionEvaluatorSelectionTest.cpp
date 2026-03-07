@@ -48,6 +48,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     pool_ = memory::memoryManager()->addLeafPool("", false);
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
+    CudfConfig::getInstance().functionEngine = "spark";
     cudf_velox::registerCudf();
     rowType_ = ROW({
         {"a", BIGINT()},

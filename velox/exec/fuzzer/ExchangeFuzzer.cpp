@@ -143,7 +143,7 @@ class ExchangeFuzzer : public VectorTestBase {
     }
     auto partialAggPlan =
         exec::test::PlanBuilder()
-            .exchange(leafPlan->outputType(), VectorSerde::Kind::kPresto)
+            .exchange(leafPlan->outputType(), "Presto")
             .partialAggregation({}, makeAggregates(rowType, 1))
             .partitionedOutput({}, 1)
             .planNode();
@@ -158,14 +158,13 @@ class ExchangeFuzzer : public VectorTestBase {
       addRemoteSplits(task, leafTaskIds);
     }
 
-    auto plan =
-        exec::test::PlanBuilder()
-            .exchange(partialAggPlan->outputType(), VectorSerde::Kind::kPresto)
-            .finalAggregation(
-                {},
-                makeAggregates(*partialAggPlan->outputType(), 0),
-                rawInputTypes)
-            .planNode();
+    auto plan = exec::test::PlanBuilder()
+                    .exchange(partialAggPlan->outputType(), "Presto")
+                    .finalAggregation(
+                        {},
+                        makeAggregates(*partialAggPlan->outputType(), 0),
+                        rawInputTypes)
+                    .planNode();
 
     try {
       // Create the Task to do the final aggregation using a TaskCursor so we
@@ -574,13 +573,13 @@ int main(int argc, char** argv) {
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+  if (!isRegisteredNamedVectorSerde("Presto")) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+  if (!isRegisteredNamedVectorSerde("CompactRow")) {
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+  if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
   exec::ExchangeSource::registerFactory(exec::test::createLocalExchangeSource);
