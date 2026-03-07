@@ -256,7 +256,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       case TypeKind::INTEGER:
         return other->isDate();
       case TypeKind::BIGINT:
-        return other->isTime();
+        return other->equivalent(*TIME());
       default:
         return false;
     }
@@ -271,7 +271,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       case TypeKind::INTEGER:
         return other->isDate();
       case TypeKind::BIGINT:
-        return other->isTime();
+        return other->equivalent(*TIME());
       default:
         return false;
     }
@@ -285,7 +285,8 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
 
-    if (input.typeKind() == TypeKind::BIGINT && input.type()->isTime()) {
+    if (input.typeKind() == TypeKind::BIGINT &&
+        input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
       const auto* sessionTimeZone = getTimeZoneFromConfig(config);
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
@@ -368,7 +369,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       VELOX_CHECK(resultType->isDate());
       castToDate(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::BIGINT) {
-      VELOX_CHECK(resultType->isTime());
+      VELOX_CHECK(resultType->equivalent(*TIME()));
       castToTime(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(

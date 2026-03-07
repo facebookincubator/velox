@@ -133,6 +133,7 @@ template <>
   }
 
   if (type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     // TIME is stored as milliseconds since midnight in Velox.
     // DuckDB TIME is stored as microseconds since midnight.
     const auto timeMillis = vector->as<SimpleVector<int64_t>>()->valueAt(index);
@@ -457,6 +458,7 @@ std::vector<MaterializedRow> materialize(
                 dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
         row.push_back(value);
       } else if (type->isTime()) {
+        VELOX_DCHECK(type->equivalent(*TIME()));
         // DuckDB TIME is in microseconds, Velox TIME is in milliseconds.
         auto value = variant(
             dataChunk->GetValue(j, i).GetValue<::duckdb::dtime_t>().micros /
