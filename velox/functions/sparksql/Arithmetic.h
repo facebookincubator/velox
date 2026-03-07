@@ -143,18 +143,40 @@ struct PModFloatFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct UnaryMinusFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a) {
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput& a) {
     if constexpr (std::is_integral_v<TInput>) {
-      // Avoid undefined integer overflow.
-      result = a == std::numeric_limits<TInput>::min() ? a : -a;
+      if (FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min())) {
+        if (ansiEnabled_) {
+          // In ANSI mode, returns an overflow error.
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError("Arithmetic overflow: -({}))", a);
+        }
+        // In ANSI off mode, returns the same minimum value.
+        result = a;
+        return Status::OK();
+      }
+      result = -a;
     } else {
       result = -a;
     }
-    return true;
+    return Status::OK();
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 // Floating point division - returns NULL on division by zero.

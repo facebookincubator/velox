@@ -180,6 +180,10 @@ TEST_F(RemainderTest, float) {
 class ArithmeticTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
+  std::optional<T> unaryminus(std::optional<T> arg) {
+    return evaluateOnce<T>("unaryminus(c0)", arg);
+  }
+
   std::optional<double> divide(
       std::optional<double> numerator,
       std::optional<double> denominator) {
@@ -295,6 +299,47 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   static constexpr float kInf = std::numeric_limits<float>::infinity();
   static constexpr double kInfDouble = std::numeric_limits<double>::infinity();
 };
+
+TEST_F(ArithmeticTest, UnaryMinus) {
+  EXPECT_EQ(unaryminus<int8_t>(1), -1);
+  EXPECT_EQ(unaryminus<int16_t>(2), -2);
+  EXPECT_EQ(unaryminus<int32_t>(3), -3);
+  EXPECT_EQ(unaryminus<int64_t>(4), -4);
+  EXPECT_EQ(unaryminus<float>(5), -5);
+  EXPECT_EQ(unaryminus<double>(6), -6);
+}
+
+TEST_F(ArithmeticTest, UnaryMinusOverflow) {
+  // Test unary minus with ANSI off - should return MIN_VALUE on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(unaryminus<int8_t>(INT8_MIN), INT8_MIN);
+  EXPECT_EQ(unaryminus<int16_t>(INT16_MIN), INT16_MIN);
+  EXPECT_EQ(unaryminus<int32_t>(INT32_MIN), INT32_MIN);
+  EXPECT_EQ(unaryminus<int64_t>(INT64_MIN), INT64_MIN);
+  EXPECT_EQ(unaryminus<float>(-kInf), kInf);
+  EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
+  EXPECT_EQ(unaryminus<double>(-kInf), kInf);
+  EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+
+  // Test unary minus with ANSI on - should throw on overflow.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(
+      unaryminus<int8_t>(std::numeric_limits<int8_t>::min()),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      unaryminus<int16_t>(std::numeric_limits<int16_t>::min()),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      unaryminus<int32_t>(std::numeric_limits<int32_t>::min()),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      unaryminus<int64_t>(std::numeric_limits<int64_t>::min()),
+      "Arithmetic overflow");
+}
 
 TEST_F(ArithmeticTest, Divide) {
   // Null cases.
