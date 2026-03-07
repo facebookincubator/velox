@@ -379,16 +379,9 @@ Mathematical Functions
         SELECT CAST(99999999999999999999999999999999.99998 as DECIMAL(38, 6)) - CAST(-0.00001 as DECIMAL(38, 5)); -- DECIMAL(38, 6) 99999999999999999999999999999999.999990
         SELECT CAST(-99999999999999999999999999999999990.0 as DECIMAL(38, 3)) - CAST(0.00001 as DECIMAL(38, 7)); -- DECIMAL(38, 6) NULL
 
-.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
+.. spark:function:: unaryminus(x) -> [same as x]
 
-    Returns the negative of ``x``. For integral types, negating the minimum value
-    returns the same minimum value when ANSI mode is disabled; throws an error otherwise.
-
-    Corresponds to Spark's unary operator ``-``. ::
-
-        SELECT -42; -- -42
-        SELECT -(-128); -- -128 (ANSI OFF) / ERROR (ANSI ON) for TINYINT
-        SELECT -(-2147483648); -- -2147483648 (ANSI OFF) / ERROR (ANSI ON) for INTEGER
+    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
 
 .. spark:function:: unhex(x) -> varbinary
 
