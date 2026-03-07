@@ -20,7 +20,7 @@
 
 namespace facebook::velox::exec::test {
 
-class FloorAndRoundArgTypesGenerator : public fuzzer::ArgTypesGenerator {
+class FloorCeilRoundArgTypesGenerator : public fuzzer::ArgTypesGenerator {
  public:
   std::vector<TypePtr> generateArgs(
       const exec::FunctionSignature& signature,

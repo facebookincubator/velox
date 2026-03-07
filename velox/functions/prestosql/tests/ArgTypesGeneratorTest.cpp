@@ -15,7 +15,7 @@
  */
 #include "velox/expression/fuzzer/tests/ArgTypesGeneratorTestUtils.h"
 #include "velox/functions/prestosql/fuzzer/DivideArgTypesGenerator.h"
-#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
@@ -93,7 +93,7 @@ TEST_F(ArgTypesGeneratorTest, divide) {
 TEST_F(ArgTypesGeneratorTest, floor) {
   const auto& signature = getOnlySignature("floor");
   const auto generator =
-      std::make_shared<exec::test::FloorAndRoundArgTypesGenerator>();
+      std::make_shared<exec::test::FloorCeilRoundArgTypesGenerator>();
 
   assertReturnType(generator, signature, DECIMAL(10, 0));
   assertReturnType(generator, signature, DECIMAL(18, 0));
@@ -107,7 +107,7 @@ TEST_F(ArgTypesGeneratorTest, round) {
   VELOX_CHECK_EQ(signatures.size(), 2);
   bool isSingleArg = signatures[0]->argumentTypes().size() == 1;
   const auto generator =
-      std::make_shared<exec::test::FloorAndRoundArgTypesGenerator>();
+      std::make_shared<exec::test::FloorCeilRoundArgTypesGenerator>();
 
   const auto& singleArgSignature =
       isSingleArg ? *signatures[0] : *signatures[1];
