@@ -39,6 +39,7 @@ add_executable(
   ArrayMinMaxByTest.cpp
   ArrayNGramsTest.cpp
   ArrayNoneMatchTest.cpp
+  ArraySplitIntoChunksTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
   ArrayRemoveTest.cpp
