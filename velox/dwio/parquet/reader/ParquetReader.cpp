@@ -1211,12 +1211,15 @@ class ParquetRowReader::Impl {
         options_.timestampPrecision());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
+    columnReaderOptions_ =
+        dwio::common::makeColumnReaderOptions(readerBase_->options());
     columnReader_ = ParquetColumnReader::build(
         columnReaderOptions_,
         requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
-        *options_.scanSpec());
+        *options_.scanSpec(),
+        pool_);
     columnReader_->setIsTopLevel();
 
     filterRowGroups();
@@ -1226,9 +1229,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
   void filterRowGroups() {

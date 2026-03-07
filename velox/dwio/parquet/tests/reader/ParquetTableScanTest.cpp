@@ -1414,6 +1414,201 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
   assertEqualVectors(rows->childAt(2), nullVector);
 }
 
+TEST_F(ParquetTableScanTest, structMatchByName) {
+  const auto assertSelectUseColumnNames =
+      [this](
+          const std::string& filePath,
+          const RowTypePtr& outputType,
+          const std::string& sql,
+          const std::string& remainingFilter = "") {
+        const auto plan =
+            PlanBuilder().tableScan(outputType, {}, remainingFilter).planNode();
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                HiveConfig::kParquetUseColumnNamesSession,
+                "true")
+            .split(makeSplit(filePath))
+            .assertResults(sql);
+      };
+
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  auto vector = makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  WriterOptions options;
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  loadData(asRowType(vector->type()), vector);
+  assertSelect(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      "SELECT id, name, address from tmp");
+
+  // Add one non-existing subfield 'middle' to the 'name' field and rename filed
+  // 'address'.
+  auto rowType =
+      ROW({"id", "name", "email"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, ('Janet', null, 'Jones'), null");
+
+  // Filter pushdown on the non-existing field.
+  assertSelectUseColumnNames(
+      file->getPath(),
+      rowType,
+      "SELECT * from tmp where false",
+      "not(is_null(name.middle))");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Filter pushdown on the NULL subfield.
+  assertSelectUseColumnNames(
+      file->getPath(),
+      rowType,
+      "SELECT * from tmp where false",
+      "not(is_null(name))");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Filter pushdown on the non-existing subfield.
+  assertSelectUseColumnNames(
+      file->getPath(),
+      rowType,
+      "SELECT * from tmp where false",
+      "not(is_null(name.full))");
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Case sensitivity when matching by name.
+  vector = makeRowVector(
+      {"id", "name", "address"},
+      {id,
+       makeRowVector(
+           {"FIRST", "LAST"},
+           {
+               makeFlatVector<std::string>({"Janet"}),
+               makeFlatVector<std::string>({"Jones"}),
+           }),
+       address});
+  file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectUseColumnNames(
+      file->getPath(), rowType, "SELECT 2, null, '567 Maple Drive'");
+
+  // Case insensitivity when matching by name and reading as lower case.
+  auto plan = PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .connectorSessionProperty(
+          kHiveConnectorId, HiveConfig::kParquetUseColumnNamesSession, "true")
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .split(makeSplit(file->getPath()))
+      .assertResults("SELECT 2, ('Janet', null, 'Jones'), '567 Maple Drive'");
+}
+
+TEST_F(ParquetTableScanTest, structMatchByIndex) {
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  const auto vector =
+      makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  WriterOptions options;
+  const auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  loadData(asRowType(vector->type()), vector);
+  assertSelect(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      "SELECT id, name, address from tmp");
+
+  // Add one nonexisting subfield 'middle' to the 'name' field.
+  auto rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectWithDataColumns(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones', null), '567 Maple Drive'");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  assertSelectWithDataColumns(
+      {makeSplit(file->getPath())},
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones'), '567 Maple Drive'");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  loadData(rowType, vector);
+  EXPECT_THROW(
+      assertSelectWithDataColumns(
+          {makeSplit(file->getPath())}, {"id", "name", "address"}, rowType, ""),
+      VeloxRuntimeError);
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  loadData(rowType, vector);
+  EXPECT_THROW(
+      assertSelectWithDataColumns(
+          {makeSplit(file->getPath())}, {"id", "name", "address"}, rowType, ""),
+      VeloxRuntimeError);
+}
+
 TEST_F(ParquetTableScanTest, deltaByteArray) {
   auto a = makeFlatVector<StringView>({"axis", "axle", "babble", "babyhood"});
   auto expected = makeRowVector({"a"}, {a});
