@@ -18,3 +18,19 @@ add_executable(velox_time_test CpuWallTimerTest.cpp)
 target_link_libraries(velox_time_test PRIVATE velox_time glog::glog GTest::gtest GTest::gtest_main)
 
 gtest_add_tests(velox_time_test "" AUTO)
+
+add_executable(velox_hierarchical_timer_test HierarchicalTimerTest.cpp)
+
+target_link_libraries(
+  velox_hierarchical_timer_test
+  PRIVATE
+    velox_hierarchical_timer
+    velox_exception
+    velox_common_base
+    fmt::fmt
+    glog::glog
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_add_tests(velox_hierarchical_timer_test "" AUTO)
