@@ -14,13 +14,18 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/copy.hpp>
 #include <cudf/detail/gather.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
+
+#include <algorithm>
 
 namespace facebook::velox::cudf_velox {
 CudfTopN::CudfTopN(
@@ -39,7 +44,8 @@ CudfTopN::CudfTopN(
           fmt::format("[{}]", topNNode->id())),
       count_(topNNode->count()),
       topNNode_(topNNode),
-      kBatchSize_(CudfConfig::getInstance().topNBatchSize) {
+      kBatchSize_(CudfConfig::getInstance().topNBatchSize),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   const auto numColumns{outputType_->children().size()};
   const auto numSortingKeys{topNNode->sortingKeys().size()};
   std::vector<bool> isSortingKey(numColumns);
@@ -72,11 +78,21 @@ CudfVectorPtr CudfTopN::mergeTopK(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   std::vector<cudf::table_view> tableViews;
+  std::vector<rmm::cuda_stream_view> inputStreams;
+  tableViews.reserve(topNBatches.size());
+  inputStreams.reserve(topNBatches.size());
   for (const auto& batch : topNBatches) {
+    if (!batch) {
+      continue;
+    }
     tableViews.push_back(batch->getTableView());
+    inputStreams.push_back(batch->stream());
   }
+  cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
+  // Ensure input-stream deallocations don't race with merge stream.
+  streamsWaitForStream(*cudaEvent_, inputStreams, stream);
   // slice it
   auto topk =
       cudf::split(
@@ -117,7 +133,7 @@ CudfVectorPtr CudfTopN::getTopKBatch(CudfVectorPtr cudfInput, int32_t k) {
     return nullptr;
   }
   auto stream = cudfInput->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto values = cudfInput->getTableView();
   auto result = getTopK(values, k, stream, mr);
   auto const size = result->num_rows();
@@ -150,7 +166,7 @@ void CudfTopN::addInput(RowVectorPtr input) {
       });
   if (topNBatches_.size() >= kBatchSize_ and totalSize >= count_) {
     auto stream = cudfGlobalStreamPool().get_stream();
-    auto mr = cudf::get_current_device_resource_ref();
+    auto mr = get_output_mr();
 
     auto result = mergeTopK(topNBatches_, count_, stream, mr);
     topNBatches_.clear();
@@ -175,7 +191,7 @@ RowVectorPtr CudfTopN::getOutput() {
   }
 
   auto stream = topNBatches_[0]->stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   auto result = mergeTopK(topNBatches_, count_, stream, mr);
   topNBatches_.clear();
   queuedInputBytes_ = 0;

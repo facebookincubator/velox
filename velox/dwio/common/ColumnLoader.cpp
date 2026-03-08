@@ -56,7 +56,7 @@ RowSet read(
 
   structReader->advanceFieldReader(fieldReader, offset);
   fieldReader->scanSpec()->setValueHook(hook);
-  fieldReader->read(offset, effectiveRows, incomingNulls);
+  fieldReader->readWithTiming(offset, effectiveRows, incomingNulls);
   if (fieldReader->fileType().type()->isRow() ||
       fieldReader->scanSpec()->isFlatMapAsStruct()) {
     // 'fieldReader_' may itself produce LazyVectors. For this it must have its

@@ -75,6 +75,10 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& rowType,
       const std::vector<PartitionField>& partitionFields);
 
+  void setConnectorSessionProperty(
+      const std::string& key,
+      const std::string& value);
+
   /// Extracts partition key-value pairs from a file path.
   /// Returns a map where keys are partition column names and values are
   /// partition values (std::nullopt for null values).

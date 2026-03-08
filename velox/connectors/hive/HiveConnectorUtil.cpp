@@ -625,7 +625,6 @@ void configureReaderOptions(
   readerOptions.setUseColumnNamesForColumnMapping(
       useColumnNamesForColumnMapping);
   readerOptions.setFileSchema(fileSchema);
-  readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
   readerOptions.setCacheable(hiveSplit->cacheable);
@@ -638,6 +637,30 @@ void configureReaderOptions(
       connectorQueryCtx->adjustTimestampToTimezone());
   readerOptions.setSelectiveNimbleReaderEnabled(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
+  readerOptions.setFileMetadataCacheEnabled(
+      hiveConfig->fileMetadataCacheEnabled(sessionProperties));
+
+  // Set footer speculative IO size based on file format.
+  switch (hiveSplit->fileFormat) {
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC:
+      readerOptions.setFooterEstimatedSize(
+          hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+    case dwio::common::FileFormat::PARQUET:
+      readerOptions.setFooterEstimatedSize(
+          hiveConfig->parquetFooterSpeculativeIoSize(sessionProperties));
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      readerOptions.setFooterEstimatedSize(
+          hiveConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
+      break;
+    default:
+      // Use ORC default for unknown formats.
+      readerOptions.setFooterEstimatedSize(
+          hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+  }
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
@@ -686,6 +709,8 @@ void configureRowReaderOptions(
         hiveConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         hiveConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setCollectColumnStats(
+        hiveConfig->readerCollectColumnStats(sessionProperties));
   }
   rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }

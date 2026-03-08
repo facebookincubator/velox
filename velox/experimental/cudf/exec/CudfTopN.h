@@ -23,6 +23,8 @@
 
 namespace facebook::velox::cudf_velox {
 
+class CudaEvent;
+
 class CudfTopN : public exec::Operator, public NvtxHelper {
  public:
   CudfTopN(
@@ -76,5 +78,6 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
   int32_t kBatchSize_;
   bool finished_ = false;
   uint64_t queuedInputBytes_{0};
+  std::unique_ptr<CudaEvent> cudaEvent_;
 };
 } // namespace facebook::velox::cudf_velox
