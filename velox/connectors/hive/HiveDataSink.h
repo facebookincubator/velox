@@ -770,7 +770,7 @@ class HiveDataSink : public DataSink {
   /// Rotates the writer at the given index to a new file. This is called when
   /// the current file exceeds maxTargetFileBytes_. The old writer is closed
   /// and a new writer is created for the same partition/bucket.
-  void rotateWriter(size_t index);
+  virtual void rotateWriter(size_t index);
 
   /// Finalizes the current file for the writer at the given index.
   /// Captures file stats and adds the file info to writtenFiles.

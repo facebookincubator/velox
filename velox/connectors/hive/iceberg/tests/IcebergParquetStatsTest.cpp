@@ -417,12 +417,13 @@ TEST_F(IcebergParquetStatsTest, boolean) {
 }
 
 TEST_F(IcebergParquetStatsTest, empty) {
-  constexpr vector_size_t size = 0;
-
-  const auto& stats = writeDataAndGetAllStats(makeRowVector(
-      {makeFlatVector<int32_t>(0), makeFlatVector<StringView>(0)}));
-  EXPECT_EQ(stats[0]->numRecords, size);
-  ASSERT_TRUE(stats[0]->columnStats.empty());
+  const auto outputDir = TempDirectoryPath::create();
+  auto dataSink = createDataSinkAndAppendData(
+      {makeRowVector(
+          {makeFlatVector<int32_t>(0), makeFlatVector<StringView>(0)})},
+      outputDir->getPath());
+  auto commitTasks = dataSink->close();
+  EXPECT_TRUE(commitTasks.empty());
 }
 
 TEST_F(IcebergParquetStatsTest, nullValues) {

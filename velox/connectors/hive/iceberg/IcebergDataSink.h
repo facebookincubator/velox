@@ -200,6 +200,8 @@ class IcebergDataSink : public HiveDataSink {
   // Returns nullptr for null partition values.
   folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
 
+  void rotateWriter(size_t index) override;
+
   void closeInternal() override;
 
   // Iceberg partition specification defining how the table is partitioned.
@@ -249,14 +251,16 @@ class IcebergDataSink : public HiveDataSink {
   // serialization.
   std::vector<folly::dynamic> commitPartitionValue_;
 
-  // Statistics for all data files written by this sink. These statistics
-  // are populated during closeInternal(). These metrics are subsequently used
+  // Statistics for all data files written by this sink, organized by writer
+  // index and file index within each writer. These statistics are populated
+  // during rotateWriter() (for rotated files) and during closeInternal()
+  // (for the final file of each writer). These metrics are subsequently used
   // to construct Iceberg commit messages.
-  // Multiple entries are saved because a single write session from
-  // appendData can generate multiple data files if the input row batch spans
-  // multiple partitions or if file rotation is triggered (e.g., reaching file
-  // size limits). Each entry corresponds to one individual data file.
-  std::vector<IcebergDataFileStatisticsPtr> dataFileStats_;
+  // Outer vector: indexed by writer index (same as writerInfo_).
+  // Inner vector: one entry per file written by that writer (including
+  // rotated files and the final file). Each entry corresponds to one
+  // individual data file.
+  std::vector<std::vector<IcebergDataFileStatisticsPtr>> dataFileStats_;
 
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
 

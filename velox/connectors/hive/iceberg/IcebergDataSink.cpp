@@ -337,13 +337,16 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
 
     // Following metadata (json format) is consumed by Presto CommitTaskData.
     // It contains the minimal subset of metadata.
-    for (const auto& fileInfo : writerInfo->writtenFiles) {
+    VELOX_CHECK_EQ(writerInfo->writtenFiles.size(), dataFileStats_[i].size());
+    for (auto fileIdx = 0; fileIdx < writerInfo->writtenFiles.size();
+         ++fileIdx) {
+      const auto& fileInfo = writerInfo->writtenFiles[fileIdx];
       // clang-format off
       folly::dynamic commitData = folly::dynamic::object(
         "path", (fs::path(writerInfo->writerParameters.targetDirectory()) /
                       fileInfo.targetFileName).string())
         ("fileSizeInBytes", fileInfo.fileSize)
-        ("metrics", dataFileStats_[i]->toJson())
+        ("metrics", dataFileStats_[i][fileIdx]->toJson())
         ("partitionSpecJson",
           icebergInsertTableHandle_->partitionSpec() ?
             icebergInsertTableHandle_->partitionSpec()->specId : 0)
@@ -445,28 +448,78 @@ folly::dynamic IcebergDataSink::makeCommitPartitionValue(
   return partitionValues;
 }
 
+void IcebergDataSink::rotateWriter(size_t index) {
+  VELOX_CHECK_LT(index, writers_.size());
+  VELOX_CHECK_NOT_NULL(writers_[index]);
+
+  // Ensure dataFileStats_ has an entry for this writer index.
+  if (dataFileStats_.size() <= index) {
+    dataFileStats_.resize(index + 1);
+  }
+
+  // Collect Iceberg parquet stats from the writer BEFORE closing it.
+  // The base rotateWriter() will call writers_[index]->close() which returns
+  // file metadata, but the base class discards that return value. We need to
+  // close the writer ourselves to capture the metadata, then prevent double
+  // close by resetting the writer.
+  {
+    memory::NonReclaimableSectionGuard nonReclaimableGuard(
+        writerInfo_[index]->nonReclaimableSectionHolder.get());
+    auto metadata = writers_[index]->close();
+    bool fileAdded = getCurrentFileBytes(index) > 0;
+
+    // Finalize file info (capture file size, add to writtenFiles).
+    finalizeWriterFile(index);
+
+#ifdef VELOX_ENABLE_PARQUET
+    if (fileAdded) {
+      dataFileStats_[index].emplace_back(
+          parquetStatsCollector_->aggregate(std::move(metadata)));
+    }
+#endif
+  }
+
+  // Release old writer. The new writer will be created lazily on the next
+  // write call.
+  writers_[index].reset();
+
+  ++writerInfo_[index]->fileSequenceNumber;
+}
+
 void IcebergDataSink::closeInternal() {
   VELOX_CHECK_NE(state_, State::kRunning);
   VELOX_CHECK_NE(state_, State::kFinishing);
 
   if (state_ == State::kClosed) {
-    dataFileStats_.reserve(writers_.size());
+    // Ensure dataFileStats_ has entries for all writers.
+    dataFileStats_.resize(writers_.size());
+
     for (auto i = 0; i < writers_.size(); ++i) {
       if (writers_[i] == nullptr) {
+        // Writer was rotated and is null. Stats for rotated files were already
+        // collected in rotateWriter(). No final file to close.
         continue;
       }
       memory::NonReclaimableSectionGuard nonReclaimableGuard(
           writerInfo_[i]->nonReclaimableSectionHolder.get());
 
-#ifdef VELOX_ENABLE_PARQUET
-      dataFileStats_.emplace_back(
-          parquetStatsCollector_->aggregate(writers_[i]->close()));
-#endif
+      auto metadata = writers_[i]->close();
+      bool fileAdded = getCurrentFileBytes(i) > 0;
 
       finalizeWriterFile(i);
+
+#ifdef VELOX_ENABLE_PARQUET
+      if (fileAdded) {
+        dataFileStats_[i].emplace_back(
+            parquetStatsCollector_->aggregate(std::move(metadata)));
+      }
+#endif
     }
   } else {
     for (auto i = 0; i < writers_.size(); ++i) {
+      if (writers_[i] == nullptr) {
+        continue;
+      }
       memory::NonReclaimableSectionGuard nonReclaimableGuard(
           writerInfo_[i]->nonReclaimableSectionHolder.get());
       writers_[i]->abort();
