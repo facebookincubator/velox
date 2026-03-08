@@ -19,6 +19,7 @@
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
 #include <folly/Demangle.h>
+#include <folly/Hash.h>
 #include <re2/re2.h>
 
 #include <sstream>
