@@ -27,6 +27,7 @@
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/parquet/ParquetFieldId.h"
+#include "velox/dwio/parquet/writer/WriterConfig.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
@@ -110,7 +111,7 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
   std::function<bool()> lambda_;
 };
 
-struct WriterOptions : public dwio::common::WriterOptions {
+struct WriterOptions : public dwio::common::WriterOptions, public WriterConfig {
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -143,51 +144,6 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// If not provided, the field_id will be -1.
   /// The structure should match the schema hierarchy with nested children.
   std::vector<ParquetFieldId> parquetFieldIds;
-
-  // Parsing session and hive configs.
-
-  // This isn't a typo; session and hive connector config names are different
-  // ('_' vs '-').
-  static constexpr const char* kParquetSessionWriteTimestampUnit =
-      "hive.parquet.writer.timestamp_unit";
-  static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
-      "hive.parquet.writer.timestamp-unit";
-  static constexpr const char* kParquetSessionEnableDictionary =
-      "hive.parquet.writer.enable_dictionary";
-  static constexpr const char* kParquetHiveConnectorEnableDictionary =
-      "hive.parquet.writer.enable-dictionary";
-  static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
-      "hive.parquet.writer.dictionary_page_size_limit";
-  static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
-      "hive.parquet.writer.dictionary-page-size-limit";
-  static constexpr const char* kParquetSessionDataPageVersion =
-      "hive.parquet.writer.datapage_version";
-  static constexpr const char* kParquetHiveConnectorDataPageVersion =
-      "hive.parquet.writer.datapage-version";
-  static constexpr const char* kParquetSessionWritePageSize =
-      "hive.parquet.writer.page_size";
-  static constexpr const char* kParquetHiveConnectorWritePageSize =
-      "hive.parquet.writer.page-size";
-  static constexpr const char* kParquetSessionWriteBatchSize =
-      "hive.parquet.writer.batch_size";
-  static constexpr const char* kParquetHiveConnectorWriteBatchSize =
-      "hive.parquet.writer.batch-size";
-  static constexpr const char* kParquetHiveConnectorCreatedBy =
-      "hive.parquet.writer.created-by";
-
-  // Use the same property name from HiveConfig::kMaxTargetFileSize.
-  static constexpr const char* kParquetConnectorMaxTargetFileSize =
-      "max-target-file-size";
-  static constexpr const char* kParquetSessionMaxTargetFileSize =
-      "max_target_file_size";
-  // Serde parameter keys for timestamp settings. These can be set via
-  // serdeParameters map to override the default timestamp behavior.
-  // The timezone key accepts a timezone string or empty string to disable
-  // timezone conversion.
-  static constexpr const char* kParquetSerdeTimestampUnit =
-      "parquet.writer.timestamp.unit";
-  static constexpr const char* kParquetSerdeTimestampTimezone =
-      "parquet.writer.timestamp.timezone";
 
   // Process hive connector and session configs.
   void processConfigs(
