@@ -37,6 +37,11 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
 
+DEFINE_bool(
+    cudf_use_buffered_input,
+    false,
+    "Use buffered input for CudfHive connector (kUseBufferedInput).");
+
 DEFINE_uint64(
     cudf_chunk_read_limit,
     0,
@@ -76,6 +81,9 @@ void CudfTpchBenchmark::initialize() {
     // Add new values into the cudfHive configuration...
     auto cudfHiveConfigurationValues =
         std::unordered_map<std::string, std::string>();
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput] =
+            std::to_string(FLAGS_cudf_use_buffered_input);
     cudfHiveConfigurationValues
         [cudf_velox::connector::hive::CudfHiveConfig::kMaxChunkReadLimit] =
             std::to_string(FLAGS_cudf_chunk_read_limit);
@@ -154,13 +162,4 @@ CudfTpchBenchmark::listSplits(
 void CudfTpchBenchmark::shutdown() {
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
-}
-
-int main(int argc, char** argv) {
-  std::string kUsage(
-      "This program benchmarks TPC-H queries. Run 'velox_cudf_tpch_benchmark -helpon=TpchBenchmark' for available options.\n");
-  gflags::SetUsageMessage(kUsage);
-  folly::Init init{&argc, &argv, false};
-  benchmark = std::make_unique<CudfTpchBenchmark>();
-  tpchBenchmarkMain();
 }
