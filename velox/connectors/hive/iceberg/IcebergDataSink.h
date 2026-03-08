@@ -189,8 +189,8 @@ class IcebergDataSink : public HiveDataSink {
   // base HiveDataSink writer options with Iceberg-specific settings:
   // - Sets timestamp timezone to nullopt (UTC) for Iceberg compliance.
   // - Sets timestamp precision to microseconds.
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
-      const override;
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      size_t writerIndex) const override;
 
   // Extracts partition values for a specific writer to be included in the
   // commit message. Converts the transformed partition values from columnar

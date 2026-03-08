@@ -717,13 +717,12 @@ class HiveDataSink : public DataSink {
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
   // The no-argument overload uses the last writer's info (for appendWriter).
-  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
-      const;
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions() const;
 
   // Creates WriterOptions for a specific writer index. Use this overload
   // during writer rotation to ensure the correct writer's memory pool and
   // nonReclaimableSection are used.
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
       size_t writerIndex) const;
 
   // Returns the Hive partition directory name for the given partition ID.

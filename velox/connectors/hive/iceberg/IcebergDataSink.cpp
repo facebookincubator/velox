@@ -400,8 +400,8 @@ uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
 }
 
 std::shared_ptr<dwio::common::WriterOptions>
-IcebergDataSink::createWriterOptions() const {
-  auto options = HiveDataSink::createWriterOptions();
+IcebergDataSink::createWriterOptions(size_t writerIndex) const {
+  auto options = HiveDataSink::createWriterOptions(writerIndex);
   // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
   // - Timestamps must be stored with microsecond precision.
   // - Timestamps must NOT be adjusted to UTC timezone; they should be written
@@ -452,6 +452,9 @@ void IcebergDataSink::closeInternal() {
   if (state_ == State::kClosed) {
     dataFileStats_.reserve(writers_.size());
     for (auto i = 0; i < writers_.size(); ++i) {
+      if (writers_[i] == nullptr) {
+        continue;
+      }
       memory::NonReclaimableSectionGuard nonReclaimableGuard(
           writerInfo_[i]->nonReclaimableSectionHolder.get());
 
