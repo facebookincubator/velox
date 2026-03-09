@@ -672,16 +672,18 @@ int main(int argc, char** argv) {
   }
 
   for (auto& param : params) {
-    folly::addBenchmark(__FILE__, param.title, [param, &bm, &results]() {
-      std::string lastCase;
-      if (lastCase != param.title) {
-        lastCase = param.title;
-        folly::BenchmarkSuspender suspender;
-        bm->makeData(param);
-      }
-      combineResults(results, bm->run());
-      return 1;
-    });
+    folly::addBenchmark(
+        __FILE__,
+        param.title,
+        [param, &bm, &results, initialized = std::make_shared<bool>(false)]() {
+          if (!*initialized) {
+            folly::BenchmarkSuspender suspender;
+            bm->makeData(param);
+            *initialized = true;
+          }
+          combineResults(results, bm->run());
+          return 1;
+        });
   }
   folly::runBenchmarks();
   std::cout << "*** Results:" << std::endl;
