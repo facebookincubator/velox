@@ -15,6 +15,10 @@
  */
 
 #include "velox/dwio/parquet/writer/Writer.h"
+
+#include <algorithm>
+#include <exception>
+
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
@@ -282,97 +286,67 @@ std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
   return newField;
 }
 
-std::optional<TimestampPrecision> getTimestampUnit(
-    const config::ConfigBase& config,
-    const char* configKey) {
-  if (const auto unit = config.get<uint8_t>(configKey)) {
-    VELOX_CHECK(
-        unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
-        "Invalid timestamp unit: {}",
-        unit.value());
-    return std::optional(static_cast<TimestampPrecision>(unit.value()));
+std::optional<TimestampPrecision> toTimestampPrecision(
+    std::optional<uint8_t> unit) {
+  if (!unit) {
+    return std::nullopt;
   }
-  return std::nullopt;
+  VELOX_CHECK(
+      *unit == 3 /*milli*/ || *unit == 6 /*micro*/ || *unit == 9 /*nano*/,
+      "Invalid timestamp unit: {}",
+      *unit);
+  return static_cast<TimestampPrecision>(*unit);
 }
 
 // Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
 // "6" (micro), or "9" (nano).
 TimestampPrecision stringToTimestampPrecision(const std::string& value) {
-  auto unit = folly::to<uint8_t>(value);
-  VELOX_CHECK(
-      unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
-      "Invalid timestamp unit: {}",
-      unit);
-  return static_cast<TimestampPrecision>(unit);
+  return toTimestampPrecision(std::optional{folly::to<uint8_t>(value)}).value();
 }
 
-std::optional<std::string> getTimestampTimeZone(
-    const config::ConfigBase& config,
-    const char* configKey) {
-  if (const auto timezone = config.get<std::string>(configKey)) {
-    return timezone.value();
+std::optional<bool> isParquetV2(std::optional<std::string> version) {
+  if (!version) {
+    return std::nullopt;
   }
-  return std::nullopt;
+  if (version == "V1") {
+    return false;
+  }
+  if (version == "V2") {
+    return true;
+  }
+  VELOX_FAIL("Unsupported parquet datapage version {}", *version);
 }
 
-std::optional<bool> isParquetEnableDictionary(
-    const config::ConfigBase& config,
-    const char* configKey) {
+std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
+  if (!pageSize) {
+    return std::nullopt;
+  }
+  return config::toCapacity(*pageSize, config::CapacityUnit::BYTE);
+}
+
+std::optional<bool> toParquetEnableDictionary(
+    std::optional<std::string> enableDictionary) {
+  if (!enableDictionary) {
+    return std::nullopt;
+  }
   try {
-    if (const auto enableDictionary = config.get<bool>(configKey)) {
-      return enableDictionary.value();
-    }
-  } catch (const folly::ConversionError& e) {
+    return folly::to<bool>(*enableDictionary);
+  } catch (const std::exception& e) {
     VELOX_USER_FAIL(
         "Invalid parquet writer enable dictionary option: {}", e.what());
   }
-  return std::nullopt;
 }
 
-std::optional<bool> getParquetDataPageVersion(
-    const config::ConfigBase& config,
-    const char* configKey) {
-  if (const auto version = config.get<std::string>(configKey)) {
-    if (version == "V1") {
-      return false;
-    } else if (version == "V2") {
-      return true;
-    } else {
-      VELOX_FAIL("Unsupported parquet datapage version {}", version.value());
-    }
+std::optional<int64_t> toParquetBatchSize(
+    std::optional<std::string> batchSize) {
+  if (!batchSize) {
+    return std::nullopt;
   }
-  return std::nullopt;
-}
-
-std::optional<int64_t> getParquetPageSize(
-    const config::ConfigBase& config,
-    const char* configKey) {
-  if (const auto pageSize = config.get<std::string>(configKey)) {
-    return config::toCapacity(pageSize.value(), config::CapacityUnit::BYTE);
-  }
-  return std::nullopt;
-}
-
-std::optional<int64_t> getParquetBatchSize(
-    const config::ConfigBase& config,
-    const char* configKey) {
   try {
-    if (const auto batchSize = config.get<int64_t>(configKey)) {
-      return batchSize.value();
-    }
-  } catch (const folly::ConversionError& e) {
+    return folly::to<int64_t>(*batchSize);
+  } catch (const std::exception& e) {
     VELOX_USER_FAIL("Invalid parquet writer batch size: {}", e.what());
   }
-  return std::nullopt;
-}
-
-std::optional<std::string> getParquetCreatedBy(
-    const config::ConfigBase& config,
-    const char* configKey) {
-  if (config.get<std::string>(configKey).has_value()) {
-    return config.get<std::string>(configKey).value();
-  }
-  return std::nullopt;
 }
 
 } // namespace
@@ -652,10 +626,8 @@ void WriterOptions::processConfigs(
 
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =
-        getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
-        ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
-        : getTimestampUnit(
-              connectorConfig, kParquetHiveConnectorWriteTimestampUnit);
+        toTimestampPrecision(session.getWithFallback<uint8_t>(
+            kParquetWriteTimestampUnit, connectorConfig));
   }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
@@ -663,50 +635,34 @@ void WriterOptions::processConfigs(
 
   if (!enableDictionary) {
     enableDictionary =
-        isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
-            .has_value()
-        ? isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
-        : isParquetEnableDictionary(
-              connectorConfig, kParquetHiveConnectorEnableDictionary);
+        toParquetEnableDictionary(session.getWithFallback<std::string>(
+            kParquetEnableDictionary, connectorConfig));
   }
 
   if (!dictionaryPageSizeLimit) {
     dictionaryPageSizeLimit =
-        getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
-            .has_value()
-        ? getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
-        : getParquetPageSize(
-              connectorConfig, kParquetHiveConnectorDictionaryPageSizeLimit);
+        toParquetPageSize(session.getWithFallback<std::string>(
+            kParquetDictionaryPageSizeLimit, connectorConfig));
   }
 
   if (!useParquetDataPageV2) {
-    useParquetDataPageV2 =
-        getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
-            .has_value()
-        ? getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
-        : getParquetDataPageVersion(
-              connectorConfig, kParquetHiveConnectorDataPageVersion);
+    useParquetDataPageV2 = isParquetV2(session.getWithFallback<std::string>(
+        kParquetDataPageVersion, connectorConfig));
   }
 
   if (!dataPageSize) {
-    dataPageSize =
-        getParquetPageSize(session, kParquetSessionWritePageSize).has_value()
-        ? getParquetPageSize(session, kParquetSessionWritePageSize)
-        : getParquetPageSize(
-              connectorConfig, kParquetHiveConnectorWritePageSize);
+    dataPageSize = toParquetPageSize(session.getWithFallback<std::string>(
+        kParquetWritePageSize, connectorConfig));
   }
 
   if (!batchSize) {
-    batchSize =
-        getParquetBatchSize(session, kParquetSessionWriteBatchSize).has_value()
-        ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
-        : getParquetBatchSize(
-              connectorConfig, kParquetHiveConnectorWriteBatchSize);
+    batchSize = toParquetBatchSize(session.getWithFallback<std::string>(
+        kParquetWriteBatchSize, connectorConfig));
   }
 
   if (!createdBy) {
-    createdBy =
-        getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
+    createdBy = session.getWithFallback<std::string>(
+        kParquetCreatedBy, connectorConfig);
   }
 
   // Parquet only updates ioStats_->rawBytesWritten() when a row group is
@@ -716,9 +672,8 @@ void WriterOptions::processConfigs(
   // row group byte threshold so we flush earlier and rawBytesWritten() grows
   // during writes.
   auto maxTargetFileSize =
-      getParquetPageSize(session, kParquetSessionMaxTargetFileSize).has_value()
-      ? getParquetPageSize(session, kParquetSessionMaxTargetFileSize)
-      : getParquetPageSize(connectorConfig, kParquetConnectorMaxTargetFileSize);
+      toParquetPageSize(session.getWithFallback<std::string>(
+          kParquetMaxTargetFileSize, connectorConfig));
   if (maxTargetFileSize.has_value()) {
     if (!flushPolicyFactory) {
       auto bytesInRowGroup = std::min<int64_t>(
