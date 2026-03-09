@@ -1101,7 +1101,7 @@ TEST_F(VectorHasherTest, simdRange) {
   }
 }
 
-TEST_F(VectorHasherTest, lookupValueIdsDictionary) {
+TEST_F(VectorHasherTest, lookupValueIdsDictionaryWithLargerBase) {
   auto base = makeNullableFlatVector<int32_t>({10, 11, 12, 13, 14, 15});
 
   auto hasher = VectorHasher::create(INTEGER(), 0);
