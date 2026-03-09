@@ -15,10 +15,55 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
+#include "velox/exec/Operator.h"
+
 namespace facebook::velox::cudf_velox {
+
+struct ReduceAggregator {
+  core::AggregationNode::Step step;
+  uint32_t inputIndex;
+  VectorPtr constant;
+  TypePtr resultType;
+
+  virtual std::unique_ptr<cudf::column> doReduce(
+      cudf::table_view const& input,
+      TypePtr const& outputType,
+      rmm::cuda_stream_view stream) = 0;
+
+  virtual ~ReduceAggregator() = default;
+
+ protected:
+  ReduceAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      VectorPtr constant,
+      const TypePtr& resultType)
+      : step(step),
+        inputIndex(inputIndex),
+        constant(constant),
+        resultType(resultType) {}
+};
+
+std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
+    core::AggregationNode const& aggregationNode,
+    exec::OperatorCtx const& operatorCtx);
+
+StepAwareAggregationRegistry& getReduceAggregationRegistry();
+
+bool registerReduceAggregationFunctions(const std::string& prefix);
+
+bool canReduceBeEvaluatedByCudf(
+    const core::AggregationNode& aggregationNode,
+    core::QueryCtx* queryCtx);
+
+bool canReduceAggregationBeEvaluatedByCudf(
+    const core::CallTypedExpr& call,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputTypes,
+    core::QueryCtx* queryCtx);
 
 class CudfReduce : public exec::Operator, public NvtxHelper {
  public:
@@ -51,7 +96,7 @@ class CudfReduce : public exec::Operator, public NvtxHelper {
       rmm::cuda_stream_view stream);
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
-  std::vector<std::unique_ptr<Aggregator>> aggregators_;
+  std::vector<std::unique_ptr<ReduceAggregator>> aggregators_;
 
   const bool isPartialOutput_;
 

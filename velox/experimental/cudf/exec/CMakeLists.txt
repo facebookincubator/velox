@@ -19,7 +19,7 @@ add_library(
   CudfFilterProject.cpp
   CudfDistinct.cpp
   CudfGroupby.cpp
-  CudfHashAggregation.cpp
+  CudfAggregation.cpp
   CudfHashJoin.cpp
   CudfReduce.cpp
   CudfLimit.cpp

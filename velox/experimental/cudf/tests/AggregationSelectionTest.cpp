@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -22,20 +24,25 @@
 #include "velox/common/memory/Memory.h"
 
 namespace {
-// Simple wrapper for test compatibility - assumes kSingle step
+// Simple wrapper for test compatibility - checks if an aggregation function
+// is supported in either the groupby or reduce registry (kSingle step).
 bool canAggregationBeEvaluatedByCudf(
     const facebook::velox::core::CallTypedExpr& call,
     facebook::velox::core::QueryCtx* queryCtx) {
-  // For tests, assume kSingle step and extract input types from the call
   std::vector<facebook::velox::TypePtr> rawInputTypes;
   for (const auto& input : call.inputs()) {
     rawInputTypes.push_back(input->type());
   }
-  return facebook::velox::cudf_velox::canAggregationBeEvaluatedByCudf(
-      call,
-      facebook::velox::core::AggregationNode::Step::kSingle,
-      rawInputTypes,
-      queryCtx);
+  return facebook::velox::cudf_velox::canGroupbyAggregationBeEvaluatedByCudf(
+             call,
+             facebook::velox::core::AggregationNode::Step::kSingle,
+             rawInputTypes,
+             queryCtx) ||
+      facebook::velox::cudf_velox::canReduceAggregationBeEvaluatedByCudf(
+             call,
+             facebook::velox::core::AggregationNode::Step::kSingle,
+             rawInputTypes,
+             queryCtx);
 }
 } // namespace
 #include "velox/core/QueryCtx.h"

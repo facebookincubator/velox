@@ -15,10 +15,68 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
+#include "velox/exec/Operator.h"
+
+#include <cudf/groupby.hpp>
+
 namespace facebook::velox::cudf_velox {
+
+struct GroupbyAggregator {
+  core::AggregationNode::Step step;
+  uint32_t inputIndex;
+  VectorPtr constant;
+  TypePtr resultType;
+
+  virtual void addGroupbyRequest(
+      cudf::table_view const& tbl,
+      std::vector<cudf::groupby::aggregation_request>& requests) = 0;
+
+  virtual std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      rmm::cuda_stream_view stream) = 0;
+
+  virtual ~GroupbyAggregator() = default;
+
+ protected:
+  GroupbyAggregator(
+      core::AggregationNode::Step step,
+      uint32_t inputIndex,
+      VectorPtr constant,
+      const TypePtr& resultType)
+      : step(step),
+        inputIndex(inputIndex),
+        constant(constant),
+        resultType(resultType) {}
+};
+
+// Factory functions for creating groupby aggregators from plan nodes.
+std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
+    core::AggregationNode const& aggregationNode,
+    exec::OperatorCtx const& operatorCtx);
+
+std::vector<std::unique_ptr<GroupbyAggregator>>
+toIntermediateGroupbyAggregators(
+    core::AggregationNode const& aggregationNode,
+    exec::OperatorCtx const& operatorCtx);
+
+// Groupby-specific aggregation registry
+StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
+
+bool registerGroupbyAggregationFunctions(const std::string& prefix);
+
+// Groupby-specific validation
+bool canGroupbyBeEvaluatedByCudf(
+    const core::AggregationNode& aggregationNode,
+    core::QueryCtx* queryCtx);
+
+bool canGroupbyAggregationBeEvaluatedByCudf(
+    const core::CallTypedExpr& call,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputTypes,
+    core::QueryCtx* queryCtx);
 
 class CudfGroupby : public exec::Operator, public NvtxHelper {
  public:
@@ -49,7 +107,7 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
-      std::vector<std::unique_ptr<Aggregator>>& aggregators,
+      std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators,
       rmm::cuda_stream_view stream);
 
   CudfVectorPtr releaseAndResetPartialOutput();
@@ -60,8 +118,8 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
   std::vector<column_index_t> groupingKeyOutputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
-  std::vector<std::unique_ptr<Aggregator>> aggregators_;
-  std::vector<std::unique_ptr<Aggregator>> intermediateAggregators_;
+  std::vector<std::unique_ptr<GroupbyAggregator>> aggregators_;
+  std::vector<std::unique_ptr<GroupbyAggregator>> intermediateAggregators_;
 
   const bool isPartialOutput_;
   const int64_t maxPartialAggregationMemoryUsage_;
