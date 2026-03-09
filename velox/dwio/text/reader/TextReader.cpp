@@ -1664,6 +1664,28 @@ bool TextRowReader::checkContainerNull(DelimType& delim) {
     return false;
   }
 
+  // Check if the first byte is an outer delimiter (empty container).
+  uint8_t firstByte = static_cast<uint8_t>(unreadData_.front());
+  bool isOuterDelim = (firstByte == '\n' || firstByte == '\r');
+  for (uint8_t d = 0; !isOuterDelim && d < depth_; ++d) {
+    if (firstByte == separators_[d]) {
+      isOuterDelim = true;
+    }
+  }
+  if (isOuterDelim) {
+    // Empty container — consume the delimiter and set delim so that
+    // the caller's isOuterEOR() check prevents entering the element loop.
+    atSOL_ = false;
+    pos_++;
+    unreadData_.remove_prefix(1);
+    if (firstByte == '\r') {
+      consumeLF();
+      firstByte = '\n';
+    }
+    delim = getDelimType(firstByte);
+    return false;
+  }
+
   const auto& ns = contents_->serDeOptions.nullString;
 
   // Enough bytes to peek at null string + delimiter.
@@ -1725,6 +1747,7 @@ bool TextRowReader::readArray(
       rawSizes[insertionRow] = 0;
     } else {
       vector_size_t elementCount = 0;
+      rawSizes[insertionRow] = 0;
       while (!isOuterEOR(delim)) {
         setNone(delim);
         auto* elementsVec = arrayVector->elements().get();
@@ -1788,6 +1811,7 @@ bool TextRowReader::readMap(
       rawSizes[insertionRow] = 0;
     } else {
       vector_size_t elementCount = 0;
+      rawSizes[insertionRow] = 0;
       while (!isOuterEOR(delim)) {
         setNone(delim);
         incrementDepth();
