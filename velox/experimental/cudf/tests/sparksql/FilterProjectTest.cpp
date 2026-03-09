@@ -71,6 +71,7 @@ TEST_F(CudfFilterProjectTest, hashWithSeed) {
   facebook::velox::test::assertEqualVectors(expected, hashResults);
 }
 
+// TODO: Re-enable after https://github.com/rapidsai/cudf/issues/21720.
 // cuDF's murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
 // h(col1, seed)), while Spark instead hashes columns iteratively:
 // h(col1, h(col0, seed)).
