@@ -50,7 +50,7 @@ SpillWriter::SpillWriter(
               compressionKind,
               0.8,
               /*_nullsFirst=*/true),
-          getNamedVectorSerde(VectorSerde::Kind::kPresto),
+          getNamedVectorSerde("Presto"),
           pool,
           &stats->ioStats),
       type_(type),
@@ -165,7 +165,7 @@ SpillReadFile::SpillReadFile(
           path,
           bufferSize,
           type,
-          getNamedVectorSerde(VectorSerde::Kind::kPresto),
+          getNamedVectorSerde("Presto"),
           std::make_unique<
               serializer::presto::PrestoVectorSerde::PrestoOptions>(
               kDefaultUseLosslessTimestamp,

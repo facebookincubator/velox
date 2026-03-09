@@ -512,6 +512,30 @@ DEBUG_ONLY_TEST_F(TableScanTest, timeLimitInGetOutput) {
   EXPECT_GE(numBailed, 12);
 }
 
+TEST_F(TableScanTest, outputBatchRowsOverride) {
+  auto vectors = makeVectors(1, 500);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  constexpr uint32_t kBatchRowsOverride{100};
+  auto plan = tableScanNode();
+  auto batches = AssertQueryBuilder(duckDbQueryRunner_)
+                     .plan(plan)
+                     .splits(makeHiveConnectorSplits({filePath}))
+                     .config(
+                         QueryConfig::kTableScanOutputBatchRowsOverride,
+                         folly::to<std::string>(kBatchRowsOverride))
+                     .copyResultBatches(pool_.get());
+
+  ASSERT_FALSE(batches.empty());
+  for (auto i = 0; i + 1 < batches.size(); ++i) {
+    EXPECT_EQ(batches[i]->size(), kBatchRowsOverride);
+  }
+  EXPECT_LE(batches.back()->size(), kBatchRowsOverride);
+
+  assertEqualResults(vectors, batches);
+}
+
 TEST_F(TableScanTest, subfieldPruningRowType) {
   // rowType: ROW
   // └── "e": ROW
@@ -1108,7 +1132,7 @@ TEST_F(TableScanTest, missingColumns) {
   common::SubfieldFilters filters;
   filters[common::Subfield("c1")] = lessThanOrEqualDouble(1050.0, true);
   auto tableHandle = std::make_shared<HiveTableHandle>(
-      kHiveConnectorId, "tmp", true, std::move(filters), nullptr, dataColumns);
+      kHiveConnectorId, "tmp", std::move(filters), nullptr, dataColumns);
   connector::ColumnHandleMap assignments;
   assignments["c0"] = regularColumn("c0", BIGINT());
   op = PlanBuilder(pool_.get())
@@ -1687,8 +1711,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   auto leafTaskId = "local://leaf-0";
   auto leafPlan = PlanBuilder()
                       .values(vectors)
-                      .partitionedOutput(
-                          {}, 1, {"c0", "c1", "c2"}, VectorSerde::Kind::kPresto)
+                      .partitionedOutput({}, 1, {"c0", "c1", "c2"}, "Presto")
                       .planNode();
   std::unordered_map<std::string, std::string> config;
   auto queryCtx = core::QueryCtx::create(
@@ -1707,23 +1730,22 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   // Main task plan with table scan and remote exchange.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId, exchangeNodeId;
-  auto planNode =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(rowType_)
-          .capturePlanNodeId(scanNodeId)
-          .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
-          .hashJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .exchange(leafPlan->outputType(), VectorSerde::Kind::kPresto)
-                  .capturePlanNodeId(exchangeNodeId)
-                  .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
-                  .planNode(),
-              "",
-              {"t1"},
-              core::JoinType::kAnti)
-          .planNode();
+  auto planNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+                      .tableScan(rowType_)
+                      .capturePlanNodeId(scanNodeId)
+                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                      .hashJoin(
+                          {"t0"},
+                          {"u0"},
+                          PlanBuilder(planNodeIdGenerator, pool_.get())
+                              .exchange(leafPlan->outputType(), "Presto")
+                              .capturePlanNodeId(exchangeNodeId)
+                              .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                              .planNode(),
+                          "",
+                          {"t1"},
+                          core::JoinType::kAnti)
+                      .planNode();
 
   // Create task, cursor, start the task and supply the table scan splits.
   const int32_t numDrivers = 6;
@@ -1993,7 +2015,7 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
         18506, std::numeric_limits<int64_t>::max(), false);
 
     auto tableHandle = std::make_shared<HiveTableHandle>(
-        "test-hive", "hive_table", true, std::move(filters), nullptr, nullptr);
+        "test-hive", "hive_table", std::move(filters), nullptr, nullptr);
     auto op = std::make_shared<TableScanNode>(
         "0",
         std::move(outputType),
@@ -2179,12 +2201,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
       filters[common::Subfield("pkey")] =
           std::make_unique<common::TimestampRange>(lower, lower, false);
       auto tableHandle = std::make_shared<HiveTableHandle>(
-          "test-hive",
-          "hive_table",
-          true,
-          std::move(filters),
-          nullptr,
-          nullptr);
+          "test-hive", "hive_table", std::move(filters), nullptr, nullptr);
 
       return PlanBuilder()
           .startTableScan()

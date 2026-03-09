@@ -2864,22 +2864,44 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
   ASSERT_GT(operatorStats.backgroundTiming.wallNanos, 0);
   auto runtimeStats = operatorStats.customStats;
   ASSERT_EQ(
-      runtimeStats.at(IndexLookupJoin::kConnectorLookupWallTime).count,
-      numProbeBatches);
-  ASSERT_GT(runtimeStats.at(IndexLookupJoin::kConnectorLookupWallTime).sum, 0);
-  ASSERT_EQ(
-      runtimeStats.at(IndexLookupJoin::kClientLookupWaitWallTime).count,
-      numProbeBatches);
-  ASSERT_GT(runtimeStats.at(IndexLookupJoin::kClientLookupWaitWallTime).sum, 0);
-  ASSERT_EQ(
-      runtimeStats.at(IndexLookupJoin::kConnectorResultPrepareTime).count,
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorLookupWallTime))
+          .count,
       numProbeBatches);
   ASSERT_GT(
-      runtimeStats.at(IndexLookupJoin::kConnectorResultPrepareTime).sum, 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientRequestProcessTime), 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientResultProcessTime), 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultSize), 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultRawSize), 0);
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorLookupWallTime))
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats.at(std::string(IndexLookupJoin::kClientLookupWaitWallTime))
+          .count,
+      numProbeBatches);
+  ASSERT_GT(
+      runtimeStats.at(std::string(IndexLookupJoin::kClientLookupWaitWallTime))
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorResultPrepareTime))
+          .count,
+      numProbeBatches);
+  ASSERT_GT(
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorResultPrepareTime))
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(
+          std::string(IndexLookupJoin::kClientRequestProcessTime)),
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(
+          std::string(IndexLookupJoin::kClientResultProcessTime)),
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(std::string(IndexLookupJoin::kClientLookupResultSize)),
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(
+          std::string(IndexLookupJoin::kClientLookupResultRawSize)),
+      0);
   ASSERT_THAT(
       operatorStats.toString(true, true),
       testing::MatchesRegex(".*Runtime stats.*connectorLookupWallNanos:.*"));
