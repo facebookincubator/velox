@@ -32,8 +32,9 @@ target_link_libraries(
   GTest::gmock
 )
 
-add_executable(
-  velox_serializer_test
+# Split velox_serializer_test into individual test binaries for parallel execution.
+set(
+  VELOX_SERIALIZER_TEST_SOURCES
   CompactRowSerializerTest.cpp
   PrestoOutputStreamListenerTest.cpp
   PrestoSerializerTest.cpp
@@ -41,10 +42,8 @@ add_executable(
   UnsafeRowSerializerTest.cpp
 )
 
-add_test(velox_serializer_test velox_serializer_test)
-
-target_link_libraries(
-  velox_serializer_test
+set(
+  VELOX_SERIALIZER_TEST_DEPS
   velox_expression_test_utility
   velox_presto_serializer
   velox_vector_test_lib
@@ -54,6 +53,14 @@ target_link_libraries(
   GTest::gtest_main
   glog::glog
 )
+
+foreach(TEST_SOURCE IN LISTS VELOX_SERIALIZER_TEST_SOURCES)
+  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
+  set(TEST_TARGET "velox_serializer_${TEST_NAME}")
+  add_executable(${TEST_TARGET} ${TEST_SOURCE})
+  add_test(${TEST_TARGET} ${TEST_TARGET})
+  target_link_libraries(${TEST_TARGET} ${VELOX_SERIALIZER_TEST_DEPS})
+endforeach()
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_serializer_benchmark SerializerBenchmark.cpp)

@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_aggregates_test
+# Split velox_aggregates_test into individual test binaries for parallel execution.
+set(
+  VELOX_AGGREGATES_TEST_SOURCES
   AggregationFunctionRegTest.cpp
   ApproxDistinctTest.cpp
   ApproxMostFrequentTest.cpp
@@ -34,7 +35,6 @@ add_executable(
   GeometricMeanTest.cpp
   HistogramTest.cpp
   KHyperLogLogAggregateTest.cpp
-  Main.cpp
   MapAccumulatorTest.cpp
   MapAggTest.cpp
   MapUnionAggregationTest.cpp
@@ -60,15 +60,8 @@ add_executable(
   VarianceAggregationTest.cpp
 )
 
-if(${VELOX_ENABLE_GEO})
-  target_sources(velox_aggregates_test PRIVATE GeometryAggregateTest.cpp)
-  target_link_libraries(velox_aggregates_test velox_functions_geo)
-endif()
-
-add_test(NAME velox_aggregates_test COMMAND velox_aggregates_test WORKING_DIRECTORY .)
-
-target_link_libraries(
-  velox_aggregates_test
+set(
+  VELOX_AGGREGATES_TEST_DEPS
   velox_aggregates
   velox_core
   velox_dwio_common_test_utils
@@ -90,3 +83,25 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+foreach(TEST_SOURCE IN LISTS VELOX_AGGREGATES_TEST_SOURCES)
+  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
+  set(TEST_TARGET "velox_aggregates_${TEST_NAME}")
+  add_executable(${TEST_TARGET} ${TEST_SOURCE} Main.cpp)
+  add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET} WORKING_DIRECTORY .)
+  target_link_libraries(${TEST_TARGET} ${VELOX_AGGREGATES_TEST_DEPS})
+endforeach()
+
+if(${VELOX_ENABLE_GEO})
+  add_executable(velox_aggregates_GeometryAggregateTest GeometryAggregateTest.cpp Main.cpp)
+  add_test(
+    NAME velox_aggregates_GeometryAggregateTest
+    COMMAND velox_aggregates_GeometryAggregateTest
+    WORKING_DIRECTORY .
+  )
+  target_link_libraries(
+    velox_aggregates_GeometryAggregateTest
+    ${VELOX_AGGREGATES_TEST_DEPS}
+    velox_functions_geo
+  )
+endif()

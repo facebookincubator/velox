@@ -19,29 +19,37 @@ target_link_libraries(
   PRIVATE velox_common_base Folly::folly velox_time glog::glog GTest::gtest GTest::gtest_main
 )
 
-add_executable(
-  velox_cache_test
+# Split velox_cache_test into individual test binaries for parallel execution.
+set(
+  VELOX_CACHE_TEST_SOURCES
   AsyncDataCacheTest.cpp
   CacheTTLControllerTest.cpp
   SsdFileTest.cpp
   SsdFileTrackerTest.cpp
   StringIdMapTest.cpp
 )
-add_test(velox_cache_test velox_cache_test)
-target_link_libraries(
-  velox_cache_test
-  PRIVATE
-    velox_caching
-    velox_file
-    velox_file_test_utils
-    velox_memory
-    velox_test_util
-    velox_flag_definitions
-    Folly::folly
-    glog::glog
-    GTest::gtest
-    GTest::gtest_main
+
+set(
+  VELOX_CACHE_TEST_DEPS
+  velox_caching
+  velox_file
+  velox_file_test_utils
+  velox_memory
+  velox_test_util
+  velox_flag_definitions
+  Folly::folly
+  glog::glog
+  GTest::gtest
+  GTest::gtest_main
 )
+
+foreach(TEST_SOURCE IN LISTS VELOX_CACHE_TEST_SOURCES)
+  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
+  set(TEST_TARGET "velox_cache_${TEST_NAME}")
+  add_executable(${TEST_TARGET} ${TEST_SOURCE})
+  add_test(${TEST_TARGET} ${TEST_TARGET})
+  target_link_libraries(${TEST_TARGET} PRIVATE ${VELOX_CACHE_TEST_DEPS})
+endforeach()
 
 add_executable(cached_factory_test CachedFactoryTest.cpp)
 add_test(cached_factory_test cached_factory_test)
