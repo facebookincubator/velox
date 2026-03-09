@@ -1048,6 +1048,12 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 
   // Handle final aggregation or global cases.
   inputs_.push_back(std::move(cudfInput));
+  queuedInputBytes_ += input->estimateFlatSize();
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
@@ -1211,6 +1217,9 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   // Release input data after synchronizing.
   stream.synchronize();
   inputs_.clear();
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
 
   if (noMoreInput_) {
     finished_ = true;

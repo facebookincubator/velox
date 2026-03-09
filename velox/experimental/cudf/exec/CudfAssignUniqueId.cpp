@@ -56,6 +56,12 @@ void CudfAssignUniqueId::addInput(RowVectorPtr input) {
   VELOX_CHECK_NE(
       numInput, 0, "CudfAssignUniqueId::addInput received empty set of rows");
   input_ = std::move(input);
+  queuedInputBytes_ = input_->estimateFlatSize();
+  addRuntimeStat(
+      "gpuQueuedInputBytes",
+      RuntimeCounter(
+          static_cast<int64_t>(queuedInputBytes_),
+          RuntimeCounter::Unit::kBytes));
 }
 
 RowVectorPtr CudfAssignUniqueId::getOutput() {
@@ -80,6 +86,9 @@ RowVectorPtr CudfAssignUniqueId::getOutput() {
       std::make_unique<cudf::table>(std::move(columns)),
       stream);
   input_ = nullptr;
+  queuedInputBytes_ = 0;
+  addRuntimeStat(
+      "gpuQueuedInputBytes", RuntimeCounter(0, RuntimeCounter::Unit::kBytes));
   return output;
 }
 
