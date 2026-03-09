@@ -17,8 +17,11 @@ add_library(
   CudfAssignUniqueId.cpp
   CudfConversion.cpp
   CudfFilterProject.cpp
+  CudfDistinct.cpp
+  CudfGroupby.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
+  CudfReduce.cpp
   CudfLimit.cpp
   CudfLocalPartition.cpp
   CudfOrderBy.cpp
