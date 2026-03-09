@@ -16,8 +16,8 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -42,7 +42,7 @@ using cudf_velox::get_temp_mr;
 using cudf_velox::GroupbyAggregator;
 
 #define DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Name, name, KIND)                    \
-  struct Groupby##Name##Aggregator : GroupbyAggregator {                       \
+  struct Groupby##Name##Aggregator : GroupbyAggregator {                      \
     Groupby##Name##Aggregator(                                                \
         core::AggregationNode::Step step,                                     \
         uint32_t inputIndex,                                                  \
@@ -317,13 +317,17 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
   std::vector<std::unique_ptr<GroupbyAggregator>> aggregators;
   for (auto& info : resolved) {
     aggregators.push_back(createGroupbyAggregator(
-        info.companionStep, info.kind, info.inputIndex, info.constant,
+        info.companionStep,
+        info.kind,
+        info.inputIndex,
+        info.constant,
         info.resultType));
   }
   return aggregators;
 }
 
-std::vector<std::unique_ptr<GroupbyAggregator>> toIntermediateGroupbyAggregators(
+std::vector<std::unique_ptr<GroupbyAggregator>>
+toIntermediateGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
     exec::OperatorCtx const& operatorCtx) {
   auto const step = core::AggregationNode::Step::kIntermediate;
