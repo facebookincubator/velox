@@ -7,17 +7,6 @@ Aggregate functions operate on a set of values to compute a single result.
 General Aggregate Functions
 ---------------------------
 
-.. spark:function:: avg(x) -> double|decimal
-
-    Returns the average (arithmetic mean) of all non-null input values.
-    When ``x`` is of type DECIMAL(p, s), the result type is DECIMAL(p + 4, s + 4),
-    and the intermediate results are (sum, count) pairs represented as ROW(DECIMAL(p + 10, s), BIGINT).
-    The current implementation for DECIMAL matches Spark avg's default behavior with spark.sql.decimalOperations.allowPrecisionLoss=true.
-    For all other input types, the result type is DOUBLE,
-    and the intermediate results are (sum, count) pairs represented as ROW(DOUBLE, BIGINT).
-    When all inputs are nulls, the intermediate result is ROW(0, 0),
-    and the final result is null.
-
 .. spark:function:: approx_count_distinct_for_intervals(x, endpoints, relativeSD) -> array(bigint)
 
     Returns approximate distinct counts per interval defined by ``endpoints``.
@@ -33,6 +22,17 @@ General Aggregate Functions
 
     Supported input types are numeric, date, timestamp, interval, and decimal.
     Endpoints can be any of these types and do not need to match the input type.
+
+.. spark:function:: avg(x) -> double|decimal
+
+    Returns the average (arithmetic mean) of all non-null input values.
+    When ``x`` is of type DECIMAL(p, s), the result type is DECIMAL(p + 4, s + 4),
+    and the intermediate results are (sum, count) pairs represented as ROW(DECIMAL(p + 10, s), BIGINT).
+    The current implementation for DECIMAL matches Spark avg's default behavior with spark.sql.decimalOperations.allowPrecisionLoss=true.
+    For all other input types, the result type is DOUBLE,
+    and the intermediate results are (sum, count) pairs represented as ROW(DOUBLE, BIGINT).
+    When all inputs are nulls, the intermediate result is ROW(0, 0),
+    and the final result is null.
 
 .. spark:function:: bit_xor(x) -> bigint
 

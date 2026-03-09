@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
@@ -34,9 +33,6 @@
 #include "velox/functions/sparksql/XxHash64.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
-#include "velox/type/StringView.h"
-#include "velox/type/Timestamp.h"
-#include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -71,14 +67,13 @@ double toDoubleDispatch(
     const DecodedVector& decoded,
     vector_size_t row,
     const TypePtr& type) {
-  if constexpr (kind == TypeKind::TIMESTAMP) {
-    return static_cast<double>(decoded.valueAt<Timestamp>(row).toMicros());
-  } else if constexpr (
+  if constexpr (
       kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
       kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
       kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
-    auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(
-        decoded.valueAt<typename TypeTraits<kind>::NativeType>(row));
+    using T = typename TypeTraits<kind>::NativeType;
+    auto converted =
+        util::Converter<TypeKind::DOUBLE>::tryCast(decoded.valueAt<T>(row));
     VELOX_USER_CHECK(converted.hasValue(), "Failed to convert value to DOUBLE");
     return converted.value();
   } else {
@@ -86,6 +81,14 @@ double toDoubleDispatch(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
         type->toString());
   }
+}
+
+template <>
+double toDoubleDispatch<TypeKind::TIMESTAMP>(
+    const DecodedVector& decoded,
+    vector_size_t row,
+    const TypePtr& /*type*/) {
+  return static_cast<double>(decoded.valueAt<Timestamp>(row).toMicros());
 }
 
 template <TypeKind kind>
@@ -119,6 +122,15 @@ uint64_t hashValueDispatch(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
         type->toString());
   }
+}
+
+template <>
+uint64_t hashValueDispatch<TypeKind::HUGEINT>(
+    const DecodedVector& decoded,
+    vector_size_t row,
+    const TypePtr& /*type*/) {
+  return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
+      decoded.valueAt<int128_t>(row), kXxHash64Seed);
 }
 
 class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
@@ -388,25 +400,25 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
         writer.commitNull();
         continue;
       }
-      auto& rowWriter = writer.current();
-      auto& endpointsWriter = rowWriter.template get_writer_at<0>();
+      auto rowWriter = writer.current();
+      auto endpointsWriter = rowWriter.template get_writer_at<0>();
       for (double endpoint : endpoints_) {
         endpointsWriter.add_item() = endpoint;
       }
 
-      auto& hllsWriter = rowWriter.template get_writer_at<1>();
+      auto hllsWriter = rowWriter.template get_writer_at<1>();
       auto* accumulator = value<Accumulator>(groups[i]);
       ensureEmptyHll();
       for (int32_t interval = 0; interval < intervalCount_; ++interval) {
-        auto& itemWriter = hllsWriter.add_item();
+        auto itemWriter = hllsWriter.add_item();
         if (accumulator->hlls.size() == intervalCount_) {
           auto& hll = accumulator->hlls[interval];
           const auto size = hll.serializedSize();
           std::string buffer(size, '\0');
           hll.serialize(buffer.data());
-          itemWriter.append(std::string_view(buffer));
+          itemWriter.append(buffer);
         } else {
-          itemWriter.append(std::string_view(emptyHll_));
+          itemWriter.append(emptyHll_);
         }
       }
       writer.commit();
@@ -583,15 +595,23 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       const DecodedVector& decoded,
       vector_size_t row,
       const TypePtr& type) {
+    const auto decimalToDouble = [](auto value, int32_t scale) {
+      const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
+      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(value);
+      VELOX_USER_CHECK(
+          converted.hasValue(), "Failed to convert decimal to DOUBLE");
+      return converted.value() / scaleFactor;
+    };
+
     if (type->isShortDecimal()) {
       auto value = decoded.valueAt<int64_t>(row);
       auto scale = type->asShortDecimal().scale();
-      return DecimalUtil::toDouble(static_cast<int128_t>(value), scale);
+      return decimalToDouble(value, scale);
     }
     if (type->isLongDecimal()) {
       auto value = decoded.valueAt<int128_t>(row);
       auto scale = type->asLongDecimal().scale();
-      return DecimalUtil::toDouble(value, scale);
+      return decimalToDouble(value, scale);
     }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         toDoubleDispatch, type->kind(), decoded, row, type);
@@ -601,16 +621,6 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       const DecodedVector& decoded,
       vector_size_t row,
       const TypePtr& type) {
-    if (type->isShortDecimal()) {
-      auto value = decoded.valueAt<int64_t>(row);
-      return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
-          static_cast<int128_t>(value), kXxHash64Seed);
-    }
-    if (type->isLongDecimal()) {
-      auto value = decoded.valueAt<int128_t>(row);
-      return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
-          value, kXxHash64Seed);
-    }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         hashValueDispatch, type->kind(), decoded, row, type);
   }

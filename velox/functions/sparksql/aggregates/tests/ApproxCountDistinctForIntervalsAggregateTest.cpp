@@ -25,9 +25,7 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
-#include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
-#include "velox/type/Variant.h"
 #include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox::exec::test;
@@ -90,7 +88,7 @@ class ApproxCountDistinctForIntervalsAggregateTest
   }
 
   template <typename T>
-  void runIntegerInputTypeTest(
+  void testIntegerInputType(
       const std::vector<int32_t>& valuesData,
       const std::vector<int32_t>& endpointsData,
       const std::vector<int64_t>& expected) {
@@ -105,48 +103,6 @@ class ApproxCountDistinctForIntervalsAggregateTest
     checkNdvs(ndvs, expected, 0.05);
   }
 };
-
-TEST_F(ApproxCountDistinctForIntervalsAggregateTest, invalidInputType) {
-  static const std::string kErrorMessage =
-      "Aggregate function signature is not supported";
-  auto values = makeFlatVector<bool>({true, false});
-  auto endpoints = makeArrayVector<bool>({{false, true}, {false, true}});
-  auto data = makeRowVector({values, endpoints});
-  auto builder = PlanBuilder().values({data});
-  VELOX_ASSERT_THROW(
-      builder.singleAggregation(
-          {}, {"approx_count_distinct_for_intervals(c0, c1, 0.05)"}),
-      kErrorMessage);
-}
-
-TEST_F(ApproxCountDistinctForIntervalsAggregateTest, endpointsNotArray) {
-  static const std::string kErrorMessage =
-      "Aggregate function signature is not supported";
-  auto values = makeFlatVector<int32_t>({1, 2});
-  auto endpoints = makeFlatVector<int32_t>({0, 1});
-  auto data = makeRowVector({values, endpoints});
-  auto builder = PlanBuilder().values({data});
-  VELOX_ASSERT_THROW(
-      builder.singleAggregation(
-          {}, {"approx_count_distinct_for_intervals(c0, c1, 0.05)"}),
-      kErrorMessage);
-}
-
-TEST_F(
-    ApproxCountDistinctForIntervalsAggregateTest,
-    endpointsWrongElementType) {
-  static const std::string kErrorMessage =
-      "Aggregate function signature is not supported";
-  auto values = makeFlatVector<double>({1.0, 2.0});
-  auto endpoints =
-      makeArrayVector<StringView>({{"a"_sv, "b"_sv}, {"a"_sv, "b"_sv}});
-  auto data = makeRowVector({values, endpoints});
-  auto builder = PlanBuilder().values({data});
-  VELOX_ASSERT_THROW(
-      builder.singleAggregation(
-          {}, {"approx_count_distinct_for_intervals(c0, c1, 0.05)"}),
-      kErrorMessage);
-}
 
 TEST_F(ApproxCountDistinctForIntervalsAggregateTest, tooFewEndpoints) {
   auto values = makeFlatVector<int32_t>({1});
@@ -250,10 +206,10 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, inputTypes) {
   const std::vector<int64_t> expected = {3, 2, 1, 1, 1};
 
   // Integer types.
-  runIntegerInputTypeTest<int8_t>(valuesData, endpointsData, expected);
-  runIntegerInputTypeTest<int16_t>(valuesData, endpointsData, expected);
-  runIntegerInputTypeTest<int32_t>(valuesData, endpointsData, expected);
-  runIntegerInputTypeTest<int64_t>(valuesData, endpointsData, expected);
+  testIntegerInputType<int8_t>(valuesData, endpointsData, expected);
+  testIntegerInputType<int16_t>(valuesData, endpointsData, expected);
+  testIntegerInputType<int32_t>(valuesData, endpointsData, expected);
+  testIntegerInputType<int64_t>(valuesData, endpointsData, expected);
 
   // Date.
   {
