@@ -274,7 +274,7 @@ class MemoryArbitrationFuzzer {
   VectorFuzzer vectorFuzzer_;
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
   folly::Synchronized<Stats> stats_;
 };
 
