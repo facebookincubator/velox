@@ -625,7 +625,6 @@ void configureReaderOptions(
   readerOptions.setUseColumnNamesForColumnMapping(
       useColumnNamesForColumnMapping);
   readerOptions.setFileSchema(fileSchema);
-  readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
   readerOptions.setCacheable(hiveSplit->cacheable);
@@ -640,6 +639,28 @@ void configureReaderOptions(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
   readerOptions.setFileMetadataCacheEnabled(
       hiveConfig->fileMetadataCacheEnabled(sessionProperties));
+
+  // Set footer speculative IO size based on file format.
+  switch (hiveSplit->fileFormat) {
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC:
+      readerOptions.setFooterSpeculativeIoSize(
+          hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+    case dwio::common::FileFormat::PARQUET:
+      readerOptions.setFooterSpeculativeIoSize(
+          hiveConfig->parquetFooterSpeculativeIoSize(sessionProperties));
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      readerOptions.setFooterSpeculativeIoSize(
+          hiveConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
+      break;
+    default:
+      // Use ORC default for unknown formats.
+      readerOptions.setFooterSpeculativeIoSize(
+          hiveConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+  }
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
