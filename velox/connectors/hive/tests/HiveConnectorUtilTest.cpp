@@ -279,7 +279,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
   EXPECT_EQ(
-      readerOptions.footerEstimatedSize(),
+      readerOptions.footerSpeculativeIoSize(),
       hiveConfig->orcFooterSpeculativeIoSize(&sessionProperties));
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
@@ -357,9 +357,9 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     configureReaderOptions(
         hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
     EXPECT_EQ(
-        readerOptions.footerEstimatedSize(),
+        readerOptions.footerSpeculativeIoSize(),
         hiveConfig->orcFooterSpeculativeIoSize(&sessionProperties));
-    EXPECT_EQ(readerOptions.footerEstimatedSize(), 1111);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 1111);
   }
 
   // Test DWRF format (uses ORC config).
@@ -370,9 +370,9 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     configureReaderOptions(
         hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
     EXPECT_EQ(
-        readerOptions.footerEstimatedSize(),
+        readerOptions.footerSpeculativeIoSize(),
         hiveConfig->orcFooterSpeculativeIoSize(&sessionProperties));
-    EXPECT_EQ(readerOptions.footerEstimatedSize(), 1111);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 1111);
   }
 
   // Test Parquet format.
@@ -383,9 +383,9 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     configureReaderOptions(
         hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
     EXPECT_EQ(
-        readerOptions.footerEstimatedSize(),
+        readerOptions.footerSpeculativeIoSize(),
         hiveConfig->parquetFooterSpeculativeIoSize(&sessionProperties));
-    EXPECT_EQ(readerOptions.footerEstimatedSize(), 2222);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 2222);
   }
 
   // Test Nimble format.
@@ -396,9 +396,9 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     configureReaderOptions(
         hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
     EXPECT_EQ(
-        readerOptions.footerEstimatedSize(),
+        readerOptions.footerSpeculativeIoSize(),
         hiveConfig->nimbleFooterSpeculativeIoSize(&sessionProperties));
-    EXPECT_EQ(readerOptions.footerEstimatedSize(), 3333);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 3333);
   }
 }
 
