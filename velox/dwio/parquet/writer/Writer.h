@@ -129,39 +129,23 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   // Parsing session and hive configs.
 
-  // This isn't a typo; session and hive connector config names are different
-  // ('_' vs '-').
-  static constexpr const char* kParquetSessionWriteTimestampUnit =
+  // Session and connector config names differ by '_' vs '-' separators.
+  // Connector keys are inferred from session keys by replacing '_' with '-'.
+  static constexpr const char* kParquetWriteTimestampUnit =
       "hive.parquet.writer.timestamp_unit";
-  static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
-      "hive.parquet.writer.timestamp-unit";
-  static constexpr const char* kParquetSessionEnableDictionary =
+  static constexpr const char* kParquetEnableDictionary =
       "hive.parquet.writer.enable_dictionary";
-  static constexpr const char* kParquetHiveConnectorEnableDictionary =
-      "hive.parquet.writer.enable-dictionary";
-  static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
+  static constexpr const char* kParquetDictionaryPageSizeLimit =
       "hive.parquet.writer.dictionary_page_size_limit";
-  static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
-      "hive.parquet.writer.dictionary-page-size-limit";
-  static constexpr const char* kParquetSessionDataPageVersion =
+  static constexpr const char* kParquetDataPageVersion =
       "hive.parquet.writer.datapage_version";
-  static constexpr const char* kParquetHiveConnectorDataPageVersion =
-      "hive.parquet.writer.datapage-version";
-  static constexpr const char* kParquetSessionWritePageSize =
+  static constexpr const char* kParquetWritePageSize =
       "hive.parquet.writer.page_size";
-  static constexpr const char* kParquetHiveConnectorWritePageSize =
-      "hive.parquet.writer.page-size";
-  static constexpr const char* kParquetSessionWriteBatchSize =
+  static constexpr const char* kParquetWriteBatchSize =
       "hive.parquet.writer.batch_size";
-  static constexpr const char* kParquetHiveConnectorWriteBatchSize =
-      "hive.parquet.writer.batch-size";
-  static constexpr const char* kParquetHiveConnectorCreatedBy =
-      "hive.parquet.writer.created-by";
-
-  // Use the same property name from HiveConfig::kMaxTargetFileSize.
-  static constexpr const char* kParquetConnectorMaxTargetFileSize =
-      "max-target-file-size";
-  static constexpr const char* kParquetSessionMaxTargetFileSize =
+  static constexpr const char* kParquetCreatedBy =
+      "hive.parquet.writer.created_by";
+  static constexpr const char* kParquetMaxTargetFileSize =
       "max_target_file_size";
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
