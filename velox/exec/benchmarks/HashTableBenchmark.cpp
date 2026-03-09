@@ -675,12 +675,11 @@ int main(int argc, char** argv) {
     folly::addBenchmark(
         __FILE__,
         param.title,
-        [param, &bm, &results, initialized = std::make_shared<bool>(false)]() {
-          if (!*initialized) {
+        [param, &bm, &results, once = std::make_shared<std::once_flag>()]() {
+          std::call_once(*once, [&] {
             folly::BenchmarkSuspender suspender;
             bm->makeData(param);
-            *initialized = true;
-          }
+          });
           combineResults(results, bm->run());
           return 1;
         });
