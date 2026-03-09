@@ -1696,6 +1696,10 @@ bool registerStepAwareBuiltinAggregationFunctions(const std::string& prefix) {
           .returnType("double")
           .argumentType("double")
           .build()};
+  registerAggregationFunctionForStep(
+      prefix + "avg",
+      core::AggregationNode::Step::kSingle,
+      avgSingleSignatures);
 
   auto avgPartialSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
