@@ -41,6 +41,316 @@
             
   <section id="pyvelox-plan-builder-api">
 <h1>Pyvelox Plan Builder Api<a class="headerlink" href="#pyvelox-plan-builder-api" title="Link to this heading">¶</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pyvelox.plan_builder.</span></span><span class="sig-name descname"><span class="pre">PlanNode</span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode.__init__" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode.__str__">
+<span class="sig-name descname"><span class="pre">__str__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode.__str__" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a short and recursive description of the plan.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode.id">
+<span class="sig-name descname"><span class="pre">id</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode.id" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the id of the current plan node.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode.name">
+<span class="sig-name descname"><span class="pre">name</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode.name" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the name of the current plan node.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode.serialize">
+<span class="sig-name descname"><span class="pre">serialize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode.serialize" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a serialized string containing the plan specification.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanNode.to_string">
+<span class="sig-name descname"><span class="pre">to_string</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanNode.to_string" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a detailed and recursive description of the plan.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pyvelox.plan_builder.</span></span><span class="sig-name descname"><span class="pre">PlanBuilder</span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.__init__" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.aggregate">
+<span class="sig-name descname"><span class="pre">aggregate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">grouping_keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aggregations</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.aggregate" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a single stage aggregation.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>grouping_keys: List of columns to group by.
+aggregations: List of aggregate expressions.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.filter">
+<span class="sig-name descname"><span class="pre">filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">filter</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.filter" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a filter node. The filter expression is specified as a
+SQL expression.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.get_plan_node">
+<span class="sig-name descname"><span class="pre">get_plan_node</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.get_plan_node" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the current plan node.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.hash_join">
+<span class="sig-name descname"><span class="pre">hash_join</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self:</span> <span class="pre">pyvelox.plan_builder.PlanBuilder,</span> <span class="pre">left_keys:</span> <span class="pre">collections.abc.Sequence[str],</span> <span class="pre">right_keys:</span> <span class="pre">collections.abc.Sequence[str],</span> <span class="pre">build_plan_node:</span> <span class="pre">pyvelox.plan_builder.PlanNode,</span> <span class="pre">output:</span> <span class="pre">collections.abc.Sequence[str]</span> <span class="pre">=</span> <span class="pre">[],</span> <span class="pre">filter:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'',</span> <span class="pre">join_type:</span> <span class="pre">pyvelox.plan_builder.JoinType</span> <span class="pre">=</span> <span class="pre">&lt;JoinType.INNER:</span> <span class="pre">0&gt;</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.hash_join" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a hash join node. Uses the build_plan_node subtree to build the
+hash table, and the current subtree as the probe side.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>left_keys: List of keys from the left table (probe).
+right_keys: List of keys from the right table (build).
+build_plan_node: The plan node defined the subplan to join with.
+output: List of columns to be projected out of the join.
+filter: Optional join filter expression.
+join_type: Join type (inner, left, right, full, etc).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.index_lookup_join">
+<span class="sig-name descname"><span class="pre">index_lookup_join</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self:</span> <span class="pre">pyvelox.plan_builder.PlanBuilder,</span> <span class="pre">left_keys:</span> <span class="pre">collections.abc.Sequence[str],</span> <span class="pre">right_keys:</span> <span class="pre">collections.abc.Sequence[str],</span> <span class="pre">index_plan_node:</span> <span class="pre">pyvelox.plan_builder.PlanNode,</span> <span class="pre">output:</span> <span class="pre">collections.abc.Sequence[str]</span> <span class="pre">=</span> <span class="pre">[],</span> <span class="pre">join_type:</span> <span class="pre">pyvelox.plan_builder.JoinType</span> <span class="pre">=</span> <span class="pre">&lt;JoinType.INNER:</span> <span class="pre">0&gt;</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.index_lookup_join" title="Link to this definition">¶</a></dt>
+<dd><p>Adds an index lookup join node. It requires the index_plan_node
+subtree to be composed of a single table scan on a connector with
+indexed access support.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>left_keys: List of keys from the left table.
+right_keys: List of keys from the right table.
+index_plan_node: The subtree containing the lookup table scan.
+output: List of columns to be projected out of the join.
+join_type: Join type (inner, left, right, full, etc).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.limit">
+<span class="sig-name descname"><span class="pre">limit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SupportsInt</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">SupportsIndex</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SupportsInt</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">SupportsIndex</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_partial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.limit" title="Link to this definition">¶</a></dt>
+<dd><p>Limit how many rows from the input to produce as output.</p>
+<dl>
+<dt>Args:</dt><dd><p>count: How many rows to produce, at most.
+offset: Hoy many rows from the beggining of the input to skip.
+is_partial: If this is restricting partial results and hence</p>
+<blockquote>
+<div><p>can be applied once per driver, or if it’s applied
+to the query output.</p>
+</div></blockquote>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.merge_join">
+<span class="sig-name descname"><span class="pre">merge_join</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self:</span> <span class="pre">pyvelox.plan_builder.PlanBuilder,</span> <span class="pre">left_keys:</span> <span class="pre">collections.abc.Sequence[str],</span> <span class="pre">right_keys:</span> <span class="pre">collections.abc.Sequence[str],</span> <span class="pre">right_plan_node:</span> <span class="pre">pyvelox.plan_builder.PlanNode,</span> <span class="pre">output:</span> <span class="pre">collections.abc.Sequence[str]</span> <span class="pre">=</span> <span class="pre">[],</span> <span class="pre">filter:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'',</span> <span class="pre">join_type:</span> <span class="pre">pyvelox.plan_builder.JoinType</span> <span class="pre">=</span> <span class="pre">&lt;JoinType.INNER:</span> <span class="pre">0&gt;</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.merge_join" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a merge join node. Merge join requires that left and right sides
+and sorted based on the join keys.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>left_keys: List of keys from the left table.
+right_keys: List of keys from the right table.
+right_plan_node: The plan node defined the subplan to join with.
+output: List of columns to be projected out of the join.
+filter: Optional join filter expression.
+join_type: Join type (inner, left, right, full, etc).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.new_builder">
+<span class="sig-name descname"><span class="pre">new_builder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.new_builder" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a new builder sharing the same plan node id generator,
+so that they can be safely reused to build different parts of the
+same plan.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.order_by">
+<span class="sig-name descname"><span class="pre">order_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_partial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.order_by" title="Link to this definition">¶</a></dt>
+<dd><p>Sorts the input based on the values of sorting keys.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><dl class="simple">
+<dt>keys: List of columns to order by. The strings can be column names</dt><dd><p>and optionally contain the sort orientation (“col” or
+“col DESC”).</p>
+</dd>
+<dt>is_partial: If this node is sorting partial query results (and hence</dt><dd><p>can run in parallel in multiple drivers), or final.</p>
+</dd>
+</dl>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.project">
+<span class="sig-name descname"><span class="pre">project</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">projections</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.project" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a projection node, calculating expression specified in
+<cite>projections</cite>. Expressions are specified as SQL expressions.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.sorted_merge">
+<span class="sig-name descname"><span class="pre">sorted_merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sources</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.sorted_merge" title="Link to this definition">¶</a></dt>
+<dd><p>Takes N sorted <cite>source</cite> subtrees and merges them into a sorted output.
+Assumes that all sources are sorted on <cite>keys</cite>.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>keys: The sorting keys.
+sources: The list of sources to merge.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.streaming_aggregate">
+<span class="sig-name descname"><span class="pre">streaming_aggregate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">grouping_keys</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aggregations</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.streaming_aggregate" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a single stage streaming aggregation. Assumes data is sorted based
+on the grouping keys.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>grouping_keys: List of columns to group by.
+aggregations: List of aggregate expressions.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.table_scan">
+<span class="sig-name descname"><span class="pre">table_scan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self:</span> <span class="pre">pyvelox.plan_builder.PlanBuilder</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_schema:</span> <span class="pre">pyvelox.type.Type</span> <span class="pre">=</span> <span class="pre">&lt;pyvelox.type.Type</span> <span class="pre">object</span> <span class="pre">at</span> <span class="pre">0x7ff0e49eacb0&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aliases:</span> <span class="pre">collections.abc.Mapping[str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">str]</span> <span class="pre">=</span> <span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subfields:</span> <span class="pre">collections.abc.Mapping[str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">collections.abc.Sequence[typing.SupportsInt</span> <span class="pre">|</span> <span class="pre">typing.SupportsIndex]]</span> <span class="pre">=</span> <span class="pre">{}</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filters:</span> <span class="pre">collections.abc.Sequence[str]</span> <span class="pre">=</span> <span class="pre">[]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">remaining_filter:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">row_index:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connector_id:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'hive'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_files:</span> <span class="pre">collections.abc.Sequence[facebook::velox::py::PyFile]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.table_scan" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a table scan node to the plan.</p>
+<dl>
+<dt>Args:</dt><dd><dl class="simple">
+<dt>output_schema: A RowType containing the schema to be projected out</dt><dd><p>of the scan.</p>
+</dd>
+<dt>aliases: An optional map of aliases to apply, from the desired</dt><dd><p>output name to the name as defined in the file. If
+there are aliases, <cite>output</cite> should be specified based
+on the aliased name.</p>
+</dd>
+<dt>subfields: Used to project individual items from columns instead</dt><dd><p>of reading entire containers. It maps from the column
+name to a list of items to be projected out.</p>
+</dd>
+<dt>filters: A list of SQL filters to be applied to the data as it is</dt><dd><p>decoded/read.</p>
+</dd>
+<dt>remainingFilter: SQL expression for the additional conjunct. May</dt><dd><p>include multiple columns and SQL functions. The
+remainingFilter is AND’ed with the other filters.</p>
+</dd>
+<dt>row_index: If defined, creates an output column with this name</dt><dd><p>producing $row_ids. This name needs to be part of the
+<cite>output</cite> as BIGINT.</p>
+</dd>
+</dl>
+<p>connector_id: ID of the connector to use for this scan.
+input_files: If defined, uses as the input files so that no splits</p>
+<blockquote>
+<div><p>will need to be added later.</p>
+</div></blockquote>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.table_write">
+<span class="sig-name descname"><span class="pre">table_write</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self:</span> <span class="pre">pyvelox.plan_builder.PlanBuilder</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_file:</span> <span class="pre">facebook::velox::py::PyFile</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_path:</span> <span class="pre">facebook::velox::py::PyFile</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connector_id:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'hive'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_schema:</span> <span class="pre">pyvelox.type.Type</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.table_write" title="Link to this definition">¶</a></dt>
+<dd><p>Adds a table write node to the plan.</p>
+<dl>
+<dt>Args:</dt><dd><p>output_file: Name of the file to be written.
+output_path: The output path where output files will be written.</p>
+<blockquote>
+<div><p>Specify this parameter instead of <cite>outputFile</cite> if the
+task is supposed to write files in parallel using
+multiple drivers. The actual file names in this path
+will be automatically generated and returned as the
+TableWriter output. Takes precedence over output_file.</p>
+</div></blockquote>
+<p>connector_id: ID of the connector to use for this scan.
+output_schema: An optional RowType containing the schema to be</p>
+<blockquote>
+<div><p>written to the file. By default write the schema
+produced by the operator upstream.</p>
+</div></blockquote>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.tpch_gen">
+<span class="sig-name descname"><span class="pre">tpch_gen</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">table_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale_factor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SupportsFloat</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">SupportsIndex</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_parts</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">SupportsInt</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">SupportsIndex</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connector_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'tpch'</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.tpch_gen" title="Link to this definition">¶</a></dt>
+<dd><p>Generates TPC-H data on the fly using dbgen. Note that generating data
+on the fly is not terribly efficient, so for performance evaluation one
+should generate data using this node, write it to output storage files,
+(Parquet, ORC, or similar), then benchmark a query plan that reads
+those files.</p>
+<dl>
+<dt>Args:</dt><dd><p>table_name: The TPC-H table name to generate data for.
+columns: The columns from <cite>table_name</cite> to generate data for. If</p>
+<blockquote>
+<div><p>empty (the default), generate data for all columns.</p>
+</div></blockquote>
+<dl class="simple">
+<dt>scale_factor: TPC-H scale factor to use - controls the amount of</dt><dd><p>data generated.</p>
+</dd>
+<dt>num_parts: How many splits to generate. This controls the parallelism</dt><dd><p>and the number of output files to be generated.</p>
+</dd>
+</dl>
+<p>connector_id: ID of the connector to use for this scan.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.unnest">
+<span class="sig-name descname"><span class="pre">unnest</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">unnest_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replicate_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">collections.abc.Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ordinal_column</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">empty_unnest_value_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.unnest" title="Link to this definition">¶</a></dt>
+<dd><p>Add an UnnestNode to unnest (explode) one or more columns of type array
+or map. The output will contain ‘replicatedColumns’ followed by
+unnested columns, followed by an optional ordinality column.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><dl class="simple">
+<dt>unnest_columns: A subset of input columns to unnest. These columns</dt><dd><p>must be of type array or map.</p>
+</dd>
+<dt>replicate_columns: A subset of input columns to include in the output</dt><dd><p>unmodified.</p>
+</dd>
+<dt>ordinal_column: An optional name for the ‘ordinal’ column to produce.</dt><dd><p>This column contains the index of the element of the
+unnested array or map. If not specified, the output
+will not contain this column.</p>
+</dd>
+<dt>empty_unnest_value_name: An optional name for the ‘emptyUnnestValue’</dt><dd><p>column to produce. This column contains a
+boolean indicating if the output row has empty
+unnest value or not. If not specified, the
+output will not contain this column and the
+unnest operator also skips producing output
+rows with empty unnest value.</p>
+</dd>
+</dl>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.plan_builder.PlanBuilder.values">
+<span class="sig-name descname"><span class="pre">values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self:</span> <span class="pre">pyvelox.plan_builder.PlanBuilder</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">values:</span> <span class="pre">collections.abc.Sequence[facebook::velox::py::PyVector]</span> <span class="pre">=</span> <span class="pre">[]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder" title="pyvelox.plan_builder.PlanBuilder"><span class="pre">pyvelox.plan_builder.PlanBuilder</span></a></span></span><a class="headerlink" href="#pyvelox.plan_builder.PlanBuilder.values" title="Link to this definition">¶</a></dt>
+<dd><p>Adds the specified vectors to the operator tree as input. All input
+vectors need to be RowVectors.</p>
+</dd></dl>
+
+</dd></dl>
+
 </section>
 
 
@@ -50,6 +360,45 @@
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Pyvelox Plan Builder Api</a><ul>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode"><code class="docutils literal notranslate"><span class="pre">PlanNode</span></code></a><ul>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode.__init__"><code class="docutils literal notranslate"><span class="pre">PlanNode.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode.__str__"><code class="docutils literal notranslate"><span class="pre">PlanNode.__str__()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode.id"><code class="docutils literal notranslate"><span class="pre">PlanNode.id()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode.name"><code class="docutils literal notranslate"><span class="pre">PlanNode.name()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode.serialize"><code class="docutils literal notranslate"><span class="pre">PlanNode.serialize()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanNode.to_string"><code class="docutils literal notranslate"><span class="pre">PlanNode.to_string()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder"><code class="docutils literal notranslate"><span class="pre">PlanBuilder</span></code></a><ul>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.__init__"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.aggregate"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.aggregate()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.filter"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.filter()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.get_plan_node"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.get_plan_node()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.hash_join"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.hash_join()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.index_lookup_join"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.index_lookup_join()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.limit"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.limit()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.merge_join"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.merge_join()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.new_builder"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.new_builder()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.order_by"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.order_by()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.project"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.project()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.sorted_merge"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.sorted_merge()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.streaming_aggregate"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.streaming_aggregate()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.table_scan"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.table_scan()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.table_write"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.table_write()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.tpch_gen"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.tpch_gen()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.unnest"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.unnest()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.plan_builder.PlanBuilder.values"><code class="docutils literal notranslate"><span class="pre">PlanBuilder.values()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="arrow.html"
