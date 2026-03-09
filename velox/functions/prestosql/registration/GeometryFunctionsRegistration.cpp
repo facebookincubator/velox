@@ -17,10 +17,10 @@
 #include <string>
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/GeometryFunctions.h"
+#include "velox/functions/prestosql/GooglePolylineFunctions.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/SphericalGeographyRegistration.h"
-#include "velox/functions/prestosql/GooglePolylineFunctions.h"
 
 namespace facebook::velox::functions {
 
@@ -216,10 +216,8 @@ void registerBingTileGeometryFunctions(const std::string& prefix) {
 }
 
 void registerGooglePolylineFunctions(const std::string& prefix) {
-  registerFunction<
-      GooglePolylineEncodeFunction,
-      Varchar,
-      Array<Geometry>>({{prefix + "google_polyline_encode"}});
+  registerFunction<GooglePolylineEncodeFunction, Varchar, Array<Geometry>>(
+      {{prefix + "google_polyline_encode"}});
 
   registerFunction<
       GooglePolylineEncodeFunction,
@@ -227,10 +225,8 @@ void registerGooglePolylineFunctions(const std::string& prefix) {
       Array<Geometry>,
       int64_t>({{prefix + "google_polyline_encode"}});
 
-  registerFunction<
-      GooglePolylineDecodeFunction,
-      Array<Geometry>,
-      Varchar>({{prefix + "google_polyline_decode"}});
+  registerFunction<GooglePolylineDecodeFunction, Array<Geometry>, Varchar>(
+      {{prefix + "google_polyline_decode"}});
 
   registerFunction<
       GooglePolylineDecodeFunction,

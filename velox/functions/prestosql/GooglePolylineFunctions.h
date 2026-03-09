@@ -29,26 +29,35 @@
 namespace facebook::velox::functions {
 
 namespace {
+// Google Polyline encoding constants
+constexpr int32_t kAsciiOffset = 63; // 0x3f - ASCII offset for printable chars
+constexpr int32_t kLumpMask = 0x20; // Continuation bit for multi-lump values
+constexpr int32_t kDataMask = 0x1f; // 5-bit data mask per lump
+constexpr int32_t kLumpSize = 5; // 5-bit lumps
 
 /// Encode a single delta value using Google Polyline encoding.
 /// https://developers.google.com/maps/documentation/utilities/polylinealgorithm
 /// Algorithm:
-/// 1. Convert signed to unsigned.
-/// 2. Encode in 5 bit lumps.
-/// 3. Add 63 to each lump to make it printable ASCII.
+/// 1. Convert signed to unsigned using ZigZag encoding:
+///    - Left shift by 1 bit
+///    - If negative, invert all bits
+///    This ensures efficient encoding of both positive and negative deltas.
+/// 2. Break into 5-bit lumps
+/// 3. Set continuation bit (0x20) for all lumps except the last
+/// 4. Add ASCII offset (63) to make printable characters
 inline void encodeNextDelta(int64_t delta, std::string& result) {
   int64_t unsignedDelta = delta << 1;
   if (delta < 0) {
     unsignedDelta = ~unsignedDelta;
   }
 
-  while (unsignedDelta >= 0x20) {
-    int64_t nextChunk = (0x20 | (unsignedDelta & 0x1f)) + 63;
-    result.push_back(static_cast<char>(nextChunk));
-    unsignedDelta >>= 5;
+  while (unsignedDelta >= kLumpMask) {
+    int64_t nextLump = (kLumpMask | (unsignedDelta & kDataMask)) + kAsciiOffset;
+    result.push_back(static_cast<char>(nextLump));
+    unsignedDelta >>= kLumpSize;
   }
 
-  result.push_back(static_cast<char>(unsignedDelta + 63));
+  result.push_back(static_cast<char>(unsignedDelta + kAsciiOffset));
 }
 
 /// https://developers.google.com/maps/documentation/utilities/polylinealgorithm
@@ -56,30 +65,36 @@ inline void encodeNextDelta(int64_t delta, std::string& result) {
 /// 1. Read 5 bit lumps until continuation bit is not set.
 /// 2. Combine lumps into unsigned value.
 /// 3. Convert unsigned to signed.
-inline int64_t decodeNextDelta(const std::string& encoded, size_t& index) {
-  int64_t result = 0;
+inline Status
+decodeNextDelta(int64_t& result, const StringView& encoded, size_t& index) {
+  int64_t value = 0;
   int shift = 0;
   int64_t b;
 
   do {
-    VELOX_USER_CHECK_LT(
-        index,
-        encoded.length(),
-        "Invalid polyline encoding: unexpected end of input");
+    // Check for unexpected end of input
+    if (index >= encoded.size()) {
+      return Status::UserError(
+          "Invalid polyline encoding: unexpected end of input");
+    }
 
-    b = static_cast<int64_t>(static_cast<unsigned char>(encoded[index++])) - 63;
-    result |= (b & 0x1f) << shift;
-    shift += 5;
-  } while (b >= 0x20);
+    b = static_cast<int64_t>(
+            static_cast<unsigned char>(encoded.data()[index++])) -
+        kAsciiOffset;
+    value |= (b & kDataMask) << shift;
+    shift += kLumpSize;
+  } while (b >= kLumpMask);
 
-  return ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+  result = ((value & 1) != 0) ? ~(value >> 1) : (value >> 1);
+  return Status::OK();
 }
-
 } // namespace
 
-// Default and minimum precision values for Google Polyline encoding.
+// Default and min/max precision values for Google Polyline encoding.
 constexpr int64_t kDefaultPrecisionExponent = 5;
 constexpr int64_t kMinimumPrecisionExponent = 1;
+constexpr int64_t kMaximumPrecisionExponent = 16;
+constexpr double kDefaultPrecision = 100000.0; // 10^5
 
 /// Google Polyline Encode Function
 /// Encodes an array of Point geometries into a Google Polyline encoded string.
@@ -91,59 +106,69 @@ struct GooglePolylineEncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Encode array of Point geometries with default precision.
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Array<Geometry>>& points) {
-    callImpl(result, points, kDefaultPrecisionExponent);
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Array<Geometry>>& points) {
+    return callImpl(result, points, kDefaultPrecisionExponent);
   }
 
   // Encode array of Point geometries with custom precision.
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE Status call(
       out_type<Varchar>& result,
       const arg_type<Array<Geometry>>& points,
       int64_t precisionExponent) {
-    callImpl(result, points, precisionExponent);
+    return callImpl(result, points, precisionExponent);
   }
 
-  private:
-  void callImpl(
+ private:
+  Status callImpl(
       out_type<Varchar>& result,
       const arg_type<Array<Geometry>>& points,
       int64_t precisionExponent) {
-  VELOX_USER_CHECK_GE(
-      precisionExponent,
-      kMinimumPrecisionExponent,
-      "Minimum Polyline precision exponent should be {}",
-      kMinimumPrecisionExponent);
-
-  double precision = std::pow(10.0, static_cast<double>(precisionExponent));
-
-  std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
-      common::geospatial::GeometryDeserializer::deserializePointsToCoordinate
-                           <Geometry>(points, "google_polyline_encode", false);
-
-  std::string encoded;
-  int64_t prevX = 0;
-  int64_t prevY = 0;
-
-  for (size_t i = 0; i < coords->size(); ++i) {
-    int64_t x = std::llround(coords->getX(i) * precision);
-    int64_t y = std::llround(coords->getY(i) * precision);
-
-    if (i == 0) {
-      encodeNextDelta(x, encoded);
-      encodeNextDelta(y, encoded);
-    } else {
-      encodeNextDelta(x - prevX, encoded);
-      encodeNextDelta(y - prevY, encoded);
+    if (precisionExponent < kMinimumPrecisionExponent) {
+      return Status::UserError(
+          fmt::format(
+              "Polyline precision must be greater or equal to {}",
+              kMinimumPrecisionExponent));
     }
-    prevX = x;
-    prevY = y;
-  }
 
-  result.resize(encoded.size());
-  std::memcpy(result.data(), encoded.data(), encoded.size());
-}
+    if (precisionExponent > kMaximumPrecisionExponent) {
+      return Status::UserError(
+          fmt::format(
+              "Polyline precision exponent must not exceed {}",
+              kMaximumPrecisionExponent));
+    }
+
+    double precision = (precisionExponent == kDefaultPrecisionExponent)
+        ? kDefaultPrecision
+        : std::pow(10.0, static_cast<double>(precisionExponent));
+
+    std::unique_ptr<geos::geom::CoordinateArraySequence> coords =
+        common::geospatial::GeometryDeserializer::deserializePointsToCoordinate<
+            Geometry>(points, "google_polyline_encode", false);
+
+    std::string encoded;
+    int64_t prevX = 0;
+    int64_t prevY = 0;
+
+    for (size_t i = 0; i < coords->size(); ++i) {
+      int64_t x = std::llround(coords->getX(i) * precision);
+      int64_t y = std::llround(coords->getY(i) * precision);
+
+      if (i == 0) {
+        encodeNextDelta(x, encoded);
+        encodeNextDelta(y, encoded);
+      } else {
+        encodeNextDelta(x - prevX, encoded);
+        encodeNextDelta(y - prevY, encoded);
+      }
+      prevX = x;
+      prevY = y;
+    }
+
+    result.resize(encoded.size());
+    std::memcpy(result.data(), encoded.data(), encoded.size());
+    return Status::OK();
+  }
 };
 
 /// Google Polyline Decode Function.
@@ -159,41 +184,59 @@ struct GooglePolylineDecodeFunction {
     factory_ = geos::geom::GeometryFactory::create();
   }
   // Decode polyline to array of Point geometries with default precision.
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Array<Geometry>>& result,
-      const arg_type<Varchar>& encoded) {
-    callImpl(result, encoded, kDefaultPrecisionExponent);
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Array<Geometry>>& result, const arg_type<Varchar>& encoded) {
+    return callImpl(result, encoded, kDefaultPrecisionExponent);
   }
 
   // Decode polyline to array of Point geometries with custom precision.
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE Status call(
       out_type<Array<Geometry>>& result,
       const arg_type<Varchar>& encoded,
       int64_t precisionExponent) {
-    callImpl(result, encoded, precisionExponent);
+    return callImpl(result, encoded, precisionExponent);
   }
 
-  private:
-  void callImpl(
+ private:
+  Status callImpl(
       out_type<Array<Geometry>>& result,
       const arg_type<Varchar>& encoded,
       int64_t precisionExponent) {
-    VELOX_USER_CHECK_GE(
-        precisionExponent,
-        kMinimumPrecisionExponent,
-        "Polyline precision exponent must be at least {}",
-        kMinimumPrecisionExponent);
+    if (precisionExponent < kMinimumPrecisionExponent) {
+      return Status::UserError(
+          fmt::format(
+              "Polyline precision must be greater or equal to {}",
+              kMinimumPrecisionExponent));
+    }
 
-    double precision = std::pow(10.0, static_cast<double>(precisionExponent));
-    std::string encodedStr(encoded.data(), encoded.size());
+    if (precisionExponent > kMaximumPrecisionExponent) {
+      return Status::UserError(
+          fmt::format(
+              "Polyline precision exponent must not exceed {}",
+              kMaximumPrecisionExponent));
+    }
+
+    double precision = (precisionExponent == kDefaultPrecisionExponent)
+        ? kDefaultPrecision
+        : std::pow(10.0, static_cast<double>(precisionExponent));
+
     size_t index = 0;
-
     int64_t x = 0;
     int64_t y = 0;
 
-    while (index < encodedStr.length()) {
-      int64_t deltaX = decodeNextDelta(encodedStr, index);
-      int64_t deltaY = decodeNextDelta(encodedStr, index);
+    while (index < encoded.size()) {
+      int64_t deltaX, deltaY;
+
+      // Check Status return from decodeNextDelta
+      auto status = decodeNextDelta(deltaX, encoded, index);
+      if (!status.ok()) {
+        return status;
+      }
+
+      status = decodeNextDelta(deltaY, encoded, index);
+      if (!status.ok()) {
+        return status;
+      }
 
       x += deltaX;
       y += deltaY;
@@ -201,11 +244,13 @@ struct GooglePolylineDecodeFunction {
       double coordX = static_cast<double>(x) / precision;
       double coordY = static_cast<double>(y) / precision;
 
-      auto point = factory_->createPoint(geos::geom::Coordinate(coordX, coordY));
+      auto point =
+          factory_->createPoint(geos::geom::Coordinate(coordX, coordY));
 
       auto& itemWriter = result.add_item();
       common::geospatial::GeometrySerializer::serialize(*point, itemWriter);
     }
+    return Status::OK();
   }
   geos::geom::GeometryFactory::Ptr factory_;
 };
