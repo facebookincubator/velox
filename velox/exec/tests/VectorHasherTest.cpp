@@ -1101,6 +1101,52 @@ TEST_F(VectorHasherTest, simdRange) {
   }
 }
 
+TEST_F(VectorHasherTest, lookupValueIdsDictionary) {
+  auto base = makeNullableFlatVector<int32_t>({10, 11, 12, 13, 14, 15});
+
+  auto hasher = VectorHasher::create(INTEGER(), 0);
+  raw_vector<uint64_t> result(8, pool());
+  std::fill(result.begin(), result.end(), 0);
+  SelectivityVector allRows(base->size());
+  hasher->decode(*base, allRows);
+  hasher->computeValueIds(allRows, result);
+
+  auto probeBase =
+      makeNullableFlatVector<int32_t>({15, 100, 11, 14, std::nullopt, 10});
+  auto indices = makeIndices(8, [](vector_size_t row) {
+    static constexpr vector_size_t kIndices[] = {0, 1, 2, 3, 4, 5, 0, 2};
+    return kIndices[row];
+  });
+  auto probe =
+      BaseVector::wrapInDictionary(BufferPtr(nullptr), indices, 8, probeBase);
+
+  SelectivityVector rows(8);
+  rows.clearAll();
+  rows.setValid(0, true);
+  rows.setValid(1, true);
+  rows.setValid(2, true);
+  rows.setValid(4, true);
+  rows.setValid(6, true);
+  rows.updateBounds();
+  std::fill(result.begin(), result.end(), 0);
+
+  VectorHasher::ScratchMemory scratch;
+  hasher->lookupValueIds(*probe, rows, scratch, result);
+
+  EXPECT_TRUE(rows.isValid(0));
+  EXPECT_FALSE(rows.isValid(1));
+  EXPECT_TRUE(rows.isValid(2));
+  EXPECT_TRUE(rows.isValid(4));
+  EXPECT_TRUE(rows.isValid(6));
+  EXPECT_EQ(rows.countSelected(), 4);
+
+  EXPECT_EQ(result[0], 6);
+  EXPECT_EQ(result[1], 0);
+  EXPECT_EQ(result[2], 2);
+  EXPECT_EQ(result[4], 0);
+  EXPECT_EQ(result[6], 6);
+}
+
 TEST_F(VectorHasherTest, typeMismatch) {
   auto hasher = VectorHasher::create(BIGINT(), 0);
 
