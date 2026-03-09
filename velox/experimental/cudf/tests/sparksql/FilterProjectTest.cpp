@@ -71,10 +71,9 @@ TEST_F(CudfFilterProjectTest, hashWithSeed) {
   facebook::velox::test::assertEqualVectors(expected, hashResults);
 }
 
-// cudf's murmurhash3_x86_32 hashes each column with the same scalar seed and
-// combines results via boost hash_combine: hash_combine(h(col0, seed),
-// h(col1, seed)). Spark instead hashes columns iteratively, using each
-// column's per-row hash as the seed for the next: h(col1, h(col0, seed)).
+// cuDF's murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
+// h(col1, seed)), while Spark instead hashes columns iteratively:
+// h(col1, h(col0, seed)).
 // These produce different results for multi-column inputs. The cudf hashing
 // API only accepts a scalar uint32_t seed (no per-row seed column), so
 // Spark's iterative semantics cannot be replicated without a custom CUDA
