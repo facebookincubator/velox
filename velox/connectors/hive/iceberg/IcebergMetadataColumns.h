@@ -55,6 +55,27 @@ struct IcebergMetadataColumn {
         BIGINT(),
         "Ordinal position of a deleted row in the data file");
   }
+
+  static constexpr const char* kRowIdColumnName = "_row_id";
+  static constexpr const char* kLastUpdatedSequenceNumberColumnName =
+      "_last_updated_sequence_number";
+
+  static std::shared_ptr<IcebergMetadataColumn> icebergRowIdColumn() {
+    return std::make_shared<IcebergMetadataColumn>(
+        2147483540,
+        kRowIdColumnName,
+        BIGINT(),
+        "Implicit row ID that is automatically assigned");
+  }
+
+  static std::shared_ptr<IcebergMetadataColumn>
+  icebergLastUpdatedSequenceNumberColumn() {
+    return std::make_shared<IcebergMetadataColumn>(
+        2147483539,
+        kLastUpdatedSequenceNumberColumnName,
+        BIGINT(),
+        "Sequence number when the row was last updated");
+  }
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
