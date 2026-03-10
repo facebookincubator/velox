@@ -83,6 +83,9 @@ void CudfDistinct::computePartialDistinctStreaming(CudfVectorPtr tbl) {
 
     auto concatenatedTable =
         cudf::concatenate(tablesToConcat, partialOutputStream, get_output_mr());
+    cudf::detail::join_streams(
+        std::vector<rmm::cuda_stream_view>{partialOutputStream},
+        inputTableStream);
 
     // Do a distinct on the concatenated results.
     // Keep concatenatedTable alive while we use its view.

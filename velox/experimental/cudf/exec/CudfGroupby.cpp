@@ -509,21 +509,15 @@ void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
 
   // If we already have partial output, concatenate the new results with it.
   if (bufferedResult_) {
-    // Create a vector of tables to concatenate
-    std::vector<cudf::table_view> tablesToConcat;
-    tablesToConcat.push_back(bufferedResult_->getTableView());
-    tablesToConcat.push_back(groupbyOnInput->getTableView());
-
     auto partialOutputStream = bufferedResult_->stream();
-    // We need to join the input table stream on the partial output stream to
-    // make sure the intermediate results are available when we do the concat.
-    cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{inputTableStream},
-        partialOutputStream);
-
-    // Concatenate the tables
-    auto concatenatedTable =
-        cudf::concatenate(tablesToConcat, partialOutputStream, get_output_mr());
+    std::vector<CudfVectorPtr> tablesToConcat;
+    tablesToConcat.push_back(bufferedResult_);
+    tablesToConcat.push_back(groupbyOnInput);
+    auto concatenatedTable = getConcatenatedTable(
+        tablesToConcat,
+        bufferedResultType_,
+        partialOutputStream,
+        get_output_mr());
 
     // Now we have to groupby again but this time with intermediate aggregators.
     // Keep concatenatedTable alive while we use its view.
@@ -570,6 +564,8 @@ void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr tbl) {
 
   auto concatenatedTable =
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
+  cudf::detail::join_streams(
+      std::vector<rmm::cuda_stream_view>{finalStream}, inputTableStream);
   auto compactedOutput = doGroupByAggregation(
       concatenatedTable->view(),
       groupingKeyOutputChannels_,
@@ -591,17 +587,15 @@ void CudfGroupby::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
       inputTableStream);
 
   if (bufferedResult_) {
-    std::vector<cudf::table_view> tablesToConcat;
-    tablesToConcat.push_back(bufferedResult_->getTableView());
-    tablesToConcat.push_back(groupbyOnInput->getTableView());
-
     auto partialOutputStream = bufferedResult_->stream();
-    cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{inputTableStream},
-        partialOutputStream);
-
-    auto concatenatedTable =
-        cudf::concatenate(tablesToConcat, partialOutputStream, get_temp_mr());
+    std::vector<CudfVectorPtr> tablesToConcat;
+    tablesToConcat.push_back(bufferedResult_);
+    tablesToConcat.push_back(groupbyOnInput);
+    auto concatenatedTable = getConcatenatedTable(
+        tablesToConcat,
+        bufferedResultType_,
+        partialOutputStream,
+        get_temp_mr());
 
     auto compactedOutput = doGroupByAggregation(
         concatenatedTable->view(),
