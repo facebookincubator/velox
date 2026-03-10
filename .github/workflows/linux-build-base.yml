@@ -296,6 +296,7 @@ jobs:
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
+            "-DVELOX_GFLAGS_TYPE=static"
             "-DVELOX_ENABLE_BENCHMARKS=ON"
             "-DVELOX_ENABLE_EXAMPLES=ON"
             "-DVELOX_ENABLE_ARROW=ON"
