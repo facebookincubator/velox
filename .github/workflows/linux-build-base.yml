@@ -223,9 +223,10 @@ jobs:
 
   ubuntu-debug:
     runs-on: 16-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: Ubuntu debug with resolve_dependency
+    name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
@@ -234,6 +235,34 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          path: velox
+          persist-credentials: false
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Install Dependencies
+        env:
+          VELOX_BUILD_SHARED: "OFF"
+          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            mkdir /tmp/build
+            cd /tmp/build
+
+            USE_CLANG=false bash /setup-ubuntu.sh
+
+            cd /
+            rm -rf /tmp/build # cleanup to avoid issues with disk space
+          fi
 
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -246,15 +275,6 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
-        with:
-          path: velox
-          persist-credentials: false
-
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps
-
       - name: Clear CCache Statistics
         run: |
           ccache -sz
@@ -263,7 +283,7 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
+          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=6
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
@@ -273,15 +293,11 @@ jobs:
             "-DVELOX_ENABLE_GEO=ON"
             "-DVELOX_ENABLE_PARQUET=ON"
             "-DVELOX_MONO_LIBRARY=ON"
-            "-DVELOX_BUILD_SHARED=ON"
           )
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
           else
-            # Faiss (link issue when using Clang) is excluded for Clang compilation
-            # and need to be added back when using GCC.
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
-            # Investigate issues with remote function service: Issue #13897
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           make debug
