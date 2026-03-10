@@ -18,6 +18,7 @@
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
+#include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
@@ -26,6 +27,24 @@
 namespace facebook::velox::parquet {
 
 namespace {
+
+/// Finds the node with the given ID in the TypeWithId tree. Uses a full
+/// traversal because Parquet's TypeWithId nodes all share the same maxId
+/// (the global max schema element index), so the maxId-based pruning used
+/// by ORC/DWRF does not work here.
+const dwio::common::TypeWithId* findNode(
+    const dwio::common::TypeWithId& root,
+    uint32_t nodeId) {
+  if (root.id() == nodeId) {
+    return &root;
+  }
+  for (auto i = 0; i < root.size(); ++i) {
+    if (auto* result = findNode(*root.childAt(i), nodeId)) {
+      return result;
+    }
+  }
+  return nullptr;
+}
 
 bool isParquetReservedKeyword(
     std::string name,
@@ -1443,6 +1462,43 @@ ParquetReader::ParquetReader(
 
 std::optional<uint64_t> ParquetReader::numberOfRows() const {
   return readerBase_->thriftFileMetaData().num_rows;
+}
+
+std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
+    uint32_t index) const {
+  auto node = findNode(*readerBase_->schemaWithId(), index);
+  if (!node) {
+    return nullptr;
+  }
+  auto& parquetNode = static_cast<const ParquetTypeWithId&>(*node);
+  if (!parquetNode.isLeaf()) {
+    return nullptr;
+  }
+
+  auto fileMetaData = readerBase_->fileMetaData();
+  const auto numRowGroups = fileMetaData.numRowGroups();
+  if (numRowGroups == 0) {
+    return nullptr;
+  }
+
+  // Merge per-row-group statistics into file-level statistics.
+  dwio::stats::StatisticsBuilderOptions options{
+      /*stringLengthLimit=*/std::numeric_limits<uint32_t>::max()};
+  auto builder =
+      dwio::stats::StatisticsBuilder::create(*parquetNode.type(), options);
+
+  for (int i = 0; i < numRowGroups; ++i) {
+    auto rowGroup = fileMetaData.rowGroup(i);
+    auto columnChunk = rowGroup.columnChunk(parquetNode.column());
+    if (!columnChunk.hasStatistics()) {
+      return nullptr;
+    }
+    auto rowGroupStats =
+        columnChunk.getColumnStatistics(parquetNode.type(), rowGroup.numRows());
+    builder->merge(*rowGroupStats);
+  }
+
+  return builder->build();
 }
 
 const velox::RowTypePtr& ParquetReader::rowType() const {
