@@ -1297,8 +1297,6 @@ int32_t parseDecimalBitWidthOrDefault(const std::string_view format) {
 }
 
 TypePtr parseDecimalFormat(const std::string_view format) {
-  const std::string_view invalidFormatMsg =
-      "Unable to convert '{}' ArrowSchema decimal format to Velox decimal";
   try {
     std::string_view::size_type sz;
 
@@ -1309,7 +1307,9 @@ TypePtr parseDecimalFormat(const std::string_view format) {
         format.size() == firstCommaIdx + 1 ||
         (secondCommaIdx != std::string_view::npos &&
          format.size() == secondCommaIdx + 1)) {
-      VELOX_USER_FAIL(invalidFormatMsg, format);
+      VELOX_USER_FAIL(
+          "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
+          format);
     }
 
     // Parse "d:".
@@ -1331,7 +1331,9 @@ TypePtr parseDecimalFormat(const std::string_view format) {
     // Otherwise return type depends on precision.
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
-    VELOX_USER_FAIL(invalidFormatMsg, format);
+    VELOX_USER_FAIL(
+        "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
+        format);
   }
 }
 
