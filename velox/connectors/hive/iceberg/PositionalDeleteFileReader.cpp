@@ -118,7 +118,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
           deleteSplit_->partitionKeys,
           {},
           hiveConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+              connectorQueryCtx_->sessionProperties()),
+          deleteSplit_->fileFormat)) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped
     // bytes.
