@@ -326,15 +326,76 @@ struct MinMaxByNStringViewAccumulator {
     std::make_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
   }
 
+  /// Copies live strings to a fresh ValueSet and frees old storage. This
+  /// eliminates fragmentation in the HashStringAllocator caused by repeated
+  /// heap evictions. Both old and new storage coexist temporarily during
+  /// compaction. Returns the number of bytes freed.
+  uint64_t compact(HashStringAllocator* allocator) {
+    if (evictedBytes_ == 0) {
+      return 0;
+    }
+
+    const auto bytesFreed = evictedBytes_;
+    ValueSet newValueSet{allocator};
+
+    for (auto& pair : base.heapValues) {
+      if constexpr (
+          std::is_same_v<V, StringView> && std::is_same_v<C, StringView>) {
+        // Copy string data to temporaries before freeing, since the
+        // StringViews point into the allocator blocks we're about to free.
+        std::string tmpComparison(pair.first.data(), pair.first.size());
+        std::optional<std::string> tmpValue;
+        if (pair.second.has_value()) {
+          tmpValue.emplace(pair.second->data(), pair.second->size());
+        }
+        freePair(pair);
+        pair.first = newValueSet.write(StringView(tmpComparison));
+        pair.second = tmpValue.has_value()
+            ? std::optional<StringView>(
+                  newValueSet.write(StringView(*tmpValue)))
+            : std::nullopt;
+      } else if constexpr (std::is_same_v<V, StringView>) {
+        std::optional<std::string> tmpValue;
+        if (pair.second.has_value()) {
+          tmpValue.emplace(pair.second->data(), pair.second->size());
+        }
+        freePair(pair);
+        pair.second = tmpValue.has_value()
+            ? std::optional<StringView>(
+                  newValueSet.write(StringView(*tmpValue)))
+            : std::nullopt;
+      } else {
+        static_assert(
+            std::is_same_v<C, StringView>,
+            "At least one of V and C must be StringView.");
+        std::string tmpComparison(pair.first.data(), pair.first.size());
+        freePair(pair);
+        pair.first = newValueSet.write(StringView(tmpComparison));
+      }
+    }
+
+    valueSet = std::move(newValueSet);
+    evictedBytes_ = 0;
+    return bytesFreed;
+  }
+
  private:
   using Pair = typename MinMaxByNAccumulator<V, C, Compare>::Pair;
 
-  std::optional<StringView> writeString(
-      const std::optional<StringView>& value) {
+  static constexpr uint32_t kHeaderSize = sizeof(HashStringAllocator::Header);
+
+  /// Tracks the total bytes of strings freed via heap eviction. These bytes
+  /// remain on the HashStringAllocator free list causing fragmentation.
+  /// Compaction reclaims this fragmented memory.
+  uint64_t evictedBytes_{0};
+
+  static std::optional<StringView> writeString(
+      const std::optional<StringView>& value,
+      ValueSet& target) {
     if (!value.has_value()) {
       return std::nullopt;
     }
-    return valueSet.write(*value);
+    return target.write(*value);
   }
 
   void
@@ -342,9 +403,11 @@ struct MinMaxByNStringViewAccumulator {
     if constexpr (
         std::is_same_v<V, StringView> && std::is_same_v<C, StringView>) {
       base.heapValues.push_back(
-          std::make_pair(valueSet.write(comparison), writeString(value)));
+          std::make_pair(
+              valueSet.write(comparison), writeString(value, valueSet)));
     } else if constexpr (std::is_same_v<V, StringView>) {
-      base.heapValues.push_back(std::make_pair(comparison, writeString(value)));
+      base.heapValues.push_back(
+          std::make_pair(comparison, writeString(value, valueSet)));
     } else {
       static_assert(
           std::is_same_v<C, StringView>,
@@ -355,7 +418,9 @@ struct MinMaxByNStringViewAccumulator {
     std::push_heap(base.heapValues.begin(), base.heapValues.end(), comparator);
   }
 
+  /// Frees the strings in 'pair' and tracks the freed bytes for compaction.
   void freePair(typename BaseType::Heap::const_reference pair) {
+    evictedBytes_ += pairStringBytes(pair);
     if constexpr (std::is_same_v<C, StringView>) {
       valueSet.free(pair.first);
     }
@@ -364,6 +429,26 @@ struct MinMaxByNStringViewAccumulator {
         valueSet.free(*pair.second);
       }
     }
+  }
+
+  /// Returns the total allocator block bytes (payload + header) used by the
+  /// strings in 'pair'. Must be called before freeing the pair.
+  static uint64_t pairStringBytes(
+      typename BaseType::Heap::const_reference pair) {
+    uint64_t bytes = 0;
+    if constexpr (std::is_same_v<C, StringView>) {
+      if (!pair.first.isInline()) {
+        auto* header = HashStringAllocator::headerOf(pair.first.data());
+        bytes += header->size() + kHeaderSize;
+      }
+    }
+    if constexpr (std::is_same_v<V, StringView>) {
+      if (pair.second.has_value() && !pair.second->isInline()) {
+        auto* header = HashStringAllocator::headerOf(pair.second->data());
+        bytes += header->size() + kHeaderSize;
+      }
+    }
+    return bytes;
   }
 
   void
@@ -870,7 +955,34 @@ class MinMaxByNAggregate : public exec::Aggregate {
     destroyAccumulators<AccumulatorType>(groups);
   }
 
+  bool supportsCompact() const override {
+    return supportsCompaction();
+  }
+
+  uint64_t compact(folly::Range<char**> groups) override {
+    if constexpr (!supportsCompaction()) {
+      return 0;
+    } else {
+      uint64_t freedBytes = 0;
+      for (auto* group : groups) {
+        if (isInitialized(group)) {
+          freedBytes += value(group)->compact(allocator_);
+        }
+      }
+      return freedBytes;
+    }
+  }
+
  private:
+  /// Returns true if the AccumulatorType supports compaction. Only StringView
+  /// types are supported. ComplexType is excluded because its compact()
+  /// allocates a temporary vector from the operator's pool, which can grow
+  /// reserved bytes during reclaim.
+  static constexpr bool supportsCompaction() {
+    return !std::is_same_v<V, ComplexType> &&
+        (std::is_same_v<V, StringView> || std::is_same_v<C, StringView>);
+  }
+
   inline AccumulatorType* value(char* group) {
     return reinterpret_cast<AccumulatorType*>(group + Aggregate::offset_);
   }
