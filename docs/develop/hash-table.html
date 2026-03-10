@@ -58,7 +58,7 @@ occupies 6 bytes. 16 pointers occupy 96 bytes. There are 16 bytes left unused at
 These are referred to as padding.</p>
 <img alt="../_images/ht-layout.png" class="align-center" src="../_images/ht-layout.png" />
 <p>A hash table is never full. There are always some empty slots. Velox allows the hash table to fill up to
-<span class="raw-html"><text style="font-size:1.2em;background-color:none">⅞</text></span> of capacity before resizing.
+<span class="raw-html"><text style="font-size:1.2em;background-color:none">0.7</text></span> of capacity before resizing.
 On resize the hash table’s capacity doubles.</p>
 <p>Individual buckets may be completely empty, partially filled or full. Buckets are filled left to right.
 If a bucket is partially full, then first N tags and N pointers are filled and the rest are free (N &lt; 16).</p>
@@ -118,7 +118,7 @@ the hash table is never full and there are enough gaps in the form of empty slot
 </section>
 <section id="resizing">
 <h2>Resizing<a class="headerlink" href="#resizing" title="Link to this heading">¶</a></h2>
-<p>If the hash table fills up beyond <span class="raw-html"><text style="font-size:1.2em;background-color:none">⅞</text></span>
+<p>If the hash table fills up beyond <span class="raw-html"><text style="font-size:1.2em;background-color:none">0.7</text></span>
 of capacity, it needs to be resized. Each resize doubles the capacity.
 A new hash table is allocated and all existing entries inserted using the “Inserting an entry” process.
 Since we know that all entries are unique, the “Inserting an entry” process can be simplified to
