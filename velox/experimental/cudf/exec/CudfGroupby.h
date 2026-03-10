@@ -55,12 +55,9 @@ struct GroupbyAggregator {
 // Factory functions for creating groupby aggregators from plan nodes.
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx);
-
-std::vector<std::unique_ptr<GroupbyAggregator>>
-toIntermediateGroupbyAggregators(
-    core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx);
+    core::AggregationNode::Step step,
+    TypePtr const& outputType,
+    std::vector<VectorPtr> const& constants);
 
 // Groupby-specific aggregation registry
 StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
@@ -108,20 +105,31 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators,
+      TypePtr const& outputType,
       rmm::cuda_stream_view stream);
 
-  CudfVectorPtr releaseAndResetPartialOutput();
+  CudfVectorPtr releaseAndResetBufferedResult();
 
-  void computeIntermediateGroupbyPartial(CudfVectorPtr tbl);
+  void computePartialGroupbyStreaming(CudfVectorPtr tbl);
+  void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
+  void computeSingleGroupbyStreaming(CudfVectorPtr tbl);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
+  std::vector<column_index_t> aggregationInputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<GroupbyAggregator>> aggregators_;
   std::vector<std::unique_ptr<GroupbyAggregator>> intermediateAggregators_;
+  // Used for kSingle streaming: partial-step aggregators (raw -> intermediate)
+  // and final-step aggregators (intermediate -> final).
+  std::vector<std::unique_ptr<GroupbyAggregator>> partialAggregators_;
+  std::vector<std::unique_ptr<GroupbyAggregator>> finalAggregators_;
 
   const bool isPartialOutput_;
+  const bool isSingleStep_;
+  // Streaming aggregation is disabled if companion aggregates are present.
+  bool streamingEnabled_{true};
   const int64_t maxPartialAggregationMemoryUsage_;
   int64_t numInputRows_ = 0;
 
@@ -131,7 +139,8 @@ class CudfGroupby : public exec::Operator, public NvtxHelper {
 
   std::vector<CudfVectorPtr> inputs_;
   TypePtr inputType_;
-  CudfVectorPtr partialOutput_;
+  RowTypePtr bufferedResultType_;
+  CudfVectorPtr bufferedResult_;
 };
 
 } // namespace facebook::velox::cudf_velox

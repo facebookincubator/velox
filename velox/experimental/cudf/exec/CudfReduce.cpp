@@ -461,17 +461,17 @@ namespace facebook::velox::cudf_velox {
 
 std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx) {
-  auto resolved = resolveAggregateInputs(aggregationNode, operatorCtx);
+    core::AggregationNode::Step step,
+    TypePtr const& outputType,
+    std::vector<VectorPtr> const& constants) {
+  auto params =
+      resolveAggregateInfos(aggregationNode, step, outputType, constants);
 
   std::vector<std::unique_ptr<ReduceAggregator>> aggregators;
-  for (auto& info : resolved) {
+  aggregators.reserve(params.size());
+  for (auto& p : params) {
     aggregators.push_back(createReduceAggregator(
-        info.companionStep,
-        info.kind,
-        info.inputIndex,
-        info.constant,
-        info.resultType));
+        p.companionStep, p.kind, p.inputIndex, p.constant, p.resultType));
   }
   return aggregators;
 }
@@ -688,7 +688,16 @@ void CudfReduce::initialize() {
   inputType_ = aggregationNode_->sources()[0]->outputType();
 
   numAggregates_ = aggregationNode_->aggregates().size();
-  aggregators_ = toReduceAggregators(*aggregationNode_, *operatorCtx_);
+  const auto inputRowSchema = asRowType(inputType_);
+  std::vector<column_index_t> emptyKeys;
+  auto aggregationInput = buildAggregationInputChannels(
+      *aggregationNode_, *operatorCtx_, inputRowSchema, emptyKeys);
+  aggregationInputChannels_ = std::move(aggregationInput.channels);
+  aggregators_ = toReduceAggregators(
+      *aggregationNode_,
+      aggregationNode_->step(),
+      outputType_,
+      aggregationInput.constants);
 
   aggregationNode_.reset();
 }
@@ -754,7 +763,9 @@ RowVectorPtr CudfReduce::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
-  return doGlobalAggregation(tbl->view(), stream);
+  auto permutedInputView = tbl->view().select(
+      aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+  return doGlobalAggregation(permutedInputView, stream);
 }
 
 void CudfReduce::noMoreInput() {

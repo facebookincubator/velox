@@ -49,7 +49,9 @@ struct ReduceAggregator {
 
 std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx);
+    core::AggregationNode::Step step,
+    TypePtr const& outputType,
+    std::vector<VectorPtr> const& constants);
 
 StepAwareAggregationRegistry& getReduceAggregationRegistry();
 
@@ -97,6 +99,8 @@ class CudfReduce : public exec::Operator, public NvtxHelper {
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<ReduceAggregator>> aggregators_;
+
+  std::vector<column_index_t> aggregationInputChannels_;
 
   const bool isPartialOutput_;
 

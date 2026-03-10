@@ -61,20 +61,20 @@ void CudfDistinct::initialize() {
   aggregationNode_.reset();
 }
 
-void CudfDistinct::computeIntermediateDistinctPartial(CudfVectorPtr tbl) {
+void CudfDistinct::computePartialDistinctStreaming(CudfVectorPtr tbl) {
   // For every input, we'll concat with existing distinct results and then do a
   // distinct on the concatenated results.
 
   auto inputTableStream = tbl->stream();
 
-  if (partialOutput_) {
+  if (bufferedResult_) {
     // Concatenate the input table with the existing distinct results.
     std::vector<cudf::table_view> tablesToConcat;
-    tablesToConcat.push_back(partialOutput_->getTableView());
+    tablesToConcat.push_back(bufferedResult_->getTableView());
     tablesToConcat.push_back(tbl->getTableView().select(
         groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end()));
 
-    auto partialOutputStream = partialOutput_->stream();
+    auto partialOutputStream = bufferedResult_->stream();
     // We need to join the input table stream on the partial output stream to
     // make sure the input table is available when we do the concat.
     cudf::detail::join_streams(
@@ -90,12 +90,12 @@ void CudfDistinct::computeIntermediateDistinctPartial(CudfVectorPtr tbl) {
         concatenatedTable->view(),
         groupingKeyOutputChannels_,
         partialOutputStream);
-    partialOutput_ = distinctOutput;
+    bufferedResult_ = distinctOutput;
   } else {
     // First time processing, just store the result of the input batch's
     // distinct. Use getTableView() to avoid expensive materialization for
     // packed_table. tbl stays alive during this function call.
-    partialOutput_ = getDistinctKeys(
+    bufferedResult_ = getDistinctKeys(
         tbl->getTableView(), groupingKeyInputChannels_, inputTableStream);
   }
 }
@@ -111,7 +111,7 @@ void CudfDistinct::addInput(RowVectorPtr input) {
   VELOX_CHECK_NOT_NULL(cudfInput);
 
   if (isPartialOutput_) {
-    computeIntermediateDistinctPartial(cudfInput);
+    computePartialDistinctStreaming(cudfInput);
     return;
   }
 
@@ -142,8 +142,8 @@ CudfVectorPtr CudfDistinct::getDistinctKeys(
       pool(), outputType_, numRows, std::move(result), stream);
 }
 
-CudfVectorPtr CudfDistinct::releaseAndResetPartialOutput() {
-  auto numOutputRows = partialOutput_->size();
+CudfVectorPtr CudfDistinct::releaseAndResetBufferedResult() {
+  auto numOutputRows = bufferedResult_->size();
   const double aggregationPct =
       numOutputRows == 0 ? 0 : (numOutputRows * 1.0) / numInputRows_ * 100;
   {
@@ -159,29 +159,29 @@ CudfVectorPtr CudfDistinct::releaseAndResetPartialOutput() {
   }
 
   numInputRows_ = 0;
-  // We're moving partialOutput_ to the caller because we want it to be null
+  // We're moving bufferedResult_ to the caller because we want it to be null
   // after this call.
-  return std::move(partialOutput_);
+  return std::move(bufferedResult_);
 }
 
 RowVectorPtr CudfDistinct::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   if (isPartialOutput_) {
-    if (partialOutput_ &&
-        partialOutput_->estimateFlatSize() >
+    if (bufferedResult_ &&
+        bufferedResult_->estimateFlatSize() >
             maxPartialAggregationMemoryUsage_) {
-      return releaseAndResetPartialOutput();
+      return releaseAndResetBufferedResult();
     }
     if (not noMoreInput_) {
       // Don't produce output if the partial output hasn't reached memory limit
       // and there's more batches to come.
       return nullptr;
     }
-    if (!partialOutput_ && finished_) {
+    if (!bufferedResult_ && finished_) {
       return nullptr;
     }
-    return releaseAndResetPartialOutput();
+    return releaseAndResetBufferedResult();
   }
 
   if (finished_) {

@@ -484,19 +484,67 @@ std::string getOriginalName(const std::string& kind) {
   return kind;
 }
 
-std::vector<ResolvedAggregateInfo> resolveAggregateInputs(
-    core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx) {
-  auto const step = aggregationNode.step();
-  auto const& inputRowSchema = aggregationNode.sources()[0]->outputType();
-  const auto numKeys = aggregationNode.groupingKeys().size();
-  const auto outputType = aggregationNode.outputType();
+namespace {
+bool isCompanionAggregateName(std::string const& kind) {
+  return kind.ends_with("_merge") || kind.ends_with("_partial") ||
+      kind.find("_merge_extract") != std::string::npos;
+}
+} // namespace
 
-  std::vector<ResolvedAggregateInfo> result;
+bool hasCompanionAggregates(
+    std::vector<core::AggregationNode::Aggregate> const& aggregates) {
+  return std::any_of(aggregates.begin(), aggregates.end(), [](auto const& agg) {
+    return isCompanionAggregateName(agg.call->name());
+  });
+}
+
+std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
+    core::AggregationNode const& aggregationNode,
+    core::AggregationNode::Step step,
+    TypePtr const& outputType,
+    std::vector<VectorPtr> const& constants) {
+  const auto numKeys = aggregationNode.groupingKeys().size();
+
+  std::vector<ResolvedAggregateInfo> params;
+  params.reserve(aggregationNode.aggregates().size());
+  for (size_t i = 0; i < aggregationNode.aggregates().size(); ++i) {
+    auto const& aggregate = aggregationNode.aggregates()[i];
+    auto const companionStep = getCompanionStep(aggregate.call->name(), step);
+    const auto originalName = getOriginalName(aggregate.call->name());
+    const auto resultType = exec::isPartialOutput(companionStep)
+        ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
+        : outputType->childAt(numKeys + i);
+
+    params.emplace_back(
+        companionStep,
+        aggregate.call->name(),
+        static_cast<uint32_t>(numKeys + i),
+        constants[i],
+        resultType);
+  }
+  return params;
+}
+
+AggregationInputChannels buildAggregationInputChannels(
+    core::AggregationNode const& aggregationNode,
+    exec::OperatorCtx const& operatorCtx,
+    RowTypePtr const& inputRowSchema,
+    std::vector<column_index_t> const& groupingKeyInputChannels) {
+  AggregationInputChannels result;
+  result.constants.resize(aggregationNode.aggregates().size());
+  result.channels.reserve(
+      groupingKeyInputChannels.size() + aggregationNode.aggregates().size());
+  result.channels.insert(
+      result.channels.end(),
+      groupingKeyInputChannels.begin(),
+      groupingKeyInputChannels.end());
+
+  const auto fallbackChannel =
+      groupingKeyInputChannels.empty() ? 0 : groupingKeyInputChannels.front();
+
   for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
     auto const& aggregate = aggregationNode.aggregates()[i];
     std::vector<column_index_t> aggInputs;
-    std::vector<VectorPtr> aggConstants;
     for (auto const& arg : aggregate.call->inputs()) {
       if (auto const field =
               dynamic_cast<core::FieldAccessTypedExpr const*>(arg.get())) {
@@ -504,38 +552,46 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInputs(
       } else if (
           auto constant =
               dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
-        aggInputs.push_back(kConstantChannel);
-        aggConstants.push_back(constant->toConstantVector(operatorCtx.pool()));
+        result.constants[i] = constant->toConstantVector(operatorCtx.pool());
+        aggInputs.push_back(fallbackChannel);
       } else {
         VELOX_NYI("Constants and lambdas not yet supported");
       }
     }
-    // The loop on aggregate.call->inputs() is taken from
-    // AggregateInfo.cpp::toAggregateInfo(). It seems to suggest that there can
-    // be multiple inputs to an aggregate.
-    // We're postponing properly supporting this for now because the currently
-    // supported aggregation functions in cudf_velox don't use it.
+
     VELOX_CHECK(aggInputs.size() <= 1);
     if (aggInputs.empty()) {
-      aggInputs.push_back(0);
+      aggInputs.push_back(fallbackChannel);
     }
 
     if (aggregate.distinct) {
       VELOX_NYI("De-dup before aggregation is not yet supported");
     }
 
-    auto const kind = aggregate.call->name();
-    auto const inputIndex = aggInputs[0];
-    auto const constant = aggConstants.empty() ? nullptr : aggConstants[0];
-    auto const companionStep = getCompanionStep(kind, step);
-    const auto originalName = getOriginalName(kind);
-    const auto resultType = exec::isPartialOutput(companionStep)
-        ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
-        : outputType->childAt(numKeys + i);
-
-    result.push_back({companionStep, kind, inputIndex, constant, resultType});
+    result.channels.push_back(aggInputs[0]);
   }
+
   return result;
+}
+
+RowTypePtr getBufferedResultType(core::AggregationNode const& aggregationNode) {
+  const auto outputRowType = asRowType(aggregationNode.outputType());
+  const auto numKeys = aggregationNode.groupingKeys().size();
+
+  std::vector<std::string> names = outputRowType->names();
+  std::vector<TypePtr> types = outputRowType->children();
+
+  VELOX_CHECK_EQ(names.size(), types.size());
+  VELOX_CHECK_GE(types.size(), numKeys + aggregationNode.aggregates().size());
+
+  for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
+    auto const& aggregate = aggregationNode.aggregates()[i];
+    const auto originalName = getOriginalName(aggregate.call->name());
+    types[numKeys + i] =
+        exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
+  }
+
+  return ROW(std::move(names), std::move(types));
 }
 
 bool hasFinalAggs(

@@ -63,7 +63,9 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(const std::string& kind);
 
-// Per-aggregate resolved info produced by resolveAggregateInputs.
+// Resolved per-aggregate parameters shared by groupby and reduce aggregator
+// construction.  Computed once by resolveAggregateInfo and consumed by the
+// type-specific factory in each module.
 struct ResolvedAggregateInfo {
   core::AggregationNode::Step companionStep;
   std::string kind;
@@ -74,9 +76,40 @@ struct ResolvedAggregateInfo {
 
 // Parse aggregate inputs from the aggregation node and resolve companion steps,
 // original names, and result types. Returns one entry per aggregate.
-std::vector<ResolvedAggregateInfo> resolveAggregateInputs(
+std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     core::AggregationNode const& aggregationNode,
-    exec::OperatorCtx const& operatorCtx);
+    core::AggregationNode::Step step,
+    TypePtr const& outputType,
+    std::vector<VectorPtr> const& constants);
+
+// Result of buildAggregationInputChannels: a channel permutation that places
+// grouping keys first, followed by aggregate input columns in aggregate order,
+// plus per-aggregate constants.
+struct AggregationInputChannels {
+  std::vector<column_index_t> channels;
+  std::vector<VectorPtr> constants;
+};
+
+// Build the input channel permutation for an aggregation node.  The returned
+// channels vector contains grouping key channels first, then one channel per
+// aggregate (resolved from the aggregate's input expression).  Constants are
+// stored in the parallel constants vector (nullptr when the aggregate uses a
+// column, non-null when it uses a constant).
+AggregationInputChannels buildAggregationInputChannels(
+    core::AggregationNode const& aggregationNode,
+    exec::OperatorCtx const& operatorCtx,
+    RowTypePtr const& inputRowSchema,
+    std::vector<column_index_t> const& groupingKeyInputChannels);
+
+// Returns true if the aggregation node contains companion aggregates
+// (e.g. _merge, _partial, _merge_extract suffixes), which disables streaming.
+bool hasCompanionAggregates(
+    std::vector<core::AggregationNode::Aggregate> const& aggregates);
+
+// Compute the intermediate ROW type used for buffered results in kFinal/kSingle
+// streaming.  The key columns keep their original types but aggregate columns
+// are replaced with the corresponding intermediate types.
+RowTypePtr getBufferedResultType(core::AggregationNode const& aggregationNode);
 
 bool hasFinalAggs(
     std::vector<core::AggregationNode::Aggregate> const& aggregates);

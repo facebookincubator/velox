@@ -51,9 +51,9 @@ class CudfDistinct : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t> const& groupByKeys,
       rmm::cuda_stream_view stream);
 
-  CudfVectorPtr releaseAndResetPartialOutput();
+  CudfVectorPtr releaseAndResetBufferedResult();
 
-  void computeIntermediateDistinctPartial(CudfVectorPtr tbl);
+  void computePartialDistinctStreaming(CudfVectorPtr tbl);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
@@ -68,7 +68,7 @@ class CudfDistinct : public exec::Operator, public NvtxHelper {
 
   std::vector<CudfVectorPtr> inputs_;
   TypePtr inputType_;
-  CudfVectorPtr partialOutput_;
+  CudfVectorPtr bufferedResult_;
 };
 
 } // namespace facebook::velox::cudf_velox
