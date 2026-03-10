@@ -2,6 +2,14 @@
 
 Guidance for Claude Code when working in the Velox repository.
 
+## PR Review
+
+When asked to review a PR (via `/pr-review`), always use the /pr-review skill.
+
+## Queries
+
+When asked a question about the PR or codebase (via `/pr-query`), use the /query skill.
+
 ## Overview
 
 Velox is an open source C++ library for composable data processing and
