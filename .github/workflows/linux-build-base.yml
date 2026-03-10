@@ -291,6 +291,7 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
+          gRPC_SOURCE: BUNDLED
           MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=6
         run: |
           EXTRA_CMAKE_FLAGS=(
