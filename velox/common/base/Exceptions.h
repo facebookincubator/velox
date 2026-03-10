@@ -44,6 +44,8 @@ struct VeloxCheckFailArgs {
 // inline it when it is large. Having an out-of-line error path helps
 // otherwise-small functions that call error-checking macros stay
 // small and thus stay eligible for inlining.
+
+// Overload without messageTemplate: message IS the template (0 or 1 args).
 template <typename Exception, typename StringType>
 [[noreturn]] void veloxCheckFail(const VeloxCheckFailArgs& args, StringType s) {
   static_assert(
@@ -67,6 +69,39 @@ template <typename Exception, typename StringType>
       args.errorSource,
       args.errorCode,
       args.isRetriable);
+}
+
+// Overload with messageTemplate: template is the format string before
+// interpolation (>=2 args, format string + arguments). The template should
+// be a string literal; for runtime format strings, use the single-arg
+// VELOX_FAIL("{}", runtimeStr) pattern instead.
+template <typename Exception, typename StringType>
+[[noreturn]] void veloxCheckFail(
+    const VeloxCheckFailArgs& args,
+    StringType s,
+    CompileTimeStringLiteral messageTemplate) {
+  static_assert(
+      !std::is_same_v<StringType, std::string>,
+      "BUG: we should not pass std::string by value to veloxCheckFail");
+  if constexpr (!std::is_same_v<Exception, VeloxUserError>) {
+    LOG(ERROR) << "Line: " << args.file << ":" << args.line
+               << ", Function:" << args.function
+               << ", Expression: " << args.expression << " " << s
+               << ", Source: " << args.errorSource
+               << ", ErrorCode: " << args.errorCode;
+  }
+
+  ++threadNumVeloxThrow();
+  throw Exception(
+      args.file,
+      args.line,
+      args.function,
+      args.expression,
+      s,
+      args.errorSource,
+      args.errorCode,
+      args.isRetriable,
+      messageTemplate);
 }
 
 // VeloxCheckFailStringType helps us pass by reference to
@@ -106,21 +141,99 @@ struct VeloxCheckFailStringType<std::string> {
   extern template void veloxCheckFail<exception_type, const std::string&>(     \
       const VeloxCheckFailArgs& args,                                          \
       const std::string&);                                                     \
+  extern template void veloxCheckFail<exception_type, CompileTimeEmptyString>( \
+      const VeloxCheckFailArgs& args,                                          \
+      CompileTimeEmptyString,                                                  \
+      CompileTimeStringLiteral);                                               \
+  extern template void veloxCheckFail<exception_type, const char*>(            \
+      const VeloxCheckFailArgs& args,                                          \
+      const char*,                                                             \
+      CompileTimeStringLiteral);                                               \
+  extern template void veloxCheckFail<exception_type, const std::string&>(     \
+      const VeloxCheckFailArgs& args,                                          \
+      const std::string&,                                                      \
+      CompileTimeStringLiteral);                                               \
   } // namespace detail
 
 // Definitions corresponding to DECLARE_CHECK_FAIL_TEMPLATES. Should
 // only be used in Exceptions.cpp.
-#define DEFINE_CHECK_FAIL_TEMPLATES(exception_type)                     \
-  template void veloxCheckFail<exception_type, CompileTimeEmptyString>( \
-      const VeloxCheckFailArgs& args, CompileTimeEmptyString);          \
-  template void veloxCheckFail<exception_type, const char*>(            \
-      const VeloxCheckFailArgs& args, const char*);                     \
-  template void veloxCheckFail<exception_type, const std::string&>(     \
-      const VeloxCheckFailArgs& args, const std::string&);
+#define DEFINE_CHECK_FAIL_TEMPLATES(exception_type)                           \
+  template void veloxCheckFail<exception_type, CompileTimeEmptyString>(       \
+      const VeloxCheckFailArgs& args, CompileTimeEmptyString);                \
+  template void veloxCheckFail<exception_type, const char*>(                  \
+      const VeloxCheckFailArgs& args, const char*);                           \
+  template void veloxCheckFail<exception_type, const std::string&>(           \
+      const VeloxCheckFailArgs& args, const std::string&);                    \
+  template void veloxCheckFail<exception_type, CompileTimeEmptyString>(       \
+      const VeloxCheckFailArgs& args,                                         \
+      CompileTimeEmptyString,                                                 \
+      CompileTimeStringLiteral);                                              \
+  template void veloxCheckFail<exception_type, const char*>(                  \
+      const VeloxCheckFailArgs& args, const char*, CompileTimeStringLiteral); \
+  template void veloxCheckFail<exception_type, const std::string&>(           \
+      const VeloxCheckFailArgs& args,                                         \
+      const std::string&,                                                     \
+      CompileTimeStringLiteral);
 
 } // namespace detail
 
-#define _VELOX_THROW_IMPL(                                            \
+// Macro arg-count detection for dispatching between the no-template
+// and with-template overloads of veloxCheckFail.
+// 0 or 1 args: message IS the template (no-template overload).
+// >=2 args: first arg is the format string template (with-template overload).
+#define _VELOX_NARGS_IMPL( \
+    _0,                    \
+    _1,                    \
+    _2,                    \
+    _3,                    \
+    _4,                    \
+    _5,                    \
+    _6,                    \
+    _7,                    \
+    _8,                    \
+    _9,                    \
+    _10,                   \
+    _11,                   \
+    _12,                   \
+    _13,                   \
+    _14,                   \
+    _15,                   \
+    _16,                   \
+    N,                     \
+    ...)                   \
+  N
+#define _VELOX_NARGS(...) \
+  _VELOX_NARGS_IMPL(      \
+      dummy,              \
+      ##__VA_ARGS__,      \
+      16,                 \
+      15,                 \
+      14,                 \
+      13,                 \
+      12,                 \
+      11,                 \
+      10,                 \
+      9,                  \
+      8,                  \
+      7,                  \
+      6,                  \
+      5,                  \
+      4,                  \
+      3,                  \
+      2,                  \
+      1,                  \
+      0)
+
+// Extract the first argument from __VA_ARGS__ (the format string) as a
+// CompileTimeStringLiteral. Only used for >=2 args path.
+#define _VELOX_MSG_TEMPLATE_PICK(_1, _2, ...) _2
+#define _VELOX_MSG_TEMPLATE(...)               \
+  ::facebook::velox::CompileTimeStringLiteral( \
+      _VELOX_MSG_TEMPLATE_PICK("", ##__VA_ARGS__, ""))
+
+// _VELOX_THROW_IMPL dispatches to the no-template or with-template path
+// based on the number of user-supplied message arguments.
+#define _VELOX_THROW_IMPL_BODY_NO_TEMPLATE(                           \
     exception, exprStr, errorSource, errorCode, isRetriable, ...)     \
   do {                                                                \
     /* GCC 9.2.1 doesn't accept this code with constexpr. */          \
@@ -139,6 +252,54 @@ struct VeloxCheckFailStringType<std::string> {
         typename ::facebook::velox::detail::VeloxCheckFailStringType< \
             decltype(message)>::type>(veloxCheckFailArgs, message);   \
   } while (0)
+
+#define _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE(                           \
+    exception, exprStr, errorSource, errorCode, isRetriable, ...)       \
+  do {                                                                  \
+    /* GCC 9.2.1 doesn't accept this code with constexpr. */            \
+    static const ::facebook::velox::detail::VeloxCheckFailArgs          \
+        veloxCheckFailArgs = {                                          \
+            __FILE__,                                                   \
+            __LINE__,                                                   \
+            __FUNCTION__,                                               \
+            exprStr,                                                    \
+            errorSource,                                                \
+            errorCode,                                                  \
+            isRetriable};                                               \
+    auto message = ::facebook::velox::errorMessage(__VA_ARGS__);        \
+    ::facebook::velox::detail::veloxCheckFail<                          \
+        exception,                                                      \
+        typename ::facebook::velox::detail::VeloxCheckFailStringType<   \
+            decltype(message)>::type>(                                  \
+        veloxCheckFailArgs, message, _VELOX_MSG_TEMPLATE(__VA_ARGS__)); \
+  } while (0)
+
+#define _VELOX_THROW_DISPATCH_0 _VELOX_THROW_IMPL_BODY_NO_TEMPLATE
+#define _VELOX_THROW_DISPATCH_1 _VELOX_THROW_IMPL_BODY_NO_TEMPLATE
+#define _VELOX_THROW_DISPATCH_2 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_3 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_4 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_5 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_6 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_7 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_8 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_9 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_10 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_11 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_12 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_13 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_14 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_15 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+#define _VELOX_THROW_DISPATCH_16 _VELOX_THROW_IMPL_BODY_WITH_TEMPLATE
+
+#define _VELOX_THROW_CONCAT2(a, b) a##b
+#define _VELOX_THROW_CONCAT(a, b) _VELOX_THROW_CONCAT2(a, b)
+#define _VELOX_THROW_SELECT(n) _VELOX_THROW_CONCAT(_VELOX_THROW_DISPATCH_, n)
+
+#define _VELOX_THROW_IMPL(                                        \
+    exception, exprStr, errorSource, errorCode, isRetriable, ...) \
+  _VELOX_THROW_SELECT(_VELOX_NARGS(__VA_ARGS__))(                 \
+      exception, exprStr, errorSource, errorCode, isRetriable, ##__VA_ARGS__)
 
 #define _VELOX_CHECK_AND_THROW_IMPL(                                    \
     expr, exprStr, exception, errorSource, errorCode, isRetriable, ...) \

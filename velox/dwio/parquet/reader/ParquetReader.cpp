@@ -774,7 +774,7 @@ TypePtr ReaderBase::convertType(
           schemaElement.__isset.type_length,
       "FIXED_LEN_BYTE_ARRAY requires length to be set");
 
-  static std::string_view kTypeMappingErrorFmtStr =
+  static constexpr const char* kTypeMappingErrorFmtStr =
       "Converted type {} is not allowed for requested type {}";
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;

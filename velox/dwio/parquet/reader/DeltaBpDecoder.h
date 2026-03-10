@@ -127,8 +127,8 @@ class DeltaBpDecoder {
     VELOX_CHECK_EQ(
         valuesPerBlock_ % 128,
         0,
-        "the number of values in a block must be multiple of 128, but it's " +
-            std::to_string(valuesPerBlock_));
+        "the number of values in a block must be multiple of 128, but it's {}",
+        valuesPerBlock_);
     VELOX_CHECK_GT(
         miniBlocksPerBlock_, 0, "cannot have zero miniblock per block");
     valuesPerMiniBlock_ = valuesPerBlock_ / miniBlocksPerBlock_;
@@ -137,8 +137,8 @@ class DeltaBpDecoder {
     VELOX_CHECK_EQ(
         valuesPerMiniBlock_ % 32,
         0,
-        "the number of values in a miniblock must be multiple of 32, but it's " +
-            std::to_string(valuesPerMiniBlock_));
+        "the number of values in a miniblock must be multiple of 32, but it's {}",
+        valuesPerMiniBlock_);
 
     totalValuesRemaining_ = totalValueCount_;
     deltaBitWidths_.resize(miniBlocksPerBlock_);
