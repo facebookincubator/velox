@@ -192,13 +192,26 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
 
-  // OK: first arg constant seed
-  auto ok = compileExecExpr(
+  // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
+  // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
+  // murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
+  // h(col1, seed)), while Spark hashes iteratively: h(col1, h(col0, seed)).
+  // The cudf API only accepts a scalar seed, so per-row seeding is not
+  // possible without a custom CUDA kernel.
+  auto multiCol = compileExecExpr(
       "hash_with_seed(42, a, b)",
       rowType_,
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+  ASSERT_FALSE(canBeEvaluatedByCudf(multiCol, /*deep=*/true));
+
+  // Single-column hash_with_seed is supported (no column combining needed).
+  auto singleCol = compileExecExpr(
+      "hash_with_seed(42, a)",
+      rowType_,
+      execCtx_.get(),
+      {.parseIntegerAsBigint = false, .functionPrefix = ""});
+  ASSERT_TRUE(canBeEvaluatedByCudf(singleCol, /*deep=*/true));
 
   // Bad: first arg must be constant seed
   try {

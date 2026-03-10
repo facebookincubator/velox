@@ -142,6 +142,12 @@ class ColumnStatistics {
     numDistinct_ = count;
   }
 
+  /// Returns true if there are no non-null values (value count is known to be
+  /// zero).
+  bool isAllNull() const {
+    return valueCount_.has_value() && valueCount_.value() == 0;
+  }
+
   /**
    * return string representation of this stats object
    */
