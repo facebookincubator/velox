@@ -76,6 +76,7 @@ velox_link_libraries(
   Folly::folly
 )
 
+add_subdirectory(rpc)
 add_subdirectory(type_calculation)
 add_subdirectory(signature_parser)
 
