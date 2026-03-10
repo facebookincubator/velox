@@ -87,26 +87,31 @@ void partitionFixedWidthValuesInPlace(
     T* values,
     const std::vector<uint32_t>& partitions,
     uint32_t numPartitions,
-    vector_size_t* cursorPartitionOffsets,
-    const vector_size_t* endPartitionOffsets) {
+    const BufferPtr& endPartitionOffsets,
+    PartitionBuildContext& ctx,
+    velox::memory::MemoryPool* pool) {
   VELOX_DCHECK_NOT_NULL(values);
-  VELOX_DCHECK_NOT_NULL(cursorPartitionOffsets);
   VELOX_DCHECK_NOT_NULL(endPartitionOffsets);
+  initializeCursorPartitionOffsets(
+      ctx.cursorPartitionOffsets, endPartitionOffsets, numPartitions, pool);
+  auto* rawCursorOffsets =
+      ctx.cursorPartitionOffsets->asMutable<vector_size_t>();
+  const auto* rawEndOffsets = endPartitionOffsets->as<vector_size_t>();
 
   for (auto currentPartition = 0; currentPartition < numPartitions;
        currentPartition++) {
-    vector_size_t& offset = cursorPartitionOffsets[currentPartition];
-    vector_size_t endOffset = endPartitionOffsets[currentPartition];
+    auto& offset = rawCursorOffsets[currentPartition];
+    auto endOffset = rawEndOffsets[currentPartition];
 
     while (offset < endOffset) {
       uint32_t targetPartition = partitions[offset];
 
       while (targetPartition != currentPartition) {
-        auto destinationOffset = cursorPartitionOffsets[targetPartition]++;
+        auto destinationOffset = rawCursorOffsets[targetPartition]++;
         std::swap(values[destinationOffset], values[offset]);
         targetPartition = partitions[destinationOffset];
       }
-      offset = ++cursorPartitionOffsets[currentPartition];
+      offset = ++rawCursorOffsets[currentPartition];
     }
   }
 }
@@ -120,20 +125,10 @@ void partitionFixedWidthValues(
     PartitionBuildContext& ctx,
     velox::memory::MemoryPool* pool) {
   VELOX_DCHECK_NOT_NULL(inputBuffer);
-  VELOX_DCHECK_NOT_NULL(endPartitionOffsets);
 
   auto input = inputBuffer->asMutable<T>();
-
-  initializeCursorPartitionOffsets(
-      ctx.cursorPartitionOffsets, endPartitionOffsets, numPartitions, pool);
-
-  vector_size_t* rawCursorOffsets =
-      ctx.cursorPartitionOffsets->asMutable<vector_size_t>();
-  const vector_size_t* rawEndOffsets =
-      endPartitionOffsets->asMutable<vector_size_t>();
-
   partitionFixedWidthValuesInPlace<T>(
-      input, partitions, numPartitions, rawCursorOffsets, rawEndOffsets);
+      input, partitions, numPartitions, endPartitionOffsets, ctx, pool);
 }
 
 // Swap two bits between two bytes
