@@ -563,3 +563,42 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
 }
+
+// Verify that extractFiltersFromRemainingFilter extracts simple single-column
+// filters from the remaining filter into subfield filters for pushdown.
+// When a filter like "c0 = 1" is fully extracted, remainingFilterExprSet_ is
+// null and totalRemainingFilterWallNanos is 0. Without extraction, the filter
+// runs post-read on the GPU and the stat is > 0.
+TEST_F(TableScanTest, remainingFilterExtraction) {
+  auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(5, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, "c");
+  createDuckDbTable(vectors);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  // "c0 = 1" is a single-column equality that should be fully extracted into
+  // a subfield filter, leaving no remaining filter to evaluate post-read.
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .remainingFilter("c0 = 1")
+                  .endTableScan()
+                  .planNode();
+
+  auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp WHERE c0 = 1");
+
+  // Verify the filter was fully extracted: no post-read remaining filter ran.
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& scanStats = planStats.at(plan->id());
+  auto it = scanStats.customStats.find("totalRemainingFilterWallNanos");
+  ASSERT_NE(it, scanStats.customStats.end());
+  EXPECT_EQ(it->second.sum, 0)
+      << "Expected no remaining filter time when filter is fully extracted";
+}
