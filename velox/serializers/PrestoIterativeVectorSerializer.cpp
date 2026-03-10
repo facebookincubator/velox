@@ -122,18 +122,18 @@ PrestoIterativeVectorSerializer::runtimeStats() {
   std::unordered_map<std::string, RuntimeCounter> map;
   if (stats_.compressionInputBytes != 0) {
     map.emplace(
-        kCompressionInputBytes,
+        std::string(kCompressionInputBytes),
         RuntimeCounter(
             stats_.compressionInputBytes, RuntimeCounter::Unit::kBytes));
   }
   if (stats_.compressedBytes != 0) {
     map.emplace(
-        kCompressedBytes,
+        std::string(kCompressedBytes),
         RuntimeCounter(stats_.compressedBytes, RuntimeCounter::Unit::kBytes));
   }
   if (stats_.compressionSkippedBytes != 0) {
     map.emplace(
-        kCompressionSkippedBytes,
+        std::string(kCompressionSkippedBytes),
         RuntimeCounter(
             stats_.compressionSkippedBytes, RuntimeCounter::Unit::kBytes));
   }

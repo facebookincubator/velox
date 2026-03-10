@@ -48,15 +48,15 @@ class RowContainerTestBase : public testing::Test,
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    if (!isRegisteredNamedVectorSerde("CompactRow")) {
       facebook::velox::serializer::CompactRowVectorSerde::
           registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
       facebook::velox::serializer::spark::UnsafeRowVectorSerde::
           registerNamedVectorSerde();
     }

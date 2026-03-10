@@ -16,12 +16,15 @@
 
 #include "velox/dwio/common/compression/PagedInputStream.h"
 
+#include "velox/dwio/common/Statistics.h"
+
 namespace facebook::velox::dwio::common::compression {
 
 void PagedInputStream::prepareOutputBuffer(uint64_t uncompressedLength) {
   if (!outputBuffer_ || uncompressedLength > outputBuffer_->capacity()) {
+    // OutputBuffer is intended for writing before reading, not need zeroFilled.
     outputBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
-        pool_, uncompressedLength);
+        pool_, uncompressedLength, false);
   }
 }
 
@@ -186,11 +189,13 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
       outputBufferPtr_ = nullptr;
     } else {
       prepareOutputBuffer(decompressedLength);
-      outputBufferLength_ = decompressor_->decompress(
-          input,
-          remainingLength_,
-          outputBuffer_->data(),
-          outputBuffer_->capacity());
+      outputBufferLength_ = withDecompressStats(decompressCounter_, [&] {
+        return decompressor_->decompress(
+            input,
+            remainingLength_,
+            outputBuffer_->data(),
+            outputBuffer_->capacity());
+      });
       if (data) {
         *data = outputBuffer_->data();
       }

@@ -17,9 +17,12 @@
 #pragma once
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+// TODO(kn): in another PR
+// #include "velox/experimental/cudf/CudfNoDefaults.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -451,13 +454,11 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto value = c->value();
     VELOX_CHECK(value->isConstantEncoding());
 
-    // Special case: VARCHAR literals cannot be handled by cudf::compute_column
-    // as the final output due to variable-width output limitation.
-    // However, if this is part of a larger expression tree (e.g., string
-    // comparison), then cudf can handle it fine since the final output won't be
-    // VARCHAR. We only need special handling when this literal will be the
-    // final output.
-    if (expr->type()->kind() == TypeKind::VARCHAR && expr == rootExpr) {
+    // TODO: There is a scalar stream synchronization bug that causes
+    // cudf::compute_column to produce spurious nulls for standalone
+    // literal expressions.  Work around it by materialising via
+    // make_column_from_scalar instead.
+    if (expr == rootExpr) {
       // convert to cudf scalar and store it
       createLiteral(value, scalars);
       // The scalar index is scalars.size() - 1 since we just added it
@@ -619,7 +620,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
       auto result = cudf_expression->eval(
           inputColumnViews,
           stream,
-          cudf::get_current_device_resource_ref(),
+          get_output_mr(),
           /*finalize=*/true);
       precomputedColumns.push_back(std::move(result));
       continue;
@@ -628,10 +629,10 @@ std::vector<ColumnOrView> precomputeSubexpressions(
       auto scalarIndex =
           std::stoi(ins_name.substr(5)); // "fill " is 5 characters
       auto newColumn = cudf::make_column_from_scalar(
-          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
+          *scalars[scalarIndex],
           inputColumnViews[dependent_column_index].size(),
           stream,
-          cudf::get_current_device_resource_ref());
+          get_output_mr());
       precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.

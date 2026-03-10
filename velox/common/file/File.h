@@ -80,7 +80,7 @@ struct FileIoContext {
   /// When false, hints to the storage layer that this read should not be cached
   /// or should be evicted soon after reading. This is useful for one-time reads
   /// where caching would waste resources.
-  bool cacheable{true};
+  bool cacheable{false};
 
   FileIoContext() = default;
 
@@ -88,7 +88,7 @@ struct FileIoContext {
       IoStats* stats,
       folly::F14FastMap<std::string, std::string> fileOpts = {},
       std::shared_ptr<FileIoTracer> tracer = nullptr,
-      bool cacheable = true)
+      bool cacheable = false)
       : ioStats(stats),
         fileOpts(std::move(fileOpts)),
         ioTracer(std::move(tracer)),

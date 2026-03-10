@@ -140,33 +140,33 @@ class BaseHashTable {
 
   /// The name of the runtime stats collected and reported by operators that use
   /// the HashTable (HashBuild, HashAggregation).
-  static inline const std::string kCapacity{"hashtable.capacity"};
-  static inline const std::string kNumRehashes{"hashtable.numRehashes"};
-  static inline const std::string kNumDistinct{"hashtable.numDistinct"};
-  static inline const std::string kNumTombstones{"hashtable.numTombstones"};
+  static constexpr std::string_view kCapacity{"hashtable.capacity"};
+  static constexpr std::string_view kNumRehashes{"hashtable.numRehashes"};
+  static constexpr std::string_view kNumDistinct{"hashtable.numDistinct"};
+  static constexpr std::string_view kNumTombstones{"hashtable.numTombstones"};
 
   /// The same as above but only reported by the HashBuild operator.
-  static inline const std::string kBuildWallNanos{"hashtable.buildWallNanos"};
-  static inline const std::string kParallelJoinPartitionWallNanos{
+  static constexpr std::string_view kBuildWallNanos{"hashtable.buildWallNanos"};
+  static constexpr std::string_view kParallelJoinPartitionWallNanos{
       "hashtable.parallelJoinPartitionWallNanos"};
-  static inline const std::string kParallelJoinPartitionCpuNanos{
+  static constexpr std::string_view kParallelJoinPartitionCpuNanos{
       "hashtable.parallelJoinPartitionCpuNanos"};
-  static inline const std::string kParallelJoinBuildWallNanos{
+  static constexpr std::string_view kParallelJoinBuildWallNanos{
       "hashtable.parallelJoinBuildWallNanos"};
-  static inline const std::string kParallelJoinBuildCpuNanos{
+  static constexpr std::string_view kParallelJoinBuildCpuNanos{
       "hashtable.parallelJoinBuildCpuNanos"};
-  static inline const std::string kParallelJoinBloomFilterPartitionWallNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterPartitionWallNanos{
       "hashtable.parallelJoinBloomFilterPartitionWallNanos"};
-  static inline const std::string kParallelJoinBloomFilterPartitionCpuNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterPartitionCpuNanos{
       "hashtable.parallelJoinBloomFilterPartitionCpuNanos"};
-  static inline const std::string kParallelJoinBloomFilterBuildWallNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterBuildWallNanos{
       "hashtable.parallelJoinBloomFilterBuildWallNanos"};
-  static inline const std::string kParallelJoinBloomFilterBuildCpuNanos{
+  static constexpr std::string_view kParallelJoinBloomFilterBuildCpuNanos{
       "hashtable.parallelJoinBloomFilterBuildCpuNanos"};
-  static inline const std::string kVectorHasherMergeCpuNanos{
+  static constexpr std::string_view kVectorHasherMergeCpuNanos{
       "hashtable.vectorHasherMergeCpuNanos"};
-  static inline const std::string kHashTableCacheHit{"hashtable.cacheHit"};
-  static inline const std::string kHashTableCacheMiss{"hashtable.cacheMiss"};
+  static constexpr std::string_view kHashTableCacheHit{"hashtable.cacheHit"};
+  static constexpr std::string_view kHashTableCacheMiss{"hashtable.cacheMiss"};
 
   /// Returns the string of the given 'mode'.
   static std::string modeString(HashMode mode);

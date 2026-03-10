@@ -371,13 +371,13 @@ depth-first order. For each node a sequence of operations is performed.
 Flat No-Nulls Fast Path
 ```````````````````````
 
-When evaluating simple expressions on short vectors (< 1000 rows), the overhead
-of handling nulls and encodings is visible. To optimize these use cases,
-expression evaluation takes flat-no-nulls fast path
-(Expr::evalFlatNoNulls). This path applies automatically when inputs are flat
-vectors or constants with no nulls and all sub-expressions are guaranteed to
-produce flat-or-constant-no-nulls results given flat-or-constant-no-nulls
-inputs.
+When evaluating simple expressions, the overhead of handling nulls and encodings
+is visible. To optimize these use cases, expression evaluation takes
+flat-no-nulls fast path (Expr::evalFlatNoNulls). This path applies automatically
+when inputs are flat vectors or constants with no nulls and all sub-expressions
+are guaranteed to produce flat-or-constant-no-nulls results given
+flat-or-constant-no-nulls inputs. The optimization can be disabled by setting the
+``expression.eval_flat_no_nulls`` configuration property to false.
 
 An example of a workload that benefits from this optimization is basic arithmetic
 over non-null floats found in many machine learning pre-processing workloads.

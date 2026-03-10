@@ -28,6 +28,90 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 namespace {
+
+// Runtime stat names for IndexSource output tracking (rows before join filter).
+constexpr std::string_view kIndexSourceOutputPositions{
+    "indexSourceOutputPositions"};
+constexpr std::string_view kIndexSourceOutputBytes{"indexSourceOutputBytes"};
+constexpr std::string_view kIndexSourceOutputVectors{
+    "indexSourceOutputVectors"};
+
+// Runtime stat names for IndexSource input tracking (lookup keys sent to
+// connector).
+constexpr std::string_view kIndexSourceInputPositions{
+    "indexSourceInputPositions"};
+constexpr std::string_view kIndexSourceInputBytes{"indexSourceInputBytes"};
+
+/// Splits operator stats to provide separate entries for the IndexLookupJoin
+/// node and the IndexSource node. This ensures the IndexSource appears with its
+/// own operator stats in the query plan visualization, rather than being hidden
+/// inside the join operator.
+std::vector<OperatorStats> splitIndexLookupJoinStats(
+    const OperatorStats& combinedStats,
+    const core::PlanNodeId& indexSourceNodeId) {
+  // Create stats for the IndexSource node. These represent the lookup side
+  // of the join which is processed internally by IndexLookupJoin but should
+  // be reported as a separate plan node.
+  OperatorStats indexSourceStats;
+  indexSourceStats.operatorId = combinedStats.operatorId;
+  indexSourceStats.pipelineId = combinedStats.pipelineId;
+  indexSourceStats.planNodeId = indexSourceNodeId;
+  indexSourceStats.operatorType = "IndexSource";
+  indexSourceStats.numDrivers = combinedStats.numDrivers;
+
+  // The backgroundTiming contains the lookup time from the index source.
+  // Use this as the CPU/wall time for IndexSource.
+  indexSourceStats.addInputTiming = combinedStats.backgroundTiming;
+  indexSourceStats.getOutputTiming.count = combinedStats.backgroundTiming.count;
+
+  // Use the tracked IndexSource stats. These are stored as runtime stats so
+  // they aggregate correctly across multiple drivers.
+  auto getTrackedStat = [&](std::string_view name) -> uint64_t {
+    auto it = combinedStats.runtimeStats.find(std::string(name));
+    if (it != combinedStats.runtimeStats.end()) {
+      return static_cast<uint64_t>(it->second.sum);
+    }
+    return 0;
+  };
+
+  // Input stats (lookup keys sent to connector).
+  indexSourceStats.inputPositions = getTrackedStat(kIndexSourceInputPositions);
+  indexSourceStats.inputBytes = getTrackedStat(kIndexSourceInputBytes);
+
+  // Output stats (rows received from connector, before join filter).
+  indexSourceStats.outputPositions =
+      getTrackedStat(kIndexSourceOutputPositions);
+  indexSourceStats.outputBytes = getTrackedStat(kIndexSourceOutputBytes);
+  indexSourceStats.outputVectors = getTrackedStat(kIndexSourceOutputVectors);
+
+  // Copy runtime stats to IndexSource - these include connector lookup metrics.
+  // Remove the internal tracking stats that were only used for splitting.
+  indexSourceStats.runtimeStats = combinedStats.runtimeStats;
+  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceInputPositions));
+  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceInputBytes));
+  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceOutputPositions));
+  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceOutputBytes));
+  indexSourceStats.runtimeStats.erase(std::string(kIndexSourceOutputVectors));
+
+  // Create stats for the IndexLookupJoin node. This is the main join operator
+  // that receives probe input from the left side and performs the join logic.
+  auto joinStats = combinedStats;
+
+  // Clear backgroundTiming from join stats since it's now attributed to
+  // IndexSource. This avoids double counting when aggregating CPU/wall time
+  // across operators.
+  joinStats.backgroundTiming.clear();
+
+  // Remove the internal tracking stats that were only used for splitting.
+  joinStats.runtimeStats.erase(std::string(kIndexSourceInputPositions));
+  joinStats.runtimeStats.erase(std::string(kIndexSourceInputBytes));
+  joinStats.runtimeStats.erase(std::string(kIndexSourceOutputPositions));
+  joinStats.runtimeStats.erase(std::string(kIndexSourceOutputBytes));
+  joinStats.runtimeStats.erase(std::string(kIndexSourceOutputVectors));
+
+  return {std::move(joinStats), std::move(indexSourceStats)};
+}
+
 void duplicateJoinKeyCheck(
     const std::vector<core::FieldAccessTypedExprPtr>& keys) {
   folly::F14FastSet<std::string> lookupKeyNames;
@@ -220,6 +304,18 @@ IndexLookupJoin::IndexLookupJoin(
       joinNode_{joinNode} {
   duplicateJoinKeyCheck(joinNode_->leftKeys());
   duplicateJoinKeyCheck(joinNode_->rightKeys());
+
+  // Set up StatsSplitter to report separate operator stats for both
+  // IndexLookupJoin and IndexSource nodes. This must be done in the constructor
+  // (not initialize()) because operator stats are copied to task stats before
+  // initialize() is called.
+  folly::Synchronized<OperatorStats>& opStats = Operator::stats();
+  opStats.withWLock([&](auto& stats) {
+    stats.setStatSplitter(
+        [indexSourceId = indexSourceNodeId_](const auto& combinedStats) {
+          return splitIndexLookupJoinStats(combinedStats, indexSourceId);
+        });
+  });
 }
 
 void IndexLookupJoin::initialize() {
@@ -795,6 +891,22 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
     return;
   }
 
+  // Track IndexSource input stats (lookup keys sent to connector). Store as
+  // runtime stats so they aggregate correctly across multiple drivers.
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addRuntimeStat(
+        kIndexSourceInputPositions,
+        RuntimeCounter(
+            static_cast<int64_t>(batch.lookupInput->size()),
+            RuntimeCounter::Unit::kNone));
+    lockedStats->addRuntimeStat(
+        kIndexSourceInputBytes,
+        RuntimeCounter(
+            static_cast<int64_t>(batch.lookupInput->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
+  }
+
   // Create the lookup result iterator.
   batch.lookupResultIter =
       indexSource_->lookup(connector::IndexSource::Request{batch.lookupInput});
@@ -858,6 +970,28 @@ RowVectorPtr IndexLookupJoin::produceRemainingOutput(InputBatchState& batch) {
 
 void IndexLookupJoin::prepareLookupResult(InputBatchState& batch) {
   VELOX_CHECK_NOT_NULL(batch.lookupResult);
+
+  // Track IndexSource output stats (rows received from connector, before join
+  // filter is applied). Store as runtime stats so they aggregate correctly
+  // across multiple drivers.
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addRuntimeStat(
+        kIndexSourceOutputPositions,
+        RuntimeCounter(
+            static_cast<int64_t>(batch.lookupResult->size()),
+            RuntimeCounter::Unit::kNone));
+    lockedStats->addRuntimeStat(
+        kIndexSourceOutputBytes,
+        RuntimeCounter(
+            static_cast<int64_t>(
+                batch.lookupResult->output->estimateFlatSize()),
+            RuntimeCounter::Unit::kBytes));
+    lockedStats->addRuntimeStat(
+        kIndexSourceOutputVectors,
+        RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+  }
+
   if (rawLookupInputHitIndices_ != nullptr) {
     return;
   }
@@ -1391,15 +1525,18 @@ void IndexLookupJoin::recordConnectorStats() {
     lockedStats->runtimeStats.erase(name);
     lockedStats->runtimeStats.emplace(name, std::move(value));
   }
-  if (connectorStats.count(kConnectorLookupWallTime) != 0) {
+  if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(connectorStats[kConnectorLookupWallTime].count),
-        static_cast<uint64_t>(connectorStats[kConnectorLookupWallTime].sum),
+        static_cast<uint64_t>(
+            connectorStats[std::string(kConnectorLookupWallTime)].count),
+        static_cast<uint64_t>(
+            connectorStats[std::string(kConnectorLookupWallTime)].sum),
         // NOTE: this might not be accurate as it doesn't include the time
         // spent inside the index storage client.
-        static_cast<uint64_t>(connectorStats[kConnectorResultPrepareTime].sum) +
-            connectorStats[kClientRequestProcessTime].sum +
-            connectorStats[kClientResultProcessTime].sum};
+        static_cast<uint64_t>(
+            connectorStats[std::string(kConnectorResultPrepareTime)].sum) +
+            connectorStats[std::string(kClientRequestProcessTime)].sum +
+            connectorStats[std::string(kClientResultProcessTime)].sum};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }

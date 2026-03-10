@@ -2858,38 +2858,285 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
       "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
 
   auto taskStats = toPlanStats(task->taskStats());
+
+  // Check IndexSource stats - lookup timing should be here, not on join stats.
+  auto& indexSourceStats = taskStats.at(indexScanNodeId_);
+  ASSERT_EQ(indexSourceStats.addInputTiming.count, numProbeBatches);
+  ASSERT_GT(indexSourceStats.addInputTiming.cpuNanos, 0);
+  ASSERT_GT(indexSourceStats.addInputTiming.wallNanos, 0);
+
+  // Verify that backgroundTiming was cleared from join stats (moved to
+  // IndexSource to avoid double counting).
   auto& operatorStats = taskStats.at(joinNodeId_);
-  ASSERT_EQ(operatorStats.backgroundTiming.count, numProbeBatches);
-  ASSERT_GT(operatorStats.backgroundTiming.cpuNanos, 0);
-  ASSERT_GT(operatorStats.backgroundTiming.wallNanos, 0);
-  auto runtimeStats = operatorStats.customStats;
+  ASSERT_EQ(operatorStats.backgroundTiming.count, 0);
+  ASSERT_EQ(operatorStats.backgroundTiming.cpuNanos, 0);
+  ASSERT_EQ(operatorStats.backgroundTiming.wallNanos, 0);
+
+  // Check runtime stats are present on IndexSource.
+  auto runtimeStats = indexSourceStats.customStats;
   ASSERT_EQ(
-      runtimeStats.at(IndexLookupJoin::kConnectorLookupWallTime).count,
-      numProbeBatches);
-  ASSERT_GT(runtimeStats.at(IndexLookupJoin::kConnectorLookupWallTime).sum, 0);
-  ASSERT_EQ(
-      runtimeStats.at(IndexLookupJoin::kClientLookupWaitWallTime).count,
-      numProbeBatches);
-  ASSERT_GT(runtimeStats.at(IndexLookupJoin::kClientLookupWaitWallTime).sum, 0);
-  ASSERT_EQ(
-      runtimeStats.at(IndexLookupJoin::kConnectorResultPrepareTime).count,
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorLookupWallTime))
+          .count,
       numProbeBatches);
   ASSERT_GT(
-      runtimeStats.at(IndexLookupJoin::kConnectorResultPrepareTime).sum, 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientRequestProcessTime), 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientResultProcessTime), 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultSize), 0);
-  ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultRawSize), 0);
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorLookupWallTime))
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats.at(std::string(IndexLookupJoin::kClientLookupWaitWallTime))
+          .count,
+      numProbeBatches);
+  ASSERT_GT(
+      runtimeStats.at(std::string(IndexLookupJoin::kClientLookupWaitWallTime))
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorResultPrepareTime))
+          .count,
+      numProbeBatches);
+  ASSERT_GT(
+      runtimeStats.at(std::string(IndexLookupJoin::kConnectorResultPrepareTime))
+          .sum,
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(
+          std::string(IndexLookupJoin::kClientRequestProcessTime)),
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(
+          std::string(IndexLookupJoin::kClientResultProcessTime)),
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(std::string(IndexLookupJoin::kClientLookupResultSize)),
+      0);
+  ASSERT_EQ(
+      runtimeStats.count(
+          std::string(IndexLookupJoin::kClientLookupResultRawSize)),
+      0);
   ASSERT_THAT(
-      operatorStats.toString(true, true),
+      indexSourceStats.toString(true, true),
       testing::MatchesRegex(".*Runtime stats.*connectorLookupWallNanos:.*"));
   ASSERT_THAT(
-      operatorStats.toString(true, true),
+      indexSourceStats.toString(true, true),
       testing::MatchesRegex(".*Runtime stats.*clientlookupWaitWallNanos.*"));
   ASSERT_THAT(
-      operatorStats.toString(true, true),
+      indexSourceStats.toString(true, true),
       testing::MatchesRegex(
           ".*Runtime stats.*connectorResultPrepareCpuNanos.*"));
+}
+
+/// Verifies that IndexLookupJoin's StatsSplitter correctly reports separate
+/// operator stats for both the IndexLookupJoin node and the IndexSource node.
+/// This ensures IndexSource appears with its own CPU/Scheduled/Output stats
+/// in the query plan visualization.
+DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitter) {
+  IndexTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+  const int numProbeBatches{2};
+  const int batchSize{100};
+  const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
+      numProbeBatches,
+      batchSize,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      100);
+  std::vector<std::shared_ptr<TempFilePath>> probeFiles =
+      createProbeFiles(probeVectors);
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  // Add a small delay in async lookup to ensure timing stats are captured.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::TestIndexSource::ResultIterator::asyncLookup",
+      std::function<void(void*)>([&](void*) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
+      }));
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      {},
+      /*filter=*/"",
+      /*hasMarker=*/false,
+      core::JoinType::kInner,
+      {"u3", "t5"});
+  auto task = runLookupQuery(
+      plan,
+      probeFiles,
+      GetParam().serialExecution,
+      GetParam().serialExecution,
+      100,
+      0,
+      GetParam().needsIndexSplit,
+      "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+
+  auto taskStats = toPlanStats(task->taskStats());
+
+  // Verify that both the IndexLookupJoin node and IndexSource node have stats.
+  ASSERT_TRUE(taskStats.count(joinNodeId_) > 0)
+      << "IndexLookupJoin node stats missing";
+  ASSERT_TRUE(taskStats.count(indexScanNodeId_) > 0)
+      << "IndexSource node stats missing";
+
+  const auto& joinStats = taskStats.at(joinNodeId_);
+  const auto& indexSourceStats = taskStats.at(indexScanNodeId_);
+
+  // Verify join stats have input from probe side.
+  EXPECT_GT(joinStats.inputRows, 0);
+  EXPECT_GT(joinStats.outputRows, 0);
+
+  // Verify IndexSource stats have output positions (the lookup results).
+  EXPECT_GT(indexSourceStats.outputRows, 0);
+  EXPECT_EQ(indexSourceStats.outputRows, joinStats.outputRows);
+
+  // Verify IndexSource stats have input positions (lookup keys sent to
+  // connector).
+  EXPECT_GT(indexSourceStats.inputRows, 0);
+  EXPECT_GT(indexSourceStats.inputBytes, 0);
+  // For inner join without filter, input rows should match join input rows
+  // (all probe rows are sent as lookup keys).
+  EXPECT_EQ(indexSourceStats.inputRows, joinStats.inputRows);
+
+  // Verify IndexSource stats have timing from backgroundTiming (lookup time).
+  // The addInputTiming should contain the lookup wall/cpu time.
+  EXPECT_GT(indexSourceStats.addInputTiming.count, 0);
+
+  // Verify runtime stats are present on IndexSource (connector metrics).
+  // These include connector lookup wall time, etc.
+  EXPECT_TRUE(
+      indexSourceStats.customStats.count(
+          std::string(IndexLookupJoin::kConnectorLookupWallTime)) > 0)
+      << "IndexSource should have connector lookup wall time";
+  EXPECT_GT(
+      indexSourceStats.customStats
+          .at(std::string(IndexLookupJoin::kConnectorLookupWallTime))
+          .sum,
+      0);
+
+  // Verify that backgroundTiming was cleared from join stats (moved to
+  // IndexSource to avoid double counting).
+  EXPECT_EQ(joinStats.backgroundTiming.count, 0);
+  EXPECT_EQ(joinStats.backgroundTiming.cpuNanos, 0);
+  EXPECT_EQ(joinStats.backgroundTiming.wallNanos, 0);
+}
+
+/// Verifies that IndexSource stats report rows BEFORE the join filter is
+/// applied, while IndexLookupJoin stats report rows AFTER the filter.
+DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
+  // Skip serial execution tests for simplicity - the stats behavior is the
+  // same.
+  if (GetParam().serialExecution || GetParam().hasNullKeys) {
+    return;
+  }
+
+  IndexTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+  const int numProbeBatches{2};
+  const int batchSize{100};
+  const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
+      numProbeBatches,
+      batchSize,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      /*hasNullKeys=*/false,
+      {},
+      {},
+      100);
+  std::vector<std::shared_ptr<TempFilePath>> probeFiles =
+      createProbeFiles(probeVectors);
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  // Add a small delay in async lookup to ensure timing stats are captured.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::TestIndexSource::ResultIterator::asyncLookup",
+      std::function<void(void*)>([&](void*) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
+      }));
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u3", "u5"}),
+      makeIndexColumnHandles({"u0", "u1", "u2", "u3", "u5"}));
+
+  // Add a filter that should filter out approximately half the rows.
+  // The filter "u3 % 2 = 0" will keep only even values of u3.
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      {},
+      /*filter=*/"u3 % 2 = 0",
+      /*hasMarker=*/false,
+      core::JoinType::kInner,
+      {"u3", "t5"});
+  auto task = runLookupQuery(
+      plan,
+      probeFiles,
+      GetParam().serialExecution,
+      GetParam().serialExecution,
+      100,
+      0,
+      GetParam().needsIndexSplit,
+      "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2 AND u.c3 % 2 = 0");
+
+  auto taskStats = toPlanStats(task->taskStats());
+
+  // Verify that both the IndexLookupJoin node and IndexSource node have stats.
+  ASSERT_TRUE(taskStats.count(joinNodeId_) > 0)
+      << "IndexLookupJoin node stats missing";
+  ASSERT_TRUE(taskStats.count(indexScanNodeId_) > 0)
+      << "IndexSource node stats missing";
+
+  const auto& joinStats = taskStats.at(joinNodeId_);
+  const auto& indexSourceStats = taskStats.at(indexScanNodeId_);
+
+  // Verify join stats have input from probe side.
+  EXPECT_GT(joinStats.inputRows, 0);
+  EXPECT_GT(joinStats.outputRows, 0);
+
+  // Verify IndexSource stats have output positions (rows before filter).
+  EXPECT_GT(indexSourceStats.outputRows, 0);
+
+  // KEY ASSERTION: IndexSource should have MORE rows than IndexLookupJoin
+  // because IndexSource reports rows BEFORE the filter ("u3 % 2 = 0") is
+  // applied.
+  EXPECT_GT(indexSourceStats.outputRows, joinStats.outputRows)
+      << "IndexSource should report more rows (before filter) than "
+      << "IndexLookupJoin (after filter)";
 }
 
 TEST_P(IndexLookupJoinTest, DISABLED_barrier) {

@@ -372,6 +372,9 @@ These stats are reported only by connector data or index sources.
    * - totalRemainingFilterWallNanos
      - nanos
      - The total walltime in nanoseconds that the data or index connector do the remaining filtering.
+   * - totalRemainingFilterCpuNanos
+     - nanos
+     - The total CPU time in nanoseconds that the data or index connector do the remaining filtering.
    * - numIndexFilterConversions
      -
      - The number of index columns that were converted from ScanSpec filters to

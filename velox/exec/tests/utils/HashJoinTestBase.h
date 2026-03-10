@@ -102,52 +102,87 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
       if ((op.operatorType == OperatorType::kHashBuild) ||
           (op.operatorType == OperatorType::kHashProbe)) {
         if (!expectedSpill) {
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillRuns].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillFillTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].count, 0);
           ASSERT_EQ(
-              op.runtimeStats[Operator::kSpillExtractVectorTime].count, 0);
+              op.runtimeStats[std::string(Operator::kSpillRuns)].count, 0);
           ASSERT_EQ(
-              op.runtimeStats[Operator::kSpillSerializationTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillFlushTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillWrites].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillWriteTime].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillReadBytes].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillReads].count, 0);
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillReadTime].count, 0);
+              op.runtimeStats[std::string(Operator::kSpillFillTime)].count, 0);
           ASSERT_EQ(
-              op.runtimeStats[Operator::kSpillDeserializationTime].count, 0);
+              op.runtimeStats[std::string(Operator::kSpillSortTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillExtractVectorTime)]
+                  .count,
+              0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillSerializationTime)]
+                  .count,
+              0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillFlushTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillWrites)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillWriteTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillReadBytes)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillReads)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillReadTime)].count, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillDeserializationTime)]
+                  .count,
+              0);
         } else {
           if (op.operatorType == OperatorType::kHashBuild) {
-            ASSERT_GT(op.runtimeStats[Operator::kSpillRuns].count, 0);
-            ASSERT_GT(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
             ASSERT_GT(
-                op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
+                op.runtimeStats[std::string(Operator::kSpillRuns)].count, 0);
+            ASSERT_GT(
+                op.runtimeStats[std::string(Operator::kSpillFillTime)].sum, 0);
+            ASSERT_GT(
+                op.runtimeStats[std::string(Operator::kSpillExtractVectorTime)]
+                    .sum,
+                0);
           } else {
             // The table spilling might also be triggered from hash probe side.
-            ASSERT_GE(op.runtimeStats[Operator::kSpillRuns].count, 0);
-            ASSERT_GE(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
             ASSERT_GE(
-                op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
+                op.runtimeStats[std::string(Operator::kSpillRuns)].count, 0);
+            ASSERT_GE(
+                op.runtimeStats[std::string(Operator::kSpillFillTime)].sum, 0);
+            ASSERT_GE(
+                op.runtimeStats[std::string(Operator::kSpillExtractVectorTime)]
+                    .sum,
+                0);
           }
-          ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].sum, 0);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillSerializationTime].sum, 0);
-          ASSERT_GE(op.runtimeStats[Operator::kSpillFlushTime].sum, 0);
-          // NOTE: spill flush might take less than one microsecond.
-          ASSERT_GE(
-              op.runtimeStats[Operator::kSpillSerializationTime].count,
-              op.runtimeStats[Operator::kSpillFlushTime].count);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillWrites].sum, 0);
-          ASSERT_GE(op.runtimeStats[Operator::kSpillWriteTime].sum, 0);
-          // NOTE: spill flush might take less than one microsecond.
-          ASSERT_GE(
-              op.runtimeStats[Operator::kSpillWrites].count,
-              op.runtimeStats[Operator::kSpillWriteTime].count);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillReadBytes].sum, 0);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillReads].sum, 0);
-          ASSERT_GT(op.runtimeStats[Operator::kSpillReadTime].sum, 0);
+          ASSERT_EQ(
+              op.runtimeStats[std::string(Operator::kSpillSortTime)].sum, 0);
           ASSERT_GT(
-              op.runtimeStats[Operator::kSpillDeserializationTime].sum, 0);
+              op.runtimeStats[std::string(Operator::kSpillSerializationTime)]
+                  .sum,
+              0);
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillFlushTime)].sum, 0);
+          // NOTE: spill flush might take less than one microsecond.
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillSerializationTime)]
+                  .count,
+              op.runtimeStats[std::string(Operator::kSpillFlushTime)].count);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillWrites)].sum, 0);
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillWriteTime)].sum, 0);
+          // NOTE: spill flush might take less than one microsecond.
+          ASSERT_GE(
+              op.runtimeStats[std::string(Operator::kSpillWrites)].count,
+              op.runtimeStats[std::string(Operator::kSpillWriteTime)].count);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillReadBytes)].sum, 0);
+          ASSERT_GT(op.runtimeStats[std::string(Operator::kSpillReads)].sum, 0);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillReadTime)].sum, 0);
+          ASSERT_GT(
+              op.runtimeStats[std::string(Operator::kSpillDeserializationTime)]
+                  .sum,
+              0);
         }
       }
     }

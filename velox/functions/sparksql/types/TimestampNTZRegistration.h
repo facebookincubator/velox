@@ -16,12 +16,8 @@
 
 #pragma once
 
-namespace facebook::velox::cudf_velox {
+namespace facebook::velox::functions::sparksql {
 
-/// CudfQueryConfig - Query session configs for the cuDF Operators.
-struct CudfQueryConfig {
-  // Query config key for the TopN batch size in the cuDF TopN operator.
-  static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
-};
+void registerTimestampNTZType();
 
-} // namespace facebook::velox::cudf_velox
+} // namespace facebook::velox::functions::sparksql

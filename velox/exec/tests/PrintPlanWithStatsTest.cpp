@@ -175,6 +175,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"  -- HashJoin\\[3\\]\\[INNER c0=u_c0\\] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT"},
        {"     Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        {"     HashBuild: Input: 100 rows \\(.+\\), Output: 0 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
@@ -190,6 +191,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"     HashProbe: Input: 2000 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        // These lines may or may not appear depending on whether the operator
        // gets blocked during a run.
@@ -208,6 +210,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"    -- TableScan\\[2\\]\\[table: hive_table\\] -> c0:INTEGER, c1:BIGINT"},
        {"       Input: 2000 rows \\(.+\\), Raw Input: 20480 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        {"          cacheWaitWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
@@ -239,11 +242,13 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"          runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          ssdCacheReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
         true},
        {"          storageReadBytes    [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"          storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
         true},
+       {"          totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"          totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"          totalScanTime       [ ]* sum: .+, count: .+, min: .+, max: .+"},
        {"          unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
@@ -254,12 +259,14 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"          runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      -- Values\\[0\\]\\[100 rows in 1 vectors\\] -> c0:INTEGER, c1:BIGINT"},
        {"         Input: 0 rows \\(.+\\), Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        {"            driverCpuTimeNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"            runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"            runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"            runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"}});
+       {"            runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"            runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"}});
 }
 
 TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
@@ -315,7 +322,8 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
         {"      loadedToValueHook\\s+sum: 50000, count: 5, min: 10000, max: 10000, avg: 10000"},
         {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"}};
+        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+        {"      runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"}};
 
     std::vector<ExpectedLine> scanDisablePrefetchMetrics = {
         {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
@@ -350,11 +358,13 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
         {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+        {"        runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"        ssdCacheReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
          true},
         {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
          true},
+        {"        totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"}};
@@ -392,9 +402,11 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
         {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+        {"        runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
         {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
          true},
+        {"        totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
         {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
@@ -455,6 +467,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
           {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+          {"      runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"      runningWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
           {"      stripeSize\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"      writeIOWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
@@ -490,9 +503,11 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
           {"        runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"        runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"        runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+          {"        runningIsBlockedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
           {"        storageReadBytes [ ]* sum: .+, count: .+, min: .+, max: .+"},
           {"        storageReadWallNanos[ ]* sum: .+, count: .+, min: .+, max: .+",
            true},
+          {"        totalRemainingFilterCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
           {"        totalRemainingFilterWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
           {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
           {"        unitLoadNanos[ ]* sum: .+, count: .+, min: .+, max: .+, avg: .+"},
