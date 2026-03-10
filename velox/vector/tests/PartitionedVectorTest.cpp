@@ -159,6 +159,22 @@ TEST_P(PartitioningVectorTest, testFlatVector) {
   testVectorPartitioning(makeAllNullFlatVector<int>(numValues));
 }
 
+TEST_P(PartitioningVectorTest, testFlatBoolVector) {
+  const int numValues = GetParam();
+
+  // Random values, no nulls
+  testVectorPartitioning(
+      makeFlatVector<bool>(numValues, [](auto row) { return row % 2 == 0; }));
+
+  // Random values, with half number of nulls
+  testVectorPartitioning(
+      makeFlatVector<bool>(
+          numValues, [](auto row) { return row % 2 == 0; }, nullEvery(2, 1)));
+
+  // All nulls
+  testVectorPartitioning(makeAllNullFlatVector<bool>(numValues));
+}
+
 TEST_P(PartitioningVectorTest, testRowVector) {
   const int numValues = GetParam();
 

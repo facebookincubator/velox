@@ -116,21 +116,6 @@ void partitionFixedWidthValuesInPlace(
   }
 }
 
-template <typename T>
-void partitionFixedWidthValues(
-    BufferPtr& inputBuffer,
-    const std::vector<uint32_t>& partitions,
-    const BufferPtr& endPartitionOffsets,
-    uint32_t numPartitions,
-    PartitionBuildContext& ctx,
-    velox::memory::MemoryPool* pool) {
-  VELOX_DCHECK_NOT_NULL(inputBuffer);
-
-  auto input = inputBuffer->asMutable<T>();
-  partitionFixedWidthValuesInPlace<T>(
-      input, partitions, numPartitions, endPartitionOffsets, ctx, pool);
-}
-
 // Swap two bits between two bytes
 void swapBit(Byte& byte1, BitIndex bit1, Byte& byte2, BitIndex bit2) {
   // Calculate the difference between the bits
@@ -151,9 +136,9 @@ void partitionBitsInPlace(
   initializeCursorPartitionOffsets(
       ctx.cursorPartitionOffsets, endPartitionOffsets, numPartitions, pool);
 
-  auto rawCursorOffsets =
+  auto* rawCursorOffsets =
       ctx.cursorPartitionOffsets->asMutable<vector_size_t>();
-  auto rawEndOffsets = endPartitionOffsets->asMutable<vector_size_t>();
+  const auto* rawEndOffsets = endPartitionOffsets->as<vector_size_t>();
 
   for (uint32_t partition = 0; partition < numPartitions; partition++) {
     auto& offset = rawCursorOffsets[partition];
@@ -182,6 +167,36 @@ void partitionBitsInPlace(
       offset = ++rawCursorOffsets[partition];
     }
   }
+}
+
+template <typename T>
+void partitionFixedWidthValues(
+    BufferPtr& inputBuffer,
+    const std::vector<uint32_t>& partitions,
+    const BufferPtr& endPartitionOffsets,
+    uint32_t numPartitions,
+    PartitionBuildContext& ctx,
+    velox::memory::MemoryPool* pool) {
+  VELOX_DCHECK_NOT_NULL(inputBuffer);
+
+  auto input = inputBuffer->asMutable<T>();
+  partitionFixedWidthValuesInPlace<T>(
+      input, partitions, numPartitions, endPartitionOffsets, ctx, pool);
+}
+
+template <>
+void partitionFixedWidthValues<bool>(
+    BufferPtr& inputBuffer,
+    const std::vector<uint32_t>& partitions,
+    const BufferPtr& endPartitionOffsets,
+    uint32_t numPartitions,
+    PartitionBuildContext& ctx,
+    velox::memory::MemoryPool* pool) {
+  VELOX_DCHECK_NOT_NULL(inputBuffer);
+
+  auto input = inputBuffer->asMutable<Byte>();
+  partitionBitsInPlace(
+      input, partitions, numPartitions, ctx, endPartitionOffsets, pool);
 }
 
 template <TypeKind typeKind>
@@ -366,15 +381,26 @@ void PartitionedRowVector::partition(
   partitionedChildren_.reserve(rowVector->childrenSize());
 
   for (const auto& child : rowVector->children()) {
-    partitionedChildren_.push_back(PartitionedVector::create(
-        child, partitions, numPartitions_, endPartitionOffsets_, ctx, pool_));
+    partitionedChildren_.push_back(
+        PartitionedVector::create(
+            child,
+            partitions,
+            numPartitions_,
+            endPartitionOffsets_,
+            ctx,
+            pool_));
   }
 
   if (numPartitions_ > 1) {
     Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
     if (rawNulls) {
       partitionBitsInPlace(
-          rawNulls, partitions, numPartitions_, ctx, endPartitionOffsets_, pool_);
+          rawNulls,
+          partitions,
+          numPartitions_,
+          ctx,
+          endPartitionOffsets_,
+          pool_);
     }
   }
 }
