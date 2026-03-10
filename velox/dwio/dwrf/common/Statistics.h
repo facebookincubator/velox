@@ -19,7 +19,6 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/FileMetadata.h"
-#include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
 namespace facebook::velox::dwrf {
 

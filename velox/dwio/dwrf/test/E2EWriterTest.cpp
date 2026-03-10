@@ -30,6 +30,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
+#include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -205,7 +206,7 @@ class E2EWriterTest : public testing::Test {
 
               dwrf::EncodingKey seqEk(valueTypeId, sequence);
               const auto& keyInfo = stripeStreams.getEncoding(seqEk).key();
-              auto key = dwrf::constructKey(keyInfo);
+              auto key = dwrf::MapStatisticsBuilder::constructKey(keyInfo);
               sequenceToKey.emplace(sequence, key);
             });
 
@@ -235,7 +236,8 @@ class E2EWriterTest : public testing::Test {
         const auto& entry = stats.mapStatistics().stats(i);
         ASSERT_TRUE(entry.stats().has_size());
         EXPECT_EQ(
-            featureStreamSizes.at(dwrf::constructKey(entry.key())),
+            featureStreamSizes.at(
+                dwrf::MapStatisticsBuilder::constructKey(entry.key())),
             entry.stats().size());
       }
     }

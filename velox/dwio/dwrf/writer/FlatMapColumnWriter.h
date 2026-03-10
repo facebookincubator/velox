@@ -38,7 +38,7 @@ class ValueStatisticsBuilder {
   static std::unique_ptr<const ValueStatisticsBuilder> create(
       WriterContext& context,
       const dwio::common::TypeWithId& root) {
-    auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+    auto options = StatisticsBuilder::optionsFromConfig(context.getConfigs());
     return create_(context, root, options);
   }
 
