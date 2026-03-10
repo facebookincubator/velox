@@ -160,8 +160,8 @@ class ReaderBase {
     return *handler_;
   }
 
-  uint64_t footerEstimatedSize() const {
-    return options_.footerEstimatedSize();
+  uint64_t footerSpeculativeIoSize() const {
+    return options_.footerSpeculativeIoSize();
   }
 
   uint64_t fileLength() const {

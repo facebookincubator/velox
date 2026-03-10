@@ -302,6 +302,7 @@ class Aggregate {
 
     for (auto* group : groups) {
       group[initializedByte_] &= ~initializedMask_;
+      clearNull(group);
     }
   }
 

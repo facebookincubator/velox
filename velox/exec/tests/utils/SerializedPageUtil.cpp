@@ -22,7 +22,7 @@ namespace facebook::velox::exec::test {
 
 std::unique_ptr<SerializedPageBase> toSerializedPage(
     const RowVectorPtr& vector,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     const std::shared_ptr<OutputBufferManager>& bufferManager,
     memory::MemoryPool* pool) {
   auto data =
