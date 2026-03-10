@@ -18,9 +18,13 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
@@ -791,6 +795,133 @@ TEST_F(HiveConnectorTest, disjuncts) {
 }
 
 #undef VELOX_ASSERT_FILTER
+
+/// A mock filesystem that delegates to the local filesystem but captures
+/// the FileOptions::fileReadOps passed to openFileForRead. Used to verify
+/// that SplitReader::createReader() propagates table identity (dbName,
+/// tableName) into fileReadOps.
+class CapturingFileSystem : public filesystems::FileSystem {
+ public:
+  static constexpr std::string_view kScheme = "capture:";
+
+  static folly::F14FastMap<std::string, std::string>& capturedFileReadOps() {
+    static folly::F14FastMap<std::string, std::string> instance;
+    return instance;
+  }
+
+  explicit CapturingFileSystem(std::shared_ptr<const config::ConfigBase> config)
+      : FileSystem(std::move(config)) {}
+
+  std::string name() const override {
+    return "capture";
+  }
+
+  std::string_view extractPath(std::string_view path) const override {
+    if (path.substr(0, kScheme.size()) == kScheme) {
+      return path.substr(kScheme.size());
+    }
+    return path;
+  }
+
+  std::unique_ptr<ReadFile> openFileForRead(
+      std::string_view path,
+      const filesystems::FileOptions& options) override {
+    capturedFileReadOps() = options.fileReadOps;
+    auto localPath = extractPath(path);
+    return filesystems::getFileSystem(localPath, config_)
+        ->openFileForRead(localPath, options);
+  }
+
+  std::unique_ptr<WriteFile> openFileForWrite(
+      std::string_view,
+      const filesystems::FileOptions&) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void remove(std::string_view) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void rename(std::string_view, std::string_view, bool) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  bool exists(std::string_view path) override {
+    auto localPath = extractPath(path);
+    return filesystems::getFileSystem(localPath, config_)->exists(localPath);
+  }
+
+  std::vector<std::string> list(std::string_view) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void mkdir(std::string_view, const filesystems::DirectoryOptions&) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void rmdir(std::string_view) override {
+    VELOX_UNSUPPORTED();
+  }
+};
+
+TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
+  // Register the capturing filesystem once.
+  static bool registered = false;
+  if (!registered) {
+    filesystems::registerFileSystem(
+        [](std::string_view path) {
+          return path.find(CapturingFileSystem::kScheme) == 0;
+        },
+        [](std::shared_ptr<const config::ConfigBase> config, std::string_view) {
+          return std::make_shared<CapturingFileSystem>(std::move(config));
+        });
+    registered = true;
+  }
+
+  // Write test data to a local temp file.
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto vector = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vector);
+
+  // Create a table handle with dbName and tableName set.
+  auto tableHandle = std::make_shared<HiveTableHandle>(
+      kHiveConnectorId,
+      "test_table",
+      SubfieldFilters{},
+      /*remainingFilter=*/nullptr,
+      /*dataColumns=*/nullptr,
+      /*indexColumns=*/std::vector<std::string>{},
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      /*filterColumnHandles=*/std::vector<HiveColumnHandlePtr>{},
+      /*sampleRate=*/1.0,
+      /*dbName=*/"test_db");
+
+  // Build the split using the capturing filesystem scheme so that
+  // openFileForRead captures the fileReadOps populated by SplitReader.
+  auto split = exec::test::HiveConnectorSplitBuilder(
+                   fmt::format("capture:{}", filePath->getPath()))
+                   .fileFormat(dwio::common::FileFormat::DWRF)
+                   .build();
+
+  // Build and run a table scan. This exercises the full pipeline:
+  // SplitReader::createReader() -> FileHandleGenerator -> CapturingFileSystem.
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool_.get());
+  ASSERT_EQ(result->size(), 3);
+
+  // Verify that SplitReader propagated dbName and tableName into fileReadOps.
+  auto& captured = CapturingFileSystem::capturedFileReadOps();
+  ASSERT_EQ(captured.at(std::string(kDbNameKey)), "test_db");
+  ASSERT_EQ(captured.at(std::string(kTableNameKey)), "test_table");
+}
 
 } // namespace
 } // namespace facebook::velox::connector::hive

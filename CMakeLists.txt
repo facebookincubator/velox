@@ -479,7 +479,7 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     message(FATAL_ERROR "-DCMAKE_CUDA_ARCHITECTURES= must be set")
   endif()
   if(CMAKE_BUILD_TYPE MATCHES Debug)
-    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
+    set(VELOX_CUDA_DEBUG_FLAGS "$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
   # Suppress deprecated GPU targets warning for CUDA 12.8.x
@@ -670,6 +670,9 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Find Threads library
   find_package(Threads REQUIRED)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
+  # Explicitly enable folly coroutines when compiler supports them.
+  # This is required for folly::coro::AsyncGenerator to work correctly.
+  add_compile_definitions(FOLLY_HAS_COROUTINES=1)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)

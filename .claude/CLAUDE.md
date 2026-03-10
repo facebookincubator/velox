@@ -111,3 +111,9 @@ Common matchers:
 - `SizeIs(n)` - collection has n elements
 
 Requires `#include <gmock/gmock.h>`.
+
+## Design Documents
+
+Design (including proposals) live in `docs/designs/`.  When creating new
+designs, place them there with a descriptive filename (e.g.,
+`column-extraction-pushdown.md`).

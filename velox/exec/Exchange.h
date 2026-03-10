@@ -97,7 +97,7 @@ class Exchange : public SourceOperator {
 
   const uint64_t preferredOutputBatchBytes_;
 
-  const VectorSerde::Kind serdeKind_;
+  const std::string serdeKind_;
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 

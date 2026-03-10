@@ -93,6 +93,7 @@ add_executable(
   MapTopNTest.cpp
   MapTopNKeysTest.cpp
   MapTopNValuesTest.cpp
+  MapTrimValuesTest.cpp
   MapKeysAndValuesTest.cpp
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
@@ -125,6 +126,7 @@ add_executable(
   TransformKeysTest.cpp
   TransformTest.cpp
   TransformValuesTest.cpp
+  TransformWithIndexTest.cpp
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   TDigestCastTest.cpp

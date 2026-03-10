@@ -220,10 +220,6 @@ uint64_t HiveConfig::maxTargetFileSizeBytes(
       config::CapacityUnit::BYTE);
 }
 
-uint64_t HiveConfig::footerEstimatedSize() const {
-  return config_->get<uint64_t>(kFooterEstimatedSize, 256UL << 10);
-}
-
 uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
@@ -264,11 +260,46 @@ bool HiveConfig::indexEnabled(const config::ConfigBase* session) const {
       kIndexEnabledSession, config_->get<bool>(kIndexEnabled, false));
 }
 
+bool HiveConfig::readerCollectColumnStats(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kReaderCollectColumnStatsSession,
+      config_->get<bool>(kReaderCollectColumnStats, false));
+}
+
 uint32_t HiveConfig::maxRowsPerIndexRequest(
     const config::ConfigBase* session) const {
   return session->get<uint32_t>(
       kMaxRowsPerIndexRequestSession,
       config_->get<uint32_t>(kMaxRowsPerIndexRequest, 0));
+}
+
+bool HiveConfig::fileMetadataCacheEnabled(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kFileMetadataCacheEnabledSession,
+      config_->get<bool>(kFileMetadataCacheEnabled, false));
+}
+
+uint64_t HiveConfig::orcFooterSpeculativeIoSize(
+    const config::ConfigBase* session) const {
+  return session->get<uint64_t>(
+      kOrcFooterSpeculativeIoSizeSession,
+      config_->get<uint64_t>(kOrcFooterSpeculativeIoSize, 256UL << 10));
+}
+
+uint64_t HiveConfig::parquetFooterSpeculativeIoSize(
+    const config::ConfigBase* session) const {
+  return session->get<uint64_t>(
+      kParquetFooterSpeculativeIoSizeSession,
+      config_->get<uint64_t>(kParquetFooterSpeculativeIoSize, 256UL << 10));
+}
+
+uint64_t HiveConfig::nimbleFooterSpeculativeIoSize(
+    const config::ConfigBase* session) const {
+  return session->get<uint64_t>(
+      kNimbleFooterSpeculativeIoSizeSession,
+      config_->get<uint64_t>(kNimbleFooterSpeculativeIoSize, 8UL << 20));
 }
 
 std::string HiveConfig::user(const config::ConfigBase* session) const {

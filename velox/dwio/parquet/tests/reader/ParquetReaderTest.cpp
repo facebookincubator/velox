@@ -1198,7 +1198,7 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   const auto fileSize = file->size();
   ASSERT_TRUE(
       fileSize <= dwio::common::ReaderOptions::kDefaultFilePreloadThreshold ||
-      fileSize <= dwio::common::ReaderOptions::kDefaultFooterEstimatedSize);
+      fileSize <= dwio::common::ReaderOptions::kDefaultFooterSpeculativeIoSize);
 
   // Check the whole file already loaded.
   ASSERT_EQ(file->bytesRead(), fileSize);

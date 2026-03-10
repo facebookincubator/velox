@@ -51,6 +51,17 @@ void writeData(WriteFile* writeFile, bool useIOBuf = false) {
   }
 }
 
+TEST(FileIoContextTest, defaultCacheableIsFalse) {
+  FileIoContext defaultContext;
+  EXPECT_FALSE(defaultContext.cacheable);
+
+  FileIoContext explicitContext(nullptr);
+  EXPECT_FALSE(explicitContext.cacheable);
+
+  FileIoContext cacheableContext(nullptr, {}, nullptr, true);
+  EXPECT_TRUE(cacheableContext.cacheable);
+}
+
 void writeDataWithOffset(WriteFile* writeFile) {
   ASSERT_EQ(writeFile->size(), 0);
   writeFile->truncate(15 + kOneMB);
@@ -190,7 +201,7 @@ class LocalFileTest : public ::testing::TestWithParam<bool> {
   const bool useFaultyFs_;
   const std::unique_ptr<folly::CPUThreadPoolExecutor> executor_ =
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::max(1, static_cast<int32_t>(folly::hardware_concurrency() / 2)),
+          std::max(1, static_cast<int32_t>(folly::available_concurrency() / 2)),
           std::make_shared<folly::NamedThreadFactory>(
               "LocalFileReadAheadTest"));
 };

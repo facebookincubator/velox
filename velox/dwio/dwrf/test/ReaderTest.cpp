@@ -271,7 +271,7 @@ void verifyFlatMapReading(
 
   /* If an extra sanity check is desired you can uncomment the 2 below lines and
    * re-run */
-  // readerOpts.setFooterEstimatedSize(257);
+  // readerOpts.setFooterSpeculativeIoSize(257);
   // readerOpts.setFilePreloadThreshold(0);
 
   RowReaderOptions rowReaderOpts;
@@ -1478,7 +1478,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
 TEST_F(TestReader, TestStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(17);
+  readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1506,7 +1506,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
 TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(17);
+  readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1535,7 +1535,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
 TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(17);
+  readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -2657,7 +2657,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(c0->valueVector()->size(), dictionary.size());
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 0);
+  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 0);
   spec->childByName("c0")->setFilter(
       std::make_unique<common::BytesValues>(
           std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaa"}, false));
@@ -2668,7 +2668,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
   stats = {};
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStatistics.flattenStringDictionaryValues, 1);
+  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 1);
 }
 
 // A primitive subfield is missing in file, and result is not reused.

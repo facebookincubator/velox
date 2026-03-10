@@ -490,6 +490,15 @@ class RowReaderOptions {
     passStringBuffersFromDecoder_ = passStringBuffersFromDecoder;
   }
 
+  bool collectColumnStats() const {
+    return collectColumnStats_;
+  }
+
+  RowReaderOptions& setCollectColumnStats(bool collect) {
+    collectColumnStats_ = collect;
+    return *this;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -554,12 +563,17 @@ class RowReaderOptions {
   // NOTE: we will control this option with a session property
   // for prod. Tests are parameterized on both branches.
   bool passStringBuffersFromDecoder_{false};
+  bool collectColumnStats_{false};
 };
 
 /// Options for creating a Reader.
 class ReaderOptions : public io::ReaderOptions {
  public:
-  static constexpr uint64_t kDefaultFooterEstimatedSize = 1024 * 1024; // 1MB
+  static constexpr uint64_t kDefaultFooterSpeculativeIoSize =
+      1024 * 1024; // 1MB
+  /// @deprecated Use kDefaultFooterSpeculativeIoSize instead.
+  static constexpr uint64_t kDefaultFooterEstimatedSize =
+      kDefaultFooterSpeculativeIoSize;
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
@@ -611,9 +625,14 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setFooterEstimatedSize(uint64_t size) {
-    footerEstimatedSize_ = size;
+  ReaderOptions& setFooterSpeculativeIoSize(uint64_t size) {
+    footerSpeculativeIoSize_ = size;
     return *this;
+  }
+
+  /// @deprecated Use setFooterSpeculativeIoSize instead.
+  ReaderOptions& setFooterEstimatedSize(uint64_t size) {
+    return setFooterSpeculativeIoSize(size);
   }
 
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
@@ -678,8 +697,13 @@ class ReaderOptions : public io::ReaderOptions {
     return decrypterFactory_;
   }
 
+  uint64_t footerSpeculativeIoSize() const {
+    return footerSpeculativeIoSize_;
+  }
+
+  /// @deprecated Use footerSpeculativeIoSize instead.
   uint64_t footerEstimatedSize() const {
-    return footerEstimatedSize_;
+    return footerSpeculativeIoSize();
   }
 
   uint64_t filePreloadThreshold() const {
@@ -738,6 +762,18 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  /// Whether to cache file metadata (footer, stripes, index) in the
+  /// process-wide AsyncDataCache. When enabled, the first reader performs a
+  /// speculative tail read and populates the cache; subsequent readers on the
+  /// same file initialize from the cache with zero additional IO.
+  bool fileMetadataCacheEnabled() const {
+    return fileMetadataCacheEnabled_;
+  }
+
+  void setFileMetadataCacheEnabled(bool value) {
+    fileMetadataCacheEnabled_ = value;
+  }
+
   bool allowEmptyFile() const {
     return allowEmptyFile_;
   }
@@ -761,7 +797,7 @@ class ReaderOptions : public io::ReaderOptions {
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
-  uint64_t footerEstimatedSize_{kDefaultFooterEstimatedSize};
+  uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
@@ -771,6 +807,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool fileMetadataCacheEnabled_{false};
   bool allowEmptyFile_{false};
   OnRowReject onRowReject_;
 };

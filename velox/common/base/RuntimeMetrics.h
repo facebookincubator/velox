@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
 #include <limits>
+#include <string_view>
 
 namespace facebook::velox {
 
@@ -77,7 +78,7 @@ class BaseRuntimeStatWriter {
   virtual ~BaseRuntimeStatWriter() = default;
 
   virtual void addRuntimeStat(
-      const std::string& /* name */,
+      std::string_view /* name */,
       const RuntimeCounter& /* value */) {}
 };
 
@@ -93,7 +94,7 @@ BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter();
 
 /// Writes runtime counter to the current Operator running on that thread.
 void addThreadLocalRuntimeStat(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value);
 
 /// Scope guard to conveniently set and revert back the current stat writer.

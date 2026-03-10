@@ -36,7 +36,7 @@ class HiveConfig;
 
 /// HiveIndexReader handles index lookups for Hive tables with cluster indexes.
 /// It focuses on:
-/// - Creating index bounds from join conditions
+/// - Creating index bounds from index lookup conditions
 /// - Delegating actual index lookups to the format-specific IndexReader
 ///
 /// The format-specific IndexReader (e.g., SelectiveNimbleIndexReader) handles:
@@ -51,7 +51,7 @@ class HiveIndexReader {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const RowTypePtr& requestType,
       const RowTypePtr& outputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -95,8 +95,9 @@ class HiveIndexReader {
   // Creates the format-specific index reader.
   std::unique_ptr<dwio::common::IndexReader> createIndexReader();
 
-  // Parses join conditions to extract column indices and constant values.
-  void parseJoinConditions();
+  // Parses index lookup conditions to extract column indices and constant
+  // values.
+  void parseIndexLookupConditions();
 
   // Builds IndexBounds from the request row vector.
   serializer::IndexBounds buildRequestIndexBounds(const RowVectorPtr& request);
@@ -117,22 +118,23 @@ class HiveIndexReader {
   const std::shared_ptr<common::ScanSpec> scanSpec_;
   const std::unique_ptr<dwio::common::Reader> fileReader_;
   const std::unique_ptr<dwio::common::IndexReader> indexReader_;
-  // Join conditions (including equal conditions converted from join keys).
-  const std::vector<core::IndexLookupConditionPtr> joinConditions_;
+  // Index lookup conditions (including equal conditions converted from lookup
+  // keys).
+  const std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
 
-  // Request column indices for each join condition (for probe side columns).
-  // For EqualIndexLookupCondition, stores {valueIndex}.
-  // For BetweenIndexLookupCondition, stores {lowerIndex, upperIndex}.
+  // Request column indices for each index lookup condition (for probe side
+  // columns). For EqualIndexLookupCondition, stores {valueIndex}. For
+  // BetweenIndexLookupCondition, stores {lowerIndex, upperIndex}.
   std::vector<std::vector<column_index_t>> requestColumnIndices_;
 
   // For BetweenIndexLookupCondition with constant bounds, stores the constant
-  // values directly. The outer vector is indexed by join condition index. The
-  // inner vector has size 2 for between conditions (lower, upper). If a bound
-  // is a constant, the corresponding optional contains the value; otherwise
-  // it's std::nullopt and the value should be decoded from request.
+  // values directly. The outer vector is indexed by index lookup condition
+  // index. The inner vector has size 2 for between conditions (lower, upper).
+  // If a bound is a constant, the corresponding optional contains the value;
+  // otherwise it's std::nullopt and the value should be decoded from request.
   std::vector<std::vector<std::optional<variant>>> constantBoundValues_;
 
-  // Cached row type for index bounds (column names and types from join
+  // Cached row type for index bounds (column names and types from index lookup
   // conditions).
   RowTypePtr indexBoundType_;
 

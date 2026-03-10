@@ -156,7 +156,7 @@ class ReaderBase {
       bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
-  const uint64_t footerEstimatedSize_;
+  const uint64_t footerSpeculativeIoSize_;
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
@@ -177,7 +177,7 @@ ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_{options.memoryPool()},
-      footerEstimatedSize_{options.footerEstimatedSize()},
+      footerSpeculativeIoSize_{options.footerSpeculativeIoSize()},
       filePreloadThreshold_{options.filePreloadThreshold()},
       options_{options},
       input_{std::move(input)},
@@ -192,8 +192,8 @@ ReaderBase::ReaderBase(
 
 void ReaderBase::loadFileMetaData() {
   bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, footerEstimatedSize_);
-  uint64_t readSize = preloadFile ? fileLength_ : footerEstimatedSize_;
+      fileLength_ <= std::max(filePreloadThreshold_, footerSpeculativeIoSize_);
+  uint64_t readSize = preloadFile ? fileLength_ : footerSpeculativeIoSize_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -1336,7 +1336,7 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
-    stats.columnReaderStatistics.pageLoadTimeNs.merge(
+    stats.columnReaderStats.pageLoadTimeNs.merge(
         columnReaderStats_.pageLoadTimeNs);
   }
 

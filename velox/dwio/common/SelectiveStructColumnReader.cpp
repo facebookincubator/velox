@@ -461,7 +461,7 @@ void SelectiveStructColumnReaderBase::read(
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
         reader->resetInitTimeClocks();
-        reader->read(offset, activeRows, structNulls);
+        reader->readWithTiming(offset, activeRows, structNulls);
 
         // Exclude initialization time.
         timer.subtract(reader->initTimeClocks());
@@ -473,7 +473,7 @@ void SelectiveStructColumnReaderBase::read(
         break;
       }
     } else {
-      reader->read(offset, activeRows, structNulls);
+      reader->readWithTiming(offset, activeRows, structNulls);
     }
   }
 
