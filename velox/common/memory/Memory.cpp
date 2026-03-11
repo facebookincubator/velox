@@ -54,9 +54,12 @@ std::shared_ptr<MemoryAllocator> createAllocator(
     mmapOptions.mmapArenaCapacityRatio = options.mmapArenaCapacityRatio;
     return std::make_shared<MmapAllocator>(mmapOptions);
   } else {
-    return std::make_shared<MallocAllocator>(
-        options.allocatorCapacity,
-        options.allocationSizeThresholdWithReservation);
+    MallocAllocator::Options mallocOptions;
+    mallocOptions.capacity = options.allocatorCapacity;
+    mallocOptions.reservationByteLimit =
+        options.allocationSizeThresholdWithReservation;
+    mallocOptions.mallocContiguousEnabled = options.mallocContiguousEnabled;
+    return std::make_shared<MallocAllocator>(mallocOptions);
   }
 }
 
