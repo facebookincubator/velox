@@ -14,13 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/common/memory/Allocation.h"
+
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/Memory.h"
-
-using namespace ::testing;
-using namespace facebook::velox::memory;
 
 namespace facebook::velox::memory {
 
@@ -105,7 +103,6 @@ TEST_F(AllocationTest, maxPageRunLimit) {
       "The number of pages to append 131070 exceeds the PageRun limit 65535");
   ASSERT_EQ(allocation.numPages(), Allocation::PageRun::kMaxPagesInRun);
   ASSERT_EQ(allocation.numRuns(), 1);
-  LOG(ERROR) << "here";
   allocation.clear();
 }
 
