@@ -283,6 +283,10 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
+          # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
+          # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
+          # exported config references gflags_static which BUNDLED gflags provides.
+          gflags_SOURCE: BUNDLED
           MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
         run: |
           EXTRA_CMAKE_FLAGS=(
@@ -313,8 +317,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error \
-            --exclude-regex velox_function_dynamic_link_test
+          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
 
   fedora-debug:
     runs-on: 16-core-ubuntu
