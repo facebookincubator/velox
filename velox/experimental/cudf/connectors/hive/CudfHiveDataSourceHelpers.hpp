@@ -91,7 +91,7 @@ struct HybridScanState {
   HybridScanState() : isHybridScanSetup_(std::make_unique<std::once_flag>()) {}
 
   std::vector<rmm::device_buffer> columnChunkBuffers_;
-  std::vector<cudf::device_span<uint8_t const>> columnChunkData_;
+  std::vector<cudf::device_span<const uint8_t>> columnChunkData_;
   std::unique_ptr<std::once_flag> isHybridScanSetup_;
 };
 
@@ -114,7 +114,7 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
  */
 std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
     std::shared_ptr<cudf::io::datasource> dataSource,
-    cudf::io::text::byte_range_info const pageIndexBytes);
+    const cudf::io::text::byte_range_info pageIndexBytes);
 
 /**
  * @brief Fetches a list of byte ranges from a host buffer into device buffers
@@ -129,11 +129,11 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
  */
 std::tuple<
     std::vector<rmm::device_buffer>,
-    std::vector<cudf::device_span<uint8_t const>>,
+    std::vector<cudf::device_span<const uint8_t>>,
     std::future<void>>
 fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
-    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
