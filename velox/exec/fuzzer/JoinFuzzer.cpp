@@ -139,7 +139,8 @@ class JoinFuzzer : public JoinFuzzerBase {
           << JoinFuzzerBase::makePercentageString(numVerified, numIterations)
           << std::endl;
       out << "Total iterations testing cross product: "
-          << JoinFuzzerBase::makePercentageString(numCrossProduct, numIterations)
+          << JoinFuzzerBase::makePercentageString(
+                 numCrossProduct, numIterations)
           << std::endl;
       return out.str();
     }
