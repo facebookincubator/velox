@@ -46,20 +46,21 @@ SingletonState& singletonState() {
 
 std::shared_ptr<MemoryAllocator> createAllocator(
     const MemoryManager::Options& options) {
+  MemoryAllocator::Options allocatorOptions;
+  allocatorOptions.capacity = options.allocatorCapacity;
   if (options.useMmapAllocator) {
-    MmapAllocator::Options mmapOptions;
-    mmapOptions.capacity = options.allocatorCapacity;
-    mmapOptions.largestSizeClass = options.largestSizeClassPages;
-    mmapOptions.useMmapArena = options.useMmapArena;
-    mmapOptions.mmapArenaCapacityRatio = options.mmapArenaCapacityRatio;
-    return std::make_shared<MmapAllocator>(mmapOptions);
+    allocatorOptions.largestSizeClass = options.largestSizeClassPages;
+    allocatorOptions.useMmapArena = options.useMmapArena;
+    allocatorOptions.mmapArenaCapacityRatio = options.mmapArenaCapacityRatio;
+    allocatorOptions.smallAllocationReservePct =
+        options.smallAllocationReservePct;
+    allocatorOptions.maxMallocBytes = options.maxMallocBytes;
+    return std::make_shared<MmapAllocator>(allocatorOptions);
   } else {
-    MallocAllocator::Options mallocOptions;
-    mallocOptions.capacity = options.allocatorCapacity;
-    mallocOptions.reservationByteLimit =
+    allocatorOptions.reservationByteLimit =
         options.allocationSizeThresholdWithReservation;
-    mallocOptions.mallocContiguousEnabled = options.mallocContiguousEnabled;
-    return std::make_shared<MallocAllocator>(mallocOptions);
+    allocatorOptions.mallocContiguousEnabled = options.mallocContiguousEnabled;
+    return std::make_shared<MallocAllocator>(allocatorOptions);
   }
 }
 
