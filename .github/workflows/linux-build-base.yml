@@ -435,7 +435,7 @@ jobs:
   cudf-join-fuzzer:
     runs-on: 4-core-ubuntu-gpu-t4
     needs: adapters
-    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' }}
+    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' && needs.adapters.result == 'success' }}
     timeout-minutes: 60
     env:
       CUDF_DIR: _build/release/velox/experimental/cudf
@@ -443,6 +443,11 @@ jobs:
       - name: Install Packages
         run: |
           sudo apt-get update && sudo apt-get install -y patchelf cuda-toolkit-12-9
+          # Verify patchelf installed correctly
+          if ! command -v patchelf >/dev/null 2>&1; then
+            echo "Error: patchelf installation failed"
+            exit 1
+          fi
 
       - name: Check NVIDIA Driver Version
         run: nvidia-smi
