@@ -214,19 +214,19 @@ jobs:
         env:
           CUDF_DIR: _build/release/velox/experimental/cudf
         run: |
-          mkdir -p $CUDF_DIR/cudf-libs
-          deps=$( \
-            for exe in $CUDF_DIR/tests/velox_cudf_*; \
-              do ldd "$exe" 2>/dev/null; done | \
+          mkdir -p "$CUDF_DIR/cudf-libs"
+          deps=$(
+            find "$CUDF_DIR/tests" -name "velox_cudf_*" -type f -executable | \
+            xargs ldd 2>/dev/null | \
             sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | \
-            sed '/libcuda/ d' | sed '/librt.so/ d' | sed '/libm.so/ d' | \
-            sed '/libstdc++.so/ d' | sed '/ld-linux-x86-64.so/ d' | sed '/libc.so/ d' | sort -u \
+            grep -vE '(libcuda|librt\.so|libm\.so|libstdc\+\+\.so|ld-linux-x86-64\.so|libc\.so)' | \
+            sort -u
           ) && \
-          (echo "$deps" | xargs readlink -f | xargs -I {} cp {} $CUDF_DIR/cudf-libs/) && \
+          (echo "$deps" | xargs readlink -f | xargs -I {} cp {} "$CUDF_DIR/cudf-libs/") && \
           lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) && \
-          (cd $CUDF_DIR/cudf-libs && echo "$lndeps" | \
+          (cd "$CUDF_DIR/cudf-libs" && echo "$lndeps" | \
             xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}) && \
-          tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
+          tar -cvf "$CUDF_DIR/cudf-libs.tar" -C "$CUDF_DIR" cudf-libs
 
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
