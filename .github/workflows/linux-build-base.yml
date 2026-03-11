@@ -287,6 +287,10 @@ jobs:
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
           # exported config references gflags_static which BUNDLED gflags provides.
           gflags_SOURCE: BUNDLED
+          # Keep system glog (container's glog is built against the same gflags
+          # version). Without this, BUNDLED gflags cascades to BUNDLED glog
+          # which conflicts with system glog loaded transitively.
+          glog_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
         run: |
           EXTRA_CMAKE_FLAGS=(
