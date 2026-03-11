@@ -299,9 +299,13 @@ ExpressionVerifier::verify(
   std::vector<VerificationState> verificationStates;
   // Share ExpressionSet between consecutive iterations to simulate its usage in
   // FilterProject.
+  // Use the same compiled Expr tree (exprSetCommon) for the simplified path,
+  // but call evalSimplified() on each expression with flat input. This
+  // guarantees both paths run the exact same expression (same optimizations,
+  // e.g. CoalesceRewrite); only the evaluation method (eval vs evalSimplified)
+  // and input (lazy vs flat) differ.
   exec::ExprSet exprSetCommon =
       createExprSetCommon(plans, execCtx_, options_.disableConstantFolding);
-  exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
 
   int testCaseItr = 0;
   for (auto [rowVector, rows] : transformedInputTestCases) {
@@ -499,17 +503,16 @@ ExpressionVerifier::verify(
     } else {
       VLOG(1) << "Execute with simplified expression eval path.";
       try {
+        exprSetCommon.clear();
+        simplifiedEvalResult.resize(exprSetCommon.size());
         exec::EvalCtx evalCtxSimplified(
-            execCtx_, &exprSetSimplified, rowVector.get());
+            execCtx_, &exprSetCommon, rowVector.get());
 
         auto copy = BaseVector::copy(*rowVector);
-        exprSetSimplified.eval(
-            0,
-            exprSetSimplified.size(),
-            true /*initialize*/,
-            rows,
-            evalCtxSimplified,
-            simplifiedEvalResult);
+        for (int32_t i = 0; i < exprSetCommon.size(); ++i) {
+          exprSetCommon.exprs()[i]->evalSimplified(
+              rows, evalCtxSimplified, simplifiedEvalResult[i]);
+        }
 
         // Flatten the input vector as an optimization if its very deeply
         // nested.
