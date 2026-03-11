@@ -576,7 +576,9 @@ endif()
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
   # Allow explicit glog_SOURCE override (e.g. when system glog is built
   # against the same gflags version as BUNDLED).
-  if(NOT DEFINED ENV{glog_SOURCE})
+  if(DEFINED ENV{glog_SOURCE})
+    set(glog_SOURCE $ENV{glog_SOURCE})
+  else()
     set(glog_SOURCE BUNDLED)
   endif()
 else()
