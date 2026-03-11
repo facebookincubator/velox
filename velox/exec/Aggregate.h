@@ -302,7 +302,20 @@ class Aggregate {
 
     for (auto* group : groups) {
       group[initializedByte_] &= ~initializedMask_;
+      clearNull(group);
     }
+  }
+
+  /// Returns true if this aggregate function supports lightweight memory
+  /// compaction via compact().
+  virtual bool supportsCompact() const {
+    return false;
+  }
+
+  /// Invoked by GroupingSet::compact() to perform lightweight memory compaction
+  /// on the given 'groups', freeing unused memory without spilling to disk.
+  virtual uint64_t compact(folly::Range<char**> /*groups*/) {
+    return 0;
   }
 
   // Clears state between reuses, e.g. this is called before reusing

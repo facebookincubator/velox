@@ -79,6 +79,14 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
+  // Scalars are constructed once at init time but later consumed on
+  // an arbitrary per-batch CUDA stream.  The underlying device_buffer
+  // is allocated with cudaMallocAsync on `stream`.  Without a sync
+  // the allocation may still be pending when a different stream reads
+  // the scalar, causing use-before-alloc.  Synchronising here is
+  // cheap (one-time cost per scalar) and guarantees the memory is
+  // available on every stream.
+
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       VELOX_FAIL("Decimal not supported");
@@ -95,32 +103,42 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
-        return std::make_unique<cudf::duration_scalar<CudfDurationType>>(
+        auto scalar = std::make_unique<cudf::duration_scalar<CudfDurationType>>(
             value, !isNull, stream, mr);
+        stream.synchronize();
+        return scalar;
       }
     } else if (type->isDate()) {
       using CudfDateType = cudf::timestamp_D;
       if constexpr (std::is_same_v<T, CudfDateType::rep>) {
-        return std::make_unique<cudf::timestamp_scalar<CudfDateType>>(
+        auto scalar = std::make_unique<cudf::timestamp_scalar<CudfDateType>>(
             value, !isNull, stream, mr);
+        stream.synchronize();
+        return scalar;
       }
     } else if (toType.has_value()) {
       if (toType == cudf::type_id::DURATION_DAYS) {
-        return std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
+        auto scalar = std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
             value, !isNull, stream, mr);
+        stream.synchronize();
+        return scalar;
       }
       VELOX_FAIL(
           "Unsupported result type {}", static_cast<int32_t>(toType.value()));
     } else {
-      return std::make_unique<cudf::numeric_scalar<T>>(
-          value, !isNull, stream, mr);
+      auto scalar =
+          std::make_unique<cudf::numeric_scalar<T>>(value, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
     }
     VELOX_FAIL("Unsupported fixed-width scalar type");
   } else if constexpr (
       std::is_same_v<T, StringView> || std::is_same_v<T, std::string_view> ||
       std::is_same_v<T, std::string>) {
-    return std::make_unique<cudf::string_scalar>(
+    auto scalar = std::make_unique<cudf::string_scalar>(
         std::string_view(value.data(), value.size()), !isNull, stream, mr);
+    stream.synchronize();
+    return scalar;
   }
   VELOX_NYI("Scalar creation not implemented for type " + type->toString());
 }

@@ -165,7 +165,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
   std::shared_ptr<Task> runLookupQuery(
       const PlanNodePtr& plan,
       int numPrefetchBatches,
-      const std::string& duckDbVefifySql);
+      const std::string& duckDbVerifySql);
 
   std::shared_ptr<Task> runLookupQuery(
       const PlanNodePtr& plan,
@@ -175,7 +175,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       int maxBatchRows,
       int numPrefetchBatches,
       bool needsIndexSplit,
-      const std::string& duckDbVefifySql);
+      const std::string& duckDbVerifySql);
 
   /// Verifies the results of the index lookup join query with and without match
   /// column.

@@ -426,32 +426,24 @@ void VectorHasher::lookupValueIdsTyped(
         result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
       });
     }
-  } else if (decoded.isIdentityMapping()) {
+    return;
+  }
+
+  if (decoded.isIdentityMapping()) {
     if (Kind == TypeKind::BIGINT && isRange_) {
       lookupIdsRangeSimd<int64_t>(decoded, rows, result);
-    } else if (Kind == TypeKind::INTEGER && isRange_) {
-      lookupIdsRangeSimd<int32_t>(decoded, rows, result);
-    } else {
-      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-        if (decoded.isNullAt(row)) {
-          if (multiplier_ == 1) {
-            result[row] = 0;
-          }
-          return;
-        }
-        T value = decoded.valueAt<T>(row);
-        uint64_t id = lookupValueId(value);
-        if (id == kUnmappable) {
-          rows.setValid(row, false);
-          return;
-        }
-        result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
-      });
+      rows.updateBounds();
+      return;
     }
-    rows.updateBounds();
-  } else {
-    hashes.resize(decoded.base()->size());
-    std::fill(hashes.begin(), hashes.end(), 0);
+    if (Kind == TypeKind::INTEGER && isRange_) {
+      lookupIdsRangeSimd<int32_t>(decoded, rows, result);
+      rows.updateBounds();
+      return;
+    }
+  }
+
+  if (decoded.isIdentityMapping() ||
+      rows.countSelected() <= decoded.base()->size()) {
     rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
       if (decoded.isNullAt(row)) {
         if (multiplier_ == 1) {
@@ -459,21 +451,41 @@ void VectorHasher::lookupValueIdsTyped(
         }
         return;
       }
-      auto baseIndex = decoded.index(row);
-      uint64_t id = hashes[baseIndex];
-      if (id == 0) {
-        T value = decoded.valueAt<T>(row);
-        id = lookupValueId(value);
-        if (id == kUnmappable) {
-          rows.setValid(row, false);
-          return;
-        }
-        hashes[baseIndex] = id;
+      T value = decoded.valueAt<T>(row);
+      uint64_t id = lookupValueId(value);
+      if (id == kUnmappable) {
+        rows.setValid(row, false);
+        return;
       }
       result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
     });
     rows.updateBounds();
+    return;
   }
+
+  hashes.resize(decoded.base()->size());
+  std::fill(hashes.begin(), hashes.end(), 0);
+  rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+    if (decoded.isNullAt(row)) {
+      if (multiplier_ == 1) {
+        result[row] = 0;
+      }
+      return;
+    }
+    auto baseIndex = decoded.index(row);
+    uint64_t id = hashes[baseIndex];
+    if (id == 0) {
+      T value = decoded.valueAt<T>(row);
+      id = lookupValueId(value);
+      if (id == kUnmappable) {
+        rows.setValid(row, false);
+        return;
+      }
+      hashes[baseIndex] = id;
+    }
+    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+  });
+  rows.updateBounds();
 }
 
 template <typename T>
@@ -698,8 +710,19 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
         return common::createBigintValues(values, nullAllowed);
       }
       [[fallthrough]];
+    case TypeKind::VARCHAR:
+      [[fallthrough]];
+    case TypeKind::VARBINARY:
+      if (!distinctOverflow_) {
+        std::vector<std::string> values;
+        values.reserve(uniqueValues_.size());
+        for (const auto& value : uniqueValues_) {
+          values.emplace_back(value.asString());
+        }
+        return std::make_unique<common::BytesValues>(values, nullAllowed);
+      }
+      [[fallthrough]];
     default:
-      // TODO Add support for strings.
       return nullptr;
   }
 }

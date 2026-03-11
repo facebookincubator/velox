@@ -34,6 +34,24 @@ struct CompileTimeEmptyString {
   }
 };
 
+/// Wraps a const char* that must originate from a string literal (or other
+/// compile-time constant). Provides a distinct type to resolve overload
+/// ambiguity with std::string_view parameters in exception constructors.
+class CompileTimeStringLiteral {
+  const char* data_;
+
+ public:
+  /* implicit */ constexpr CompileTimeStringLiteral(const char* data)
+      : data_{data} {}
+
+  constexpr operator const char*() const {
+    return data_;
+  }
+  constexpr operator std::string_view() const {
+    return data_ ? std::string_view(data_) : std::string_view();
+  }
+};
+
 // When there is no message passed, we can statically detect this case
 // and avoid passing even a single unnecessary argument pointer,
 // minimizing size and thus maximizing eligibility for inlining.

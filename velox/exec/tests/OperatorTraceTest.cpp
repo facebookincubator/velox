@@ -857,12 +857,12 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   auto ioBuf = folly::IOBuf::create(12 + 16);
   folly::io::Appender appender(ioBuf.get(), 0);
   // Writes an invalid split without crc.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
   // Writes a valid spilt.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   splitInfoFile->append(std::move(ioBuf));
   splitInfoFile->close();
 
@@ -946,13 +946,13 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   auto ioBuf = folly::IOBuf::create(16 * 2);
   folly::io::Appender appender(ioBuf.get(), 0);
   // Writes an invalid split with a wrong checksum.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32 - 1);
+  appender.writeLE<uint32_t>(crc32 - 1);
   // Writes a valid split.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   splitInfoFile->append(std::move(ioBuf));
   splitInfoFile->close();
 

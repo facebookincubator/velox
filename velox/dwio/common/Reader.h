@@ -50,11 +50,11 @@ class RowReader {
   /// Tracks the number of index columns that were converted from ScanSpec
   /// filters to index bounds for index-based filtering (e.g., cluster index
   /// pruning in Nimble).
-  static inline const std::string kNumIndexFilterConversions =
+  static constexpr std::string_view kNumIndexFilterConversions =
       "numIndexFilterConversions";
 
   /// Tracks the number of times a stripe has been loaded during index lookup.
-  static inline const std::string kNumStripeLoads = "numStripeLoads";
+  static constexpr std::string_view kNumStripeLoads = "numStripeLoads";
 
   virtual ~RowReader() = default;
 
@@ -210,13 +210,13 @@ class IndexReader {
   /// Tracks the number of index lookup requests submitted in startLookup().
   /// Each request corresponds to one set of index bounds and may match rows
   /// across multiple stripes.
-  static inline const std::string kNumIndexLookupRequests =
+  static constexpr std::string_view kNumIndexLookupRequests =
       "numIndexLookupRequests";
 
   /// Tracks the total number of stripes that need to be read for all requests.
   /// Multiple requests may share the same stripe, and each shared stripe is
   /// counted once per request that needs it.
-  static inline const std::string kNumIndexLookupStripes =
+  static constexpr std::string_view kNumIndexLookupStripes =
       "numIndexLookupStripes";
 
   /// Tracks the total number of read segments across all stripes. A read
@@ -224,7 +224,7 @@ class IndexReader {
   /// When filters are present, overlapping request ranges are split at
   /// boundaries to enable per-request output tracking. Without filters,
   /// overlapping ranges are merged to minimize I/O.
-  static inline const std::string kNumIndexLookupReadSegments =
+  static constexpr std::string_view kNumIndexLookupReadSegments =
       "numIndexLookupReadSegments";
 
   virtual ~IndexReader() = default;
@@ -293,11 +293,18 @@ class Reader {
    */
   virtual std::optional<uint64_t> numberOfRows() const = 0;
 
-  /**
-   * Get statistics for a specified column.
-   * @param index column index
-   * @return column statisctics
-   */
+  /// Returns file-level statistics for the column identified by 'index'.
+  ///
+  /// 'index' is a node ID in the type tree (TypeWithId::id()), not a top-level
+  /// column ordinal. Node 0 is the root ROW type; top-level columns start at 1
+  /// for flat schemas. For nested types, IDs follow pre-order DFS numbering.
+  ///
+  /// Use typeWithId() to navigate the schema and obtain the correct ID:
+  ///   auto& col = reader->typeWithId()->childByName("column_name");
+  ///   auto stats = reader->columnStatistics(col->id());
+  ///
+  /// Returns nullptr if statistics are not available (e.g., non-leaf complex
+  /// types in Parquet, out-of-range index, or missing stats in the file).
   virtual std::unique_ptr<ColumnStatistics> columnStatistics(
       uint32_t index) const = 0;
 

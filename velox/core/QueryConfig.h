@@ -68,6 +68,12 @@ class QueryConfig {
   static constexpr const char* kExprEvalSimplified =
       "expression.eval_simplified";
 
+  /// Whether to enable the FlatNoNulls fast path for expression evaluation.
+  /// When enabled, expressions skip null checking and vector decoding when all
+  /// inputs are flat-encoded with no nulls. True by default.
+  static constexpr const char* kExprEvalFlatNoNulls =
+      "expression.eval_flat_no_nulls";
+
   /// Whether to track CPU usage for individual expressions (supported by call
   /// and cast expressions). False by default. Can be expensive when processing
   /// small batches, e.g. < 10K rows.
@@ -223,6 +229,14 @@ class QueryConfig {
   static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
       "aggregation_compaction_unused_memory_ratio";
 
+  /// If true, enables lightweight memory compaction before spilling during
+  /// memory reclaim in aggregation. When enabled, the aggregation operator
+  /// will try to compact aggregate function state (e.g., free dead strings)
+  /// before resorting to spilling.
+  /// Disabled by default.
+  static constexpr const char* kAggregationMemoryCompactionReclaimEnabled =
+      "aggregation_memory_compaction_reclaim_enabled";
+
   static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
       "abandon_partial_topn_row_number_min_rows";
 
@@ -297,6 +311,12 @@ class QueryConfig {
   /// limit'.
   static constexpr const char* kTableScanGetOutputTimeLimitMs =
       "table_scan_getoutput_time_limit_ms";
+
+  /// If non-zero, overrides the number of rows in each output batch produced
+  /// by the TableScan operator, bypassing the dynamic batch size calculation.
+  /// Zero means 'no override'.
+  static constexpr const char* kTableScanOutputBatchRowsOverride =
+      "table_scan_output_batch_rows_override";
 
   /// If false, the 'group by' code is forced to use generic hash mode
   /// hashtable.
@@ -493,6 +513,10 @@ class QueryConfig {
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
+  /// The max number of items to use for the bloom filter.
+  static constexpr const char* kSparkBloomFilterMaxNumItems =
+      "spark.bloom_filter.max_num_items";
+
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
@@ -536,6 +560,11 @@ class QueryConfig {
   /// filter) and push down to upstream operators.
   static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
       "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// Whether hash probe can generate dynamic filter for string types and
+  /// push down to upstream operators.
+  static constexpr const char* kHashProbeStringDynamicFilterPushdownEnabled =
+      "hash_probe_string_dynamic_filter_pushdown_enabled";
 
   /// The maximum byte size of Bloom filter that can be generated from hash
   /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
@@ -929,6 +958,10 @@ class QueryConfig {
     return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
   }
 
+  bool aggregationMemoryCompactionReclaimEnabled() const {
+    return get<bool>(kAggregationMemoryCompactionReclaimEnabled, false);
+  }
+
   int32_t abandonPartialTopNRowNumberMinRows() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinRows, 100'000);
   }
@@ -1052,6 +1085,10 @@ class QueryConfig {
     return get<uint64_t>(kTableScanGetOutputTimeLimitMs, 5'000);
   }
 
+  uint32_t tableScanOutputBatchRowsOverride() const {
+    return get<uint32_t>(kTableScanOutputBatchRowsOverride, 0);
+  }
+
   bool hashAdaptivityEnabled() const {
     return get<bool>(kHashAdaptivityEnabled, true);
   }
@@ -1102,6 +1139,10 @@ class QueryConfig {
 
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool exprEvalFlatNoNulls() const {
+    return get<bool>(kExprEvalFlatNoNulls, true);
   }
 
   bool parallelOutputJoinBuildRowsEnabled() const {
@@ -1278,17 +1319,14 @@ class QueryConfig {
     return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
   }
 
-  // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
-  // 256, so decrease it to not over memory limit.
   int64_t sparkBloomFilterMaxNumBits() const {
-    constexpr int64_t kDefault = 4'096 * 1024;
-    auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-    VELOX_USER_CHECK_LE(
-        value,
-        kDefault,
-        "{} cannot exceed the default value",
-        kSparkBloomFilterMaxNumBits);
-    return value;
+    constexpr int64_t kDefault = 67'108'864;
+    return get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
+  }
+
+  int64_t sparkBloomFilterMaxNumItems() const {
+    constexpr int64_t kDefault = 4'000'000L;
+    return get<int64_t>(kSparkBloomFilterMaxNumItems, kDefault);
   }
 
   int32_t sparkPartitionId() const {
@@ -1346,6 +1384,10 @@ class QueryConfig {
 
   bool hashProbeDynamicFilterPushdownEnabled() const {
     return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  bool hashProbeStringDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeStringDynamicFilterPushdownEnabled, false);
   }
 
   uint64_t hashProbeBloomFilterPushdownMaxSize() const {
