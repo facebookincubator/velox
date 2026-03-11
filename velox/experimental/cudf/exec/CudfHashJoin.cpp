@@ -1237,6 +1237,53 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
   return cudfOutputs;
 }
 
+namespace {
+/// Creates a boolean column indicating which rows have NULL in ANY key column.
+/// Returns a column where row[i] = true if ANY key column is NULL at row i.
+std::unique_ptr<cudf::column> createProbeKeyNullMask(
+    cudf::table_view keyView,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto numRows = keyView.num_rows();
+
+  if (keyView.num_columns() == 0 || numRows == 0) {
+    auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream);
+    return cudf::make_column_from_scalar(falseScalar, numRows, stream, mr);
+  }
+
+  // Start with first column's null mask
+  auto result = cudf::is_null(keyView.column(0), stream, mr);
+
+  // OR with other columns' null masks
+  for (cudf::size_type i = 1; i < keyView.num_columns(); i++) {
+    auto colIsNull = cudf::is_null(keyView.column(i), stream, mr);
+    result = cudf::binary_operation(
+        result->view(),
+        colIsNull->view(),
+        cudf::binary_operator::BITWISE_OR,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        mr);
+  }
+  return result;
+}
+
+/// Applies a null mask to a boolean column.
+/// Where nullMask[i] is true, result[i] becomes NULL.
+/// Where nullMask[i] is false, result[i] keeps its original value from col.
+std::unique_ptr<cudf::column> applyNullMask(
+    cudf::column_view col,
+    cudf::column_view nullMask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Create a null scalar (valid=false means NULL)
+  auto nullScalar = cudf::numeric_scalar<bool>(false, false, stream);
+
+  // copy_if_else: where nullMask is true, use nullScalar (NULL); else use col value
+  return cudf::copy_if_else(nullScalar, col, nullMask, stream, mr);
+}
+} // namespace
+
 // LEFT SEMI PROJECT returns all probe rows with a boolean "match" column
 // indicating whether each probe row has at least one matching build row
 // (that also passes the filter, if specified). Unlike LEFT SEMI FILTER
@@ -1251,7 +1298,9 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
 //    This correctly handles duplicate probe indices (when one probe row matches
 //    multiple build rows) by returning true if the index appears at least once.
 // 4. Accumulate matches across build table batches using BITWISE_OR
-// 5. Output: all probe columns + match column
+// 5. For null-aware mode (without filter): apply null mask based on probe key
+//    nullity and build side null keys presence
+// 6. Output: all probe columns + match column
 std::vector<std::unique_ptr<cudf::table>>
 CudfHashJoinProbe::leftSemiProjectJoin(
     cudf::table_view leftTableView,
@@ -1261,6 +1310,8 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
   auto numProbeRows = leftTableView.num_rows();
+
+  const bool isNullAware = joinNode_->isNullAware() && !joinNode_->filter();
 
   // Create probe row indices sequence: [0, 1, 2, ..., numProbeRows-1]
   // Used with cudf::contains to create the match column
@@ -1381,7 +1432,55 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     matchCol = std::move(updatedMatch);
   }
 
-  // Step 5: Build output table with all probe columns + match column
+  // Step 5: For null-aware mode (IN semantics), apply null mask to match column.
+  // Empty build: always FALSE. Otherwise: NULL probe key or (no match AND build
+  // has nulls) yields NULL; matched rows yield TRUE; else FALSE.
+  if (isNullAware) {
+    bool buildSideEmpty = true;
+    for (const auto& rt : rightTables) {
+      if (rt->num_rows() > 0) {
+        buildSideEmpty = false;
+        break;
+      }
+    }
+
+    // For empty build side, IN returns FALSE (already set in matchCol).
+    if (!buildSideEmpty) {
+      auto probeKeyView = leftTableView.select(leftKeyIndices_);
+      bool probeHasNulls = cudf::has_nulls(probeKeyView);
+
+      if (probeHasNulls || buildSideHasNullKeys_) {
+        // Compute null mask: true where result should be NULL
+        auto probeKeyNullMask =
+            createProbeKeyNullMask(probeKeyView, stream, get_temp_mr());
+
+        std::unique_ptr<cudf::column> nullMask;
+        if (buildSideHasNullKeys_) {
+          // NULL where: probe key is NULL OR no match
+          auto noMatchMask = cudf::unary_operation(
+              matchCol->view(),
+              cudf::unary_operator::NOT,
+              stream,
+              get_temp_mr());
+          nullMask = cudf::binary_operation(
+              probeKeyNullMask->view(),
+              noMatchMask->view(),
+              cudf::binary_operator::BITWISE_OR,
+              cudf::data_type{cudf::type_id::BOOL8},
+              stream,
+              get_temp_mr());
+        } else {
+          // NULL only where probe key is NULL
+          nullMask = std::move(probeKeyNullMask);
+        }
+
+        matchCol =
+            applyNullMask(matchCol->view(), nullMask->view(), stream, get_output_mr());
+      }
+    }
+  }
+
+  // Step 6: Build output table with all probe columns + match column
   std::vector<std::unique_ptr<cudf::column>> outputCols;
   outputCols.resize(outputType_->names().size());
 
@@ -1784,6 +1883,24 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
       cachedExtendedRightViews_.push_back(extendedView);
     }
     initStream.synchronize();
+  }
+
+  // Check if build side has any null keys (needed for null-aware left semi project)
+  if (joinNode_->isLeftSemiProjectJoin() && joinNode_->isNullAware()) {
+    auto& rightTablesInit = hashObject_.value().first;
+    buildSideHasNullKeys_ = false;
+    for (auto& rt : rightTablesInit) {
+      auto keyView = rt->view().select(rightKeyIndices_);
+      for (cudf::size_type k = 0; k < keyView.num_columns(); k++) {
+        if (keyView.column(k).has_nulls()) {
+          buildSideHasNullKeys_ = true;
+          break;
+        }
+      }
+      if (buildSideHasNullKeys_) {
+        break;
+      }
+    }
   }
 
   auto& rightTables = hashObject_.value().first;

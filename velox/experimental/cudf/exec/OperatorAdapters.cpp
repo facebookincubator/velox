@@ -288,12 +288,11 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    // Null-aware LEFT SEMI PROJECT uses IN semantics (returns NULL when probe
-    // key is NULL or when no match exists but build has NULLs), which requires
-    // special handling not yet implemented. Non-null-aware uses EXISTS semantics
-    // which is simpler and currently supported.
+    // Null-aware LEFT SEMI PROJECT with filter requires tracking per-row
+    // NULL vs no-match state during filter evaluation, which is not yet
+    // implemented. The no-filter case is supported.
     if (joinPlanNode->joinType() == core::JoinType::kLeftSemiProject &&
-        joinPlanNode->isNullAware()) {
+        joinPlanNode->isNullAware() && joinPlanNode->filter()) {
       return false;
     }
 
