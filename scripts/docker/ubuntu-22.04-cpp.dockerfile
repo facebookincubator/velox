@@ -47,4 +47,9 @@ RUN apt-get update && \
       apt-get update && apt-get install -y -q --no-install-recommends gh && \
       apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Pre-download gflags source for BUNDLED builds to avoid downloading at build time.
+RUN mkdir -p /velox/deps-sources && \
+    curl -fsSL -o /velox/deps-sources/gflags-v2.2.2.tar.gz \
+      https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz
+
 WORKDIR /velox
