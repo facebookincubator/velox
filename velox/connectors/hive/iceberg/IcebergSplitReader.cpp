@@ -23,6 +23,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox::dwio::common;
 
@@ -243,8 +244,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     auto* rowOutput = output->as<RowVector>();
     if (rowOutput) {
       auto& seqNumChild = rowOutput->childAt(*lastUpdatedSeqNumOutputIndex_);
-      // Load lazy vector and replace the child reference so we can access
-      // the actual data. The Parquet reader wraps columns in LazyVector.
+      // Load lazy vector - the Parquet reader wraps columns in LazyVector.
       seqNumChild = BaseVector::loadedVectorShared(seqNumChild);
       auto vectorSize = seqNumChild->size();
 
@@ -258,20 +258,21 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
               static_cast<int64_t>(*dataSequenceNumber_));
         }
       } else if (seqNumChild->mayHaveNulls()) {
-        // Handle any vector encoding (flat, dictionary, etc.) by creating
-        // a new flat vector with null values replaced.
-        auto pool = connectorQueryCtx_->memoryPool();
-        auto* simpleVec = seqNumChild->as<SimpleVector<int64_t>>();
-        auto newFlat =
-            BaseVector::create<FlatVector<int64_t>>(BIGINT(), vectorSize, pool);
-        for (vector_size_t i = 0; i < vectorSize; ++i) {
-          if (simpleVec->isNullAt(i)) {
-            newFlat->set(i, *dataSequenceNumber_);
-          } else {
-            newFlat->set(i, simpleVec->valueAt(i));
+        // Use DecodedVector to handle any encoding (flat, dictionary, etc.).
+        DecodedVector decoded(*seqNumChild);
+        if (decoded.mayHaveNulls()) {
+          auto pool = connectorQueryCtx_->memoryPool();
+          auto newFlat = BaseVector::create<FlatVector<int64_t>>(
+              BIGINT(), vectorSize, pool);
+          for (vector_size_t i = 0; i < vectorSize; ++i) {
+            if (decoded.isNullAt(i)) {
+              newFlat->set(i, *dataSequenceNumber_);
+            } else {
+              newFlat->set(i, decoded.valueAt<int64_t>(i));
+            }
           }
+          seqNumChild = newFlat;
         }
-        seqNumChild = newFlat;
       }
     }
   }
@@ -286,12 +287,12 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     auto* rowOutput = output->as<RowVector>();
     if (rowOutput) {
       auto& rowIdChild = rowOutput->childAt(*rowIdOutputIndex_);
-      // Load lazy vector and replace the child reference.
+      // Load lazy vector - the Parquet reader wraps columns in LazyVector.
       rowIdChild = BaseVector::loadedVectorShared(rowIdChild);
       auto vectorSize = rowIdChild->size();
 
       if (rowIdChild->isConstantEncoding() && rowIdChild->isNullAt(0)) {
-        // All null — compute _row_id = first_row_id + _pos for all rows.
+        // All null - compute _row_id = first_row_id + _pos for all rows.
         auto pool = connectorQueryCtx_->memoryPool();
         auto flatVec =
             BaseVector::create<FlatVector<int64_t>>(BIGINT(), vectorSize, pool);
@@ -318,41 +319,43 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
         }
         rowIdChild = flatVec;
       } else if (rowIdChild->mayHaveNulls()) {
-        // Column is in the file but has some null values — replace nulls
-        // with first_row_id + _pos. Handle any vector encoding.
-        auto pool = connectorQueryCtx_->memoryPool();
-        auto* simpleVec = rowIdChild->as<SimpleVector<int64_t>>();
-        auto newFlat =
-            BaseVector::create<FlatVector<int64_t>>(BIGINT(), vectorSize, pool);
-        int64_t batchStartPos = splitOffset_ + baseReadOffset_;
-        if (mutation.deletedRows == nullptr) {
-          for (vector_size_t i = 0; i < vectorSize; ++i) {
-            if (simpleVec->isNullAt(i)) {
-              newFlat->set(
-                  i, static_cast<int64_t>(*firstRowId_) + batchStartPos + i);
-            } else {
-              newFlat->set(i, simpleVec->valueAt(i));
-            }
-          }
-        } else {
-          vector_size_t outputIdx = 0;
-          for (vector_size_t j = 0;
-               j < static_cast<vector_size_t>(actualSize) &&
-               outputIdx < vectorSize;
-               ++j) {
-            if (!bits::isBitSet(mutation.deletedRows, j)) {
-              if (simpleVec->isNullAt(outputIdx)) {
+        // Column is in the file but has some null values - replace nulls
+        // with first_row_id + _pos. Use DecodedVector for encoding support.
+        DecodedVector decoded(*rowIdChild);
+        if (decoded.mayHaveNulls()) {
+          auto pool = connectorQueryCtx_->memoryPool();
+          auto newFlat = BaseVector::create<FlatVector<int64_t>>(
+              BIGINT(), vectorSize, pool);
+          int64_t batchStartPos = splitOffset_ + baseReadOffset_;
+          if (mutation.deletedRows == nullptr) {
+            for (vector_size_t i = 0; i < vectorSize; ++i) {
+              if (decoded.isNullAt(i)) {
                 newFlat->set(
-                    outputIdx,
-                    static_cast<int64_t>(*firstRowId_) + batchStartPos + j);
+                    i, static_cast<int64_t>(*firstRowId_) + batchStartPos + i);
               } else {
-                newFlat->set(outputIdx, simpleVec->valueAt(outputIdx));
+                newFlat->set(i, decoded.valueAt<int64_t>(i));
               }
-              ++outputIdx;
+            }
+          } else {
+            vector_size_t outputIdx = 0;
+            for (vector_size_t j = 0;
+                 j < static_cast<vector_size_t>(actualSize) &&
+                 outputIdx < vectorSize;
+                 ++j) {
+              if (!bits::isBitSet(mutation.deletedRows, j)) {
+                if (decoded.isNullAt(outputIdx)) {
+                  newFlat->set(
+                      outputIdx,
+                      static_cast<int64_t>(*firstRowId_) + batchStartPos + j);
+                } else {
+                  newFlat->set(outputIdx, decoded.valueAt<int64_t>(outputIdx));
+                }
+                ++outputIdx;
+              }
             }
           }
+          rowIdChild = newFlat;
         }
-        rowIdChild = newFlat;
       }
     }
   }

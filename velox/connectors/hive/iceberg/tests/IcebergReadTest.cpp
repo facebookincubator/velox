@@ -239,7 +239,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           IcebergDeleteFile icebergDeleteFile(
               FileContent::kPositionalDeletes,
               deleteFilePath,
-              fileFomat_,
+              fileFormat_,
               deleteFilePaths[deleteFileName].first,
               testing::internal::GetFileSize(
                   std::fopen(deleteFilePath.c_str(), "r")));
@@ -275,6 +275,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   std::shared_ptr<dwrf::Config> config_;
   std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
 
+  FileFormat fileFormat_{FileFormat::DWRF};
+
   std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
       const std::string& dataFilePath,
       const std::vector<IcebergDeleteFile>& deleteFiles = {},
@@ -294,7 +296,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           std::make_shared<HiveIcebergSplit>(
               kIcebergConnectorId,
               dataFilePath,
-              fileFomat_,
+              fileFormat_,
               i * splitSize,
               splitSize,
               partitionKeys,
@@ -352,7 +354,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     IcebergDeleteFile icebergDeleteFile(
         FileContent::kPositionalDeletes,
         deleteFilePath->getPath(),
-        fileFomat_,
+        fileFormat_,
         deletedPositionSize,
         testing::internal::GetFileSize(
             std::fopen(deleteFilePath->getPath().c_str(), "r")));
@@ -364,7 +366,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return {std::make_shared<HiveIcebergSplit>(
         kIcebergConnectorId,
         path,
-        dwio::common::FileFormat::PARQUET,
+        FileFormat::PARQUET,
         0,
         fileSize,
         partitionKeys,
@@ -577,8 +579,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
     return deletePositionVector;
   }
-
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
 
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
       IcebergMetadataColumn::icebergDeleteFilePathColumn();
@@ -932,7 +932,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
   IcebergDeleteFile deleteFile(
       FileContent::kPositionalDeletes,
       deleteFilePath->getPath(),
-      dwio::common::FileFormat::DWRF,
+      FileFormat::DWRF,
       3,
       testing::internal::GetFileSize(
           std::fopen(deleteFilePath->getPath().c_str(), "r")),
@@ -957,7 +957,7 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      dwio::common::FileFormat::DWRF,
+      FileFormat::DWRF,
       static_cast<uint64_t>(fileSize / 2),
       static_cast<uint64_t>(fileSize / 2),
       std::unordered_map<std::string, std::optional<std::string>>{},
@@ -1043,7 +1043,7 @@ TEST_F(HiveIcebergTest, readRowIdColumnMissing) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      fileFomat_,
+      fileFormat_,
       0,
       file->size(),
       std::unordered_map<std::string, std::optional<std::string>>{},
@@ -1089,8 +1089,6 @@ TEST_F(HiveIcebergTest, readRowIdColumnComputedWithDeletes) {
   auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
   auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
 
-  auto fileRowType = ROW({"c0"}, {BIGINT()});
-
   // Write data file with 5 rows.
   std::vector<RowVectorPtr> dataVectors;
   dataVectors.push_back(makeRowVector({
@@ -1108,16 +1106,22 @@ TEST_F(HiveIcebergTest, readRowIdColumnComputedWithDeletes) {
        makeFlatVector<int64_t>({1, 3})})};
   writeToFile(deleteFilePath->getPath(), deleteVectors);
 
+  uint64_t upperBound = 3;
+  auto upperBoundLE = folly::Endian::little(upperBound);
+  auto encodedUpperBound = encoding::Base64::encode(
+      std::string_view(
+          reinterpret_cast<const char*>(&upperBoundLE), sizeof(upperBoundLE)));
+
   IcebergDeleteFile deleteFile(
       FileContent::kPositionalDeletes,
       deleteFilePath->getPath(),
-      fileFomat_,
+      fileFormat_,
       2,
       testing::internal::GetFileSize(
           std::fopen(deleteFilePath->getPath().c_str(), "r")),
       {},
       {},
-      {{posColumn->id, "3"}});
+      {{posColumn->id, encodedUpperBound}});
 
   auto file = filesystems::getFileSystem(dataFilePath->getPath(), nullptr)
                   ->openFileForRead(dataFilePath->getPath());
@@ -1126,7 +1130,7 @@ TEST_F(HiveIcebergTest, readRowIdColumnComputedWithDeletes) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      fileFomat_,
+      fileFormat_,
       0,
       file->size(),
       std::unordered_map<std::string, std::optional<std::string>>{},
@@ -1194,7 +1198,7 @@ TEST_F(HiveIcebergTest, readLastUpdatedSequenceNumberAllNulls) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      fileFomat_,
+      fileFormat_,
       0,
       file->size(),
       std::unordered_map<std::string, std::optional<std::string>>{},
@@ -1258,7 +1262,7 @@ TEST_F(HiveIcebergTest, readLastUpdatedSequenceNumberMixed) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      fileFomat_,
+      fileFormat_,
       0,
       file->size(),
       std::unordered_map<std::string, std::optional<std::string>>{},
@@ -1300,8 +1304,6 @@ TEST_F(HiveIcebergTest, readLastUpdatedSequenceNumberMixed) {
 TEST_F(HiveIcebergTest, readLastUpdatedSequenceNumberInherited) {
   folly::SingletonVault::singleton()->registrationComplete();
 
-  auto fileRowType = ROW({"c0"}, {BIGINT()});
-
   // Write data file without _last_updated_sequence_number column.
   std::vector<RowVectorPtr> dataVectors;
   dataVectors.push_back(makeRowVector({
@@ -1317,7 +1319,7 @@ TEST_F(HiveIcebergTest, readLastUpdatedSequenceNumberInherited) {
   auto split = std::make_shared<HiveIcebergSplit>(
       kIcebergConnectorId,
       dataFilePath->getPath(),
-      fileFomat_,
+      fileFormat_,
       0,
       file->size(),
       std::unordered_map<std::string, std::optional<std::string>>{},
