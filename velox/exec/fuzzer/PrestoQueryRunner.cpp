@@ -327,7 +327,7 @@ bool PrestoQueryRunner::isConstantExprSupported(
     // same timezone as Velox. Interval type cannot be used as the type of
     // constant literals in Presto SQL.
     auto& type = expr->type();
-    return type->isPrimitiveType() && !type->isTimestamp() &&
+    return type->isPrimitiveType() && !type->isTimestamp() && !type->isTime() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
         !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&

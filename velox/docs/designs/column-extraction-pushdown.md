@@ -24,8 +24,8 @@ extracting map keys produces an `ARRAY(K)` instead of a `MAP(K, V)`.
 |----------------|--------------------------------------|----------------------------------------------------|
 | Output type    | Same as input (MAP stays MAP)        | Different (MAP -> ARRAY, MAP/ARRAY -> BIGINT)      |
 | Semantics      | Drop unused parts, null-fill         | Transform the type structure                       |
-| Mechanism      | `requiredSubfields` on column handle | `extraction` chain on column handle (new)          |
-| Composability  | N/A                                  | Result can be further pruned via requiredSubfields |
+| Mechanism      | `requiredSubfields` on column handle | `extractions` (NamedExtraction list) on column handle |
+| Composability  | N/A                                  | N/A — mutually exclusive with subfield pruning     |
 
 ### Why not extend subfield pruning?
 
@@ -55,34 +55,39 @@ These are contradictory: `[$]` says "skip keys and values" while `["foo"]` says
 it must read the whole column in order to return maps with correct size, and
 if it only reads key `foo` the result would be incorrect.
 
-Column extraction solves this by creating **separate column handles** for each
-reference.  The same source column appears twice in the scan's `assignments`
-with different extraction chains and output types:
+Column extraction solves this with a single column handle that carries
+**multiple named extraction chains**.  The column is read once, and each
+extraction is applied independently:
 
 ```
 assignments: {
-    "a": { name: "col", extraction: [Size],    dataType: BIGINT          }
-    "b": { name: "col", extraction: [],        dataType: MAP(VARCHAR, BIGINT),
-           requiredSubfields: ["col[\"foo\"]"]                            }
+    "col": {
+        name: "col",
+        hiveType: MAP(VARCHAR, BIGINT),
+        dataType: ROW({ "a": BIGINT, "b": ARRAY(BIGINT) }),
+        extractions: [
+            { outputName: "a", chain: [Size],  dataType: BIGINT },
+            { outputName: "b", chain: [MapKeyFilter(["foo"]), MapValues],  dataType: ARRAY(BIGINT) }
+        ],
+    }
 }
 ```
 
-The reader can now optimize each handle independently:
+The reader reads `col` once — it reads sizes without restriction (`a`), and read
+keys and values with a filter on the key (since `b` needs only key `"foo"`), and
+further apply remaining of the chain in `b` in the column reader of map values.
 
-- For `a`: read only the lengths stream, skip keys and values entirely.
-- For `b`: read keys and values, filter to key `"foo"`.
-
-This separation is the core reason column extraction is a new mechanism rather
-than an extension of subfield pruning.  Subfield pruning merges all references
-to a column into one handle, which forces the reader to satisfy the union of
-all requirements.  Column extraction allows each reference to specify its own
-read strategy.
+This is the core reason column extraction is a new mechanism rather than an
+extension of subfield pruning.  Subfield pruning merges all references to a
+column into one output, which forces the reader to satisfy the union of all
+requirements.  Column extraction keeps a single column handle but produces
+multiple named outputs, each with its own extraction chain.
 
 ## Protocol: Extraction Chain
 
 The extraction is expressed as an ordered chain of steps.  Each step operates on
 one nesting level of the source type.  The chain is a new field on the column
-handle, separate from `requiredSubfields`.
+handle, mutually exclusive with `requiredSubfields`.
 
 ### Extraction steps
 
@@ -157,68 +162,42 @@ level.
 Every `ARRAY` boundary in the chain — whether from extraction or from the
 source type — is explicitly represented by an `ArrayElements` step.
 
-### Composition with subfield pruning
+### Mutual exclusivity with subfield pruning
 
-Column extraction and subfield pruning are orthogonal.  They compose through a
-clear ordering:
+Column extraction (`extractions`) and subfield pruning (`requiredSubfields`)
+**cannot coexist** on the same column handle.  A column handle uses either
+`requiredSubfields` (type-preserving pruning) or `extractions` (extraction
+chains), but not both.
 
-1. **Extraction** is applied first.  It transforms the source type into a
-   (possibly different) output type.
-2. **Subfield pruning** (`requiredSubfields`) is applied second.  It operates on
-   the **post-extraction type**, not the file type.
+This simplifies the reader contract — the reader either prunes subfields
+within the existing type structure, or applies extraction chains to produce
+new types.  There is no ambiguity about which operation runs first or how
+their type changes interact.
 
-The extraction chain determines the output type.  `requiredSubfields` then
-prunes within that output type using the same rules as today (struct members
-→ null-fill, map keys → drop, array indices → truncate).
+**When to use which:**
 
-**Rule:** `requiredSubfields` paths are relative to the post-extraction type.
-If extraction produces `ARRAY(ROW(x: INT, y: INT))`, then `requiredSubfields`
-paths start from `ARRAY(ROW(x, y))`, not from the original file column type.
+- Use `requiredSubfields` when the column's output type stays the same as the
+  file type (struct field pruning, map key filtering, array index truncation).
+- Use `extractions` when the column's output type changes (MapKeys, MapValues,
+  Size, StructField extraction, or any chain that transforms the type).
 
-Examples:
+**Expressing subfield-like operations in extraction chains:**
 
+Operations that would have used `requiredSubfields` can be expressed as
+extraction steps instead:
+
+- Struct field access → `StructField(name)` in the chain
+- Map key filtering → `MapKeyFilter(keys)` in the chain
+- Multiple struct fields → multiple `NamedExtraction` entries, each with a
+  `StructField` chain
+
+For example, instead of `requiredSubfields: ["col.x", "col.y"]`, use:
 ```
--- map_values(col).x, map_values(col).y
--- where col: MAP(K, ROW(x: INT, y: INT, z: INT))
-extraction:          [MapValues]
-post-extraction type: ARRAY(ROW(x: INT, y: INT, z: INT))
-requiredSubfields:   ["[*].x", "[*].y"]
--- "[*]" refers to array elements, ".x"/".y" prune the ROW to fields x and y.
--- Field z is null-filled.  StructField cannot replace this because multiple
--- fields are needed — StructField extracts a single field.
+extractions: [
+    { outputName: "x", chain: [StructField("x")], dataType: INT },
+    { outputName: "y", chain: [StructField("y")], dataType: INT }
+]
 ```
-
-```
--- transform(map_values(col), m -> element_at(m, 'foo'))
--- where col: MAP(K1, MAP(VARCHAR, ROW(x: INT, y: INT, z: INT)))
--- and only x and y are used from the value
-extraction:          [MapValues, ArrayElements, MapKeyFilter(["foo"])]
-post-extraction type: ARRAY(MAP(VARCHAR, ROW(x: INT, y: INT, z: INT)))
-requiredSubfields:   ["[*][*].x", "[*][*].y"]
--- MapKeyFilter already filters to key "foo", so requiredSubfields uses [*]
--- for the map (all remaining entries), not ["foo"] again.
--- ".x"/".y" prune the ROW.  Field z is null-filled.
-```
-
-```
--- map_keys(col) where col: MAP(ROW(a: INT, b: INT, c: INT), V)
--- and only a and b are used from each key
-extraction:          [MapKeys]
-post-extraction type: ARRAY(ROW(a: INT, b: INT, c: INT))
-requiredSubfields:   ["[*].a", "[*].b"]
--- Extracts keys (which are ROWs), then prunes to fields a and b.
--- Field c is null-filled.
-```
-
-**When extraction is empty**, `requiredSubfields` operates on the file type
-directly — this is the existing behavior, unchanged.
-
-**When both are present**, the column handle carries:
-- `hiveType`: file type (for the reader to know what to read)
-- `extraction`: chain to transform the type (applied by the reader)
-- `dataType`: post-extraction type (for validation)
-- `requiredSubfields`: pruning paths relative to `dataType` (applied by the
-  reader after extraction)
 
 ### Overlap between `MapKeyFilter` and map key pruning
 
@@ -231,45 +210,30 @@ where they sit:
 - **`MapKeyFilter`**: filters keys as a step in the extraction chain, output
   stays `MAP(K, V)`.  Can compose with other extraction steps.
 
-When key filtering is the **only** operation on a column (no other extraction
-steps), either mechanism works.  Prefer subfield pruning in this case — it uses
-the existing infrastructure with no new protocol fields.
+Since extraction and subfield pruning are mutually exclusive on the same column
+handle, use one or the other:
 
-When key filtering is **part of an extraction chain** (e.g.,
-`[MapValues, ArrayElements, MapKeyFilter(["foo"])]`), use `MapKeyFilter`.
-Subfield pruning cannot express key filtering at an intermediate nesting level
-within the chain.
-
-When an extraction chain already exists and `requiredSubfields` contains a
-single map key subscript that could be expressed as `MapKeyFilter`, prefer
-extending the chain with `MapKeyFilter` over using `requiredSubfields`.  This
-keeps all filtering logic in the extraction chain, making the reader's job
-simpler.
+- Use `requiredSubfields` when key filtering is the only operation needed and
+  no type transformation is involved.
+- Use `MapKeyFilter` in an extraction chain when key filtering combines with
+  other extraction steps (e.g., `[MapKeyFilter(["foo"]), MapValues]`).
 
 ### Overlap between `StructField` and struct subfield pruning
 
 `StructField` and subfield pruning's nested field paths (`.field1`, `.field2`)
-both navigate into struct fields.  They overlap when accessing a single struct
-child:
+both navigate into struct fields.  They overlap when accessing struct children:
 
 - **Subfield pruning** (`requiredSubfields: ["col.x"]`): prunes the struct to
   only field `x`, output stays `ROW(...)` with other fields null-filled.
 - **`StructField("x")`**: extracts field `x` as a step in the extraction chain,
   output becomes the field's type directly (e.g., `INT`).
 
-When struct field access is the **only** operation on a column, prefer subfield
-pruning — it keeps the `ROW` type and uses the existing infrastructure.
+Since extraction and subfield pruning are mutually exclusive:
 
-When struct navigation is **part of an extraction chain** (e.g.,
-`[StructField("a"), StructField("b"), MapKeys]`), use `StructField`.  It
-navigates to the target type for subsequent extraction steps.  Subfield pruning
-cannot compose with extraction — it only prunes within the post-extraction
-type.
-
-When an extraction chain already exists and `requiredSubfields` contains a
-single struct field path that could be expressed as `StructField`, prefer
-extending the chain with `StructField` over using `requiredSubfields`.  This
-keeps all navigation logic in the extraction chain.
+- Use `requiredSubfields` for struct pruning when no type transformation is
+  needed (output stays ROW).
+- Use `StructField` in an extraction chain when struct navigation combines
+  with other extraction steps (e.g., `[StructField("a"), MapKeys]`).
 
 ## Examples
 
@@ -359,9 +323,8 @@ second navigates the source `ARRAY` level.
 
 ### `map_values(col).x` — `col: MAP(K, ROW(x: INT, y: INT))`
 
-Extraction chain already exists (`MapValues`), and only a single struct field
-is accessed.  Extend the chain with `StructField` instead of using
-`requiredSubfields`.
+Extraction is used, so `requiredSubfields` cannot be set.  Use `StructField`
+in the chain to extract the specific field.
 
 ```
 Chain: [MapValues, ArrayElements, StructField("x")]
@@ -418,9 +381,8 @@ filtered result.
 SQL: `transform(map_values(col), m -> element_at(m, 'foo').x)`
 
 Extract values from outer map, filter inner map to key `"foo"`, extract
-subfield `x`.  Since there is already an extraction chain and only a single
-struct field is accessed, extend the chain with `StructField` instead of using
-`requiredSubfields`.
+subfield `x`.  Extraction is used, so `requiredSubfields` cannot be set.
+Use `StructField` in the chain.
 
 ```
 Chain: [MapValues, ArrayElements, MapKeyFilter(["foo"]), MapValues, ArrayElements, StructField("x")]
@@ -484,6 +446,18 @@ struct ExtractionPathElement {
   std::vector<int64_t> intFilterKeys;
 };
 
+/// Named extraction chain producing one output column.
+struct NamedExtraction {
+  /// Output column name in the scan's outputType.
+  std::string outputName;
+
+  /// Extraction chain to apply.  Empty means pass-through (no extraction).
+  std::vector<ExtractionPathElement> chain;
+
+  /// Output type after applying the chain.
+  TypePtr dataType;
+};
+
 class HiveColumnHandle : public connector::ColumnHandle {
  public:
   HiveColumnHandle(
@@ -492,21 +466,23 @@ class HiveColumnHandle : public connector::ColumnHandle {
       TypePtr dataType,
       TypePtr hiveType,
       std::vector<common::Subfield> requiredSubfields = {},
-      std::vector<ExtractionPathElement> extraction = {},
+      std::vector<NamedExtraction> extractions = {},
       ...);
 
-  /// Chain of extraction steps.  Empty means no extraction (current behavior).
-  /// When non-empty:
-  ///   - hiveType is the source column type in the file.
-  ///   - dataType is the output type after extraction.
-  ///   - requiredSubfields operates on the post-extraction type.
-  const std::vector<ExtractionPathElement>& extraction() const {
-    return extraction_;
+  /// Named extraction chains.  Empty means no extraction (current behavior).
+  /// When a single entry is present, the column handle's dataType is that
+  /// entry's dataType.  When multiple entries are present, the column
+  /// handle's dataType is a ROW type whose fields are the outputNames with
+  /// their corresponding dataTypes.
+  /// Mutually exclusive with requiredSubfields — if extractions is non-empty,
+  /// requiredSubfields must be empty.
+  const std::vector<NamedExtraction>& extractions() const {
+    return extractions_;
   }
 
  private:
   ...
-  std::vector<ExtractionPathElement> extraction_;
+  std::vector<NamedExtraction> extractions_;
 };
 ```
 
@@ -518,8 +494,14 @@ public class HiveColumnHandle extends BaseHiveColumnHandle {
     // Existing
     private final List<Subfield> requiredSubfields;
 
-    // New: extraction chain
-    private final List<ExtractionPathElement> extraction;
+    // New: named extraction chains
+    private final List<NamedExtraction> extractions;
+
+    public record NamedExtraction(
+        String outputName,
+        List<ExtractionPathElement> chain,
+        TypeSignature dataType
+    ) {}
 
     public record ExtractionPathElement(
         ExtractionStep step,
@@ -541,20 +523,27 @@ public class HiveColumnHandle extends BaseHiveColumnHandle {
 
 ### Serialization
 
-The extraction chain is serialized as a JSON array in the plan fragment,
-alongside `requiredSubfields`:
+The named extraction chains are serialized as a JSON array in the plan
+fragment.  Note that `requiredSubfields` and `extractions` are mutually
+exclusive — when `extractions` is non-empty, `requiredSubfields` must be
+empty:
 
 ```json
 {
   "name": "col",
   "hiveType": "map(varchar, array(map(integer, double)))",
-  "typeSignature": "array(array(array(integer)))",
   "requiredSubfields": [],
-  "extraction": [
-    {"step": "MAP_VALUES"},
-    {"step": "ARRAY_ELEMENTS"},
-    {"step": "ARRAY_ELEMENTS"},
-    {"step": "MAP_KEYS"}
+  "extractions": [
+    {
+      "outputName": "col_keys",
+      "dataType": "array(array(array(integer)))",
+      "chain": [
+        {"step": "MAP_VALUES"},
+        {"step": "ARRAY_ELEMENTS"},
+        {"step": "ARRAY_ELEMENTS"},
+        {"step": "MAP_KEYS"}
+      ]
+    }
   ]
 }
 ```
@@ -565,27 +554,133 @@ With key filter and struct field extraction:
 {
   "name": "col",
   "hiveType": "map(varchar, row(x integer, y integer))",
-  "typeSignature": "array(integer)",
   "requiredSubfields": [],
-  "extraction": [
-    {"step": "MAP_KEY_FILTER", "stringFilterKeys": ["foo", "bar"]},
-    {"step": "MAP_VALUES"},
-    {"step": "ARRAY_ELEMENTS"},
-    {"step": "STRUCT_FIELD", "fieldName": "x"}
+  "extractions": [
+    {
+      "outputName": "col_x",
+      "dataType": "array(integer)",
+      "chain": [
+        {"step": "MAP_KEY_FILTER", "stringFilterKeys": ["foo", "bar"]},
+        {"step": "MAP_VALUES"},
+        {"step": "ARRAY_ELEMENTS"},
+        {"step": "STRUCT_FIELD", "fieldName": "x"}
+      ]
+    }
+  ]
+}
+```
+
+Multiple extractions from the same column:
+
+```json
+{
+  "name": "col",
+  "hiveType": "map(varchar, row(x integer, y double))",
+  "requiredSubfields": [],
+  "extractions": [
+    {
+      "outputName": "col_size",
+      "dataType": "bigint",
+      "chain": [{"step": "SIZE"}]
+    },
+    {
+      "outputName": "col_keys",
+      "dataType": "array(varchar)",
+      "chain": [{"step": "MAP_KEYS"}]
+    },
+    {
+      "outputName": "col_x",
+      "dataType": "array(integer)",
+      "chain": [
+        {"step": "MAP_VALUES"},
+        {"step": "ARRAY_ELEMENTS"},
+        {"step": "STRUCT_FIELD", "fieldName": "x"}
+      ]
+    }
   ]
 }
 ```
 
 ### Contract
 
-- `extraction` is empty → current behavior, no type transformation.
-- `extraction` is non-empty → worker applies the chain, producing `dataType`.
-- `requiredSubfields` operates on the **post-extraction type**, not the file
-  type.
-- Multiple column handles can reference the same source column with different
-  extractions (e.g., one for keys, one for values, one for size).
-- The worker validates `hiveType` + `extraction` chain → `dataType` and
-  rejects mismatches.
+- `extractions` is empty → current behavior, `requiredSubfields` may be used
+  for type-preserving pruning.
+- `extractions` is non-empty → worker applies each chain, producing the
+  corresponding `dataType`.  `requiredSubfields` must be empty.
+- `extractions` and `requiredSubfields` are **mutually exclusive** on the same
+  column handle.
+- `requiredSubfields` operates on the file type (existing behavior).
+- When multiple extractions are needed from the same column, use the
+  `NamedExtraction` list on a single column handle (see "Multiple extractions
+  per column" below).  Do NOT create multiple column handles for the same
+  source column.
+- The worker validates `hiveType` + each extraction chain → its `dataType`
+  and rejects mismatches.
+
+### Multiple extractions per column
+
+When a query references the same column with different extractions (e.g.,
+`SELECT map_keys(col) AS keys, cardinality(col) AS size FROM t`), a single
+column handle carries all extraction chains via `NamedExtraction`.  The column
+handle's `dataType` is a **ROW** whose fields are the output names with their
+corresponding types:
+
+```
+assignments: {
+    "col": HiveColumnHandle {
+        name: "col",
+        hiveType: MAP(K, V),
+        dataType: ROW({ "keys": ARRAY(K), "size": BIGINT }),
+        extractions: [
+            { outputName: "keys", chain: [MapKeys],  dataType: ARRAY(K) },
+            { outputName: "size", chain: [Size],     dataType: BIGINT   }
+        ]
+    }
+}
+```
+
+The column is read once from the file.  Each extraction chain is applied
+independently to produce a field in the output ROW.
+
+**Examples with multiple extractions:**
+
+```
+-- col: MAP(VARCHAR, ROW(x: INT, y: INT, z: INT))
+-- Query: SELECT map_keys(col) AS keys, map_values(col).x AS vals_x FROM t
+--
+-- Two extractions: keys and a specific value subfield.
+-- Use StructField in the values chain to extract only field x.
+
+HiveColumnHandle {
+    name: "col",
+    hiveType: MAP(VARCHAR, ROW(x: INT, y: INT, z: INT)),
+    dataType: ROW({ "keys": ARRAY(VARCHAR), "vals_x": ARRAY(INT) }),
+    extractions: [
+        { outputName: "keys",   chain: [MapKeys],                              dataType: ARRAY(VARCHAR) },
+        { outputName: "vals_x", chain: [MapValues, ArrayElements, StructField("x")],  dataType: ARRAY(INT) }
+    ]
+}
+```
+
+```
+-- col: MAP(BIGINT, ROW(a: VARCHAR, b: DOUBLE, c: INT))
+-- Query: SELECT cardinality(col) AS sz, map_values(col).a AS vals_a,
+--        map_values(col).b AS vals_b FROM t
+--
+-- Three outputs: size and two value subfields.
+-- Each subfield gets its own NamedExtraction with a StructField chain.
+
+HiveColumnHandle {
+    name: "col",
+    hiveType: MAP(BIGINT, ROW(a: VARCHAR, b: DOUBLE, c: INT)),
+    dataType: ROW({ "sz": BIGINT, "vals_a": ARRAY(VARCHAR), "vals_b": ARRAY(DOUBLE) }),
+    extractions: [
+        { outputName: "sz",     chain: [Size],                                     dataType: BIGINT },
+        { outputName: "vals_a", chain: [MapValues, ArrayElements, StructField("a")],  dataType: ARRAY(VARCHAR) },
+        { outputName: "vals_b", chain: [MapValues, ArrayElements, StructField("b")],  dataType: ARRAY(DOUBLE) }
+    ]
+}
+```
 
 ## Future Extensions
 
@@ -624,9 +719,8 @@ Output: ARRAY(ARRAY(FLOAT))
 ```
 -- User history, take first 128 events, extract only item_id
 col: ARRAY(ROW(item_id BIGINT, timestamp BIGINT))
-Chain: [ArraySlice(0, 128)]
-Output: ARRAY(ROW(item_id BIGINT, timestamp BIGINT))
-requiredSubfields: ["[*].item_id"]
+Chain: [ArraySlice(0, 128), ArrayElements, StructField("item_id")]
+Output: ARRAY(BIGINT)
 ```
 
 ```

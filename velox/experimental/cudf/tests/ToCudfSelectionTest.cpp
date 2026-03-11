@@ -61,7 +61,7 @@ class ToCudfSelectionTest : public OperatorTestBase {
     auto stats = task->taskStats();
     for (const auto& pipelineStats : stats.pipelineStats) {
       for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType == "CudfAggregation") {
+        if (operatorStats.operatorType.starts_with("CudfAggregation")) {
           return true;
         }
       }

@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
 #include "velox/functions/prestosql/ArraySubset.h"
+#include "velox/functions/prestosql/DotProduct.h"
 #include "velox/functions/prestosql/L2Norm.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
@@ -448,5 +449,66 @@ void registerArrayFunctions(const std::string& prefix) {
       ParameterBinder<MapL2NormFunction, int64_t, double>,
       double,
       Map<int64_t, double>>({prefix + "l2_norm"});
+
+  // Register dot_product for integer arrays only.
+  // Float and double array versions already exist in
+  // MathematicalFunctionsRegistration.cpp (DotProductArray,
+  // DotProductFloatArray) with different semantics: they return NaN for empty
+  // arrays to maintain compatibility with cosine_similarity and other distance
+  // functions there. Integer versions here return 0 for empty arrays.
+  registerFunction<
+      ParameterBinder<DotProductFunction, int8_t>,
+      int64_t,
+      Array<int8_t>,
+      Array<int8_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int16_t>,
+      int64_t,
+      Array<int16_t>,
+      Array<int16_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int32_t>,
+      int64_t,
+      Array<int32_t>,
+      Array<int32_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int64_t>,
+      int64_t,
+      Array<int64_t>,
+      Array<int64_t>>({prefix + "dot_product"});
+
+  // Register dot_product for maps with integer keys
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int32_t, int64_t>,
+      int64_t,
+      Map<int32_t, int64_t>,
+      Map<int32_t, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int64_t, int64_t>,
+      int64_t,
+      Map<int64_t, int64_t>,
+      Map<int64_t, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int32_t, double>,
+      double,
+      Map<int32_t, double>,
+      Map<int32_t, double>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int64_t, double>,
+      double,
+      Map<int64_t, double>,
+      Map<int64_t, double>>({prefix + "dot_product"});
+
+  // Register dot_product for maps with varchar keys
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, Varchar, int64_t>,
+      int64_t,
+      Map<Varchar, int64_t>,
+      Map<Varchar, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, Varchar, double>,
+      double,
+      Map<Varchar, double>,
+      Map<Varchar, double>>({prefix + "dot_product"});
 }
 } // namespace facebook::velox::functions
