@@ -16,8 +16,10 @@
 
 #include "velox/functions/sparksql/types/TimestampNTZRegistration.h"
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
+#include "velox/dwio/parquet/reader/ParquetReaderUtils.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/sparksql/types/TimestampNTZCastUtil.h"
+#include "velox/functions/sparksql/types/TimestampNTZColumnReader.h"
 #include "velox/functions/sparksql/types/TimestampNTZType.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -98,6 +100,57 @@ class TimestampNTZTypeFactory : public CustomTypeFactory {
       const InputGeneratorConfig& config) const override {
     return std::make_shared<fuzzer::RandomInputGenerator<int64_t>>(
         config.seed_, TIMESTAMP_NTZ(), config.nullRatio_);
+  }
+
+  std::unique_ptr<dwio::common::SelectiveColumnReader> getParquetColumnReader(
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+      parquet::ParquetParams& params,
+      common::ScanSpec& scanSpec) const override {
+    return std::make_unique<TimestampNTZColumnReader>(
+        requestedType, fileType, params, scanSpec);
+  }
+
+  void applyParquetDictionaryRead(
+      memory::MemoryPool& pool,
+      const parquet::ParquetDictionaryReadContext& readContext,
+      dwio::common::DictionaryValues& dictionary,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType)
+      const override {
+    if (dictionary.numValues == 0) {
+      return;
+    }
+
+    const auto parquetTypeWithId =
+        std::static_pointer_cast<const parquet::ParquetTypeWithId>(fileType);
+    VELOX_USER_CHECK_EQ(
+        parquetTypeWithId->parquetType_.value(), parquet::thrift::Type::INT64);
+    const auto numBytes = dictionary.numValues * sizeof(int64_t);
+
+    auto values = AlignedBuffer::allocate<int64_t>(dictionary.numValues, &pool);
+    auto* rawValues = values->asMutable<int64_t>();
+
+    if (readContext.pageData) {
+      memcpy(rawValues, readContext.pageData, numBytes);
+    } else {
+      VELOX_DCHECK_NOT_NULL(readContext.inputStream);
+      VELOX_DCHECK_NOT_NULL(readContext.bufferStart);
+      VELOX_DCHECK_NOT_NULL(readContext.bufferEnd);
+      VELOX_DCHECK_NOT_NULL(readContext.stats);
+      uint64_t readUs{0};
+      {
+        MicrosecondTimer timer(&readUs);
+        dwio::common::readBytes(
+            numBytes,
+            readContext.inputStream,
+            reinterpret_cast<char*>(rawValues),
+            *readContext.bufferStart,
+            *readContext.bufferEnd);
+      }
+      readContext.stats->pageLoadTimeNs.increment(readUs * 1'000);
+    }
+
+    dictionary.values = std::move(values);
   }
 };
 

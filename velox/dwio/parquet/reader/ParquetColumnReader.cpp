@@ -40,7 +40,9 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec) {
-  auto colName = scanSpec.fieldName();
+  if (customTypeExists(requestedType->name())) {
+    return getParquetColumnReader(requestedType, fileType, params, scanSpec);
+  }
 
   if (fileType->type()->isTime()) {
     VELOX_CHECK(fileType->type()->equivalent(*TIME()));

@@ -155,6 +155,10 @@ class PageReader {
     return sessionTimezone_;
   }
 
+  void setRequestedType(const TypePtr& requestedType) {
+    requestedType_ = requestedType;
+  }
+
  private:
   // Indicates that we only want the repdefs for the next page. Used when
   // prereading repdefs with seekToPage.
@@ -459,6 +463,7 @@ class PageReader {
   // Dictionary contents.
   dwio::common::DictionaryValues dictionary_;
   thrift::Encoding::type dictionaryEncoding_;
+  TypePtr requestedType_;
 
   // Offset of current page's header from start of ColumnChunk.
   uint64_t pageStart_{0};

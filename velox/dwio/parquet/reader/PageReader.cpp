@@ -21,6 +21,7 @@
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/reader/ParquetReaderUtils.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/vector/FlatVector.h"
 
@@ -380,6 +381,18 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
         pageData_,
         pageHeader.compressed_page_size,
         pageHeader.uncompressed_page_size);
+  }
+
+  if (requestedType_ && customTypeExists(requestedType_->name())) {
+    const ParquetDictionaryReadContext readContext{
+        .pageData = pageData_,
+        .inputStream = inputStream_.get(),
+        .bufferStart = &bufferStart_,
+        .bufferEnd = &bufferEnd_,
+        .stats = &stats_};
+    applyParquetDictionaryRead(
+        pool_, readContext, requestedType_, dictionary_, type_);
+    return;
   }
 
   auto parquetType = type_->parquetType_.value();

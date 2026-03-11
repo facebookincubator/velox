@@ -20,3 +20,20 @@ target_link_libraries(
   velox_vector_test_lib
   GTest::gtest_main
 )
+
+add_executable(velox_custom_parquet_table_scan_test CustomParquetTableScanTest.cpp)
+add_test(
+  NAME velox_custom_parquet_table_scan_test
+  COMMAND velox_custom_parquet_table_scan_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_custom_parquet_table_scan_test
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_spark_types
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  ${TEST_LINK_LIBS}
+)

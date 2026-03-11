@@ -2362,6 +2362,23 @@ class CastOperator;
 using CastOperatorPtr = std::shared_ptr<const CastOperator>;
 } // namespace exec
 
+namespace common {
+class ScanSpec;
+} // namespace common
+
+namespace dwio {
+namespace common {
+struct DictionaryValues;
+class SelectiveColumnReader;
+class TypeWithId;
+} // namespace common
+} // namespace dwio
+
+namespace parquet {
+class ParquetParams;
+struct ParquetDictionaryReadContext;
+} // namespace parquet
+
 /// Forward declaration.
 class Variant;
 class AbstractInputGenerator;
@@ -2399,6 +2416,22 @@ class CustomTypeFactory {
 
   virtual AbstractInputGeneratorPtr getInputGenerator(
       const InputGeneratorConfig& config) const = 0;
+
+  /// Returns a Parquet column reader for this custom type if it has a custom
+  /// implementation. Returns nullptr otherwise.
+  virtual std::unique_ptr<dwio::common::SelectiveColumnReader>
+  getParquetColumnReader(
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+      parquet::ParquetParams& params,
+      common::ScanSpec& scanSpec) const;
+
+  // Applies custom Parquet dictionary read operation for this custom type.
+  virtual void applyParquetDictionaryRead(
+      memory::MemoryPool& pool,
+      const parquet::ParquetDictionaryReadContext& readContext,
+      dwio::common::DictionaryValues& dictionary,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType) const {}
 };
 
 class AbstractInputGenerator {
@@ -2488,8 +2521,21 @@ TypePtr getCustomType(
     const std::string& name,
     const std::vector<TypeParameter>& parameters);
 
-/// Removes custom type from the registry if exists. Returns true if type was
-/// removed, false if type didn't exist.
+std::unique_ptr<dwio::common::SelectiveColumnReader> getParquetColumnReader(
+    const TypePtr& requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+    parquet::ParquetParams& params,
+    common::ScanSpec& scanSpec);
+
+void applyParquetDictionaryRead(
+    memory::MemoryPool& pool,
+    const parquet::ParquetDictionaryReadContext& readContext,
+    const TypePtr& requestedType,
+    dwio::common::DictionaryValues& dictionary,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType);
+
+/// Removes custom type from the registry if exists. Returns true if type
+/// was removed, false if type didn't exist.
 bool unregisterCustomType(const std::string& name);
 
 /// Returns the custom cast operator for the custom type with the specified
@@ -2516,12 +2562,12 @@ void toTypeSql(const TypePtr& type, std::ostream& out);
 /// Cache of serialized RowType instances. Useful to reduce the size of
 /// serialized expressions and plans. Disabled by default. Not thread safe.
 ///
-/// To enable, call 'serializedTypeCache().enable()'. This enables the cache for
-/// the current thread. To disable, call 'serializedTypeCache().disable()'.
-/// While enables, type serialization will use the cache and serialize the types
-/// using IDs stored in the cache. The caller is responsible for saving
-/// serialized types from the cache and using these to hidrate
-/// 'deserializedTypeCache()' before deserializing the types.
+/// To enable, call 'serializedTypeCache().enable()'. This enables the cache
+/// for the current thread. To disable, call
+/// 'serializedTypeCache().disable()'. While enables, type serialization will
+/// use the cache and serialize the types using IDs stored in the cache. The
+/// caller is responsible for saving serialized types from the cache and using
+/// these to hidrate 'deserializedTypeCache()' before deserializing the types.
 class SerializedTypeCache {
  public:
   struct Options {
@@ -2554,16 +2600,16 @@ class SerializedTypeCache {
     cache_.clear();
   }
 
-  /// Returns the ID of the type if it is in the cache. Returns std::nullopt if
-  /// type is not found in the cache. Cache key is type instance pointer. Hence,
-  /// equal but different instances are stored separately.
+  /// Returns the ID of the type if it is in the cache. Returns std::nullopt
+  /// if type is not found in the cache. Cache key is type instance pointer.
+  /// Hence, equal but different instances are stored separately.
   std::optional<int32_t> get(const Type& type) const;
 
-  /// Stores the type in the cache. Returns the ID of the type. Reports an error
-  /// if type is already present in the cache. IDs are monotonically increasing.
-  /// Serialized type may refer to types stored previously in the cache. When
-  /// deserializing type cache, make sure to deserialize types in the order of
-  /// cache IDs.
+  /// Stores the type in the cache. Returns the ID of the type. Reports an
+  /// error if type is already present in the cache. IDs are monotonically
+  /// increasing. Serialized type may refer to types stored previously in the
+  /// cache. When deserializing type cache, make sure to deserialize types in
+  /// the order of cache IDs.
   int32_t put(const Type& type, folly::dynamic serialized);
 
   /// Serialized the types stored in the cache. Use

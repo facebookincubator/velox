@@ -24,6 +24,8 @@
 #include <sstream>
 #include <typeindex>
 
+#include "velox/dwio/common/SelectiveColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetReaderUtils.h"
 #include "velox/external/tzdb/exception.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
@@ -1204,7 +1206,42 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   return nullptr;
 }
 
+std::unique_ptr<dwio::common::SelectiveColumnReader> getParquetColumnReader(
+    const TypePtr& requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+    parquet::ParquetParams& params,
+    common::ScanSpec& scanSpec) {
+  auto factory = getTypeFactory(requestedType->name());
+  if (factory) {
+    return factory->getParquetColumnReader(
+        requestedType, fileType, params, scanSpec);
+  }
+  return nullptr;
+}
+
+void applyParquetDictionaryRead(
+    memory::MemoryPool& pool,
+    const parquet::ParquetDictionaryReadContext& readContext,
+    const TypePtr& requestedType,
+    dwio::common::DictionaryValues& dictionary,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType) {
+  auto factory = getTypeFactory(requestedType->name());
+  if (factory) {
+    factory->applyParquetDictionaryRead(
+        pool, readContext, dictionary, fileType);
+  }
+}
+
 CustomTypeFactory::~CustomTypeFactory() = default;
+
+std::unique_ptr<dwio::common::SelectiveColumnReader>
+CustomTypeFactory::getParquetColumnReader(
+    const TypePtr& /*requestedType*/,
+    const std::shared_ptr<const dwio::common::TypeWithId>& /*fileType*/,
+    parquet::ParquetParams& /*params*/,
+    common::ScanSpec& /*scanSpec*/) const {
+  return nullptr;
+}
 
 AbstractInputGenerator::~AbstractInputGenerator() = default;
 
