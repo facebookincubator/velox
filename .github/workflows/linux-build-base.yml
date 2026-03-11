@@ -82,6 +82,8 @@ jobs:
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 8-core-ubuntu-22.04
     container: ghcr.io/facebookincubator/velox-dev:adapters
+    outputs:
+      cudf-changes: ${{ steps.changes.outputs.cudf }}
     defaults:
       run:
         shell: bash
@@ -102,6 +104,16 @@ jobs:
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Check cuDF Changes
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        if: ${{ ! inputs.use-clang && always() }}
+        with:
+          filters: |
+            cudf:
+              - 'velox/experimental/cudf/**'
+              - 'CMake/resolve_dependency_modules/cudf.cmake'
 
       - name: Install Dependencies
         env:
@@ -196,6 +208,35 @@ jobs:
 
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
           ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
+
+      - name: Copy Shared Libraries for cuDF Test Binaries
+        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf == 'true' && always() }}
+        env:
+          CUDF_DIR: _build/release/velox/experimental/cudf
+        run: |
+          mkdir -p $CUDF_DIR/cudf-libs
+          deps=$( \
+            for exe in $CUDF_DIR/tests/velox_cudf_*; \
+              do ldd "$exe" 2>/dev/null; done | \
+            sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | \
+            sed '/libcuda/ d' | sed '/librt.so/ d' | sed '/libm.so/ d' | \
+            sed '/libstdc++.so/ d' | sed '/ld-linux-x86-64.so/ d' | sed '/libc.so/ d' | sort -u \
+          ) && \
+          (echo "$deps" | xargs readlink -f | xargs -I {} cp {} $CUDF_DIR/cudf-libs/) && \
+          lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) && \
+          (cd $CUDF_DIR/cudf-libs && echo "$lndeps" | \
+            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}) && \
+          tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
+
+      - name: Upload cuDF Test Binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf == 'true' && always() }}
+        with:
+          name: cudftestbinaries
+          path: |
+            _build/release/velox/experimental/cudf/tests/velox_cudf_*
+            _build/release/velox/experimental/cudf/cudf-libs.tar
+          retention-days: 3
 
       # Clang-tidy needs a complete build because some files are only generated during the build
       # that clang tidy will not find and report errors otherwise.
@@ -383,3 +424,49 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fedora-debug-default-gcc
+
+  cudf-join-fuzzer:
+    runs-on: 4-core-ubuntu-gpu-t4
+    needs: adapters
+    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' }}
+    timeout-minutes: 60
+    env:
+      CUDF_DIR: _build/release/velox/experimental/cudf
+    steps:
+      - name: Install Packages
+        run: |
+          sudo apt-get update && sudo apt-get install -y patchelf cuda-toolkit-12-9
+
+      - name: Check NVIDIA Driver Version
+        run: nvidia-smi
+
+      - name: Download cuDF Test Binaries
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: cudftestbinaries
+
+      - name: Prepare Fuzzer Binary
+        run: |
+          (cd $CUDF_DIR && tar -xf cudf-libs.tar)
+          patchelf --force-rpath --set-rpath '$ORIGIN/../cudf-libs' $CUDF_DIR/tests/velox_cudf_join_fuzzer
+          chmod +x $CUDF_DIR/tests/velox_cudf_join_fuzzer
+
+      - name: Run cuDF Join Fuzzer
+        run: |
+          mkdir -p /tmp/cudf_join_fuzzer_repro/logs/
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          $CUDF_DIR/tests/velox_cudf_join_fuzzer \
+                --seed ${random_seed} \
+                --duration_sec 900 \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/cudf_join_fuzzer_repro/logs \
+          && echo -e "\n\ncuDF Join fuzzer run finished successfully."
+
+      - name: Archive artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cudf-join-fuzzer-failure-artifacts
+          path: /tmp/cudf_join_fuzzer_repro

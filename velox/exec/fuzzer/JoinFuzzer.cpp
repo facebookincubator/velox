@@ -70,10 +70,6 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 
-std::string makePercentageString(size_t value, size_t total) {
-  return fmt::format("{} ({:.2f}%)", value, (double)value / total * 100);
-}
-
 class JoinFuzzer : public JoinFuzzerBase {
  public:
   JoinFuzzer(
@@ -86,6 +82,8 @@ class JoinFuzzer : public JoinFuzzerBase {
         writerPool_{rootPool_->addAggregateChild(
             "joinFuzzerWriter",
             exec::MemoryReclaimer::create())} {
+    // Replace base Stats with our extended Stats.
+    stats_ = std::make_unique<Stats>();
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
   }
@@ -106,110 +104,9 @@ class JoinFuzzer : public JoinFuzzerBase {
     return referenceQueryRunner_->supportedScalarTypes();
   }
 
-  // Override to use maxDepth=2 for nested types in payload columns.
-  std::vector<RowVectorPtr> generateProbeInput(
-      const std::vector<std::string>& keyNames,
-      const std::vector<TypePtr>& keyTypes) override {
-    std::vector<std::string> names = keyNames;
-    std::vector<TypePtr> types = keyTypes;
-
-    bool keyTypesAllBool = true;
-    for (const auto& type : keyTypes) {
-      if (!type->isBoolean()) {
-        keyTypesAllBool = false;
-        break;
-      }
-    }
-
-    // Add up to 3 payload columns.
-    const auto numPayload = randInt(0, 3);
-    for (auto i = 0; i < numPayload; ++i) {
-      names.push_back(fmt::format("tp{}", i + keyNames.size()));
-      types.push_back(vectorFuzzer_.randType(
-          referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
-    }
-
-    const auto inputType = ROW(std::move(names), std::move(types));
-    std::vector<RowVectorPtr> input;
-    for (auto i = 0; i < FLAGS_num_batches; ++i) {
-      if (keyTypesAllBool) {
-        // Joining on just boolean keys creates so many hits it explodes the
-        // output size, reduce the batch size to 10% to control the output size
-        // while still covering this case.
-        input.push_back(
-            vectorFuzzer_.fuzzRow(inputType, FLAGS_batch_size / 10, false));
-      } else {
-        input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
-      }
-    }
-    return input;
-  }
-
-  // Override to use maxDepth=2 for nested types in payload columns.
-  std::vector<RowVectorPtr> generateBuildInput(
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys) override {
-    std::vector<std::string> names = buildKeys;
-    std::vector<TypePtr> types;
-    for (const auto& key : probeKeys) {
-      types.push_back(asRowType(probeInput[0]->type())->findChild(key));
-    }
-
-    // Add up to 3 payload columns.
-    const auto numPayload = randInt(0, 3);
-    for (auto i = 0; i < numPayload; ++i) {
-      names.push_back(fmt::format("bp{}", i + buildKeys.size()));
-      types.push_back(vectorFuzzer_.randType(
-          referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
-    }
-
-    const auto rowType = ROW(std::move(names), std::move(types));
-
-    // 1 in 10 times use empty build.
-    // TODO Use non-empty build with no matches sometimes.
-    if (vectorFuzzer_.coinToss(0.1)) {
-      return {BaseVector::create<RowVector>(rowType, 0, pool_.get())};
-    }
-
-    // TODO Remove the assumption that probeKeys are the first columns in
-    // probeInput.
-
-    // To ensure there are some matches, sample with replacement 10% of probe
-    // join keys and use these as 80% of build keys. The rest build keys are
-    // randomly generated. This allows the build side to have unmatched rows
-    // that should appear in right join and full join.
-    std::vector<RowVectorPtr> input;
-    for (const auto& probe : probeInput) {
-      auto numRows = 1 + probe->size() / 8;
-      auto build = vectorFuzzer_.fuzzRow(rowType, numRows, false);
-
-      // Pick probe side rows to copy.
-      std::vector<vector_size_t> rowNumbers(numRows);
-      SelectivityVector rows(numRows, false);
-      for (auto i = 0; i < numRows; ++i) {
-        if (vectorFuzzer_.coinToss(0.8) && probe->size() > 0) {
-          rowNumbers[i] = randInt(0, probe->size() - 1);
-          rows.setValid(i, true);
-        }
-      }
-
-      for (auto i = 0; i < probeKeys.size(); ++i) {
-        build->childAt(i)->resize(numRows);
-        build->childAt(i)->copy(
-            probe->childAt(i).get(), rows, rowNumbers.data());
-      }
-
-      for (auto i = 0; i < numPayload; ++i) {
-        auto column = i + probeKeys.size();
-        build->childAt(column) =
-            vectorFuzzer_.fuzz(rowType->childAt(column), numRows);
-      }
-
-      input.push_back(build);
-    }
-
-    return input;
+  /// Allow nested types (depth 2) for payload columns to test complex types.
+  int getPayloadMaxDepth() const override {
+    return 2;
   }
 
   void verify(core::JoinType joinType) override;
@@ -239,14 +136,19 @@ class JoinFuzzer : public JoinFuzzerBase {
       std::stringstream out;
       out << "\nTotal iterations tested: " << numIterations << std::endl;
       out << "Total iterations verified against reference DB: "
-          << makePercentageString(numVerified, numIterations) << std::endl;
+          << JoinFuzzerBase::makePercentageString(numVerified, numIterations)
+          << std::endl;
       out << "Total iterations testing cross product: "
-          << makePercentageString(numCrossProduct, numIterations) << std::endl;
+          << JoinFuzzerBase::makePercentageString(numCrossProduct, numIterations)
+          << std::endl;
       return out.str();
     }
   };
 
-  Stats stats_;
+  /// Helper to access our extended Stats.
+  Stats& stats() {
+    return static_cast<Stats&>(*stats_);
+  }
 };
 
 RowVectorPtr JoinFuzzer::execute(
@@ -400,8 +302,8 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
               referenceResult.value(), plan.plan->outputType(), {expected}),
           "Velox and DuckDB results don't match");
 
-      LOG(INFO) << "Result matches with referenc DB.";
-      stats_.numVerified++;
+      LOG(INFO) << "Result matches with reference DB.";
+      stats_->numVerified++;
     }
   }
 
@@ -551,7 +453,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
        core::isFullJoin(joinType)) &&
       FLAGS_batch_size * FLAGS_num_batches <= 500) {
     if (vectorFuzzer_.coinToss(0.1)) {
-      stats_.numCrossProduct++;
+      stats().numCrossProduct++;
 
       JoinMaker crossJoinMaker(
           joinType,
@@ -618,7 +520,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           "Velox and Reference results don't match");
 
       LOG(INFO) << "Result matches with reference DB.";
-      stats_.numVerified++;
+      stats_->numVerified++;
     }
   }
 

@@ -117,13 +117,13 @@ int main(int argc, char** argv) {
   functions::prestosql::registerAllScalarFunctions();
   parse::registerTypeResolver();
 
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+  if (!isRegisteredNamedVectorSerde("Presto")) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+  if (!isRegisteredNamedVectorSerde("CompactRow")) {
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+  if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
 

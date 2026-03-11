@@ -30,6 +30,13 @@ using namespace facebook::velox::exec;
 /// CudfJoinFuzzer extends JoinFuzzerBase to test cuDF hash join
 /// implementation. It restricts the join types and data types to those
 /// supported by both cuDF and the DuckDB reference query runner.
+///
+/// Note: Unlike the CPU JoinFuzzer, this fuzzer does not test:
+/// - Spilling: GPU memory is managed by RMM (RAPIDS Memory Manager), not
+///   Velox's spill framework.
+/// - Alternative plan variations: Only hash join is tested (no merge join,
+///   nested loop join, or table scan plans) since cuDF only supports hash join.
+/// - Grouped execution: Not supported by the cuDF execution path.
 class CudfJoinFuzzer : public JoinFuzzerBase {
  public:
   CudfJoinFuzzer(
@@ -157,10 +164,12 @@ class CudfJoinFuzzer : public JoinFuzzerBase {
       VELOX_CHECK(
           exec::test::assertEqualResults(
               referenceResult.value(), plan->outputType(), {result}),
-          "Velox and Reference results don't match");
+          "Velox and Reference results don't match. Seed: {}, Join type: {}",
+          currentSeed_,
+          joinTypeName(joinType));
 
       LOG(INFO) << "Result matches with reference DB.";
-      stats_.numVerified++;
+      stats_->numVerified++;
     }
   }
 };

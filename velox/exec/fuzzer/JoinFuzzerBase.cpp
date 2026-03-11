@@ -41,11 +41,11 @@ bool isDone(size_t i, T startTime) {
   return i >= FLAGS_steps;
 }
 
-std::string makePercentageString(size_t value, size_t total) {
+} // namespace
+
+std::string JoinFuzzerBase::makePercentageString(size_t value, size_t total) {
   return fmt::format("{} ({:.2f}%)", value, (double)value / total * 100);
 }
-
-} // namespace
 
 JoinFuzzerBase::JoinFuzzerBase(
     size_t initialSeed,
@@ -61,7 +61,8 @@ JoinFuzzerBase::JoinFuzzerBase(
           true,
           exec::MemoryReclaimer::create())),
       vectorFuzzer_{getFuzzerOptions(), pool_.get()},
-      referenceQueryRunner_{std::move(referenceQueryRunner)} {
+      referenceQueryRunner_{std::move(referenceQueryRunner)},
+      stats_{std::make_unique<Stats>()} {
   filesystems::registerLocalFileSystem();
 
   std::unordered_map<std::string, std::string> hiveConfig = {
@@ -160,12 +161,13 @@ std::vector<RowVectorPtr> JoinFuzzerBase::generateProbeInput(
   }
 
   const auto& supportedTypes = getSupportedTypes();
+  const auto payloadMaxDepth = getPayloadMaxDepth();
 
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("tp{}", i + keyNames.size()));
-    types.push_back(vectorFuzzer_.randType(supportedTypes, /*maxDepth=*/0));
+    types.push_back(vectorFuzzer_.randType(supportedTypes, payloadMaxDepth));
   }
 
   const auto inputType = ROW(std::move(names), std::move(types));
@@ -195,17 +197,18 @@ std::vector<RowVectorPtr> JoinFuzzerBase::generateBuildInput(
   }
 
   const auto& supportedTypes = getSupportedTypes();
+  const auto payloadMaxDepth = getPayloadMaxDepth();
 
   // Add up to 3 payload columns.
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("bp{}", i + buildKeys.size()));
-    types.push_back(vectorFuzzer_.randType(supportedTypes, /*maxDepth=*/0));
+    types.push_back(vectorFuzzer_.randType(supportedTypes, payloadMaxDepth));
   }
 
   const auto rowType = ROW(std::move(names), std::move(types));
 
-  // 1 in 10 times use empty build.
+  // 10% chance of empty build side to test edge case handling.
   if (vectorFuzzer_.coinToss(0.1)) {
     return {BaseVector::create<RowVector>(rowType, 0, pool_.get())};
   }
@@ -216,6 +219,8 @@ std::vector<RowVectorPtr> JoinFuzzerBase::generateBuildInput(
   // appear in right join and full join.
   std::vector<RowVectorPtr> input;
   for (const auto& probe : probeInput) {
+    // Build side is ~12.5% (1/8) the size of probe side to keep output
+    // manageable while still testing realistic join scenarios.
     auto numRows = 1 + probe->size() / 8;
     auto build = vectorFuzzer_.fuzzRow(rowType, numRows, false);
 
@@ -223,6 +228,7 @@ std::vector<RowVectorPtr> JoinFuzzerBase::generateBuildInput(
     std::vector<vector_size_t> rowNumbers(numRows);
     SelectivityVector rows(numRows, false);
     for (auto i = 0; i < numRows; ++i) {
+      // 80% of build keys come from probe to ensure matches exist.
       if (vectorFuzzer_.coinToss(0.8) && probe->size() > 0) {
         rowNumbers[i] = randInt(0, probe->size() - 1);
         rows.setValid(i, true);
@@ -267,7 +273,8 @@ std::string JoinFuzzerBase::Stats::toString() const {
   std::stringstream out;
   out << "\nTotal iterations tested: " << numIterations << std::endl;
   out << "Total iterations verified against reference DB: "
-      << makePercentageString(numVerified, numIterations) << std::endl;
+      << JoinFuzzerBase::makePercentageString(numVerified, numIterations)
+      << std::endl;
   return out.str();
 }
 
@@ -279,23 +286,23 @@ void JoinFuzzerBase::go() {
 
   const auto startTime = std::chrono::system_clock::now();
 
-  while (!isDone(stats_.numIterations, startTime)) {
+  while (!isDone(stats_->numIterations, startTime)) {
     const auto joinType = pickJoinType();
 
     LOG(WARNING) << "==============================> Started iteration "
-                 << stats_.numIterations << " (seed: " << currentSeed_
+                 << stats_->numIterations << " (seed: " << currentSeed_
                  << ", join type: " << joinTypeName(joinType) << ")";
 
     verify(joinType);
 
     LOG(WARNING) << "==============================> Done with iteration "
-                 << stats_.numIterations;
+                 << stats_->numIterations;
 
     reSeed();
-    ++stats_.numIterations;
+    ++stats_->numIterations;
   }
 
-  LOG(INFO) << stats_.toString();
+  LOG(INFO) << stats_->toString();
 }
 
 } // namespace facebook::velox::exec

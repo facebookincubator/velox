@@ -72,16 +72,23 @@ class JoinFuzzerBase {
   /// Returns a list of randomly generated join key types.
   std::vector<TypePtr> generateJoinKeyTypes(int32_t numKeys);
 
+  /// Maximum nesting depth for payload column types. Override to allow
+  /// nested types (arrays, maps, structs) in payload columns.
+  /// Default is 0 (scalar types only).
+  virtual int getPayloadMaxDepth() const {
+    return 0;
+  }
+
   /// Returns randomly generated probe input with up to 3 additional payload
   /// columns.
-  virtual std::vector<RowVectorPtr> generateProbeInput(
+  std::vector<RowVectorPtr> generateProbeInput(
       const std::vector<std::string>& keyNames,
       const std::vector<TypePtr>& keyTypes);
 
   /// Same as generateProbeInput() but copies over 10% of the input in the probe
   /// columns to ensure some matches during joining. Also generates an empty
   /// input with a 10% chance.
-  virtual std::vector<RowVectorPtr> generateBuildInput(
+  std::vector<RowVectorPtr> generateBuildInput(
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<std::string>& probeKeys,
       const std::vector<std::string>& buildKeys);
@@ -111,7 +118,16 @@ class JoinFuzzerBase {
     virtual std::string toString() const;
   };
 
-  Stats stats_;
+  /// Creates the Stats object. Override to return a subclass with additional
+  /// fields. Called once during construction.
+  virtual std::unique_ptr<Stats> makeStats() {
+    return std::make_unique<Stats>();
+  }
+
+  /// Helper for formatting percentages in stats output.
+  static std::string makePercentageString(size_t value, size_t total);
+
+  std::unique_ptr<Stats> stats_;
 };
 
 } // namespace facebook::velox::exec
