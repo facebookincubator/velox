@@ -316,6 +316,9 @@ class PageReader {
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
         nullsFromFastPath = false;
         deltaByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+        nullsFromFastPath = false;
+        deltaLengthByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         nullsFromFastPath = false;
         stringDecoder_->readWithVisitor<true>(nulls, visitor);
@@ -326,6 +329,8 @@ class PageReader {
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
         deltaByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+        deltaLengthByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         stringDecoder_->readWithVisitor<false>(nulls, visitor);
       }
@@ -520,6 +525,7 @@ class PageReader {
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
+  std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
 };

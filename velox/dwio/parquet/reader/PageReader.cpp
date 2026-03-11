@@ -782,6 +782,13 @@ void PageReader::makeDecoder() {
         break;
       }
       [[fallthrough]];
+    case Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      if (parquetType == thrift::Type::BYTE_ARRAY) {
+        deltaLengthByteArrDecoder_ =
+            std::make_unique<DeltaLengthByteArrayDecoder>(pageData_);
+        break;
+      }
+      [[fallthrough]];
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
   }
@@ -824,6 +831,8 @@ void PageReader::skip(int64_t numRows) {
     deltaBpDecoder_->skip(toSkip);
   } else if (deltaByteArrDecoder_) {
     deltaByteArrDecoder_->skip(toSkip);
+  } else if (deltaLengthByteArrDecoder_) {
+    deltaLengthByteArrDecoder_->skip(toSkip);
   } else if (rleBooleanDecoder_) {
     rleBooleanDecoder_->skip(toSkip);
   } else {
