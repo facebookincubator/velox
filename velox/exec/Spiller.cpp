@@ -297,8 +297,15 @@ void SpillerBase::extractSpill(
 
   auto* result = resultPtr.get();
   const auto& types = container_->columnTypes();
+  // Use shallow string copy since the extracted vector is immediately
+  // serialized to the spill file and the RowContainer outlives the vector.
   for (auto i = 0; i < types.size(); ++i) {
-    container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
+    container_->extractColumn(
+        rows.data(),
+        rows.size(),
+        i,
+        result->childAt(i),
+        /*shallowStringCopy=*/true);
   }
   const auto& accumulators = container_->accumulators();
   column_index_t accumulatorColumnOffset = types.size();

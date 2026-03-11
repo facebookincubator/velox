@@ -163,6 +163,14 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
       assertEqualVectors(expected, result);
     };
 
+    auto testStringShallowCopy = [&]() {
+      // Test the extractColumn API that didn't use the offset parameter and
+      // copied to the start of the result vector.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(rows.data(), size, column, result, true);
+      assertEqualVectors(expected, result);
+    };
+
     auto testBasicWithOffset = [&]() {
       // Test extractColumn from offset.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
@@ -188,6 +196,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase,
 
     // Test using extractColumn API.
     testBasic();
+    testStringShallowCopy();
     testBasicWithOffset();
     // Test using extractColumn (with rowNumbers) API.
     testRowNumbers();
