@@ -224,8 +224,15 @@ jobs:
           ) && \
           (echo "$deps" | xargs readlink -f | xargs -I {} cp {} "$CUDF_DIR/cudf-libs/") && \
           lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) && \
-          (cd "$CUDF_DIR/cudf-libs" && echo "$lndeps" | \
-            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {}) && \
+          if [[ -d "$CUDF_DIR/cudf-libs" ]]; then
+            cd "$CUDF_DIR/cudf-libs" || exit 1
+            while IFS= read -r link; do
+              [[ -z "$link" || ! -L "$link" ]] && continue
+              target=$(readlink -f "$link") || continue
+              ln -sf "$(basename "$target")" "$(basename "$link")" || echo "Warning: Failed to create symlink for $link"
+            done <<< "$lndeps"
+            cd - > /dev/null
+          fi && \
           tar -cvf "$CUDF_DIR/cudf-libs.tar" -C "$CUDF_DIR" cudf-libs
 
       - name: Upload cuDF Test Binaries
