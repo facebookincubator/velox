@@ -434,13 +434,21 @@ class RowContainer {
   /// values. If 'columnHasNulls' is false, a null-free optimization will be
   /// applied. It is the caller's responsibility to ensure this flag is set
   /// correctly.
+  /// @param shallowStringCopy When true, contiguous (inline or single-piece
+  /// out-of-line) string values are not copied out of the RowContainer's
+  /// HashStringAllocator. Instead, the result StringViews point directly into
+  /// the RowContainer's memory. Multi-piece strings are still reassembled into
+  /// a new buffer. This is only safe when the RowContainer outlives the result
+  /// vector (e.g. during spilling where the extracted vector is immediately
+  /// serialized to disk).
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
       bool columnHasNulls,
       vector_size_t resultOffset,
-      const VectorPtr& result);
+      const VectorPtr& result,
+      bool shallowStringCopy = false);
 
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
@@ -449,13 +457,22 @@ class RowContainer {
   /// values. If 'columnHasNulls' is false, a null-free optimization will be
   /// applied. It is the caller's responsibility to ensure this flag is set
   /// correctly.
+  /// @param shallowStringCopy When true, contiguous (inline or single-piece
+  /// out-of-line) string values are not copied out of the RowContainer's
+  /// HashStringAllocator. Instead, the result StringViews point directly into
+  /// the RowContainer's memory. Multi-piece strings are still reassembled into
+  /// a new buffer. This is only safe when the RowContainer outlives the result
+  /// vector (e.g. during spilling where the extracted vector is immediately
+  /// serialized to disk).
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
       bool columnHasNulls,
-      const VectorPtr& result) {
-    extractColumn(rows, numRows, col, columnHasNulls, 0, result);
+      const VectorPtr& result,
+      bool shallowStringCopy = false) {
+    extractColumn(
+        rows, numRows, col, columnHasNulls, 0, result, shallowStringCopy);
   }
 
   /// Copies the values from the array pointed to by 'rows' at 'col' into
@@ -468,13 +485,21 @@ class RowContainer {
   /// values. If 'columnHasNulls' is false, a null-free optimization will be
   /// applied. It is the caller's responsibility to ensure this flag is set
   /// correctly.
+  /// @param shallowStringCopy When true, contiguous (inline or single-piece
+  /// out-of-line) string values are not copied out of the RowContainer's
+  /// HashStringAllocator. Instead, the result StringViews point directly into
+  /// the RowContainer's memory. Multi-piece strings are still reassembled into
+  /// a new buffer. This is only safe when the RowContainer outlives the result
+  /// vector (e.g. during spilling where the extracted vector is immediately
+  /// serialized to disk).
   static void extractColumn(
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,
       RowColumn col,
       bool columnHasNulls,
       vector_size_t resultOffset,
-      const VectorPtr& result);
+      const VectorPtr& result,
+      bool shallowStringCopy = false);
 
   /// Sets in result all locations with null values in col for rows (for numRows
   /// number of rows).
@@ -491,13 +516,16 @@ class RowContainer {
       const char* const* rows,
       int32_t numRows,
       int32_t columnIndex,
-      const VectorPtr& result) const {
+      const VectorPtr& result,
+      bool shallowStringCopy = false) const {
     extractColumn(
         rows,
         numRows,
         columnAt(columnIndex),
         columnHasNulls(columnIndex),
-        result);
+        0,
+        result,
+        shallowStringCopy);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -508,14 +536,16 @@ class RowContainer {
       int32_t numRows,
       int32_t columnIndex,
       int32_t resultOffset,
-      const VectorPtr& result) const {
+      const VectorPtr& result,
+      bool shallowStringCopy = false) const {
     extractColumn(
         rows,
         numRows,
         columnAt(columnIndex),
         columnHasNulls(columnIndex),
         resultOffset,
-        result);
+        result,
+        shallowStringCopy);
   }
 
   /// Copies the values at 'columnIndex' at positions in the 'rowNumbers' array
@@ -530,14 +560,16 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t columnIndex,
       const vector_size_t resultOffset,
-      const VectorPtr& result) const {
+      const VectorPtr& result,
+      bool shallowStringCopy = false) const {
     extractColumn(
         rows,
         rowNumbers,
         columnAt(columnIndex),
         columnHasNulls(columnIndex),
         resultOffset,
-        result);
+        result,
+        shallowStringCopy);
   }
 
   /// Sets in result all locations with null values in columnIndex for rows.
@@ -966,7 +998,8 @@ class RowContainer {
       RowColumn column,
       bool columnHasNulls,
       int32_t resultOffset,
-      const VectorPtr& result) {
+      const VectorPtr& result,
+      bool shallowStringCopy = false) {
     if (rowNumbers.size() > 0) {
       extractColumnTypedInternal<true, Kind>(
           rows,
@@ -975,7 +1008,8 @@ class RowContainer {
           column,
           columnHasNulls,
           resultOffset,
-          result);
+          result,
+          shallowStringCopy);
     } else {
       extractColumnTypedInternal<false, Kind>(
           rows,
@@ -984,7 +1018,8 @@ class RowContainer {
           column,
           columnHasNulls,
           resultOffset,
-          result);
+          result,
+          shallowStringCopy);
     }
   }
 
@@ -996,7 +1031,8 @@ class RowContainer {
       RowColumn column,
       bool columnHasNulls,
       int32_t resultOffset,
-      const VectorPtr& result) {
+      const VectorPtr& result,
+      bool shallowStringCopy = false) {
     // Resize the result vector before all copies.
     result->resize(numRows + resultOffset);
 
@@ -1013,7 +1049,13 @@ class RowContainer {
     auto offset = column.offset();
     if (!nullMask || !columnHasNulls) {
       extractValuesNoNulls<useRowNumbers, T>(
-          rows, rowNumbers, numRows, offset, resultOffset, flatResult);
+          rows,
+          rowNumbers,
+          numRows,
+          offset,
+          resultOffset,
+          flatResult,
+          shallowStringCopy);
     } else {
       extractValuesWithNulls<useRowNumbers, T>(
           rows,
@@ -1023,7 +1065,8 @@ class RowContainer {
           column.nullByte(),
           nullMask,
           resultOffset,
-          flatResult);
+          flatResult,
+          shallowStringCopy);
     }
   }
 
@@ -1125,7 +1168,8 @@ class RowContainer {
       int32_t nullByte,
       uint8_t nullMask,
       int32_t resultOffset,
-      FlatVector<T>* result) {
+      FlatVector<T>* result,
+      bool shallowStringCopy = false) {
     auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
 
@@ -1147,7 +1191,11 @@ class RowContainer {
       } else {
         bits::setNull(nulls, resultIndex, false);
         if constexpr (std::is_same_v<T, StringView>) {
-          extractString(valueAt<StringView>(row, offset), result, resultIndex);
+          extractString(
+              valueAt<StringView>(row, offset),
+              result,
+              resultIndex,
+              shallowStringCopy);
         } else {
           values[resultIndex] = valueAt<T>(row, offset);
         }
@@ -1162,7 +1210,8 @@ class RowContainer {
       int32_t numRows,
       int32_t offset,
       int32_t resultOffset,
-      FlatVector<T>* result) {
+      FlatVector<T>* result,
+      bool shallowStringCopy = false) {
     [[maybe_unused]] auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
     BufferPtr valuesBuffer = result->mutableValues();
@@ -1181,7 +1230,11 @@ class RowContainer {
       } else {
         result->setNull(resultIndex, false);
         if constexpr (std::is_same_v<T, StringView>) {
-          extractString(valueAt<StringView>(row, offset), result, resultIndex);
+          extractString(
+              valueAt<StringView>(row, offset),
+              result,
+              resultIndex,
+              shallowStringCopy);
         } else {
           values[resultIndex] = valueAt<T>(row, offset);
         }
@@ -1416,10 +1469,18 @@ class RowContainer {
     }
   }
 
+  /// @param shallowStringCopy When true, contiguous (inline or single-piece
+  /// out-of-line) string values are not copied out of the RowContainer's
+  /// HashStringAllocator. Instead, the result StringViews point directly into
+  /// the RowContainer's memory. Multi-piece strings are still reassembled into
+  /// a new buffer. This is only safe when the RowContainer outlives the result
+  /// vector (e.g. during spilling where the extracted vector is immediately
+  /// serialized to disk).
   static void extractString(
       StringView value,
       FlatVector<StringView>* values,
-      vector_size_t index);
+      vector_size_t index,
+      bool shallowStringCopy = false);
 
   static int32_t compareStringAsc(
       StringView left,
@@ -1692,7 +1753,8 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     RowColumn /*column*/,
     bool /*columnHasNulls*/,
     int32_t /*resultOffset*/,
-    const VectorPtr& /*result*/) {
+    const VectorPtr& /*result*/,
+    bool /*shallowStringCopy*/) {
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
 }
 
@@ -1702,7 +1764,8 @@ inline void RowContainer::extractColumn(
     RowColumn column,
     bool columnHasNulls,
     int32_t resultOffset,
-    const VectorPtr& result) {
+    const VectorPtr& result,
+    bool shallowStringCopy) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       extractColumnTyped,
       result->typeKind(),
@@ -1712,7 +1775,8 @@ inline void RowContainer::extractColumn(
       column,
       columnHasNulls,
       resultOffset,
-      result);
+      result,
+      shallowStringCopy);
 }
 
 inline void RowContainer::extractColumn(
@@ -1721,7 +1785,8 @@ inline void RowContainer::extractColumn(
     RowColumn column,
     bool columnHasNulls,
     int32_t resultOffset,
-    const VectorPtr& result) {
+    const VectorPtr& result,
+    bool shallowStringCopy) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       extractColumnTyped,
       result->typeKind(),
@@ -1731,7 +1796,8 @@ inline void RowContainer::extractColumn(
       column,
       columnHasNulls,
       resultOffset,
-      result);
+      result,
+      shallowStringCopy);
 }
 
 inline void RowContainer::extractNulls(

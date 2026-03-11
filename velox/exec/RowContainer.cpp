@@ -780,14 +780,27 @@ void RowContainer::storeSerializedRow(
 void RowContainer::extractString(
     StringView value,
     FlatVector<StringView>* values,
-    vector_size_t index) {
-  if (value.isInline() ||
-      reinterpret_cast<const HashStringAllocator::Header*>(value.data())[-1]
-              .size() >= value.size()) {
-    // The string is inline or all in one piece out of line.
+    vector_size_t index,
+    bool shallowStringCopy) {
+  if (value.isInline()) {
     values->set(index, value);
     return;
   }
+  const bool isSinglePiece =
+      reinterpret_cast<const HashStringAllocator::Header*>(value.data())[-1]
+          .size() >= value.size();
+  if (isSinglePiece) {
+    if (shallowStringCopy) {
+      // The string data lives contiguously in the RowContainer's
+      // HashStringAllocator. Set the StringView directly without copying.
+      // The caller must ensure the RowContainer outlives this vector.
+      values->setNoCopy(index, value);
+    } else {
+      values->set(index, value);
+    }
+    return;
+  }
+  // Multi-part string: must reassemble into a contiguous buffer.
   auto rawBuffer = values->getRawStringBufferWithSpace(value.size());
   HashStringAllocator::InputStream stream(
       HashStringAllocator::headerOf(value.data()));
