@@ -115,6 +115,55 @@ class TestPyVeloxRunner(unittest.TestCase):
         )
         self.assertEqual(output, expected_result)
 
+    def test_mark_sorted(self):
+        # Sorted data: marker column should be all True.
+        vector = to_velox(
+            pyarrow.record_batch([pyarrow.array([1, 2, 3, 4, 5])], names=["c0"])
+        )
+
+        plan_builder = (
+            PlanBuilder()
+            .values([vector])
+            .mark_sorted(
+                marker_key="is_sorted",
+                sorting_keys=["c0"],
+            )
+        )
+        runner = LocalRunner(plan_builder.get_plan_node())
+        iterator = runner.execute()
+        output = next(iterator)
+        self.assertRaises(StopIteration, next, iterator)
+
+        self.assertEqual(output.size(), 5)
+        # Marker column is at index 1 (after c0).
+        marker = output.child_at(1)
+        for i in range(5):
+            self.assertEqual(marker[i], "true")
+
+    def test_mark_sorted_unsorted(self):
+        # Unsorted data: row at index 2 breaks sort order (3 -> 2).
+        vector = to_velox(
+            pyarrow.record_batch([pyarrow.array([1, 3, 2, 4, 5])], names=["c0"])
+        )
+
+        plan_builder = (
+            PlanBuilder()
+            .values([vector])
+            .mark_sorted(
+                marker_key="is_sorted",
+                sorting_keys=["c0"],
+            )
+        )
+        runner = LocalRunner(plan_builder.get_plan_node())
+        iterator = runner.execute()
+        output = next(iterator)
+        self.assertRaises(StopIteration, next, iterator)
+
+        marker = output.child_at(1)
+        expected = ["true", "true", "false", "true", "true"]
+        for i in range(5):
+            self.assertEqual(marker[i], expected[i])
+
     def test_hash_join(self):
         batch_size = 100
         probe = list(range(batch_size))
