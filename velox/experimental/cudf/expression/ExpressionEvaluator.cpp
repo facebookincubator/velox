@@ -217,9 +217,8 @@ class DateAddFunction : public CudfFunction {
     VELOX_CHECK(
         expr->inputs()[0]->type()->isDate(),
         "First argument to date_add must be a date");
-    VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[0]));
+    VELOX_CHECK_NULL(std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+        expr->inputs()[0]));
     // The date_add second argument could be int8_t, int16_t, int32_t.
     value_ = makeScalarFromConstantExpr(
         expr->inputs()[1], cudf::type_id::DURATION_DAYS);
@@ -747,9 +746,11 @@ class ConcatFunction : public CudfFunction {
     VELOX_CHECK_GE(numInputs_, 2, "concat expects at least 2 inputs");
 
     // Scan inputs for literals and store strings in map by input index.
-    // Capture the size of the first non-literal input column and validate all others.
+    // Capture the size of the first non-literal input column and validate all
+    // others.
     for (size_t i = 0; i < numInputs_; ++i) {
-      if (auto constant = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[i])) {
+      if (auto constant =
+              std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[i])) {
         inputIndexToLiteral_[i] = constant->value()->toString(0);
       }
     }
@@ -760,9 +761,11 @@ class ConcatFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // If there is at least one input column, fetch its size as the output size.
-    // If there are no input columns, the output size will be 1.
-    size_t outputSize = inputColumns.empty() ? 1u : asView(inputColumns[0]).size();
-    
+    // If there are no input columns, this means that all the inputs are
+    // literals, and the output size will be 1.
+    const size_t outputSize =
+        inputColumns.empty() ? 1u : asView(inputColumns[0]).size();
+
     // Iterate the inputs, building a vector of column views, either a literal
     // from the map, or the next input column. We also keep a vector of the
     // columns created for literals, so that they persist while their views
@@ -778,9 +781,10 @@ class ConcatFunction : public CudfFunction {
         columnViews.push_back(asView(column));
       } else {
         // Create a column of the literal repeated for the entire output size.
-        auto const literal = it->second;
+        auto const& literal = it->second;
         cudf::string_scalar scalar(literal, true, stream, mr);
-        auto col = cudf::make_column_from_scalar(scalar, outputSize, stream, mr);
+        auto col =
+            cudf::make_column_from_scalar(scalar, outputSize, stream, mr);
         columnViews.push_back(col->view());
         literalColumns.emplace_back(std::move(col));
       }
@@ -788,7 +792,13 @@ class ConcatFunction : public CudfFunction {
 
     // Concatenate the columns, nulls as empty strings, no separators.
     cudf::string_scalar emptyString("");
-    return cudf::strings::concatenate(cudf::table_view(columnViews), emptyString, emptyString, cudf::strings::separator_on_nulls::YES, stream, mr);
+    return cudf::strings::concatenate(
+        cudf::table_view(columnViews),
+        emptyString,
+        emptyString,
+        cudf::strings::separator_on_nulls::YES,
+        stream,
+        mr);
   }
 
  private:
