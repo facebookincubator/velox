@@ -20,6 +20,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/serializers/SerializerRegister.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -36,6 +37,7 @@ class PlanNodeToStringTest : public testing::Test,
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
+    registerAllNamedVectorSerdes();
     data_ = makeRowVector(
         {makeFlatVector<int16_t>({0, 1, 2, 3, 4}),
          makeFlatVector<int32_t>({0, 1, 2, 3, 4}),

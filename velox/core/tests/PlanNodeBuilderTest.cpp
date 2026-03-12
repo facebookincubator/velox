@@ -20,6 +20,7 @@
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/tests/utils/AggregationResolver.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/serializers/SerializerRegister.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace ::facebook::velox;
@@ -35,6 +36,7 @@ class PlanNodeBuilderTest : public testing::Test, public test::VectorTestBase {
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     aggregate::prestosql::registerAllAggregateFunctions();
+    registerAllNamedVectorSerdes();
   }
 
   core::ColumnStatsSpec createStatsSpec(

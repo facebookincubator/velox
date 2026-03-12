@@ -94,35 +94,6 @@ std::unique_ptr<BatchVectorSerializer> VectorSerde::createBatchSerializer(
   return std::make_unique<DefaultBatchVectorSerializer>(pool, this, options);
 }
 
-std::string VectorSerde::kindName(Kind kind) {
-  switch (kind) {
-    case Kind::kPresto:
-      return "Presto";
-    case Kind::kCompactRow:
-      return "CompactRow";
-    case Kind::kUnsafeRow:
-      return "UnsafeRow";
-  }
-  VELOX_UNREACHABLE(
-      fmt::format("Unknown vector serde kind: {}", static_cast<int32_t>(kind)));
-}
-
-VectorSerde::Kind VectorSerde::kindByName(const std::string& kindName) {
-  static const std::unordered_map<std::string, Kind> kNameToKind = {
-      {"Presto", Kind::kPresto},
-      {"CompactRow", Kind::kCompactRow},
-      {"UnsafeRow", Kind::kUnsafeRow}};
-  const auto it = kNameToKind.find(kindName);
-  VELOX_CHECK(
-      it != kNameToKind.end(), "Unknown vector serde kind: {}", kindName);
-  return it->second;
-}
-
-std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind) {
-  out << VectorSerde::kindName(kind);
-  return out;
-}
-
 VectorSerde* getVectorSerde() {
   auto serde = getVectorSerdeImpl().get();
   VELOX_CHECK_NOT_NULL(serde, "Vector serde is not registered.");
@@ -149,6 +120,7 @@ bool isRegisteredVectorSerde() {
 void registerNamedVectorSerde(
     const std::string& kind,
     std::unique_ptr<VectorSerde> serdeToRegister) {
+  VELOX_CHECK(!kind.empty(), "Serde name must not be empty.");
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   VELOX_CHECK(
       namedSerdeMap.find(kind) == namedSerdeMap.end(),
@@ -163,11 +135,13 @@ void deregisterNamedVectorSerde(const std::string& kind) {
 }
 
 bool isRegisteredNamedVectorSerde(const std::string& kind) {
+  VELOX_CHECK(!kind.empty(), "Serde name must not be empty.");
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   return namedSerdeMap.find(kind) != namedSerdeMap.end();
 }
 
 VectorSerde* getNamedVectorSerde(const std::string& kind) {
+  VELOX_CHECK(!kind.empty(), "Serde name must not be empty.");
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   auto it = namedSerdeMap.find(kind);
   VELOX_CHECK(
