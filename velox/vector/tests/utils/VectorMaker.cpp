@@ -247,26 +247,45 @@ MapVectorPtr VectorMaker::mapVector(
     const std::vector<vector_size_t>& nulls) {
   VELOX_CHECK_EQ(keys->size(), values->size());
 
+  // Derive sizes from consecutive offsets.
   const auto size = offsets.size();
-  BufferPtr offsetsBuffer = allocateOffsets(size, pool_);
-  BufferPtr sizesBuffer = allocateSizes(size, pool_);
-  BufferPtr nullsBuffer = nullptr;
-  auto rawOffsets = offsetsBuffer->asMutable<vector_size_t>();
-  auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
-
-  for (int i = 0; i < size - 1; i++) {
-    rawSizes[i] = offsets[i + 1] - offsets[i];
+  std::vector<vector_size_t> sizes(size);
+  for (size_t i = 0; i + 1 < size; ++i) {
+    sizes[i] = offsets[i + 1] - offsets[i];
   }
-  rawSizes[size - 1] = keys->size() - offsets.back();
+  if (size > 0) {
+    sizes.back() = keys->size() - offsets.back();
+  }
 
-  memcpy(rawOffsets, offsets.data(), size * sizeof(vector_size_t));
+  return mapVector(offsets, sizes, keys, values, nulls);
+}
 
+MapVectorPtr VectorMaker::mapVector(
+    const std::vector<vector_size_t>& offsets,
+    const std::vector<vector_size_t>& sizes,
+    const VectorPtr& keys,
+    const VectorPtr& values,
+    const std::vector<vector_size_t>& nulls) {
+  VELOX_CHECK_EQ(offsets.size(), sizes.size());
+
+  const auto numRows = offsets.size();
+  BufferPtr offsetsBuffer = allocateOffsets(numRows, pool_);
+  BufferPtr sizesBuffer = allocateSizes(numRows, pool_);
+  memcpy(
+      offsetsBuffer->asMutable<vector_size_t>(),
+      offsets.data(),
+      numRows * sizeof(vector_size_t));
+  memcpy(
+      sizesBuffer->asMutable<vector_size_t>(),
+      sizes.data(),
+      numRows * sizeof(vector_size_t));
+
+  BufferPtr nullsBuffer = nullptr;
   if (!nulls.empty()) {
-    nullsBuffer = AlignedBuffer::allocate<bool>(size, pool_, bits::kNotNull);
+    nullsBuffer = allocateNulls(numRows, pool_);
     auto rawNulls = nullsBuffer->asMutable<uint64_t>();
-
-    for (int i = 0; i < nulls.size(); i++) {
-      bits::setNull(rawNulls, nulls[i]);
+    for (const auto idx : nulls) {
+      bits::setNull(rawNulls, idx);
     }
   }
 
@@ -274,7 +293,7 @@ MapVectorPtr VectorMaker::mapVector(
       pool_,
       MAP(keys->type(), values->type()),
       nullsBuffer,
-      size,
+      numRows,
       offsetsBuffer,
       sizesBuffer,
       keys,
