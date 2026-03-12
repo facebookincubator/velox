@@ -239,32 +239,35 @@ jobs:
           CUDF_DIR: _build/release/velox/experimental/cudf
         run: |
           mkdir -p $CUDF_DIR/cudf-libs
-          deps=$( \
-            for exe in $CUDF_DIR/tests/velox_cudf_*; \
-              do ldd "$exe" 2>/dev/null; done | \
-            sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' | \
-            # don't copy cuda runtime and certain system libraries
-            sed '/libcuda/ d' |  \
-            sed '/librt.so/ d' |  \
-            sed '/libm.so/ d' |  \
-            sed '/libstdc++.so/ d' |  \
-            sed '/ld-linux-x86-64.so/ d' |  \
-            sed '/libc.so/ d' | sort -u \
-          ) && \
+          deps=$(
+            find "$CUDF_DIR/tests" -name "velox_cudf_*" -type f -executable |
+            xargs ldd 2>/dev/null |
+            sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' |
+            grep -vE '^/(lib|usr/lib|lib64)/(libcuda|librt\.so|libm\.so|libstdc\+\+\.so|ld-linux-x86-64\.so|libc\.so)' |
+            sort -u
+          ) &&
           # copy all "real" files and symlink targets to $CUDF_DIR/cudf-libs
-          ( \
-            echo "$deps" | \
-            xargs readlink -f | \
-            xargs -I {} cp {} $CUDF_DIR/cudf-libs/ \
-          ) && \
+          (
+            echo "$deps" |
+            xargs readlink -f |
+            xargs -I {} cp {} $CUDF_DIR/cudf-libs/
+          ) &&
           # filter out which libraries are symlinks
-          lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) && \
+          lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) &&
           # write new symlinks to the same folder, with targets in the same folder
-          ( \
-            cd $CUDF_DIR/cudf-libs && \
-            echo "$lndeps" | \
-            xargs -I {} bash -c 'ln -s $(basename $(readlink -f "$1")) $(basename "$1")' bash {} \
-          ) && \
+          if [[ -d "$CUDF_DIR/cudf-libs" ]]; then
+            cd "$CUDF_DIR/cudf-libs" || exit 1
+            while IFS= read -r link; do
+              [[ -L "$link" ]] || continue
+              target=$(readlink -f "$link") || continue
+              target_basename=$(basename "$target") || continue
+             link_basename=$(basename "$link") || continue
+             ln -sf "$target_basename" "$link_basename" || echo "Warning: Failed to create symlink $link_basename"
+            done <<< "$lndeps"
+          else
+            echo "Error: Directory $CUDF_DIR/cudf-libs not found"
+            exit 1
+          fi &&
           tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
 
       - name: Upload cuDF Test Binaries
@@ -283,7 +286,7 @@ jobs:
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
     needs: adapters
-    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes && always() }}
+    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' && needs.adapters.result == 'success' && always() }}
     timeout-minutes: 30
     env:
       CUDF_DIR: _build/release/velox/experimental/cudf
@@ -309,6 +312,19 @@ jobs:
       - name: Adapt Downloaded Files
         run: |
           # Change hardcoded workspace path in CTestTestfile.cmake to the runner workspace
+          if [[ -f "$CUDF_DIR/tests/CTestTestfile.cmake" ]]; then
+            workspace_escaped=$(printf '%s\n' "${{ github.workspace }}" | sed 's/[[\.*^$()+?{|]/\\&/g')
+            sed -i "s|/__w/velox/velox|${workspace_escaped}|g" "$CUDF_DIR/tests/CTestTestfile.cmake"
+            # Verify the replacement worked
+            if grep -q "${{ github.workspace }}" "$CUDF_DIR/tests/CTestTestfile.cmake"; then
+              echo "Successfully updated paths in CTestTestfile.cmake"
+            else
+              echo "Warning: Path replacement may have failed"
+            fi
+          else
+            echo "Error: CTestTestfile.cmake not found"
+            exit 1
+          fi
           sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' $CUDF_DIR/tests/CTestTestfile.cmake
           grep "Source directory" $CUDF_DIR/tests/CTestTestfile.cmake
           grep "Build directory" $CUDF_DIR/tests/CTestTestfile.cmake
