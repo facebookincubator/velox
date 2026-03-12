@@ -1,0 +1,137 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Claude — skill-based PR assistant (replaces claude-review.yml)
+#
+# This workflow uses izaitsevfb/claude-code-action (a fork that fixes
+# forked-PR handling) with Claude Skills instead of inline prompts.
+# Review logic lives in .claude/skills/pr-review/SKILL.md.
+#
+# Supported commands (comment on a PR):
+#   @claude /pr-review [context] — thorough code review
+#   @claude /query <question> — ask about the PR or codebase
+#
+# Differences from claude-review.yml (the legacy workflow):
+#   - Uses claude-code-action (higher-level) instead of claude-code-base-action
+#   - Review/query instructions are in Skills, not inline heredocs
+#   - Trigger phrase is @claude (not /claude-review or /claude-query)
+#   - Tag mode handles PR context, diff, and comment posting automatically
+#
+# Security model:
+#   - Hardcoded user allowlist gates workflow execution
+#   - Read-only tools enforced via --allowedTools
+#   - Fork PRs handled securely by the action fork
+
+name: Claude
+
+on:
+  # Tag mode: action detects @claude in comments and responds inline
+  issue_comment:
+    types: [created]
+
+  # Agent mode: manual trigger for testing (log-only unless MCP tools used)
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+        type: number
+      model:
+        description: Claude model to use
+        required: false
+        type: choice
+        options:
+          - claude-opus-4-6
+          - claude-opus-4-1-20250805
+          - claude-sonnet-4-20250514
+          - claude-4-0-sonnet-20250805
+        default: claude-opus-4-6
+
+# Restrict default permissions — jobs declare only what they need
+permissions:
+  contents: read
+
+jobs:
+  claude-assistant:
+    name: Claude Assistant
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
+    # Gate: workflow_dispatch always runs; issue_comment requires PR context,
+    # @claude mention, and an authorized user
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev", "jainxrohit", "pratikpugalia"]'), github.event.comment.user.login)
+      )
+
+    steps:
+      # For workflow_dispatch, checkout the PR merge ref so Claude has the
+      # PR code. For issue_comment, default ref is fine — the action handles
+      # diff fetching internally.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}
+          persist-credentials: false
+
+      - name: Run Claude Code
+        uses: izaitsevfb/claude-code-action@2817c54db8f44f3a0485d57292566bf07d428a25 # forked-pr-fix
+        with:
+          trigger_phrase: "@claude"
+          # prompt is only set for workflow_dispatch (agent mode).
+          # For issue_comment (tag mode), prompt must be empty to avoid
+          # triggering agent mode
+          # CLAUDE.md provides skill routing instructions instead.
+          prompt: ${{ github.event_name == 'workflow_dispatch' && format('Review the PR currently checked out in the Velox project current workspace. Use the /pr-review skill and post the final output as a comment on the original PR {0}', inputs.pr_number) || '' }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Tool access:
+          #   - Skill: invoke /pr-review and /query skills
+          #   - Read,Glob,Grep: codebase exploration (used by skills)
+          #   - mcp__github_inline_comment: post comments on specific PR lines
+          #   - workflow_dispatch adds: MCP comment tool + gh CLI for PR data
+          claude_args: "--model ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'claude-opus-4-6' }} --allowedTools Skill,${{ github.event_name == 'workflow_dispatch' && 'mcp__github_comment__create_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),' || '' }}mcp__github_inline_comment__create_inline_comment,Read,Glob,Grep"
+          settings: '{"alwaysThinkingEnabled": true}'
+
+  # Notify unauthorized users who try to invoke @claude
+  unauthorized-notice:
+    name: Unauthorized Notice
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude') &&
+      !contains(fromJSON('["kgpai", "mbasmanova", "pedroerp", "yuhta", "kagamiori", "bikramSingh91", "kevinwilfong", "xiaoxmeng", "kKPulla", "juwentus1234", "penescu", "srsuryadev", "jainxrohit", "pratikpugalia"]'), github.event.comment.user.login)
+
+    steps:
+      - name: Post unauthorized notice
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `👋 @${context.payload.comment.user.login}, \`@claude\` commands are currently restricted to a small group of users during this initial rollout.\n\nIf you'd like a Claude review, please ask a maintainer to run this command.`
+            });
