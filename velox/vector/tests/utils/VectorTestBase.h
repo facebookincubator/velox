@@ -664,6 +664,18 @@ class VectorTestBase {
     return vectorMaker_.mapVector(offsets, keyVector, valueVector, nulls);
   }
 
+  // Creates a MapVector with explicit offsets and sizes, allowing
+  // non-consecutive or out-of-order layouts in the underlying key/value arrays.
+  MapVectorPtr makeMapVector(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      const VectorPtr& keyVector,
+      const VectorPtr& valueVector,
+      const std::vector<vector_size_t>& nulls = {}) {
+    return vectorMaker_.mapVector(
+        offsets, sizes, keyVector, valueVector, nulls);
+  }
+
   MapVectorPtr makeAllNullMapVector(
       vector_size_t size,
       const TypePtr& keyType,
