@@ -5420,6 +5420,10 @@ class MarkDistinctNode : public PlanNode {
     return "MarkDistinct";
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return queryConfig.markDistinctSpillEnabled();
+  }
+
   const std::string& markerName() const {
     return markerName_;
   }
