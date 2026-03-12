@@ -16,7 +16,10 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -1161,6 +1164,18 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
+}
+
+TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
+  SemanticVersion v181("parquet-mr", 1, 8, 1);
+  ParquetStatsContext ctx181{std::optional<SemanticVersion>(v181)};
+  EXPECT_TRUE(ctx181.shouldIgnoreStatistics(thrift::Type::BYTE_ARRAY))
+      << "ParquetStatsContext(parquet-mr 1.8.1) should ignore string stats";
+
+  SemanticVersion v182("parquet-mr", 1, 8, 2);
+  ParquetStatsContext ctx182{std::optional<SemanticVersion>(v182)};
+  EXPECT_FALSE(ctx182.shouldIgnoreStatistics(thrift::Type::BYTE_ARRAY))
+      << "ParquetStatsContext(parquet-mr 1.8.2) should not ignore string stats";
 }
 
 TEST_F(ParquetReaderTest, parseLongTagged) {
