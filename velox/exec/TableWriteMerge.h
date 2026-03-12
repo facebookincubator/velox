@@ -65,9 +65,6 @@ class TableWriteMerge : public Operator {
   // Creates the last output and fragment columns must be null.
   RowVectorPtr createLastOutput();
 
-  // Check if the input is statistics input.
-  bool isStatistics(RowVectorPtr input);
-
   std::unique_ptr<ColumnStatsCollector> statsCollector_;
   bool finished_{false};
   // The sum of written rows.
