@@ -167,7 +167,7 @@ function install_glog {
 }
 
 function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
+  wget_and_untar https://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
   (
     cd "${DEPENDENCY_DIR}"/lzo || exit
     ./configure --prefix="${INSTALL_PREFIX}" --enable-shared --disable-static --docdir=/usr/share/doc/lzo-"${LZO_VERSION}"
