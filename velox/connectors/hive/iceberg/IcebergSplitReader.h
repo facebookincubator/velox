@@ -113,10 +113,6 @@ class IcebergSplitReader : public SplitReader {
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
 
-  // True if _last_updated_sequence_number is read from the data file (not set
-  // as a constant). Set in adaptColumns().
-  bool readLastUpdatedSeqNumFromFile_{false};
-
   // The child index of _last_updated_sequence_number in readerOutputType_.
   // Used to locate the column in the output for null-value replacement.
   std::optional<column_index_t> lastUpdatedSeqNumOutputIndex_;
@@ -128,9 +124,6 @@ class IcebergSplitReader : public SplitReader {
   // First row ID from the manifest entry, used to compute _row_id.
   // When available (>= 0), _row_id = first_row_id + _pos for rows not in file.
   std::optional<int64_t> firstRowId_;
-
-  // True if _row_id should be computed as first_row_id + _pos in next().
-  bool computeRowId_{false};
 
   // The child index of _row_id in readerOutputType_.
   std::optional<column_index_t> rowIdOutputIndex_;

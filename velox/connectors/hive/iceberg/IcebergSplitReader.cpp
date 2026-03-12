@@ -115,30 +115,20 @@ void IcebergSplitReader::prepareSplit(
   // in next(). If adaptColumns() set them as constants (column missing from
   // file), no replacement is needed. If the column is read from the file
   // (not constant), null values must be replaced per spec.
-  readLastUpdatedSeqNumFromFile_ = false;
   lastUpdatedSeqNumOutputIndex_ = std::nullopt;
   if (dataSequenceNumber_.has_value()) {
     auto* seqNumSpec = scanSpec_->childByName(
         IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName);
     if (seqNumSpec && !seqNumSpec->isConstant()) {
-      auto idx = readerOutputType_->getChildIdxIfExists(
+      lastUpdatedSeqNumOutputIndex_ = readerOutputType_->getChildIdxIfExists(
           IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName);
-      if (idx.has_value()) {
-        readLastUpdatedSeqNumFromFile_ = true;
-        lastUpdatedSeqNumOutputIndex_ = *idx;
-      }
     }
   }
 
-  computeRowId_ = false;
   rowIdOutputIndex_ = std::nullopt;
   if (firstRowId_.has_value()) {
-    auto idx = readerOutputType_->getChildIdxIfExists(
+    rowIdOutputIndex_ = readerOutputType_->getChildIdxIfExists(
         IcebergMetadataColumn::kRowIdColumnName);
-    if (idx.has_value()) {
-      computeRowId_ = true;
-      rowIdOutputIndex_ = *idx;
-    }
   }
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
@@ -239,8 +229,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   // _last_updated_sequence_number with the data sequence number from the
   // file's manifest entry. Per the spec, null means the value should be
   // inherited from the manifest entry's sequence number.
-  if (readLastUpdatedSeqNumFromFile_ && dataSequenceNumber_.has_value() &&
-      lastUpdatedSeqNumOutputIndex_.has_value() && rowsScanned > 0) {
+  if (lastUpdatedSeqNumOutputIndex_.has_value() &&
+      dataSequenceNumber_.has_value() && rowsScanned > 0) {
     auto* rowOutput = output->as<RowVector>();
     if (rowOutput) {
       auto& seqNumChild = rowOutput->childAt(*lastUpdatedSeqNumOutputIndex_);
@@ -282,8 +272,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   // the manifest entry's first_row_id plus the row's position in the file.
   // When positional deletes are applied, we track actual file positions
   // using the deletion bitmap.
-  if (computeRowId_ && firstRowId_.has_value() &&
-      rowIdOutputIndex_.has_value() && rowsScanned > 0) {
+  if (rowIdOutputIndex_.has_value() && firstRowId_.has_value() &&
+      rowsScanned > 0) {
     auto* rowOutput = output->as<RowVector>();
     if (rowOutput) {
       auto& rowIdChild = rowOutput->childAt(*rowIdOutputIndex_);
