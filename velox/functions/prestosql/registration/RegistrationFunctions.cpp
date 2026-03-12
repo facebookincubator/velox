@@ -41,6 +41,7 @@ extern void registerFloatingPointFunctions(const std::string& prefix);
 extern void registerJsonFunctions(const std::string& prefix);
 extern void registerMapFunctions(const std::string& prefix);
 extern void registerStringFunctions(const std::string& prefix);
+extern void registerVarbinaryFunctions(const std::string& prefix);
 extern void registerBinaryFunctions(const std::string& prefix);
 extern void registerURLFunctions(const std::string& prefix);
 extern void registerDataSizeFunctions(const std::string& prefix);
@@ -139,6 +140,10 @@ void registerStringFunctions(const std::string& prefix) {
   functions::registerStringFunctions(prefix);
 }
 
+void registerVarbinaryFunctions(const std::string& prefix) {
+  functions::registerVarbinaryFunctions(prefix);
+}
+
 void registerBinaryFunctions(const std::string& prefix) {
   functions::registerBinaryFunctions(prefix);
 }
@@ -173,6 +178,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerDateTimeFunctions(prefix);
   registerURLFunctions(prefix);
   registerStringFunctions(prefix);
+  registerVarbinaryFunctions(prefix);
   registerBinaryFunctions(prefix);
   registerBitwiseFunctions(prefix);
   registerUuidFunctions(prefix);
