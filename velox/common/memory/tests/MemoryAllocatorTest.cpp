@@ -432,7 +432,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
     return;
   }
   {
-    MmapAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = kCapacityBytes;
     options.smallAllocationReservePct = 39;
     options.maxMallocBytes = 2999;
@@ -448,7 +448,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
     EXPECT_EQ(smallAllocationBytes, mmapAllocator->mallocReservedBytes());
   }
   {
-    MmapAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = kCapacityBytes;
     options.smallAllocationReservePct = 39;
     options.maxMallocBytes = 0;
@@ -462,7 +462,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
     EXPECT_EQ(0, mmapAllocator->mallocReservedBytes());
   }
   {
-    MmapAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = 64 * 256 * AllocationTraits::kPageSize - 100;
     options.smallAllocationReservePct = 10;
     options.maxMallocBytes = 3072;
@@ -2000,7 +2000,7 @@ class MallocContiguousTest : public testing::TestWithParam<bool> {
   }
 
   void SetUp() override {
-    MallocAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = kCapacityBytes;
     options.reservationByteLimit = 0;
     options.mallocContiguousEnabled = GetParam();

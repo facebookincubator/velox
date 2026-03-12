@@ -58,7 +58,7 @@ class CachedBufferedInputTest : public testing::Test {
 
   void SetUp() override {
     executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(10);
-    allocator_ = std::make_shared<MallocAllocator>(MallocAllocator::Options{
+    allocator_ = std::make_shared<MallocAllocator>(MemoryAllocator::Options{
         .capacity = 512 << 20, .reservationByteLimit = 0});
     cache_ = AsyncDataCache::create(allocator_.get());
     ioStatistics_ = std::make_shared<IoStatistics>();

@@ -26,18 +26,6 @@ namespace facebook::velox::memory {
 /// The implementation of MemoryAllocator using malloc.
 class MallocAllocator : public MemoryAllocator {
  public:
-  struct Options {
-    /// Capacity in bytes, default unlimited.
-    size_t capacity{kMaxMemory};
-
-    /// Allocation size threshold below which allocations use sharded local
-    /// counters instead of updating the global counter. Default 1MB.
-    uint32_t reservationByteLimit{1 << 20};
-
-    /// If true, use malloc for contiguous allocations instead of mmap/munmap.
-    bool mallocContiguousEnabled{false};
-  };
-
   explicit MallocAllocator(const Options& options);
 
   ~MallocAllocator() override;
