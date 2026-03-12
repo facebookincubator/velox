@@ -23,7 +23,6 @@
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions {
-namespace {
 
 BufferPtr sortElements(
     const SelectivityVector& rows,
@@ -91,6 +90,8 @@ BufferPtr sortElements(
 
   return indices;
 }
+
+namespace {
 
 void applyComplexType(
     const SelectivityVector& rows,
