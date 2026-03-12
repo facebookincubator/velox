@@ -667,7 +667,7 @@ Here is the memory reclaim process within a query:
    reclamation through disk spilling and table writer flush. *Operator::reclaim*
    is added to support memory reclamation with the default implementation does
    nothing. Only spillable operators override that method: *OrderBy*, *HashBuild*,
-   *HashAggregation*, *RowNumber*, *TopNRowNumber*, *Window* and *TableWriter*.
+   *HashAggregation*, *RowNumber*, *TopNRowNumber*, *MarkDistinct*, *Window* and *TableWriter*.
    As for now, we simply spill everything from the spillable operator’s row
    container to free up memory. After we add memory compaction support for row
    containers, we could leverage fine-grained disk spilling features in Velox
