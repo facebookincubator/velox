@@ -70,9 +70,34 @@ class MarkSorted : public Operator {
   /// (0, 1, 2, ...) to avoid holding a reference to the entire input batch.
   void copyLastRowKeyColumns();
 
+  /// Returns true if all key columns in input_ use constant encoding with
+  /// non-null values. When true, within-batch comparison can be skipped
+  /// entirely since all rows have the same key values.
+  bool allKeysConstant() const;
+
+  /// Returns true if input has a single sorting key that is flat, non-null,
+  /// and a SIMD-eligible primitive type.
+  bool canApplySimdPath() const;
+
+  /// Returns true if the given type kind supports SIMD comparison.
+  static bool isSimdEligibleType(TypeKind kind);
+
+  /// Apply SIMD comparison for a single primitive sorting key. Writes
+  /// bit-packed results into resultBits (clears bits for unsorted rows).
+  /// Row 0 is not modified (handled by cross-batch logic).
+  void applySimdComparison(uint64_t* resultBits, vector_size_t numRows);
+
+  /// Helper to check if a pair of comparison results indicates sorted order
+  /// for the given sort order. Returns true if the comparison result 'cmp'
+  /// is consistent with 'order'.
+  static bool isSortedPair(int32_t cmp, const core::SortOrder& order) {
+    return order.isAscending() ? (cmp <= 0) : (cmp >= 0);
+  }
+
   const std::string markerName_;
   std::vector<column_index_t> sortingKeyChannels_;
   std::vector<CompareFlags> compareFlags_;
+  std::vector<core::SortOrder> sortingOrders_;
 
   /// Key-only RowType for lastRow_ construction. Columns are at sequential
   /// indices (0, 1, 2, ...) mapping to sortingKeyChannels_ in the input.
@@ -83,5 +108,15 @@ class MarkSorted : public Operator {
   /// (key columns only), so cross-batch comparison uses inline logic instead
   /// of isSortedRelativeTo().
   RowVectorPtr lastRow_;
+
+  /// Zero-copy: holds reference to the previous input batch for cross-batch
+  /// comparison when the batch is smaller than zeroCopyThreshold_. Mutually
+  /// exclusive with lastRow_ (one or neither is set, never both).
+  RowVectorPtr prevInput_;
+
+  /// Batch size threshold for zero-copy optimization. Batches smaller than
+  /// this hold a reference to the entire batch; larger batches deep-copy
+  /// key columns only.
+  int32_t zeroCopyThreshold_;
 };
 } // namespace facebook::velox::exec

@@ -872,6 +872,13 @@ class QueryConfig {
   static constexpr const char* kJoinBuildVectorHasherMaxNumDistinct =
       "join_build_vector_hasher_max_num_distinct";
 
+  /// Batch size threshold for zero-copy optimization in MarkSorted operator.
+  /// For batches smaller than this threshold, the operator holds a reference to
+  /// the entire input batch instead of copying key columns for cross-batch
+  /// comparison.
+  static constexpr const char* kMarkSortedZeroCopyThreshold =
+      "mark_sorted_zero_copy_threshold";
+
   enum class RowSizeTrackingMode {
     DISABLED = 0,
     EXCLUDE_DELTA_SPLITS = 1,
@@ -1544,6 +1551,10 @@ class QueryConfig {
 
   uint32_t joinBuildVectorHasherMaxNumDistinct() const {
     return get<uint32_t>(kJoinBuildVectorHasherMaxNumDistinct, 1'000'000);
+  }
+
+  int32_t markSortedZeroCopyThreshold() const {
+    return get<int32_t>(kMarkSortedZeroCopyThreshold, 1000);
   }
 
   template <typename T>

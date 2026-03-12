@@ -16,6 +16,7 @@
 
 #include "velox/exec/MarkSorted.h"
 #include "velox/common/base/CompareFlags.h"
+#include "velox/functions/lib/SIMDComparisonUtil.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
@@ -47,14 +48,17 @@ MarkSorted::MarkSorted(
   // Extract channel indices for sorting keys.
   sortingKeyChannels_.reserve(sortingKeys.size());
   compareFlags_.reserve(sortingKeys.size());
+  sortingOrders_.reserve(sortingKeys.size());
 
   for (auto i = 0; i < sortingKeys.size(); ++i) {
     const auto& key = sortingKeys[i];
     auto channel = inputType->getChildIdx(key->name());
     sortingKeyChannels_.push_back(channel);
 
-    // Build CompareFlags from SortOrder.
     const auto& order = sortingOrders[i];
+    sortingOrders_.push_back(order);
+
+    // Build CompareFlags from SortOrder.
     compareFlags_.push_back(
         {order.isNullsFirst(),
          order.isAscending(),
@@ -74,6 +78,8 @@ MarkSorted::MarkSorted(
   }
   lastRowType_ = ROW(std::move(keyNames), std::move(keyTypes));
 
+  zeroCopyThreshold_ = driverCtx->queryConfig().markSortedZeroCopyThreshold();
+
   results_.resize(1);
 }
 
@@ -86,10 +92,6 @@ bool MarkSorted::isSortedRelativeTo(
     vector_size_t currentIndex,
     const RowVectorPtr& prevData,
     vector_size_t prevIndex) {
-  // Compare each sorting key column.
-  // For sorted data, each row should be >= previous (ascending) or <= previous
-  // (descending). The compare function respects ascending/descending flags,
-  // so we just check if compare() returns >= 0 for each key.
   for (auto i = 0; i < sortingKeyChannels_.size(); ++i) {
     auto channel = sortingKeyChannels_[i];
     const auto& currentColumn = currentData->childAt(channel);
@@ -100,19 +102,105 @@ bool MarkSorted::isSortedRelativeTo(
 
     if (result.has_value()) {
       if (result.value() < 0) {
-        // Current row is less than previous (in sort order), NOT sorted.
         return false;
       } else if (result.value() > 0) {
-        // Current row is greater than previous, sorted (no need to check more
-        // keys).
         return true;
       }
-      // Equal on this key, continue to next key.
     }
   }
 
   // All keys are equal - this is still considered sorted.
   return true;
+}
+
+bool MarkSorted::allKeysConstant() const {
+  for (auto channel : sortingKeyChannels_) {
+    auto& keyCol = input_->childAt(channel);
+    if (!keyCol->isConstantEncoding() || keyCol->isNullAt(0)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool MarkSorted::isSimdEligibleType(TypeKind kind) {
+  switch (kind) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool MarkSorted::canApplySimdPath() const {
+  if (sortingKeyChannels_.size() != 1) {
+    return false;
+  }
+  auto& keyCol = input_->childAt(sortingKeyChannels_[0]);
+  if (!keyCol->isFlatEncoding() || keyCol->mayHaveNulls()) {
+    return false;
+  }
+  return isSimdEligibleType(keyCol->typeKind());
+}
+
+void MarkSorted::applySimdComparison(
+    uint64_t* resultBits,
+    vector_size_t numRows) {
+  auto channel = sortingKeyChannels_[0];
+  auto& keyCol = input_->childAt(channel);
+  bool ascending = sortingOrders_[0].isAscending();
+  const auto numCompares = numRows - 1;
+
+  // Allocate bit-packed result buffer for SIMD output.
+  const auto bufferBytes = bits::nbytes(numCompares);
+  auto simdBuffer = AlignedBuffer::allocate<uint8_t>(bufferBytes, pool());
+  auto simdResult = simdBuffer->asMutable<uint8_t>();
+  memset(simdResult, 0, bufferBytes);
+
+  // Dispatch by type to call applySimdComparison with typed raw data.
+  // Consecutive-row trick: rawData+1 as lhs, rawData as rhs.
+  // For ascending: row[i+1] >= row[i] means sorted.
+  // For descending: row[i+1] <= row[i] means sorted.
+  auto dispatchSimd = [&](auto dummy) {
+    using T = decltype(dummy);
+    const T* rawData = keyCol->asFlatVector<T>()->rawValues();
+    if (ascending) {
+      functions::applySimdComparison<T, false, false, std::greater_equal<>>(
+          0, numCompares, rawData + 1, rawData, simdResult);
+    } else {
+      functions::applySimdComparison<T, false, false, std::less_equal<>>(
+          0, numCompares, rawData + 1, rawData, simdResult);
+    }
+  };
+
+  switch (keyCol->typeKind()) {
+    case TypeKind::TINYINT:
+      dispatchSimd(int8_t{});
+      break;
+    case TypeKind::SMALLINT:
+      dispatchSimd(int16_t{});
+      break;
+    case TypeKind::INTEGER:
+      dispatchSimd(int32_t{});
+      break;
+    case TypeKind::BIGINT:
+      dispatchSimd(int64_t{});
+      break;
+    default:
+      VELOX_UNREACHABLE();
+  }
+
+  // Merge bit-packed SIMD results into resultBits with +1 offset.
+  // simdResult bit i = comparison result for (data[i+1] vs data[i]).
+  // Row 0 is handled by cross-batch logic, so we write to bit i+1.
+  for (vector_size_t i = 0; i < numCompares; ++i) {
+    if (!bits::isBitSet(simdResult, i)) {
+      bits::clearBit(resultBits, i + 1);
+    }
+  }
 }
 
 RowVectorPtr MarkSorted::getOutput() {
@@ -139,51 +227,72 @@ RowVectorPtr MarkSorted::getOutput() {
   auto resultBits =
       results_[0]->as<FlatVector<bool>>()->mutableRawValues<uint64_t>();
 
-  // Initialize all bits to true (sorted), then set false for violations.
+  // Initialize all bits to true (sorted), then clear for violations.
   bits::fillBits(resultBits, 0, outputSize, true);
 
-  // First row of first batch is always marked true (already initialized).
-  // First row of subsequent batches is compared with lastRow_.
-  if (lastRow_) {
-    // Compare first row of current batch with stored last row.
-    // lastRow_ has key columns at sequential indices (0, 1, 2, ...) so we
-    // cannot use isSortedRelativeTo which expects the same schema on both
-    // sides.
-    bool sorted = true;
-    for (auto i = 0; i < sortingKeyChannels_.size(); ++i) {
-      auto channel = sortingKeyChannels_[i];
-      const auto& currentColumn = input_->childAt(channel);
-      const auto& prevColumn = lastRow_->childAt(i);
+  // Cross-batch comparison: compare first row of current batch with last row
+  // of previous batch. Single if/else if chain (U3).
+  if (prevInput_) {
+    // Zero-copy mode: prevInput_ has same schema as current input.
+    for (column_index_t k = 0; k < sortingKeyChannels_.size(); ++k) {
+      auto channel = sortingKeyChannels_[k];
+      auto cmp = prevInput_->childAt(channel)->compare(
+          input_->childAt(channel).get(),
+          prevInput_->size() - 1,
+          0,
+          compareFlags_[k]);
+      if (cmp.has_value() && cmp.value() != 0) {
+        if (cmp.value() > 0) {
+          // Previous > current in sort order means NOT sorted.
+          bits::clearBit(resultBits, 0);
+        }
+        break;
+      }
+    }
+    prevInput_.reset();
+  } else if (lastRow_) {
+    // Copy mode: lastRow_ has key columns at sequential indices.
+    for (column_index_t k = 0; k < sortingKeyChannels_.size(); ++k) {
+      auto channel = sortingKeyChannels_[k];
+      auto cmp = lastRow_->childAt(k)->compare(
+          input_->childAt(channel).get(), 0, 0, compareFlags_[k]);
+      if (cmp.has_value() && cmp.value() != 0) {
+        if (cmp.value() > 0) {
+          bits::clearBit(resultBits, 0);
+        }
+        break;
+      }
+    }
+  }
 
-      auto result =
-          currentColumn->compare(prevColumn.get(), 0, 0, compareFlags_[i]);
-
-      if (result.has_value()) {
-        if (result.value() < 0) {
-          sorted = false;
-          break;
-        } else if (result.value() > 0) {
-          break;
+  // Within-batch comparison.
+  if (outputSize > 1) {
+    if (allKeysConstant()) {
+      // ConstantVector fast path (U6): all key columns are constant non-null,
+      // so all rows are trivially sorted. Bits are already true.
+    } else if (canApplySimdPath()) {
+      // SIMD fast path (U5): single flat non-null primitive key.
+      applySimdComparison(resultBits, outputSize);
+    } else {
+      // Generic path: compare each row with its predecessor.
+      for (auto i = 1; i < outputSize; ++i) {
+        if (!isSortedRelativeTo(input_, i, input_, i - 1)) {
+          bits::setBit(resultBits, i, false);
         }
       }
     }
-    if (!sorted) {
-      bits::setBit(resultBits, 0, false);
-    }
   }
 
-  // Process remaining rows in batch.
-  for (auto i = 1; i < outputSize; ++i) {
-    bool sorted = isSortedRelativeTo(input_, i, input_, i - 1);
-    if (!sorted) {
-      bits::setBit(resultBits, i, false);
-    }
+  // Store last row for next batch's cross-batch comparison.
+  if (input_->size() < zeroCopyThreshold_) {
+    // Zero-copy: hold reference to entire batch.
+    prevInput_ = input_;
+    lastRow_.reset();
+  } else {
+    // Copy: deep-copy key columns only.
+    copyLastRowKeyColumns();
+    prevInput_.reset();
   }
-
-  // Copy only sorting key columns of the last row for cross-batch comparison.
-  // Avoids holding a reference to the entire batch, preventing OOM on wide
-  // schemas and allowing the upstream producer to reuse memory.
-  copyLastRowKeyColumns();
 
   auto output = fillOutput(outputSize, nullptr);
 
@@ -218,6 +327,7 @@ void MarkSorted::copyLastRowKeyColumns() {
 void MarkSorted::noMoreInput() {
   Operator::noMoreInput();
   lastRow_.reset();
+  prevInput_.reset();
 }
 
 bool MarkSorted::isFinished() {
