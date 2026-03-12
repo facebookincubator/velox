@@ -314,6 +314,20 @@ struct Log2Function {
 };
 
 template <typename T>
+struct LnFunction {
+  // Returns NULL (rather than NaN or -Infinity) when the argument is at or
+  // below the zero asymptote. This matches Spark's UnaryLogExpression, which
+  // inherits the convention from Hive.
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    if (a <= 0.0) {
+      return false;
+    }
+    result = std::log(a);
+    return true;
+  }
+};
+
+template <typename T>
 struct Log1pFunction {
   FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
     if (a <= -1) {
