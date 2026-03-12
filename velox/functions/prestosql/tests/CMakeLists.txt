@@ -31,6 +31,7 @@ add_executable(
   ArrayFilterTest.cpp
   ArrayFrequencyTest.cpp
   ArrayFlattenTest.cpp
+  ArrayLeastFrequentTest.cpp
   ArrayHasDuplicatesTest.cpp
   ArrayIntersectTest.cpp
   ArrayJoinTest.cpp
