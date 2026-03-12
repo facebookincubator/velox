@@ -2772,6 +2772,7 @@ PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
       std::move(sources));
 }
 
+namespace {
 // Validates that grouping keys in 'spec' are present in 'type' and have no
 // duplicates. 'context' is used in error messages (e.g. "written columns",
 // "source output").
@@ -2792,6 +2793,7 @@ void validateGroupingKeys(
         key->name());
   }
 }
+} // namespace
 
 TableWriteNode::TableWriteNode(
     const PlanNodeId& id,
@@ -2847,8 +2849,35 @@ TableWriteNode::TableWriteNode(
       expectedType->toString());
 }
 
+namespace {
+void addStatsSpecDetails(
+    std::stringstream& stream,
+    const std::optional<ColumnStatsSpec>& spec) {
+  if (!spec.has_value()) {
+    return;
+  }
+  stream << "stats[" << AggregationNode::toName(spec->aggregationStep);
+  if (!spec->groupingKeys.empty()) {
+    stream << " [";
+    addFields(stream, spec->groupingKeys);
+    stream << "]";
+  }
+  stream << ": ";
+  for (auto i = 0; i < spec->aggregates.size(); ++i) {
+    appendComma(i, stream);
+    stream << spec->aggregates[i].call->toString();
+  }
+  stream << "]";
+}
+} // namespace
+
 void TableWriteNode::addDetails(std::stringstream& stream) const {
-  stream << insertTableHandle_->connectorInsertTableHandle()->toString();
+  stream << insertTableHandle_->connectorId() << ", "
+         << folly::join(", ", columnNames_);
+  if (columnStatsSpec_.has_value()) {
+    stream << ", ";
+    addStatsSpecDetails(stream, columnStatsSpec_);
+  }
 }
 
 RowTypePtr ColumnStatsSpec::outputType() const {
@@ -2991,7 +3020,9 @@ TableWriteMergeNode::TableWriteMergeNode(
   }
 }
 
-void TableWriteMergeNode::addDetails(std::stringstream& /* stream */) const {}
+void TableWriteMergeNode::addDetails(std::stringstream& stream) const {
+  addStatsSpecDetails(stream, columnStatsSpec_);
+}
 
 folly::dynamic TableWriteMergeNode::serialize() const {
   auto obj = PlanNode::serialize();
