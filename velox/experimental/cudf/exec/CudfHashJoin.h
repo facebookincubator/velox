@@ -212,7 +212,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   bool finished_{false};
 
   /// True if any build table has NULL values in join key columns.
-  /// Used for null-aware LEFT SEMI PROJECT to determine match column nullability.
+  /// Used for null-aware LEFT SEMI PROJECT to determine match column
+  /// nullability.
   bool buildSideHasNullKeys_{false};
 
   // Copied from HashProbe.h

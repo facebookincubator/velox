@@ -1279,7 +1279,8 @@ std::unique_ptr<cudf::column> applyNullMask(
   // Create a null scalar (valid=false means NULL)
   auto nullScalar = cudf::numeric_scalar<bool>(false, false, stream, mr);
 
-  // copy_if_else: where nullMask is true, use nullScalar (NULL); else use col value
+  // copy_if_else: where nullMask is true, use nullScalar (NULL); else use col
+  // value
   return cudf::copy_if_else(nullScalar, col, nullMask, stream, mr);
 }
 } // namespace
@@ -1414,10 +1415,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     // rows, it appears multiple times in matchedProbeIndices, but contains()
     // returns true if it appears at least once.
     auto matchedInBatch = cudf::contains(
-        matchedProbeIndices,
-        probeRowIndices->view(),
-        stream,
-        get_temp_mr());
+        matchedProbeIndices, probeRowIndices->view(), stream, get_temp_mr());
 
     // Step 4: Accumulate matches across build table batches using OR.
     // A probe row's final match value is true if it matched in ANY batch.
@@ -1432,9 +1430,9 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     matchCol = std::move(updatedMatch);
   }
 
-  // Step 5: For null-aware mode (IN semantics), apply null mask to match column.
-  // Empty build: always FALSE. Otherwise: NULL probe key or (no match AND build
-  // has nulls) yields NULL; matched rows yield TRUE; else FALSE.
+  // Step 5: For null-aware mode (IN semantics), apply null mask to match
+  // column. Empty build: always FALSE. Otherwise: NULL probe key or (no match
+  // AND build has nulls) yields NULL; matched rows yield TRUE; else FALSE.
   if (isNullAware) {
     bool buildSideEmpty = true;
     for (const auto& rt : rightTables) {
@@ -1474,8 +1472,8 @@ CudfHashJoinProbe::leftSemiProjectJoin(
           nullMask = std::move(probeKeyNullMask);
         }
 
-        matchCol =
-            applyNullMask(matchCol->view(), nullMask->view(), stream, get_output_mr());
+        matchCol = applyNullMask(
+            matchCol->view(), nullMask->view(), stream, get_output_mr());
       }
     }
   }
@@ -1885,7 +1883,8 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     initStream.synchronize();
   }
 
-  // Check if build side has any null keys (needed for null-aware left semi project)
+  // Check if build side has any null keys (needed for null-aware left semi
+  // project)
   if (joinNode_->isLeftSemiProjectJoin() && joinNode_->isNullAware()) {
     auto& rightTablesInit = hashObject_.value().first;
     buildSideHasNullKeys_ = false;
