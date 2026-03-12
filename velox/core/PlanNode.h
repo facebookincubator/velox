@@ -1474,8 +1474,81 @@ struct ColumnStatsSpec : public ISerializable {
   static ColumnStatsSpec create(const folly::dynamic& obj, void* context);
 };
 
+/// Writes input rows to a table via a connector-specific DataSink and
+/// optionally collects per-column statistics (count, min, max,
+/// approx_distinct) using an embedded ColumnStatsCollector.
+///
+/// Two output modes depending on outputType:
+///
+/// 1. Single-column BIGINT (Spark/Gluten): output is a single row count.
+///    No stats, no fragments, no commit context. Used when columnStatsSpec
+///    is not set.
+///
+/// 2. Multiplexed format (Prestissimo, see TableWriteTraits):
+///   Channel 0 (rows):      row count or NULL
+///   Channel 1 (fragments): file fragment data or NULL
+///   Channel 2 (context):   commit context JSON (always present)
+///   Channel 3+ (stats):    aggregated statistics columns (if configured)
+///
+///   Each operator instance (one per driver) produces three kinds of rows:
+///     - Statistics rows: rows=NULL, fragments=NULL, stats populated.
+///       One row per partition (or one row for unpartitioned tables).
+///     - Fragment rows:   rows=NULL, fragments=non-NULL, stats=NULL.
+///       One row per output file.
+///     - Summary row:     rows=totalCount, fragments=NULL, stats=NULL.
+///       One per driver, emitted last.
+///
+///   The context column (channel 2) is a JSON object. See
+///   TableWriteTraits for field names (taskId, lifespan,
+///   pageSinkCommitStrategy, lastPage). All rows carry context; the
+///   summary row has lastPage=true.
+///
+///   When columnStatsSpec is set, the aggregation step controls output types:
+///     - kSingle:  produces final statistics values (single-driver, no merge).
+///     - kPartial: produces intermediate aggregation state (requires a
+///                 downstream TableWriteMergeNode to finalize).
+///
+/// Typical plan topologies (data flows left to right):
+///
+///   Single-node, single-driver:
+///     Input → TableWrite(kSingle)
+///
+///   Single-node, multi-driver:
+///     Input → TableWrite(kPartial) → LocalGather → TableWriteMerge(kFinal)
+///
+///   Multi-node, multi-driver:
+///     Worker:      Input → TableWrite(kPartial) → LocalGather
+///                    → TableWriteMerge(kIntermediate) → PartitionedOutput
+///     Coordinator: Exchange → TableWriteMerge(kFinal)
+///     In Prestissimo, the coordinator uses Presto's Java
+///     TableFinishOperator instead of TableWriteMerge.
 class TableWriteNode : public PlanNode {
  public:
+  /// @param id Plan node ID.
+  /// @param columns Subset of source output columns to write, potentially
+  /// reordered. The names in this type must match columns in the source
+  /// output (used to build the input-to-output column mapping).
+  /// @param columnNames Target table column names for the written data.
+  /// Aligned 1:1 with 'columns'. May differ from 'columns' names when the
+  /// query renames columns (e.g. source has "expr_0" but table column is
+  /// "key"). The DataSink receives data using these names.
+  /// @param columnStatsSpec Optional specification for column statistics
+  /// collection. When set, the operator collects per-column aggregates
+  /// (count, min, max, approx_distinct) alongside the write. Restrictions:
+  ///   - aggregation step must be kSingle or kPartial.
+  ///   - grouping keys must be a subset of 'columns' (partition columns).
+  ///   - grouping keys must not contain duplicates.
+  /// @param insertTableHandle Connector-specific handle identifying the
+  /// target table and write operation.
+  /// @param hasPartitioningScheme Whether a partitioning scheme is configured
+  /// for shuffles. Controls which query config determines the number of
+  /// writer operator instances: 'task_partitioned_writer_count' if true,
+  /// 'task_writer_count' if false.
+  /// @param outputType Output row type. For Prestissimo, must match
+  /// TableWriteTraits::outputType(columnStatsSpec). For Spark/Gluten, a
+  /// single-column BIGINT type with no columnStatsSpec.
+  /// @param commitStrategy Commit strategy for the write operation.
+  /// @param source Input plan node providing rows to write.
   TableWriteNode(
       const PlanNodeId& id,
       const RowTypePtr& columns,
@@ -1485,25 +1558,7 @@ class TableWriteNode : public PlanNode {
       bool hasPartitioningScheme,
       RowTypePtr outputType,
       connector::CommitStrategy commitStrategy,
-      const PlanNodePtr& source)
-      : PlanNode(id),
-        sources_{source},
-        columns_{columns},
-        columnNames_{columnNames},
-        columnStatsSpec_(std::move(columnStatsSpec)),
-        insertTableHandle_(std::move(insertTableHandle)),
-        hasPartitioningScheme_(hasPartitioningScheme),
-        outputType_(std::move(outputType)),
-        commitStrategy_(commitStrategy) {
-    VELOX_USER_CHECK_EQ(columns_->size(), columnNames_.size());
-    for (const auto& column : columns_->names()) {
-      VELOX_USER_CHECK(
-          source->outputType()->containsChild(column),
-          "Column {} not found in TableWriter input: {}",
-          column,
-          source->outputType()->toString());
-    }
-  }
+      const PlanNodePtr& source);
 
   class Builder {
    public:
@@ -1641,8 +1696,7 @@ class TableWriteNode : public PlanNode {
   /// Indicates if this table write plan node has specified partitioning
   /// scheme for remote and local shuffles. If true, the task creates a
   /// number of table write operators based on the query config
-  /// 'task_partitioned_writer_count', otherwise based on
-  /// x'task_writer_count'.
+  /// 'task_partitioned_writer_count', otherwise based on 'task_writer_count'.
   bool hasPartitioningScheme() const {
     return hasPartitioningScheme_;
   }
@@ -1651,13 +1705,10 @@ class TableWriteNode : public PlanNode {
     return commitStrategy_;
   }
 
-  /// Returns true of this table write plan node has configured column
-  /// statistics collection.
   bool hasColumnStatsSpec() const {
     return columnStatsSpec_.has_value();
   }
 
-  /// Optional spec for column statistics collection.
   const std::optional<ColumnStatsSpec>& columnStatsSpec() const {
     return columnStatsSpec_;
   }
@@ -1689,29 +1740,50 @@ class TableWriteNode : public PlanNode {
 
 using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 
+/// Merges output from multiple TableWrite operators. Collects fragments,
+/// accumulates row counts, and aggregates column statistics using an
+/// embedded ColumnStatsCollector.
+///
+/// Input rows are classified per-row using TableWriteTraits::isStatisticsRow
+/// (see TableWriteTraits). Input batches may contain a mix of statistics and
+/// data rows (e.g. when receiving batched output from an exchange):
+///   - Statistics rows (rows=NULL, fragments=NULL): routed to the stats
+///     collector for aggregation.
+///   - Data rows (rows or fragments non-NULL): row counts are accumulated,
+///     fragments are buffered, and commit context is validated for
+///     consistency (all inputs must share the same commit strategy;
+///     taskId may differ in cross-worker merge).
+///
+/// Output follows the same three-phase protocol as TableWriteNode:
+///   1. Fragment rows (emitted first, to free memory).
+///   2. Aggregated statistics rows from the stats collector.
+///   3. Summary row with total row count and lastPage=true.
+///
+/// The aggregation step in ColumnStatsSpec must be kIntermediate or kFinal:
+///   - kIntermediate: reads partial state, produces partial state (for
+///     further merging downstream).
+///   - kFinal: reads partial state, produces final scalar values.
+///
+/// Supports both single-task multi-driver merge (via LocalGather) and
+/// cross-task merge (via Exchange from multiple workers).
 class TableWriteMergeNode : public PlanNode {
  public:
-  /// 'outputType' specifies the type to store the metadata of table write
-  /// output which contains the following columns: 'numWrittenRows',
-  /// 'fragment' and 'tableCommitContext'.
+  /// @param id Plan node ID.
+  /// @param columnStatsSpec Optional specification for column statistics
+  /// aggregation. Restrictions:
+  ///   - aggregation step must be kIntermediate or kFinal.
+  ///   - grouping keys must be present in source output type.
+  ///   - grouping keys must not contain duplicates.
+  /// @param outputType Output row type. Column names may differ from
+  /// TableWriteTraits defaults (e.g. Prestissimo appends node ID suffixes).
+  /// Types must match TableWriteTraits::outputType(columnStatsSpec).
+  /// @param source Input plan node, typically a LocalGather over
+  /// TableWriteNode(s).
   TableWriteMergeNode(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::optional<ColumnStatsSpec> columnStatsSpec,
-      PlanNodePtr source)
-      : PlanNode(id),
-        columnStatsSpec_(std::move(columnStatsSpec)),
-        sources_{std::move(source)},
-        outputType_(std::move(outputType)) {
-    if (hasColumnStatsSpec()) {
-      VELOX_USER_CHECK(
-          columnStatsSpec_->aggregationStep ==
-                  core::AggregationNode::Step::kFinal ||
-              columnStatsSpec_->aggregationStep ==
-                  core::AggregationNode::Step::kIntermediate,
-          "TableWriteMergeNode requires aggregation step to be intermediate or final");
-    }
-  }
+      PlanNodePtr source);
 
   class Builder {
    public:

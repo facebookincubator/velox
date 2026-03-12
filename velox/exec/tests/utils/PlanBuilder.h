@@ -893,8 +893,18 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit,
       std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
 
-  /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge();
+  /// Add a TableWriteMergeNode. Derives the ColumnStatsSpec from the
+  /// TableWriteNode in the plan tree and applies the given step.
+  /// Finds the TableWriteNode through LocalPartitionNode if present.
+  /// @param step Must be kIntermediate or kFinal. Defaults to kIntermediate.
+  PlanBuilder& tableWriteMerge(
+      core::AggregationNode::Step step =
+          core::AggregationNode::Step::kIntermediate);
+
+  /// Add a TableWriteMergeNode with an explicit ColumnStatsSpec. Use for
+  /// coordinator-side merge where the TableWriteNode is in a different
+  /// fragment (e.g. after an Exchange).
+  PlanBuilder& tableWriteMerge(core::ColumnStatsSpec columnStatsSpec);
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -1301,6 +1311,9 @@ class PlanBuilder {
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
+
+  /// Add a LocalPartitionNode with gather type (N-to-1, empty partition keys).
+  PlanBuilder& localGather();
 
   /// A convenience method to add a LocalPartitionNode with hive partition
   /// function.
