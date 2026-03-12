@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Claude Code
-        uses: izaitsevfb/claude-code-action@2817c54db8f44f3a0485d57292566bf07d428a25 # forked-pr-fix
+        uses: izaitsevfb/claude-code-action@ececd56fb999d06b4dd2477437bc408938295d76 # forked-pr-fix
         with:
           trigger_phrase: "@claude"
           # prompt is only set for workflow_dispatch (agent mode).
