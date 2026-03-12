@@ -217,6 +217,57 @@ TEST_P(PartitioningVectorTest, testRowVector) {
   }));
 }
 
+// Partitioning a null-free vector must not allocate a null buffer.
+TEST_P(PartitioningVectorTest, noNullBufferAllocatedForNullFreeFlat) {
+  const int numValues = GetParam();
+  if (numValues == 0) {
+    return;
+  }
+
+  auto flat = makeFlatVector<int32_t>(numValues, [](auto row) { return row; });
+  ASSERT_FALSE(flat->mayHaveNulls());
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 2;
+  }
+
+  auto pv = PartitionedVector::create(flat, partitions, 2, ctx_, pool_.get());
+  EXPECT_FALSE(pv->baseVector()->mayHaveNulls())
+      << "partition() must not allocate a null buffer for a null-free FlatVector";
+}
+
+// Partitioning a null-free RowVector must not allocate null buffers on the
+// row vector or any of its children.
+TEST_P(PartitioningVectorTest, noNullBufferAllocatedForNullFreeRow) {
+  const int numValues = GetParam();
+  if (numValues == 0) {
+    return;
+  }
+
+  auto row = makeRowVector({
+      makeFlatVector<int32_t>(numValues, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(numValues, [](auto row) { return row * 10; }),
+  });
+  ASSERT_FALSE(row->mayHaveNulls());
+  ASSERT_FALSE(row->childAt(0)->mayHaveNulls());
+  ASSERT_FALSE(row->childAt(1)->mayHaveNulls());
+
+  std::vector<uint32_t> partitions(numValues);
+  for (int i = 0; i < numValues; ++i) {
+    partitions[i] = i % 2;
+  }
+
+  auto pv = PartitionedVector::create(row, partitions, 2, ctx_, pool_.get());
+  auto* base = pv->baseVector()->as<RowVector>();
+  EXPECT_FALSE(base->mayHaveNulls())
+      << "partition() must not allocate a null buffer for a null-free RowVector";
+  EXPECT_FALSE(base->childAt(0)->mayHaveNulls())
+      << "partition() must not allocate a null buffer for null-free child 0";
+  EXPECT_FALSE(base->childAt(1)->mayHaveNulls())
+      << "partition() must not allocate a null buffer for null-free child 1";
+}
+
 // Test with different vector sizes, including edge cases like 0 and 1.
 INSTANTIATE_TEST_SUITE_P(
     FlatVectorSizes,
