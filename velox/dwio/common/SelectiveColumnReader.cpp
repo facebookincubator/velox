@@ -61,7 +61,7 @@ SelectiveColumnReader::SelectiveColumnReader(
   // Initialize per-column metrics if collection is enabled.
   if (params.runtimeStatistics().columnMetricsSet) {
     columnMetrics_ = params.runtimeStatistics().columnMetricsSet->getOrCreate(
-        fileType_->id());
+        fileType_->id(), fileType_->type()->kind());
   }
 }
 
