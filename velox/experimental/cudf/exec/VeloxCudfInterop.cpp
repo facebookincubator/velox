@@ -195,13 +195,13 @@ RowVectorPtr toVeloxColumn(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   // To avoid ownership issues, we make copies of the Arrow objects
-  // returned from CUDF as unique_ptrs, then mark the originals as
+  // returned from cuDF as unique_ptrs, then mark the originals as
   // released so their destructors don't try to free the resources.
   //
-  // A better solution would be alternative versions of the CUDF
+  // A better solution would be alternative versions of the cuDF
   // to_arrow_host functions that return Arrow objects by value
   // or populate objects passed by reference, but that would require
-  // changes to CUDF.
+  // changes to cuDF.
   //
   // seves 1/17/26
 
@@ -216,10 +216,9 @@ RowVectorPtr toVeloxColumn(
   // Override schema type recursively with outputType if provided. This is
   // needed for some types like VARBINARY which are exported as STRING (the
   // format is overridden to "z" when the exportVarbinaryAsString option is set
-  // to true in the exportToArrow() call) because CUDF does not have a VARBINARY
+  // to true in the exportToArrow() call) because cuDF does not have a VARBINARY
   // type. This code implements the other side of the conversion, to change the
   // format back to "z" so that the data re-imports as VARBINARY.
-  // @TODO Add a proper VARBINARY type to CUDF.
   if (outputType) {
     setArrowFormatBackToVarbinary(&schemaCopy, *outputType);
   }
