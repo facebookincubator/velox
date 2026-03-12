@@ -357,6 +357,11 @@ uint32_t maxDrivers(
       if (join->isRightSemiProjectJoin() && join->isNullAware()) {
         return 1;
       }
+    } else if (std::dynamic_pointer_cast<const core::TableWriteMergeNode>(
+                   node)) {
+      // TableWriteMerge accumulates state (row counts, fragments, stats)
+      // and produces a single summary row. Must run single-threaded.
+      return 1;
     } else if (
         auto tableWrite =
             std::dynamic_pointer_cast<const core::TableWriteNode>(node)) {

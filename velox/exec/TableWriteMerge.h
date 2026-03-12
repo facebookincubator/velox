@@ -55,6 +55,12 @@ class TableWriteMerge : public Operator {
   void close() override;
 
  private:
+  // Processes a batch of statistics rows.
+  void addStatisticsInput(const RowVectorPtr& input);
+
+  // Processes a batch of data rows (row counts, fragments, commit context).
+  void addDataInput(const RowVectorPtr& input);
+
   // Creates non-last output with fragments and last commit context only.
   RowVectorPtr createFragmentsOutput();
 
