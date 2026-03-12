@@ -115,7 +115,7 @@ class CacheTest : public ::testing::Test {
           std::make_unique<cache::test::SsdCacheTestHelper>(ssd.get());
       groupStats_ = &ssd->groupStats();
     }
-    memory::MmapAllocator::Options options;
+    memory::MemoryAllocator::Options options;
     options.capacity = maxBytes;
     allocator_ = std::make_shared<memory::MmapAllocator>(options);
     cache_ = AsyncDataCache::create(allocator_.get(), std::move(ssd));

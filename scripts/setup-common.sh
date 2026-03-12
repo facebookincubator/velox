@@ -113,6 +113,19 @@ function install_protobuf {
   cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
 }
 
+function install_grpc {
+  github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
+  cmake_install_dir grpc \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_INSTALL=ON
+}
+
 function install_double_conversion {
   wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/"${DOUBLE_CONVERSION_VERSION}".tar.gz double-conversion
   cmake_install_dir double-conversion -DBUILD_TESTING=OFF
@@ -154,7 +167,7 @@ function install_glog {
 }
 
 function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
+  wget_and_untar https://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
   (
     cd "${DEPENDENCY_DIR}"/lzo || exit
     ./configure --prefix="${INSTALL_PREFIX}" --enable-shared --disable-static --docdir=/usr/share/doc/lzo-"${LZO_VERSION}"
@@ -310,26 +323,9 @@ function install_gcs_sdk_cpp {
   # Install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
-  # abseil-cpp
-  install_abseil
-
-  # protobuf
-  github_checkout protocolbuffers/protobuf v"${PROTOBUF_VERSION}" --depth 1
-  cmake_install_dir protobuf \
-    -Dprotobuf_BUILD_TESTS=OFF \
-    -Dprotobuf_ABSL_PROVIDER=package
-
-  # grpc
-  github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
-  cmake_install_dir grpc \
-    -DgRPC_BUILD_TESTS=OFF \
-    -DgRPC_ABSL_PROVIDER=package \
-    -DgRPC_ZLIB_PROVIDER=package \
-    -DgRPC_CARES_PROVIDER=package \
-    -DgRPC_RE2_PROVIDER=package \
-    -DgRPC_SSL_PROVIDER=package \
-    -DgRPC_PROTOBUF_PROVIDER=package \
-    -DgRPC_INSTALL=ON
+  # abseil-cpp, protobuf, grpc
+  install_protobuf
+  install_grpc
 
   # crc32
   github_checkout google/crc32c "${CRC32_VERSION}" --depth 1

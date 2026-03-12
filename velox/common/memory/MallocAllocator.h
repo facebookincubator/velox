@@ -26,7 +26,7 @@ namespace facebook::velox::memory {
 /// The implementation of MemoryAllocator using malloc.
 class MallocAllocator : public MemoryAllocator {
  public:
-  MallocAllocator(size_t capacity, uint32_t reservationByteLimit);
+  explicit MallocAllocator(const Options& options);
 
   ~MallocAllocator() override;
 
@@ -101,6 +101,15 @@ class MallocAllocator : public MemoryAllocator {
       Allocation* collateral,
       ContiguousAllocation& allocation,
       MachinePageCount maxPages);
+
+  // Allocates 'maxBytes' of contiguous memory using malloc or mmap depending
+  // on 'mallocContiguousEnabled_'. Returns the allocated pointer, or nullptr
+  // on failure.
+  void* dispatchAllocateContiguous(size_t maxBytes);
+
+  // Frees contiguous memory previously allocated by
+  // dispatchAllocateContiguous.
+  void dispatchFreeContiguous(ContiguousAllocation& allocation);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 
@@ -216,6 +225,9 @@ class MallocAllocator : public MemoryAllocator {
   }
 
   const Kind kind_;
+
+  // If true, use malloc for contiguous allocations instead of mmap/munmap.
+  const bool mallocContiguousEnabled_;
 
   // Capacity in bytes. Total allocation byte is not allowed to exceed this
   // value.

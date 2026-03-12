@@ -511,6 +511,18 @@ TEST_F(CudfAggregationSelectionTest, comprehensiveTypeSupportValidation) {
           std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c3")},
       "max");
 
+  // MIN/MAX VARCHAR signatures
+  auto minVarcharExpr = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c6")},
+      "min");
+  auto maxVarcharExpr = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c6")},
+      "max");
+
   // AVG signatures
   auto avgSmallintExpr = std::make_shared<core::CallTypedExpr>(
       DOUBLE(),
@@ -581,6 +593,11 @@ TEST_F(CudfAggregationSelectionTest, comprehensiveTypeSupportValidation) {
   ASSERT_TRUE(canAggregationBeEvaluatedByCudf(*maxDoubleExpr, queryCtx_.get()));
 
   ASSERT_TRUE(
+      canAggregationBeEvaluatedByCudf(*minVarcharExpr, queryCtx_.get()));
+  ASSERT_TRUE(
+      canAggregationBeEvaluatedByCudf(*maxVarcharExpr, queryCtx_.get()));
+
+  ASSERT_TRUE(
       canAggregationBeEvaluatedByCudf(*avgSmallintExpr, queryCtx_.get()));
   ASSERT_TRUE(
       canAggregationBeEvaluatedByCudf(*avgIntegerExpr, queryCtx_.get()));
@@ -604,12 +621,7 @@ TEST_F(CudfAggregationSelectionTest, invalidTypeCombinationsRejected) {
           std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c6")},
       "sum");
 
-  // min/max on varchar and boolean
-  auto minVarcharExpr = std::make_shared<core::CallTypedExpr>(
-      VARCHAR(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c6")},
-      "min");
+  // max on boolean
   auto maxBooleanExpr = std::make_shared<core::CallTypedExpr>(
       BOOLEAN(),
       std::vector<core::TypedExprPtr>{
@@ -620,8 +632,6 @@ TEST_F(CudfAggregationSelectionTest, invalidTypeCombinationsRejected) {
       canAggregationBeEvaluatedByCudf(*avgVarcharExpr, queryCtx_.get()));
   ASSERT_FALSE(
       canAggregationBeEvaluatedByCudf(*sumVarcharExpr, queryCtx_.get()));
-  ASSERT_FALSE(
-      canAggregationBeEvaluatedByCudf(*minVarcharExpr, queryCtx_.get()));
   ASSERT_FALSE(
       canAggregationBeEvaluatedByCudf(*maxBooleanExpr, queryCtx_.get()));
 }

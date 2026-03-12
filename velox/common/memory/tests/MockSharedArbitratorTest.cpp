@@ -1900,6 +1900,26 @@ DEBUG_ONLY_TEST_F(
   auto* localArbitrationOp = localArbitrationTask->addMemoryOp(true);
   localArbitrationOp->allocate(memoryPoolCapacity);
 
+  // Install the test value callback BEFORE spawning the thread to avoid a race
+  // condition where the thread triggers global arbitration before the callback
+  // is registered, causing the main thread to deadlock. (GitHub issue #15336)
+  std::atomic_bool globalArbitrationStarted{false};
+  folly::EventCount globalArbitrationStartWait;
+  std::atomic_bool globalArbitrationWaitFlag{true};
+  folly::EventCount globalArbitrationWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::SharedArbitrator::runGlobalArbitration",
+      std::function<void(const SharedArbitrator*)>(
+          ([&](const SharedArbitrator* /*unused*/) {
+            if (globalArbitrationStarted.exchange(true)) {
+              return;
+            }
+            globalArbitrationStartWait.notifyAll();
+
+            globalArbitrationWait.await(
+                [&]() { return !globalArbitrationWaitFlag.load(); });
+          })));
+
   auto globalArbitrationTriggerThread = std::thread([&]() {
     std::unordered_map<std::string, RuntimeMetric> runtimeStats;
     auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
@@ -1951,23 +1971,6 @@ DEBUG_ONLY_TEST_F(
             .sum,
         1);
   });
-
-  std::atomic_bool globalArbitrationStarted{false};
-  folly::EventCount globalArbitrationStartWait;
-  std::atomic_bool globalArbitrationWaitFlag{true};
-  folly::EventCount globalArbitrationWait;
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::memory::SharedArbitrator::runGlobalArbitration",
-      std::function<void(const SharedArbitrator*)>(
-          ([&](const SharedArbitrator* /*unused*/) {
-            if (globalArbitrationStarted.exchange(true)) {
-              return;
-            }
-            globalArbitrationStartWait.notifyAll();
-
-            globalArbitrationWait.await(
-                [&]() { return !globalArbitrationWaitFlag.load(); });
-          })));
 
   globalArbitrationStartWait.await(
       [&]() { return globalArbitrationStarted.load(); });

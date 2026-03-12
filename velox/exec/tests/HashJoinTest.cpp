@@ -4752,6 +4752,230 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
           .run();
     }
   }
+
+  // Test with VARCHAR keys.
+  {
+    SCOPED_TRACE("VARCHAR keys with skipped splits");
+
+    std::vector<RowVectorPtr> stringProbeVectors;
+    std::vector<std::shared_ptr<TempFilePath>> stringTempFiles;
+    for (int32_t i = 0; i < numSplits; ++i) {
+      auto rowVector = makeRowVector({
+          makeFlatVector<StringView>(
+              numRowsProbe,
+              [&](auto row) {
+                return StringView::makeInline(
+                    fmt::format("key_{}", row - i * 10));
+              }),
+          makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(
+              numRowsProbe, [&](auto /*row*/) { return i % 2 == 0 ? 0 : i; }),
+      });
+      stringProbeVectors.push_back(rowVector);
+      stringTempFiles.push_back(TempFilePath::create());
+      writeToFile(stringTempFiles.back()->getPath(), rowVector);
+    }
+
+    auto makeStringInputSplits = [&](const core::PlanNodeId& nodeId) {
+      return [&] {
+        std::vector<exec::Split> probeSplits;
+        for (auto& file : stringTempFiles) {
+          probeSplits.push_back(
+              exec::Split(makeHiveConnectorSplit(file->getPath())));
+        }
+        // We add splits that have no rows.
+        auto makeEmpty = [&]() {
+          return exec::Split(
+              HiveConnectorSplitBuilder(stringTempFiles.back()->getPath())
+                  .start(10000000)
+                  .length(1)
+                  .build());
+        };
+        std::vector<exec::Split> emptyFront = {makeEmpty(), makeEmpty()};
+        std::vector<exec::Split> emptyMiddle = {makeEmpty(), makeEmpty()};
+        probeSplits.insert(
+            probeSplits.begin(), emptyFront.begin(), emptyFront.end());
+        probeSplits.insert(
+            probeSplits.begin() + 13, emptyMiddle.begin(), emptyMiddle.end());
+        SplitInput splits;
+        splits.emplace(nodeId, probeSplits);
+        return splits;
+      };
+    };
+
+    // Create build vectors in range [key_35, key_233].
+    std::vector<RowVectorPtr> stringBuildVectors;
+    for (int i = 0; i < 5; ++i) {
+      stringBuildVectors.push_back(makeRowVector({
+          makeFlatVector<StringView>(
+              numRowsBuild / 5,
+              [i](auto row) {
+                return StringView::makeInline(
+                    fmt::format(
+                        "key_{}", 35 + 2 * (row + i * numRowsBuild / 5)));
+              }),
+          makeFlatVector<int64_t>(
+              numRowsBuild / 5, [](auto row) { return row; }),
+      }));
+    }
+
+    createDuckDbTable("t_str_skip", stringProbeVectors);
+    createDuckDbTable("u_str_skip", stringBuildVectors);
+
+    auto stringProbeType =
+        ROW({"c0", "c1", "c2"}, {VARCHAR(), BIGINT(), BIGINT()});
+
+    auto stringBuildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                               .values(stringBuildVectors)
+                               .project({"c0 AS u_c0", "c1 AS u_c1"})
+                               .planNode();
+
+    // Inner join.
+    {
+      SCOPED_TRACE("VARCHAR Inner join with skipped splits");
+      core::PlanNodeId probeScanId;
+      auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .tableScan(stringProbeType, {"c2 > 0"})
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        stringBuildSide,
+                        "",
+                        {"c0", "c1", "u_c1"},
+                        core::JoinType::kInner)
+                    .project({"c0", "c1 + 1", "c1 + u_c1"})
+                    .planNode();
+
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .numDrivers(1)
+          .makeInputSplits(makeStringInputSplits(probeScanId))
+          .config(
+              core::QueryConfig::kHashProbeDynamicFilterPushdownEnabled, "true")
+          .config(
+              core::QueryConfig::kHashProbeStringDynamicFilterPushdownEnabled,
+              "true")
+          .referenceQuery(
+              "SELECT t_str_skip.c0, t_str_skip.c1 + 1, t_str_skip.c1 + u_str_skip.c1 FROM t_str_skip, u_str_skip WHERE t_str_skip.c0 = u_str_skip.c0 AND t_str_skip.c2 > 0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            if (hasSpill) {
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_LT(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            }
+          })
+          .run();
+    }
+
+    // Left semi join.
+    {
+      SCOPED_TRACE("VARCHAR Left semi join with skipped splits");
+      core::PlanNodeId probeScanId;
+      auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .tableScan(stringProbeType, {"c2 > 0"})
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        stringBuildSide,
+                        "",
+                        {"c0", "c1"},
+                        core::JoinType::kLeftSemiFilter)
+                    .project({"c0", "c1 + 1"})
+                    .planNode();
+
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .numDrivers(1)
+          .makeInputSplits(makeStringInputSplits(probeScanId))
+          .config(
+              core::QueryConfig::kHashProbeDynamicFilterPushdownEnabled, "true")
+          .config(
+              core::QueryConfig::kHashProbeStringDynamicFilterPushdownEnabled,
+              "true")
+          .referenceQuery(
+              "SELECT t_str_skip.c0, t_str_skip.c1 + 1 FROM t_str_skip WHERE t_str_skip.c0 IN (SELECT c0 FROM u_str_skip) AND t_str_skip.c2 > 0")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            if (hasSpill) {
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
+              ASSERT_EQ(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            }
+          })
+          .run();
+    }
+
+    // Right semi join.
+    {
+      SCOPED_TRACE("VARCHAR Right semi join with skipped splits");
+      core::PlanNodeId probeScanId;
+      auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .tableScan(stringProbeType, {"c2 > 0"})
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        stringBuildSide,
+                        "",
+                        {"u_c0", "u_c1"},
+                        core::JoinType::kRightSemiFilter)
+                    .project({"u_c0", "u_c1 + 1"})
+                    .planNode();
+
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .numDrivers(1)
+          .makeInputSplits(makeStringInputSplits(probeScanId))
+          .config(
+              core::QueryConfig::kHashProbeDynamicFilterPushdownEnabled, "true")
+          .config(
+              core::QueryConfig::kHashProbeStringDynamicFilterPushdownEnabled,
+              "true")
+          .referenceQuery(
+              "SELECT u_str_skip.c0, u_str_skip.c1 + 1 FROM u_str_skip WHERE u_str_skip.c0 IN (SELECT c0 FROM t_str_skip WHERE t_str_skip.c2 > 0)")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            if (hasSpill) {
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_EQ(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(
+                  getInputPositions(task, 1),
+                  numRowsProbe * numNonSkippedSplits);
+            }
+          })
+          .run();
+    }
+  }
 }
 
 TEST_P(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {

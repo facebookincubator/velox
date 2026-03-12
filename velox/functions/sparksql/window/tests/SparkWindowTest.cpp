@@ -115,8 +115,8 @@ class SparkAggregateWindowLimitMemoryTest
   static void SetUpTestCase() {
     OperatorTestBase::SetUpTestCase();
     OperatorTestBase::setupMemory(
-        256 << 20, // allocatorCapacity
-        256 << 20, // arbitratorCapacity
+        192 << 20, // allocatorCapacity
+        192 << 20, // arbitratorCapacity
         0, // arbitratorReservedCapacity
         0, // memoryPoolInitCapacity
         0, // memoryPoolReservedCapacity
@@ -137,18 +137,22 @@ class SparkAggregateWindowLimitMemoryTest
 // the limit and cause failure.
 // The capacity is calculated as:
 //   1. size of input data: 1 rows * 32KB (the length of the string) = 32KB
-//   2. size of RowContainer: ((1,024 rows * 32KB (data) + 1,024 rows * 32KB
-//      (Accumulators))) * 3 = 192MB
-//      (Accumulators won't be destroyed now)
+//   2. size of RowContainer: ((1,024 rows * 32KB (data))) * 3 +
+//   32KB(Accumulator) = 96MB
+//      (Accumulators will be destroyed when processing a new partition.)
 //   3. size of results: 10 rows * 32KB * 2 (column 'd' and the result column) =
 //      640KB
 //   4. other overheads
-//    Total: ~ 192MB
+//    Total: ~ 96MB
 // If we don't clear the string buffers in time, the size of the string buffers
-// would be at least 1,024 rows * 32KB * 3 = 96MB. So without the fix, we need
-// capacity to be set to more than 192MB + 96MB = 288MB to pass the test.
-// So we set the capacity to 256MB here.
-TEST_F(SparkAggregateWindowLimitMemoryTest, clearStringBuffersInTime) {
+// would be at least 1,024 rows * 32KB * 3 = 96MB. If we don't destroy the
+// previously created accumulator, the memory size of accumulators accumulated
+// will be (32KB * 1024 rows * 3) = 96MB. So without the fix, we need capacity
+// to be set to more than 96MB + 96MB + 96MB = 288MB to pass the test. We set
+// the capacity to 192MB here to verify that our fixes work.
+TEST_F(
+    SparkAggregateWindowLimitMemoryTest,
+    clearStringBuffersAndAccumulatorsInTime) {
   constexpr vector_size_t size = 1'024 * 3;
   constexpr vector_size_t resultSize = 10;
   // For this test, it is important to create a single-row partition.

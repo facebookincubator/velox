@@ -24,7 +24,8 @@ void checkDuplicateKeys(
   if (rows.end() == 0) {
     return;
   }
-  static const char* kDuplicateKey = "Duplicate map keys ({}) are not allowed";
+  static constexpr const char* kDuplicateKey =
+      "Duplicate map keys ({}) are not allowed";
 
   MapVector::canonicalize(mapVector);
 
