@@ -1247,7 +1247,7 @@ std::unique_ptr<cudf::column> createProbeKeyNullMask(
   auto numRows = keyView.num_rows();
 
   if (keyView.num_columns() == 0 || numRows == 0) {
-    auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream);
+    auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream, mr);
     return cudf::make_column_from_scalar(falseScalar, numRows, stream, mr);
   }
 
@@ -1277,7 +1277,7 @@ std::unique_ptr<cudf::column> applyNullMask(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   // Create a null scalar (valid=false means NULL)
-  auto nullScalar = cudf::numeric_scalar<bool>(false, false, stream);
+  auto nullScalar = cudf::numeric_scalar<bool>(false, false, stream, mr);
 
   // copy_if_else: where nullMask is true, use nullScalar (NULL); else use col value
   return cudf::copy_if_else(nullScalar, col, nullMask, stream, mr);
