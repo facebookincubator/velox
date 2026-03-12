@@ -4198,6 +4198,19 @@ TEST_F(DateTimeFunctionsTest, parseDatetime) {
           "yyyy-MM-dd+HH:mm:99 zzzzzzzzzz"),
       "Parsing time zone long names is not supported.");
 
+  // DST gap: 2026-03-08 02:00 does not exist in America/Los_Angeles.
+  // Clocks spring forward from 02:00 PST to 03:00 PDT. parse_datetime should
+  // handle this gracefully by adjusting forward past the gap.
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(
+      parseDatetime("2026-03-08+03:00", "yyyy-MM-dd+HH:mm"),
+      parseDatetime("2026-03-08+02:00", "yyyy-MM-dd+HH:mm"));
+
+  // Mid-gap time: 02:30 is adjusted forward to 03:30 PDT.
+  EXPECT_EQ(
+      parseDatetime("2026-03-08+03:30", "yyyy-MM-dd+HH:mm"),
+      parseDatetime("2026-03-08+02:30", "yyyy-MM-dd+HH:mm"));
+
   // Test overflow in either direction.
   VELOX_ASSERT_THROW(
       parseDatetime(
@@ -5233,6 +5246,15 @@ TEST_F(DateTimeFunctionsTest, fromIso8601Timestamp) {
         fromIso("T11-08:00"));
   }
 
+  // DST gap: 2024-03-10 02:00 does not exist in America/Los_Angeles.
+  // Clocks spring forward from 02:00 PST to 03:00 PDT. from_iso8601_timestamp
+  // should adjust forward past the gap.
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(fromIso("2024-03-10T03:00:00"), fromIso("2024-03-10T02:00:00"));
+
+  // Mid-gap time: 02:30 is adjusted forward to 03:30 PDT.
+  EXPECT_EQ(fromIso("2024-03-10T03:30:00"), fromIso("2024-03-10T02:30:00"));
+
   VELOX_ASSERT_THROW(
       fromIso("1970-01-02 11:38"),
       R"(Unable to parse timestamp value: "1970-01-02 11:38")");
@@ -5379,6 +5401,19 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   EXPECT_EQ(
       Timestamp(1730707200, 0),
       dateParse("04-Nov-2024 (Mon)", "%d-%b-%Y (%a)"));
+
+  // DST gap: 2026-03-08 02:00 does not exist in America/Los_Angeles.
+  // Clocks spring forward from 02:00 PST to 03:00 PDT. date_parse should
+  // handle this gracefully by adjusting forward past the gap, consistent with
+  // Presto. Both 02:00 (nonexistent) and 03:00 PDT map to the same UTC instant.
+  EXPECT_EQ(
+      dateParse("2026-03-08 03:00", "%Y-%m-%d %H:%i"),
+      dateParse("2026-03-08 02:00", "%Y-%m-%d %H:%i"));
+
+  // Mid-gap time: 02:30 is adjusted forward to 03:30 PDT.
+  EXPECT_EQ(
+      dateParse("2026-03-08 03:30", "%Y-%m-%d %H:%i"),
+      dateParse("2026-03-08 02:30", "%Y-%m-%d %H:%i"));
 
   VELOX_ASSERT_THROW(dateParse("", "%y+"), "Invalid date format: ''");
   VELOX_ASSERT_THROW(dateParse("1", "%y+"), "Invalid date format: '1'");

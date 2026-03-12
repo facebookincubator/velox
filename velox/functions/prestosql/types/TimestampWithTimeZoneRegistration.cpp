@@ -80,6 +80,10 @@ void castFromTimestamp(
       // Treat TIMESTAMP as wall time in session time zone. This means that in
       // order to get its UTC representation we need to shift the value by the
       // offset of the time zone.
+      // Adjust for DST gaps (nonexistent local times) before converting to GMT.
+      auto corrected = sessionTimeZone->correct_nonexistent_time(
+          std::chrono::seconds(ts.getSeconds()));
+      ts = Timestamp(corrected.count(), ts.getNanos());
       ts.toGMT(*sessionTimeZone);
     }
     rawResults[row] = pack(ts.toMillis(), sessionTimeZone->id());
@@ -134,6 +138,10 @@ void castFromString(
         const auto& config = context.execCtx()->queryCtx()->queryConfig();
         timeZone = getTimeZoneFromConfig(config);
       }
+      // Adjust for DST gaps (nonexistent local times) before converting to GMT.
+      auto corrected = timeZone->correct_nonexistent_time(
+          std::chrono::seconds(ts.getSeconds()));
+      ts = Timestamp(corrected.count(), ts.getNanos());
       ts.toGMT(*timeZone);
       rawResults[row] = pack(ts.toMillis(), timeZone->id());
     }
