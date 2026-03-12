@@ -66,13 +66,11 @@ class UnsafeRowSerializerTest : public ::testing::Test,
   void SetUp() override {
     pool_ = memory::memoryManager()->addLeafPool();
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kCompactRow);
+    deregisterNamedVectorSerde("CompactRow");
     serializer::spark::UnsafeRowVectorSerde::registerVectorSerde();
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
-    ASSERT_EQ(getVectorSerde()->kind(), VectorSerde::Kind::kUnsafeRow);
-    ASSERT_EQ(
-        getNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)->kind(),
-        VectorSerde::Kind::kUnsafeRow);
+    ASSERT_EQ(getVectorSerde()->kind(), "UnsafeRow");
+    ASSERT_EQ(getNamedVectorSerde("UnsafeRow")->kind(), "UnsafeRow");
     appendRow_ = GetParam().appendRow;
     compressionKind_ = GetParam().compressionKind;
     microBatchDeserialize_ = GetParam().microBatchDeserialize;
@@ -81,7 +79,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
 
   void TearDown() override {
     deregisterVectorSerde();
-    deregisterNamedVectorSerde(VectorSerde::Kind::kUnsafeRow);
+    deregisterNamedVectorSerde("UnsafeRow");
   }
 
   void serialize(RowVectorPtr rowVector, std::ostream* output) {

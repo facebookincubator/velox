@@ -124,14 +124,14 @@ DEFINE_string(
 
 namespace facebook::velox::tool::trace {
 namespace {
-VectorSerde::Kind getVectorSerdeKind() {
+std::string getVectorSerdeKind() {
   switch (FLAGS_shuffle_serialization_format) {
     case 0:
-      return VectorSerde::Kind::kPresto;
+      return "Presto";
     case 1:
-      return VectorSerde::Kind::kCompactRow;
+      return "CompactRow";
     case 2:
-      return VectorSerde::Kind::kUnsafeRow;
+      return "UnsafeRow";
     default:
       VELOX_UNSUPPORTED(
           "Unsupported shuffle serialization format: {}",
@@ -311,13 +311,13 @@ void TraceReplayRunner::init() {
   if (!isRegisteredVectorSerde()) {
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+  if (!isRegisteredNamedVectorSerde("Presto")) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+  if (!isRegisteredNamedVectorSerde("CompactRow")) {
     serializer::CompactRowVectorSerde::registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+  if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
 

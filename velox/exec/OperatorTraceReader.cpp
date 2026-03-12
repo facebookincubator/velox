@@ -31,7 +31,7 @@ OperatorTraceInputReader::OperatorTraceInputReader(
       fs_(filesystems::getFileSystem(traceDir_, nullptr)),
       dataType_(std::move(dataType)),
       pool_(pool),
-      serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
+      serde_(getNamedVectorSerde("Presto")),
       inputStream_(getInputStream()) {
   VELOX_CHECK_NOT_NULL(dataType_);
 }
