@@ -432,7 +432,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
     return;
   }
   {
-    MmapAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = kCapacityBytes;
     options.smallAllocationReservePct = 39;
     options.maxMallocBytes = 2999;
@@ -448,7 +448,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
     EXPECT_EQ(smallAllocationBytes, mmapAllocator->mallocReservedBytes());
   }
   {
-    MmapAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = kCapacityBytes;
     options.smallAllocationReservePct = 39;
     options.maxMallocBytes = 0;
@@ -462,7 +462,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
     EXPECT_EQ(0, mmapAllocator->mallocReservedBytes());
   }
   {
-    MmapAllocator::Options options;
+    MemoryAllocator::Options options;
     options.capacity = 64 * 256 * AllocationTraits::kPageSize - 100;
     options.smallAllocationReservePct = 10;
     options.maxMallocBytes = 3072;
@@ -1992,5 +1992,264 @@ TEST_F(MmapConfigTest, sizeClasses) {
     runPages = runPages / 2;
   }
 }
+
+class MallocContiguousTest : public testing::TestWithParam<bool> {
+ protected:
+  static void SetUpTestCase() {
+    FLAGS_velox_memory_leak_check_enabled = true;
+  }
+
+  void SetUp() override {
+    MemoryAllocator::Options options;
+    options.capacity = kCapacityBytes;
+    options.reservationByteLimit = 0;
+    options.mallocContiguousEnabled = GetParam();
+    allocator_ = std::make_shared<MallocAllocator>(options);
+  }
+
+  std::shared_ptr<MallocAllocator> allocator_;
+};
+
+TEST_P(MallocContiguousTest, allocateAndFreeContiguous) {
+  constexpr MachinePageCount kNumPages = 16;
+  ContiguousAllocation allocation;
+  ASSERT_TRUE(allocator_->allocateContiguous(kNumPages, nullptr, allocation));
+  ASSERT_FALSE(allocation.empty());
+  ASSERT_EQ(allocation.numPages(), kNumPages);
+  ASSERT_NE(allocation.data(), nullptr);
+
+  // Verify we can write and read from the allocated memory.
+  auto* data = reinterpret_cast<int64_t*>(allocation.data());
+  for (int64_t i = 0; i < kNumPages; ++i) {
+    data[i] = i * 42;
+  }
+  for (int64_t i = 0; i < kNumPages; ++i) {
+    ASSERT_EQ(data[i], i * 42);
+  }
+
+  allocator_->freeContiguous(allocation);
+  ASSERT_TRUE(allocation.empty());
+  ASSERT_EQ(allocator_->numAllocated(), 0);
+  ASSERT_EQ(allocator_->numMapped(), 0);
+}
+
+TEST_P(MallocContiguousTest, allocateContiguousWithMaxPages) {
+  constexpr MachinePageCount kNumPages = 8;
+  constexpr MachinePageCount kMaxPages = 32;
+  ContiguousAllocation allocation;
+  ASSERT_TRUE(allocator_->allocateContiguous(
+      kNumPages, nullptr, allocation, nullptr, kMaxPages));
+  ASSERT_EQ(allocation.numPages(), kNumPages);
+  ASSERT_EQ(allocation.maxSize(), AllocationTraits::pageBytes(kMaxPages));
+
+  allocator_->freeContiguous(allocation);
+  ASSERT_TRUE(allocation.empty());
+}
+
+TEST_P(MallocContiguousTest, growContiguous) {
+  constexpr MachinePageCount kNumPages = 8;
+  constexpr MachinePageCount kMaxPages = 32;
+  ContiguousAllocation allocation;
+  ASSERT_TRUE(allocator_->allocateContiguous(
+      kNumPages, nullptr, allocation, nullptr, kMaxPages));
+
+  // Write data before growing.
+  auto* data = reinterpret_cast<int64_t*>(allocation.data());
+  const auto numWords = static_cast<int64_t>(
+      AllocationTraits::pageBytes(kNumPages) / sizeof(int64_t));
+  for (int64_t i = 0; i < numWords; ++i) {
+    data[i] = i + 1;
+  }
+
+  // Grow within maxPages.
+  constexpr MachinePageCount kIncrement = 8;
+  ASSERT_TRUE(allocator_->growContiguousWithoutRetry(kIncrement, allocation));
+  ASSERT_EQ(allocation.numPages(), kNumPages + kIncrement);
+
+  // Verify original data is intact after grow.
+  data = reinterpret_cast<int64_t*>(allocation.data());
+  for (int64_t i = 0; i < numWords; ++i) {
+    ASSERT_EQ(data[i], i + 1);
+  }
+
+  allocator_->freeContiguous(allocation);
+  ASSERT_TRUE(allocation.empty());
+}
+
+TEST_P(MallocContiguousTest, freeContiguousCollateral) {
+  constexpr MachinePageCount kFirstPages = 16;
+  constexpr MachinePageCount kSecondPages = 8;
+  ContiguousAllocation allocation;
+  ASSERT_TRUE(allocator_->allocateContiguous(kFirstPages, nullptr, allocation));
+  ASSERT_EQ(allocation.numPages(), kFirstPages);
+  ASSERT_EQ(allocator_->numAllocated(), kFirstPages);
+
+  // Allocate again into the same allocation — old allocation is freed as
+  // contiguous collateral.
+  ASSERT_TRUE(
+      allocator_->allocateContiguous(kSecondPages, nullptr, allocation));
+  ASSERT_EQ(allocation.numPages(), kSecondPages);
+  ASSERT_EQ(allocator_->numAllocated(), kSecondPages);
+
+  allocator_->freeContiguous(allocation);
+  ASSERT_EQ(allocator_->numAllocated(), 0);
+}
+
+TEST_P(MallocContiguousTest, allocateContiguousFailure) {
+  constexpr MachinePageCount kNumPages = 16;
+  ContiguousAllocation allocation;
+
+  // Inject allocation failure so dispatchAllocateContiguous returns nullptr.
+  allocator_->testingSetFailureInjection(
+      MemoryAllocator::InjectedFailure::kAllocate, true);
+
+  ASSERT_FALSE(allocator_->allocateContiguous(kNumPages, nullptr, allocation));
+  ASSERT_TRUE(allocation.empty());
+  // Verify all counter increments are properly rolled back.
+  ASSERT_EQ(allocator_->numAllocated(), 0);
+  ASSERT_EQ(allocator_->numMapped(), 0);
+  auto failureMsg = allocator_->getAndClearFailureMessage();
+  EXPECT_THAT(failureMsg, testing::HasSubstr("Failed to allocate"));
+  ASSERT_TRUE(allocator_->checkConsistency());
+}
+
+TEST_P(MallocContiguousTest, allocContiguous) {
+  struct {
+    MachinePageCount nonContiguousPages;
+    MachinePageCount oldContiguousPages;
+    MachinePageCount newContiguousPages;
+  } testSettings[] = {
+      {100, 100, 200},
+      {100, 200, 200},
+      {200, 100, 200},
+      {200, 100, 400},
+      {0, 100, 100},
+      {0, 200, 100},
+      {0, 100, 200},
+      {100, 0, 100},
+      {200, 0, 100},
+      {100, 0, 200}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(
+        fmt::format(
+            "nonContiguousPages:{} oldContiguousPages:{} newContiguousPages:{}",
+            testData.nonContiguousPages,
+            testData.oldContiguousPages,
+            testData.newContiguousPages));
+    SetUp();
+    Allocation allocation;
+    if (testData.nonContiguousPages != 0) {
+      allocator_->allocateNonContiguous(
+          testData.nonContiguousPages, allocation);
+    }
+    ContiguousAllocation contiguousAllocation;
+    if (testData.oldContiguousPages != 0) {
+      allocator_->allocateContiguous(
+          testData.oldContiguousPages, nullptr, contiguousAllocation);
+    }
+    allocator_->allocateContiguous(
+        testData.newContiguousPages, &allocation, contiguousAllocation);
+    ASSERT_EQ(allocator_->numAllocated(), testData.newContiguousPages);
+    ASSERT_EQ(allocator_->numMapped(), testData.newContiguousPages);
+
+    allocator_->freeContiguous(contiguousAllocation);
+    ASSERT_EQ(allocator_->numMapped(), 0);
+    ASSERT_EQ(allocator_->numAllocated(), 0);
+    ASSERT_TRUE(allocator_->checkConsistency());
+  }
+}
+
+TEST_P(MallocContiguousTest, allocContiguousFail) {
+  struct {
+    MachinePageCount nonContiguousPages;
+    MachinePageCount oldContiguousPages;
+    MachinePageCount newContiguousPages;
+  } testSettings[] = {{200, 100, 400}, {0, 100, 200}, {100, 0, 200}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(
+        fmt::format(
+            "nonContiguousPages:{} oldContiguousPages:{} newContiguousPages:{}",
+            testData.nonContiguousPages,
+            testData.oldContiguousPages,
+            testData.newContiguousPages));
+    SetUp();
+    Allocation allocation;
+    if (testData.nonContiguousPages != 0) {
+      allocator_->allocateNonContiguous(
+          testData.nonContiguousPages, allocation);
+    }
+    ContiguousAllocation contiguousAllocation;
+    if (testData.oldContiguousPages != 0) {
+      allocator_->allocateContiguous(
+          testData.oldContiguousPages, nullptr, contiguousAllocation);
+    }
+    ASSERT_EQ(
+        allocator_->numAllocated(),
+        testData.oldContiguousPages + testData.nonContiguousPages);
+
+    allocator_->testingSetFailureInjection(
+        MemoryAllocator::InjectedFailure::kCap, true);
+
+    ASSERT_FALSE(allocator_->allocateContiguous(
+        testData.newContiguousPages, &allocation, contiguousAllocation));
+    auto failureMsg = allocator_->getAndClearFailureMessage();
+    EXPECT_THAT(
+        failureMsg, testing::HasSubstr("Exceeded memory allocator limit"));
+    ASSERT_EQ(allocator_->numAllocated(), 0);
+    ASSERT_EQ(allocator_->numMapped(), 0);
+    ASSERT_TRUE(allocator_->checkConsistency());
+  }
+}
+
+TEST_P(MallocContiguousTest, allocContiguousGrow) {
+  auto largestClass = allocator_->sizeClasses().back();
+  constexpr int32_t kInitialLarge = 1024;
+  constexpr int32_t kMinGrow = 1024;
+  MachinePageCount numPages = 0;
+  std::vector<Allocation> small;
+  auto freeSmall = [&](int32_t toFree) {
+    int32_t freed = 0;
+    while (!small.empty() && freed < toFree) {
+      freed += small.back().numPages();
+      allocator_->freeNonContiguous(small.back());
+      small.pop_back();
+    }
+  };
+
+  for (; numPages < kCapacityPages - kInitialLarge; numPages += largestClass) {
+    Allocation temp;
+    allocator_->allocateNonContiguous(largestClass, temp);
+    small.push_back(std::move(temp));
+  }
+  ContiguousAllocation large;
+  EXPECT_FALSE(allocator_->allocateContiguous(
+      kInitialLarge * 2, nullptr, large, nullptr, kCapacityPages));
+  EXPECT_TRUE(allocator_->allocateContiguous(
+      kInitialLarge, nullptr, large, nullptr, kCapacityPages));
+  EXPECT_FALSE(allocator_->growContiguous(kMinGrow, large));
+  auto failureMsg = allocator_->getAndClearFailureMessage();
+  EXPECT_THAT(
+      failureMsg, testing::HasSubstr("Exceeded memory allocator limit"));
+  freeSmall(kMinGrow);
+  EXPECT_TRUE(allocator_->growContiguous(kMinGrow, large));
+  EXPECT_EQ(allocator_->numAllocated(), kCapacityPages);
+  freeSmall(4 * kMinGrow);
+  EXPECT_TRUE(allocator_->growContiguous(4 * kMinGrow, large));
+  EXPECT_THROW(
+      allocator_->growContiguous(100000 * kMinGrow, large), VeloxException);
+  allocator_->freeContiguous(large);
+  EXPECT_EQ(
+      kCapacityPages - kInitialLarge - 5 * kMinGrow,
+      allocator_->numAllocated());
+  freeSmall(kCapacityPages);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MallocContiguousTests,
+    MallocContiguousTest,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "mallocContiguous" : "mmapContiguous";
+    });
 
 } // namespace facebook::velox::memory

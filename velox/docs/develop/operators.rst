@@ -1018,6 +1018,11 @@ MarkDistinctNode
 The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
 Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of 'distinctKeys'.
 
+This operator supports spilling. The spill mechanism follows the same pattern as RowNumber: when memory pressure
+triggers spilling, the hash table contents and future input are partitioned and written to disk. During restore,
+each partition's hash table is rebuilt from the spilled data, preserving knowledge of which keys were already seen.
+Disabled by default; enable with `mark_distinct_spill_enabled` configuration property.
+
 .. list-table::
   :widths: 10 30
   :align: left

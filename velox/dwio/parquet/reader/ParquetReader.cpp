@@ -20,6 +20,7 @@
 
 #include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -774,7 +775,7 @@ TypePtr ReaderBase::convertType(
           schemaElement.__isset.type_length,
       "FIXED_LEN_BYTE_ARRAY requires length to be set");
 
-  static std::string_view kTypeMappingErrorFmtStr =
+  static constexpr const char* kTypeMappingErrorFmtStr =
       "Converted type {} is not allowed for requested type {}";
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;

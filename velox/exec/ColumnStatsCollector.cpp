@@ -159,7 +159,6 @@ void ColumnStatsCollector::addInput(RowVectorPtr input) {
     return;
   }
 
-  // Add input to the grouping set
   groupingSet_->addInput(input, /*mayPushdown=*/false);
 }
 

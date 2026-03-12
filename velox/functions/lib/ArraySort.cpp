@@ -533,7 +533,7 @@ core::TypedExprPtr rewriteArraySortCall(
   if (lambda->signature()->size() != 2) {
     return nullptr;
   }
-  static const std::string kNotSupported =
+  static constexpr const char* kNotSupported =
       "array_sort with comparator lambda that cannot be rewritten "
       "into a transform is not supported: {}";
 
