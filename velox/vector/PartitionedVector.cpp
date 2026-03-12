@@ -346,8 +346,8 @@ template <typename T>
 void PartitionedFlatVector<T>::partition(
     const std::vector<uint32_t>& partitions,
     PartitionBuildContext& ctx) {
-  Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
-  if (rawNulls) {
+  if (vector_->rawNulls()) {
+    Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
     partitionBitsInPlace(
         rawNulls, partitions, numPartitions_, ctx, endPartitionOffsets_, pool_);
   }
@@ -391,17 +391,15 @@ void PartitionedRowVector::partition(
             pool_));
   }
 
-  if (numPartitions_ > 1) {
+  if (numPartitions_ > 1 && vector_->rawNulls()) {
     Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
-    if (rawNulls) {
-      partitionBitsInPlace(
-          rawNulls,
+    partitionBitsInPlace(
+        rawNulls,
           partitions,
           numPartitions_,
           ctx,
           endPartitionOffsets_,
           pool_);
-    }
   }
 }
 
