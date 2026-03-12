@@ -106,6 +106,12 @@ RowTypePtr TableWriteTraits::outputType(
   return kOutputTypeWithoutStats->unionWith(columnStatsSpec->outputType());
 }
 
+bool TableWriteTraits::isStatisticsRow(const RowVectorPtr& output) {
+  VELOX_CHECK_GT(output->size(), 0);
+  return output->childAt(kRowCountChannel)->isNullAt(0) &&
+      output->childAt(kFragmentChannel)->isNullAt(0);
+}
+
 folly::dynamic TableWriteTraits::getTableCommitContext(
     const RowVectorPtr& input) {
   VELOX_CHECK_GT(input->size(), 0);

@@ -18,6 +18,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/core/PlanNode.h"
+#include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::core {
@@ -2771,6 +2772,81 @@ PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
       std::move(sources));
 }
 
+// Validates that grouping keys in 'spec' are present in 'type' and have no
+// duplicates. 'context' is used in error messages (e.g. "written columns",
+// "source output").
+void validateGroupingKeys(
+    const ColumnStatsSpec& spec,
+    const RowType& type,
+    std::string_view context) {
+  folly::F14FastSet<std::string> seenKeys;
+  for (const auto& key : spec.groupingKeys) {
+    VELOX_USER_CHECK(
+        type.containsChild(key->name()),
+        "Grouping key not found in {}: {}",
+        context,
+        key->name());
+    VELOX_USER_CHECK(
+        seenKeys.insert(key->name()).second,
+        "Duplicate grouping key: {}",
+        key->name());
+  }
+}
+
+TableWriteNode::TableWriteNode(
+    const PlanNodeId& id,
+    const RowTypePtr& columns,
+    const std::vector<std::string>& columnNames,
+    std::optional<ColumnStatsSpec> columnStatsSpec,
+    std::shared_ptr<const InsertTableHandle> insertTableHandle,
+    bool hasPartitioningScheme,
+    RowTypePtr outputType,
+    connector::CommitStrategy commitStrategy,
+    const PlanNodePtr& source)
+    : PlanNode(id),
+      sources_{source},
+      columns_{columns},
+      columnNames_{columnNames},
+      columnStatsSpec_(std::move(columnStatsSpec)),
+      insertTableHandle_(std::move(insertTableHandle)),
+      hasPartitioningScheme_(hasPartitioningScheme),
+      outputType_(std::move(outputType)),
+      commitStrategy_(commitStrategy) {
+  VELOX_USER_CHECK_NOT_NULL(sources_[0]);
+  VELOX_USER_CHECK_NOT_NULL(insertTableHandle_);
+  VELOX_USER_CHECK_EQ(columns_->size(), columnNames_.size());
+  for (const auto& column : columns_->names()) {
+    VELOX_USER_CHECK(
+        sources_[0]->outputType()->containsChild(column),
+        "Column not found in TableWrite input: {}",
+        column);
+  }
+  if (columnStatsSpec_.has_value()) {
+    VELOX_USER_CHECK(
+        columnStatsSpec_->aggregationStep == AggregationNode::Step::kSingle ||
+            columnStatsSpec_->aggregationStep ==
+                AggregationNode::Step::kPartial,
+        "TableWriteNode requires aggregation step to be single or partial");
+    validateGroupingKeys(
+        columnStatsSpec_.value(), *columns_, "written columns");
+  }
+  // Single-column BIGINT output with no stats spec. Used by Spark/Gluten
+  // and other non-Prestissimo integrations.
+  if (outputType_->size() == 1 && !columnStatsSpec_.has_value()) {
+    VELOX_USER_CHECK_EQ(
+        outputType_->childAt(0)->kind(),
+        TypeKind::BIGINT,
+        "Single-column outputType must be BIGINT");
+    return;
+  }
+  const auto expectedType = TableWriteTraits::outputType(columnStatsSpec_);
+  VELOX_USER_CHECK(
+      outputType_->equivalent(*expectedType),
+      "TableWriteNode outputType mismatch: {} vs computed {}",
+      outputType_->toString(),
+      expectedType->toString());
+}
+
 void TableWriteNode::addDetails(std::stringstream& stream) const {
   stream << insertTableHandle_->connectorInsertTableHandle()->toString();
 }
@@ -2886,6 +2962,33 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
       outputType,
       commitStrategy,
       deserializeSingleSource(obj, context));
+}
+
+TableWriteMergeNode::TableWriteMergeNode(
+    const PlanNodeId& id,
+    RowTypePtr outputType,
+    std::optional<ColumnStatsSpec> columnStatsSpec,
+    PlanNodePtr source)
+    : PlanNode(id),
+      columnStatsSpec_(std::move(columnStatsSpec)),
+      sources_{std::move(source)},
+      outputType_(std::move(outputType)) {
+  VELOX_USER_CHECK_NOT_NULL(sources_[0]);
+  const auto expectedType = TableWriteTraits::outputType(columnStatsSpec_);
+  VELOX_USER_CHECK(
+      outputType_->equivalent(*expectedType),
+      "TableWriteMergeNode outputType mismatch: {} vs computed {}",
+      outputType_->toString(),
+      expectedType->toString());
+  if (hasColumnStatsSpec()) {
+    VELOX_USER_CHECK(
+        columnStatsSpec_->aggregationStep == AggregationNode::Step::kFinal ||
+            columnStatsSpec_->aggregationStep ==
+                AggregationNode::Step::kIntermediate,
+        "TableWriteMergeNode requires aggregation step to be intermediate or final");
+    validateGroupingKeys(
+        columnStatsSpec_.value(), *sources_[0]->outputType(), "source output");
+  }
 }
 
 void TableWriteMergeNode::addDetails(std::stringstream& /* stream */) const {}

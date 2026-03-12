@@ -16,24 +16,11 @@
 
 #include "velox/exec/TableWriteMerge.h"
 
-#include "HashAggregation.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
 namespace {
-
-bool isSameCommitContext(
-    const folly::dynamic& first,
-    const folly::dynamic& second) {
-  return std::tie(
-             first[TableWriteTraits::kTaskIdContextKey],
-             first[TableWriteTraits::kCommitStrategyContextKey]) ==
-      std::tie(
-             second[TableWriteTraits::kTaskIdContextKey],
-             second[TableWriteTraits::kCommitStrategyContextKey]);
-}
 
 bool containsNonNullRows(const VectorPtr& vector) {
   if (!vector->mayHaveNulls()) {
@@ -86,7 +73,7 @@ void TableWriteMerge::addInput(RowVectorPtr input) {
   VELOX_CHECK(!noMoreInput_);
   VELOX_CHECK_GT(input->size(), 0);
 
-  if (isStatistics(input)) {
+  if (TableWriteTraits::isStatisticsRow(input)) {
     VELOX_CHECK_NOT_NULL(statsCollector_);
     statsCollector_->addInput(input);
     return;
@@ -95,14 +82,18 @@ void TableWriteMerge::addInput(RowVectorPtr input) {
   // Increments row count.
   numRows_ += TableWriteTraits::getRowCount(input);
 
-  // Makes sure the lifespan is the same.
+  // Validate that all inputs share the same task ID and commit strategy.
   auto commitContext = TableWriteTraits::getTableCommitContext(input);
   if (lastCommitContext_ != nullptr) {
-    VELOX_CHECK(
-        isSameCommitContext(lastCommitContext_, commitContext),
-        "incompatible table commit context: {} is not compatible with {}",
-        lastCommitContext_.asString(),
-        commitContext.asString());
+    VELOX_CHECK_EQ(
+        lastCommitContext_[TableWriteTraits::kTaskIdContextKey].asString(),
+        commitContext[TableWriteTraits::kTaskIdContextKey].asString(),
+        "Mismatched taskId in commit context");
+    VELOX_CHECK_EQ(
+        lastCommitContext_[TableWriteTraits::kCommitStrategyContextKey]
+            .asString(),
+        commitContext[TableWriteTraits::kCommitStrategyContextKey].asString(),
+        "Mismatched commit strategy in commit context");
   }
   lastCommitContext_ = commitContext;
 
@@ -216,8 +207,4 @@ RowVectorPtr TableWriteMerge::createLastOutput() {
   return output;
 }
 
-bool TableWriteMerge::isStatistics(RowVectorPtr input) {
-  return input->childAt(TableWriteTraits::kRowCountChannel)->isNullAt(0) &&
-      input->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(0);
-}
 } // namespace facebook::velox::exec
