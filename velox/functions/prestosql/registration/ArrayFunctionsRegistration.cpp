@@ -26,6 +26,7 @@
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
 #include "velox/functions/prestosql/ArraySubset.h"
+#include "velox/functions/prestosql/ArrayTopNComparator.h"
 #include "velox/functions/prestosql/L2Norm.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
@@ -279,6 +280,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayTopNFunction<Date>(prefix);
   registerArrayTopNFunction<Varbinary>(prefix);
   registerArrayTopNFunction<Orderable<T1>>(prefix);
+  registerArrayTopNComparatorFunction(prefix);
 
   registerArrayRemoveNullFunctions<int8_t>(prefix);
   registerArrayRemoveNullFunctions<int16_t>(prefix);
