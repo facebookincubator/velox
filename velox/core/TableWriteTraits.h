@@ -84,10 +84,12 @@ class TableWriteTraits {
   static RowTypePtr outputType(
       const std::optional<core::ColumnStatsSpec>& columnStatsSpec);
 
-  /// Returns true if 'output' is a statistics row (both row count and
-  /// fragment channels are NULL). Statistics rows carry aggregated
+  /// Returns true if row 'index' in 'output' is a statistics row (both row
+  /// count and fragment channels are NULL). Statistics rows carry aggregated
   /// per-column stats; data rows carry row counts and/or file fragments.
-  static bool isStatisticsRow(const RowVectorPtr& output);
+  static bool isStatisticsRow(
+      const RowVectorPtr& output,
+      vector_size_t index = 0);
 
   /// Returns the parsed commit context from table writer 'output'.
   static folly::dynamic getTableCommitContext(const RowVectorPtr& output);

@@ -1740,18 +1740,19 @@ class TableWriteNode : public PlanNode {
 
 using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 
-/// Merges output from multiple TableWrite operators running in parallel
-/// drivers within the same task. Collects fragments, accumulates row counts,
-/// and aggregates column statistics using an embedded ColumnStatsCollector.
+/// Merges output from multiple TableWrite operators. Collects fragments,
+/// accumulates row counts, and aggregates column statistics using an
+/// embedded ColumnStatsCollector.
 ///
-/// Input rows are classified using the same multiplexed format as
-/// TableWriteNode output (see TableWriteTraits):
+/// Input rows are classified per-row using TableWriteTraits::isStatisticsRow
+/// (see TableWriteTraits). Input batches may contain a mix of statistics and
+/// data rows (e.g. when receiving batched output from an exchange):
 ///   - Statistics rows (rows=NULL, fragments=NULL): routed to the stats
 ///     collector for aggregation.
 ///   - Data rows (rows or fragments non-NULL): row counts are accumulated,
 ///     fragments are buffered, and commit context is validated for
-///     consistency (all inputs must share the same taskId and commit
-///     strategy).
+///     consistency (all inputs must share the same commit strategy;
+///     taskId may differ in cross-worker merge).
 ///
 /// Output follows the same three-phase protocol as TableWriteNode:
 ///   1. Fragment rows (emitted first, to free memory).
@@ -1763,10 +1764,8 @@ using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
 ///     further merging downstream).
 ///   - kFinal: reads partial state, produces final scalar values.
 ///
-/// Designed for single-task, multi-driver merge. Assumes all input comes
-/// from drivers within the same task (same commit context). Not designed
-/// for cross-task merge (e.g. merging output from multiple workers via an
-/// exchange) — use a separate operator for that.
+/// Supports both single-task multi-driver merge (via LocalGather) and
+/// cross-task merge (via Exchange from multiple workers).
 class TableWriteMergeNode : public PlanNode {
  public:
   /// @param id Plan node ID.

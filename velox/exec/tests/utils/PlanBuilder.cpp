@@ -839,51 +839,56 @@ const core::TableWriteNodePtr findTableWrite(const core::PlanNodePtr planNode) {
 }
 } // namespace
 
-PlanBuilder& PlanBuilder::tableWriteMerge() {
+PlanBuilder& PlanBuilder::tableWriteMerge(core::AggregationNode::Step step) {
   VELOX_CHECK_NOT_NULL(planNode_, "TableWriteMerge cannot be the source node");
   auto writer = findTableWrite(planNode_);
   VELOX_CHECK_NOT_NULL(
-      writer, "TableWriteMerge can only be added after TableWrite node");
+      writer, "TableWriteMerge requires a TableWrite node in the plan tree");
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
   if (writer->hasColumnStatsSpec()) {
-    const auto writerSpec = writer->columnStatsSpec().value();
-    VELOX_CHECK_EQ(
-        writerSpec.aggregationStep, core::AggregationNode::Step::kPartial);
-    std::vector<std::vector<TypePtr>> aggregateRawInputs;
-    const auto numAggregates = writerSpec.aggregates.size();
-    aggregateRawInputs.reserve(numAggregates);
-    for (const auto& aggregate : writerSpec.aggregates) {
-      aggregateRawInputs.push_back(aggregate.rawInputTypes);
-    }
+    const auto& writerSpec = writer->columnStatsSpec().value();
     const auto& inputType = planNode_->outputType();
+    const auto numAggregates = writerSpec.aggregates.size();
 
     std::vector<std::string> aggregateNames;
     aggregateNames.reserve(numAggregates);
     std::vector<core::AggregationNode::Aggregate> aggregates;
     aggregates.reserve(numAggregates);
-    for (int i = 0; i < numAggregates; ++i) {
-      core::AggregationNode::Aggregate aggregate = writerSpec.aggregates[i];
+    for (size_t i = 0; i < numAggregates; ++i) {
+      auto aggregate = writerSpec.aggregates[i];
       aggregate.call = std::make_shared<core::CallTypedExpr>(
           aggregate.call->type(),
           aggregate.call->name(),
           field(inputType, writerSpec.aggregateNames[i]));
       aggregates.push_back(std::move(aggregate));
-      aggregateNames.push_back(fmt::format("a{}", i));
+      aggregateNames.push_back(writerSpec.aggregateNames[i]);
     }
     columnStatsSpec = core::ColumnStatsSpec{
         writerSpec.groupingKeys,
-        core::AggregationNode::Step::kIntermediate,
+        step,
         std::move(aggregateNames),
         std::move(aggregates)};
   }
 
+  auto outputType = TableWriteTraits::outputType(columnStatsSpec);
   planNode_ = std::make_shared<core::TableWriteMergeNode>(
       nextPlanNodeId(),
-      TableWriteTraits::outputType(columnStatsSpec),
-      columnStatsSpec,
+      std::move(outputType),
+      std::move(columnStatsSpec),
       planNode_);
-  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::tableWriteMerge(
+    core::ColumnStatsSpec columnStatsSpec) {
+  VELOX_CHECK_NOT_NULL(planNode_, "TableWriteMerge cannot be the source node");
+  auto outputType = TableWriteTraits::outputType(columnStatsSpec);
+  planNode_ = std::make_shared<core::TableWriteMergeNode>(
+      nextPlanNodeId(),
+      std::move(outputType),
+      std::move(columnStatsSpec),
+      planNode_);
   return *this;
 }
 
@@ -1547,6 +1552,10 @@ PlanBuilder& PlanBuilder::localPartition(const std::vector<std::string>& keys) {
       pool_);
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::localGather() {
+  return localPartition(std::vector<std::string>{});
 }
 
 PlanBuilder& PlanBuilder::scaleWriterlocalPartition(

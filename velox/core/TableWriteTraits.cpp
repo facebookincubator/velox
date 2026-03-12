@@ -106,10 +106,12 @@ RowTypePtr TableWriteTraits::outputType(
   return kOutputTypeWithoutStats->unionWith(columnStatsSpec->outputType());
 }
 
-bool TableWriteTraits::isStatisticsRow(const RowVectorPtr& output) {
-  VELOX_CHECK_GT(output->size(), 0);
-  return output->childAt(kRowCountChannel)->isNullAt(0) &&
-      output->childAt(kFragmentChannel)->isNullAt(0);
+bool TableWriteTraits::isStatisticsRow(
+    const RowVectorPtr& output,
+    vector_size_t index) {
+  VELOX_DCHECK_LT(index, output->size());
+  return output->childAt(kRowCountChannel)->isNullAt(index) &&
+      output->childAt(kFragmentChannel)->isNullAt(index);
 }
 
 folly::dynamic TableWriteTraits::getTableCommitContext(
@@ -123,8 +125,8 @@ folly::dynamic TableWriteTraits::getTableCommitContext(
 
 int64_t TableWriteTraits::getRowCount(const RowVectorPtr& output) {
   VELOX_CHECK_GT(output->size(), 0);
-  auto rowCountVector =
-      output->childAt(kRowCountChannel)->asFlatVector<int64_t>();
+  auto* rowCountVector =
+      output->childAt(kRowCountChannel)->as<SimpleVector<int64_t>>();
   VELOX_CHECK_NOT_NULL(rowCountVector);
   int64_t rowCount{0};
   for (int i = 0; i < output->size(); ++i) {
