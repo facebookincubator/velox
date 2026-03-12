@@ -1257,6 +1257,10 @@ FilterNode(rank/row_number &lt;= limit), but it uses less memory and CPU.</p>
 <h3>MarkDistinctNode<a class="headerlink" href="#markdistinctnode" title="Link to this heading">¶</a></h3>
 <p>The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
 Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of ‘distinctKeys’.</p>
+<p>This operator supports spilling. The spill mechanism follows the same pattern as RowNumber: when memory pressure
+triggers spilling, the hash table contents and future input are partitioned and written to disk. During restore,
+each partition’s hash table is rebuilt from the spilled data, preserving knowledge of which keys were already seen.
+Disabled by default; enable with <cite>mark_distinct_spill_enabled</cite> configuration property.</p>
 <table class="docutils align-left">
 <colgroup>
 <col style="width: 25.0%" />

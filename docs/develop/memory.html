@@ -648,7 +648,7 @@ reclamation (<em>Operator::MemoryReclaimer</em>). Currently we support memory
 reclamation through disk spilling and table writer flush. <em>Operator::reclaim</em>
 is added to support memory reclamation with the default implementation does
 nothing. Only spillable operators override that method: <em>OrderBy</em>, <em>HashBuild</em>,
-<em>HashAggregation</em>, <em>RowNumber</em>, <em>TopNRowNumber</em>, <em>Window</em> and <em>TableWriter</em>.
+<em>HashAggregation</em>, <em>RowNumber</em>, <em>TopNRowNumber</em>, <em>MarkDistinct</em>, <em>Window</em> and <em>TableWriter</em>.
 As for now, we simply spill everything from the spillable operator’s row
 container to free up memory. After we add memory compaction support for row
 containers, we could leverage fine-grained disk spilling features in Velox
