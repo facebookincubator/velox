@@ -85,6 +85,11 @@ struct CudfHiveWriterOptions
 
   // Sorting columns
   std::vector<sorting_column> sortingColumns;
+
+  std::shared_ptr<facebook::velox::dwio::common::WriterOptions> clone()
+      const override {
+    return std::make_shared<CudfHiveWriterOptions>(*this);
+  }
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive

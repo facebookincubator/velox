@@ -27,6 +27,7 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HiveInsertTableHandle.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"

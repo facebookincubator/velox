@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
+#include "velox/connectors/hive/PartitionWriter.h"
+
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -83,10 +85,10 @@ std::string makeUuid() {
 }
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
-    std::optional<uint32_t> bucketId,
+    std::optional<uint32_t> /*bucketId*/,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-    const ConnectorQueryCtx& connectorQueryCtx,
-    bool commitRequired) const {
+    const ConnectorQueryCtx& /*connectorQueryCtx*/,
+    bool /*commitRequired*/) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   if (targetFileName.empty()) {
     targetFileName = fmt::format("{}", makeUuid());
@@ -126,7 +128,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           serdeParameters,
           nullptr,
           false,
-          std::make_shared<const HiveInsertFileNameGenerator>()),
+          std::make_shared<const IcebergFileNameGenerator>()),
       partitionSpec_(partitionSpec) {
   VELOX_USER_CHECK(
       !inputColumns_.empty(),
@@ -303,19 +305,32 @@ IcebergDataSink::IcebergDataSink(
               ? std::make_unique<IcebergPartitionName>(partitionSpec_)
               : nullptr),
       partitionRowType_(std::move(partitionRowType)) {
+  VELOX_USER_CHECK(
+      commitStrategy == CommitStrategy::kNoCommit,
+      "Iceberg connector supports only no-commit write strategy.");
   commitPartitionValue_.resize(maxOpenWriters_);
+  if (isPartitioned()) {
+    partitionWriter_->setOnWriterCreated(
+        [this](uint32_t writerIndex, const HiveWriterId& /*id*/) {
+          if (commitPartitionValue_[writerIndex].isNull()) {
+            commitPartitionValue_[writerIndex] =
+                makeCommitPartitionValue(writerIndex);
+          }
+        });
+  }
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
+  const auto& writers = partitionWriter_->writers();
   std::vector<std::string> commitTasks;
-  commitTasks.reserve(writerInfo_.size());
+  commitTasks.reserve(writers.size());
 
   auto icebergInsertTableHandle =
       std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
           insertTableHandle_);
 
-  for (auto i = 0; i < writerInfo_.size(); ++i) {
-    const auto& writerInfo = writerInfo_.at(i);
+  for (auto i = 0; i < writers.size(); ++i) {
+    const auto& writerInfo = writers[i]->writerInfo();
     VELOX_CHECK_NOT_NULL(writerInfo);
 
     // Following metadata (json format) is consumed by Presto CommitTaskData.
@@ -375,17 +390,9 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
       partitionKeyAsLowerCase_);
 }
 
-uint32_t IcebergDataSink::ensureWriter(const HiveWriterId& id) {
-  auto writerId = HiveDataSink::ensureWriter(id);
-  if (commitPartitionValue_[writerId].isNull()) {
-    commitPartitionValue_[writerId] = makeCommitPartitionValue(writerId);
-  }
-  return writerId;
-}
-
 std::shared_ptr<dwio::common::WriterOptions>
-IcebergDataSink::createWriterOptions() const {
-  auto options = HiveDataSink::createWriterOptions();
+IcebergDataSink::createWriterOptions(const HiveWriterInfo* writerInfo) const {
+  auto options = HiveDataSink::createWriterOptions(writerInfo);
   // Per Iceberg specification (https://iceberg.apache.org/spec/#parquet):
   // - Timestamps must be stored with microsecond precision.
   // - Timestamps must NOT be adjusted to UTC timezone; they should be written

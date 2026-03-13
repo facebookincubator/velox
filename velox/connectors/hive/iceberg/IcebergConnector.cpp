@@ -68,6 +68,9 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
     ConnectorInsertTableHandlePtr connectorInsertTableHandle,
     ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy) {
+  VELOX_USER_CHECK(
+      commitStrategy == CommitStrategy::kNoCommit,
+      "Iceberg connector supports only no-commit write strategy.");
   auto icebergInsertHandle = checkedPointerCast<const IcebergInsertTableHandle>(
       connectorInsertTableHandle);
 

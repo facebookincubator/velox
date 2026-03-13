@@ -160,6 +160,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
   void processConfigs(
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) override;
+
+  std::shared_ptr<dwio::common::WriterOptions> clone() const override {
+    return std::make_shared<WriterOptions>(*this);
+  }
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.

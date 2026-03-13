@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/fuzzer/PrestoQueryRunnerToSqlPlanNodeVisitor.h"
-#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HiveInsertTableHandle.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 
 using namespace facebook::velox;
