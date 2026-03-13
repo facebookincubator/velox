@@ -217,6 +217,17 @@ TEST_P(PartitioningVectorTest, testRowVector) {
   }));
 }
 
+TEST_P(PartitioningVectorTest, testConstantVector) {
+  const int numValues = GetParam();
+
+  testVectorPartitioning(makeConstant<int32_t>(7, numValues));
+  testVectorPartitioning(makeConstant<int32_t>(std::nullopt, numValues));
+  testVectorPartitioning(makeConstantRow(
+      ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}),
+      variant::row({variant(11), variant("constant")}),
+      numValues));
+}
+
 // Partitioning a null-free vector must not allocate a null buffer.
 TEST_P(PartitioningVectorTest, noNullBufferAllocatedForNullFreeFlat) {
   const int numValues = GetParam();

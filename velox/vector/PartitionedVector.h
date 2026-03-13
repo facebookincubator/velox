@@ -268,4 +268,31 @@ class PartitionedRowVector : public PartitionedVector {
   std::vector<PartitionedVectorPtr> partitionedChildren_;
 };
 
+/// Partitions a ConstantVector by reusing the same constant payload and
+/// returning constant slices sized to each partition.
+class PartitionedConstantVector : public PartitionedVector {
+ public:
+  PartitionedConstantVector(
+      const VectorPtr& constantVector,
+      uint32_t numPartitions,
+      const BufferPtr& partitionOffsets,
+      velox::memory::MemoryPool* pool)
+      : PartitionedVector(
+            constantVector,
+            numPartitions,
+            partitionOffsets,
+            pool) {}
+
+  void partition(
+      const std::vector<uint32_t>& partitions,
+      PartitionBuildContext& ctx) override;
+
+  VectorPtr partitionAt(uint32_t partition) const override;
+
+  const vector_size_t* rawSizes() override {
+    VELOX_UNREACHABLE(
+        "PartitionedConstantVector does not implement rawSizes()");
+  }
+};
+
 } // namespace facebook::velox

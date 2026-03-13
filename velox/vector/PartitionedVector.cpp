@@ -307,12 +307,16 @@ PartitionedVectorPtr PartitionedVector::create(
           vector, partitions, numPartitions, endPartitionOffsets, ctx, pool);
     }
 
+    case VectorEncoding::Simple::CONSTANT: {
+      return std::make_shared<PartitionedConstantVector>(
+          vector, numPartitions, endPartitionOffsets, pool);
+    }
+
     case VectorEncoding::Simple::ARRAY:
     case VectorEncoding::Simple::MAP:
     case VectorEncoding::Simple::DICTIONARY:
     case VectorEncoding::Simple::BIASED:
     case VectorEncoding::Simple::SEQUENCE:
-    case VectorEncoding::Simple::CONSTANT:
     case VectorEncoding::Simple::LAZY:
       VELOX_UNSUPPORTED(
           "Unsupported vector encoding for PartitionedVector: {}",
@@ -394,12 +398,7 @@ void PartitionedRowVector::partition(
   if (numPartitions_ > 1 && vector_->rawNulls()) {
     Byte* rawNulls = reinterpret_cast<Byte*>(vector_->mutableRawNulls());
     partitionBitsInPlace(
-        rawNulls,
-          partitions,
-          numPartitions_,
-          ctx,
-          endPartitionOffsets_,
-          pool_);
+        rawNulls, partitions, numPartitions_, ctx, endPartitionOffsets_, pool_);
   }
 }
 
@@ -434,6 +433,21 @@ VectorPtr PartitionedRowVector::partitionAt(uint32_t partition) const {
       std::move(nulls),
       numRowsInPartition,
       std::move(children));
+}
+
+void PartitionedConstantVector::partition(
+    const std::vector<uint32_t>& /*partitions*/,
+    PartitionBuildContext& /*ctx*/) {}
+
+VectorPtr PartitionedConstantVector::partitionAt(uint32_t partition) const {
+  VELOX_CHECK_LT(partition, numPartitions_);
+
+  const vector_size_t beginOffset =
+      partition == 0 ? 0 : rawEndPartitionOffsets_[partition - 1];
+  const vector_size_t numRowsInPartition =
+      rawEndPartitionOffsets_[partition] - beginOffset;
+
+  return vector_->slice(0, numRowsInPartition);
 }
 
 } // namespace facebook::velox
