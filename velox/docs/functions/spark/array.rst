@@ -230,6 +230,24 @@ Array Functions
         SELECT concat(array(1, 2), array(1, 2), array(1, null)); -- [1, 2, 1, 2, 1, NULL]
         SELECT concat(array(array(1, 2)), array(array(1, null))); -- [[1, 2], [1, NULL]]
 
+.. spark:function:: element_at(array(E), index) -> E
+
+    Returns element of ``array`` at given 1-based ``index``. If ``index`` < 0, accesses elements
+    from the last to the first. Throws an error if ``index`` is 0. Returns ``NULL`` if the index
+    exceeds the length of the array.
+    Corresponds to Spark's ``element_at`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT element_at(array(1, 2, 3), 2); -- 2
+        SELECT element_at(array(1, 2, 3), -1); -- 3
+        SELECT element_at(array(1, 2, 3), 0); -- error
+        SELECT element_at(array(1, 2, 3), 5); -- NULL
+
+.. spark:function:: checked_element_at(array(E), index) -> E
+
+    Returns element of ``array`` at given 1-based ``index``. If ``index`` < 0, accesses elements
+    from the last to the first. Throws an error if ``index`` is 0 or exceeds the length of the array.
+    Corresponds to Spark's ``element_at`` with ``spark.sql.ansi.enabled`` set to true.
+
 .. spark:function:: exists(array(T), function(T, boolean)) → boolean
 
     Returns whether at least one element of an array matches the given predicate.
