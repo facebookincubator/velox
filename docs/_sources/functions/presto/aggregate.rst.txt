@@ -312,11 +312,11 @@ Array Aggregate Functions
 
 .. function:: vector_sum(array(T)) -> array(T)
 
-    Returns the element-wise sum of all input arrays.
+    Returns the element-wise sum of all input arrays. Equivalent to
+    ``ARRAY[SUM(a[1]), SUM(a[2]), ...]``, with the same null-handling
+    semantics as :func:`sum`: null elements are skipped, and positions
+    where all input values are null produce null in the output.
     All input arrays must have the same length.
-    Null elements are skipped, consistent with standard :func:`sum` aggregate
-    semantics. Positions where all input values are null produce null in the
-    output.
     Supported types for T are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL
     and DOUBLE.
     Overflow is checked for integer types.
