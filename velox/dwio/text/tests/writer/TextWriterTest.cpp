@@ -17,10 +17,10 @@
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/dwio/text/RegisterTextWriter.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -28,8 +28,6 @@
 /// TODO: Add fuzzer test.
 
 namespace facebook::velox::text {
-using namespace facebook::velox::common::testutil;
-
 class TextWriterTest : public testing::Test,
                        public velox::test::VectorTestBase {
  public:
@@ -39,7 +37,7 @@ class TextWriterTest : public testing::Test,
     registerTextReaderFactory();
     rootPool_ = memory::memoryManager()->addRootPool("TextWriterTests");
     leafPool_ = rootPool_->addLeafChild("TextWriterTests");
-    tempPath_ = TempDirectoryPath::create();
+    tempPath_ = exec::test::TempDirectoryPath::create();
   }
 
   void TearDown() override {
@@ -66,7 +64,7 @@ class TextWriterTest : public testing::Test,
   constexpr static double kNaN = std::numeric_limits<double>::quiet_NaN();
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
-  std::shared_ptr<TempDirectoryPath> tempPath_;
+  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
 };
 
 TEST_F(TextWriterTest, write) {
@@ -161,9 +159,9 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[2][6], "3.100000");
 
   // timestamp
-  EXPECT_EQ(result[0][7], "1969-12-31 16:00:00.000");
-  EXPECT_EQ(result[1][7], "1969-12-31 16:00:01.001");
-  EXPECT_EQ(result[2][7], "1969-12-31 16:00:02.002");
+  EXPECT_EQ(result[0][7], "1970-01-01 00:00:00.000");
+  EXPECT_EQ(result[1][7], "1970-01-01 00:00:01.001");
+  EXPECT_EQ(result[2][7], "1970-01-01 00:00:02.002");
 
   // varchar
   EXPECT_EQ(result[0][8], "hello");
@@ -238,7 +236,7 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(3, result), 3);
   for (int i = 0; i < 3; ++i) {
@@ -547,7 +545,7 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
   ASSERT_EQ(rowReader->next(13, result), 13);
   for (int i = 0; i < 13; ++i) {
     EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
@@ -700,7 +698,7 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(5, result), 5);
   for (int i = 0; i < 5; ++i) {
@@ -938,7 +936,7 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(5, result), 5);
   for (int i = 0; i < 5; ++i) {
@@ -1093,7 +1091,7 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(5, result), 5);
   for (int i = 0; i < 5; ++i) {
@@ -1480,7 +1478,7 @@ TEST_F(
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
   ASSERT_EQ(rowReader->next(3, result), 3);
   for (int i = 0; i < 3; ++i) {
     EXPECT_TRUE(result->equalValueAt(data.get(), i, i));
@@ -1610,7 +1608,7 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(5, result), 3);
   for (int i = 0; i < 3; ++i) {
@@ -1742,7 +1740,7 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
 
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(3, result), 3);
   for (int i = 0; i < 3; ++i) {
@@ -1864,7 +1862,7 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
   auto rowReader = reader->createRowReader(rowReaderOptions);
   EXPECT_EQ(*reader->rowType(), *schema);
 
-  VectorPtr result;
+  VectorPtr result = BaseVector::create(schema, 0, pool());
 
   ASSERT_EQ(rowReader->next(3, result), 3);
   for (int i = 0; i < 3; ++i) {

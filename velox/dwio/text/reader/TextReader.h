@@ -17,8 +17,9 @@
 #pragma once
 
 #include <array>
-#include <limits>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "folly/CppAttributes.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -31,7 +32,6 @@ namespace facebook::velox::text {
 using common::CompressionKind;
 using common::ScanSpec;
 using dwio::common::BufferedInput;
-using dwio::common::ColumnSelector;
 using dwio::common::ColumnStatistics;
 using dwio::common::Mutation;
 using dwio::common::ReaderOptions;
@@ -40,11 +40,13 @@ using dwio::common::SerDeOptions;
 using dwio::common::TypeWithId;
 using memory::MemoryPool;
 
+using RejectedRow = dwio::common::RejectedRow;
+using OnRowReject = dwio::common::OnRowReject;
+
 // Shared state for a file between TextReader and TextRowReader
 struct FileContents {
   FileContents(MemoryPool& pool, const std::shared_ptr<const RowType>& t);
 
-  const size_t COLUMN_POSITION_INVALID = std::numeric_limits<size_t>::max();
   const std::shared_ptr<const RowType> schema;
 
   std::unique_ptr<BufferedInput> input;
@@ -55,7 +57,8 @@ struct FileContents {
   CompressionKind compression;
   dwio::common::compression::CompressionOptions compressionOptions;
   SerDeOptions serDeOptions;
-  std::array<bool, 128> needsEscape;
+
+  OnRowReject onRowReject;
 };
 
 using DelimType = uint8_t;
@@ -65,32 +68,24 @@ constexpr DelimType DelimTypeEOE = 2;
 
 class TextReader : public dwio::common::Reader {
  public:
-  TextReader(
-      const ReaderOptions& options,
-      std::unique_ptr<BufferedInput> input);
+  TextReader(ReaderOptions options, std::unique_ptr<BufferedInput> input);
 
-  std::optional<uint64_t> numberOfRows() const override;
+  std::optional<uint64_t> numberOfRows() const final;
 
   std::unique_ptr<ColumnStatistics> columnStatistics(
-      uint32_t index) const override;
+      uint32_t index) const final;
 
-  const RowTypePtr& rowType() const override;
+  const RowTypePtr& rowType() const final;
 
-  CompressionKind getCompression() const;
-
-  const std::shared_ptr<const TypeWithId>& typeWithId() const override;
+  const std::shared_ptr<const TypeWithId>& typeWithId() const final;
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
-      const RowReaderOptions& options) const override;
-
-  uint64_t getFileLength() const;
+      const RowReaderOptions& options) const final;
 
  private:
   ReaderOptions options_;
   mutable std::shared_ptr<const TypeWithId> typeWithId_;
   std::shared_ptr<FileContents> contents_;
-  std::shared_ptr<const TypeWithId> schemaWithId_;
-  std::shared_ptr<const RowType> internalSchema_;
 };
 
 class TextRowReader : public dwio::common::RowReader {
@@ -102,35 +97,28 @@ class TextRowReader : public dwio::common::RowReader {
   uint64_t next(
       uint64_t size,
       VectorPtr& result,
-      const Mutation* mutation = nullptr) override;
+      const Mutation* mutation = nullptr) final;
 
-  int64_t nextRowNumber() override;
+  int64_t nextRowNumber() final {
+    return atEOF_ ? -1 : static_cast<int64_t>(currentRow_) + 1;
+  }
 
-  int64_t nextReadSize(uint64_t size) override;
+  int64_t nextReadSize(uint64_t size) final {
+    return static_cast<int64_t>(std::min(fileLength_ - currentRow_, size));
+  }
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override;
+  void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const final {}
 
-  void resetFilterCaches() override;
+  void resetFilterCaches() final {}
 
-  std::optional<size_t> estimatedRowSize() const override;
-
-  const ColumnSelector& getColumnSelector() const;
-
-  std::shared_ptr<const TypeWithId> getSelectedType() const;
-
-  uint64_t getRowNumber() const;
+  std::optional<size_t> estimatedRowSize() const final {
+    return std::nullopt;
+  }
 
   uint64_t seekToRow(uint64_t rowNumber);
 
  private:
-  const RowReaderOptions& getDefaultOpts();
-
-  const std::shared_ptr<const RowType>& getType() const;
-
-  bool isSelectedField(const std::shared_ptr<const TypeWithId>& t);
-
-  const char* getStreamNameData() const;
+  const RowType& getFileType() const;
 
   uint64_t getLength();
 
@@ -146,13 +134,9 @@ class TextRowReader : public dwio::common::RowReader {
 
   void resetEOE(DelimType& delim);
 
-  bool isEOE(DelimType delim);
-
   void setEOR(DelimType& delim);
 
   bool isEOR(DelimType delim);
-
-  bool isOuterEOR(DelimType delim);
 
   bool isEOEorEOR(DelimType delim);
 
@@ -162,77 +146,235 @@ class TextRowReader : public dwio::common::RowReader {
 
   DelimType getDelimType(uint8_t v);
 
-  template <bool skipLF = false>
-  char getByteUnchecked(DelimType& delim);
+  void resetLine();
 
-  template <bool skipLF = false>
-  char getByteUncheckedOptimized(DelimType& delim);
+  bool refillChunk();
 
-  uint8_t getByte(DelimType& delim);
-  uint8_t getByteOptimized(DelimType& delim);
+  /// Consumes trailing \n after \r, handling chunk boundaries.
+  void consumeLF();
 
-  bool getEOR(DelimType& delim, bool& isNull);
+  /// Bulk-scans chunks, skipping escape sequences, until IsTerminator(byte)
+  /// returns true. On terminator, calls OnTerminator(byte) and returns.
+  /// On EOF, calls setEOF() and returns. Never builds ownedString_.
+  template <bool HasEscape, typename IsTerminator, typename OnTerminator>
+  void scanToTerminator(const IsTerminator& isTerm, const OnTerminator& onTerm);
 
   bool skipLine();
 
-  void resetLine();
+  void skipField(DelimType& delim);
 
-  static std::string&
+  static std::string_view
   getString(TextRowReader& th, bool& isNull, DelimType& delim);
 
   template <typename T>
-  static T getInteger(TextRowReader& th, bool& isNull, DelimType& delim);
+  static T getNumeric(TextRowReader& th, bool& isNull, DelimType& delim);
 
   static bool getBoolean(TextRowReader& th, bool& isNull, DelimType& delim);
 
-  static float getFloat(TextRowReader& th, bool& isNull, DelimType& delim);
-
-  static double getDouble(TextRowReader& th, bool& isNull, DelimType& delim);
-
   void readElement(
       const std::shared_ptr<const Type>& t,
-      const std::shared_ptr<const Type>& reqT,
       BaseVector* FOLLY_NULLABLE data,
       vector_size_t insertionRow,
       DelimType& delim);
 
-  template <class T, class reqT>
-  void putValue(
-      const std::function<T(TextRowReader& th, bool& isNull, DelimType& delim)>&
-          f,
-      BaseVector* FOLLY_NULLABLE data,
-      vector_size_t insertionRow,
-      DelimType& delim);
+  /// Returns true if delim indicates end-of-record for an enclosing
+  /// (shallower) depth — i.e. we have reached the terminator for the
+  /// container we are currently inside.
+  bool isOuterEOR(DelimType delim);
 
-  template <class T>
-  void setValueFromString(
-      const std::string& str,
+  /// Peeks at the current position to check whether the field value is
+  /// the null string followed by an outer delimiter.  Must be called
+  /// after incrementDepth() and before reading any elements.
+  /// Consumes the null value + delimiter only when returning true.
+  bool checkContainerNull(DelimType& delim);
+
+  template <typename T, typename Filter, typename F>
+  bool putValue(
+      const F& f,
       BaseVector* FOLLY_NULLABLE data,
       vector_size_t insertionRow,
-      std::function<std::optional<T>(const std::string&)> convert);
+      DelimType& delim,
+      const velox::common::Filter* filter);
+
+  template <typename T, typename Filter, typename Converter>
+  bool setValueFromString(
+      std::string_view str,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      const Converter& convert,
+      const velox::common::Filter* filter);
+
+  std::string_view ownedStringView() const {
+    return std::string_view{ownedString_.data(), ownedString_.size()};
+  }
+
+  std::string_view finishString(bool& isNull, bool wasEscaped);
 
   const std::shared_ptr<FileContents> contents_;
-  const std::shared_ptr<const TypeWithId> schemaWithId_;
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec_;
 
-  mutable std::shared_ptr<const TypeWithId> selectedSchema_;
-
   RowReaderOptions options_;
-  ColumnSelector columnSelector_;
-  uint64_t currentRow_;
+  uint64_t currentRow_ = 0;
   uint64_t pos_;
   bool atEOL_;
   bool atEOF_;
   bool atSOL_;
   bool atPhysicalEOF_;
   uint8_t depth_;
-  std::string unreadData_;
+  bool hasEscape_;
+  uint8_t escapeChar_;
+  std::array<uint8_t, 8> separators_;
+  std::array<std::array<bool, 256>, 8> isSpecialCharByDepth_;
+  std::string_view unreadData_;
   std::string_view preLoadedUnreadData_;
-  int unreadIdx_;
   uint64_t limit_; // lowest offset not in the range
   uint64_t fileLength_;
-  std::string ownedString_;
+  std::vector<char> ownedString_;
   std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;
+  bool rowHasError_ = false;
+  std::string_view errorValue_;
+
+  // true -> ok, else skip
+  using ColumnReaderFunc = bool (TextRowReader::*)(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+
+  static constexpr int64_t kNotProjected = -1;
+
+  struct FileColumnDesc {
+    int64_t resultVectorIdx = kNotProjected;
+    ColumnReaderFunc reader = nullptr;
+    const velox::common::Filter* filter = nullptr;
+  };
+  std::vector<FileColumnDesc> fileColumns_;
+  std::vector<const velox::common::ScanSpec*> constantSpecs_;
+
+  void initializeColumnReaders();
+
+  // Specialized readers for each type, templatized on filter type.
+  // Return true if value passes the filter, false if filtered out.
+  template <typename Filter>
+  bool readInteger(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readDate(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readBigInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readBigIntDecimal(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readSmallInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readTinyInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readBoolean(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readVarChar(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readVarBinary(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readReal(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readDouble(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readTimestamp(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readHugeInt(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readHugeIntDecimal(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readArray(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readMap(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
+  template <typename Filter>
+  bool readRow(
+      const Type& type,
+      BaseVector* FOLLY_NULLABLE data,
+      vector_size_t insertionRow,
+      DelimType& delim,
+      const velox::common::Filter* filter);
 };
 
 } // namespace facebook::velox::text
