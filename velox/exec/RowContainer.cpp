@@ -958,7 +958,7 @@ void RowContainer::hash(
 }
 
 void RowContainer::clear() {
-  if (usesExternalMemory_) {
+  if (usesExternalMemory_ && !externalPreReleased_) {
     constexpr int32_t kBatch = 1000;
     std::vector<char*> rows(kBatch);
     RowContainerIterator iter;
@@ -980,6 +980,101 @@ void RowContainer::clear() {
 
   rowColumnsStats_.clear();
   rowColumnsStats_.resize(types_.size());
+}
+
+void RowContainer::releaseAllocation(int allocationIndex) {
+  VELOX_CHECK_GE(allocationIndex, 0);
+  VELOX_CHECK_LT(allocationIndex, rows_.numRanges());
+  if (usesExternalMemory_) {
+    externalPreReleased_ = true;
+    RowContainerIterator obj;
+    RowContainerIterator* iter = &obj;
+    iter->allocationIndex = allocationIndex;
+    // init the offset from dummy data.
+    iter->normalizedKeysLeft = numRowsWithNormalizedKey_;
+    iter->normalizedKeySize = originalNormalizedKeySize_;
+    // todo: remove logging.
+    VLOG(1) << "numRowsWithNormalizedKey_ = " << numRowsWithNormalizedKey_;
+    constexpr int32_t kBatchSize = 4096;
+    std::vector<char*> rows(kBatchSize);
+    size_t totalNumRows = 0;
+    while (true) {
+      const auto numRows = listAllRowsWithinAllocation(
+          iter, rows.size(), RowContainer::kUnlimited, rows.data());
+      if (numRows == 0) {
+        break;
+      }
+      // we unset the freeNextRowVector according to `clear` operation.
+      freeRowsExtraMemory(folly::Range<char**>(rows.data(), numRows));
+      totalNumRows += numRows;
+    }
+    // todo: This assumes this function is called from allocationIndex 0 and
+    // in order with no repetition. Must add more mechanism to ensure this.
+    //
+    numRowsWithNormalizedKey_ -= totalNumRows;
+    if (numRowsWithNormalizedKey_ < 0) {
+      numRowsWithNormalizedKey_ = 0;
+    }
+    // todo: remove logging.
+    VLOG(1) << "free #" << totalNumRows << " rows for allocationIndex #"
+            << allocationIndex;
+  }
+  rows_.releaseAllocation(allocationIndex);
+}
+
+int32_t RowContainer::listAllRowsWithinAllocation(
+    RowContainerIterator* iter,
+    int32_t maxRows,
+    uint64_t maxBytes,
+    char** rows) const {
+  int32_t count = 0;
+  uint64_t totalBytes = 0;
+  auto numAllocations = rows_.numRanges();
+  if (iter->allocationIndex == 0 && iter->rowOffset == 0) {
+    iter->normalizedKeysLeft = numRowsWithNormalizedKey_;
+    iter->normalizedKeySize = originalNormalizedKeySize_;
+  }
+  int32_t rowSize = fixedRowSize_ +
+      (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
+  // eliminate the original location loop.
+  auto i = iter->allocationIndex;
+  if (i < numAllocations) {
+    auto range = rows_.rangeAt(i);
+    auto* data =
+        range.data() + memory::alignmentPadding(range.data(), alignment_);
+    auto limit = range.size() -
+        (reinterpret_cast<uintptr_t>(data) -
+         reinterpret_cast<uintptr_t>(range.data()));
+    auto row = iter->rowOffset;
+    while (row + rowSize <= limit) {
+      rows[count++] = data + row +
+          (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
+      VELOX_DCHECK_EQ(
+          reinterpret_cast<uintptr_t>(rows[count - 1]) % alignment_, 0);
+      row += rowSize;
+      auto newTotalBytes = totalBytes + rowSize;
+      if (--iter->normalizedKeysLeft == 0) {
+        rowSize -= originalNormalizedKeySize_;
+      }
+      if (bits::isBitSet(rows[count - 1], freeFlagOffset_)) {
+        --count;
+        continue;
+      }
+      totalBytes = newTotalBytes;
+      if (rowSizeOffset_) {
+        totalBytes += variableRowSize(rows[count - 1]);
+      }
+      if (count == maxRows || totalBytes > maxBytes) {
+        iter->rowOffset = row;
+        iter->allocationIndex = i;
+        return count;
+      }
+    }
+    // we have listed all the rows in this location.
+    iter->rowOffset = 0;
+  }
+  iter->allocationIndex = std::numeric_limits<int32_t>::max();
+  return count;
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

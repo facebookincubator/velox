@@ -694,6 +694,18 @@ class RowContainer {
     return listRows<ProbeType::kAll>(iter, maxRows, kUnlimited, rows);
   }
 
+  int32_t numAllocations() const {
+    return rows_.numRanges();
+  }
+
+  void releaseAllocation(int allocationIndex);
+
+  int32_t listAllRowsWithinAllocation(
+      RowContainerIterator* iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) const;
+
   /// Sets 'probed' flag for the specified rows. Used by the right and
   /// full join to mark build-side rows that matches join
   /// condition. 'rows' may contain duplicate entries for the cases
@@ -1525,6 +1537,7 @@ class RowContainer {
   std::vector<Accumulator> accumulators_;
 
   bool usesExternalMemory_ = false;
+  bool externalPreReleased_ = false;
   // Types of non-aggregate columns. Keys first. Corresponds pairwise
   // to 'typeKinds_' and 'rowColumns_'.
   std::vector<TypePtr> types_;
