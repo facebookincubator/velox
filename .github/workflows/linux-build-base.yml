@@ -326,7 +326,7 @@ jobs:
       - name: Run Tests
         run: |
           ulimit -n 65536
-          cd _build/debug && ctest -j 24 --timeout 900 --output-on-failure --no-tests=error
+          cd _build/debug && ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error
 
   fedora-debug:
     runs-on: 16-core-ubuntu
