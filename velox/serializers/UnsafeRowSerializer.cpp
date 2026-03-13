@@ -130,7 +130,15 @@ void UnsafeRowVectorSerde::registerVectorSerde() {
 // static
 void UnsafeRowVectorSerde::registerNamedVectorSerde() {
   velox::registerNamedVectorSerde(
-      "UnsafeRow", std::make_unique<UnsafeRowVectorSerde>());
+      kSerdeKind, std::make_unique<UnsafeRowVectorSerde>());
+}
+
+// static
+void UnsafeRowVectorSerde::tryRegisterNamedVectorSerde() {
+  if (!velox::isRegisteredNamedVectorSerde(kSerdeKind)) {
+    velox::registerNamedVectorSerde(
+        kSerdeKind, std::make_unique<UnsafeRowVectorSerde>());
+  }
 }
 
 } // namespace facebook::velox::serializer::spark

@@ -22,7 +22,7 @@ namespace facebook::velox::serializer {
 
 class CompactRowVectorSerde : public VectorSerde {
  public:
-  CompactRowVectorSerde() : VectorSerde("CompactRow") {}
+  CompactRowVectorSerde() : VectorSerde(kSerdeKind) {}
 
   void estimateSerializedSize(
       const row::CompactRow* compactRow,
@@ -53,8 +53,20 @@ class CompactRowVectorSerde : public VectorSerde {
       velox::memory::MemoryPool* pool,
       const Options* options = nullptr) override;
 
+  /// Registers this serde as the global default vector serde. Throws if a
+  /// default serde is already registered.
   static void registerVectorSerde();
+
+  /// Registers this serde in the named serde registry under kSerdeKind.
+  /// Throws if a serde with the same name is already registered.
   static void registerNamedVectorSerde();
+
+  /// Registers this serde in the named serde registry under kSerdeKind only
+  /// if not already registered. No-op if a serde with the same name exists.
+  static void tryRegisterNamedVectorSerde();
+
+ private:
+  inline static const std::string kSerdeKind{"CompactRow"};
 };
 
 } // namespace facebook::velox::serializer

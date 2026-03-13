@@ -88,7 +88,7 @@ class PrestoVectorSerde : public VectorSerde {
     bool preserveEncodings{false};
   };
 
-  PrestoVectorSerde() : VectorSerde("Presto") {}
+  PrestoVectorSerde() : VectorSerde(kSerdeKind) {}
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
@@ -191,8 +191,20 @@ class PrestoVectorSerde : public VectorSerde {
       std::vector<Token>& out,
       const Options* options = nullptr);
 
+  /// Registers this serde as the global default vector serde. Throws if a
+  /// default serde is already registered.
   static void registerVectorSerde();
+
+  /// Registers this serde in the named serde registry under kSerdeKind.
+  /// Throws if a serde with the same name is already registered.
   static void registerNamedVectorSerde();
+
+  /// Registers this serde in the named serde registry under kSerdeKind only
+  /// if not already registered. No-op if a serde with the same name exists.
+  static void tryRegisterNamedVectorSerde();
+
+ private:
+  inline static const std::string kSerdeKind{"Presto"};
 };
 
 class PrestoOutputStreamListener : public OutputStreamListener {
