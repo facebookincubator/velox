@@ -24,7 +24,8 @@
  * THE TPC SOFTWARE IS AVAILABLE WITHOUT CHARGE FROM TPC.
  */
 
-int* makePermutation(int nSize, int nStream, DSDGenContext& dsdGenContext);
+std::vector<int32_t>
+makePermutation(int nSize, int nStream, DSDGenContext& dsdGenContext);
 ds_key_t* makeKeyPermutation(
     ds_key_t* pNumberSet,
     ds_key_t nSize,
