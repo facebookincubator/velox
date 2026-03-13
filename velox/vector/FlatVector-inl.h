@@ -85,19 +85,19 @@ xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
 
 template <typename T>
 std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
-  using len_type = decltype(BaseVector::length_);
+  const vector_size_t length = BaseVector::length_;
   BufferPtr hashBuffer =
-      AlignedBuffer::allocate<uint64_t>(BaseVector::length_, BaseVector::pool_);
+      AlignedBuffer::allocate<uint64_t>(length, BaseVector::pool_);
   auto hashData = hashBuffer->asMutable<uint64_t>();
 
   folly::hasher<T> hasher;
   if (!BaseVector::rawNulls_) {
     VELOX_DCHECK_NOT_NULL(rawValues_);
-    for (len_type i = 0; i < BaseVector::length_; ++i) {
+    for (vector_size_t i = 0; i < length; ++i) {
       hashData[i] = hasher(valueAtFast(i));
     }
   } else {
-    for (len_type i = 0; i < BaseVector::length_; ++i) {
+    for (vector_size_t i = 0; i < length; ++i) {
       if (bits::isBitNull(BaseVector::rawNulls_, i)) {
         hashData[i] = BaseVector::kNullHash;
       } else {
@@ -109,14 +109,14 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       BaseVector::pool_,
       BIGINT(),
       BufferPtr(nullptr),
-      BaseVector::length_,
+      length,
       std::move(hashBuffer),
       std::vector<BufferPtr>() /*stringBuffers*/,
       SimpleVectorStats<uint64_t>{}, /* stats */
       std::nullopt /*distinctValueCount*/,
       0 /*nullCount*/,
       false /*sorted*/,
-      sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
+      sizeof(uint64_t) * length /*representedBytes*/);
 }
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
