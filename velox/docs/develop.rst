@@ -19,6 +19,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/hash-table
     develop/aggregations
     develop/connectors
+    develop/dwio
     develop/joins
     develop/anti-join
     develop/operators
