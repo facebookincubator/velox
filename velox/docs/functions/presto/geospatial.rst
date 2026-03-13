@@ -625,5 +625,38 @@ for more details.
     For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
     the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.
 
+.. function:: google_polyline_decode(encoded: varchar) -> points: array(geometry)
+
+    Decodes a Google Polyline encoded string into an array of Point geometries.
+    Uses a fixed precision of 10^5 (100,000), which assumes coordinates were
+    encoded with 5 decimal places of precision.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
+.. function:: google_polyline_decode(encoded: varchar, precision_exponent: bigint) -> points: array(geometry)
+
+    Decodes a Google Polyline encoded string into an array of Point geometries
+    using the specified precision exponent. The precision exponent must be between
+    1 and 16 (inclusive). The precision used for decoding is 10^precision_exponent.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
+.. function:: google_polyline_encode(points: array(Geometry)) -> encoded: varchar
+
+    Encodes an array of Point geometries into a Google Polyline encoded string.
+    Uses a fixed precision of 10^5 (100,000), which rounds coordinates to
+    5 decimal places.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
+
+.. function:: google_polyline_encode(points: array(Geometry), precision_exponent: bigint) -> encoded: varchar
+
+    Encodes an array of Point geometries into a Google Polyline encoded string
+    using the specified precision exponent. The precision exponent must be between
+    1 and 16 (inclusive). The precision used for encoding is 10^precision_exponent.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html

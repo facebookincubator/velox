@@ -296,6 +296,8 @@ std::unordered_set<std::string> skipFunctions = {
     "convex_hull_agg",
     "geometry_union_agg",
     "localtime",
+    "google_polyline_decode",
+    "google_polyline_encode",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {
