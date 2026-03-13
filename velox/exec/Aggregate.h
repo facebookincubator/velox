@@ -93,6 +93,17 @@ class Aggregate {
     setAllocatorInternal(allocator);
   }
 
+  /// Called after construction to pass constant input values to the aggregate.
+  /// Non-constant inputs have null entries in 'constantInputs'. This is called
+  /// before any data is processed, allowing the aggregate to read constant
+  /// arguments (e.g., flags, configuration values) at initialization time
+  /// rather than extracting them from 'args' at runtime.
+  ///
+  /// Default implementation is a no-op. Override in subclasses that need
+  /// access to constant arguments.
+  virtual void setConstantInputs(
+      const std::vector<VectorPtr>& /*constantInputs*/) {}
+
   /// Called for functions that take one or more lambda expression as input.
   /// These expressions must appear after all non-lambda inputs.
   /// These expressions cannot use captures.
