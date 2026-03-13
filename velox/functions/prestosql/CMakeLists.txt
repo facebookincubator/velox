@@ -78,6 +78,7 @@ velox_link_libraries(
   Folly::folly
   FastFloat::fast_float
   stemmer::stemmer
+  s2geometry::s2geometry
 )
 
 if(VELOX_ENABLE_FAISS)

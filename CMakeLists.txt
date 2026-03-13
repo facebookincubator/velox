@@ -762,4 +762,9 @@ if(VELOX_ENABLE_GEO)
   velox_resolve_dependency(geos)
 endif()
 
+# S2 geometry library for geospatial functions.
+# Always bundled since it is not commonly available as a system package.
+set(s2geometry_SOURCE BUNDLED)
+velox_resolve_dependency(s2geometry)
+
 add_subdirectory(velox)

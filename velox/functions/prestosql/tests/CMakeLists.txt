@@ -144,6 +144,8 @@ if(VELOX_ENABLE_GEO)
   target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp)
 endif()
 
+target_sources(velox_functions_test PRIVATE S2FunctionsTest.cpp)
+
 if(VELOX_ENABLE_FAISS)
   set_source_files_properties(
     DistanceFunctionsTest.cpp
