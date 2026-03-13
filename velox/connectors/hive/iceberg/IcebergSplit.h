@@ -25,6 +25,19 @@ namespace facebook::velox::connector::hive::iceberg {
 struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   std::vector<IcebergDeleteFile> deleteFiles;
 
+  /// Positional update files attached to this split. Each update file contains
+  /// (file_path, pos, <subset of updated columns>) for merge-on-read column
+  /// updates. Only the columns that were modified are present in the update
+  /// file; unchanged columns are not included and retain their base values.
+  ///
+  /// NOTE: "Positional updates" are a Velox-side merge-on-read extension, not
+  /// part of the Iceberg V2 spec (which achieves updates via delete + insert).
+  ///
+  /// Reuses IcebergDeleteFile because the metadata shape (path, format, record
+  /// count, bounds) is identical; the content field distinguishes the file type
+  /// via FileContent::kPositionalUpdates.
+  std::vector<IcebergUpdateFile> updateFiles;
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -55,7 +68,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<FileProperties> fileProperties = std::nullopt,
+      std::vector<IcebergUpdateFile> updates = {});
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

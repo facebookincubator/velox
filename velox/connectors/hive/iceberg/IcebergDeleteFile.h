@@ -27,6 +27,10 @@ enum class FileContent {
   kData,
   kPositionalDeletes,
   kEqualityDeletes,
+  /// Velox extension (not part of the Iceberg V2 spec). Carries column-level
+  /// updates keyed by (file_path, pos) for merge-on-read without full-row
+  /// rewrites. Standard Iceberg achieves updates via delete + insert.
+  kPositionalUpdates,
 };
 
 struct IcebergDeleteFile {
@@ -65,5 +69,9 @@ struct IcebergDeleteFile {
         lowerBounds(_lowerBounds),
         upperBounds(_upperBounds) {}
 };
+
+/// Type alias for readability. Positional update files reuse the same metadata
+/// structure as delete files; only the content field differs.
+using IcebergUpdateFile = IcebergDeleteFile;
 
 } // namespace facebook::velox::connector::hive::iceberg
