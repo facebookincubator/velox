@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/SplitReader.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
+#include "velox/connectors/hive/iceberg/PositionalUpdateFileReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -93,13 +94,17 @@ class IcebergSplitReader : public SplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // The read offset to the beginning of the split in number of rows for the
-  // current batch for the base data file
+  /// Read offset to the beginning of the split in number of rows for the
+  /// current batch for the base data file.
   uint64_t baseReadOffset_;
-  // The file position for the first row in the split
+  /// File position for the first row in the split.
   uint64_t splitOffset_;
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
+
+  /// Readers for positional update files attached to this split.
+  std::list<std::unique_ptr<PositionalUpdateFileReader>>
+      positionalUpdateFileReaders_;
 };
 } // namespace facebook::velox::connector::hive::iceberg
