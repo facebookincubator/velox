@@ -5290,6 +5290,131 @@ TEST_P(HashJoinTest, smallOutputBatchSize) {
       .run();
 }
 
+// Verifies correctness when dependent column decoding is skipped during spill.
+TEST_P(HashJoinTest, spillWithDependentColumns) {
+  auto spillDirectory = TempDirectoryPath::create();
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .keyTypes({BIGINT()})
+      .probeVectors(1600, 5)
+      .buildVectors(1500, 5)
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kJoinSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillStartPartitionBit, "48")
+      .config(core::QueryConfig::kSpillNumPartitionBits, "3")
+      .injectSpill(false)
+      .maxSpillLevel(0)
+      .checkSpillStats(false)
+      .run();
+}
+
+// Verifies correctness for anti-join with filter during spill, where dependent
+// column decoding is still required for null filtering.
+TEST_P(HashJoinTest, spillAntiJoinWithFilter) {
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(5, [&](int32_t /*unused*/) {
+        return makeRowVector(
+            {"t0", "t1"},
+            {
+                makeFlatVector<int32_t>(256, [](auto row) { return row % 11; }),
+                makeFlatVector<int32_t>(256, [](auto row) { return row; }),
+            });
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(5, [&](int32_t /*unused*/) {
+        return makeRowVector(
+            {"u0", "u1"},
+            {
+                makeFlatVector<int32_t>(200, [](auto row) { return row % 5; }),
+                makeFlatVector<int32_t>(200, [](auto row) { return row; }),
+            });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .joinFilter("t1 != u1")
+      .joinOutputLayout({"t0", "t1"})
+      .referenceQuery(
+          "SELECT t.* FROM t WHERE NOT EXISTS "
+          "(SELECT * FROM u WHERE t0 = u0 AND t1 <> u1)")
+      .checkSpillStats(false)
+      .run();
+}
+
+// Verifies correctness with wide build side (many dependent columns) and spill.
+TEST_P(HashJoinTest, spillWithWideBuildSide) {
+  auto probeType = ROW({"t_k0", "t_v0"}, {BIGINT(), VARCHAR()});
+  auto buildType =
+      ROW({"u_k0", "u_v0", "u_v1", "u_v2"},
+          {BIGINT(), VARCHAR(), BIGINT(), DOUBLE()});
+
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(5, [&](int32_t /*unused*/) {
+        return makeRowVector(
+            probeType->names(),
+            {
+                makeFlatVector<int64_t>(200, [](auto row) { return row % 31; }),
+                makeFlatVector<StringView>(
+                    200,
+                    [](auto row) {
+                      return StringView::makeInline(
+                          fmt::format("probe_{}", row));
+                    }),
+            });
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(5, [&](int32_t /*unused*/) {
+        return makeRowVector(
+            buildType->names(),
+            {
+                makeFlatVector<int64_t>(180, [](auto row) { return row % 31; }),
+                makeFlatVector<StringView>(
+                    180,
+                    [](auto row) {
+                      return StringView::makeInline(
+                          fmt::format("build_{}", row));
+                    }),
+                makeFlatVector<int64_t>(180, [](auto row) { return row * 10; }),
+                makeFlatVector<double>(180, [](auto row) { return row * 1.5; }),
+            });
+      });
+
+  auto spillDirectory = TempDirectoryPath::create();
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .probeType(probeType)
+      .probeKeys({"t_k0"})
+      .probeVectors(std::move(probeVectors))
+      .buildType(buildType)
+      .buildKeys({"u_k0"})
+      .buildVectors(std::move(buildVectors))
+      .joinOutputLayout({"t_k0", "t_v0", "u_v0", "u_v1", "u_v2"})
+      .referenceQuery(
+          "SELECT t_k0, t_v0, u_v0, u_v1, u_v2 FROM t, u WHERE t_k0 = u_k0")
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kJoinSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillStartPartitionBit, "48")
+      .config(core::QueryConfig::kSpillNumPartitionBits, "3")
+      .injectSpill(false)
+      .maxSpillLevel(0)
+      .checkSpillStats(false)
+      .run();
+}
+
 TEST_P(HashJoinTest, spillFileSize) {
   const std::vector<uint64_t> maxSpillFileSizes({0, 1, 1'000'000'000});
   for (const auto spillFileSize : maxSpillFileSizes) {
