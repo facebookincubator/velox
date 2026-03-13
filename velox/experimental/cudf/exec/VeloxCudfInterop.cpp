@@ -20,11 +20,9 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/type/StringView.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
-#include "velox/vector/FlatVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
 #include <cudf/column/column.hpp>
@@ -35,9 +33,7 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/error.hpp>
 
-#include <cuda_runtime.h>
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/device_buffer.hpp>
 
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
