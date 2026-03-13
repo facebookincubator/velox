@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
+#include <numeric>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -337,6 +338,17 @@ class MockRemoteFunctionTest : public functions::test::FunctionBaseTest {
     result->payload() = rowVectorToIOBuf(resultVector, *pool(), serde.get());
   }
 
+  /// Registers a mock remote function with signature (bigint, bigint) ->
+  /// bigint.
+  void registerMockRemotePlusFunction(const std::string& name) {
+    auto signatures = {exec::FunctionSignatureBuilder()
+                           .returnType("bigint")
+                           .argumentType("bigint")
+                           .argumentType("bigint")
+                           .build()};
+    registerMockRemoteFunction(name, std::move(signatures));
+  }
+
  protected:
   std::shared_ptr<testing::NiceMock<MockRemoteFunctionClient>> mockClient_;
 };
@@ -391,6 +403,94 @@ TEST_F(MockRemoteFunctionTest, mockClientThrowsException) {
       evaluate<SimpleVector<int64_t>>(
           "mock_throwing(c0)", makeRowVector({inputVector})),
       "Mock connection error");
+}
+
+TEST_F(MockRemoteFunctionTest, mockClientRepeatedCoroutineCalls) {
+  registerMockRemotePlusFunction("mock_repeated");
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .Times(3)
+      .WillRepeatedly([this](
+                          remote::RemoteFunctionResponse& response,
+                          const remote::RemoteFunctionRequest& /*request*/) {
+        auto resultVector =
+            makeRowVector({makeFlatVector<int64_t>({10, 20, 30})});
+        setMockResponse(response, resultVector);
+      });
+
+  for (int i = 0; i < 3; ++i) {
+    auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+    auto results = evaluate<SimpleVector<int64_t>>(
+        "mock_repeated(c0, c0)", makeRowVector({inputVector}));
+    auto expected = makeFlatVector<int64_t>({10, 20, 30});
+    assertEqualVectors(expected, results);
+  }
+}
+
+// Tests that exceptions thrown during the coroutine path don't leave the
+// function in a broken state.
+TEST_F(MockRemoteFunctionTest, coroutineExceptionThenRecovery) {
+  registerMockRemotePlusFunction("mock_recover");
+
+  // First call throws, second call succeeds.
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([](remote::RemoteFunctionResponse&,
+                   const remote::RemoteFunctionRequest&) {
+        throw std::runtime_error("Transient network error");
+      })
+      .WillOnce([this](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& /*request*/) {
+        auto resultVector = makeRowVector({makeFlatVector<int64_t>({2, 4, 6})});
+        setMockResponse(response, resultVector);
+      });
+
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+
+  // First call should fail.
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "mock_recover(c0, c0)", makeRowVector({inputVector})),
+      "Transient network error");
+
+  // Second call should succeed, verifying the coroutine path recovers.
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "mock_recover(c0, c0)", makeRowVector({inputVector}));
+  auto expected = makeFlatVector<int64_t>({2, 4, 6});
+  assertEqualVectors(expected, results);
+}
+
+// Tests the coroutine path with a larger batch
+TEST_F(MockRemoteFunctionTest, coroutineLargePayload) {
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_large", signatures);
+
+  constexpr int kSize = 1000;
+  std::vector<int64_t> expectedValues(kSize);
+  for (int i = 0; i < kSize; ++i) {
+    expectedValues[i] = i * 10;
+  }
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([this, &expectedValues](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& /*request*/) {
+        auto resultVector =
+            makeRowVector({makeFlatVector<int64_t>(expectedValues)});
+        setMockResponse(response, resultVector);
+      });
+
+  std::vector<int64_t> inputValues(kSize);
+  std::iota(inputValues.begin(), inputValues.end(), 0);
+  auto inputVector = makeFlatVector<int64_t>(inputValues);
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "mock_large(c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>(expectedValues);
+  assertEqualVectors(expected, results);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

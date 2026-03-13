@@ -34,11 +34,12 @@ class RemoteThriftFunction : public RemoteVectorFunction {
         location_(metadata.location),
         client_(createClient(metadata)) {}
 
-  std::unique_ptr<remote::RemoteFunctionResponse> invokeRemoteFunction(
+  folly::coro::Task<std::unique_ptr<remote::RemoteFunctionResponse>>
+  invokeRemoteFunction(
       const remote::RemoteFunctionRequest& request) const override {
     auto remoteResponse = std::make_unique<remote::RemoteFunctionResponse>();
     client_->invokeFunction(*remoteResponse, request);
-    return remoteResponse;
+    co_return remoteResponse;
   }
 
   std::string remoteLocationToString() const override {
@@ -77,7 +78,7 @@ void registerRemoteFunction(
     bool overwrite) {
   exec::registerStatefulVectorFunction(
       name,
-      signatures,
+      std::move(signatures),
       std::bind(
           createRemoteFunction,
           std::placeholders::_1,
