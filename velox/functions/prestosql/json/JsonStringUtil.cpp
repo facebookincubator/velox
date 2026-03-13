@@ -552,6 +552,7 @@ unescapeSizeForJsonFunctions(const char* input, size_t length, bool fully) {
         case 'f':
         case 'r':
         case 't':
+        case '\\':
         case '"': {
           if (fully) {
             ++outSize;
@@ -598,7 +599,7 @@ size_t unescapeSizeForJsonCast(const char* input, size_t length) {
   return unescapeSizeForJsonFunctions(input, length, false);
 }
 
-void unescapeForJsonFunctions(
+size_t unescapeForJsonFunctions(
     const char* input,
     size_t length,
     char* output,
@@ -663,6 +664,7 @@ void unescapeForJsonFunctions(
         case 'f':
         case 'r':
         case 't':
+        case '\\':
         case '"': {
           if (fully) {
             size_t index = 0;
@@ -706,6 +708,7 @@ void unescapeForJsonFunctions(
       }
     }
   }
+  return pos - output;
 }
 void unescapeForJsonCast(const char* input, size_t length, char* output) {
   unescapeForJsonFunctions(input, length, output, false);
