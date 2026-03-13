@@ -206,17 +206,15 @@ class RowIterator {
 
 class VectorSerde {
  public:
-  enum class Kind {
-    kPresto,
-    kCompactRow,
-    kUnsafeRow,
-  };
-
-  static std::string kindName(Kind type);
-
-  static Kind kindByName(const std::string& name);
+  /// Built-in serialization format names.
+  static constexpr std::string_view kPrestoName = "Presto";
+  static constexpr std::string_view kCompactRowName = "CompactRow";
+  static constexpr std::string_view kUnsafeRowName = "UnsafeRow";
 
   virtual ~VectorSerde() = default;
+
+  /// Returns the name of this serde format (e.g. "Presto", "CompactRow").
+  virtual const std::string& kind() const = 0;
 
   // Lets the caller pass options to the Serde. This can be extended to add
   // custom options by each of its extended classes.
@@ -238,10 +236,6 @@ class VectorSerde {
     /// times compression misses the target the less frequently it is tried.
     float minCompressionRatio{0.8};
   };
-
-  const std::string& kind() const {
-    return kind_;
-  }
 
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
@@ -350,14 +344,7 @@ class VectorSerde {
       const Options* options = nullptr) {
     VELOX_NYI();
   }
-
- protected:
-  explicit VectorSerde(std::string kind) : kind_(std::move(kind)) {}
-
-  const std::string kind_;
 };
-
-std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind);
 
 /// Register/deregister the "default" vector serde.
 void registerVectorSerde(std::unique_ptr<VectorSerde> serdeToRegister);
@@ -382,38 +369,6 @@ bool isRegisteredNamedVectorSerde(const std::string& kind);
 
 /// Get the vector serde identified by `serdeName`. Throws if not found.
 VectorSerde* getNamedVectorSerde(const std::string& kind);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-/// Legacy overloads accepting VectorSerde::Kind for backward compatibility.
-inline void registerNamedVectorSerde(
-    VectorSerde::Kind kind,
-    std::unique_ptr<VectorSerde> serdeToRegister) {
-  registerNamedVectorSerde(
-      VectorSerde::kindName(kind), std::move(serdeToRegister));
-}
-
-inline void deregisterNamedVectorSerde(VectorSerde::Kind kind) {
-  deregisterNamedVectorSerde(VectorSerde::kindName(kind));
-}
-
-inline bool isRegisteredNamedVectorSerde(VectorSerde::Kind kind) {
-  return isRegisteredNamedVectorSerde(VectorSerde::kindName(kind));
-}
-
-inline VectorSerde* getNamedVectorSerde(VectorSerde::Kind kind) {
-  return getNamedVectorSerde(VectorSerde::kindName(kind));
-}
-
-/// Allow comparing std::string with VectorSerde::Kind for backward
-/// compatibility (e.g. serdeKind() == VectorSerde::Kind::kCompactRow).
-inline bool operator==(const std::string& lhs, VectorSerde::Kind rhs) {
-  return lhs == VectorSerde::kindName(rhs);
-}
-
-inline bool operator==(VectorSerde::Kind lhs, const std::string& rhs) {
-  return VectorSerde::kindName(lhs) == rhs;
-}
-#endif
 
 class VectorStreamGroup : public StreamArena {
  public:
@@ -564,12 +519,3 @@ RowVectorPtr IOBufToRowVector(
     VectorSerde* serde = nullptr);
 
 } // namespace facebook::velox
-
-template <>
-struct fmt::formatter<facebook::velox::VectorSerde::Kind>
-    : formatter<std::string> {
-  auto format(facebook::velox::VectorSerde::Kind s, format_context& ctx) const {
-    return formatter<std::string>::format(
-        facebook::velox::VectorSerde::kindName(s), ctx);
-  }
-};

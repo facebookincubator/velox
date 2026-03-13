@@ -23,7 +23,12 @@ namespace facebook::velox::test {
 
 class MockVectorSerde : public VectorSerde {
  public:
-  MockVectorSerde() : VectorSerde("Presto") {}
+  MockVectorSerde() = default;
+
+  const std::string& kind() const override {
+    static const std::string kKind{"Mock"};
+    return kKind;
+  }
 
   void estimateSerializedSize(
       const BaseVector* /*vector*/,

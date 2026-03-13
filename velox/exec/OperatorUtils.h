@@ -324,14 +324,4 @@ std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     const std::string& kind,
     std::optional<float> minCompressionRatio = std::nullopt);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-inline std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
-    common::CompressionKind compressionKind,
-    VectorSerde::Kind kind,
-    std::optional<float> minCompressionRatio = std::nullopt) {
-  return getVectorSerdeOptions(
-      compressionKind, VectorSerde::kindName(kind), minCompressionRatio);
-}
-#endif
-
 } // namespace facebook::velox::exec

@@ -862,7 +862,7 @@ void MergeExchange::close() {
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
         RuntimeCounter(
-            static_cast<int64_t>(VectorSerde::kindByName(serde_->kind()))));
+            static_cast<int64_t>(Operator::serdeStatId(serde_->kind()))));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));

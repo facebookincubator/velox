@@ -88,7 +88,16 @@ class PrestoVectorSerde : public VectorSerde {
     bool preserveEncodings{false};
   };
 
-  PrestoVectorSerde() : VectorSerde("Presto") {}
+  PrestoVectorSerde() = default;
+
+  static const std::string& name() {
+    static const std::string kName{"Presto"};
+    return kName;
+  }
+
+  const std::string& kind() const override {
+    return name();
+  }
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.

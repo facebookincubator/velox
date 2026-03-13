@@ -3177,6 +3177,10 @@ PartitionedOutputNode::PartitionedOutputNode(
       partitionFunctionSpec_(std::move(partitionFunctionSpec)),
       serdeKind_(std::move(serdeKind)),
       outputType_(std::move(outputType)) {
+  VELOX_CHECK(
+      isRegisteredNamedVectorSerde(serdeKind_),
+      "Serde '{}' is not registered.",
+      serdeKind_);
   VELOX_USER_CHECK_GT(numPartitions_, 0);
   if (numPartitions_ == 1) {
     VELOX_USER_CHECK(

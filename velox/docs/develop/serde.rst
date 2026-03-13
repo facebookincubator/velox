@@ -27,3 +27,20 @@ The details of UnsafeRow and CompactRow formats can be found in the following ar
 
 Velox also uses another row-wise serialization format, ContainerRowSerde, for storing
 data in aggregation and join operators. This format is similar to CompactRow.
+
+Serde Registration API
+======================
+
+Velox uses a named registry for serialization formats. Each serde is registered
+under a unique string name via ``registerNamedVectorSerde(name, serde)`` and
+retrieved with ``getNamedVectorSerde(name)``. Use
+``isRegisteredNamedVectorSerde(name)`` to check whether a name has been
+registered. Names must be non-empty; passing an empty string throws.
+
+Built-in format names are available as constants on the ``VectorSerde`` class:
+
+* ``VectorSerde::kPrestoName`` — ``"Presto"``
+* ``VectorSerde::kCompactRowName`` — ``"CompactRow"``
+* ``VectorSerde::kUnsafeRowName`` — ``"UnsafeRow"``
+
+Custom formats can be registered under any non-empty name.
