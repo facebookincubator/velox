@@ -928,6 +928,297 @@ TEST_F(CbrtTest, cbrt) {
   EXPECT_EQ(cbrt(-kInf), -kInf);
   EXPECT_TRUE(std::isnan(cbrt(kNan).value()));
 }
+// Tests for checked interval arithmetic functions
+class CheckedIntervalArithmeticTest : public SparkFunctionBaseTest {
+ protected:
+  template <typename TInterval>
+  static TypePtr intervalType();
+
+  template <typename TNum>
+  static TypePtr numericType();
+
+  template <typename TInterval, typename TNum>
+  std::optional<TInterval> checkedIntervalMultiply(
+      std::optional<TInterval> interval,
+      std::optional<TNum> multiplier) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_multiply(c0, c1)",
+        {intervalType<TInterval>(), numericType<TNum>()},
+        interval,
+        multiplier);
+  }
+
+  template <typename TInterval, typename TNum>
+  std::optional<TInterval> checkedIntervalDivide(
+      std::optional<TInterval> interval,
+      std::optional<TNum> divisor) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_divide(c0, c1)",
+        {intervalType<TInterval>(), numericType<TNum>()},
+        interval,
+        divisor);
+  }
+
+  template <typename TInterval>
+  std::optional<TInterval> checkedIntervalAdd(
+      std::optional<TInterval> a,
+      std::optional<TInterval> b) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_add(c0, c1)",
+        {intervalType<TInterval>(), intervalType<TInterval>()},
+        a,
+        b);
+  }
+
+  template <typename TInterval>
+  std::optional<TInterval> checkedIntervalSubtract(
+      std::optional<TInterval> a,
+      std::optional<TInterval> b) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_subtract(c0, c1)",
+        {intervalType<TInterval>(), intervalType<TInterval>()},
+        a,
+        b);
+  }
+
+  template <typename TInterval, typename TDecimal>
+  std::optional<TInterval> checkedIntervalMultiplyDecimal(
+      std::optional<TInterval> interval,
+      std::optional<TDecimal> multiplier,
+      const TypePtr& decimalType) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_multiply(c0, c1)",
+        {intervalType<TInterval>(), decimalType},
+        interval,
+        multiplier);
+  }
+
+  template <typename TInterval, typename TDecimal>
+  std::optional<TInterval> checkedIntervalDivideDecimal(
+      std::optional<TInterval> interval,
+      std::optional<TDecimal> divisor,
+      const TypePtr& decimalType) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_divide(c0, c1)",
+        {intervalType<TInterval>(), decimalType},
+        interval,
+        divisor);
+  }
+
+  template <typename TInterval, typename TNum>
+  std::optional<TInterval> checkedIntervalMultiplyNumericFirst(
+      std::optional<TNum> multiplier,
+      std::optional<TInterval> interval) {
+    return evaluateOnce<TInterval>(
+        "checked_interval_multiply(c0, c1)",
+        {numericType<TNum>(), intervalType<TInterval>()},
+        multiplier,
+        interval);
+  }
+};
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::intervalType<int64_t>() {
+  return INTERVAL_DAY_TIME();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::intervalType<int32_t>() {
+  return INTERVAL_YEAR_MONTH();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::numericType<int8_t>() {
+  return TINYINT();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::numericType<int16_t>() {
+  return SMALLINT();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::numericType<int32_t>() {
+  return INTEGER();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::numericType<int64_t>() {
+  return BIGINT();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::numericType<float>() {
+  return REAL();
+}
+
+template <>
+TypePtr CheckedIntervalArithmeticTest::numericType<double>() {
+  return DOUBLE();
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalDayTimeMultiply) {
+  // Normal cases
+  EXPECT_EQ(200, (checkedIntervalMultiply<int64_t, double>(100, 2.0)));
+  EXPECT_EQ(-200, (checkedIntervalMultiply<int64_t, double>(100, -2.0)));
+  EXPECT_EQ(0, (checkedIntervalMultiply<int64_t, double>(100, 0.0)));
+
+  // HALF_UP rounding for fractional multipliers
+  EXPECT_EQ(2, (checkedIntervalMultiply<int64_t, double>(3, 0.5)));
+  EXPECT_EQ(-2, (checkedIntervalMultiply<int64_t, double>(-3, 0.5)));
+
+  // Overflow cases - should throw
+  VELOX_ASSERT_THROW(
+      (checkedIntervalMultiply<int64_t, double>(
+          std::numeric_limits<int64_t>::max(), 2.0)),
+      "Interval overflow in multiply");
+
+  VELOX_ASSERT_THROW(
+      (checkedIntervalMultiply<int64_t, double>(
+          std::numeric_limits<int64_t>::min(), 2.0)),
+      "Interval overflow in multiply");
+
+  // NaN should error (Spark behavior for ANSI intervals)
+  VELOX_ASSERT_THROW(
+      (checkedIntervalMultiply<int64_t, double>(
+          100, std::numeric_limits<double>::quiet_NaN())),
+      "Interval overflow in multiply");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalYearMonthMultiply) {
+  // Normal cases
+  EXPECT_EQ(24, (checkedIntervalMultiply<int32_t, double>(12, 2.0)));
+  EXPECT_EQ(-24, (checkedIntervalMultiply<int32_t, double>(12, -2.0)));
+
+  // Numeric-first multiply (commutative)
+  EXPECT_EQ(
+      24, (checkedIntervalMultiplyNumericFirst<int32_t, double>(2.0, 12)));
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      (checkedIntervalMultiply<int32_t, double>(
+          std::numeric_limits<int32_t>::max(), 2.0)),
+      "Interval overflow in multiply");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalDayTimeDivide) {
+  // Normal cases
+  EXPECT_EQ(50, (checkedIntervalDivide<int64_t, double>(100, 2.0)));
+  EXPECT_EQ(-50, (checkedIntervalDivide<int64_t, double>(100, -2.0)));
+
+  // HALF_UP rounding for integral divisors
+  EXPECT_EQ(2, (checkedIntervalDivide<int64_t, int32_t>(3, 2)));
+  EXPECT_EQ(-2, (checkedIntervalDivide<int64_t, int32_t>(-3, 2)));
+
+  // Division by zero - should throw
+  VELOX_ASSERT_THROW(
+      (checkedIntervalDivide<int64_t, double>(100, 0.0)), "Division by zero");
+
+  // NaN divisor should error (Spark behavior for ANSI intervals)
+  VELOX_ASSERT_THROW(
+      (checkedIntervalDivide<int64_t, double>(
+          100, std::numeric_limits<double>::quiet_NaN())),
+      "Interval overflow in divide");
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      (checkedIntervalDivide<int64_t, double>(
+          std::numeric_limits<int64_t>::max(), 0.5)),
+      "Interval overflow in divide");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalYearMonthDivide) {
+  // Normal cases
+  EXPECT_EQ(6, (checkedIntervalDivide<int32_t, double>(12, 2.0)));
+
+  // Division by zero
+  VELOX_ASSERT_THROW(
+      (checkedIntervalDivide<int32_t, double>(12, 0.0)), "Division by zero");
+
+  // Overflow
+  VELOX_ASSERT_THROW(
+      (checkedIntervalDivide<int32_t, double>(
+          std::numeric_limits<int32_t>::max(), 0.5)),
+      "Interval overflow in divide");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalDayTimeAdd) {
+  // Normal cases
+  EXPECT_EQ(300, checkedIntervalAdd<int64_t>(100, 200));
+  EXPECT_EQ(-100, checkedIntervalAdd<int64_t>(100, -200));
+  EXPECT_EQ(0, checkedIntervalAdd<int64_t>(100, -100));
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      checkedIntervalAdd<int64_t>(std::numeric_limits<int64_t>::max(), 1),
+      "Interval overflow in add");
+
+  VELOX_ASSERT_THROW(
+      checkedIntervalAdd<int64_t>(std::numeric_limits<int64_t>::min(), -1),
+      "Interval overflow in add");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalYearMonthAdd) {
+  // Normal cases
+  EXPECT_EQ(24, checkedIntervalAdd<int32_t>(12, 12));
+  EXPECT_EQ(0, checkedIntervalAdd<int32_t>(12, -12));
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      checkedIntervalAdd<int32_t>(std::numeric_limits<int32_t>::max(), 1),
+      "Interval overflow in add");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalDayTimeSubtract) {
+  // Normal cases
+  EXPECT_EQ(100, checkedIntervalSubtract<int64_t>(300, 200));
+  EXPECT_EQ(300, checkedIntervalSubtract<int64_t>(100, -200));
+  EXPECT_EQ(0, checkedIntervalSubtract<int64_t>(100, 100));
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      checkedIntervalSubtract<int64_t>(std::numeric_limits<int64_t>::min(), 1),
+      "Interval overflow in subtract");
+
+  VELOX_ASSERT_THROW(
+      checkedIntervalSubtract<int64_t>(std::numeric_limits<int64_t>::max(), -1),
+      "Interval overflow in subtract");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalYearMonthSubtract) {
+  // Normal cases
+  EXPECT_EQ(0, checkedIntervalSubtract<int32_t>(12, 12));
+  EXPECT_EQ(24, checkedIntervalSubtract<int32_t>(12, -12));
+
+  // Overflow cases
+  VELOX_ASSERT_THROW(
+      checkedIntervalSubtract<int32_t>(std::numeric_limits<int32_t>::min(), 1),
+      "Interval overflow in subtract");
+}
+
+TEST_F(CheckedIntervalArithmeticTest, intervalDecimalMultiplyDivide) {
+  const auto shortDecimal = DECIMAL(10, 1); // scale 1
+
+  // IntervalDayTime * decimal
+  EXPECT_EQ(
+      15,
+      (checkedIntervalMultiplyDecimal<int64_t, int64_t>(10, 15, shortDecimal)));
+  EXPECT_EQ(
+      7,
+      (checkedIntervalDivideDecimal<int64_t, int64_t>(10, 15, shortDecimal)));
+
+  // IntervalYearMonth * decimal
+  EXPECT_EQ(
+      30,
+      (checkedIntervalMultiplyDecimal<int32_t, int64_t>(12, 25, shortDecimal)));
+  EXPECT_EQ(
+      2, (checkedIntervalDivideDecimal<int32_t, int64_t>(5, 25, shortDecimal)));
+
+  // Decimal division by zero
+  VELOX_ASSERT_THROW(
+      (checkedIntervalDivideDecimal<int64_t, int64_t>(10, 0, shortDecimal)),
+      "Division by zero");
+}
 
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
