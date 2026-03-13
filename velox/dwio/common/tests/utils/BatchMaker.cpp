@@ -141,6 +141,18 @@ VectorPtr BatchMaker::createVector<TypeKind::BIGINT>(
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  if (type->isTime()) {
+    return createScalar<int64_t>(
+        size,
+        gen,
+        [&gen]() {
+          // TIME is milliseconds since midnight.
+          return Random::rand64(0, 86400000, gen);
+        },
+        pool,
+        isNullAt,
+        type);
+  }
   return createScalar<int64_t>(
       size,
       gen,
