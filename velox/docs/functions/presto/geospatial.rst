@@ -225,13 +225,35 @@ Spatial Operations
 .. function:: geometry_union_agg(geometry: Geometry) -> union: Geometry
 
     Returns a geometry that represents the point set union of the aggregated
-    input geometries. Null geometries are ignored. Empty input returns null.
+    input geometries.
+
+    **Behavior with nulls and empty geometries:**
+    * Null geometries (SQL NULL values) are ignored and do not contribute to
+      the result.
+    * Empty geometries (e.g., ``POINT EMPTY``, ``LINESTRING EMPTY``) are
+      included in the aggregation. If all input geometries are empty, the
+      result is ``GEOMETRYCOLLECTION EMPTY``. If there is at least one
+      non-empty geometry, empty geometries are ignored and only non-empty
+      geometries contribute to the union.
+    * If there are no input rows (empty input), the function returns null.
 
 .. function:: convex_hull_agg(geometry: Geometry) -> union: Geometry
 
     Returns a geometry that represents the convex hull of the points in the
-    aggregated input geometries.  Null geometries are ignored. Empty input
-    returns null.
+    aggregated input geometries.
+
+    **Behavior with nulls and empty geometries:**
+    * Null geometries (SQL NULL values) are ignored and do not contribute to
+      the result.
+    * Empty geometries (e.g., ``POINT EMPTY``, ``LINESTRING EMPTY``) are
+      included in the aggregation. If all input geometries are empty, the
+      result is ``GEOMETRYCOLLECTION EMPTY``. If some inputs are empty and
+      some are non-empty, empty geometries are ignored and only non-empty
+      geometries contribute to the convex hull calculation.
+    * If there are no input rows (empty input), the function returns null.
+    * The convex hull is computed from all points in the non-empty input
+      geometries. If all input geometries are collinear points, the result
+      is a LINESTRING. If all points are the same, the result is a POINT.
 
 Accessors
 ---------
