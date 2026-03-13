@@ -36,6 +36,12 @@ TEST_F(MapTopNKeysTest, emptyMap) {
       makeArrayVectorFromJson<int32_t>({
           "[]",
       }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[]",
+      }));
 }
 
 TEST_F(MapTopNKeysTest, multipleMaps) {
@@ -54,6 +60,22 @@ TEST_F(MapTopNKeysTest, multipleMaps) {
           "[3, 2, 1]",
           "[2, 1]",
       }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[5, 4, 3]",
+          "[3, 2, 1]",
+          "[2, 1]",
+      }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> -1 * x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[1, 2, 3]",
+          "[1, 2]",
+      }));
 }
 
 TEST_F(MapTopNKeysTest, nIsZero) {
@@ -66,6 +88,10 @@ TEST_F(MapTopNKeysTest, nIsZero) {
   assertEqualVectors(
       evaluate("map_top_n_keys(c0, 0)", input),
       makeArrayVectorFromJson<int32_t>({"[]"}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 0, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({"[]"}));
 }
 
 TEST_F(MapTopNKeysTest, nIsNegative) {
@@ -77,6 +103,10 @@ TEST_F(MapTopNKeysTest, nIsNegative) {
 
   VELOX_ASSERT_THROW(
       evaluate("map_top_n_keys(c0, -1)", input),
+      "n must be greater than or equal to 0");
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_top_n_keys(c0, -1, (x,y) -> x)", input),
       "n must be greater than or equal to 0");
 }
 
@@ -92,8 +122,11 @@ TEST_F(MapTopNKeysTest, timestampWithTimeZone) {
         {0}, makeFlatVector(expectedKeys, TIMESTAMP_WITH_TIME_ZONE()));
 
     const auto result = evaluate("map_top_n_keys(c0, 3)", makeRowVector({map}));
+    const auto resultWithLambda =
+        evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", makeRowVector({map}));
 
     assertEqualVectors(expected, result);
+    assertEqualVectors(expected, resultWithLambda);
   };
 
   testMapTopNKeys(
@@ -135,6 +168,109 @@ TEST_F(MapTopNKeysTest, nestedVarcharMap) {
   auto result = evaluate("map_top_n_keys(c0, 2)", input);
   auto expected = makeArrayVectorFromJson<std::string>({"[\"k3\", \"k2\"]"});
   assertEqualVectors(expected, result);
+}
+
+TEST_F(MapTopNKeysTest, dictionaryEncodedMap) {
+  auto map = makeMapVectorFromJson<int32_t, float>(
+      {"{3:0.44, 1:0.10, 4:0.80, 2:0.60}"});
+
+  auto indices = makeIndices({0, 0, 0});
+  auto dictMap = wrapInDictionary(indices, 3, map);
+
+  RowVectorPtr input = makeRowVector({dictMap});
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 1)", input),
+      makeArrayVectorFromJson<int32_t>({"[4]", "[4]", "[4]"}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 2)", input),
+      makeArrayVectorFromJson<int32_t>({"[4, 3]", "[4, 3]", "[4, 3]"}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 1, (x, y) -> y)", input),
+      makeArrayVectorFromJson<int32_t>({"[4]", "[4]", "[4]"}));
+}
+
+TEST_F(MapTopNKeysTest, nGreaterThanMapSize) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{3:1, 2:1, 1:1}",
+          "{5:1}",
+          "{}",
+      }),
+  });
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 10)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[3, 2, 1]",
+          "[5]",
+          "[]",
+      }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 10, (x,y) -> -1 * x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[5]",
+          "[]",
+      }));
+}
+
+TEST_F(MapTopNKeysTest, nullValuesInMap) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>(
+          {"{1:1, 2:2, 3:3}", // All valid values
+           "{2:20, 4:40, 7:3}", // Only one projected key
+           "{1:100, 2:null, 6:600}", // Null Value
+           "{4:4000, 6:6000}", // No projected keys
+           "{1:10000}", // single element, projected key
+           "{}", // empty map
+           "null"}), // null map
+  });
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[3, 2, 1]",
+          "[7, 4, 2]",
+          "[6, 2, 1]",
+          "[6, 4]",
+          "[1]",
+          "[]",
+          "null",
+      }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[3, 2, 1]",
+          "[7, 4, 2]",
+          "[6, 2, 1]",
+          "[6, 4]",
+          "[1]",
+          "[]",
+          "null",
+      }));
+}
+
+TEST_F(MapTopNKeysTest, lambdaReturnsNull) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1:10, 2:20, 3:30, 4:40}",
+      }),
+  });
+
+  // Transform that returns null for even numbers.
+  // Expected: odd numbers sorted descending, then nulls (evens).
+  assertEqualVectors(
+      evaluate(
+          "map_top_n_keys(c0, 3, (x,y) -> if(x % 2 = 0, cast(null as integer), x))",
+          input),
+      makeArrayVectorFromJson<int32_t>({
+          "[3, 1, 2]",
+      }));
 }
 
 } // namespace
