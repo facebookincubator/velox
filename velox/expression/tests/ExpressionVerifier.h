@@ -90,6 +90,10 @@ class ExpressionVerifier {
       bool canThrow,
       const InputRowMetadata& inputRowMetadata = {});
 
+  int numSkippedIfSwitchMismatches() const {
+    return numSkippedIfSwitchMismatches_;
+  }
+
  private:
   // Utility method used to serialize the relevant data required to repro a
   // crash.
@@ -115,6 +119,7 @@ class ExpressionVerifier {
   const ExpressionVerifierOptions options_;
 
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner_;
+  int numSkippedIfSwitchMismatches_{0};
 };
 
 // Finds the minimum common subexpression which fails for a plan should it
