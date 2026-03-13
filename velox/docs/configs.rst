@@ -951,6 +951,11 @@ Each query can override the config by setting corresponding query session proper
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - hive.parquet.writer.compression-codec
+     - hive.parquet.writer.compression_codec
+     - string
+     -
+     - The compression codec used for writing Parquet. This configuration is shared between Hive and Iceberg connectors.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
