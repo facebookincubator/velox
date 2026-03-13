@@ -2060,10 +2060,11 @@ struct ParseDurationFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
+    VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
     static const LazyRE2 kDurationRegex{
         .pattern_ = R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)",
-        .options_ = {},
     };
+    VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
     // TODO: Remove re2::StringPiece != std::string_view hacks.
     // It's needed because for some systems in CI,
     // re2 and abseil libraries are old.
