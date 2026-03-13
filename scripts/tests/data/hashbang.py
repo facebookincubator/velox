@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import fnmatch
-import os
-import regex
-import sys
 
 class attrdict(dict):
     __getattr__ = dict.__getitem__
