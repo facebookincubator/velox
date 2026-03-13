@@ -177,7 +177,7 @@ std::vector<CompressionKind> params = {
     CompressionKind::CompressionKind_NONE,
     CompressionKind::CompressionKind_SNAPPY,
     CompressionKind::CompressionKind_ZSTD,
-    CompressionKind::CompressionKind_LZ4,
+    CompressionKind::CompressionKind_LZ4_HADOOP,
     CompressionKind::CompressionKind_GZIP,
 };
 
