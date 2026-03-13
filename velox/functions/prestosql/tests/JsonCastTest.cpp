@@ -1187,6 +1187,17 @@ TEST_F(JsonCastTest, toBoolean) {
   testThrow<JsonNativeType>(JSON(), BOOLEAN(), {""_sv}, "no JSON found");
 }
 
+TEST_F(JsonCastTest, toDecimal) {
+  // Casting DECIMAL to JSON is currently unsupported because precision and
+  // scale are not handled yet. The query below is expected to return 123456789,
+  // but currently returns 1234567.
+  testThrow<JsonNativeType>(
+      JSON(),
+      DECIMAL(10, 2),
+      {"1234567.89"_sv},
+      "Cannot cast JSON to DECIMAL(10, 2).");
+}
+
 TEST_F(JsonCastTest, toArray) {
   auto data = makeNullableFlatVector<JsonNativeType>(
       {R"(["red","blue"])"_sv,
