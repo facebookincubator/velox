@@ -80,6 +80,7 @@ class BloomFilter {
     auto version = stream.read<int8_t>();
     VELOX_USER_CHECK_EQ(kBloomFilterV1, version);
     auto size = stream.read<int32_t>();
+    VELOX_CHECK_GE(size, 0, "Invalid BloomFilter size: {}", size);
     bits_.resize(size);
     auto bitsdata =
         reinterpret_cast<const uint64_t*>(serialized + stream.offset());

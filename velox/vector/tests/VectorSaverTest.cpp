@@ -714,4 +714,13 @@ TEST_F(VectorSaverTest, multipleVectors) {
 
   ASSERT_EQ(out.str().size(), in.tellg());
 }
+TEST_F(VectorSaverTest, corruptStringSize) {
+  // The read<std::string> function reads int32_t size then resizes a string.
+  // A negative size must throw instead of crashing via std::terminate.
+  int32_t badSize = -1;
+  std::string data(reinterpret_cast<const char*>(&badSize), sizeof(badSize));
+  std::istringstream in(data);
+  VELOX_ASSERT_THROW(restoreVector(in, pool()), "");
+}
+
 } // namespace facebook::velox::test
