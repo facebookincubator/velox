@@ -11,28 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_connector Connector.cpp)
 
-velox_link_libraries(velox_connector velox_common_config velox_vector)
+add_executable(velox_lance_connector_test LanceConnectorTest.cpp)
 
-add_subdirectory(fuzzer)
+target_link_libraries(
+  velox_lance_connector_test
+  velox_lance_connector
+  velox_exec_test_lib
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
 
-if(${VELOX_ENABLE_HIVE_CONNECTOR})
-  add_subdirectory(hive)
-endif()
-
-if(${VELOX_ENABLE_TPCH_CONNECTOR})
-  add_subdirectory(tpch)
-endif()
-
-if(${VELOX_ENABLE_TPCDS_CONNECTOR})
-  add_subdirectory(tpcds)
-endif()
-
-if(${VELOX_ENABLE_LANCE_CONNECTOR})
-  add_subdirectory(lance)
-endif()
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_test(NAME velox_lance_connector_test COMMAND velox_lance_connector_test)
