@@ -106,7 +106,6 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             echo "Removing previous AWS SDK and s2n installations to avoid conflicts..."
@@ -118,6 +117,7 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-centos9.sh
 
@@ -249,7 +249,6 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "OFF"
-          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -258,6 +257,7 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
 
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             USE_CLANG=false bash /setup-ubuntu.sh
 
             cd /
@@ -275,6 +275,26 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
+      - uses: actions/checkout@v5
+        with:
+          path: velox
+          persist-credentials: false
+
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-ubuntu.sh
+          install_apt_deps
+          install_faiss_deps
+          # We can remove them once we bundle FBThrift.
+          install_fmt
+          install_boost
+          install_fast_float
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
+
       - name: Clear CCache Statistics
         run: |
           ccache -sz
@@ -283,15 +303,25 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
-          # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
-          # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
-          # exported config references gflags_static which BUNDLED gflags provides.
-          gflags_SOURCE: BUNDLED
-          # Keep system glog (container's glog is built against the same gflags
-          # version). Without this, BUNDLED gflags cascades to BUNDLED glog
-          # which conflicts with system glog loaded transitively.
-          glog_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
+          # We can remove "-DBoost_SOURCE=SYSTEM",
+          # "-Dfolly_SOURCE=SYSTEM" and "-Dgflags_SOURCE=SYSTEM" once
+          # we add support for bundling FBThrift.
+          #
+          # FBThrift has transitive Boost dependency. We can't mix
+          # bundled Boost and system Boost.
+          #
+          # Recent FBThrift needs recent Folly.
+          #
+          # System FBThrift is built with system GFlags. We need to
+          # use system GFlags with system FBThrift.
+          EXTRA_CMAKE_FLAGS: >-
+            -DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY
+            -DBoost_SOURCE=SYSTEM
+            -Dfolly_SOURCE=SYSTEM
+            -Dgflags_SOURCE=SYSTEM
+            -DVELOX_ENABLE_PARQUET=ON
+            -DVELOX_ENABLE_EXAMPLES=ON
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
@@ -350,7 +380,6 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -359,7 +388,9 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
 
-            # Install basic deps with GCC.
+            # Use absolute path within the container for patches
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+            # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-fedora.sh
 
             cd /
@@ -385,13 +416,11 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
-          fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
           EXTRA_CMAKE_FLAGS: >-
             -DVELOX_ENABLE_PARQUET=ON
-            -DARROW_THRIFT_USE_SHARED=ON
             -DVELOX_ENABLE_EXAMPLES=ON
         run: |
           uv tool install --force cmake@3.31.1

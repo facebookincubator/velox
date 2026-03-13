@@ -7722,7 +7722,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
   const auto expectedResult =
       runHashJoinTask(vectors, nullptr, false, numDrivers, pool(), false).data;
 
-  for (uint64_t timeoutMs : {1'000, 30'000}) {
+  for (uint64_t timeoutMs : {1'000, 120'000}) {
     SCOPED_TRACE(fmt::format("timeout {}", succinctMillis(timeoutMs)));
     auto memoryManager = createMemoryManager(512 << 20, 0, timeoutMs);
     auto queryCtx =

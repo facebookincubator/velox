@@ -205,20 +205,23 @@ function install_arrow {
     if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
       # We need to set a different path when building the Dockerfile.
       ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+
+      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch"
+      VELOX_ARROW_CMAKE_PATCH+=" $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
     fi
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
-    git apply "$VELOX_ARROW_CMAKE_PATCH"
+    for patch in $VELOX_ARROW_CMAKE_PATCH; do
+      git apply "$patch" || exit 1
+    done
     # Presto needs this for Arrow Flight
     if [[ -n $EXTRA_ARROW_PATCH ]]; then
-      git apply "$EXTRA_ARROW_PATCH"
+      git apply "$EXTRA_ARROW_PATCH"|| exit 1
     fi
   ) || exit 1
 
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
-    -DARROW_WITH_THRIFT=ON \
     -DARROW_WITH_LZ4=ON \
     -DARROW_WITH_SNAPPY=ON \
     -DARROW_WITH_ZLIB=ON \
@@ -233,33 +236,6 @@ function install_arrow {
     -DARROW_BUILD_STATIC=ON \
     -DBOOST_ROOT="$INSTALL_PREFIX" \
     $EXTRA_ARROW_OPTIONS
-}
-
-function install_thrift {
-  wget_and_untar https://github.com/apache/thrift/archive/"${THRIFT_VERSION}".tar.gz thrift
-
-  EXTRA_CXXFLAGS="-O3 -fPIC"
-  # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
-  if [[ ${USE_CLANG} != "false" ]]; then
-    EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
-  fi
-
-  CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_COMPILER=ON \
-    -DBUILD_EXAMPLES=OFF \
-    -DBUILD_TUTORIALS=OFF \
-    -DCMAKE_DEBUG_POSTFIX= \
-    -DWITH_AS3=OFF \
-    -DWITH_CPP=ON \
-    -DWITH_C_GLIB=OFF \
-    -DWITH_JAVA=OFF \
-    -DWITH_JAVASCRIPT=OFF \
-    -DWITH_LIBEVENT=OFF \
-    -DWITH_NODEJS=OFF \
-    -DWITH_PYTHON=OFF \
-    -DWITH_QT5=OFF \
-    -DWITH_ZLIB=OFF
 }
 
 function install_stemmer {
