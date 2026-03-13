@@ -52,6 +52,7 @@ velox_add_library(
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  MarkSorted.cpp
   EnforceDistinct.cpp
   MemoryReclaimer.cpp
   Merge.cpp

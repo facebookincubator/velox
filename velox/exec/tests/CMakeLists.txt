@@ -64,6 +64,7 @@ add_executable(
   LocalPartitionTest.cpp
   Main.cpp
   MarkDistinctTest.cpp
+  MarkSortedTest.cpp
   EnforceDistinctTest.cpp
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
