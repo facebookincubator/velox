@@ -294,7 +294,7 @@ jobs:
           # which conflicts with system glog loaded transitively.
           glog_SOURCE: SYSTEM
           VELOX_GFLAGS_URL: file:///velox/deps-sources/gflags-v2.2.2.tar.gz
-          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
