@@ -94,6 +94,16 @@ class TypeCoercer {
   /// When `a` and `b` are ROW types with different field names, the resulting
   /// ROW has empty field names for any positions where the corresponding field
   /// names do not match.
+  /// Checks if coercion from 'fromType' to 'toType' is a type-only coercion,
+  /// meaning no actual data transformation is required. This is true for:
+  /// - Bounded VARCHAR to unbounded VARCHAR (e.g., VARCHAR(10) to VARCHAR)
+  /// - Unbounded VARCHAR to bounded VARCHAR (e.g., VARCHAR to VARCHAR(10))
+  /// - Decimal types with same precision and scale
+  ///
+  /// @return true if the coercion is type-only, false otherwise.
+  static bool isTypeOnlyCoercion(
+      const TypePtr& fromType,
+      const TypePtr& toType);
   static TypePtr leastCommonSuperType(const TypePtr& a, const TypePtr& b);
 };
 

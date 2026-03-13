@@ -675,7 +675,6 @@ PlanBuilder& PlanBuilder::parallelProject(
       std::move(exprGroups),
       noLoadColumns,
       planNode_);
-
   return *this;
 }
 

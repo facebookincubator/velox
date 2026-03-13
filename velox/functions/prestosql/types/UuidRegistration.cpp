@@ -97,11 +97,27 @@ struct UuidParser<TypeKind::VARBINARY> {
 class UuidCastOperator : public exec::CastOperator {
  public:
   bool isSupportedFromType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other) || VARBINARY()->equivalent(*other);
+    switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        if (other->isVarcharN() && getVarcharLength(*other) < 36) {
+          return false;
+        }
+        [[fallthrough]];
+      case TypeKind::VARBINARY:
+        return true;
+      default:
+        return false;
+    }
   }
 
   bool isSupportedToType(const TypePtr& other) const override {
-    return VARCHAR()->equivalent(*other) || VARBINARY()->equivalent(*other);
+    switch (other->kind()) {
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        return true;
+      default:
+        return false;
+    }
   }
 
   void castTo(

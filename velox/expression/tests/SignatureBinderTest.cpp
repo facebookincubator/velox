@@ -1391,6 +1391,188 @@ TEST(SignatureBinderTest, genericCoercions) {
   }
 }
 
+TEST(SignatureBinderTest, arrayTypeCoercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("boolean")
+                       .argumentType("ARRAY(SMALLINT)")
+                       .argumentType("ARRAY(INTEGER)")
+                       .argumentType("ARRAY(BIGINT)")
+                       .argumentType("ARRAY(REAL)")
+                       .argumentType("ARRAY(DOUBLE)")
+                       //.argumentType("ARRAY(VARCHAR)")
+                       .build();
+  testCoercions(
+      signature,
+      {ARRAY(TINYINT()),
+       ARRAY(TINYINT()),
+       ARRAY(TINYINT()),
+       ARRAY(TINYINT()),
+       ARRAY(TINYINT())},
+      // ARRAY(VARCHAR(10))},
+      {ARRAY(SMALLINT()),
+       ARRAY(INTEGER()),
+       ARRAY(BIGINT()),
+       ARRAY(REAL()),
+       ARRAY(DOUBLE())},
+      // ARRAY(VARCHAR())},
+      BOOLEAN());
+
+  testCoercions(
+      signature,
+      {ARRAY(SMALLINT()),
+       ARRAY(SMALLINT()),
+       ARRAY(SMALLINT()),
+       ARRAY(REAL()),
+       ARRAY(REAL())},
+      // ARRAY(VARCHAR(999))},
+      {nullptr, ARRAY(INTEGER()), ARRAY(BIGINT()), nullptr, ARRAY(DOUBLE())},
+      // ARRAY(VARCHAR())},
+      BOOLEAN());
+
+  testNoCoercions(
+      signature,
+      {ARRAY(SMALLINT()),
+       ARRAY(INTEGER()),
+       ARRAY(BIGINT()),
+       ARRAY(REAL()),
+       ARRAY(DOUBLE())},
+      // ARRAY(VARCHAR())},
+      BOOLEAN());
+
+  assertCannotBind(
+      signature,
+      {ARRAY(INTEGER()),
+       ARRAY(INTEGER()),
+       ARRAY(INTEGER()),
+       ARRAY(INTEGER()),
+       ARRAY(INTEGER())},
+      // ARRAY(INTEGER())},
+      /*allowCoercion*/ true);
+
+  assertCannotBind(
+      signature,
+      {ARRAY(SMALLINT()),
+       ARRAY(INTEGER()),
+       ARRAY(VARCHAR()),
+       ARRAY(INTEGER()),
+       ARRAY(INTEGER())},
+      // ARRAY(VARCHAR())},
+      /*allowCoercion*/ true);
+}
+
+TEST(SignatureBinderTest, mapTypeCoercions) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("boolean")
+                       .argumentType("MAP(SMALLINT, SMALLINT)")
+                       .argumentType("MAP(INTEGER, INTEGER)")
+                       .argumentType("MAP(BIGINT, BIGINT)")
+                       .argumentType("MAP(REAL, REAL)")
+                       .argumentType("MAP(DOUBLE, DOUBLE)")
+                       //.argumentType("MAP(VARCHAR, VARCHAR)")
+                       //.argumentType("MAP(BIGINT, VARCHAR)")
+                       .build();
+
+  testCoercions(
+      signature,
+      {MAP(TINYINT(), TINYINT()),
+       MAP(TINYINT(), TINYINT()),
+       MAP(TINYINT(), TINYINT()),
+       MAP(TINYINT(), TINYINT()),
+       MAP(TINYINT(), TINYINT())},
+      // MAP(VARCHAR(10), VARCHAR(20)),
+      // MAP(TINYINT(), VARCHAR(10))},
+      {MAP(SMALLINT(), SMALLINT()),
+       MAP(INTEGER(), INTEGER()),
+       MAP(BIGINT(), BIGINT()),
+       MAP(REAL(), REAL()),
+       MAP(DOUBLE(), DOUBLE())},
+      // MAP(VARCHAR(), VARCHAR()),
+      // MAP(BIGINT(), VARCHAR())},
+      BOOLEAN());
+
+  testCoercions(
+      signature,
+      {MAP(SMALLINT(), TINYINT()),
+       MAP(SMALLINT(), INTEGER()),
+       MAP(TINYINT(), SMALLINT()),
+       MAP(REAL(), REAL()),
+       MAP(REAL(), REAL())},
+      // MAP(VARCHAR(100), VARCHAR(100000)),
+      // MAP(INTEGER(), VARCHAR(99999))},
+      {MAP(SMALLINT(), SMALLINT()),
+       MAP(INTEGER(), INTEGER()),
+       MAP(BIGINT(), BIGINT()),
+       nullptr,
+       MAP(DOUBLE(), DOUBLE())},
+      // MAP(VARCHAR(), VARCHAR()),
+      // MAP(BIGINT(), VARCHAR())},
+      BOOLEAN());
+
+  testNoCoercions(
+      signature,
+      {MAP(SMALLINT(), SMALLINT()),
+       MAP(INTEGER(), INTEGER()),
+       MAP(BIGINT(), BIGINT()),
+       MAP(REAL(), REAL()),
+       MAP(DOUBLE(), DOUBLE())},
+      // MAP(VARCHAR(), VARCHAR()),
+      // MAP(BIGINT(), VARCHAR())},
+      BOOLEAN());
+
+  assertCannotBind(
+      signature,
+      {MAP(INTEGER(), INTEGER()),
+       MAP(INTEGER(), INTEGER()),
+       MAP(INTEGER(), INTEGER()),
+       MAP(INTEGER(), INTEGER()),
+       MAP(INTEGER(), INTEGER())},
+      // MAP(INTEGER(), INTEGER()),
+      // MAP(INTEGER(), INTEGER())},
+      /*allowCoercion*/ true);
+}
+
+TEST(SignatureBinderTest, rowTypeCoercions) {
+  auto signature =
+      exec::FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("ROW(SMALLINT)")
+          .argumentType("ROW(SMALLINT, INTEGER)")
+          .argumentType("ROW(BIGINT, DOUBLE)")
+          //.argumentType("ROW(BIGINT, VARCHAR)")
+          //.argumentType("ROW(ARRAY(BIGINT), MAP(BIGINT, VARCHAR))")
+          .build();
+
+  testCoercions(
+      signature,
+      {ROW({TINYINT()}), ROW({TINYINT(), TINYINT()}), ROW({TINYINT(), REAL()})},
+      // ROW({TINYINT(), VARCHAR(100)}),
+      // ROW({ARRAY(TINYINT()), MAP(TINYINT(), VARCHAR(100))})},
+      {ROW({SMALLINT()}),
+       ROW({SMALLINT(), INTEGER()}),
+       ROW({BIGINT(), DOUBLE()})},
+      // ROW({BIGINT(), VARCHAR()}),
+      // ROW({ARRAY(BIGINT()), MAP(BIGINT(), VARCHAR())})},
+      BOOLEAN());
+
+  testNoCoercions(
+      signature,
+      {ROW({SMALLINT()}),
+       ROW({SMALLINT(), INTEGER()}),
+       ROW({BIGINT(), DOUBLE()})},
+      // ROW({BIGINT(), VARCHAR()}),
+      // ROW({ARRAY(BIGINT()), MAP(BIGINT(), VARCHAR())})},
+      BOOLEAN());
+
+  assertCannotBind(
+      signature,
+      {ROW({INTEGER()}),
+       ROW({INTEGER(), INTEGER()}),
+       ROW({INTEGER(), INTEGER()})},
+      // ROW({INTEGER(), INTEGER()}),
+      // ROW({ARRAY(BIGINT()), MAP(BIGINT(), VARCHAR())})},
+      /*allowCoercion*/ true);
+}
+
 TEST(SignatureBinderTest, homogeneousRow) {
   // row(T, ...) -> boolean
   {
@@ -1641,6 +1823,36 @@ TEST(SignatureBinderTest, unknownInComplexTypes) {
   }
 }
 
+TEST(SignatureBinderTest, varcharN) {
+  // varchar -> varchar with varcharN argument type.
+  auto signature = exec::FunctionSignatureBuilder()
+                       .argumentType("varchar")
+                       .returnType("varchar")
+                       .build();
+  testSignatureBinder(signature, {VARCHAR(10)}, VARCHAR());
+
+  // Test with map.
+  signature = exec::FunctionSignatureBuilder()
+                  .argumentType("map(varchar, varchar)")
+                  .returnType("boolean")
+                  .build();
+  testSignatureBinder(signature, {MAP(VARCHAR(5), VARCHAR(10))}, BOOLEAN());
+
+  // Test with Array.
+  signature = exec::FunctionSignatureBuilder()
+                  .argumentType("array(varchar)")
+                  .returnType("boolean")
+                  .build();
+  testSignatureBinder(signature, {ARRAY(VARCHAR(5))}, BOOLEAN());
+
+  // Test with Row.
+  signature = exec::FunctionSignatureBuilder()
+                  .argumentType("row(varchar)")
+                  .returnType("boolean")
+                  .build();
+  testSignatureBinder(signature, {ROW({VARCHAR(5)})}, BOOLEAN());
+}
+
 TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
   auto makeSignature = [](const std::string& returnType,
                           const std::vector<std::string>& argTypes) {
@@ -1730,6 +1942,5 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     ASSERT_EQ(coercions[1], nullptr);
   }
 }
-
 } // namespace
 } // namespace facebook::velox::exec::test

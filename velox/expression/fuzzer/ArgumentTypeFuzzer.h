@@ -23,6 +23,10 @@
 
 namespace facebook::velox::fuzzer {
 
+constexpr std::string_view kNormalizedDecimalTypeName = "decimal";
+constexpr std::string_view kNormalizedVarcharTypeName = "varchar";
+constexpr std::string_view kNormalizedVarbinaryTypeName = "varbinary";
+
 /// For function signatures using type variables, generates a list of
 /// arguments types. Optionally, allows to specify a desired return type. If
 /// specified, the return type acts as a constraint on the possible set of
@@ -30,21 +34,31 @@ namespace facebook::velox::fuzzer {
 /// random type that can bind to the function's return type.
 class ArgumentTypeFuzzer {
  public:
+  static const uint32_t kDefaultMaxVarcharTypeLength = 100;
+
+  struct Options {
+    // The maximum fuzzed type length for a parameterized varchar type.
+    uint32_t maxVarcharTypeLength = kDefaultMaxVarcharTypeLength;
+  };
+
   ArgumentTypeFuzzer(
       const exec::FunctionSignature& signature,
       FuzzerGenerator& rng,
-      const std::vector<TypePtr>& scalarTypes = velox::defaultScalarTypes())
-      : ArgumentTypeFuzzer(signature, nullptr, rng, scalarTypes) {}
+      const std::vector<TypePtr>& scalarTypes = velox::defaultScalarTypes(),
+      const std::optional<ArgumentTypeFuzzer::Options>& options = std::nullopt)
+      : ArgumentTypeFuzzer(signature, nullptr, rng, scalarTypes, options) {}
 
   ArgumentTypeFuzzer(
       const exec::FunctionSignature& signature,
       const TypePtr& returnType,
       FuzzerGenerator& rng,
-      const std::vector<TypePtr>& scalarTypes = velox::defaultScalarTypes())
+      const std::vector<TypePtr>& scalarTypes = velox::defaultScalarTypes(),
+      const std::optional<ArgumentTypeFuzzer::Options>& options = std::nullopt)
       : signature_{signature},
         returnType_{returnType},
         rng_{rng},
-        scalarTypes_(scalarTypes) {}
+        scalarTypes_(scalarTypes),
+        options_(options.value_or(Options())) {}
 
   /// Generate random argument types. If the desired returnType has been
   /// specified, checks that it can be bound to the return type of signature_.
@@ -76,10 +90,19 @@ class ArgumentTypeFuzzer {
   // randomly generated type.
   void determineUnboundedTypeVariables();
 
+  // Decimal and Varchar (optionally) use integer variables that
+  // need to be bound.
+  void determineUnboundedIntegerVariables(const exec::TypeSignature& type);
+
   // Bind integer variables used in specified decimal(p,s) type signature to
   // randomly generated values if not already bound.
   // Noop if 'type' is not a decimal type signature.
-  void determineUnboundedIntegerVariables(const exec::TypeSignature& type);
+  void determineDecimalIntegerVariables(const exec::TypeSignature& type);
+
+  // Bind integer variables used in specified varchar(i) type signature to
+  // randomly generated values if not already bound.
+  // Noop if 'type' is not a varchar type signature.
+  void determineVarcharIntegerVariables(const exec::TypeSignature& type);
 
   // Bind LongEnumParameter variables used in enum type signatures to
   // randomly generated values if not already bound.
@@ -101,10 +124,13 @@ class ArgumentTypeFuzzer {
   std::pair<std::optional<int>, std::optional<int>> tryBindFixedPrecisionScale(
       const exec::TypeSignature& type);
 
-  // Find all the nested decimal type signatures recursively.
-  void findDecimalTypes(
+  // Find all the nested searchType type signatures recursively.
+  void findTypesInSignature(
+      std::string_view searchType,
       const exec::TypeSignature& type,
-      std::vector<exec::TypeSignature>& decimalTypes) const;
+      std::vector<exec::TypeSignature>& foundTypes);
+
+  std::optional<int> tryBindFixedVarcharLength(const exec::TypeSignature& type);
 
   const exec::FunctionSignature& signature_;
 
@@ -129,6 +155,8 @@ class ArgumentTypeFuzzer {
 
   /// The set of scalar types that can be used in random argument types.
   const std::vector<TypePtr> scalarTypes_;
+
+  const Options options_;
 };
 
 /// Return the kind name of type in lower case. This is expected to match the
