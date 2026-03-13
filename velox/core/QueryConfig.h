@@ -811,6 +811,13 @@ class QueryConfig {
   static constexpr const char* kStreamingAggregationEagerFlush =
       "streaming_aggregation_eager_flush";
 
+  /// Threshold for zero-copy optimization in MarkSorted operator. If the input
+  /// batch has fewer rows than this threshold, the entire batch is held as a
+  /// reference (zero-copy). If the batch is larger, only the key columns of
+  /// the last row are copied. Default is 1000 rows.
+  static constexpr const char* kMarkSortedZeroCopyThreshold =
+      "mark_sorted_zero_copy_threshold";
+
   // If true, skip request data size if there is only single source.
   // This is used to optimize the Presto-on-Spark use case where each
   // exchange client has only one shuffle partition source.
@@ -1507,6 +1514,10 @@ class QueryConfig {
 
   int32_t streamingAggregationMinOutputBatchRows() const {
     return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
+  }
+
+  int32_t markSortedZeroCopyThreshold() const {
+    return get<int32_t>(kMarkSortedZeroCopyThreshold, 1'000);
   }
 
   bool singleSourceExchangeOptimizationEnabled() const {
