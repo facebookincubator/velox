@@ -43,13 +43,11 @@ set(
   GTest::gtest_main
 )
 
-foreach(TEST_SOURCE IN LISTS VELOX_CACHE_TEST_SOURCES)
-  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
-  set(TEST_TARGET "velox_cache_${TEST_NAME}")
-  add_executable(${TEST_TARGET} ${TEST_SOURCE})
-  add_test(${TEST_TARGET} ${TEST_TARGET})
-  target_link_libraries(${TEST_TARGET} PRIVATE ${VELOX_CACHE_TEST_DEPS})
-endforeach()
+velox_add_grouped_tests(
+  PREFIX velox_cache_test
+  SOURCES ${VELOX_CACHE_TEST_SOURCES}
+  DEPS ${VELOX_CACHE_TEST_DEPS}
+)
 
 add_executable(cached_factory_test CachedFactoryTest.cpp)
 add_test(cached_factory_test cached_factory_test)

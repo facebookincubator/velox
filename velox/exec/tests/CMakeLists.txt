@@ -160,13 +160,13 @@ set(
   fmt::fmt
 )
 
-foreach(TEST_SOURCE IN LISTS VELOX_EXEC_TEST_SOURCES)
-  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
-  set(TEST_TARGET "velox_exec_${TEST_NAME}")
-  add_executable(${TEST_TARGET} ${TEST_SOURCE} Main.cpp)
-  add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(${TEST_TARGET} ${VELOX_EXEC_TEST_DEPS})
-endforeach()
+velox_add_grouped_tests(
+  PREFIX velox_exec_test
+  SOURCES ${VELOX_EXEC_TEST_SOURCES}
+  DEPS ${VELOX_EXEC_TEST_DEPS}
+  EXTRA_SOURCES Main.cpp
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 if(VELOX_ENABLE_GEO)
   add_executable(velox_exec_SpatialJoinTest SpatialJoinTest.cpp Main.cpp)
@@ -262,18 +262,12 @@ set(
   GTest::gtest_main
 )
 
-foreach(TEST_SOURCE IN LISTS VELOX_EXEC_UTIL_TEST_SOURCES)
-  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
-  set(TEST_TARGET "velox_exec_${TEST_NAME}")
-  add_executable(
-    ${TEST_TARGET}
-    ${TEST_SOURCE}
-    PrestoQueryRunnerIntermediateTypeTransformTestBase.cpp
-    Main.cpp
-  )
-  add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET})
-  target_link_libraries(${TEST_TARGET} ${VELOX_EXEC_UTIL_TEST_DEPS})
-endforeach()
+velox_add_grouped_tests(
+  PREFIX velox_exec_util_test
+  SOURCES ${VELOX_EXEC_UTIL_TEST_SOURCES}
+  DEPS ${VELOX_EXEC_UTIL_TEST_DEPS}
+  EXTRA_SOURCES PrestoQueryRunnerIntermediateTypeTransformTestBase.cpp Main.cpp
+)
 
 add_executable(velox_in_10_min_demo VeloxIn10MinDemo.cpp)
 

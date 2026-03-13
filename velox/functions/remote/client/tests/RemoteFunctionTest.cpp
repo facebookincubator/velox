@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Singleton.h>
 #include <folly/SocketAddress.h>
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
@@ -405,6 +406,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
+  // Use Relaxed mode to allow singleton registration after
+  // registrationComplete() which is needed when building with shared
+  // libraries (-DVELOX_BUILD_SHARED=ON) since fbthrift singletons are
+  // registered when the shared library is loaded.
+  folly::SingletonVault::singleton()->setType(
+      folly::SingletonVault::Type::Relaxed);
   folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }

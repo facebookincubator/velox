@@ -54,13 +54,11 @@ set(
   glog::glog
 )
 
-foreach(TEST_SOURCE IN LISTS VELOX_SERIALIZER_TEST_SOURCES)
-  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
-  set(TEST_TARGET "velox_serializer_${TEST_NAME}")
-  add_executable(${TEST_TARGET} ${TEST_SOURCE})
-  add_test(${TEST_TARGET} ${TEST_TARGET})
-  target_link_libraries(${TEST_TARGET} ${VELOX_SERIALIZER_TEST_DEPS})
-endforeach()
+velox_add_grouped_tests(
+  PREFIX velox_serializer_test
+  SOURCES ${VELOX_SERIALIZER_TEST_SOURCES}
+  DEPS ${VELOX_SERIALIZER_TEST_DEPS}
+)
 
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(velox_serializer_benchmark SerializerBenchmark.cpp)

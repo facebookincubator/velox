@@ -84,13 +84,13 @@ set(
   GTest::gtest_main
 )
 
-foreach(TEST_SOURCE IN LISTS VELOX_AGGREGATES_TEST_SOURCES)
-  get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
-  set(TEST_TARGET "velox_aggregates_${TEST_NAME}")
-  add_executable(${TEST_TARGET} ${TEST_SOURCE} Main.cpp)
-  add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET} WORKING_DIRECTORY .)
-  target_link_libraries(${TEST_TARGET} ${VELOX_AGGREGATES_TEST_DEPS})
-endforeach()
+velox_add_grouped_tests(
+  PREFIX velox_aggregates_test
+  SOURCES ${VELOX_AGGREGATES_TEST_SOURCES}
+  DEPS ${VELOX_AGGREGATES_TEST_DEPS}
+  EXTRA_SOURCES Main.cpp
+  WORKING_DIRECTORY .
+)
 
 if(${VELOX_ENABLE_GEO})
   add_executable(velox_aggregates_GeometryAggregateTest GeometryAggregateTest.cpp Main.cpp)

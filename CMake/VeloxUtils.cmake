@@ -220,3 +220,54 @@ function(velox_sources TARGET)
     target_sources(${TARGET} ${ARGN})
   endif()
 endfunction()
+
+# Number of test source files per grouped test binary. Controls the trade-off
+# between link time (fewer groups = faster linking) and ctest parallelism
+# (more groups = more parallel test processes). Set to 1 for per-file binaries.
+set(VELOX_TESTS_PER_GROUP 10 CACHE STRING "Number of test source files per grouped test binary")
+
+# Creates grouped test binaries from a list of test sources. Groups tests into
+# batches of VELOX_TESTS_PER_GROUP to reduce link target count while
+# maintaining ctest parallelism.
+#
+# Usage:
+#   velox_add_grouped_tests(
+#     PREFIX velox_exec
+#     SOURCES ${MY_SOURCES}
+#     DEPS ${MY_DEPS}
+#     [EXTRA_SOURCES Main.cpp]
+#     [WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}]
+#   )
+function(velox_add_grouped_tests)
+  cmake_parse_arguments(ARG "" "PREFIX;WORKING_DIRECTORY" "SOURCES;DEPS;EXTRA_SOURCES" ${ARGN})
+
+  if(NOT ARG_WORKING_DIRECTORY)
+    set(ARG_WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
+  list(LENGTH ARG_SOURCES _num_sources)
+  math(
+    EXPR
+    _num_groups
+    "(${_num_sources} + ${VELOX_TESTS_PER_GROUP} - 1) / ${VELOX_TESTS_PER_GROUP}"
+  )
+
+  set(_idx 0)
+  set(_group 0)
+  set(_current_sources "")
+
+  foreach(_source IN LISTS ARG_SOURCES)
+    list(APPEND _current_sources ${_source})
+    math(EXPR _idx "${_idx} + 1")
+    math(EXPR _group_end "(${_group} + 1) * ${VELOX_TESTS_PER_GROUP}")
+
+    if(_idx GREATER_EQUAL _group_end OR _idx EQUAL _num_sources)
+      set(_target "${ARG_PREFIX}_group${_group}")
+      add_executable(${_target} ${_current_sources} ${ARG_EXTRA_SOURCES})
+      add_test(NAME ${_target} COMMAND ${_target} WORKING_DIRECTORY ${ARG_WORKING_DIRECTORY})
+      target_link_libraries(${_target} ${ARG_DEPS})
+      set(_current_sources "")
+      math(EXPR _group "${_group} + 1")
+    endif()
+  endforeach()
+endfunction()
