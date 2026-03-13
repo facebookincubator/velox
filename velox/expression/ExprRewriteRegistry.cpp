@@ -27,7 +27,8 @@ void ExprRewriteRegistry::clear() {
 }
 
 core::TypedExprPtr ExprRewriteRegistry::rewrite(
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   const auto& inputs = expr->inputs();
   VELOX_CHECK(
       std::any_of(
@@ -42,7 +43,7 @@ core::TypedExprPtr ExprRewriteRegistry::rewrite(
   registry_.withRLock([&](const auto& list) {
     for (const auto& rewrite : list) {
       VELOX_CHECK_NOT_NULL(rewrite);
-      if (auto rewritten = (rewrite)(expr)) {
+      if (auto rewritten = (rewrite)(expr, pool)) {
         result = rewritten;
         break;
       }

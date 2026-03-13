@@ -142,6 +142,25 @@ class ConstantTypedExpr : public ITypedExpr {
 
   bool equals(const ITypedExpr& other) const;
 
+  /// Compares this constant expression with another for equality using the
+  /// specified null handling mode.
+  ///
+  /// @param other The expression to compare with.
+  /// @param nullHandlingMode Determines how nulls are compared.
+  ///   - kNullAsValue: null == null is true, null == value is false.
+  ///   - kNullAsIndeterminate: null comparison may be indeterminate and could
+  ///     return std::nullopt.
+  /// @param pool Memory pool used to convert constant expressions with variant
+  ///     to a constant vector for comparison with nullHandlingMode.
+  /// TODO: Add support for comparing Variants with kNullAsIndeterminate null
+  ///  comparison mode.
+  /// @return true if expressions are equal, false if not equal, std::nullopt
+  ///     if the result is indeterminate (only with kNullAsIndeterminate mode).
+  std::optional<bool> equals(
+      const ITypedExpr& other,
+      CompareFlags::NullHandlingMode nullHandlingMode,
+      memory::MemoryPool* pool) const;
+
   bool operator==(const ITypedExpr& other) const final {
     return this->equals(other);
   }
