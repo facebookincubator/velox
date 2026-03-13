@@ -36,3 +36,7 @@ endif()
 if(${VELOX_ENABLE_ICEBERG_FUNCTIONS})
   add_subdirectory(iceberg)
 endif()
+
+if(${VELOX_ENABLE_DELTA_FUNCTIONS})
+  add_subdirectory(delta)
+endif()
