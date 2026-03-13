@@ -63,12 +63,37 @@ constexpr const Base32::ReverseIndex kBase32ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255 // 240-255
 };
 
+// Character set for Base32 encoding (RFC 4648).
+// Uses uppercase letters A-Z (values 0-25) and digits 2-7 (values 26-31).
+constexpr const Base32::Charset kBase32Charset = {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+    'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
+    'W', 'X', 'Y', 'Z', '2', '3', '4', '5', '6', '7'};
+
+// Verify that for every entry in kBase32Charset, the corresponding entry
+// in kBase32ReverseIndexTable is correct.
+static_assert(
+    BaseEncoderUtils::checkForwardIndex(
+        sizeof(kBase32Charset) - 1,
+        kBase32Charset,
+        kBase32ReverseIndexTable),
+    "kBase32Charset has incorrect entries");
+
+// Verify that for every entry in kBase32ReverseIndexTable, the corresponding
+// entry in kBase32Charset is correct.
+static_assert(
+    BaseEncoderUtils::checkReverseIndex(
+        sizeof(kBase32ReverseIndexTable) - 1,
+        kBase32Charset,
+        kBase32ReverseIndexTable),
+    "kBase32ReverseIndexTable has incorrect entries.");
+
 // static
 folly::Expected<uint8_t, Status> Base32::base32ReverseLookup(
     char encodedChar,
     const ReverseIndex& reverseIndex) {
   auto index = reverseIndex[static_cast<uint8_t>(encodedChar)];
-  if (index >= 32) {
+  if (index >= kCharsetSize) {
     return folly::makeUnexpected(
         Status::UserError("Unrecognized character: {}", encodedChar));
   }
@@ -87,13 +112,14 @@ folly::Expected<size_t, Status> Base32::calculateDecodedSize(
   size_t validCharCount = 0;
   for (size_t i = 0; i < inputSize; ++i) {
     char c = input[i];
-    if (c == Base32::kPadding || std::isspace(static_cast<unsigned char>(c))) {
+    if (c == BaseEncoderUtils::kPadding ||
+        std::isspace(static_cast<unsigned char>(c))) {
       continue;
     }
 
     // Validate character first
     auto index = kBase32ReverseIndexTable[static_cast<uint8_t>(c)];
-    if (index >= 32) {
+    if (index >= kCharsetSize) {
       return folly::makeUnexpected(
           Status::UserError("Unrecognized character: {}", c));
     }
@@ -159,7 +185,8 @@ folly::Expected<size_t, Status> Base32::decodeImpl(
     char c = input[i];
 
     // Skip padding and whitespace (RFC 4648 allows whitespace in encoded data)
-    if (c == Base32::kPadding || std::isspace(static_cast<unsigned char>(c))) {
+    if (c == BaseEncoderUtils::kPadding ||
+        std::isspace(static_cast<unsigned char>(c))) {
       continue;
     }
 
