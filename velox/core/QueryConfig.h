@@ -846,7 +846,8 @@ class QueryConfig {
 
   /// If this is true, then the unnest operator might split output for each
   /// input batch based on the output batch size control. Otherwise, it produces
-  /// a single output for each input batch.
+  /// a single output for each input batch. This can be overriden on a per
+  /// operator basis by the splitOutput parameter in the UnnestPlanNode.
   static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
 
   /// Priority of the query in the memory pool reclaimer. Lower value means
