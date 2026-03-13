@@ -40,10 +40,10 @@ struct ArrayL2NormFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(double& out, const TInput& inputArray) {
+  FOLLY_ALWAYS_INLINE void call(double& out, const TInput& inputArray) {
     if (inputArray.size() == 0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double maxAbs = 0.0;
@@ -55,7 +55,7 @@ struct ArrayL2NormFunction {
 
     if (maxAbs == 0.0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double sumOfSquares = 0.0;
@@ -67,14 +67,14 @@ struct ArrayL2NormFunction {
     }
 
     out = maxAbs * std::sqrt(sumOfSquares);
-    return true;
+    return;
   }
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool callNullFree(double& out, const TInput& inputArray) {
+  FOLLY_ALWAYS_INLINE void callNullFree(double& out, const TInput& inputArray) {
     if (inputArray.size() == 0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double maxAbs = 0.0;
@@ -84,7 +84,7 @@ struct ArrayL2NormFunction {
 
     if (maxAbs == 0.0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double sumOfSquares = 0.0;
@@ -94,7 +94,7 @@ struct ArrayL2NormFunction {
     }
 
     out = maxAbs * std::sqrt(sumOfSquares);
-    return true;
+    return;
   }
 };
 
@@ -114,12 +114,12 @@ template <typename TExec, typename K, typename V>
 struct MapL2NormFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       double& out,
       const arg_type<Map<K, V>>& inputMap) {
     if (inputMap.size() == 0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double maxAbs = 0.0;
@@ -132,7 +132,7 @@ struct MapL2NormFunction {
 
     if (maxAbs == 0.0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double sumOfSquares = 0.0;
@@ -144,15 +144,15 @@ struct MapL2NormFunction {
     }
 
     out = maxAbs * std::sqrt(sumOfSquares);
-    return true;
+    return;
   }
 
-  FOLLY_ALWAYS_INLINE bool callNullFree(
+  FOLLY_ALWAYS_INLINE void callNullFree(
       double& out,
       const null_free_arg_type<Map<K, V>>& inputMap) {
     if (inputMap.size() == 0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double maxAbs = 0.0;
@@ -162,7 +162,7 @@ struct MapL2NormFunction {
 
     if (maxAbs == 0.0) {
       out = 0.0;
-      return true;
+      return;
     }
 
     double sumOfSquares = 0.0;
@@ -172,7 +172,7 @@ struct MapL2NormFunction {
     }
 
     out = maxAbs * std::sqrt(sumOfSquares);
-    return true;
+    return;
   }
 };
 
