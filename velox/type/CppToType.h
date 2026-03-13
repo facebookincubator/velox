@@ -15,6 +15,10 @@
  */
 #pragma once
 
+#include <map>
+#include <unordered_map>
+#include <vector>
+
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -107,6 +111,28 @@ struct CppToType<std::shared_ptr<T>> : public CppToTypeBase<TypeKind::OPAQUE> {
 
 template <>
 struct CppToType<UnknownValue> : public CppToTypeBase<TypeKind::UNKNOWN> {};
+
+template <typename T>
+struct CppToType<std::vector<T>> : public CppToTypeBase<TypeKind::ARRAY> {
+  static auto create() {
+    return ARRAY(CppToType<T>::create());
+  }
+};
+
+template <typename K, typename V>
+struct CppToType<std::map<K, V>> : public CppToTypeBase<TypeKind::MAP> {
+  static auto create() {
+    return MAP(CppToType<K>::create(), CppToType<V>::create());
+  }
+};
+
+template <typename K, typename V>
+struct CppToType<std::unordered_map<K, V>>
+    : public CppToTypeBase<TypeKind::MAP> {
+  static auto create() {
+    return MAP(CppToType<K>::create(), CppToType<V>::create());
+  }
+};
 
 // todo: remaining cpp2type
 
