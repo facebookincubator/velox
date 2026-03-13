@@ -105,6 +105,9 @@ struct ThreadState {
   /// True if there is a future outstanding that will schedule this on an
   /// executor thread when some promise is realized.
   bool hasBlockingFuture{false};
+  /// Timestamp in microseconds when the driver became blocked. Used to record
+  /// blocked time when the driver is terminated while still blocked.
+  uint64_t blockingStartUs{0};
   /// The number of suspension requests on a on-thread driver. If > 0, this
   /// driver thread is in a (recursive) section waiting for RPC or memory
   /// strategy decision. The thread is not supposed to access its memory, which
@@ -170,6 +173,7 @@ struct ThreadState {
     obj["isTerminated"] = isTerminated.load();
     obj["isEnqueued"] = isEnqueued.load();
     obj["hasBlockingFuture"] = hasBlockingFuture;
+    obj["blockingStartUs"] = blockingStartUs;
     obj["isSuspended"] = suspended();
     obj["startExecTime"] = startExecTimeMs;
     return obj;
@@ -594,6 +598,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
       RowVectorPtr& result);
 
   void updateStats();
+
+  /// Records operator blocked time ins case the driver was off the thrread and
+  /// blocked when terminated.
+  void updateOperatorBlockingStats();
 
   // Defines the driver barrier processing state.
   struct BarrierState {
