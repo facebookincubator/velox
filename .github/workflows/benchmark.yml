@@ -1,0 +1,140 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Ubuntu Benchmark
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/benchmark.yml
+      - scripts/ci/benchmark-requirements.txt
+      - scripts/setup-ubuntu.sh
+
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  benchmark:
+    if: github.repository == 'facebookincubator/velox'
+    runs-on: 8-core-ubuntu-22.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      BINARY_DIR: ${{ github.workspace }}/benchmarks/
+      CONTENDER_OUTPUT_PATH: ${{ github.workspace }}/benchmark-results/contender/
+      INSTALL_PREFIX: ${{ github.workspace }}/dependencies
+    steps:
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          path: velox
+
+          persist-credentials: false
+
+      - name: Restore Dependencies
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        id: restore-deps
+        with:
+          path: ${{ env.INSTALL_PREFIX }}
+          key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
+
+      - name: Install apt dependencies
+        env:
+          UV_TOOL_BIN_DIR: /usr/local/bin
+        run: |
+          source velox/scripts/setup-ubuntu.sh
+          install_apt_deps
+
+      - name: Install compiled dependencies
+        if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
+        env:
+          CCACHE_DISABLE: 'true'
+        run: |
+          source velox/scripts/setup-ubuntu.sh
+          run_and_time install_fmt
+          run_and_time install_protobuf
+          run_and_time install_boost
+          run_and_time install_fast_float
+          run_and_time install_folly
+          run_and_time install_fizz
+          run_and_time install_wangle
+          run_and_time install_mvfst
+          run_and_time install_fbthrift
+          run_and_time install_stemmer
+          run_and_time install_arrow
+
+      - name: Save Dependencies
+        if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.INSTALL_PREFIX }}
+          key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
+
+      - name: Restore ccache
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        id: restore-cache
+        with:
+          clean: true
+          path: ccache
+          key: ccache-benchmark
+
+      - name: Clear CCache Statistics
+        run: |
+          ccache -sz
+
+      - name: Build Contender Benchmarks
+        working-directory: velox
+        run: |
+          n_cores=$(nproc)
+          make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
+          mkdir -p  ${BINARY_DIR}/contender/
+          cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
+
+      - name: CCache after
+        run: |
+          ccache -vs
+
+      - name: Save ccache"
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ccache
+          key: ccache-benchmark
+
+      - name: Install benchmark dependencies
+        run: |
+          python3 -m pip install -r velox/scripts/ci/benchmark-requirements.txt
+
+      - name: Run Benchmarks - Contender
+        working-directory: velox
+        run: |
+          make benchmarks-basic-run \
+              EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
+
+      - name: Upload result artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          path: benchmark-results
+          name: benchmark-results
+          retention-days: 5
