@@ -217,8 +217,9 @@ class DateAddFunction : public CudfFunction {
     VELOX_CHECK(
         expr->inputs()[0]->type()->isDate(),
         "First argument to date_add must be a date");
-    VELOX_CHECK_NULL(std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-        expr->inputs()[0]));
+    VELOX_CHECK_NULL(
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[0]));
     // The date_add second argument could be int8_t, int16_t, int32_t.
     value_ = makeScalarFromConstantExpr(
         expr->inputs()[1], cudf::type_id::DURATION_DAYS);
@@ -746,8 +747,6 @@ class ConcatFunction : public CudfFunction {
     VELOX_CHECK_GE(numInputs_, 2, "concat expects at least 2 inputs");
 
     // Scan inputs for literals and store strings in map by input index.
-    // Capture the size of the first non-literal input column and validate all
-    // others.
     for (size_t i = 0; i < numInputs_; ++i) {
       if (auto constant =
               std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[i])) {
@@ -760,6 +759,12 @@ class ConcatFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    // Validate sizes.
+    VELOX_CHECK_EQ(
+        inputColumns.size() + inputIndexToLiteral_.size(),
+        numInputs_,
+        "Unexpected number of input columns");
+
     // If there is at least one input column, fetch its size as the output size.
     // If there are no input columns, this means that all the inputs are
     // literals, and the output size will be 1.
@@ -1061,7 +1066,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
-           .argumentType("varchar")
+           .variableArity("varchar")
            .build()});
 
   // Our cudf binary ops can take all numeric types but instead of listing them
