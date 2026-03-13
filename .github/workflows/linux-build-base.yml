@@ -238,37 +238,43 @@ jobs:
         env:
           CUDF_DIR: _build/release/velox/experimental/cudf
         run: |
-          mkdir -p $CUDF_DIR/cudf-libs
+          mkdir -p "$CUDF_DIR/cudf-libs"
           deps=$(
             find "$CUDF_DIR/tests" -name "velox_cudf_*" -type f -executable |
             xargs ldd 2>/dev/null |
             sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' |
             grep -vE '^/(lib|usr/lib|lib64)/(libcuda|librt\.so|libm\.so|libstdc\+\+\.so|ld-linux-x86-64\.so|libc\.so)' |
             sort -u
-          ) &&
-          # copy all "real" files and symlink targets to $CUDF_DIR/cudf-libs
+          )
+          if [ -z "$deps" ]; then
+            echo "Error: No dependencies found"
+            exit 1
+          fi
+          # copy all "real" files and symlink targets to "$CUDF_DIR/cudf-libs"
           (
             echo "$deps" |
             xargs readlink -f |
-            xargs -I {} cp {} $CUDF_DIR/cudf-libs/
-          ) &&
+            xargs -I {} cp {} "$CUDF_DIR/cudf-libs/"
+          )
           # filter out which libraries are symlinks
-          lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {}) &&
+          lndeps=$(echo "$deps" | xargs -I {} bash -c '[ -L "$1" ] && echo "$1" || true' bash {})
           # write new symlinks to the same folder, with targets in the same folder
-          if [[ -d "$CUDF_DIR/cudf-libs" ]]; then
-            cd "$CUDF_DIR/cudf-libs" || exit 1
-            while IFS= read -r link; do
-              [[ -L "$link" ]] || continue
-              target=$(readlink -f "$link") || continue
-              target_basename=$(basename "$target") || continue
-             link_basename=$(basename "$link") || continue
-             ln -sf "$target_basename" "$link_basename" || echo "Warning: Failed to create symlink $link_basename"
-            done <<< "$lndeps"
-          else
-            echo "Error: Directory $CUDF_DIR/cudf-libs not found"
-            exit 1
-          fi &&
-          tar -cvf $CUDF_DIR/cudf-libs.tar -C $CUDF_DIR cudf-libs
+          (
+            if [[ -d "$CUDF_DIR/cudf-libs" ]]; then
+              cd "$CUDF_DIR/cudf-libs" || exit 1
+              while IFS= read -r link; do
+                [[ -L "$link" ]] || continue
+                target=$(readlink -f "$link") || continue
+                target_basename=$(basename "$target") || continue
+                link_basename=$(basename "$link") || continue
+                ln -sf "$target_basename" "$link_basename" || echo "Warning: Failed to create symlink $link_basename"
+              done <<< "$lndeps"
+            else
+              echo "Error: Directory $CUDF_DIR/cudf-libs not found"
+              exit 1
+            fi
+          )
+          tar -cvf "$CUDF_DIR/cudf-libs.tar" -C "$CUDF_DIR" cudf-libs
 
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
