@@ -115,8 +115,50 @@ void IcebergSplitReader::prepareSplit(
                 splitOffset_,
                 hiveSplit_->connectorId));
       }
+    } else if (deleteFile.content == FileContent::kEqualityDeletes) {
+      VELOX_NYI("Equality deletes are not yet supported.");
     } else {
-      VELOX_NYI();
+      VELOX_NYI(
+          "Unsupported delete file content type: {}",
+          static_cast<int>(deleteFile.content));
+    }
+  }
+
+  positionalUpdateFileReaders_.clear();
+  const auto& updateFiles = icebergSplit->updateFiles;
+
+  // Derive update column names and types from the reader output schema.
+  // Following the standard Iceberg MoR pattern, update files carry all
+  // output columns (full-row updates). Hoisted outside the loop since the
+  // schema is identical for every update file.
+  std::vector<std::string> updateColumnNames;
+  std::vector<TypePtr> updateColumnTypes;
+  for (auto i = 0; i < readerOutputType_->size(); ++i) {
+    updateColumnNames.push_back(readerOutputType_->nameOf(i));
+    updateColumnTypes.push_back(readerOutputType_->childAt(i));
+  }
+
+  for (const auto& updateFile : updateFiles) {
+    VELOX_CHECK(
+        updateFile.content == FileContent::kPositionalUpdates,
+        "Expected positional update file but got content type: {}",
+        static_cast<int>(updateFile.content));
+    if (updateFile.recordCount > 0) {
+      positionalUpdateFileReaders_.push_back(
+          std::make_unique<PositionalUpdateFileReader>(
+              updateFile,
+              hiveSplit_->filePath,
+              updateColumnNames,
+              updateColumnTypes,
+              fileHandleFactory_,
+              connectorQueryCtx_,
+              ioExecutor_,
+              hiveConfig_,
+              ioStatistics_,
+              ioStats_,
+              runtimeStats,
+              splitOffset_,
+              hiveSplit_->connectorId));
     }
   }
 }
@@ -159,6 +201,24 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
+
+  if (rowsScanned > 0 && !positionalUpdateFileReaders_.empty()) {
+    auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
+    VELOX_CHECK_NOT_NULL(
+        outputRowVector, "Output must be a RowVector for positional updates.");
+
+    for (auto iter = positionalUpdateFileReaders_.begin();
+         iter != positionalUpdateFileReaders_.end();) {
+      (*iter)->applyUpdates(
+          baseReadOffset_, outputRowVector, deleteBitmap_, actualSize);
+
+      if ((*iter)->noMoreData()) {
+        iter = positionalUpdateFileReaders_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+  }
 
   return rowsScanned;
 }
