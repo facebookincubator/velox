@@ -1,0 +1,218 @@
+---
+slug: simd-capped-unicode-length
+title: "Accelerating Unicode string processing with SIMD in Velox"
+authors: [PingLiuPing, Yuhta, mbasmanova]
+tags: [tech-blog, performance]
+---
+
+## TL;DR
+
+We optimized two Unicode string helpers — `cappedLengthUnicode` and
+`cappedByteLengthUnicode` — by replacing byte-by-byte `utf8proc_char_length`
+calls with a SIMD-based scanning loop. The new implementation processes
+register-width blocks at a time: pure-ASCII blocks skip in one step, while
+mixed blocks use bitmask arithmetic to count character starts. Both helpers now
+share a single parameterized template, eliminating code duplication.
+
+On a comprehensive benchmark matrix covering string lengths from 4 to 1024
+bytes and ASCII ratios from 0% to 100%, we measured **2–15× speedups** across
+most configurations, with no regressions on Unicode-heavy inputs. The
+optimization benefits all callers of these helpers, including the Iceberg
+truncate transform and various string functions.
+
+## Why SIMD, why here
+
+Velox is a high-performance execution engine, and SIMD is one of the primary
+ways we deliver that performance across compute-heavy paths. This is not a
+one-off micro-optimization; it is a principle we apply consistently when the
+data and algorithms make SIMD a natural fit. String processing is one of those
+places: it is ubiquitous in query execution and often dominated by byte-wise
+work that maps well to vectorized scanning.
+
+In this post, we describe how we applied this principle to two Unicode helpers
+that sit on many string processing paths, and how we balanced speed,
+correctness, and maintainability.
+
+The old implementation calls utf8proc_char_length on every UTF character.
+That is robust, but it is inefficient for long ASCII segments where every character has only 1 byte.
+## What these helpers do
+
+- **`cappedLengthUnicode`** returns the number of UTF-8 characters in a
+  string, stopping early once `maxChars` is reached.
+- **`cappedByteLengthUnicode`** returns the *byte position* of the Nth
+  character, also capped by `maxChars`. This is the key primitive for
+  truncating strings by character count without re-parsing the entire string.
+
+Consider a UTF-8 string that mixes multi-byte characters and ASCII:
+
+```
+input = "你好abc世界"  // 15 bytes, 7 characters
+```
+
+With `maxChars = 3`:
+- `cappedLengthUnicode` returns `3`.
+- `cappedByteLengthUnicode` returns `7` (the byte position after the third
+  character, `"好"`).
+
+Both need to handle mixed ASCII and multi-byte UTF-8 inputs, invalid bytes,
+and early-exit behavior. These helpers are called on the Unicode code path —
+the path used when the input is *not* known to be pure ASCII at the call
+site. They are hot in several places, most notably the
+<a href="https://iceberg.apache.org/spec/#truncate-transform-details">Iceberg truncate transform</a>,
+which must find the byte position of the Nth character to truncate partition
+keys. When we profiled the Iceberg write benchmark, `cappedByteLengthUnicode`
+stood out as a clear hot spot.
+
+Byte-by-byte UTF-8 scanning becomes a bottleneck on large, ASCII-heavy
+strings, but we cannot assume pure ASCII because inputs may mix ASCII and
+multi-byte characters.
+
+## The SIMD design
+
+We introduced a shared helper, `detail::cappedUnicodeImpl`, and parameterized
+it by whether it should return characters or bytes. The key idea is to process
+the string in SIMD-width blocks using
+<a href="https://github.com/xtensor-stack/xsimd">xsimd</a>:
+
+1. **ASCII fast path.** Load a register-width block and check whether any
+   byte has its high bit set. If not, the whole block is ASCII. We can skip the
+   entire block and advance the counters in one step.
+2. **Mixed UTF-8 blocks.** For a block containing non-ASCII bytes, we count
+   character starts using `(byte & 0xC0) != 0x80`, convert the predicate into a
+   bitmask, and use `popcount` to get the number of UTF-8 characters in the
+   block.
+3. **Finding the Nth character.** For `cappedByteLengthUnicode`, if the
+   `maxChars` target falls inside a mixed block, we use `ctz` on the bitmask to
+   locate the Nth character start and add a small inline helper
+   (`getUtf8CharLength`) to compute the byte length of that UTF-8 character.
+4. **Remainder handling.** For the tail, we keep two loops:
+   - A non-ASCII remainder loop that avoids ASCII fast-path mispredicts.
+   - A branching ASCII loop that is cheaper than the branchless version for
+     short strings.
+
+## The journey: what we tried and learned
+
+The final implementation emerged through several rounds of iteration and
+experimentation. Here are the key insights from that process.
+
+### Optimize at the core, not the call site
+
+The initial version added the SIMD fast path directly in the Iceberg truncate
+function. But the real bottleneck was in `cappedByteLengthUnicode` itself.
+Moving the optimization into the shared helper meant every call site benefits
+— not just Iceberg.
+
+### Avoid switching between code paths
+
+The first SIMD version only accelerated the leading ASCII prefix: it scanned
+SIMD blocks until it hit the first non-ASCII byte, then fell back to scalar
+for the rest of the string. This is useless if the first character is
+non-ASCII but the rest are ASCII. The obvious fix — re-entering the SIMD path
+after each non-ASCII block — caused a ~20% regression on mixed and
+Unicode-heavy inputs due to the overhead of switching between SIMD and scalar
+modes. The solution was a single SIMD loop that handles *both* ASCII and mixed
+blocks, avoiding frequent code-path switches and extra branching.
+
+### Unify the two helpers
+
+`cappedLengthUnicode` and `cappedByteLengthUnicode` have nearly identical
+logic — the only difference is what they return. Factoring them into a shared
+`detail::cappedUnicodeImpl<returnByteLength>` template eliminated the code
+duplication and ensures both helpers stay in sync.
+
+### Short strings need special care
+
+After the SIMD path was generalized, the expanded benchmark matrix revealed
+regressions on very short strings (4 bytes). The fix was simple: skip the
+SIMD loop entirely when the string is shorter than one register width. Short
+strings go straight to the scalar path, which avoids the overhead of loading
+and testing a partial SIMD register.
+
+### A branchless `getUtf8CharLength`
+
+The scalar remainder loop originally called `utf8proc_char_length`, which
+involves several branches. A branchless alternative using `std::countl_zero`
+compiles to a handful of instructions:
+
+```cpp
+auto n = std::countl_zero((~static_cast<uint32_t>(c) << 24) | 1);
+return (n == 0 || n > 4) ? 1 : n;
+```
+
+This improved performance on the short-string and remainder paths.
+
+### Confidence through comprehensive testing
+
+Since `cappedLengthUnicode` is widely used across Velox (unlike
+`cappedByteLengthUnicode` which is limited to Iceberg and Spark), the change
+needed high confidence. The PR added tests for multi-byte UTF-8 sequences that
+straddle SIMD boundaries, continuation bytes in the scalar tail, and strings
+that are exactly one register width.
+
+## Benchmark results
+
+We added `StringCoreBenchmark.cpp` to measure both helpers across a matrix of
+string lengths (4, 16, 64, 256, 1024 bytes) and ASCII ratios (0%, 1%, 25%,
+50%, 75%, 99%, 100%). Each benchmark processes 10,000 strings with
+`maxChars = 128`.
+
+ASCII ratio indicates the percentage of characters in each string that are
+single-byte ASCII; the remaining characters are multi-byte UTF-8. The
+following table highlights representative speedups from the full matrix
+(measured on an Apple M3):
+
+| String Length | ASCII Ratio | `cappedByteLengthUnicode` | `cappedLengthUnicode` |
+| --- | --- | --- | --- |
+| 16 | 50% | **+9.7×** | **+7.7×** |
+| 64 | 50% | **+15.3×** | **+11.3×** |
+| 64 | 100% | **+6.3×** | **+7.3×** |
+| 256 | 25% | **+9.2×** | **+6.3×** |
+| 256 | 100% | **+9.0×** | **+7.2×** |
+| 1024 | 50% | **+6.1×** | **+7.4×** |
+| 1024 | 99% | **+2.3×** | **+2.4×** |
+| 1024 | 100% | **+4.9×** | **+7.6×** |
+| 4 | 0% (Unicode-only) | −1.25× | −1.08× |
+| 4 | 100% (short ASCII) | −1.07× | −1.02× |
+
+The small regressions on 4-byte strings are within noise for such tiny
+inputs. For strings ≥ 16 bytes — which dominate real workloads — speedups
+range from 2× to over 15×, with the largest gains on mixed-content strings
+where the SIMD loop handles both ASCII and non-ASCII blocks without falling
+back to scalar.
+
+We also validated the results on an x86_64 server (Intel Xeon Skylake with
+AVX-512) and observed similar improvement patterns. A full set of raw numbers
+is available in the
+<a href="https://gist.github.com/PingLiuPing/889ec7d8cdffbf9081cb1af75e7f102f">perf data gist</a>
+and summarized in the
+<a href="https://github.com/facebookincubator/velox/pull/16428">PR</a>.
+
+## Takeaways
+
+- **Measure first, optimize second.** The optimization started from a real
+  hot spot found in the Iceberg write benchmark — not from speculation.
+- **Optimize the core, not the symptom.** Rather than patching the call site,
+  we pushed the improvement into the shared helper so that all callers benefit.
+- **SIMD is a first-class tool** in Velox for performance-critical paths.
+  String processing — ubiquitous in query execution and dominated by
+  byte-wise work — is a natural fit for vectorized scanning.
+- **Avoid switching between code paths.** Re-entering the SIMD path after every
+  non-ASCII block introduced extra branching and switching overhead; a unified
+  loop that handles both ASCII and mixed blocks was consistently faster.
+- **Branchless is not always faster.** A single branchless remainder loop was
+  slower than two tailored loops on short strings.
+- **Avoid duplication.** The two helpers share a single parameterized
+  implementation, keeping behavior consistent and reducing maintenance burden.
+- **Data-driven iteration.** We tried multiple strategies and compared them
+  against a realistic benchmark matrix. We kept the version that improved the
+  common case without regressing Unicode-heavy workloads.
+- **Comprehensive benchmarks** across different string lengths and ASCII
+  mixing ratios are essential for validating correctness-sensitive
+  optimizations.
+
+## Acknowledgements
+
+Special thanks to <a href="https://github.com/mbasmanova">Masha Basmanova</a> and
+<a href="https://github.com/Yuhta">Yuhta</a> for their guidance and detailed
+code reviews that shaped the SIMD design and pushed for comprehensive
+benchmarking.
