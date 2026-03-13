@@ -120,7 +120,7 @@ int32_t randDate(FuzzerGenerator& rng) {
 }
 
 int32_t randTime(FuzzerGenerator& rng) {
-  return rand<int64_t>(rng, TimeType::kMin, TimeType::kMax);
+  return rand<int64_t>(rng, TIME()->getMin(), TIME()->getMax());
 }
 
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
