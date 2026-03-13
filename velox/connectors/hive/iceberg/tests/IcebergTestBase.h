@@ -50,6 +50,14 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   void TearDown() override;
 
+  virtual int64_t rootPoolCapacityBytes() const {
+    return 1L << 30;
+  }
+
+  void setConnectorSessionProperty(
+      const std::string& key,
+      const std::string& value);
+
   std::vector<RowVectorPtr> createTestData(
       RowTypePtr rowType,
       int32_t numBatches,
