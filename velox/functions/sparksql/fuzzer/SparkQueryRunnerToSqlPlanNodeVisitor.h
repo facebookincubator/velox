@@ -93,6 +93,11 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
     VELOX_NYI();
   }
 
+  void visit(const core::MarkSortedNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::EnforceDistinctNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
