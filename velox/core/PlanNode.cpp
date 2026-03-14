@@ -2506,6 +2506,78 @@ PlanNodePtr EnforceDistinctNode::create(
       source);
 }
 
+RowTypePtr getMarkSortedOutputType(
+    const RowTypePtr& inputType,
+    const std::string& markerName) {
+  std::vector<std::string> names = inputType->names();
+  std::vector<TypePtr> types = inputType->children();
+
+  names.emplace_back(markerName);
+  types.emplace_back(BOOLEAN());
+  return ROW(std::move(names), std::move(types));
+}
+
+MarkSortedNode::MarkSortedNode(
+    PlanNodeId id,
+    std::string markerName,
+    std::vector<FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<SortOrder> sortingOrders,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      markerName_(std::move(markerName)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      sources_{std::move(source)},
+      outputType_(
+          getMarkSortedOutputType(sources_[0]->outputType(), markerName_)) {
+  VELOX_USER_CHECK_GT(markerName_.size(), 0);
+  VELOX_USER_CHECK_GT(sortingKeys_.size(), 0);
+  VELOX_USER_CHECK_EQ(
+      sortingKeys_.size(),
+      sortingOrders_.size(),
+      "Number of sorting keys and sorting orders must be the same");
+}
+
+void MarkSortedNode::addDetails(std::stringstream& stream) const {
+  stream << "marker: " << markerName_ << ", keys: [";
+  for (auto i = 0; i < sortingKeys_.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << sortingKeys_[i]->name() << " " << sortingOrders_[i].toString();
+  }
+  stream << "]";
+}
+
+folly::dynamic MarkSortedNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["markerName"] = this->markerName_;
+  obj["sortingKeys"] = ISerializable::serialize(this->sortingKeys_);
+  obj["sortingOrders"] = ISerializable::serialize(this->sortingOrders_);
+  return obj;
+}
+
+void MarkSortedNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr MarkSortedNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto markerName = obj["markerName"].asString();
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+
+  return std::make_shared<MarkSortedNode>(
+      deserializePlanNodeId(obj),
+      markerName,
+      sortingKeys,
+      sortingOrders,
+      source);
+}
+
 namespace {
 RowTypePtr getRowNumberOutputType(
     const RowTypePtr& inputType,
@@ -3806,6 +3878,8 @@ void PlanNode::registerSerDe() {
   registry.Register("LimitNode", LimitNode::create);
   registry.Register("LocalMergeNode", LocalMergeNode::create);
   registry.Register("LocalPartitionNode", LocalPartitionNode::create);
+  registry.Register("MarkDistinctNode", MarkDistinctNode::create);
+  registry.Register("MarkSortedNode", MarkSortedNode::create);
   registry.Register("OrderByNode", OrderByNode::create);
   registry.Register("PartitionedOutputNode", PartitionedOutputNode::create);
   registry.Register("ProjectNode", ProjectNode::create);
