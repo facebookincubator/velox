@@ -38,7 +38,7 @@ add_executable(
 add_test(
   NAME velox_functions_lib_test
   COMMAND velox_functions_lib_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -54,3 +54,5 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
 )
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/data DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

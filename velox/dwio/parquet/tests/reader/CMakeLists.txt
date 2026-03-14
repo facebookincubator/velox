@@ -16,7 +16,7 @@ add_executable(velox_dwio_parquet_page_reader_test ParquetPageReaderTest.cpp)
 add_test(
   NAME velox_dwio_parquet_page_reader_test
   COMMAND velox_dwio_parquet_page_reader_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_link_libraries(
   velox_dwio_parquet_page_reader_test
@@ -65,7 +65,7 @@ add_executable(
 add_test(
   NAME velox_dwio_parquet_reader_test
   COMMAND velox_dwio_parquet_reader_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_link_libraries(
   velox_dwio_parquet_reader_test
@@ -78,7 +78,7 @@ add_executable(velox_dwio_parquet_structure_decoder_test NestedStructureDecoderT
 add_test(
   NAME velox_dwio_parquet_structure_decoder_test
   COMMAND velox_dwio_parquet_structure_decoder_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_link_libraries(
   velox_dwio_parquet_structure_decoder_test
@@ -101,7 +101,7 @@ add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
 add_test(
   NAME velox_dwio_parquet_table_scan_test
   COMMAND velox_dwio_parquet_table_scan_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_link_libraries(
   velox_dwio_parquet_table_scan_test
@@ -120,7 +120,7 @@ if(${VELOX_ENABLE_ARROW})
   add_test(
     NAME velox_dwio_parquet_rlebp_decoder_test
     COMMAND velox_dwio_parquet_rlebp_decoder_test
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
   target_link_libraries(
     velox_dwio_parquet_rlebp_decoder_test

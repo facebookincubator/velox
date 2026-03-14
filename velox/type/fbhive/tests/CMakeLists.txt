@@ -17,7 +17,7 @@ add_executable(velox_type_fbhive_test HiveTypeParserTests.cpp)
 add_test(
   NAME velox_type_fbhive_test
   COMMAND velox_type_fbhive_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -34,7 +34,7 @@ add_executable(velox_type_serializer_fbhive_test HiveTypeSerializerTests.cpp)
 add_test(
   NAME velox_type_serializer_fbhive_test
   COMMAND velox_type_serializer_fbhive_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(

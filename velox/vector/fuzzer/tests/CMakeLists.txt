@@ -31,7 +31,7 @@ add_executable(velox_constrained_vector_generator_test ConstrainedVectorGenerato
 add_test(
   NAME velox_constrained_vector_generator_test
   COMMAND velox_constrained_vector_generator_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
