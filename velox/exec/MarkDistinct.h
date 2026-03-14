@@ -43,6 +43,10 @@ class MarkDistinct : public Operator {
     return false;
   }
 
+  bool isFilter() const override {
+    return true;
+  }
+
   bool needsInput() const override {
     return !noMoreInput_ && !input_;
   }
