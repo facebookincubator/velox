@@ -80,7 +80,7 @@ jobs:
     needs: get-changes
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 8-core-ubuntu-22.04
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -138,7 +138,7 @@ jobs:
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=12 MAX_LINK_JOBS=12
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 14
@@ -195,7 +195,8 @@ jobs:
           wget https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar -O /usr/local/hadoop/share/hadoop/mapreduce/mockito-core-2.23.4.jar
 
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
-          ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
+          ulimit -n 65536
+          ctest -j 24 --timeout 900 --label-exclude cuda_driver --output-on-failure --no-tests=error
 
       # Clang-tidy needs a complete build because some files are only generated during the build
       # that clang tidy will not find and report errors otherwise.
@@ -222,7 +223,7 @@ jobs:
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
 
   ubuntu-debug:
-    runs-on: 16-core-ubuntu
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
@@ -248,7 +249,7 @@ jobs:
 
       - name: Install Dependencies
         env:
-          VELOX_BUILD_SHARED: "OFF"
+          VELOX_BUILD_SHARED: "ON"
           VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
@@ -291,10 +292,12 @@ jobs:
           # version). Without this, BUNDLED gflags cascades to BUNDLED glog
           # which conflicts with system glog loaded transitively.
           glog_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          VELOX_GFLAGS_URL: file:///velox/deps-sources/gflags-v2.2.2.tar.gz
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
+            "-DVELOX_BUILD_SHARED=ON"
             "-DVELOX_ENABLE_BENCHMARKS=ON"
             "-DVELOX_ENABLE_EXAMPLES=ON"
             "-DVELOX_ENABLE_ARROW=ON"
@@ -321,10 +324,11 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
+          ulimit -n 65536
+          cd _build/debug && ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error
 
   fedora-debug:
-    runs-on: 16-core-ubuntu
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:fedora
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
@@ -388,7 +392,7 @@ jobs:
           fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
           EXTRA_CMAKE_FLAGS: >-
             -DVELOX_ENABLE_PARQUET=ON
             -DARROW_THRIFT_USE_SHARED=ON
