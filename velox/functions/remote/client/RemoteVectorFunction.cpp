@@ -16,6 +16,7 @@
 
 #include "velox/functions/remote/client/RemoteVectorFunction.h"
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/GetSerde.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
@@ -26,6 +27,42 @@ namespace {
 std::string serializeType(const TypePtr& type) {
   // Use hive type serializer.
   return type::fbhive::HiveTypeSerializer::serialize(type);
+}
+
+/// Convert a SelectivityVector into contiguous IndexRange runs of selected
+/// rows.
+std::vector<IndexRange> toIndexRanges(const SelectivityVector& rows) {
+  std::vector<IndexRange> ranges;
+  vector_size_t rangeStart{-1};
+  vector_size_t rangeSize{0};
+
+  bits::forEachSetBit(
+      rows.allBits(), rows.begin(), rows.end(), [&](vector_size_t row) {
+        if (rangeStart == -1) {
+          rangeStart = row;
+          rangeSize = 1;
+        } else if (row == rangeStart + rangeSize) {
+          ++rangeSize;
+        } else {
+          ranges.push_back({rangeStart, rangeSize});
+          rangeStart = row;
+          rangeSize = 1;
+        }
+      });
+
+  if (rangeStart != -1) {
+    ranges.push_back({rangeStart, rangeSize});
+  }
+  return ranges;
+}
+
+/// Count total rows across all ranges.
+vector_size_t countRows(const std::vector<IndexRange>& ranges) {
+  vector_size_t count{0};
+  for (const auto& range : ranges) {
+    count += range.size;
+  }
+  return count;
 }
 
 } // namespace
@@ -92,20 +129,41 @@ void RemoteVectorFunction::applyRemote(
   functionHandle->argumentTypes() = serializedInputTypes_;
 
   auto requestInputs = request.inputs();
-  requestInputs->rowCount() = remoteRowVector->size();
   requestInputs->pageFormat() = serdeFormat_;
 
-  // TODO: serialize only active rows.
-  if (preserveEncoding_) {
-    requestInputs->payload_ref() = rowVectorToIOBufBatch(
-        remoteRowVector,
-        rows.end(),
-        *context.pool(),
-        serde_.get(),
-        serdeOptions_.get());
+  // Serialize only active rows to reduce network and server overhead.
+  const bool allSelected = rows.isAllSelected();
+  std::vector<IndexRange> activeRanges;
+
+  if (allSelected) {
+    activeRanges.push_back({0, rows.end()});
   } else {
-    requestInputs->payload_ref() = rowVectorToIOBuf(
-        remoteRowVector, rows.end(), *context.pool(), serde_.get());
+    activeRanges = toIndexRanges(rows);
+  }
+
+  const auto numActiveRows =
+      allSelected ? rows.end() : countRows(activeRanges);
+  requestInputs->rowCount() = numActiveRows;
+
+  auto rangesView = folly::Range<const IndexRange*>(
+      activeRanges.data(), activeRanges.size());
+  if (preserveEncoding_) {
+    auto serializer =
+        serde_->createBatchSerializer(context.pool(), serdeOptions_.get());
+    IOBufOutputStream stream(*context.pool());
+    Scratch scratch;
+    serializer->serialize(remoteRowVector, rangesView, scratch, &stream);
+    requestInputs->payload_ref() = std::move(*stream.getIOBuf());
+  } else {
+    auto streamGroup =
+        std::make_unique<VectorStreamGroup>(context.pool(), serde_.get());
+    streamGroup->createStreamTree(
+        asRowType(remoteRowVector->type()), numActiveRows);
+    Scratch scratch;
+    streamGroup->append(remoteRowVector, rangesView, scratch);
+    IOBufOutputStream stream(*context.pool());
+    streamGroup->flush(&stream);
+    requestInputs->payload_ref() = std::move(*stream.getIOBuf());
   }
 
   std::unique_ptr<remote::RemoteFunctionResponse> remoteResponse;
@@ -127,7 +185,19 @@ void RemoteVectorFunction::applyRemote(
       ROW({outputType}),
       *context.pool(),
       serde_.get());
-  result = outputRowVector->childAt(0);
+  auto compactedResult = outputRowVector->childAt(0);
+
+  // Scatter compacted result back to original row positions if needed.
+  if (allSelected) {
+    result = compactedResult;
+  } else {
+    result = BaseVector::create(outputType, rows.end(), context.pool());
+    vector_size_t compactIdx{0};
+    rows.applyToSelected([&](vector_size_t origRow) {
+      result->copy(compactedResult.get(), origRow, compactIdx, 1);
+      ++compactIdx;
+    });
+  }
 
   if (auto errorPayload = remoteResult.errorPayload()) {
     auto errorsRowVector = IOBufToRowVector(
@@ -137,17 +207,33 @@ void RemoteVectorFunction::applyRemote(
         errorsVector,
         "Remote function error payload should be convertible to flat vector.");
 
-    SelectivityVector selectedRows(errorsRowVector->size());
-    selectedRows.applyToSelected([&](vector_size_t i) {
-      if (errorsVector->isNullAt(i)) {
-        return;
-      }
-      try {
-        throw std::runtime_error(std::string(errorsVector->valueAt(i)));
-      } catch (const std::exception&) {
-        context.setError(i, std::current_exception());
-      }
-    });
+    // Map compacted error indices back to original row positions.
+    if (allSelected) {
+      SelectivityVector selectedRows(errorsRowVector->size());
+      selectedRows.applyToSelected([&](vector_size_t i) {
+        if (errorsVector->isNullAt(i)) {
+          return;
+        }
+        try {
+          VELOX_USER_FAIL("{}", errorsVector->valueAt(i));
+        } catch (const std::exception&) {
+          context.setError(i, std::current_exception());
+        }
+      });
+    } else {
+      vector_size_t compactIdx{0};
+      rows.applyToSelected([&](vector_size_t origRow) {
+        if (compactIdx < errorsRowVector->size() &&
+            !errorsVector->isNullAt(compactIdx)) {
+          try {
+            VELOX_USER_FAIL("{}", errorsVector->valueAt(compactIdx));
+          } catch (const std::exception&) {
+            context.setError(origRow, std::current_exception());
+          }
+        }
+        ++compactIdx;
+      });
+    }
   }
 }
 
