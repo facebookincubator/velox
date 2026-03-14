@@ -239,7 +239,42 @@ function LatestCommunityNews() {
 
           <div className={styles.tileScroll} ref={scrollRef}>
             {/* Each tile is boxed */}
-            <a href="https://veloxcon.io/veloxcon-china/" className={styles.newsTile} target="_blank" rel="noopener">
+            <a href="https://veloxcon.io/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Event</span>
+  <h3>VeloxCon 2026</h3>
+  <p>Join us at Meta HQ in the Bay Area, April 29-30 for in-person VeloxCon.</p>
+  <span className={styles.newsDate}>April 2026</span>
+</a>
+            
+            <a href="https://velox-lib.io/blog/regex-hidden-traps" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>The hidden traps of regex in LIKE and split</h3>
+  <p>Both LIKE and Spark's split can silently produce wrong results when used with column values instead of constants.</p>
+  <span className={styles.newsDate}>March 2026</span>
+</a>
+
+            <a href="https://velox-lib.io/blog/stringview-api-changes/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>velox::StringView API Changes and Best Practices</h3>
+  <p>This post describes in more detail how Velox handles columns of strings.</p>
+  <span className={styles.newsDate}>February 2026</span>
+</a>
+
+<a href="https://velox-lib.io/blog/task-barrier/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Task Barrier: Efficient Task Reuse and Streaming Checkpoints in Velox</h3>
+  <p>How Velox Task Barriers provide a synchronization mechanism.</p>
+  <span className={styles.newsDate}>January 2026</span>
+</a>
+
+<a href="https://velox-lib.io/blog/why-row-based-sort/" className={styles.newsTile} target="_blank" rel="noopener">
+  <span className={styles.newsTag}>Blog</span>
+  <h3>Why Sort is row-based in Velox — A Quantitative Assessment</h3>
+  <p>Rationale behind this design decision and provide experimental evidence for its implementation.</p>
+  <span className={styles.newsDate}>December 2025</span>
+</a>
+
+<a href="https://veloxcon.io/veloxcon-china/" className={styles.newsTile} target="_blank" rel="noopener">
   <span className={styles.newsTag}>Event</span>
   <h3>VeloxCon China 2025</h3>
   <p>Join us in Beijing on December 13 for our first community event in China.</p>
