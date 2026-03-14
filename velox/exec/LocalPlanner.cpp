@@ -298,78 +298,24 @@ uint32_t maxDrivers(
     return count;
   }
   for (auto& node : driverFactory.planNodes) {
-    if (auto topN = std::dynamic_pointer_cast<const core::TopNNode>(node)) {
-      if (!topN->isPartial()) {
-        // final topN must run single-threaded
-        return 1;
-      }
-    } else if (
-        auto values = std::dynamic_pointer_cast<const core::ValuesNode>(node)) {
-      // values node must run single-threaded, unless in test context
-      if (!values->testingIsParallelizable()) {
-        return 1;
-      }
-    } else if (std::dynamic_pointer_cast<const core::ArrowStreamNode>(node)) {
-      // ArrowStream node must run single-threaded.
+    if (node->requiresSingleThread()) {
       return 1;
-    } else if (
-        auto limit = std::dynamic_pointer_cast<const core::LimitNode>(node)) {
-      // final limit must run single-threaded
-      if (!limit->isPartial()) {
-        return 1;
-      }
-    } else if (
-        auto orderBy =
-            std::dynamic_pointer_cast<const core::OrderByNode>(node)) {
-      // final orderby must run single-threaded
-      if (!orderBy->isPartial()) {
-        return 1;
-      }
-    } else if (
-        auto localExchange =
+    }
+
+    if (auto localExchange =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(node)) {
-      // Local gather must run single-threaded.
-      switch (localExchange->type()) {
-        case core::LocalPartitionNode::Type::kGather:
-          return 1;
-        case core::LocalPartitionNode::Type::kRepartition:
-          count = std::min(queryConfig.maxLocalExchangePartitionCount(), count);
-          break;
-        default:
-          VELOX_UNREACHABLE("Unexpected local exchange type");
-      }
-    } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
-      // Local merge must run single-threaded.
-      return 1;
-    } else if (std::dynamic_pointer_cast<const core::MixedUnionNode>(node)) {
-      // Mixed union must run single-threaded.
-      return 1;
-    } else if (std::dynamic_pointer_cast<const core::MergeExchangeNode>(node)) {
-      // Merge exchange must run single-threaded.
-      return 1;
-    } else if (std::dynamic_pointer_cast<const core::MergeJoinNode>(node)) {
-      // Merge join must run single-threaded.
-      return 1;
-    } else if (
-        auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-      // Null-aware right semi project doesn't support multi-threaded
-      // execution.
-      if (join->isRightSemiProjectJoin() && join->isNullAware()) {
-        return 1;
+      // Repartition limits parallelism to the partition count.
+      if (localExchange->type() ==
+          core::LocalPartitionNode::Type::kRepartition) {
+        count = std::min(queryConfig.maxLocalExchangePartitionCount(), count);
       }
     } else if (
         auto tableWrite =
             std::dynamic_pointer_cast<const core::TableWriteNode>(node)) {
-      const auto& connectorInsertHandle =
-          tableWrite->insertTableHandle()->connectorInsertTableHandle();
-      if (!connectorInsertHandle->supportsMultiThreading()) {
-        return 1;
+      if (tableWrite->hasPartitioningScheme()) {
+        return queryConfig.taskPartitionedWriterCount();
       } else {
-        if (tableWrite->hasPartitioningScheme()) {
-          return queryConfig.taskPartitionedWriterCount();
-        } else {
-          return queryConfig.taskWriterCount();
-        }
+        return queryConfig.taskWriterCount();
       }
     } else {
       auto result = Operator::maxDrivers(node);

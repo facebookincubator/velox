@@ -340,8 +340,11 @@ void Exchange::close() {
   columnarPageIdx_ = 0;
 
   if (exchangeClient_) {
-    recordExchangeClientStats();
+    // Close the client before recording stats so that stats are captured
+    // from the final state. ExchangeClient::close() caches final stats
+    // before clearing sources.
     exchangeClient_->close();
+    recordExchangeClientStats();
   }
   exchangeClient_ = nullptr;
   {

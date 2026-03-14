@@ -47,7 +47,14 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
-  cmake_install_dir folly -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON)
+  # When folly is static, use static gflags to avoid dual gflags flag
+  # registration when .so plugins are dlopen'd (both the binary and plugin
+  # would register the same flags in a shared gflags registry).
+  if [[ ${VELOX_BUILD_SHARED} != "ON" ]]; then
+    FOLLY_FLAGS+=(-DGFLAGS_SHARED=FALSE)
+  fi
+  cmake_install_dir folly "${FOLLY_FLAGS[@]}"
 }
 
 function install_fizz {
@@ -167,7 +174,7 @@ function install_glog {
 }
 
 function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
+  wget_and_untar https://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
   (
     cd "${DEPENDENCY_DIR}"/lzo || exit
     ./configure --prefix="${INSTALL_PREFIX}" --enable-shared --disable-static --docdir=/usr/share/doc/lzo-"${LZO_VERSION}"

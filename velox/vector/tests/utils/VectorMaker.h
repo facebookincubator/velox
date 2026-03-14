@@ -1050,6 +1050,17 @@ class VectorMaker {
       const VectorPtr& values,
       const std::vector<vector_size_t>& nulls = {});
 
+  /// Create a MapVector from explicit offsets, sizes, and key/value vectors.
+  /// Unlike the offsets-only overload above, this allows non-consecutive or
+  /// out-of-order offsets (e.g. for testing vectors produced by filters or
+  /// slices). An optional nulls vector specifies which row indices are null.
+  MapVectorPtr mapVector(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      const VectorPtr& keys,
+      const VectorPtr& values,
+      const std::vector<vector_size_t>& nulls = {});
+
  private:
   vector_size_t createOffsetsAndSizes(
       vector_size_t size,
