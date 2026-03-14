@@ -27,7 +27,7 @@ Options:
   --commit <sha>       Update all dependencies using cudf commit and compatible versions
 
 Environment Variables:
-  GH_TOKEN         GitHub personal access token for higher API rate limits (optional)
+  GH_TOKEN         GitHub personal access token for higher API rate limits via curl (optional)
 
 Examples:
   $0 --branch main
@@ -47,57 +47,30 @@ ARG="${2:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CMAKE_FILE="$SCRIPT_DIR/../CMake/resolve_dependency_modules/cudf.cmake"
 
-# Support GitHub token for higher rate limits
+# Use gh CLI if available or fall back to curl supporting GitHub token for higher rate limits.
 GH_TOKEN="${GH_TOKEN:-}"
-CURL_AUTH_OPTS=""
-if [[ -n $GH_TOKEN ]]; then
-  CURL_AUTH_OPTS="-H \"Authorization: token $GH_TOKEN\""
-fi
+
+fetch_github_api() {
+  local endpoint=$1
+  if command -v gh &>/dev/null; then
+    gh api "${endpoint}" 2>/dev/null && return
+  fi
+  local curl_opts="-sf --max-time 30"
+  if [[ -n $GH_TOKEN ]]; then
+    curl_opts="$curl_opts -H \"Authorization: token $GH_TOKEN\""
+  fi
+  curl $curl_opts "https://api.github.com/${endpoint}"
+}
 
 get_commit_info() {
   local repo=$1 branch=$2
   local response
-  local curl_opts="--max-time 10 -w %{http_code}"
-  
-  if [[ -n $GH_TOKEN ]]; then
-    curl_opts="$curl_opts -H \"Authorization: token $GH_TOKEN\""
-  fi
-  
-  response=$(timeout 15 curl -s $curl_opts "https://api.github.com/repos/rapidsai/${repo}/commits/${branch}" 2>&1)
-  local status=$?
-  
-  if [[ $status -eq 124 ]]; then
-    echo "Error: Request timed out fetching $repo from branch $branch" >&2
+  response=$(fetch_github_api "repos/rapidsai/${repo}/commits/${branch}") || {
+    echo "Error: GitHub API request failed for $repo/$branch" >&2
+    echo "  Try: gh auth login  (or set GH_TOKEN for curl fallback)" >&2
     return 1
-  fi
-  
-  if [[ $status -ne 0 ]]; then
-    echo "Error: Failed to fetch commit info for $repo from branch $branch (exit code: $status)" >&2
-    return 1
-  fi
-  
-  # Extract HTTP code from end of response
-  local http_code="${response: -3}"
-  local json_body="${response%???}"
-  
-  if [[ $http_code != "200" ]]; then
-    echo "Error: GitHub API returned HTTP $http_code for $repo/$branch" >&2
-    if [[ $http_code == "403" ]]; then
-      echo "" >&2
-      echo "You've exceeded GitHub's API rate limit (60 requests/hour without authentication)." >&2
-      echo "" >&2
-      echo "SOLUTION: Authenticate with a GitHub token to get 5,000 requests/hour:" >&2
-      echo "" >&2
-      echo "  export GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >&2
-      echo "  ./scripts/update-cudf-deps.sh --branch main" >&2
-      echo "" >&2
-      echo "Get a token at: https://github.com/settings/tokens/new" >&2
-      echo "(Select scope: public_repo)" >&2
-    fi
-    return 1
-  fi
-  
-  echo "$json_body" | jq -r '[.sha, .commit.committer.date[:10]] | join(" ")' 2>/dev/null || {
+  }
+  echo "$response" | jq -r '[.sha, .commit.committer.date[:10]] | join(" ")' 2>/dev/null || {
     echo "Error: Failed to parse JSON response from $repo" >&2
     return 1
   }
@@ -106,25 +79,13 @@ get_commit_info() {
 get_commit_before_date() {
   local repo=$1 until_date=$2
   local response
-  local curl_opts="-sf --max-time 30"
-  
-  if [[ -n $GH_TOKEN ]]; then
-    curl_opts="$curl_opts -H \"Authorization: token $GH_TOKEN\""
-  fi
-  
-  response=$(curl $curl_opts "https://api.github.com/repos/rapidsai/${repo}/commits?sha=main&until=${until_date}&per_page=1" 2>&1)
-  local status=$?
-  
-  if [[ $status -ne 0 ]]; then
-    echo "Error: Failed to fetch commits for $repo before $until_date" >&2
-    echo "  Curl exit code: $status" >&2
-    echo "  Response: $response" >&2
+  response=$(fetch_github_api "repos/rapidsai/${repo}/commits?sha=main&until=${until_date}&per_page=1") || {
+    echo "Error: GitHub API request failed fetching $repo commits before $until_date" >&2
+    echo "  Try: gh auth login  (or set GH_TOKEN for curl fallback)" >&2
     return 1
-  fi
-  
+  }
   echo "$response" | jq -r '.[0] | [.sha, .commit.committer.date[:10]] | join(" ")' 2>/dev/null || {
     echo "Error: Failed to parse response for $repo before $until_date" >&2
-    echo "  Response was: $response" >&2
     return 1
   }
 }
@@ -142,25 +103,14 @@ get_version() {
     echo "${BASH_REMATCH[1]}"
   else
     local response
-    local curl_opts="-sf --max-time 30"
-    
-    if [[ -n $GH_TOKEN ]]; then
-      curl_opts="$curl_opts -H \"Authorization: token $GH_TOKEN\""
-    fi
-    
-    response=$(curl $curl_opts "https://raw.githubusercontent.com/rapidsai/cudf/${branch}/VERSION" 2>&1)
-    local status=$?
-    
-    if [[ $status -ne 0 ]]; then
-      echo "Error: Failed to fetch version from branch $branch" >&2
-      echo "  Curl exit code: $status" >&2
-      echo "  Response: $response" >&2
+    response=$(fetch_github_api "repos/rapidsai/cudf/contents/VERSION?ref=${branch}") || {
+      echo "Error: Failed to fetch VERSION file from branch $branch" >&2
+      echo "  Try: \`gh auth login\` (or set GH_TOKEN) before running this script" >&2
+      echo "  You can create a GitHub Personal Access Token at https://github.com/settings/tokens" >&2
       return 1
-    fi
-    
-    echo "$response" | grep -oP '^[0-9]+\.[0-9]+' || {
+    }
+    echo "$response" | jq -r '.content' | base64 -d | grep -oP '^[0-9]+\.[0-9]+' || {
       echo "Error: Failed to parse VERSION file from branch $branch" >&2
-      echo "  Response was: $response" >&2
       return 1
     }
   fi
@@ -186,14 +136,14 @@ update_dependency() {
 
 if [[ $MODE == "--pr" ]]; then
   echo "Fetching cuDF PR #${ARG}..."
-  PR_INFO=$(curl -sf --max-time 30 "https://api.github.com/repos/rapidsai/cudf/pulls/${ARG}") || {
+  PR_INFO=$(fetch_github_api "repos/rapidsai/cudf/pulls/${ARG}") || {
     echo "Error: Failed to fetch PR #${ARG}" >&2
     exit 1
   }
   SHA=$(echo "$PR_INFO" | jq -r '.head.sha')
   BASE=$(echo "$PR_INFO" | jq -r '.base.ref')
   VERSION=$(get_version "$BASE") || exit 1
-  DATE=$(curl -sf --max-time 30 "https://api.github.com/repos/rapidsai/cudf/commits/${SHA}" | jq -r '.commit.committer.date[:10]') || {
+  DATE=$(fetch_github_api "repos/rapidsai/cudf/commits/${SHA}" | jq -r '.commit.committer.date[:10]') || {
     echo "Error: Failed to fetch commit date for $SHA" >&2
     exit 1
   }
@@ -210,14 +160,14 @@ if [[ $MODE == "--pr" ]]; then
 
 elif [[ $MODE == "--commit" ]]; then
   echo "Fetching cuDF commit ${ARG:0:7}..."
-  COMMIT_INFO=$(curl -sf --max-time 30 "https://api.github.com/repos/rapidsai/cudf/commits/${ARG}") || {
+  COMMIT_INFO=$(fetch_github_api "repos/rapidsai/cudf/commits/${ARG}") || {
     echo "Error: Failed to fetch commit $ARG" >&2
     exit 1
   }
   SHA=$(echo "$COMMIT_INFO" | jq -r '.sha')
   DATE=$(echo "$COMMIT_INFO" | jq -r '.commit.committer.date[:10]')
   TIMESTAMP=$(echo "$COMMIT_INFO" | jq -r '.commit.committer.date')
-  VERSION=$(curl -sf --max-time 30 "https://raw.githubusercontent.com/rapidsai/cudf/${SHA}/VERSION" | grep -oP '^[0-9]+\.[0-9]+') || {
+  VERSION=$(fetch_github_api "repos/rapidsai/cudf/contents/VERSION?ref=${SHA}" | jq -r '.content' | base64 -d | grep -oP '^[0-9]+\.[0-9]+') || {
     echo "Error: Failed to fetch VERSION file for commit $SHA" >&2
     exit 1
   }
