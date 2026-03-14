@@ -19,6 +19,8 @@
 #include <array>
 #include <limits>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "folly/CppAttributes.h"
 #include "velox/dwio/common/BufferedInput.h"
@@ -177,17 +179,13 @@ class TextRowReader : public dwio::common::RowReader {
 
   void resetLine();
 
-  static std::string&
+  static std::string_view
   getString(TextRowReader& th, bool& isNull, DelimType& delim);
 
   template <typename T>
-  static T getInteger(TextRowReader& th, bool& isNull, DelimType& delim);
+  static T getNumeric(TextRowReader& th, bool& isNull, DelimType& delim);
 
   static bool getBoolean(TextRowReader& th, bool& isNull, DelimType& delim);
-
-  static float getFloat(TextRowReader& th, bool& isNull, DelimType& delim);
-
-  static double getDouble(TextRowReader& th, bool& isNull, DelimType& delim);
 
   void readElement(
       const std::shared_ptr<const Type>& t,
@@ -206,10 +204,14 @@ class TextRowReader : public dwio::common::RowReader {
 
   template <class T>
   void setValueFromString(
-      const std::string& str,
+      std::string_view str,
       BaseVector* FOLLY_NULLABLE data,
       vector_size_t insertionRow,
-      std::function<std::optional<T>(const std::string&)> convert);
+      std::function<std::optional<T>(std::string_view)> convert);
+
+  std::string_view ownedStringView() const {
+    return std::string_view{ownedString_.data(), ownedString_.size()};
+  }
 
   const std::shared_ptr<FileContents> contents_;
   const std::shared_ptr<const TypeWithId> schemaWithId_;
@@ -231,7 +233,7 @@ class TextRowReader : public dwio::common::RowReader {
   int unreadIdx_;
   uint64_t limit_; // lowest offset not in the range
   uint64_t fileLength_;
-  std::string ownedString_;
+  std::vector<char> ownedString_;
   std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;
 };
 
