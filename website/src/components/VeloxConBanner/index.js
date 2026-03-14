@@ -4,19 +4,21 @@ import Link from '@docusaurus/Link';
 
 export default function VeloxConBanner() {
   return (
-    <section className={styles.banner} role="region" aria-label="VeloxCon China announcement">
+    <section className={styles.banner} role="region" aria-label="VeloxCon announcement">
       <div className={styles.container}>
         <div className={styles.text}>
-          <h2 className={styles.title}>Announcing VeloxCon China 2025</h2>
-          <p className={styles.subtitle}>December 13 | Ant Group Offices, Beijing</p>
+          <h2 className={styles.title}>Announcing VeloxCon 2026</h2>
+          <p className={styles.subtitle}>Meta HQ, Bay Area</p>
+          <p className={styles.date}>April 29–30, 2026</p>
         </div>
+
         <Link
           className={styles.button}
-          to="https://www.bagevent.com/event/veloxcon-china-2025-en"
+          to="https://veloxcon.io/"
           target="_blank"
           rel="noopener noreferrer"
         >
-          Learn more and Register →
+          Register Now →
         </Link>
       </div>
     </section>
