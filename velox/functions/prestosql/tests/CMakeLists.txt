@@ -51,6 +51,8 @@ add_executable(
   ArraySumTest.cpp
   ArrayTrimTest.cpp
   ArrayUnionTest.cpp
+  DotProductTest.cpp
+  DotProductFuzzerTest.cpp
   ArgTypesGeneratorTest.cpp
   BinaryFunctionsTest.cpp
   BingTileCastTest.cpp
