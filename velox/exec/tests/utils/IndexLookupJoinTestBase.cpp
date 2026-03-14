@@ -20,7 +20,8 @@
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 namespace facebook::velox::exec::test {
-using namespace facebook::velox::test;
+using namespace facebook::velox::common::testutil;
+using velox::test::assertEqualVectors;
 
 namespace {
 std::vector<std::string> appendMarker(const std::vector<std::string> columns) {
@@ -420,13 +421,13 @@ bool IndexLookupJoinTestBase::isFilter(const std::string& conditionSql) const {
 std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
     const PlanNodePtr& plan,
     int numPrefetchBatches,
-    const std::string& duckDbVefifySql) {
+    const std::string& duckDbVerifySql) {
   return AssertQueryBuilder(duckDbQueryRunner_)
       .plan(plan)
       .config(
           QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
           std::to_string(numPrefetchBatches))
-      .assertResults(duckDbVefifySql);
+      .assertResults(duckDbVerifySql);
 }
 
 std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
@@ -437,7 +438,7 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
     int maxOutputRows,
     int numPrefetchBatches,
     bool needsIndexSplit,
-    const std::string& duckDbVefifySql) {
+    const std::string& duckDbVerifySql) {
   AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
   queryBuilder.plan(plan)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
@@ -457,7 +458,7 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
             std::make_shared<TestIndexConnectorSplit>(
                 kTestIndexConnectorName)));
   }
-  return queryBuilder.assertResults(duckDbVefifySql);
+  return queryBuilder.assertResults(duckDbVerifySql);
 }
 
 void IndexLookupJoinTestBase::verifyResultWithMatchColumn(

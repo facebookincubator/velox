@@ -15,6 +15,7 @@
  */
 #include "velox/exec/FilterProject.h"
 #include "velox/core/Expressions.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -72,6 +73,65 @@ std::vector<OperatorStats> splitStats(
   return {std::move(projectStats), std::move(filterStats)};
 }
 
+// Unwraps dictionary/constant/sequence encodings to get to the underlying
+// Lazy vector if it exists. Otherwise, returns nullptr.
+const BaseVector* unwrapToLazy(const VectorPtr& vector) {
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::CONSTANT:
+    case VectorEncoding::Simple::DICTIONARY:
+    case VectorEncoding::Simple::SEQUENCE: {
+      return vector->valueVector() ? unwrapToLazy(vector->valueVector())
+                                   : nullptr;
+    }
+    case VectorEncoding::Simple::LAZY:
+      return vector.get();
+    default:
+      return nullptr;
+  }
+}
+
+// Returns a unique identity pointer for Lazy vectors. For other vectors,
+// returns nullptr.
+const void* lazyIdentityPtr(const VectorPtr& vec) {
+  if (!vec) {
+    return nullptr;
+  }
+  const BaseVector* lazyVec = unwrapToLazy(vec);
+  if (!lazyVec) {
+    return nullptr;
+  }
+  return static_cast<const void*>(lazyVec);
+}
+
+// Load the reused lazy vectors in the output. A lazy vector cannot be reused
+// across different output fields because its contents may be loaded via a
+// hook during pushdown. Accessing a loaded vector in this case can lead to
+// incorrect results or even a crash.
+void loadReusedLazyVectors(const RowVectorPtr& output) {
+  if (!output) {
+    return;
+  }
+
+  const auto& vectors = output->children();
+
+  // Build a map of lazy identity pointers to their occurrence count.
+  std::unordered_map<const void*, size_t> lazyIdentityCounts;
+  for (const auto& vector : vectors) {
+    const void* id = lazyIdentityPtr(vector);
+    if (id) {
+      lazyIdentityCounts[id]++;
+    }
+  }
+
+  // Load only the vectors whose lazy identity appears more than once.
+  for (auto& vector : vectors) {
+    const void* id = lazyIdentityPtr(vector);
+    if (id && lazyIdentityCounts[id] > 1) {
+      vector->loadedVector();
+    }
+  }
+}
+
 } // namespace
 
 FilterProject::FilterProject(
@@ -84,7 +144,7 @@ FilterProject::FilterProject(
           project ? project->outputType() : filter->outputType(),
           operatorId,
           project ? project->id() : filter->id(),
-          "FilterProject"),
+          OperatorType::kFilterProject),
       hasFilter_(filter != nullptr),
       lazyDereference_(
           dynamic_cast<const core::LazyDereferenceNode*>(project.get()) !=
@@ -185,7 +245,9 @@ RowVectorPtr FilterProject::getOutput() {
   if (!hasFilter_) {
     VELOX_CHECK(!isIdentityProjection_);
     auto results = project(*rows, evalCtx);
-    return fillOutput(size, nullptr, results);
+    auto output = fillOutput(size, nullptr, results);
+    loadReusedLazyVectors(output);
+    return output;
   }
 
   // evaluate filter
@@ -205,10 +267,12 @@ RowVectorPtr FilterProject::getOutput() {
     results = project(*rows, evalCtx);
   }
 
-  return fillOutput(
+  auto output = fillOutput(
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
       results);
+  loadReusedLazyVectors(output);
+  return output;
 }
 
 std::vector<VectorPtr> FilterProject::project(

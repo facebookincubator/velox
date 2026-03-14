@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <string_view>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
@@ -103,6 +105,9 @@ struct ThreadState {
   /// True if there is a future outstanding that will schedule this on an
   /// executor thread when some promise is realized.
   bool hasBlockingFuture{false};
+  /// Timestamp in microseconds when the driver became blocked. Used to record
+  /// blocked time when the driver is terminated while still blocked.
+  uint64_t blockingStartUs{0};
   /// The number of suspension requests on a on-thread driver. If > 0, this
   /// driver thread is in a (recursive) section waiting for RPC or memory
   /// strategy decision. The thread is not supposed to access its memory, which
@@ -168,6 +173,7 @@ struct ThreadState {
     obj["isTerminated"] = isTerminated.load();
     obj["isEnqueued"] = isEnqueued.load();
     obj["hasBlockingFuture"] = hasBlockingFuture;
+    obj["blockingStartUs"] = blockingStartUs;
     obj["isSuspended"] = suspended();
     obj["startExecTime"] = startExecTimeMs;
     return obj;
@@ -257,8 +263,11 @@ struct DriverCtx {
       const core::PlanNodeId& planNodeId,
       const std::string& operatorType);
 
-  /// Builds the spill config for the operator with specified 'operatorId'.
-  std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
+  /// Builds the spill config for the operator with specified 'operatorId' and
+  /// 'operatorType'.
+  std::optional<common::SpillConfig> makeSpillConfig(
+      int32_t operatorId,
+      std::string_view operatorType) const;
 
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{
@@ -341,6 +350,14 @@ using PipelinePushdownFilters =
 
 class Driver : public std::enable_shared_from_this<Driver> {
  public:
+  ~Driver();
+
+  // Disable copy and move
+  Driver(const Driver&) = delete;
+  Driver& operator=(const Driver&) = delete;
+  Driver(Driver&&) = delete;
+  Driver& operator=(Driver&&) = delete;
+
   static void enqueue(std::shared_ptr<Driver> instance);
 
   /// Run the pipeline until it produces a batch of data or gets blocked.
@@ -484,7 +501,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Returns true if the driver is under barrier processing.
   bool hasBarrier() const {
-    return barrier_.has_value();
+    return barrier_.active.load(std::memory_order_acquire);
   }
 
   /// Invoked to start draining the output of this driver pipeline from the
@@ -582,15 +599,33 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void updateStats();
 
+  /// Records operator blocked time ins case the driver was off the thrread and
+  /// blocked when terminated.
+  void updateOperatorBlockingStats();
+
   // Defines the driver barrier processing state.
   struct BarrierState {
+    // True if the driver is under barrier processing. This is set by
+    // startBarrier() and read by hasBarrier() from different threads.
+    std::atomic_bool active{false};
     // If set, the driver has started output draining. It points to the operator
     // that is currently draining output.
     std::optional<int32_t> drainingOpId{std::nullopt};
-    // If set, the specified operator doesn't need any more input to finish the
-    // draining operation. All the upstream operators within the same driver
-    // should drop their output or output processing.
-    std::optional<int32_t> dropInputOpId{std::nullopt};
+    // The operator id that doesn't need any more input to finish the draining
+    // operation. All the upstream operators within the same driver should drop
+    // their output or output processing. -1 means not set. This is accessed
+    // from different driver threads so it needs to be atomic.
+    static constexpr int32_t kNoDropInput = -1;
+    std::atomic_int32_t dropInputOpId{kNoDropInput};
+
+    BarrierState() = default;
+
+    /// Starts the barrier processing. Must be called when the barrier is not
+    /// active.
+    void start();
+
+    /// Resets the barrier state. Must be called when the barrier is active.
+    void reset();
   };
 
   // Invoked to start draining on the next operator. If there is no "next"
@@ -652,8 +687,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::atomic_bool closed_{false};
 
-  // If set, the driver is under a barrier processing.
-  std::optional<BarrierState> barrier_;
+  // The driver barrier processing state.
+  BarrierState barrier_;
 
   OpCallStatus opCallStatus_;
 
@@ -668,7 +703,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // should update.
   size_t curOperatorId_{0};
 
-  std::vector<std::unique_ptr<Operator>> operators_;
+  std::vector<std::unique_ptr<Operator>> operators_; // NOLINT
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 

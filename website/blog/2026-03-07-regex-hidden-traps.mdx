@@ -1,0 +1,183 @@
+---
+slug: regex-hidden-traps
+title: "The hidden traps of regex in LIKE and split"
+authors: [mbasmanova]
+tags: [tech-blog,functions]
+---
+
+SQL functions sometimes use regular expressions under the hood in ways that
+surprise users. Two common examples are the
+<a href="https://facebookincubator.github.io/velox/functions/presto/regexp.html#like">LIKE</a>
+operator and Spark's
+<a href="https://facebookincubator.github.io/velox/functions/spark/string.html#split">split</a>
+function.
+
+In Presto,
+<a href="https://facebookincubator.github.io/velox/functions/presto/string.html#split">split</a>
+takes a literal string delimiter and
+<a href="https://facebookincubator.github.io/velox/functions/presto/regexp.html#regexp_split">regexp_split</a>
+is a separate function for regex-based splitting. Spark's `split`, however,
+always treats the delimiter as a regular expression.
+
+Both LIKE and Spark's split can silently produce wrong results and waste CPU
+when used with column values instead of constants. Understanding why this
+happens helps write faster, more correct queries — and helps engine developers
+make better design choices.
+
+## LIKE is not contains
+
+A very common query pattern is to check whether one string contains another:
+
+```sql
+SELECT * FROM t WHERE name LIKE '%' || search_term || '%'
+```
+
+This looks intuitive: wrap `search_term` in `%` wildcards and you get a
+"contains" check. But LIKE is **not** the same as substring matching.
+LIKE treats `_` as a single-character wildcard and `%` as a multi-character
+wildcard. If `search_term` comes from a column and contains these characters,
+the results are silently wrong:
+
+```
+SELECT url,
+       url LIKE '%' || search_term || '%' AS like_result,
+       strpos(url, search_term) > 0 AS contains_result
+FROM (VALUES
+    ('https://site.com/home'),
+    ('https://site.com/user_profile'),
+    ('https://site.com/username')
+) AS t(url)
+CROSS JOIN (VALUES ('user_')) AS s(search_term);
+
+              url              | like_result | contains_result
+-------------------------------+-------------+----------------
+https://site.com/home          |    false    |     false
+https://site.com/user_profile  |    true     |     true
+https://site.com/username      |    true     |     false
+```
+
+`LIKE '%user_%'` matches `'https://site.com/username'` because `_` is a
+wildcard that matches any single character — in this case, `n`. But
+`strpos(url, 'user_') > 0` treats `_` as a literal underscore and correctly
+reports that `'https://site.com/username'` does not contain the substring
+`'user_'`.
+
+When the pattern is a constant, this distinction is visible and intentional.
+But when users write `x LIKE '%' || y || '%'` where `y` is a column, the
+values of `y` may contain `_` or `%` characters — and they will be silently
+interpreted as wildcards, producing wrong results.
+
+## Spark's split treats delimiters as regex
+
+In Presto, the <a href="https://facebookincubator.github.io/velox/functions/presto/string.html#split">split</a>
+function takes a literal string delimiter, while
+<a href="https://facebookincubator.github.io/velox/functions/presto/regexp.html#regexp_split">regexp_split</a>
+is a separate function for regex-based splitting. This distinction makes the intent clear.
+
+Spark's <a href="https://facebookincubator.github.io/velox/functions/spark/string.html#split">split</a>
+function, however, always treats the delimiter as a regular expression.
+Users rarely realize this, and a common pattern is to split a string using a
+value from another column:
+
+```sql
+select split(dir_path, location_path)[1] as partition_name from t
+```
+
+Here, a table stores Hive partition metadata: `dir_path` is the full partition
+path (e.g., `/data/warehouse/db.name/table/ds=2024-01-01`) and `location_path`
+is the table path (e.g., `/data/warehouse/db.name/table`). The user wants to
+strip the table path prefix to get the partition name.
+
+This works for simple paths. But `location_path` is interpreted as a regular
+expression, not a literal string. If it contains `.` — as in `db.name` — the
+`.` matches **any character**, not a literal dot. Characters like `(`, `)`,
+`[`, `+`, `*`, `?`, and `$` would also cause wrong results or errors.
+
+A correct alternative that also executes faster uses simple string operations:
+
+```sql
+IF(starts_with(dir_path, location_path),
+   substr(dir_path, length(location_path) + 2)) as partition_name
+```
+
+This is a bit more verbose than `split(dir_path, location_path)[1]`, but it is
+correct for all inputs and avoids regex compilation entirely.
+
+## Performance trap
+
+Beyond correctness, there is a performance problem. Both LIKE and Spark's
+split use <a href="https://github.com/google/re2">RE2</a> as the regex
+engine. RE2 is fast and safe, but compiling a regular expression can take up
+to 200x more CPU time than evaluating it.
+
+When the pattern or delimiter is a constant, the regex is compiled once and
+reused for every row. The cost is negligible. But when the pattern comes from
+a column, a new regex may need to be compiled for every distinct value. A table
+with thousands of distinct `location_path` values means thousands of regex
+compilations — each one expensive and none of them necessary.
+
+Velox limits the number of compiled regular expressions per function instance
+per thread of execution via the
+<a href="https://facebookincubator.github.io/velox/configs.html#expression-evaluation-configuration">expression.max_compiled_regexes</a>
+configuration property (default: 100). When this limit is reached, the query fails with an
+error.
+
+## Tempting but wrong fix
+
+When users hit this limit, the natural reaction is to ask the engine developers
+to raise or eliminate the cap. A recent
+<a href="https://github.com/facebookincubator/velox/pull/15953">pull request</a>
+proposed replacing the fixed-size cache with an evicting cache: when the limit
+is reached, the oldest compiled regex is evicted to make room for the new one.
+
+This sounds reasonable, and the motivation is understandable — users migrating
+from Spark don't want to rewrite working queries. But it makes things worse:
+
+- **It hides the correctness bug.** The query no longer fails, so users never
+  discover that their LIKE pattern or split delimiter is being interpreted as
+  a regex and producing wrong results for inputs with special characters.
+- **It makes the performance problem worse.** With thousands of distinct
+  patterns, the cache churns constantly — evicting one compiled regex only to
+  compile another. The query runs, but dramatically slower than necessary, and
+  the user has no indication why. In shared multi-tenant clusters, a single
+  slow query like this can consume excessive CPU and affect other users'
+  workloads.
+
+The error is a feature, not a bug. It is an early warning that catches misuse
+before it leads to silently wrong results in production and prevents a single
+query from wasting shared cluster resources.
+
+## Right fix
+
+**For users:** replace LIKE with literal string operations when checking for
+substrings. Use `strpos(x, y) > 0` or `contains(x, y)` instead of
+`x LIKE '%' || y || '%'`. For Spark's split with literal delimiters, use
+`substr` or other <a href="https://facebookincubator.github.io/velox/functions/spark/string.html">string functions</a> that don't involve regex.
+
+**For engine developers:** optimize the functions to avoid regex when it isn't
+needed. Velox's LIKE implementation already does this. As described in
+<a href="https://github.com/xumingming">James Xu</a>'s
+<a href="/blog/like">earlier blog post</a>, the engine analyzes each pattern
+and uses fast paths — prefix match, suffix match, substring search — whenever
+the pattern contains only regular characters and `_` wildcards. For simple patterns, this gives up to 750x speedup over regex.
+Regex is compiled only for patterns that truly require it, and these optimized
+patterns are not counted toward the compiled regex limit.
+
+The same approach should be applied to Spark's split function. The engine can
+check whether the delimiter contains any regex metacharacters. If it doesn't,
+a simple string search can be used instead of compiling a regex. This would
+make queries like `split(dir_path, location_path)` both fast and correct —
+without users needing to change anything and without removing the safety net
+for cases that genuinely require regex.
+
+## Takeaways
+
+- `LIKE` is not `contains`. The `_` and `%` wildcards can silently corrupt
+  results when the pattern comes from a column.
+- Spark's `split` treats delimiters as regex. Characters like `.` in column
+  values are interpreted as regex metacharacters, not literal characters.
+  Presto avoids this by separating `split` (literal) and `regexp_split` (regex).
+- When a query hits the compiled regex limit, the right response is to fix the
+  query, not to raise the limit.
+- Engine developers should optimize functions to avoid regex when the input
+  is a plain string, rather than making it easier to misuse regex at scale.

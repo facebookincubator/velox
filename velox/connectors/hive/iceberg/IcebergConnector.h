@@ -16,13 +16,9 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-
-/// TODO Add IcebergConfig class and Move these configuration properties to
-/// IcebergConfig.h
-extern const std::string_view kIcebergFunctionPrefixConfig;
-extern const std::string_view kDefaultIcebergFunctionPrefix;
 
 /// Provides Iceberg table format support.
 /// - Creates IcebergDataSource instances for reading Iceberg tables with
@@ -67,7 +63,7 @@ class IcebergConnector final : public HiveConnector {
       CommitStrategy commitStrategy) override;
 
  private:
-  const std::string functionPrefix_;
+  const std::shared_ptr<IcebergConfig> icebergConfig_;
 };
 
 class IcebergConnectorFactory final : public ConnectorFactory {

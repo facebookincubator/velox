@@ -15,6 +15,7 @@
  */
 #include "velox/type/Subfield.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Tokenizer.h"
 
 using namespace facebook::velox::common;
@@ -156,4 +157,125 @@ TEST(SubfieldTest, longSubscript) {
       dynamic_cast<const Subfield::LongSubscript*>(subfield.path()[1].get());
   ASSERT_TRUE(longSubscript);
   ASSERT_EQ(longSubscript->index(), 3309189884973035076);
+}
+
+TEST(SubfieldTest, asCheckedNestedField) {
+  const Subfield subfield("a.b.c");
+  ASSERT_EQ(subfield.path().size(), 3);
+
+  // Successful cast to NestedField.
+  const std::vector<std::string> expectedNames = {"a", "b", "c"};
+  for (int i = 0; i < 3; ++i) {
+    const auto* nestedField =
+        subfield.path()[i]->asChecked<Subfield::NestedField>();
+    EXPECT_EQ(nestedField->name(), expectedNames[i]);
+
+    // Failed cast should throw.
+    VELOX_ASSERT_THROW(
+        subfield.path()[i]->asChecked<Subfield::LongSubscript>(),
+        "PathElement is not of expected type");
+    VELOX_ASSERT_THROW(
+        subfield.path()[i]->asChecked<Subfield::StringSubscript>(),
+        "PathElement is not of expected type");
+    VELOX_ASSERT_THROW(
+        subfield.path()[i]->asChecked<Subfield::AllSubscripts>(),
+        "PathElement is not of expected type");
+  }
+}
+
+TEST(SubfieldTest, asCheckedLongSubscript) {
+  Subfield subfield("a[42]");
+  ASSERT_EQ(subfield.path().size(), 2);
+
+  // Element 0 is NestedField.
+  const auto* nestedField =
+      subfield.path()[0]->asChecked<Subfield::NestedField>();
+  EXPECT_EQ(nestedField->name(), "a");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::LongSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::StringSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::AllSubscripts>(),
+      "PathElement is not of expected type");
+
+  // Element 1 is LongSubscript.
+  const auto* longSubscript =
+      subfield.path()[1]->asChecked<Subfield::LongSubscript>();
+  EXPECT_EQ(longSubscript->index(), 42);
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::NestedField>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::StringSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::AllSubscripts>(),
+      "PathElement is not of expected type");
+}
+
+TEST(SubfieldTest, asCheckedStringSubscript) {
+  Subfield subfield("a[\"key\"]");
+  ASSERT_EQ(subfield.path().size(), 2);
+
+  // Element 0 is NestedField.
+  const auto* nestedField =
+      subfield.path()[0]->asChecked<Subfield::NestedField>();
+  EXPECT_EQ(nestedField->name(), "a");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::LongSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::StringSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::AllSubscripts>(),
+      "PathElement is not of expected type");
+
+  // Element 1 is StringSubscript.
+  const auto* stringSubscript =
+      subfield.path()[1]->asChecked<Subfield::StringSubscript>();
+  EXPECT_EQ(stringSubscript->index(), "key");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::NestedField>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::LongSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::AllSubscripts>(),
+      "PathElement is not of expected type");
+}
+
+TEST(SubfieldTest, asCheckedAllSubscripts) {
+  Subfield subfield("a[*]");
+  ASSERT_EQ(subfield.path().size(), 2);
+
+  // Element 0 is NestedField.
+  const auto* nestedField =
+      subfield.path()[0]->asChecked<Subfield::NestedField>();
+  EXPECT_EQ(nestedField->name(), "a");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::LongSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::StringSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[0]->asChecked<Subfield::AllSubscripts>(),
+      "PathElement is not of expected type");
+
+  // Element 1 is AllSubscripts.
+  EXPECT_NE(subfield.path()[1]->asChecked<Subfield::AllSubscripts>(), nullptr);
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::NestedField>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::LongSubscript>(),
+      "PathElement is not of expected type");
+  VELOX_ASSERT_THROW(
+      subfield.path()[1]->asChecked<Subfield::StringSubscript>(),
+      "PathElement is not of expected type");
 }

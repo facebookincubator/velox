@@ -31,6 +31,8 @@ void generateJsonTyped(
     int row,
     std::string& result,
     const TypePtr& type,
+    bool isDate,
+    bool isDecimal,
     const std::shared_ptr<exec::CastHooks>& hooks) {
   auto value = input.valueAt(row);
 
@@ -80,13 +82,13 @@ void generateJsonTyped(
       result.append("\"");
       result.append(buffer);
       result.append("\"");
-    } else if (type->isDate()) {
+    } else if (isDate) {
       std::string stringValue = DATE()->toString(value);
       result.reserve(stringValue.size() + 2);
       result.append("\"");
       result.append(stringValue);
       result.append("\"");
-    } else if (type->isDecimal()) {
+    } else if (isDecimal) {
       result.append(DecimalUtil::toString(value, type));
     } else {
       folly::toAppend<std::string, T>(value, &result);
@@ -102,13 +104,20 @@ void generateJsonNonKeyTyped(
     FlatVector<StringView>& flatResult,
     const std::shared_ptr<exec::CastHooks>& hooks) {
   std::string result;
+  const auto& type = inputVector.type();
+  // Resolve type checks once before the loop to avoid per-element
+  // dynamic_cast calls in isDecimal() (which does two dynamic_casts
+  // to ShortDecimalType*/LongDecimalType* that always fail for plain
+  // integer types).
+  const bool isDate = type->isDate();
+  const bool isDecimal = type->isDecimal();
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     if (inputVector.isNullAt(row)) {
       flatResult.set(row, "null");
     } else {
       result.clear();
       generateJsonTyped<T, legacyCast>(
-          inputVector, row, result, inputVector.type(), hooks);
+          inputVector, row, result, type, isDate, isDecimal, hooks);
 
       flatResult.set(row, StringView{result});
     }
@@ -123,6 +132,9 @@ void generateJsonKeyTyped(
     FlatVector<StringView>& flatResult,
     const std::shared_ptr<exec::CastHooks>& hooks) {
   std::string result;
+  const auto& type = inputVector.type();
+  const bool isDate = type->isDate();
+  const bool isDecimal = type->isDecimal();
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     if (inputVector.isNullAt(row)) {
       VELOX_USER_FAIL("Map keys cannot be null.");
@@ -134,7 +146,7 @@ void generateJsonKeyTyped(
       }
 
       generateJsonTyped<T, legacyCast>(
-          inputVector, row, result, inputVector.type(), hooks);
+          inputVector, row, result, type, isDate, isDecimal, hooks);
 
       if constexpr (!std::is_same_v<T, StringView>) {
         result.append("\"");

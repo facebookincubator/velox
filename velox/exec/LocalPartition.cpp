@@ -16,6 +16,7 @@
 
 #include "velox/exec/LocalPartition.h"
 #include "velox/common/Casts.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/EncodedVectorCopy.h"
 
@@ -264,7 +265,7 @@ LocalExchange::LocalExchange(
           std::move(outputType),
           operatorId,
           planNodeId,
-          "LocalExchange"),
+          OperatorType::kLocalExchange),
       partition_{partition},
       queue_{operatorCtx_->task()->getLocalExchangeQueue(
           ctx->splitGroupId,
@@ -333,7 +334,7 @@ LocalPartition::LocalPartition(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "LocalPartition"),
+          OperatorType::kLocalPartition),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()},

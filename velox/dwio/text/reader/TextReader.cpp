@@ -257,34 +257,27 @@ uint64_t TextRowReader::next(
       DelimType delim = DelimTypeNone;
       const auto& ct = t->childAt(i);
       const auto& rct = reqT->childAt(i);
-      auto childVector = rowVecPtr->childAt(i).get();
+      BaseVector* childVector = nullptr;
 
       if (isSelectedField(ct)) {
+        childVector = rowVecPtr->childAt(i).get();
         ++colIndex;
       } else if (colIndex < reqChildCount && !projectSelectedType) {
-        // not selected and not projecting: set to null
-        if (childVector != nullptr) {
-          rowVecPtr->setNull(i, true);
-          childVector = nullptr;
-        }
+        // Not selected and not projecting: discard the child by setting it to
+        // nullptr. The projectColumns() function will later filter out unneeded
+        // columns based on the ScanSpec.
+        rowVecPtr->childAt(i) = nullptr;
         ++colIndex;
       } else {
-        // not selected and projecting: just discard the field
-        childVector = nullptr;
+        // Not selected and projecting: discard the child. Same reasoning as
+        // above.
+        rowVecPtr->childAt(i) = nullptr;
       }
 
       resizeVector(childVector, rowsRead);
       readElement(ct->type(), rct->type(), childVector, rowsRead, delim);
     }
 
-    // set null property
-    for (uint64_t i = colIndex; i < reqChildCount; i++) {
-      auto childVector = rowVecPtr->childAt(i).get();
-
-      if (childVector != nullptr) {
-        rowVecPtr->setNull(static_cast<vector_size_t>(i), true);
-      }
-    }
     (void)skipLine();
     ++currentRow_;
     ++rowsRead;

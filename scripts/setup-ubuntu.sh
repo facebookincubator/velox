@@ -232,6 +232,7 @@ function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
   run_and_time install_protobuf
+  run_and_time install_grpc
   run_and_time install_boost
   run_and_time install_fast_float
   run_and_time install_folly

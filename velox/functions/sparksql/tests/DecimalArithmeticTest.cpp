@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/DecimalArithmetic.h"
+#include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -87,6 +88,251 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       std::optional<T> t,
       std::optional<U> u) {
     return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
+  }
+
+  // Checked tests use evaluateOnce (scalar) rather than testArithmeticFunction
+  // (batch) because error assertions need std::optional returns to verify both
+  // try() -> nullopt and bare -> throw behaviors.
+  template <typename T, typename U>
+  std::optional<int128_t> checkedDecimalArithmetic(
+      const std::string& func,
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return evaluateOnce<int128_t>(
+        fmt::format("{}(c0, c1)", func), {tType, uType}, t, u);
+  }
+
+  template <typename T, typename U>
+  std::optional<int128_t> checkedAdd(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return checkedDecimalArithmetic("checked_add", tType, uType, t, u);
+  }
+
+  template <typename T, typename U>
+  std::optional<int128_t> checkedSubtract(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u) {
+    return checkedDecimalArithmetic("checked_subtract", tType, uType, t, u);
+  }
+
+  template <typename T, typename U>
+  void assertErrorForCheckedDecimalArithmetic(
+      const std::string& func,
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u,
+      const std::string& errorMessage) {
+    auto res = evaluateOnce<int128_t>(
+        fmt::format("try({}(c0, c1))", func), {tType, uType}, t, u);
+    ASSERT_TRUE(!res.has_value());
+    VELOX_ASSERT_USER_THROW(
+        (evaluateOnce<int128_t>(
+            fmt::format("{}(c0, c1)", func), {tType, uType}, t, u)),
+        errorMessage);
+  }
+
+  template <typename T, typename U>
+  void assertErrorForCheckedAdd(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u,
+      const std::string& errorMessage) {
+    assertErrorForCheckedDecimalArithmetic(
+        "checked_add", tType, uType, t, u, errorMessage);
+  }
+
+  template <typename T, typename U>
+  void assertErrorForCheckedSubtract(
+      const TypePtr& tType,
+      const TypePtr& uType,
+      std::optional<T> t,
+      std::optional<U> u,
+      const std::string& errorMessage) {
+    assertErrorForCheckedDecimalArithmetic(
+        "checked_subtract", tType, uType, t, u, errorMessage);
+  }
+
+  /// Runs the common normal and overflow test cases for checked add.
+  void testCheckedAddCommon(const std::string& suffix = "") {
+    const std::string func = "checked_add" + suffix;
+
+    // All input type combinations.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(18, 2), DECIMAL(18, 2), 100, 200)),
+        300);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int128_t>(
+            func, DECIMAL(18, 2), DECIMAL(20, 2), 100, 200)),
+        300);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int64_t>(
+            func, DECIMAL(20, 2), DECIMAL(18, 2), 100, 200)),
+        300);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func, DECIMAL(20, 2), DECIMAL(20, 2), 100, 200)),
+        300);
+
+    // Adding with zero.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(18, 2), DECIMAL(18, 2), 0, 100)),
+        100);
+
+    // Adding negative numbers.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(18, 2), DECIMAL(18, 2), -100, 50)),
+        -50);
+
+    // Result precision capped at 38, no overflow.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func, DECIMAL(38, 0), DECIMAL(38, 0), 100, 200)),
+        300);
+
+    // Near-boundary success: large values through addLarge path, but fits.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func,
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            HugeInt::parse("49999999999999999999999999999999999999"),
+            HugeInt::parse("49999999999999999999999999999999999999"))),
+        HugeInt::parse("99999999999999999999999999999999999998"));
+
+    // Positive overflow should throw; try() should return NULL.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("99999999999999999999999999999999999999"),
+        HugeInt::parse("99999999999999999999999999999999999999"),
+        "Decimal overflow in add");
+
+    // Positive overflow with large positive and small positive.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("99999999999999999999999999999999999999"),
+        1,
+        "Decimal overflow in add");
+
+    // Negative overflow should throw; try() should return NULL.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("-99999999999999999999999999999999999999"),
+        HugeInt::parse("-99999999999999999999999999999999999999"),
+        "Decimal overflow in add");
+
+    // Negative overflow with large negative and small negative.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("-99999999999999999999999999999999999999"),
+        -1,
+        "Decimal overflow in add");
+  }
+
+  /// Runs the common normal and overflow test cases for checked subtract.
+  void testCheckedSubtractCommon(const std::string& suffix = "") {
+    const std::string func = "checked_subtract" + suffix;
+
+    // All input type combinations.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(18, 2), DECIMAL(18, 2), 300, 200)),
+        100);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int128_t>(
+            func, DECIMAL(18, 2), DECIMAL(20, 2), 300, 200)),
+        100);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int64_t>(
+            func, DECIMAL(20, 2), DECIMAL(18, 2), 300, 200)),
+        100);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func, DECIMAL(20, 2), DECIMAL(20, 2), 300, 200)),
+        100);
+
+    // Subtracting zero.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(18, 2), DECIMAL(18, 2), 100, 0)),
+        100);
+
+    // Subtracting negative (effectively adding).
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(18, 2), DECIMAL(18, 2), 100, -50)),
+        150);
+
+    // Result precision capped at 38, no overflow.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func, DECIMAL(38, 0), DECIMAL(38, 0), 300, 200)),
+        100);
+
+    // Near-boundary success: large values through addLarge path, but fits.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func,
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            HugeInt::parse("49999999999999999999999999999999999999"),
+            HugeInt::parse("-49999999999999999999999999999999999999"))),
+        HugeInt::parse("99999999999999999999999999999999999998"));
+
+    // Negative overflow should throw; try() should return NULL.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("-99999999999999999999999999999999999999"),
+        HugeInt::parse("99999999999999999999999999999999999999"),
+        "Decimal overflow in subtract");
+
+    // Negative overflow with large negative and small positive.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("-99999999999999999999999999999999999999"),
+        1,
+        "Decimal overflow in subtract");
+
+    // Positive overflow should throw; try() should return NULL.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("99999999999999999999999999999999999999"),
+        HugeInt::parse("-99999999999999999999999999999999999999"),
+        "Decimal overflow in subtract");
+
+    // Positive overflow with large positive and small negative.
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("99999999999999999999999999999999999999"),
+        -1,
+        "Decimal overflow in subtract");
   }
 };
 
@@ -832,6 +1078,62 @@ TEST_F(DecimalArithmeticTest, checkedDiv) {
           HugeInt::parse("99999999999999999999999999999999999999"),
           1)),
       "Overflow in integral divide");
+}
+
+TEST_F(DecimalArithmeticTest, checkedAdd) {
+  testCheckedAddCommon();
+}
+
+TEST_F(DecimalArithmeticTest, checkedSubtract) {
+  testCheckedSubtractCommon();
+}
+
+TEST_F(DecimalArithmeticTest, checkedAddDenyPrecisionLoss) {
+  const std::string denyPrecisionLoss = "_deny_precision_loss";
+  testCheckedAddCommon(denyPrecisionLoss);
+
+  // Overflow during scale alignment should throw instead of returning null.
+  // These cases only overflow under deny-precision-loss because the full scale
+  // is preserved (not reduced), requiring a larger rescale factor.
+  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+      "checked_add" + denyPrecisionLoss,
+      DECIMAL(38, 3),
+      DECIMAL(38, 7),
+      HugeInt::parse("-99999999999999999999999999999999990000"),
+      -100,
+      "Decimal overflow in add");
+
+  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+      "checked_add" + denyPrecisionLoss,
+      DECIMAL(38, 3),
+      DECIMAL(38, 7),
+      HugeInt::parse("99999999999999999999999999999999999000"),
+      9999999,
+      "Decimal overflow in add");
+}
+
+TEST_F(DecimalArithmeticTest, checkedSubtractDenyPrecisionLoss) {
+  const std::string denyPrecisionLoss = "_deny_precision_loss";
+  testCheckedSubtractCommon(denyPrecisionLoss);
+
+  // Overflow during scale alignment should throw instead of returning null.
+  // These cases only overflow under deny-precision-loss because the full scale
+  // is preserved (not reduced), requiring a larger rescale factor.
+  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+      "checked_subtract" + denyPrecisionLoss,
+      DECIMAL(38, 3),
+      DECIMAL(38, 7),
+      HugeInt::parse("-99999999999999999999999999999999990000"),
+      100,
+      "Decimal overflow in subtract");
+
+  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+      "checked_subtract" + denyPrecisionLoss,
+      DECIMAL(38, 3),
+      DECIMAL(38, 7),
+      HugeInt::parse("99999999999999999999999999999999999000"),
+      -9999999,
+      "Decimal overflow in subtract");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

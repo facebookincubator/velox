@@ -863,5 +863,54 @@ TEST_F(FlatMapVectorTest, copyRanges) {
       {BaseVector::CopyRange{0, 1, 2}, BaseVector::CopyRange{3, 3, 1}});
 }
 
+TEST_F(FlatMapVectorTest, copyAndPreserveNestedFlatMap) {
+  // Create a nested map type: MAP<INT, MAP<INT, INT>>.
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), MAP(INTEGER(), INTEGER())),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{std::make_shared<FlatMapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          2,
+          makeFlatVector<int32_t>({10, 20}),
+          std::vector<VectorPtr>{
+              makeFlatVector<int32_t>({100, 0}),
+              makeFlatVector<int32_t>({200, 0})},
+          std::vector<BufferPtr>{
+              AlignedBuffer::allocate<bool>(2, pool_.get(), true),
+              AlignedBuffer::allocate<bool>(2, pool_.get(), true)})},
+      std::vector<BufferPtr>{
+          AlignedBuffer::allocate<bool>(2, pool_.get(), true)});
+
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), MAP(INTEGER(), INTEGER())),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({2}),
+      std::vector<VectorPtr>{std::make_shared<FlatMapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          2,
+          makeFlatVector<int32_t>({30}),
+          std::vector<VectorPtr>{makeFlatVector<int32_t>({300, 0})},
+          std::vector<BufferPtr>{
+              AlignedBuffer::allocate<bool>(2, pool_.get(), true)})},
+      std::vector<BufferPtr>{
+          AlignedBuffer::allocate<bool>(2, pool_.get(), true)});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 2}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  ASSERT_EQ(target->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  assertEqualVectors(source, target);
+}
+
 } // namespace
 } // namespace facebook::velox::test

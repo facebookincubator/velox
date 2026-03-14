@@ -119,7 +119,7 @@ ReaderBase::ReaderBase(
 
   const auto preloadFile = fileLength_ <= options_.filePreloadThreshold();
   const int64_t footerBufSize =
-      std::min(fileLength_, options_.footerEstimatedSize());
+      std::min(fileLength_, options_.footerSpeculativeIoSize());
   const uint64_t readSize = preloadFile ? fileLength_ : footerBufSize;
   if (input_->supportSyncLoad()) {
     input_->enqueue({fileLength_ - readSize, readSize, "footer"});

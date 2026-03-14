@@ -21,6 +21,7 @@
 
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -38,6 +39,8 @@ static constexpr int32_t kNumVectors = 200;
 static constexpr int32_t kRowsPerVector = 10'000;
 
 namespace {
+using namespace facebook::velox::common::testutil;
+
 class BenchmarkRecorder {
  public:
   BenchmarkRecorder() = default;
@@ -209,12 +212,12 @@ class WindowSubPartitionedSortBenchmark : public HiveConnectorTestBase {
     auto stats = task->taskStats();
     for (auto& pipeline : stats.pipelineStats) {
       for (auto& op : pipeline.operatorStats) {
-        if (op.operatorType == "Window") {
+        if (op.operatorType == OperatorType::kWindow) {
           windowNanos_.add(op.addInputTiming);
           windowNanos_.add(op.getOutputTiming);
           windowMems_.add(op.memoryStats);
         }
-        if (op.operatorType == "Values") {
+        if (op.operatorType == OperatorType::kValues) {
           // This is the timing for Window::noMoreInput() where the window
           // sorting happens. So including in the cpu timing.
           windowNanos_.add(op.finishTiming);

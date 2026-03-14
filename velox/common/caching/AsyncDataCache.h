@@ -574,6 +574,15 @@ class CacheShard {
       uint64_t size,
       folly::SemiFuture<bool>* readyFuture);
 
+  /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
+  /// exists and is not exclusive. Returns an empty pin (inside optional) if
+  /// the entry is exclusive; if 'waitFuture' is not nullptr it is set to a
+  /// future realized when the entry is no longer exclusive. Returns
+  /// std::nullopt on miss. Does not create entries.
+  std::optional<CachePin> find(
+      RawFileCacheKey key,
+      folly::SemiFuture<bool>* waitFuture = nullptr);
+
   /// Marks the cache entry with given cache 'key' as immediate evictable.
   void makeEvictable(RawFileCacheKey key);
 
@@ -653,6 +662,16 @@ class CacheShard {
 
   CachePin initEntry(RawFileCacheKey key, AsyncDataCacheEntry* entry);
 
+  // Looks up 'key' in the cache under mutex_. 'size' is the minimum acceptable
+  // entry size: pass 0 from find() to accept any size, or the required size
+  // from findOrCreate() to trigger stale-entry eviction when too small.
+  // Returns std::nullopt on miss (or after evicting a stale entry),
+  // an empty CachePin if the entry is exclusive, or a shared CachePin on hit.
+  std::optional<CachePin> lookupLocked(
+      RawFileCacheKey key,
+      uint64_t size,
+      folly::SemiFuture<bool>* waitFuture);
+
   void freeAllocations(std::vector<memory::Allocation>& allocations);
 
   void tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry);
@@ -714,11 +733,13 @@ class AsyncDataCache : public memory::Cache {
         double _maxWriteRatio = 0.7,
         double _ssdSavableRatio = 0.125,
         int32_t _minSsdSavableBytes = 1 << 24,
-        int32_t _numShards = kDefaultNumShards)
+        int32_t _numShards = kDefaultNumShards,
+        uint64_t _ssdFlushThresholdBytes = 0)
         : maxWriteRatio(_maxWriteRatio),
           ssdSavableRatio(_ssdSavableRatio),
           minSsdSavableBytes(_minSsdSavableBytes),
-          numShards(_numShards) {}
+          numShards(_numShards),
+          ssdFlushThresholdBytes(_ssdFlushThresholdBytes) {}
 
     /// The max ratio of the number of in-memory cache entries being written to
     /// SSD cache over the total number of cache entries. This is to control SSD
@@ -742,6 +763,11 @@ class AsyncDataCache : public memory::Cache {
     /// shards to decrease contention on the mutex for the key to entry mapping
     /// and other housekeeping. Must be a power of 2.
     int32_t numShards;
+
+    /// The maximum threshold in bytes for triggering SSD flush. When the
+    /// accumulated SSD-savable bytes exceed this value, a flush to SSD is
+    /// triggered. Set to 0 to disable this threshold (default).
+    uint64_t ssdFlushThresholdBytes;
   };
 
   AsyncDataCache(
@@ -799,6 +825,15 @@ class AsyncDataCache : public memory::Cache {
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
+      folly::SemiFuture<bool>* waitFuture = nullptr);
+
+  /// Finds a cache entry for 'key'. Returns a shared-mode pin if the entry
+  /// exists and is not exclusive. Returns an empty pin (inside optional) if
+  /// the entry is exclusive; if 'waitFuture' is not nullptr it is set to a
+  /// future realized when the entry is no longer exclusive. Returns
+  /// std::nullopt on miss.
+  std::optional<CachePin> find(
+      RawFileCacheKey key,
       folly::SemiFuture<bool>* waitFuture = nullptr);
 
   /// Marks the cache entry with given cache 'key' as immediate evictable.

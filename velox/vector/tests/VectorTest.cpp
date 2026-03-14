@@ -4514,5 +4514,139 @@ TEST_F(VectorTest, transferOrCopyTo) {
 }
 #pragma GCC diagnostic pop
 
+TEST_F(VectorTest, createEmptyLikePrimitives) {
+  auto intVector = makeFlatVector<int32_t>({1, 2, 3});
+  auto emptyInt = BaseVector::createEmptyLike(intVector.get(), 10, pool());
+  EXPECT_EQ(emptyInt->size(), 10);
+  EXPECT_EQ(emptyInt->type()->kind(), TypeKind::INTEGER);
+  EXPECT_EQ(emptyInt->encoding(), VectorEncoding::Simple::FLAT);
+
+  auto stringVector = makeFlatVector<StringView>({"a"_sv, "b"_sv});
+  auto emptyString = BaseVector::createEmptyLike(stringVector.get(), 5, pool());
+  EXPECT_EQ(emptyString->size(), 5);
+  EXPECT_EQ(emptyString->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(emptyString->encoding(), VectorEncoding::Simple::FLAT);
+}
+
+TEST_F(VectorTest, createEmptyLikeComplexTypes) {
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeFlatVector<StringView>({"a"_sv, "b"_sv}),
+  });
+  auto emptyRow =
+      BaseVector::createEmptyLike<RowVector>(rowVector.get(), 5, pool());
+  EXPECT_EQ(emptyRow->size(), 5);
+  EXPECT_EQ(emptyRow->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(emptyRow->childrenSize(), 2);
+  EXPECT_EQ(emptyRow->childAt(0)->size(), 5);
+  EXPECT_EQ(emptyRow->childAt(1)->size(), 5);
+
+  auto arrayVector = makeArrayVector<int32_t>({{1, 2}, {3}});
+  auto emptyArray =
+      BaseVector::createEmptyLike<ArrayVector>(arrayVector.get(), 3, pool());
+  EXPECT_EQ(emptyArray->size(), 3);
+  EXPECT_EQ(emptyArray->type()->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(emptyArray->elements()->size(), 0);
+
+  auto mapVector = makeMapVector<int32_t, StringView>({{{1, "a"_sv}}});
+  auto emptyMap =
+      BaseVector::createEmptyLike<MapVector>(mapVector.get(), 4, pool());
+  EXPECT_EQ(emptyMap->size(), 4);
+  EXPECT_EQ(emptyMap->type()->kind(), TypeKind::MAP);
+  EXPECT_EQ(emptyMap->encoding(), VectorEncoding::Simple::MAP);
+  EXPECT_EQ(emptyMap->mapKeys()->size(), 0);
+  EXPECT_EQ(emptyMap->mapValues()->size(), 0);
+}
+
+TEST_F(VectorTest, createEmptyLikeFlatMap) {
+  auto flatMapVector = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 30}},
+  });
+  EXPECT_EQ(flatMapVector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+
+  auto emptyFlatMap =
+      BaseVector::createEmptyLike(flatMapVector.get(), 5, pool());
+  EXPECT_EQ(emptyFlatMap->size(), 5);
+  EXPECT_EQ(emptyFlatMap->type()->kind(), TypeKind::MAP);
+  EXPECT_EQ(emptyFlatMap->encoding(), VectorEncoding::Simple::FLAT_MAP);
+}
+
+TEST_F(VectorTest, createEmptyLikeNestedFlatMap) {
+  // ROW containing a FlatMapVector.
+  auto flatMapVector = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{3, 30}},
+  });
+  auto rowWithFlatMap = makeRowVector({
+      makeFlatVector<int64_t>({100, 200}),
+      flatMapVector,
+  });
+
+  auto emptyRow =
+      BaseVector::createEmptyLike<RowVector>(rowWithFlatMap.get(), 3, pool());
+  EXPECT_EQ(emptyRow->size(), 3);
+  EXPECT_EQ(emptyRow->childrenSize(), 2);
+  EXPECT_EQ(emptyRow->childAt(0)->encoding(), VectorEncoding::Simple::FLAT);
+  EXPECT_EQ(emptyRow->childAt(1)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+
+  // ARRAY of FlatMapVector.
+  auto arrayType = ARRAY(MAP(BIGINT(), BIGINT()));
+  auto arrayOfFlatMaps = std::make_shared<ArrayVector>(
+      pool(),
+      arrayType,
+      nullptr,
+      2,
+      allocateOffsets(2, pool()),
+      allocateSizes(2, pool()),
+      flatMapVector);
+
+  auto emptyArray = BaseVector::createEmptyLike<ArrayVector>(
+      arrayOfFlatMaps.get(), 4, pool());
+  EXPECT_EQ(emptyArray->size(), 4);
+  EXPECT_EQ(
+      emptyArray->elements()->encoding(), VectorEncoding::Simple::FLAT_MAP);
+}
+
+TEST_F(VectorTest, createMapOfArraysVectorWithNullRows) {
+  // Row 0: {1 → [10, 20]}
+  // Row 1: null
+  // Row 2: {2 → [30]}
+  auto vector = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, {{10, 20}}}}, {}, {{2, {{30}}}}}, {1});
+
+  ASSERT_EQ(vector->size(), 3);
+  auto* map = vector->as<MapVector>();
+  ASSERT_NE(map, nullptr);
+
+  // Row 0: non-null, size 1.
+  EXPECT_FALSE(map->isNullAt(0));
+  EXPECT_EQ(map->sizeAt(0), 1);
+
+  // Row 1: null.
+  EXPECT_TRUE(map->isNullAt(1));
+
+  // Row 2: non-null, size 1.
+  EXPECT_FALSE(map->isNullAt(2));
+  EXPECT_EQ(map->sizeAt(2), 1);
+
+  // Verify keys and values.
+  auto* keys = map->mapKeys()->as<FlatVector<int64_t>>();
+  EXPECT_EQ(keys->valueAt(0), 1);
+  EXPECT_EQ(keys->valueAt(1), 2);
+
+  auto* arrays = map->mapValues()->as<ArrayVector>();
+  auto* elements = arrays->elements()->as<FlatVector<int64_t>>();
+
+  // Row 0, key 1 → [10, 20].
+  EXPECT_EQ(arrays->sizeAt(0), 2);
+  EXPECT_EQ(elements->valueAt(arrays->offsetAt(0)), 10);
+  EXPECT_EQ(elements->valueAt(arrays->offsetAt(0) + 1), 20);
+
+  // Row 2, key 2 → [30].
+  EXPECT_EQ(arrays->sizeAt(1), 1);
+  EXPECT_EQ(elements->valueAt(arrays->offsetAt(1)), 30);
+}
+
 } // namespace
 } // namespace facebook::velox

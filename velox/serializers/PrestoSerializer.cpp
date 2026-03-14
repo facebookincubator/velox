@@ -266,7 +266,7 @@ void PrestoVectorSerde::registerVectorSerde() {
 void PrestoVectorSerde::registerNamedVectorSerde() {
   detail::initBitsToMapOnce();
   velox::registerNamedVectorSerde(
-      VectorSerde::Kind::kPresto, std::make_unique<PrestoVectorSerde>());
+      "Presto", std::make_unique<PrestoVectorSerde>());
 }
 
 /* static */ Status PrestoVectorSerde::lex(

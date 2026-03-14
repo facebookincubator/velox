@@ -21,10 +21,11 @@
 #include <sys/mman.h>
 
 namespace facebook::velox::memory {
-MallocAllocator::MallocAllocator(size_t capacity, uint32_t reservationByteLimit)
+MallocAllocator::MallocAllocator(const Options& options)
     : kind_(MemoryAllocator::Kind::kMalloc),
-      capacity_(capacity),
-      reservationByteLimit_(reservationByteLimit),
+      mallocContiguousEnabled_(options.mallocContiguousEnabled),
+      capacity_(options.capacity),
+      reservationByteLimit_(options.reservationByteLimit),
       reserveFunc_(
           [this](uint32_t& counter, uint32_t increment, std::mutex& lock) {
             return incrementUsageWithReservationFunc(counter, increment, lock);
@@ -34,7 +35,7 @@ MallocAllocator::MallocAllocator(size_t capacity, uint32_t reservationByteLimit)
             decrementUsageWithReservationFunc(counter, decrement, lock);
             return true;
           }),
-      reservations_(folly::hardware_concurrency()) {}
+      reservations_(folly::available_concurrency()) {}
 
 MallocAllocator::~MallocAllocator() {
   // TODO: Remove the check when memory leak issue is resolved.
@@ -145,11 +146,7 @@ bool MallocAllocator::allocateContiguousImpl(
   }
   auto numContiguousCollateralPages = allocation.numPages();
   if (numContiguousCollateralPages > 0) {
-    useHugePages(allocation, false);
-    if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
-      VELOX_MEM_LOG(ERROR) << "munmap got " << folly::errnoStr(errno) << "for "
-                           << allocation.data() << ", " << allocation.size();
-    }
+    dispatchFreeContiguous(allocation);
     numMapped_.fetch_sub(numContiguousCollateralPages);
     numAllocated_.fetch_sub(numContiguousCollateralPages);
     numExternalMapped_.fetch_sub(numContiguousCollateralPages);
@@ -175,19 +172,23 @@ bool MallocAllocator::allocateContiguousImpl(
   numAllocated_.fetch_add(numPages);
   numMapped_.fetch_add(numPages);
   numExternalMapped_.fetch_add(numPages);
-  void* data = ::mmap(
-      nullptr,
-      AllocationTraits::pageBytes(maxPages),
-      PROT_READ | PROT_WRITE,
-      MAP_PRIVATE | MAP_ANONYMOUS,
-      -1,
-      0);
-  // TODO: add handling of MAP_FAILED.
-  allocation.set(
-      data,
-      AllocationTraits::pageBytes(numPages),
-      AllocationTraits::pageBytes(maxPages));
-  useHugePages(allocation, true);
+  const auto maxBytes = AllocationTraits::pageBytes(maxPages);
+  void* data = dispatchAllocateContiguous(maxBytes);
+  if (FOLLY_UNLIKELY(data == nullptr)) {
+    numAllocated_.fetch_sub(numPages);
+    numMapped_.fetch_sub(numPages);
+    numExternalMapped_.fetch_sub(numPages);
+    decrementUsage(static_cast<int64_t>(AllocationTraits::pageBytes(numPages)));
+    const auto errorMsg = fmt::format(
+        "Failed to allocate {} of contiguous memory", succinctBytes(maxBytes));
+    VELOX_MEM_LOG(WARNING) << errorMsg;
+    setAllocatorFailureMessage(errorMsg);
+    return false;
+  }
+  allocation.set(data, AllocationTraits::pageBytes(numPages), maxBytes);
+  if (!mallocContiguousEnabled_) {
+    useHugePages(allocation, true);
+  }
   return true;
 }
 
@@ -222,19 +223,44 @@ void MallocAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
   if (allocation.empty()) {
     return;
   }
-  useHugePages(allocation, false);
   const auto bytes = allocation.size();
   const auto numPages = allocation.numPages();
-  if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
-    VELOX_MEM_LOG(ERROR) << "Error for munmap(" << allocation.data() << ", "
-                         << succinctBytes(bytes) << "): '"
-                         << folly::errnoStr(errno) << "'";
-  }
+  dispatchFreeContiguous(allocation);
   numMapped_.fetch_sub(numPages);
   numAllocated_.fetch_sub(numPages);
   numExternalMapped_.fetch_sub(numPages);
   decrementUsage(bytes);
   allocation.clear();
+}
+
+void* MallocAllocator::dispatchAllocateContiguous(size_t maxBytes) {
+  if (testingHasInjectedFailure(InjectedFailure::kAllocate)) {
+    return nullptr;
+  }
+  if (mallocContiguousEnabled_) {
+    return ::aligned_alloc(AllocationTraits::kPageSize, maxBytes);
+  }
+  // TODO: add handling of MAP_FAILED.
+  return ::mmap(
+      nullptr,
+      maxBytes,
+      PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS,
+      -1,
+      0);
+}
+
+void MallocAllocator::dispatchFreeContiguous(ContiguousAllocation& allocation) {
+  if (mallocContiguousEnabled_) {
+    ::free(allocation.data());
+  } else {
+    useHugePages(allocation, false);
+    if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
+      VELOX_MEM_LOG(ERROR) << "Error for munmap(" << allocation.data() << ", "
+                           << succinctBytes(allocation.size()) << "): '"
+                           << folly::errnoStr(errno) << "'";
+    }
+  }
 }
 
 bool MallocAllocator::growContiguousWithoutRetry(

@@ -27,6 +27,7 @@ BUILD_GEOS="${BUILD_GEOS:-true}"
 BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
+EXTRA_ARROW_PATCH=${EXTRA_ARROW_PATCH:-""}
 SIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION:-"OFF"}
 
 USE_CLANG="${USE_CLANG:-false}"
@@ -46,7 +47,14 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
-  cmake_install_dir folly -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON)
+  # When folly is static, use static gflags to avoid dual gflags flag
+  # registration when .so plugins are dlopen'd (both the binary and plugin
+  # would register the same flags in a shared gflags registry).
+  if [[ ${VELOX_BUILD_SHARED} != "ON" ]]; then
+    FOLLY_FLAGS+=(-DGFLAGS_SHARED=FALSE)
+  fi
+  cmake_install_dir folly "${FOLLY_FLAGS[@]}"
 }
 
 function install_fizz {
@@ -112,6 +120,19 @@ function install_protobuf {
   cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
 }
 
+function install_grpc {
+  github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
+  cmake_install_dir grpc \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_INSTALL=ON
+}
+
 function install_double_conversion {
   wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/"${DOUBLE_CONVERSION_VERSION}".tar.gz double-conversion
   cmake_install_dir double-conversion -DBUILD_TESTING=OFF
@@ -153,7 +174,7 @@ function install_glog {
 }
 
 function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
+  wget_and_untar https://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
   (
     cd "${DEPENDENCY_DIR}"/lzo || exit
     ./configure --prefix="${INSTALL_PREFIX}" --enable-shared --disable-static --docdir=/usr/share/doc/lzo-"${LZO_VERSION}"
@@ -189,6 +210,10 @@ function install_arrow {
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
     git apply "$VELOX_ARROW_CMAKE_PATCH"
+    # Presto needs this for Arrow Flight
+    if [[ -n $EXTRA_ARROW_PATCH ]]; then
+      git apply "$EXTRA_ARROW_PATCH"
+    fi
   ) || exit 1
 
   cmake_install_dir arrow/cpp \
@@ -305,26 +330,9 @@ function install_gcs_sdk_cpp {
   # Install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
-  # abseil-cpp
-  install_abseil
-
-  # protobuf
-  github_checkout protocolbuffers/protobuf v"${PROTOBUF_VERSION}" --depth 1
-  cmake_install_dir protobuf \
-    -Dprotobuf_BUILD_TESTS=OFF \
-    -Dprotobuf_ABSL_PROVIDER=package
-
-  # grpc
-  github_checkout grpc/grpc "${GRPC_VERSION}" --depth 1
-  cmake_install_dir grpc \
-    -DgRPC_BUILD_TESTS=OFF \
-    -DgRPC_ABSL_PROVIDER=package \
-    -DgRPC_ZLIB_PROVIDER=package \
-    -DgRPC_CARES_PROVIDER=package \
-    -DgRPC_RE2_PROVIDER=package \
-    -DgRPC_SSL_PROVIDER=package \
-    -DgRPC_PROTOBUF_PROVIDER=package \
-    -DgRPC_INSTALL=ON
+  # abseil-cpp, protobuf, grpc
+  install_protobuf
+  install_grpc
 
   # crc32
   github_checkout google/crc32c "${CRC32_VERSION}" --depth 1

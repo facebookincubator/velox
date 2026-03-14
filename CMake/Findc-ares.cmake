@@ -20,7 +20,7 @@ if(c-ares_FOUND)
 endif()
 
 find_path(C_ARES_INCLUDE_DIR NAMES ares.h PATH_SUFFIXES c-ares)
-find_library(C_ARES_LIBRARY NAMES c-ares)
+find_library(C_ARES_LIBRARY NAMES c-ares cares)
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(c-ares DEFAULT_MSG C_ARES_LIBRARY C_ARES_INCLUDE_DIR)

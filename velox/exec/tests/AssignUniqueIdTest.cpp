@@ -21,7 +21,7 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec {
-
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec::test;
 
@@ -200,22 +200,32 @@ TEST_F(AssignUniqueIdTest, barrier) {
                   .assignUniqueId("row_number")
                   .project({"c0", "c1", "row_number"})
                   .planNode();
+  struct {
+    bool hasBarrier;
+    bool serialExecution;
 
-  for (const auto barrierExecution : {false, true}) {
-    SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+    std::string toString() const {
+      return fmt::format(
+          "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+    }
+  } testSettings[] = {
+      {false, false}, {false, true}, {true, false}, {true, true}};
 
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
     std::shared_ptr<Task> task;
     auto result = AssertQueryBuilder(plan)
                       .splits(makeHiveConnectorSplits(tempFiles))
-                      .serialExecution(true)
-                      .barrierExecution(barrierExecution)
+                      .serialExecution(testData.serialExecution)
+                      .maxDrivers(testData.serialExecution ? 1 : 3)
+                      .barrierExecution(testData.hasBarrier)
                       .copyResults(pool(), task);
     auto results = split(result, numSplits);
 
     verifyUniqueId(vectors, results);
 
     const auto taskStats = task->taskStats();
-    ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+    ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
   }
 }

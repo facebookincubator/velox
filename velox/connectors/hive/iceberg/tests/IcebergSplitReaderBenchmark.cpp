@@ -282,7 +282,6 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
       std::make_shared<HiveTableHandle>(
           "kHiveConnectorId",
           "tableName",
-          false,
           std::move(filters),
           remainingFilterExpr,
           rowType);

@@ -191,6 +191,45 @@ std::string getAndClearCacheFailureMessage();
 /// tracking while delegating the allocation to a root allocator.
 class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
  public:
+  struct Options {
+    /// Capacity in bytes, default unlimited.
+    /// Applies to: MallocAllocator, MmapAllocator.
+    size_t capacity{static_cast<size_t>(std::numeric_limits<int64_t>::max())};
+
+    /// --- MallocAllocator-only options ---
+
+    /// Allocation size threshold below which allocations use sharded local
+    /// counters instead of updating the global counter. Default 1MB.
+    uint32_t reservationByteLimit{1 << 20};
+
+    /// If true, use malloc for contiguous allocations instead of mmap/munmap.
+    bool mallocContiguousEnabled{false};
+
+    /// --- MmapAllocator-only options ---
+
+    /// Number of pages in the largest size class.
+    int32_t largestSizeClass{256};
+
+    /// If set true, allocations larger than largest size class size will be
+    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
+    /// issued for each such allocation.
+    bool useMmapArena{false};
+
+    /// Used to determine MmapArena capacity. The ratio represents system
+    /// memory capacity to single MmapArena capacity ratio.
+    int32_t mmapArenaCapacityRatio{10};
+
+    /// If not zero, reserve 'smallAllocationReservePct'% of space from
+    /// 'capacity' for ad hoc small allocations delegated to std::malloc.
+    /// If 'maxMallocBytes' is 0, this value will be disregarded.
+    uint32_t smallAllocationReservePct{0};
+
+    /// The allocation threshold less than which an allocation is delegated
+    /// to std::malloc(). If zero, no allocations are delegated to malloc
+    /// and 'smallAllocationReservePct' is automatically set to 0.
+    int32_t maxMallocBytes{3072};
+  };
+
   /// Defines the memory allocator kinds.
   enum class Kind {
     /// The default memory allocator kind which is implemented by

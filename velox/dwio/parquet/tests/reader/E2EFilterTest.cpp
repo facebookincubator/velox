@@ -664,7 +664,7 @@ TEST_F(E2EFilterTest, largeMetadata) {
           rowType_, 1000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
-  readerOpts.setFooterEstimatedSize(1024);
+  readerOpts.setFooterSpeculativeIoSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(

@@ -231,9 +231,9 @@ class S3FileSystem::Impl {
  public:
   Impl(const S3Config& s3Config) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
-    Aws::S3::S3ClientConfiguration clientConfig;
-    // Required for AWS CLI object operations on OCI and MinIO due to checksum
-    // handling.
+    Aws::Client::ClientConfigurationInitValues initValues;
+    initValues.shouldDisableIMDS = !s3Config.useIMDS();
+    Aws::S3::S3ClientConfiguration clientConfig(initValues);
     clientConfig.checksumConfig.requestChecksumCalculation =
         Aws::Client::RequestChecksumCalculation::WHEN_REQUIRED;
     clientConfig.checksumConfig.responseChecksumValidation =

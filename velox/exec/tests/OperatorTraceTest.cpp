@@ -21,6 +21,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
@@ -30,19 +31,16 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/trace/Trace.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::velox::exec::trace::test {
 namespace {
-
+using namespace facebook::velox::common::testutil;
 using exec::test::assertEqualResults;
 using exec::test::AssertQueryBuilder;
 using exec::test::PlanBuilder;
-using exec::test::TempDirectoryPath;
-using exec::test::TempFilePath;
 
 class OperatorTraceTest : public exec::test::HiveConnectorTestBase {
  protected:
@@ -859,12 +857,12 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   auto ioBuf = folly::IOBuf::create(12 + 16);
   folly::io::Appender appender(ioBuf.get(), 0);
   // Writes an invalid split without crc.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
   // Writes a valid spilt.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   splitInfoFile->append(std::move(ioBuf));
   splitInfoFile->close();
 
@@ -948,13 +946,13 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   auto ioBuf = folly::IOBuf::create(16 * 2);
   folly::io::Appender appender(ioBuf.get(), 0);
   // Writes an invalid split with a wrong checksum.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32 - 1);
+  appender.writeLE<uint32_t>(crc32 - 1);
   // Writes a valid split.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   splitInfoFile->append(std::move(ioBuf));
   splitInfoFile->close();
 

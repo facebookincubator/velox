@@ -16,6 +16,7 @@
 
 #include "velox/exec/Unnest.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
@@ -40,7 +41,7 @@ Unnest::Unnest(
           unnestNode->outputType(),
           operatorId,
           unnestNode->id(),
-          "Unnest"),
+          OperatorType::kUnnest),
       withOrdinality_(unnestNode->hasOrdinality()),
       withMarker_(unnestNode->hasMarker()),
       maxOutputSize_(

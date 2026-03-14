@@ -16,17 +16,9 @@
 #pragma once
 
 #include <string>
-#include "velox/parse/IExpr.h"
+#include "velox/parse/SqlExpressionsParser.h"
 
 namespace facebook::velox::duckdb {
-
-struct OrderByClause {
-  core::ExprPtr expr;
-  bool ascending;
-  bool nullsFirst;
-
-  std::string toString() const;
-};
 
 /// Hold parsing options.
 struct ParseOptions {
@@ -58,60 +50,32 @@ std::vector<core::ExprPtr> parseMultipleExpressions(
     const std::string& exprString,
     const ParseOptions& options);
 
-struct AggregateExpr {
-  core::ExprPtr expr;
-  std::vector<OrderByClause> orderBy;
-  bool distinct{false};
-  core::ExprPtr maskExpr{nullptr};
-};
-
 /// Parses aggregate function call expression with optional ORDER by clause.
 /// Examples:
 ///     sum(a)
 ///     sum(a) as s
 ///     array_agg(x ORDER BY y DESC)
-AggregateExpr parseAggregateExpr(
+parse::AggregateExpr parseAggregateExpr(
     const std::string& exprString,
     const ParseOptions& options);
 
 // Parses an ORDER BY clause using DuckDB's internal postgresql-based parser.
 // Uses ASC NULLS LAST as the default sort order.
-OrderByClause parseOrderByExpr(const std::string& exprString);
+parse::OrderByClause parseOrderByExpr(const std::string& exprString);
 
 // Parses a WINDOW function SQL string using DuckDB's internal postgresql-based
 // parser. Window Functions are executed by Velox Window PlanNodes and not the
 // expression evaluation. So we cannot use an IExpr based API. The structures
 // below capture all the metadata needed from the window function SQL string
 // for usage in the WindowNode plan node.
-enum class WindowType { kRows, kRange };
-
-enum class BoundType {
-  kCurrentRow,
-  kUnboundedPreceding,
-  kUnboundedFollowing,
-  kPreceding,
-  kFollowing
-};
-
-struct IExprWindowFrame {
-  WindowType type;
-  BoundType startType;
-  core::ExprPtr startValue;
-  BoundType endType;
-  core::ExprPtr endValue;
-};
-
-struct IExprWindowFunction {
-  core::ExprPtr functionCall;
-  IExprWindowFrame frame;
-  bool ignoreNulls;
-
-  std::vector<core::ExprPtr> partitionBy;
-  std::vector<OrderByClause> orderBy;
-};
-
-IExprWindowFunction parseWindowExpr(
+parse::WindowExpr parseWindowExpr(
     const std::string& windowString,
+    const ParseOptions& options);
+
+/// Parses a SQL expression that can be either a scalar expression or a window
+/// function. Returns the appropriate type based on the parsed result.
+std::variant<core::ExprPtr, parse::WindowExpr> parseScalarOrWindowExpr(
+    const std::string& exprString,
     const ParseOptions& options);
 
 } // namespace facebook::velox::duckdb

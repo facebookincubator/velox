@@ -35,7 +35,7 @@ class HiveConfig;
 
 /// HiveIndexSource provides index lookup for Hive tables.
 /// Currently supports Nimble file format with TabletIndex for efficient
-/// key-based stripe lookups to enable IndexLookupJoin.
+/// key-based stripe lookups.
 ///
 /// NOTE: This is a scaffold implementation that assumes a single Nimble file.
 /// The user may need to optimize and extend this for production use cases.
@@ -44,7 +44,7 @@ class HiveIndexSource : public IndexSource,
  public:
   HiveIndexSource(
       const RowTypePtr& requestType,
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const RowTypePtr& outputType,
       HiveTableHandlePtr tableHandle,
       const ColumnHandleMap& columnHandles,
@@ -66,6 +66,10 @@ class HiveIndexSource : public IndexSource,
 
   memory::MemoryPool* pool() const {
     return pool_;
+  }
+
+  uint32_t maxRowsPerIndexRequest() const {
+    return maxRowsPerIndexRequest_;
   }
 
   const RowTypePtr& outputType() const {
@@ -94,14 +98,13 @@ class HiveIndexSource : public IndexSource,
 
   void init(
       const ColumnHandleMap& assignments,
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions);
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions);
 
-  // Validates and initializes join conditions:
+  // Validates and initializes index lookup conditions:
   // - Converts filter conditions (with constant values) to filters_.
-  // - Non-filter conditions are stored in joinConditions_.
-  // Returns a list of index column names used by joinConditions_.
-  std::vector<std::string> initJoinConditions(
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+  // - Non-filter conditions are stored in indexLookupConditions_.
+  void initIndexLookupConditions(
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const ColumnHandleMap& assignments);
 
   // Initializes the remaining filter:
@@ -122,19 +125,20 @@ class HiveIndexSource : public IndexSource,
   const std::shared_ptr<HiveConfig> hiveConfig_;
   memory::MemoryPool* const pool_;
   core::ExpressionEvaluator* const expressionEvaluator_;
+  const uint32_t maxRowsPerIndexRequest_;
 
   const HiveTableHandlePtr tableHandle_;
   const RowTypePtr requestType_;
   const RowTypePtr outputType_;
   folly::Executor* const executor_;
 
-  // All join conditions including equal join keys converted to
-  // EqualIndexLookupConditions and original non-filter join conditions.
+  // All index lookup conditions including equal lookup keys converted to
+  // EqualIndexLookupConditions and original non-filter index lookup conditions.
   // This is passed to HiveIndexReader.
-  std::vector<core::IndexLookupConditionPtr> joinConditions_;
+  std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
 
   // Filters for pushdown. Includes subfield filters from table handle and
-  // filters converted from constant join conditions.
+  // filters converted from constant index lookup conditions.
   common::SubfieldFilters filters_;
 
   // Remaining filter expression set after filter pushdown.

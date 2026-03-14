@@ -34,7 +34,7 @@ PYBIND11_MODULE(runner, m) {
   // is about to exit.
   static auto rootPool = velox::memory::memoryManager()->addRootPool();
   static auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(
-      folly::hardware_concurrency());
+      folly::available_concurrency());
 
   // TaskIterator iterates over Vectors.
   py::module::import("pyvelox.vector");
@@ -47,11 +47,15 @@ PYBIND11_MODULE(runner, m) {
       .def(
           "step",
           &velox::py::PyTaskIterator::step,
+          py::arg("plan_id") = "",
           py::keep_alive<0, 1>(),
           py::doc(R"(
         Steps through execution, returning either the input to the next
         operator with a breakpoint installed, or the next task output.
         If no breakpoints are set, then step() behaves like next().
+
+        If plan_id is specified, only stops at a breakpoint matching the
+        given plan node ID; breakpoints for other nodes are skipped.
           )"))
       .def(
           "current",

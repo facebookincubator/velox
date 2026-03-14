@@ -36,7 +36,10 @@ permissions:
 jobs:
   metrics:
     name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    # Disabled: the conbench service at velox-conbench.voltrondata.run is no
+    # longer available (DNS resolution fails). The scheduled runs have been
+    # failing since late 2025. Re-enable once a replacement service is set up.
+    if: false #${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
     strategy:

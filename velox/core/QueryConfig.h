@@ -68,6 +68,12 @@ class QueryConfig {
   static constexpr const char* kExprEvalSimplified =
       "expression.eval_simplified";
 
+  /// Whether to enable the FlatNoNulls fast path for expression evaluation.
+  /// When enabled, expressions skip null checking and vector decoding when all
+  /// inputs are flat-encoded with no nulls. True by default.
+  static constexpr const char* kExprEvalFlatNoNulls =
+      "expression.eval_flat_no_nulls";
+
   /// Whether to track CPU usage for individual expressions (supported by call
   /// and cast expressions). False by default. Can be expensive when processing
   /// small batches, e.g. < 10K rows.
@@ -223,6 +229,14 @@ class QueryConfig {
   static constexpr const char* kAggregationCompactionUnusedMemoryRatio =
       "aggregation_compaction_unused_memory_ratio";
 
+  /// If true, enables lightweight memory compaction before spilling during
+  /// memory reclaim in aggregation. When enabled, the aggregation operator
+  /// will try to compact aggregate function state (e.g., free dead strings)
+  /// before resorting to spilling.
+  /// Disabled by default.
+  static constexpr const char* kAggregationMemoryCompactionReclaimEnabled =
+      "aggregation_memory_compaction_reclaim_enabled";
+
   static constexpr const char* kAbandonPartialTopNRowNumberMinRows =
       "abandon_partial_topn_row_number_min_rows";
 
@@ -298,6 +312,12 @@ class QueryConfig {
   static constexpr const char* kTableScanGetOutputTimeLimitMs =
       "table_scan_getoutput_time_limit_ms";
 
+  /// If non-zero, overrides the number of rows in each output batch produced
+  /// by the TableScan operator, bypassing the dynamic batch size calculation.
+  /// Zero means 'no override'.
+  static constexpr const char* kTableScanOutputBatchRowsOverride =
+      "table_scan_output_batch_rows_override";
+
   /// If false, the 'group by' code is forced to use generic hash mode
   /// hashtable.
   static constexpr const char* kHashAdaptivityEnabled =
@@ -347,6 +367,10 @@ class QueryConfig {
   /// RowNumber spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kRowNumberSpillEnabled =
       "row_number_spill_enabled";
+
+  /// MarkDistinct spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kMarkDistinctSpillEnabled =
+      "mark_distinct_spill_enabled";
 
   /// TopNRowNumber spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kTopNRowNumberSpillEnabled =
@@ -420,7 +444,19 @@ class QueryConfig {
   static constexpr const char* kSpillFileCreateConfig =
       "spill_file_create_config";
 
-  /// Default offset spill start partition bit. It is used with
+  /// Config used to create aggregation spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kAggregationSpillFileCreateConfig =
+      "aggregation_spill_file_create_config";
+
+  /// Config used to create hash join spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kHashJoinSpillFileCreateConfig =
+      "hash_join_spill_file_create_config";
+
+  /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
   /// spill.
@@ -481,6 +517,10 @@ class QueryConfig {
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
+  /// The max number of items to use for the bloom filter.
+  static constexpr const char* kSparkBloomFilterMaxNumItems =
+      "spark.bloom_filter.max_num_items";
+
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
@@ -501,6 +541,12 @@ class QueryConfig {
   static constexpr const char* kSparkJsonIgnoreNullFields =
       "spark.json_ignore_null_fields";
 
+  /// If true, collect_list aggregate function will ignore nulls in the input.
+  /// Defaults to true to match Spark's default behavior. Set to false to
+  /// include nulls (RESPECT NULLS). Introduced in Spark 4.2 (SPARK-55256).
+  static constexpr const char* kSparkCollectListIgnoreNulls =
+      "spark.collect_list.ignore_nulls";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -518,6 +564,11 @@ class QueryConfig {
   /// filter) and push down to upstream operators.
   static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
       "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// Whether hash probe can generate dynamic filter for string types and
+  /// push down to upstream operators.
+  static constexpr const char* kHashProbeStringDynamicFilterPushdownEnabled =
+      "hash_probe_string_dynamic_filter_pushdown_enabled";
 
   /// The maximum byte size of Bloom filter that can be generated from hash
   /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
@@ -911,6 +962,10 @@ class QueryConfig {
     return get<double>(kAggregationCompactionUnusedMemoryRatio, 0.25);
   }
 
+  bool aggregationMemoryCompactionReclaimEnabled() const {
+    return get<bool>(kAggregationMemoryCompactionReclaimEnabled, false);
+  }
+
   int32_t abandonPartialTopNRowNumberMinRows() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinRows, 100'000);
   }
@@ -1034,6 +1089,10 @@ class QueryConfig {
     return get<uint64_t>(kTableScanGetOutputTimeLimitMs, 5'000);
   }
 
+  uint32_t tableScanOutputBatchRowsOverride() const {
+    return get<uint32_t>(kTableScanOutputBatchRowsOverride, 0);
+  }
+
   bool hashAdaptivityEnabled() const {
     return get<bool>(kHashAdaptivityEnabled, true);
   }
@@ -1086,6 +1145,10 @@ class QueryConfig {
     return get<bool>(kExprEvalSimplified, false);
   }
 
+  bool exprEvalFlatNoNulls() const {
+    return get<bool>(kExprEvalFlatNoNulls, true);
+  }
+
   bool parallelOutputJoinBuildRowsEnabled() const {
     return get<bool>(kParallelOutputJoinBuildRowsEnabled, false);
   }
@@ -1124,6 +1187,10 @@ class QueryConfig {
 
   bool rowNumberSpillEnabled() const {
     return get<bool>(kRowNumberSpillEnabled, true);
+  }
+
+  bool markDistinctSpillEnabled() const {
+    return get<bool>(kMarkDistinctSpillEnabled, true);
   }
 
   bool topNRowNumberSpillEnabled() const {
@@ -1193,6 +1260,14 @@ class QueryConfig {
     return get<std::string>(kSpillFileCreateConfig, "");
   }
 
+  std::string aggregationSpillFileCreateConfig() const {
+    return get<std::string>(kAggregationSpillFileCreateConfig, "");
+  }
+
+  std::string hashJoinSpillFileCreateConfig() const {
+    return get<std::string>(kHashJoinSpillFileCreateConfig, "");
+  }
+
   int32_t minSpillableReservationPct() const {
     constexpr int32_t kDefaultPct = 5;
     return get<int32_t>(kMinSpillableReservationPct, kDefaultPct);
@@ -1252,17 +1327,14 @@ class QueryConfig {
     return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
   }
 
-  // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
-  // 256, so decrease it to not over memory limit.
   int64_t sparkBloomFilterMaxNumBits() const {
-    constexpr int64_t kDefault = 4'096 * 1024;
-    auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-    VELOX_USER_CHECK_LE(
-        value,
-        kDefault,
-        "{} cannot exceed the default value",
-        kSparkBloomFilterMaxNumBits);
-    return value;
+    constexpr int64_t kDefault = 67'108'864;
+    return get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
+  }
+
+  int64_t sparkBloomFilterMaxNumItems() const {
+    constexpr int64_t kDefault = 4'000'000L;
+    return get<int64_t>(kSparkBloomFilterMaxNumItems, kDefault);
   }
 
   int32_t sparkPartitionId() const {
@@ -1283,6 +1355,10 @@ class QueryConfig {
 
   bool sparkJsonIgnoreNullFields() const {
     return get<bool>(kSparkJsonIgnoreNullFields, true);
+  }
+
+  bool sparkCollectListIgnoreNulls() const {
+    return get<bool>(kSparkCollectListIgnoreNulls, true);
   }
 
   bool exprTrackCpuUsage() const {
@@ -1316,6 +1392,10 @@ class QueryConfig {
 
   bool hashProbeDynamicFilterPushdownEnabled() const {
     return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  bool hashProbeStringDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeStringDynamicFilterPushdownEnabled, false);
   }
 
   uint64_t hashProbeBloomFilterPushdownMaxSize() const {

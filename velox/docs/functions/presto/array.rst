@@ -247,6 +247,31 @@ Array Functions
           SELECT array_subset(ARRAY[1, 2, 3], ARRAY[1, 1, 2]); -- [1, 1, 2]
           SELECT array_subset(ARRAY[1, 2, 3], ARRAY[5, 0, -1]); -- []
 
+.. function:: l2_norm(array(T)) -> double
+
+    Returns the Euclidean norm (L2 norm) of an array of numeric values.
+    The L2 norm is calculated as the square root of the sum of squares of all elements: sqrt(sum(x^2)).
+    Returns 0.0 for empty arrays. Null elements are skipped in the calculation.
+    Supports integer and floating point types. ::
+
+          SELECT l2_norm(ARRAY[3, 4]); -- 5.0
+          SELECT l2_norm(ARRAY[1, 2, 2]); -- 3.0
+          SELECT l2_norm(ARRAY[3.0, 4.0]); -- 5.0
+          SELECT l2_norm(ARRAY[]); -- 0.0
+          SELECT l2_norm(ARRAY[3, NULL, 4]); -- 5.0
+
+.. function:: l2_norm(map(K, V)) -> double
+
+    Returns the Euclidean norm (L2 norm) of the values in a map.
+    The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
+    Keys are ignored; only values are used in the calculation.
+    Returns 0.0 for empty maps. Null values are skipped in the calculation.
+    Supports maps with numeric value types (integer or floating point). ::
+
+          SELECT l2_norm(MAP(ARRAY['a', 'b'], ARRAY[3, 4])); -- 5.0
+          SELECT l2_norm(MAP(ARRAY[1, 2], ARRAY[3.0, 4.0])); -- 5.0
+          SELECT l2_norm(MAP(ARRAY[], ARRAY[])); -- 0.0
+
 .. function:: array_sum(array(T)) -> bigint/double
 
     Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
@@ -432,6 +457,18 @@ Array Functions
         SELECT transform(ARRAY [5, NULL, 6], x -> COALESCE(x, 0) + 1); -- [6, 1, 7]
         SELECT transform(ARRAY ['x', 'abc', 'z'], x -> x || '0'); -- ['x0', 'abc0', 'z0']
         SELECT transform(ARRAY [ARRAY [1, NULL, 2], ARRAY[3, NULL]], a -> filter(a, x -> x IS NOT NULL)); -- [[1, 2], [3]]
+
+.. function:: transform_with_index(array(T), function(T,bigint,U)) -> array(U)
+
+    Returns an array that is the result of applying ``function`` to each element of ``array``.
+    The lambda function receives both the element and its 1-based index as arguments.
+    This is useful for transformations that need to know the position of each element::
+
+        SELECT transform_with_index(ARRAY [], (x, i) -> x + i); -- []
+        SELECT transform_with_index(ARRAY [5, 6, 7], (x, i) -> x * i); -- [5, 12, 21]
+        SELECT transform_with_index(ARRAY ['a', 'b', 'c'], (x, i) -> concat(x, cast(i as varchar))); -- ['a1', 'b2', 'c3']
+        SELECT transform_with_index(ARRAY [10, 20, 30], (x, i) -> i); -- [1, 2, 3]
+        SELECT transform_with_index(ARRAY [1, 2, 3], (x, i) -> if(i % 2 = 1, x, x * 2)); -- [1, 4, 3]
 
 .. function:: trim_array(x, n) -> array
 

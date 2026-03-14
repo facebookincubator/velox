@@ -15,6 +15,8 @@
  */
 #include "velox/exec/GroupId.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 GroupId::GroupId(
@@ -26,7 +28,7 @@ GroupId::GroupId(
           groupIdNode->outputType(),
           operatorId,
           groupIdNode->id(),
-          "GroupId") {
+          OperatorType::kGroupId) {
   const auto& inputType = groupIdNode->sources()[0]->outputType();
 
   std::unordered_map<column_index_t, column_index_t>

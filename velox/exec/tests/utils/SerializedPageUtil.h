@@ -25,7 +25,7 @@ namespace facebook::velox::exec::test {
 /// Helper function for serializing RowVector to PrestoPage format.
 std::unique_ptr<SerializedPageBase> toSerializedPage(
     const RowVectorPtr& vector,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     const std::shared_ptr<OutputBufferManager>& bufferManager,
     memory::MemoryPool* pool);
 

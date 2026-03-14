@@ -22,12 +22,13 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TempFilePath.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using facebook::velox::common::Region;
 using namespace facebook::velox::tests::utils;
 
@@ -48,6 +49,17 @@ void writeData(WriteFile* writeFile, bool useIOBuf = false) {
     writeFile->append("ddddd");
     ASSERT_EQ(writeFile->size(), 15 + kOneMB);
   }
+}
+
+TEST(FileIoContextTest, defaultCacheableIsFalse) {
+  FileIoContext defaultContext;
+  EXPECT_FALSE(defaultContext.cacheable);
+
+  FileIoContext explicitContext(nullptr);
+  EXPECT_FALSE(explicitContext.cacheable);
+
+  FileIoContext cacheableContext(nullptr, {}, nullptr, true);
+  EXPECT_TRUE(cacheableContext.cacheable);
 }
 
 void writeDataWithOffset(WriteFile* writeFile) {
@@ -189,7 +201,7 @@ class LocalFileTest : public ::testing::TestWithParam<bool> {
   const bool useFaultyFs_;
   const std::unique_ptr<folly::CPUThreadPoolExecutor> executor_ =
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::max(1, static_cast<int32_t>(folly::hardware_concurrency() / 2)),
+          std::max(1, static_cast<int32_t>(folly::available_concurrency() / 2)),
           std::make_shared<folly::NamedThreadFactory>(
               "LocalFileReadAheadTest"));
 };
@@ -206,7 +218,7 @@ TEST_P(LocalFileTest, writeAndRead) {
   for (auto testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
+    auto tempFile = TempFilePath::create(useFaultyFs_);
     const auto& filename = tempFile->getPath();
     auto fs = filesystems::getFileSystem(filename, {});
     fs->remove(filename);
@@ -234,7 +246,7 @@ TEST_P(LocalFileTest, writeAndRead) {
 }
 
 TEST_P(LocalFileTest, viaRegistry) {
-  auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
+  auto tempFile = TempFilePath::create(useFaultyFs_);
   const auto& filename = tempFile->getPath();
   auto fs = filesystems::getFileSystem(filename, {});
   fs->remove(filename);
@@ -250,7 +262,7 @@ TEST_P(LocalFileTest, viaRegistry) {
 }
 
 TEST_P(LocalFileTest, rename) {
-  const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
+  const auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
   const auto a = fmt::format("{}/a", tempFolder->getPath());
   const auto b = fmt::format("{}/b", tempFolder->getPath());
   const auto newA = fmt::format("{}/newA", tempFolder->getPath());
@@ -277,7 +289,7 @@ TEST_P(LocalFileTest, rename) {
 }
 
 TEST_P(LocalFileTest, exists) {
-  auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
+  auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
   auto a = fmt::format("{}/a", tempFolder->getPath());
   auto b = fmt::format("{}/b", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(a, nullptr);
@@ -296,7 +308,7 @@ TEST_P(LocalFileTest, exists) {
 }
 
 TEST_P(LocalFileTest, isDirectory) {
-  auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
+  auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
   auto a = fmt::format("{}/a", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(a, nullptr);
   auto writeFile = localFs->openFileForWrite(a);
@@ -305,7 +317,7 @@ TEST_P(LocalFileTest, isDirectory) {
 }
 
 TEST_P(LocalFileTest, list) {
-  const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
+  const auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
   const auto a = fmt::format("{}/1", tempFolder->getPath());
   const auto b = fmt::format("{}/2", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(a, nullptr);
@@ -328,7 +340,7 @@ TEST_P(LocalFileTest, readFileDestructor) {
   if (useFaultyFs_) {
     return;
   }
-  auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
+  auto tempFile = TempFilePath::create(useFaultyFs_);
   const auto& filename = tempFile->getPath();
   auto fs = filesystems::getFileSystem(filename, {});
   fs->remove(filename);
@@ -362,7 +374,7 @@ TEST_P(LocalFileTest, readFileDestructor) {
 }
 
 TEST_P(LocalFileTest, mkdirFailIfPresent) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
+  auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
   std::string path = tempFolder->getPath();
   auto localFs = filesystems::getFileSystem(path, nullptr);
 
@@ -384,7 +396,7 @@ TEST_P(LocalFileTest, mkdirFailIfPresent) {
 }
 
 TEST_P(LocalFileTest, mkdir) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
+  auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
 
   std::string path = tempFolder->getPath();
   auto localFs = filesystems::getFileSystem(path, nullptr);
@@ -409,7 +421,7 @@ TEST_P(LocalFileTest, mkdir) {
 }
 
 TEST_P(LocalFileTest, rmdir) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
+  auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
 
   std::string path = tempFolder->getPath();
   auto localFs = filesystems::getFileSystem(path, nullptr);
@@ -442,7 +454,7 @@ TEST_P(LocalFileTest, rmdir) {
 }
 
 TEST_P(LocalFileTest, fileNotFound) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
+  auto tempFolder = TempDirectoryPath::create(useFaultyFs_);
   auto path = fmt::format("{}/file", tempFolder->getPath());
   auto localFs = filesystems::getFileSystem(path, nullptr);
   VELOX_ASSERT_RUNTIME_THROW_CODE(
@@ -452,7 +464,7 @@ TEST_P(LocalFileTest, fileNotFound) {
 }
 
 TEST_P(LocalFileTest, attributes) {
-  auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
+  auto tempFile = TempFilePath::create(useFaultyFs_);
   const auto& filename = tempFile->getPath();
   auto fs = filesystems::getFileSystem(filename, {});
   fs->remove(filename);
@@ -486,7 +498,7 @@ class FaultyFsTest : public ::testing::Test {
   }
 
   void SetUp() {
-    dir_ = exec::test::TempDirectoryPath::create(true);
+    dir_ = TempDirectoryPath::create(true);
     fs_ = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
         filesystems::getFileSystem(dir_->getPath(), {}));
     VELOX_CHECK_NOT_NULL(fs_);
@@ -535,7 +547,7 @@ class FaultyFsTest : public ::testing::Test {
     }
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> dir_;
+  std::shared_ptr<TempDirectoryPath> dir_;
   std::string readFilePath_;
   std::string writeFilePath_;
   std::shared_ptr<tests::utils::FaultyFileSystem> fs_;

@@ -280,4 +280,54 @@ TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
   }
 }
 
+TEST_F(QueryConfigTest, operatorSpillFileCreateConfig) {
+  // Test default values (empty strings)
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(config.aggregationSpillFileCreateConfig(), "");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "");
+  }
+
+  // Test with aggregation spill file create config set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kAggregationSpillFileCreateConfig,
+          "aggregation_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(
+        config.aggregationSpillFileCreateConfig(), "aggregation_config_value");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "");
+  }
+
+  // Test with hash join spill file create config set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kHashJoinSpillFileCreateConfig,
+          "hashjoin_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(config.aggregationSpillFileCreateConfig(), "");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "hashjoin_config_value");
+  }
+
+  // Test with both configs set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kAggregationSpillFileCreateConfig,
+          "aggregation_config_value"},
+         {QueryConfig::kHashJoinSpillFileCreateConfig,
+          "hashjoin_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(
+        config.aggregationSpillFileCreateConfig(), "aggregation_config_value");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "hashjoin_config_value");
+  }
+}
+
 } // namespace facebook::velox::core::test
