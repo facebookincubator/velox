@@ -83,6 +83,7 @@ jobs:
           echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
           echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
           echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
           source scripts/setup-macos.sh
           install_build_prerequisites
@@ -120,10 +121,13 @@ jobs:
           BUILD_VERSION: ${{ inputs.version }}
           CIBW_BUILD: cp310-* cp311-* cp312-* cp313-*
           CIBW_ENVIRONMENT_PASS_LINUX: BUILD_VERSION
-          CIBW_ENVIRONMENT_LINUX: CCACHE_DIR=/host${{ github.workspace }}/ccache
+          CIBW_ENVIRONMENT_LINUX: >-
+            CCACHE_DIR=/host${{ github.workspace }}/ccache
+            DuckDB_SOURCE=BUNDLED
           # for macos
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-14' && '14' || '13' }}
           CCACHE_DIR: ${{ github.workspace }}/ccache
+          DuckDB_SOURCE: BUNDLED
         with:
           output-dir: wheelhouse
 
