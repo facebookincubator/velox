@@ -90,6 +90,7 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
       CUDA_VERSION: '12.9'
+      DuckDB_SOURCE: BUNDLED
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
@@ -388,6 +389,7 @@ jobs:
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
+          DuckDB_SOURCE: BUNDLED
           faiss_SOURCE: BUNDLED
           fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED

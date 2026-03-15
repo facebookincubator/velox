@@ -104,6 +104,8 @@ std::string duckOperatorToVelox(ExpressionType type) {
       return "in";
     case ExpressionType::OPERATOR_NOT:
       return "not";
+    case ExpressionType::OPERATOR_TRY:
+      return "try";
     default:
       return normalizeFuncName(ExpressionTypeToOperator(type));
   }
@@ -181,6 +183,19 @@ core::ExprPtr parseConstantExpr(
     value = Value::DOUBLE(value.GetValue<double>());
   }
 
+  if (value.type().id() == LogicalTypeId::INTERVAL) {
+    auto interval = value.GetValue<::duckdb::interval_t>();
+    if (interval.months != 0) {
+      int32_t totalMonths = interval.months;
+      return std::make_shared<core::ConstantExpr>(
+          INTERVAL_YEAR_MONTH(), Variant(totalMonths), getAlias(expr));
+    }
+    int64_t totalMillis =
+        interval.days * 24LL * 60 * 60 * 1'000 + interval.micros / 1'000;
+    return std::make_shared<core::ConstantExpr>(
+        INTERVAL_DAY_TIME(), Variant(totalMillis), getAlias(expr));
+  }
+
   return std::make_shared<const core::ConstantExpr>(
       toVeloxType(value.type()), duckValueToVariant(value), getAlias(expr));
 }
@@ -217,21 +232,26 @@ std::optional<int64_t> extractInteger(const core::ConstantExpr& constInput) {
 
 } // namespace
 
+std::optional<int64_t> extractIntegerRecursive(const core::IExpr* expr) {
+  if (auto constInput = dynamic_cast<const core::ConstantExpr*>(expr)) {
+    return extractInteger(*constInput);
+  }
+  if (auto castInput = dynamic_cast<const core::CastExpr*>(expr)) {
+    return extractIntegerRecursive(castInput->input().get());
+  }
+  if (auto callInput = dynamic_cast<const core::CallExpr*>(expr)) {
+    if (callInput->name() == "trunc" && callInput->inputs().size() == 1) {
+      return extractIntegerRecursive(callInput->inputs()[0].get());
+    }
+  }
+  return std::nullopt;
+}
+
 std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     const std::string& functionName,
     const core::ExprPtr& input,
     std::optional<std::string> alias) {
-  std::optional<int64_t> value;
-
-  if (auto constInput = dynamic_cast<const core::ConstantExpr*>(input.get())) {
-    value = extractInteger(*constInput);
-  } else if (
-      auto castInput = dynamic_cast<const core::CastExpr*>(input.get())) {
-    if (auto constInput =
-            dynamic_cast<const core::ConstantExpr*>(castInput->input().get())) {
-      value = extractInteger(*constInput);
-    }
-  }
+  auto value = extractIntegerRecursive(input.get());
 
   if (!value.has_value()) {
     return nullptr;
@@ -825,6 +845,11 @@ parse::WindowType parseWindowType(const WindowExpression& expr) {
         boundary == WindowBoundary::EXPR_PRECEDING_ROWS) {
       return parse::WindowType::kRows;
     }
+    if (boundary == WindowBoundary::CURRENT_ROW_GROUPS ||
+        boundary == WindowBoundary::EXPR_FOLLOWING_GROUPS ||
+        boundary == WindowBoundary::EXPR_PRECEDING_GROUPS) {
+      return parse::WindowType::kRange;
+    }
     return parse::WindowType::kRange;
   };
 
@@ -839,12 +864,15 @@ parse::BoundType parseBoundType(WindowBoundary boundary) {
   switch (boundary) {
     case WindowBoundary::CURRENT_ROW_RANGE:
     case WindowBoundary::CURRENT_ROW_ROWS:
+    case WindowBoundary::CURRENT_ROW_GROUPS:
       return parse::BoundType::kCurrentRow;
     case WindowBoundary::EXPR_PRECEDING_ROWS:
     case WindowBoundary::EXPR_PRECEDING_RANGE:
+    case WindowBoundary::EXPR_PRECEDING_GROUPS:
       return parse::BoundType::kPreceding;
     case WindowBoundary::EXPR_FOLLOWING_ROWS:
     case WindowBoundary::EXPR_FOLLOWING_RANGE:
+    case WindowBoundary::EXPR_FOLLOWING_GROUPS:
       return parse::BoundType::kFollowing;
     case WindowBoundary::UNBOUNDED_FOLLOWING:
       return parse::BoundType::kUnboundedFollowing;

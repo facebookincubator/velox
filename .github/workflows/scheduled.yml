@@ -103,6 +103,7 @@ jobs:
       SKBUILD_BUILD_DIR: _build/debug
       PYVELOX_LEGACY_ONLY: 'ON'
       CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      DuckDB_SOURCE: BUNDLED
 
     defaults:
       run:
