@@ -65,6 +65,11 @@ class CompactRowVectorSerde : public VectorSerde {
   /// if not already registered. No-op if a serde with the same name exists.
   static void tryRegisterNamedVectorSerde();
 
+  /// Returns the name of this serde kind.
+  static const std::string& name() {
+    return kSerdeKind;
+  }
+
  private:
   inline static const std::string kSerdeKind{"CompactRow"};
 };
