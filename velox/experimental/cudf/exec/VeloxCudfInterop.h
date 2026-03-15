@@ -52,4 +52,14 @@ facebook::velox::RowVectorPtr toVeloxColumn(
 
 } // namespace with_arrow
 
+/// Converts a Velox RowVector to a cudf table by directly reading from
+/// FlatVector buffers and copying to GPU. This avoids the overhead of
+/// Arrow serialization/deserialization. Currently supports flat scalar types
+/// and strings; falls back to Arrow path for complex/nested types.
+std::unique_ptr<cudf::table> toCudfTable(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 } // namespace facebook::velox::cudf_velox
