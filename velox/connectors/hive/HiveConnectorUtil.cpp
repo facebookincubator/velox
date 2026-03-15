@@ -619,7 +619,7 @@ void configureReaderOptions(
       break;
     }
     default:
-      useColumnNamesForColumnMapping = false;
+      break;
   }
 
   readerOptions.setUseColumnNamesForColumnMapping(
