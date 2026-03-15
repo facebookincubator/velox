@@ -75,6 +75,49 @@ bool isCompatible(
        isCompatibleFunc(requestedType->asArray().elementType()));
 }
 
+/// Checks if a decimal type has enough integer precision to hold all values
+/// of the given Parquet physical int type.
+bool hasEnoughDecimalPrecision(
+    const TypePtr& type,
+    int32_t minIntegerPrecision) {
+  if (!type->isDecimal()) {
+    return false;
+  }
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  return (precision - scale) >= minIntegerPrecision;
+}
+
+/// Checks if a type is compatible with an INT32 physical type for widening.
+/// INT_8, INT_16, and INT_32 are all stored as Parquet INT32, so they share
+/// the same compatibility rule. For decimal targets, Spark requires
+/// precision-scale >= 10. For non-decimal, Spark supports widening to
+/// TINYINT through BIGINT and DOUBLE (not FLOAT, which has only ~7
+/// significant digits vs INT32's 10).
+///
+/// Including TINYINT and SMALLINT as valid targets means that narrowing
+/// conversions like INT_32 -> TINYINT or INT_16 -> TINYINT are also accepted.
+/// This matches Spark behavior: since all three share the same physical type,
+/// the reader simply truncates the value with silent overflow on out-of-range
+/// inputs.
+bool isInt32Compatible(const TypePtr& type) {
+  if (type->isDecimal()) {
+    return hasEnoughDecimalPrecision(type, 10);
+  }
+  return type->kind() == TypeKind::TINYINT ||
+      type->kind() == TypeKind::SMALLINT || type->kind() == TypeKind::INTEGER ||
+      type->kind() == TypeKind::BIGINT || type->kind() == TypeKind::DOUBLE;
+}
+
+/// Checks whether the given type is compatible with a Parquet INT64 source.
+/// Accepts BIGINT identity mapping and Decimal targets with sufficient
+/// precision (precision - scale >= 20, covering the full INT64 range).
+bool isInt64Compatible(const TypePtr& type) {
+  if (type->isDecimal()) {
+    return hasEnoughDecimalPrecision(type, 20);
+  }
+  return type->kind() == TypeKind::BIGINT;
+}
+
 } // namespace
 
 /// Metadata and options for reading Parquet.
@@ -777,8 +820,10 @@ TypePtr ReaderBase::convertType(
 
   static constexpr const char* kTypeMappingErrorFmtStr =
       "Converted type {} is not allowed for requested type {}";
+
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
+
   if (schemaElement.__isset.converted_type) {
     switch (schemaElement.converted_type) {
       case thrift::ConvertedType::INT_8:
@@ -790,15 +835,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TINYINT ||
-                          type->kind() == TypeKind::SMALLINT ||
-                          type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt32Compatible),
             kTypeMappingErrorFmtStr,
             "TINYINT",
             requestedType->toString());
@@ -813,14 +850,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::SMALLINT ||
-                          type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt32Compatible),
             kTypeMappingErrorFmtStr,
             "SMALLINT",
             requestedType->toString());
@@ -835,13 +865,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt32Compatible),
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString());
@@ -852,16 +876,11 @@ TypePtr ReaderBase::convertType(
         VELOX_CHECK_EQ(
             schemaElement.type,
             thrift::Type::INT64,
-            "{} converted type can only be set for value of thrift::Type::INT32",
+            "{} converted type can only be set for value of thrift::Type::INT64",
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString());
@@ -908,9 +927,6 @@ TypePtr ReaderBase::convertType(
             "DECIMAL requires a length and scale specifier!");
         const auto schemaElementPrecision = schemaElement.precision;
         const auto schemaElementScale = schemaElement.scale;
-        // A long decimal requested type cannot read a value of a short decimal.
-        // As a result, the mapping from short to long decimal is currently
-        // restricted.
         auto type = DECIMAL(schemaElementPrecision, schemaElementScale);
         if (requestedType) {
           VELOX_CHECK(
@@ -921,39 +937,23 @@ TypePtr ReaderBase::convertType(
               kTypeMappingErrorFmtStr,
               "DECIMAL",
               requestedType->toString());
-          // Reading short decimals with a long decimal requested type is not
-          // yet possible. To allow for correct interpretation of the values,
-          // the scale of the file type and requested type must match while
-          // precision may be larger.
-          if (requestedType->isShortDecimal()) {
-            VELOX_CHECK(
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [&](const TypePtr& type) {
-                      return type->isShortDecimal() &&
-                          type->asShortDecimal().precision() >=
-                          schemaElementPrecision &&
-                          type->asShortDecimal().scale() == schemaElementScale;
-                    }),
-                kTypeMappingErrorFmtStr,
-                type->toString(),
-                requestedType->toString());
-          } else {
-            VELOX_CHECK(
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [&](const TypePtr& type) {
-                      return type->isLongDecimal() &&
-                          type->asLongDecimal().precision() >=
-                          schemaElementPrecision &&
-                          type->asLongDecimal().scale() == schemaElementScale;
-                    }),
-                kTypeMappingErrorFmtStr,
-                type->toString(),
-                requestedType->toString());
-          }
+          // Allow decimal widening: precision may be larger and scale may
+          // increase as long as precisionIncrease >= scaleIncrease (matching
+          // Spark's isDecimalTypeMatched rule). Short-to-long decimal crossing
+          // is handled by getDecimalValues via the upcast path.
+          VELOX_CHECK(
+              isCompatible(
+                  requestedType,
+                  isRepeated,
+                  [&](const TypePtr& type) {
+                    auto [precision, scale] = getDecimalPrecisionScale(*type);
+                    auto precInc = precision - schemaElementPrecision;
+                    auto scaleInc = scale - schemaElementScale;
+                    return scaleInc >= 0 && precInc >= scaleInc;
+                  }),
+              kTypeMappingErrorFmtStr,
+              type->toString(),
+              requestedType->toString());
         }
         return type;
       }
@@ -1027,13 +1027,7 @@ TypePtr ReaderBase::convertType(
       case thrift::Type::type::INT32:
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt32Compatible),
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString());
@@ -1057,12 +1051,7 @@ TypePtr ReaderBase::convertType(
         }
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString());

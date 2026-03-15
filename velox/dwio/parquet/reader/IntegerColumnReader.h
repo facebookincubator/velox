@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::parquet {
 
@@ -59,6 +60,8 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
         !logicalType.value().INTEGER.isSigned) {
       getUnsignedIntValues(rows, requestedType_, result);
+    } else if (requestedType_->isDecimal()) {
+      getDecimalValues(rows, fileType, result);
     } else {
       getIntValues(rows, requestedType_, result);
     }
@@ -81,6 +84,92 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   template <typename ColumnVisitor>
   void readWithVisitor(const RowSet& rows, ColumnVisitor visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
+  }
+
+ private:
+  /// Reads integer values and rescales them to the requested decimal type.
+  /// Handles both INT->Decimal (file stores raw integers, scale from 0) and
+  /// Decimal->Decimal (file stores scaled decimals, scale from file type).
+  void getDecimalValues(
+      const RowSet& rows,
+      const ParquetTypeWithId& fileType,
+      VectorPtr* result) {
+    // For Decimal->Decimal, read as plain integer (BIGINT/HUGEINT) to avoid
+    // applyDecimalScaleMultiplier incorrectly re-scaling already-scaled values.
+    // Use the requested type's physical width for the read type so that
+    // short->long decimal crossing (int64->int128) is handled by
+    // getFlatValues' upcast path.
+    const bool isDecimalToDecimal = fileType.convertedType_.has_value() &&
+        fileType.convertedType_.value() == thrift::ConvertedType::DECIMAL &&
+        fileType.type()->isDecimal();
+
+    const TypePtr readType = isDecimalToDecimal
+        ? (requestedType_->isShortDecimal() ? TypePtr(BIGINT())
+                                            : TypePtr(HUGEINT()))
+        : requestedType_;
+
+    getIntValues(rows, readType, result);
+
+    // allNull_ produces a ConstantVector; skip value rescaling.
+    if (allNull_) {
+      return;
+    }
+
+    int32_t requestedScale = getDecimalPrecisionScale(*requestedType_).second;
+    int32_t fileScale = isDecimalToDecimal
+        ? getDecimalPrecisionScale(*fileType.type()).second
+        : 0;
+    int32_t scaleAdjust = requestedScale - fileScale;
+    VELOX_CHECK_GE(
+        scaleAdjust,
+        0,
+        "Parquet does not support scale narrowing: {}",
+        scaleAdjust);
+    VELOX_CHECK_LE(
+        scaleAdjust,
+        LongDecimalType::kMaxPrecision,
+        "Scale adjustment exceeds max decimal precision: {}",
+        scaleAdjust);
+
+    if (scaleAdjust > 0) {
+      if (requestedType_->isShortDecimal()) {
+        // Safe to cast: kPowersOfTen[scaleAdjust] fits in int64_t because
+        // scaleAdjust <= maxPrecision(18) and 10^18 < 2^63.
+        applyDecimalScaleMultiplier<int64_t>(
+            *result,
+            static_cast<int64_t>(DecimalUtil::kPowersOfTen[scaleAdjust]));
+      } else {
+        applyDecimalScaleMultiplier<int128_t>(
+            *result, DecimalUtil::kPowersOfTen[scaleAdjust]);
+      }
+    }
+    if (isDecimalToDecimal) {
+      (*result)->setType(requestedType_);
+    }
+  }
+
+  /// Multiplies all non-null values in result by multiplier.
+  /// Overflow is impossible because convertType validates precInc >= scaleInc,
+  /// guaranteeing that originalValue * 10^scaleAdjust fits within the target
+  /// precision.
+  template <typename T>
+  void applyDecimalScaleMultiplier(const VectorPtr& result, T multiplier)
+      const {
+    auto* flat = result->asUnchecked<FlatVector<T>>();
+    auto* rawValues = flat->mutableRawValues();
+    const auto* rawNulls = flat->rawNulls();
+    const auto size = flat->size();
+    if (!rawNulls) {
+      for (vector_size_t i = 0; i < size; ++i) {
+        rawValues[i] *= multiplier;
+      }
+    } else {
+      for (vector_size_t i = 0; i < size; ++i) {
+        if (bits::isBitSet(rawNulls, i)) {
+          rawValues[i] *= multiplier;
+        }
+      }
+    }
   }
 };
 
