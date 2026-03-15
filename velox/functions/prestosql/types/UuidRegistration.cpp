@@ -22,6 +22,7 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox {
 namespace {

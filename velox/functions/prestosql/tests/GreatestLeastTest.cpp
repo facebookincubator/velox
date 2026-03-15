@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 
 using namespace facebook::velox;

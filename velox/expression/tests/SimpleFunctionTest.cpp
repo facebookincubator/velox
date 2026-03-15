@@ -28,6 +28,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"

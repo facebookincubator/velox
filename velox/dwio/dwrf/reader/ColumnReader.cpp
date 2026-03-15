@@ -23,6 +23,7 @@
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/ConstantColumnReader.h"
 #include "velox/dwio/dwrf/reader/FlatMapColumnReader.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"

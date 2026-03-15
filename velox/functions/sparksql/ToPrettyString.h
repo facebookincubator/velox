@@ -19,6 +19,7 @@
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 

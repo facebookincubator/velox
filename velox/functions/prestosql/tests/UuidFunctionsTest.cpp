@@ -19,6 +19,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::prestosql {
 
