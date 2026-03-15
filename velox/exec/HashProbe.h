@@ -278,6 +278,12 @@ class HashProbe : public Operator {
   // operator is set to reclaimable at this stage.
   void ensureOutputFits();
 
+  /// Pre-loads lazy input vectors before the non-reclaimable probe loop.
+  void ensureLazyInputLoaded();
+
+  /// Returns the number of bytes to reserve for output processing.
+  uint64_t outputBatchReservationBytes() const;
+
   // Setups spilled output reader if 'spillOutputPartitionSet_' is not empty.
   void maybeSetupSpillOutputReader();
 

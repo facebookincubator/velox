@@ -865,6 +865,7 @@ void HashProbe::fillLeftSemiProjectMatchColumn(vector_size_t size) {
 }
 
 void HashProbe::fillOutput(vector_size_t size) {
+  TestValue::adjust("facebook::velox::exec::HashProbe::fillOutput", this);
   prepareOutput(size);
 
   for (auto [in, out] : projectedInputColumns_) {
@@ -1065,8 +1066,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       fmt::format("Invalid state {}", state_));
 
   if (!toSpillOutput) {
-    // Avoid memory reservation if it is triggered by memory arbitration to
-    // spill pending output.
+    ensureLazyInputLoaded();
     ensureOutputFits();
   }
 
@@ -1845,6 +1845,14 @@ bool HashProbe::nonReclaimableState() const {
       (table_ == nullptr) || (table_->numDistinct() == 0);
 }
 
+uint64_t HashProbe::outputBatchReservationBytes() const {
+  return static_cast<uint64_t>(
+      static_cast<double>(operatorCtx_->driverCtx()
+                              ->queryConfig()
+                              .preferredOutputBatchBytes()) *
+      1.2);
+}
+
 void HashProbe::ensureOutputFits() {
   if (!canReclaim()) {
     // Don't reserve memory if we can't reclaim from this hash probe operator.
@@ -1863,9 +1871,7 @@ void HashProbe::ensureOutputFits() {
     memory::testingRunArbitration(pool());
   }
 
-  const uint64_t bytesToReserve =
-      operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes() *
-      1.2;
+  const uint64_t bytesToReserve = outputBatchReservationBytes();
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }
@@ -1879,6 +1885,60 @@ void HashProbe::ensureOutputFits() {
                << " for memory pool " << pool()->name()
                << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
+}
+
+void HashProbe::ensureLazyInputLoaded() {
+  if (!canReclaim() || input_ == nullptr || replacedWithDynamicFilter_) {
+    return;
+  }
+
+  // Semi/anti joins without filter don't load lazy vectors
+  if (!filter_ &&
+      (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+       isAntiJoin(joinType_))) {
+    return;
+  }
+
+  // Skip the expensive maybeReserve() if no input columns are lazy
+  bool hasLazy{false};
+  for (const auto& [in, _] : projectedInputColumns_) {
+    if (isLazyNotLoaded(*input_->childAt(in))) {
+      hasLazy = true;
+      break;
+    }
+  }
+  if (!hasLazy && filter_) {
+    for (const auto& projection : filterInputProjections_) {
+      if (isLazyNotLoaded(*input_->childAt(projection.inputChannel))) {
+        hasLazy = true;
+        break;
+      }
+    }
+  }
+  if (!hasLazy) {
+    return;
+  }
+
+  // Trigger reclaim if the query pool is at capacity before the non-reclaimable
+  // lazy loading below.
+  // Poke the pool to see if it's tight, while the reclaimable guard is active.
+  {
+    Operator::ReclaimableSectionGuard guard(this);
+    pool()->maybeReserve(outputBatchReservationBytes());
+  }
+
+  if (input_ == nullptr) {
+    return;
+  }
+
+  for (const auto& [in, _] : projectedInputColumns_) {
+    ensureLoaded(in);
+  }
+  if (filter_) {
+    for (const auto& projection : filterInputProjections_) {
+      ensureLoaded(projection.inputChannel);
+    }
+  }
 }
 
 bool HashProbe::canReclaim() const {
