@@ -974,6 +974,98 @@ TEST_P(UnnestTest, spiltOutput) {
   }
 }
 
+// Test that UnnestNode::splitOutput overrides query config.
+TEST_P(UnnestTest, splitOutputNodeOverride) {
+  const auto numBatches = 3;
+  const auto inputBatchSize = 256;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(inputBatchSize, [](auto row) { return row; }),
+    }));
+  }
+
+  const auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>(
+          numBatches * 3 * inputBatchSize,
+          [](auto row) { return 1 + row % 3; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Create a plan with project node to generate the sequence.
+  auto projectPlan = PlanBuilder(planNodeIdGenerator)
+                         .values(vectors)
+                         .project({"sequence(1, 3) as s"})
+                         .planNode();
+
+  // Get the output type from the project node.
+  auto projectOutput = projectPlan->outputType();
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> unnestFields;
+  unnestFields.emplace_back(
+      std::make_shared<core::FieldAccessTypedExpr>(
+          projectOutput->childAt(0), "s"));
+
+  struct {
+    std::optional<bool> nodeSplitOutput;
+    bool configSplitOutput;
+    bool expectSplit;
+
+    std::string toString() const {
+      return fmt::format(
+          "nodeSplitOutput: {}, configSplitOutput: {}, expectSplit: {}",
+          nodeSplitOutput.has_value()
+              ? (nodeSplitOutput.value() ? "true" : "false")
+              : "nullopt",
+          configSplitOutput,
+          expectSplit);
+    }
+  } testSettings[] = {
+      // Node splitOutput not set, use config.
+      {std::nullopt, true, true},
+      {std::nullopt, false, false},
+      // Node splitOutput=true overrides config.
+      {true, true, true},
+      {true, false, true},
+      // Node splitOutput=false overrides config.
+      {false, true, false},
+      {false, false, false},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
+
+    core::PlanNodeId unnestPlanNodeId;
+    auto unnestNode = std::make_shared<core::UnnestNode>(
+        planNodeIdGenerator->next(),
+        std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
+        unnestFields,
+        std::vector<std::string>{"s_e"},
+        std::nullopt,
+        std::nullopt,
+        projectPlan,
+        testData.nodeSplitOutput);
+    unnestPlanNodeId = unnestNode->id();
+
+    const int expectedNumOutputVectors = testData.expectSplit
+        ? bits::divRoundUp(inputBatchSize * 3, GetParam()) * numBatches
+        : numBatches;
+
+    auto task = AssertQueryBuilder(unnestNode)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchRows,
+                        std::to_string(GetParam()))
+                    .config(
+                        core::QueryConfig::kUnnestSplitOutput,
+                        testData.configSplitOutput ? "true" : "false")
+                    .assertResults(expectedResult);
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(
+        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        expectedNumOutputVectors);
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnnestTest,
     UnnestTest,

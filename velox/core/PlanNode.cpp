@@ -1362,13 +1362,15 @@ UnnestNode::UnnestNode(
     std::vector<std::string> unnestNames,
     std::optional<std::string> ordinalityName,
     std::optional<std::string> markerName,
-    const PlanNodePtr& source)
+    const PlanNodePtr& source,
+    std::optional<bool> splitOutput)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},
       unnestNames_{std::move(unnestNames)},
       ordinalityName_{std::move(ordinalityName)},
       markerName_(std::move(markerName)),
+      splitOutput_(splitOutput),
       sources_{source} {
   // Calculate output type. First come "replicate" columns, followed by
   // "unnest" columns, followed by an optional ordinality column.
@@ -1429,6 +1431,9 @@ folly::dynamic UnnestNode::serialize() const {
   if (markerName_.has_value()) {
     obj["markerName"] = markerName_.value();
   }
+  if (splitOutput_.has_value()) {
+    obj["splitOutput"] = splitOutput_.value();
+  }
   return obj;
 }
 
@@ -1453,6 +1458,10 @@ PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("markerName")) {
     markerName = obj["markerName"].asString();
   }
+  std::optional<bool> splitOutput = std::nullopt;
+  if (obj.count("splitOutput")) {
+    splitOutput = obj["splitOutput"].asBool();
+  }
   return std::make_shared<UnnestNode>(
       deserializePlanNodeId(obj),
       std::move(replicateVariables),
@@ -1460,7 +1469,8 @@ PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
       std::move(unnestNames),
       std::move(ordinalityName),
       std::move(markerName),
-      std::move(source));
+      std::move(source),
+      splitOutput);
 }
 
 AbstractJoinNode::AbstractJoinNode(

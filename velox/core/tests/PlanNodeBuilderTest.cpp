@@ -1002,6 +1002,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
   std::vector<std::string> unnestNames{"b"};
   std::optional<std::string> ordinalityName =
       std::make_optional<std::string>("ord");
+  std::optional<bool> splitOutput = false;
 
   const auto verify = [&](const std::shared_ptr<const UnnestNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -1009,6 +1010,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
     EXPECT_EQ(node->unnestVariables(), unnestVariables);
     EXPECT_TRUE(node->hasOrdinality());
     EXPECT_EQ(node->sources()[0], source_);
+    EXPECT_EQ(node->splitOutput(), splitOutput);
 
     for (int i = 0; i < node->outputType()->size(); ++i) {
       if (i < replicateVariables.size()) {
@@ -1031,6 +1033,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
                         .unnestNames(unnestNames)
                         .ordinalityName(ordinalityName)
                         .source(source_)
+                        .splitOutput(splitOutput)
                         .build();
   verify(node);
 

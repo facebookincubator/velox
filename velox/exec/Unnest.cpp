@@ -45,7 +45,12 @@ Unnest::Unnest(
       withOrdinality_(unnestNode->hasOrdinality()),
       withMarker_(unnestNode->hasMarker()),
       maxOutputSize_(
-          driverCtx->queryConfig().unnestSplitOutput()
+          // If splitOutput is set to true in the UnnestNode or it's not set at
+          // all and it's enabled in the QueryConfig.
+          ((unnestNode->splitOutput().has_value() &&
+            unnestNode->splitOutput().value()) ||
+           (!unnestNode->splitOutput().has_value() &&
+            driverCtx->queryConfig().unnestSplitOutput()))
               ? outputBatchRows()
               : std::numeric_limits<vector_size_t>::max()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
