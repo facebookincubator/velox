@@ -167,7 +167,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             connector::hive::LocationHandle::TableType::kNew),
         fileFormat,
         CompressionKind::CompressionKind_ZSTD,
-        {},
+        {}, // serdeParameters
         writerOptions,
         ensureFiles);
   }
@@ -1290,7 +1290,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           dwio::common::FileFormat::DWRF,
           CompressionKind::CompressionKind_ZSTD,
           {}, // serdeParameters
-          nullptr, // writeOptions
+          nullptr, // writerOptions
           true // ensureFiles
           ),
       "ensureFiles is not supported with partition keys in the data");
@@ -1313,7 +1313,7 @@ TEST_F(HiveDataSinkTest, ensureFilesUnsupported) {
           dwio::common::FileFormat::DWRF,
           CompressionKind::CompressionKind_ZSTD,
           {}, // serdeParameters
-          nullptr, // writeOptions
+          nullptr, // writerOptions
           true // ensureFiles
           ),
       "ensureFiles is not supported with bucketing");

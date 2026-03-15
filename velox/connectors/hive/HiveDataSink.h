@@ -254,7 +254,9 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       // engine handles ensuring a 1 to 1 mapping from task to bucket.
       const bool ensureFiles = false,
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const HiveInsertFileNameGenerator>());
+          std::make_shared<const HiveInsertFileNameGenerator>(),
+      const std::unordered_map<std::string, std::string>& storageParameters =
+          {});
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -275,10 +277,19 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return storageFormat_;
   }
 
+  /// Format specific options.
   const std::unordered_map<std::string, std::string>& serdeParameters() const {
     return serdeParameters_;
   }
 
+  /// Storage specific options.
+  const std::unordered_map<std::string, std::string>& storageParameters()
+      const {
+    return storageParameters_;
+  }
+
+  /// Avoid this in future usages. Format specific change should go through
+  /// serdeParameters.
   const std::shared_ptr<dwio::common::WriterOptions>& writerOptions() const {
     return writerOptions_;
   }
@@ -333,6 +344,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
   const std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
+  const std::unordered_map<std::string, std::string> storageParameters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::vector<column_index_t> nonPartitionChannels_;
 };
