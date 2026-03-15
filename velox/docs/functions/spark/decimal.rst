@@ -158,6 +158,13 @@ Arithmetic Functions
     ``LongType`` (result scale is 0), so precision loss is not applicable.
     Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
 
+.. spark:function:: checked_multiply(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of multiplying ``x`` and ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Throws an error when the result overflows.
+    Corresponds to Spark's operator ``*`` with ``spark.sql.ansi.enabled`` set to true.
+
 .. spark:function:: checked_subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
     Returns the result of subtracting ``y`` from ``x``. The result type is determined
@@ -176,6 +183,16 @@ Arithmetic Functions
         SELECT CAST(21 as DECIMAL(20, 3)) div CAST(20 as DECIMAL(20, 2)); -- 1
         SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
         SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
+
+.. spark:function:: multiply(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of multiplying ``x`` and ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows.
+    Corresponds to Spark's operator ``*`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1.1 as DECIMAL(3, 1)) * CAST(2.0 as DECIMAL(3, 1)); -- 2.20
+        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) * CAST(10 as DECIMAL(38, 0)); -- NULL
 
 .. spark:function:: subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
