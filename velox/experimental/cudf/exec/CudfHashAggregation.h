@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/Operator.h"
 #include "velox/expression/FunctionSignature.h"
 
@@ -183,6 +184,9 @@ using StepAwareAggregationRegistry = std::unordered_map<
 
 // Get the step-aware aggregation registry
 StepAwareAggregationRegistry& getStepAwareAggregationRegistry();
+
+// Get aggregation function signatures map from the CUDF registry.
+exec::AggregateFunctionSignatureMap getCudfAggregationFunctionSignatureMap();
 
 // Register aggregation function signatures for a specific step
 bool registerAggregationFunctionForStep(
