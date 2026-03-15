@@ -476,7 +476,11 @@ void HashAggregation::reclaim(
 
   updateEstimatedOutputRowSize();
 
-  // Try lightweight compaction first before spilling.
+  // Try lightweight compaction before spilling. Compaction defragments the
+  // HashStringAllocator by consolidating free blocks so that future
+  // allocations reuse them instead of requesting new arena slabs.
+  // Compaction itself does not free arena slabs; the actual pool-level bytes
+  // reclaimed are measured by ScopedReclaimedBytesRecorder in the caller.
   if (memoryCompactionEnabled_) {
     uint64_t compactedBytes{0};
     if (hasCompactableAggregates_) {
@@ -485,10 +489,13 @@ void HashAggregation::reclaim(
     TestValue::adjust(
         "facebook::velox::exec::HashAggregation::reclaim::compact",
         &compactedBytes);
+
     if (compactedBytes > 0) {
-      stats.reclaimedBytes += compactedBytes;
       pool()->release();
-      if (compactedBytes >= targetBytes) {
+      // Return early if compaction defragmented enough bytes. The
+      // defragmentation prevents future memory growth that would otherwise
+      // require spilling.
+      if (FOLLY_UNLIKELY(compactedBytes >= targetBytes)) {
         return;
       }
     }
