@@ -819,13 +819,18 @@ void GroupingSet::extractGroups(
     return;
   }
   const auto totalKeys = rowContainer->keyTypes().size();
+  std::vector<column_index_t> keyColIndices;
+  std::vector<VectorPtr> keyResults;
+  keyColIndices.reserve(totalKeys);
+  keyResults.reserve(totalKeys);
   for (int32_t i = 0; i < totalKeys; ++i) {
-    auto& keyVector = result->childAt(i);
-    rowContainer->extractColumn(
-        groups.data(),
-        groups.size(),
-        groupingKeyOutputProjections_[i],
-        keyVector);
+    keyColIndices.push_back(groupingKeyOutputProjections_[i]);
+    keyResults.push_back(result->childAt(i));
+  }
+  rowContainer->extractColumns(
+      groups.data(), groups.size(), keyColIndices, 0, keyResults);
+  for (int32_t i = 0; i < totalKeys; ++i) {
+    result->childAt(i) = keyResults[i];
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {

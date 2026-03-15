@@ -188,6 +188,17 @@ add_executable(velox_atomics_benchmark AtomicsBench.cpp)
 
 target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
 
+add_executable(velox_extract_columns_e2e_bm ExtractColumnsE2EBenchmark.cpp)
+
+target_link_libraries(
+  velox_extract_columns_e2e_bm
+  velox_exec
+  velox_dwio_common_test_utils
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 if(VELOX_ENABLE_GEO)
   add_executable(velox_spatial_join_benchmark SpatialJoinBenchmark.cpp)
 

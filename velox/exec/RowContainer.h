@@ -540,6 +540,44 @@ class RowContainer {
         result);
   }
 
+  /// Batch-extract multiple columns into result vectors. When
+  /// columnIndices.size() >= 2, uses a tiled column-major strategy with
+  /// dynamic tile sizing to improve cache efficiency.
+  void extractColumns(
+      const char* const* rows,
+      int32_t numRows,
+      const std::vector<column_index_t>& columnIndices,
+      int32_t resultOffset,
+      std::vector<VectorPtr>& results) const;
+
+  /// Convenience: extract columns 0..numColumns-1 directly into 'result'
+  /// RowVector's children (indices 0..numColumns-1). This is the common
+  /// pattern in TopN, StreamingAggregation, HashBuild, Spiller, etc.
+  void extractColumns(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t numColumns,
+      RowVectorPtr& result) const;
+
+  /// Cache budget (bytes) for dynamic tile sizing. The tile size is computed
+  /// as kTileBudgetBytes / fixedRowSize_, clamped to [64, kMaxTileSize].
+  /// With hyperthreading, two threads share L1d (48KB Intel / 32KB AMD),
+  /// giving ~16-24KB effective per thread. Using 20KB as the budget keeps
+  /// the tile working set within L1d under contention.
+  static constexpr int32_t kTileBudgetBytes = 20 * 1024;
+
+  /// Maximum tile size (rows). Capped to limit per-tile dispatch overhead.
+  static constexpr int32_t kMaxTileSize = 256;
+
+  /// Computes the optimal tile size (in rows) for tiled column-major
+  /// extraction, based on the fixed row size. Returns a power-of-2 in
+  /// [64, kMaxTileSize] that keeps tile × rowBytes within kTileBudgetBytes.
+  static int32_t computeTileSize(int32_t fixedRowBytes) {
+    int32_t raw = kTileBudgetBytes / std::max(fixedRowBytes, 1);
+    raw = std::clamp(raw, 64, kMaxTileSize);
+    return 1 << (31 - __builtin_clz(raw));
+  }
+
   /// Sets in result all locations with null values in columnIndex for rows.
   void extractNulls(
       const char* const* rows,
