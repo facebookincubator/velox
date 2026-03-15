@@ -69,13 +69,10 @@ struct RemoteFunctionRequest {
   /// The page containing serialized input parameters.
   2: RemoteFunctionPage inputs;
 
-  /// Whether the function is supposed to throw an exception if errors are
-  /// found, or capture exceptions and return back to the user. This is used
-  /// to implement special forms (if the function is inside a try() construct,
-  /// for example).
-  ///
-  /// TODO: the format to return serialized exceptions back to the client needs
-  /// to be defined and implemented.
+  /// Whether the function should throw on error or capture exceptions and
+  /// return them in the errorPayload field of RemoteFunctionPage. When false
+  /// (e.g., inside a try() expression), errors are serialized as VARCHAR
+  /// strings in errorPayload.
   3: bool throwOnError;
 }
 
