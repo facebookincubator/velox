@@ -35,6 +35,7 @@
 #include <cudf/round.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
+#include <cudf/strings/combine.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/slice.hpp>
@@ -738,6 +739,78 @@ class ContainsFunction : public CudfFunction {
   std::string pattern_;
 };
 
+class ConcatFunction : public CudfFunction {
+ public:
+  explicit ConcatFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    numInputs_ = expr->inputs().size();
+    VELOX_CHECK_GE(numInputs_, 2, "concat expects at least 2 inputs");
+
+    // Scan inputs for literals and store strings in map by input index.
+    for (size_t i = 0; i < numInputs_; ++i) {
+      if (auto constant =
+              std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[i])) {
+        inputIndexToLiteral_[i] = constant->value()->toString(0);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // Validate sizes.
+    VELOX_CHECK_EQ(
+        inputColumns.size() + inputIndexToLiteral_.size(),
+        numInputs_,
+        "Unexpected number of input columns");
+
+    // If there is at least one input column, fetch its size as the output size.
+    // If there are no input columns, this means that all the inputs are
+    // literals, and the output size will be 1.
+    const size_t outputSize =
+        inputColumns.empty() ? 1u : asView(inputColumns[0]).size();
+
+    // Iterate the inputs, building a vector of column views, either a literal
+    // from the map, or the next input column. We also keep a vector of the
+    // columns created for literals, so that they persist while their views
+    // are used in the concatenation.
+    std::vector<cudf::column_view> columnViews;
+    std::vector<std::unique_ptr<cudf::column>> literalColumns;
+    size_t nextInputColumnIndex = 0u;
+    for (size_t i = 0; i < numInputs_; ++i) {
+      auto it = inputIndexToLiteral_.find(i);
+      if (it == inputIndexToLiteral_.end()) {
+        // No literal for this input. Use the next input column.
+        auto& column = inputColumns[nextInputColumnIndex++];
+        columnViews.push_back(asView(column));
+      } else {
+        // Create a column of the literal repeated for the entire output size.
+        auto const& literal = it->second;
+        cudf::string_scalar scalar(literal, true, stream, mr);
+        auto col =
+            cudf::make_column_from_scalar(scalar, outputSize, stream, mr);
+        columnViews.push_back(col->view());
+        literalColumns.emplace_back(std::move(col));
+      }
+    }
+
+    // Concatenate the columns, nulls as empty strings, no separators.
+    cudf::string_scalar emptyString("");
+    return cudf::strings::concatenate(
+        cudf::table_view(columnViews),
+        emptyString,
+        emptyString,
+        cudf::strings::separator_on_nulls::YES,
+        stream,
+        mr);
+  }
+
+ private:
+  std::map<int, std::string> inputIndexToLiteral_;
+  size_t numInputs_{0};
+};
+
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
@@ -983,6 +1056,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("boolean")
            .argumentType("varchar")
            .constantArgumentType("varchar")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "concat",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<ConcatFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .variableArity("varchar")
            .build()});
 
   // Our cudf binary ops can take all numeric types but instead of listing them
