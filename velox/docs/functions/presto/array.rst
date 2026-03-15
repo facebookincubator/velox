@@ -52,6 +52,17 @@ Array Functions
         SELECT array_distinct(ARRAY [1, 2, 1]); -- [1, 2]
         SELECT array_distinct(ARRAY [1, NULL, NULL]); -- [1, NULL]
 
+.. function:: array_split_into_chunks(array(T), sz) -> array(array(T))
+
+    Returns an array of arrays splitting the input array into chunks of given
+    length. The last chunk will be shorter than the chunk length if the array's
+    length is not an integer multiple of the chunk length. Ignores null inputs,
+    but not elements. ::
+
+        SELECT array_split_into_chunks(ARRAY [1, 2, 3, 4, 5], 2); -- [[1, 2], [3, 4], [5]]
+        SELECT array_split_into_chunks(ARRAY [1, 2, 3], 5); -- [[1, 2, 3]]
+        SELECT array_split_into_chunks(ARRAY ['a', 'b', 'c'], 2); -- [['a', 'b'], ['c']]
+
 .. function:: array_duplicates(array(E)) -> array(E)
 
     Returns a set of elements that occur more than once in array.
