@@ -38,35 +38,6 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-namespace {
-
-IcebergColumnHandlePtr convertToIcebergColumnHandle(
-    const HiveColumnHandlePtr& hiveColumn) {
-  static int32_t fieldIdCounter = 1;
-
-  std::function<parquet::ParquetFieldId(const TypePtr&, int32_t&)> makeField =
-      [&makeField](
-          const TypePtr& type, int32_t& fieldId) -> parquet::ParquetFieldId {
-    const int32_t currentId = fieldId++;
-    std::vector<parquet::ParquetFieldId> children;
-    children.reserve(type->size());
-    for (auto i = 0; i < type->size(); ++i) {
-      children.push_back(makeField(type->childAt(i), fieldId));
-    }
-    return parquet::ParquetFieldId{currentId, children};
-  };
-
-  auto field = makeField(hiveColumn->dataType(), fieldIdCounter);
-
-  return std::make_shared<const IcebergColumnHandle>(
-      hiveColumn->name(),
-      hiveColumn->columnType(),
-      hiveColumn->dataType(),
-      field);
-}
-
-} // namespace
-
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
