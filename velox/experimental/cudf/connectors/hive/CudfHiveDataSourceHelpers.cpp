@@ -30,6 +30,7 @@
 
 #include <folly/futures/Future.h>
 
+#include <future>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -164,7 +165,7 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
 
 std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
     std::shared_ptr<cudf::io::datasource> dataSource,
-    cudf::io::text::byte_range_info const pageIndexBytes) {
+    const cudf::io::text::byte_range_info pageIndexBytes) {
   // Using libcudf utility but may have custom implementation in the future
   return cudf::io::parquet::fetch_page_index_to_host(
       *dataSource, pageIndexBytes);
@@ -172,16 +173,175 @@ std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
 
 std::tuple<
     std::vector<rmm::device_buffer>,
-    std::vector<cudf::device_span<uint8_t const>>,
+    std::vector<cudf::device_span<const uint8_t>>,
     std::future<void>>
 fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
-    cudf::host_span<cudf::io::text::byte_range_info const> byteRanges,
+    cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // Using libcudf utility but may have custom implementation in the future
-  return cudf::io::parquet::fetch_byte_ranges_to_device_async(
-      *dataSource, byteRanges, stream, mr);
+  static std::mutex mutex;
+
+  // Pad buffer sizes to be a multiple of 8 bytes. Required by
+  // `decode_page_data_kernel` in cuDF Parquet reader.
+  constexpr auto bufferPaddingMultiple = 8;
+
+  // Allocate device spans for each column chunk
+  std::vector<cudf::device_span<const uint8_t>> columnChunkData{};
+  columnChunkData.reserve(byteRanges.size());
+
+  // Total IO size across all byte ranges
+  auto totalSize = std::accumulate(
+      byteRanges.begin(),
+      byteRanges.end(),
+      std::size_t{0},
+      [&](auto acc, auto const& byteRange) { return acc + byteRange.size(); });
+
+  // Allocate single device buffer for all column chunks
+  std::vector<rmm::device_buffer> columnChunkBuffers{};
+  columnChunkBuffers.emplace_back(
+      cudf::util::round_up_safe<size_t>(totalSize, bufferPaddingMultiple),
+      stream,
+      mr);
+
+  // Compute device spans for each column chunk
+  auto bufferData = static_cast<uint8_t*>(columnChunkBuffers.back().data());
+  std::ignore = std::accumulate(
+      byteRanges.begin(),
+      byteRanges.end(),
+      std::size_t{0},
+      [&](auto acc, auto const& byteRange) {
+        columnChunkData.emplace_back(
+            bufferData + acc, static_cast<size_t>(byteRange.size()));
+        return acc + byteRange.size();
+      });
+
+  // For BufferedInputDataSource, enqueue reads into the buffer and launch the
+  // actual load asynchronously.
+  if (auto bufferedInput =
+          dynamic_cast<BufferedInputDataSource*>(dataSource.get())) {
+    auto iter =
+        thrust::make_zip_iterator(byteRanges.begin(), columnChunkData.begin());
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      std::for_each(
+          iter, iter + byteRanges.size(), [bufferedInput](auto const& tuple) {
+            auto const& byteRange = thrust::get<0>(tuple);
+            auto const& destination = thrust::get<1>(tuple);
+            bufferedInput->enqueueForDevice(
+                static_cast<uint64_t>(byteRange.offset()),
+                static_cast<uint64_t>(byteRange.size()),
+                const_cast<uint8_t*>(destination.data()));
+          });
+    }
+
+    // load buffered input data source
+    auto syncFunction = [](BufferedInputDataSource* bufferedInput,
+                           rmm::cuda_stream_view stream) {
+      bufferedInput->load(stream);
+    };
+
+    return {
+        std::move(columnChunkBuffers),
+        std::move(columnChunkData),
+        std::async(std::launch::deferred, syncFunction, bufferedInput, stream)};
+  }
+
+  // KvikIO dataSource: Impl borrowed from `fetch_byte_ranges_to_device_async()`
+  // in `parquet_io_utils.cpp` in cuDF.
+  std::vector<size_t> ioOffsets;
+  std::vector<size_t> ioSizes;
+  std::vector<uint8_t*> destinations;
+
+  for (size_t chunk = 0; chunk < byteRanges.size();) {
+    auto const ioOffset = static_cast<size_t>(byteRanges[chunk].offset());
+    auto ioSize = static_cast<size_t>(byteRanges[chunk].size());
+    size_t nextChunk = chunk + 1;
+    while (nextChunk < byteRanges.size()) {
+      size_t const nextOffset = byteRanges[nextChunk].offset();
+      if (nextOffset != ioOffset + ioSize) {
+        break;
+      }
+      ioSize += byteRanges[nextChunk].size();
+      nextChunk++;
+    }
+    if (ioSize != 0) {
+      ioOffsets.push_back(ioOffset);
+      ioSizes.push_back(ioSize);
+      destinations.push_back(
+          const_cast<uint8_t*>(columnChunkData[chunk].data()));
+    }
+    chunk = nextChunk;
+  }
+  VELOX_CHECK(
+      ioOffsets.size() == ioSizes.size() and
+          ioSizes.size() == destinations.size(),
+      "Unexpected number of IO offsets, sizes, or destinations");
+
+  std::vector<std::future<size_t>> deviceReadTasks{};
+  std::vector<std::future<size_t>> hostReadTasks{};
+  deviceReadTasks.reserve(byteRanges.size());
+  hostReadTasks.reserve(byteRanges.size());
+
+  // device_read_async is not guaranteed to follow stream-ordering (see
+  // datasource API docs)
+  stream.synchronize();
+
+  {
+    auto iter = thrust::make_zip_iterator(
+        ioOffsets.begin(), ioSizes.begin(), destinations.begin());
+
+    std::lock_guard<std::mutex> lock(mutex);
+
+    std::for_each(iter, iter + ioOffsets.size(), [&](auto const& tuple) {
+      auto const ioOffset = thrust::get<0>(tuple);
+      auto const ioSize = thrust::get<1>(tuple);
+      auto const dest = thrust::get<2>(tuple);
+
+      // Directly read the column chunk data to the device buffer if supported
+      if (dataSource->supports_device_read() and
+          dataSource->is_device_read_preferred(ioSize)) {
+        deviceReadTasks.emplace_back(
+            dataSource->device_read_async(ioOffset, ioSize, dest, stream));
+      } else {
+        // Read the column chunk data to the host buffer and copy it to the
+        // device buffer
+        hostReadTasks.emplace_back(
+            std::async(
+                std::launch::deferred,
+                [dataSource, ioOffset, ioSize, dest, stream]() {
+                  auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
+                  CUDF_CUDA_TRY(cudaMemcpyAsync(
+                      dest,
+                      hostBuffer->data(),
+                      ioSize,
+                      cudaMemcpyHostToDevice,
+                      stream.value()));
+                  return ioSize;
+                }));
+      }
+    });
+  }
+
+  // Synchronize host and device reads
+  auto syncFunction = [](decltype(hostReadTasks) hostReadTasks,
+                         decltype(deviceReadTasks) deviceReadTasks) {
+    for (auto& task : hostReadTasks) {
+      task.get();
+    }
+    for (auto& task : deviceReadTasks) {
+      task.get();
+    }
+  };
+
+  return {
+      std::move(columnChunkBuffers),
+      std::move(columnChunkData),
+      std::async(
+          std::launch::deferred,
+          syncFunction,
+          std::move(hostReadTasks),
+          std::move(deviceReadTasks))};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

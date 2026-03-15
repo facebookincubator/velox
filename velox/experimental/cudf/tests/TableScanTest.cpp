@@ -322,26 +322,17 @@ TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
-  // Reset the CudfHiveConnector config to use the experimental cudf reader
-  auto config = std::unordered_map<std::string, std::string>{
-      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-           kUseExperimentalCudfReader,
-       "true"}};
-  resetCudfHiveConnector(
-      std::make_shared<config::ConfigBase>(std::move(config)));
-
-  // Test scan all columns with buffered input datasource(s)
-  {
-    auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
-  }
-
-  // Test scan all columns with kvikIO datasource(s)
-  {
-    config.insert(
+  // Test scan all columns with buffered input and kvikio datasources
+  for (const auto useBufferedInput : {true, false}) {
+    // Reset config to use the experimental cudf reader and specified input
+    // datasource
+    auto config = std::unordered_map<std::string, std::string>{
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseExperimentalCudfReader,
+         "true"},
         {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
              kUseBufferedInput,
-         "false"});
+         useBufferedInput ? "true" : "false"}};
     resetCudfHiveConnector(
         std::make_shared<config::ConfigBase>(std::move(config)));
     auto plan = tableScanNode();
