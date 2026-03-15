@@ -25,6 +25,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/HashProbe.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -3742,6 +3743,295 @@ TEST_P(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
       "not (c1 < 15 and c2 >= 0)",
       {"c1", "c2"},
       "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 = u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))");
+}
+
+/// Verifies that lazy probe-side vectors are loaded BEFORE the non-reclaimable
+/// probe output loop in getOutputInternal(). This ensures that lazy loading
+/// allocations happen in ensureLazyInputLoaded() (which can trigger reclaim),
+/// not inside the non-reclaimable CALL_OPERATOR section.
+DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeWithLazyInput) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 1'000;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const int32_t numProbeVectors = 3;
+  std::vector<RowVectorPtr> probeVectors;
+  std::vector<RowVectorPtr> probeReference;
+  probeVectors.reserve(numProbeVectors);
+  probeReference.reserve(numProbeVectors);
+  for (int32_t i = 0; i < numProbeVectors; ++i) {
+    auto nonLazy = fuzzer.fuzzRow(probeType_);
+    probeReference.push_back(
+        std::dynamic_pointer_cast<RowVector>(
+            nonLazy->testingCopyPreserveEncodings()));
+    // Wrap non-key columns (indices 1, 2) in lazy. Key column (t_k1, index 0)
+    // is loaded by decodeAndDetectNonNullKeys() in addInput().
+    probeVectors.push_back(
+        VectorFuzzer(opts, pool()).fuzzRowChildrenToLazy(nonLazy, {1, 2}));
+  }
+  createDuckDbTable("t", probeReference);
+
+  const int32_t numBuildVectors = 3;
+  std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(numBuildVectors);
+  for (int32_t i = 0; i < numBuildVectors; ++i) {
+    buildVectors.push_back(fuzzer.fuzzRow(buildType_));
+  }
+  createDuckDbTable("u", buildVectors);
+
+  // Track whether fillOutput (the non-reclaimable probe output loop) has been
+  // entered. Lazy loading should happen BEFORE this point.
+  std::atomic_bool fillOutputEntered{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashProbe::fillOutput",
+      std::function<void(HashProbe*)>(
+          [&](HashProbe* /* unused */) { fillOutputEntered = true; }));
+
+  // Track when lazy loading occurs and whether it's inside fillOutput.
+  std::atomic_int lazyLoadsBeforeFillOutput{0};
+  std::atomic_int lazyLoadsDuringFillOutput{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::{}::VectorLoaderWrap::loadInternal",
+      std::function<void(void*)>([&](void* /* unused */) {
+        if (fillOutputEntered) {
+          ++lazyLoadsDuringFillOutput;
+        } else {
+          ++lazyLoadsBeforeFillOutput;
+        }
+      }));
+
+  const auto spillDirectory = TempDirectoryPath::create();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, false)
+                  .hashJoin(
+                      {"t_k1"},
+                      {"u_k1"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, false)
+                          .planNode(),
+                      "",
+                      concat(probeType_->names(), buildType_->names()))
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kJoinSpillEnabled, "true")
+      .plan(plan)
+      .assertResults(
+          "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1");
+
+  // No lazy loading should happen during the non-reclaimable probe loop.
+  // ensureLazyInputLoaded() should have pre-loaded all lazy vectors before
+  // fillOutput() is called.
+  ASSERT_EQ(lazyLoadsDuringFillOutput, 0);
+}
+
+/// Verifies that hash join with lazy probe input produces correct results
+/// when spill is triggered during probe processing. Uses the built-in
+/// testingTriggerSpill mechanism in ensureOutputFits() to force spill.
+TEST_P(HashJoinTest, reclaimDuringLazyInputLoading) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 1'000;
+  VectorFuzzer fuzzer(opts, pool());
+
+  const int32_t numProbeVectors = 5;
+  std::vector<RowVectorPtr> probeVectors;
+  std::vector<RowVectorPtr> probeReference;
+  probeVectors.reserve(numProbeVectors);
+  probeReference.reserve(numProbeVectors);
+  for (int32_t i = 0; i < numProbeVectors; ++i) {
+    auto nonLazy = fuzzer.fuzzRow(probeType_);
+    probeReference.push_back(
+        std::dynamic_pointer_cast<RowVector>(
+            nonLazy->testingCopyPreserveEncodings()));
+    probeVectors.push_back(
+        VectorFuzzer(opts, pool()).fuzzRowChildrenToLazy(nonLazy));
+  }
+  createDuckDbTable("t", probeReference);
+
+  const int32_t numBuildVectors = 10;
+  std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(numBuildVectors);
+  for (int32_t i = 0; i < numBuildVectors; ++i) {
+    buildVectors.push_back(fuzzer.fuzzRow(buildType_));
+  }
+  createDuckDbTable("u", buildVectors);
+
+  // injectSpill(true) runs the query twice: once without spill, once with
+  // testingTriggerSpill. Both runs must produce correct results with lazy
+  // probe input.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .probeKeys({"t_k1"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_k1"})
+      .buildVectors(std::move(buildVectors))
+      .referenceQuery(
+          "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+      .run();
+}
+
+/// Verifies that hash join with lazy probe input produces correct results
+/// across all join types, with automatic spill injection.
+TEST_P(MultiThreadedHashJoinTest, hashJoinWithLazyProbeInputAndSpill) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 1'000;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Create deterministic probe vectors: non-lazy first, then wrap in lazy.
+  const int32_t numProbeVectors = 3;
+  std::vector<RowVectorPtr> probeVectors;
+  std::vector<RowVectorPtr> probeReference;
+  probeVectors.reserve(numProbeVectors);
+  probeReference.reserve(numProbeVectors);
+  for (int32_t i = 0; i < numProbeVectors; ++i) {
+    auto nonLazy = fuzzer.fuzzRow(probeType_);
+    probeReference.push_back(
+        std::dynamic_pointer_cast<RowVector>(
+            nonLazy->testingCopyPreserveEncodings()));
+    probeVectors.push_back(
+        VectorFuzzer(opts, pool()).fuzzRowChildrenToLazy(nonLazy));
+  }
+  createDuckDbTable("t", probeReference);
+
+  const int32_t numBuildVectors = 3;
+  std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(numBuildVectors);
+  for (int32_t i = 0; i < numBuildVectors; ++i) {
+    buildVectors.push_back(fuzzer.fuzzRow(buildType_));
+  }
+  createDuckDbTable("u", buildVectors);
+
+  struct {
+    core::JoinType joinType;
+    std::string filter;
+    std::vector<std::string> outputColumns;
+    std::string referenceQuery;
+  } testCases[] = {
+      {core::JoinType::kInner,
+       "",
+       concat(probeType_->names(), buildType_->names()),
+       "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1"},
+      {core::JoinType::kLeft,
+       "",
+       concat(probeType_->names(), buildType_->names()),
+       "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t LEFT JOIN u ON t.t_k1 = u.u_k1"},
+      {core::JoinType::kFull,
+       "",
+       concat(probeType_->names(), buildType_->names()),
+       "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t FULL OUTER JOIN u ON t.t_k1 = u.u_k1"},
+      {core::JoinType::kAnti,
+       "t_k2 <> u_k2",
+       probeType_->names(),
+       "SELECT t_k1, t_k2, t_v1 FROM t WHERE NOT EXISTS (SELECT 1 FROM u WHERE t.t_k1 = u.u_k1 AND t.t_k2 <> u.u_k2)"},
+      {core::JoinType::kLeftSemiProject,
+       "",
+       concat(probeType_->names(), {"match"}),
+       "SELECT t_k1, t_k2, t_v1, EXISTS (SELECT 1 FROM u WHERE t.t_k1 = u.u_k1) FROM t"},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format("joinType: {}", static_cast<int>(testCase.joinType)));
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+        .probeKeys({"t_k1"})
+        .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+        .buildKeys({"u_k1"})
+        .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+        .joinType(testCase.joinType)
+        .joinFilter(testCase.filter)
+        .joinOutputLayout(std::vector<std::string>(testCase.outputColumns))
+        .referenceQuery(testCase.referenceQuery)
+        .run();
+  }
+}
+
+/// Verifies that ensureLazyInputLoaded() performs selective loading — only
+/// matching rows (passingInputRows_) are loaded, not all rows. After
+/// ensureLazyInputLoaded(), no lazy loading should occur during the
+/// non-reclaimable probe output loop.
+DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSelectiveLazyLoading) {
+  // Create probe data with low selectivity: most probe keys won't match
+  // build keys, so passingInputRows_ should be a small subset.
+  auto probeVectors = makeRowVector(
+      {"t_k1", "t_k2", "t_v1"},
+      {makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+       makeFlatVector<StringView>(
+           1'000, [](auto /*row*/) { return StringView::makeInline("probe"); }),
+       makeFlatVector<StringView>(
+           1'000, [](auto /*row*/) { return StringView::makeInline("val"); })});
+
+  // Build data only has keys 0-9, so only ~1% of probe rows match.
+  auto buildVectors = makeRowVector(
+      {"u_k1", "u_k2", "u_v1"},
+      {makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+       makeFlatVector<StringView>(
+           10, [](auto /*row*/) { return StringView::makeInline("build"); }),
+       makeFlatVector<int32_t>(10, [](auto row) { return row * 100; })});
+
+  std::vector<RowVectorPtr> lazyProbeInput;
+  lazyProbeInput.push_back(VectorFuzzer({.vectorSize = 1'000}, pool())
+                               .fuzzRowChildrenToLazy(probeVectors, {1, 2}));
+
+  std::vector<RowVectorPtr> probeReference;
+  probeReference.push_back(
+      std::dynamic_pointer_cast<RowVector>(
+          probeVectors->testingCopyPreserveEncodings()));
+  createDuckDbTable("t", probeReference);
+  createDuckDbTable("u", {buildVectors});
+
+  // Track lazy loads: before vs during fillOutput.
+  std::atomic_bool fillOutputEntered{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashProbe::fillOutput",
+      std::function<void(HashProbe*)>(
+          [&](HashProbe* /* unused */) { fillOutputEntered = true; }));
+
+  std::atomic_int lazyLoadsBeforeFillOutput{0};
+  std::atomic_int lazyLoadsDuringFillOutput{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::{}::VectorLoaderWrap::loadInternal",
+      std::function<void(void*)>([&](void* /* unused */) {
+        if (fillOutputEntered) {
+          ++lazyLoadsDuringFillOutput;
+        } else {
+          ++lazyLoadsBeforeFillOutput;
+        }
+      }));
+
+  const auto spillDirectory = TempDirectoryPath::create();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(lazyProbeInput, false)
+                  .hashJoin(
+                      {"t_k1"},
+                      {"u_k1"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, false)
+                          .planNode(),
+                      "",
+                      concat(probeType_->names(), buildType_->names()))
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kJoinSpillEnabled, true)
+      .plan(plan)
+      .assertResults(
+          "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1");
+
+  // Lazy loading should have occurred before getOutput (in
+  // ensureLazyInputLoaded).
+  ASSERT_GT(lazyLoadsBeforeFillOutput, 0);
+  // No lazy loading during the non-reclaimable probe loop.
+  ASSERT_EQ(lazyLoadsDuringFillOutput, 0);
 }
 
 TEST_P(HashJoinTest, dynamicFilters) {
