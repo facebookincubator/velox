@@ -288,6 +288,14 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
+    // Null-aware LEFT SEMI PROJECT with filter requires tracking per-row
+    // NULL vs no-match state during filter evaluation, which is not yet
+    // implemented. The no-filter case is supported.
+    if (joinPlanNode->joinType() == core::JoinType::kLeftSemiProject &&
+        joinPlanNode->isNullAware() && joinPlanNode->filter()) {
+      return false;
+    }
+
     if (joinPlanNode->filter()) {
       if (!canBeEvaluatedByCudf(
               {joinPlanNode->filter()}, ctx->task->queryCtx().get())) {
