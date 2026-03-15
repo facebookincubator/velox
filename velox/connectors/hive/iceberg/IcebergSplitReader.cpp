@@ -19,6 +19,7 @@
 #include <folly/lang/Bits.h>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -77,6 +78,8 @@ void IcebergSplitReader::prepareSplit(
   baseReadOffset_ = 0;
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
+  deletionVectorReaders_.clear();
+  equalityDeleteFileReaders_.clear();
 
   const auto& deleteFiles = icebergSplit->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
@@ -115,8 +118,104 @@ void IcebergSplitReader::prepareSplit(
                 splitOffset_,
                 hiveSplit_->connectorId));
       }
+    } else if (deleteFile.content == FileContent::kEqualityDeletes) {
+      if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
+        // Per the Iceberg spec (V2+), an equality delete file should only
+        // apply to data files whose data sequence number is strictly less
+        // than the delete file's data sequence number. A sequence number of
+        // 0 means "unassigned" (legacy V1 tables) and disables filtering.
+        if (deleteFile.dataSequenceNumber > 0 &&
+            icebergSplit->dataSequenceNumber > 0 &&
+            deleteFile.dataSequenceNumber <= icebergSplit->dataSequenceNumber) {
+          continue;
+        }
+
+        // Resolve equalityFieldIds to column names and types. In Iceberg,
+        // field IDs for top-level columns are assigned sequentially starting
+        // from 1, matching the column order in the table schema.
+        std::vector<std::string> equalityColumnNames;
+        std::vector<TypePtr> equalityColumnTypes;
+
+        const auto& dataColumns = hiveTableHandle_->dataColumns();
+        if (dataColumns) {
+          for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
+            // Field IDs are 1-based; column index is fieldId - 1.
+            auto colIdx = static_cast<size_t>(eqFieldId - 1);
+            VELOX_CHECK_LT(
+                colIdx,
+                dataColumns->size(),
+                "Equality delete field ID out of range: {}",
+                eqFieldId);
+            equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
+            equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
+          }
+        }
+
+        if (!equalityColumnNames.empty()) {
+          equalityDeleteFileReaders_.push_back(
+              std::make_unique<EqualityDeleteFileReader>(
+                  deleteFile,
+                  equalityColumnNames,
+                  equalityColumnTypes,
+                  hiveSplit_->filePath,
+                  fileHandleFactory_,
+                  connectorQueryCtx_,
+                  ioExecutor_,
+                  hiveConfig_,
+                  ioStatistics_,
+                  ioStats_,
+                  runtimeStats,
+                  hiveSplit_->connectorId));
+        }
+      }
+    } else if (deleteFile.content == FileContent::kDeletionVector) {
+      if (deleteFile.recordCount > 0) {
+        deletionVectorReaders_.push_back(
+            std::make_unique<DeletionVectorReader>(
+                deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));
+      }
     } else {
-      VELOX_NYI();
+      VELOX_NYI(
+          "Unsupported delete file content type: {}",
+          static_cast<int>(deleteFile.content));
+    }
+  }
+
+  positionalUpdateFileReaders_.clear();
+  const auto& updateFiles = icebergSplit->updateFiles;
+
+  // Derive update column names and types from the reader output schema.
+  // Following the standard Iceberg MoR pattern, update files carry all
+  // output columns (full-row updates). Hoisted outside the loop since the
+  // schema is identical for every update file.
+  std::vector<std::string> updateColumnNames;
+  std::vector<TypePtr> updateColumnTypes;
+  for (auto i = 0; i < readerOutputType_->size(); ++i) {
+    updateColumnNames.push_back(readerOutputType_->nameOf(i));
+    updateColumnTypes.push_back(readerOutputType_->childAt(i));
+  }
+
+  for (const auto& updateFile : updateFiles) {
+    VELOX_CHECK(
+        updateFile.content == FileContent::kPositionalUpdates,
+        "Expected positional update file but got content type: {}",
+        static_cast<int>(updateFile.content));
+    if (updateFile.recordCount > 0) {
+      positionalUpdateFileReaders_.push_back(
+          std::make_unique<PositionalUpdateFileReader>(
+              updateFile,
+              hiveSplit_->filePath,
+              updateColumnNames,
+              updateColumnTypes,
+              fileHandleFactory_,
+              connectorQueryCtx_,
+              ioExecutor_,
+              hiveConfig_,
+              ioStatistics_,
+              ioStats_,
+              runtimeStats,
+              splitOffset_,
+              hiveSplit_->connectorId));
     }
   }
 }
@@ -137,7 +236,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     return 0;
   }
 
-  if (!positionalDeleteFileReaders_.empty()) {
+  if (!positionalDeleteFileReaders_.empty() ||
+      !deletionVectorReaders_.empty()) {
     auto numBytes = bits::nbytes(actualSize);
     dwio::common::ensureCapacity<int8_t>(
         deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool(), false, true);
@@ -152,6 +252,17 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
         ++iter;
       }
     }
+
+    for (auto iter = deletionVectorReaders_.begin();
+         iter != deletionVectorReaders_.end();) {
+      (*iter)->readDeletePositions(baseReadOffset_, actualSize, deleteBitmap_);
+
+      if ((*iter)->noMoreData()) {
+        iter = deletionVectorReaders_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
   }
 
   mutation.deletedRows = deleteBitmap_ && deleteBitmap_->size() > 0
@@ -159,6 +270,89 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
+
+  // Apply equality deletes after reading base data. Unlike positional deletes
+  // (which set bits before reading), equality deletes require the data values
+  // to be available for comparison.
+  if (rowsScanned > 0 && !equalityDeleteFileReaders_.empty()) {
+    auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
+    VELOX_CHECK_NOT_NULL(
+        outputRowVector, "Output must be a RowVector for equality deletes.");
+
+    auto numRows = outputRowVector->size();
+
+    // Use a separate bitmap for equality deletes to track which rows to
+    // remove from the output.
+    BufferPtr eqDeleteBitmap = AlignedBuffer::allocate<bool>(
+        numRows, connectorQueryCtx_->memoryPool());
+    std::memset(
+        eqDeleteBitmap->asMutable<uint8_t>(), 0, eqDeleteBitmap->size());
+
+    for (auto& reader : equalityDeleteFileReaders_) {
+      reader->applyDeletes(outputRowVector, eqDeleteBitmap);
+    }
+
+    // Count surviving rows and compact the output if any rows were deleted.
+    auto* eqBitmap = eqDeleteBitmap->as<uint8_t>();
+    vector_size_t numDeleted = 0;
+    for (vector_size_t i = 0; i < numRows; ++i) {
+      if (bits::isBitSet(eqBitmap, i)) {
+        ++numDeleted;
+      }
+    }
+
+    if (numDeleted > 0) {
+      // Build the list of surviving row indices.
+      vector_size_t numSurviving = numRows - numDeleted;
+      if (numSurviving == 0) {
+        output = BaseVector::create(
+            outputRowVector->type(), 0, connectorQueryCtx_->memoryPool());
+        return 0;
+      }
+
+      // Build a SelectivityVector of surviving rows and use it to compact.
+      std::vector<BaseVector::CopyRange> ranges;
+      ranges.reserve(numSurviving);
+      vector_size_t targetIdx = 0;
+      for (vector_size_t i = 0; i < numRows; ++i) {
+        if (!bits::isBitSet(eqBitmap, i)) {
+          ranges.push_back({i, targetIdx++, 1});
+        }
+      }
+
+      auto newOutput = BaseVector::create(
+          outputRowVector->type(),
+          numSurviving,
+          connectorQueryCtx_->memoryPool());
+      auto newRowOutput = std::dynamic_pointer_cast<RowVector>(newOutput);
+      for (auto i = 0; i < outputRowVector->childrenSize(); ++i) {
+        newRowOutput->childAt(i)->resize(numSurviving);
+        newRowOutput->childAt(i)->copyRanges(
+            outputRowVector->childAt(i).get(), ranges);
+      }
+      newRowOutput->resize(numSurviving);
+      output = newRowOutput;
+      rowsScanned = numSurviving;
+    }
+  }
+
+  if (rowsScanned > 0 && !positionalUpdateFileReaders_.empty()) {
+    auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
+    VELOX_CHECK_NOT_NULL(
+        outputRowVector, "Output must be a RowVector for positional updates.");
+
+    for (auto iter = positionalUpdateFileReaders_.begin();
+         iter != positionalUpdateFileReaders_.end();) {
+      (*iter)->applyUpdates(
+          baseReadOffset_, outputRowVector, deleteBitmap_, actualSize);
+
+      if ((*iter)->noMoreData()) {
+        iter = positionalUpdateFileReaders_.erase(iter);
+      } else {
+        ++iter;
+      }
+    }
+  }
 
   return rowsScanned;
 }

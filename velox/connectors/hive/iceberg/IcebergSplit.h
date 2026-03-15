@@ -25,6 +25,27 @@ namespace facebook::velox::connector::hive::iceberg {
 struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   std::vector<IcebergDeleteFile> deleteFiles;
 
+  /// Data sequence number of the base data file in this split. Per the Iceberg
+  /// spec (V2+), an equality delete file should only apply to data files whose
+  /// data sequence number is strictly less than the delete file's sequence
+  /// number. A value of 0 means "unassigned" (legacy V1 tables) and disables
+  /// sequence number filtering.
+  int64_t dataSequenceNumber{0};
+
+  /// Positional update files attached to this split. Each update file contains
+  /// (file_path, pos, <all output columns>) for merge-on-read full-row updates.
+  /// Following the standard Iceberg MoR pattern, update files carry complete
+  /// rows — all output columns are present and replace the base row values at
+  /// matching positions.
+  ///
+  /// NOTE: "Positional updates" are a Velox-side merge-on-read extension, not
+  /// part of the Iceberg V2 spec (which achieves updates via delete + insert).
+  ///
+  /// Reuses IcebergDeleteFile because the metadata shape (path, format, record
+  /// count, bounds) is identical; the content field distinguishes the file type
+  /// via FileContent::kPositionalUpdates.
+  std::vector<IcebergDeleteFile> updateFiles;
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -55,7 +76,9 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<FileProperties> fileProperties = std::nullopt,
+      std::vector<IcebergDeleteFile> updates = {},
+      int64_t dataSequenceNumber = 0);
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
