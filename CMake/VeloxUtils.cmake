@@ -14,6 +14,7 @@
 include_guard(GLOBAL)
 
 include(CMakePackageConfigHelpers)
+include(GoogleTest)
 
 function(velox_get_rpath_origin VAR)
   if(APPLE)
@@ -264,8 +265,14 @@ function(velox_add_grouped_tests)
     if(_idx GREATER_EQUAL _group_end OR _idx EQUAL _num_sources)
       set(_target "${ARG_PREFIX}_group${_group}")
       add_executable(${_target} ${_current_sources} ${ARG_EXTRA_SOURCES})
-      add_test(NAME ${_target} COMMAND ${_target} WORKING_DIRECTORY ${ARG_WORKING_DIRECTORY})
       target_link_libraries(${_target} ${ARG_DEPS})
+      gtest_discover_tests(${_target}
+        TEST_PREFIX ""
+        WORKING_DIRECTORY ${ARG_WORKING_DIRECTORY}
+        DISCOVERY_MODE PRE_TEST
+        DISCOVERY_TIMEOUT 60
+        TEST_FILTER "-*DISABLED_*"
+      )
       set(_current_sources "")
       math(EXPR _group "${_group} + 1")
     endif()

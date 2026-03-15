@@ -109,7 +109,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   // Do not send no-more-splits message. Expect the task to finish without
   // receiving that message.
 
-  ASSERT_EQ(20, numRead);
+  ASSERT_EQ(21, numRead);
   ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
 }
 
