@@ -109,6 +109,14 @@ class DecimalUtil {
     return toString(value, *type);
   }
 
+  /// Converts a scaled decimal value to double.
+  static double toDouble(int128_t value, uint8_t scale) {
+    long double scaled = static_cast<long double>(value);
+    long double divisor =
+        static_cast<long double>(DecimalUtil::kPowersOfTen[scale]);
+    return static_cast<double>(scaled / divisor);
+  }
+
   template <typename T>
   inline static void fillDecimals(
       T* decimals,

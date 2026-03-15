@@ -7,6 +7,22 @@ Aggregate functions operate on a set of values to compute a single result.
 General Aggregate Functions
 ---------------------------
 
+.. spark:function:: approx_count_distinct_for_intervals(x, endpoints, relativeSD) -> array(bigint)
+
+    Returns approximate distinct counts per interval defined by ``endpoints``.
+    Given an array of sorted endpoints (e1, e2, ..., eN), the result contains
+    counts for intervals [e1, e2], (e2, e3], ..., (eN-1, eN].
+    Values outside the overall range are ignored. Null inputs are ignored.
+
+    Duplicate endpoints are allowed. For any interval with identical endpoints
+    (e.g. (5, 5]), the result is 1.
+
+    ``endpoints`` must be a constant (foldable) array with at least two values.
+    ``relativeSD`` must be constant as well.
+
+    Supported input types are numeric, date, timestamp, interval, and decimal.
+    Endpoints can be any of these types and do not need to match the input type.
+
 .. spark:function:: avg(x) -> double|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.
