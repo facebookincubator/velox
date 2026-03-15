@@ -89,6 +89,17 @@ class IcebergSplitReader : public SplitReader {
   ///       Column was added to the table schema after this data file was
   ///       written. Set as NULL constant since the old file doesn't contain
   ///       this column.
+  ///    c) Row lineage (_last_updated_sequence_number):
+  ///       For Iceberg V3 row lineage, if the column is not in the file,
+  ///       inherit the data sequence number from the file's manifest entry
+  ///       (provided via $data_sequence_number info column). Per the spec,
+  ///       null values indicate the value should be inherited.
+  ///    d) Row lineage (_row_id):
+  ///       Per the spec, null _row_id values are assigned as
+  ///       first_row_id + _pos. When first_row_id is available from
+  ///       the split info column $first_row_id, the value is computed
+  ///       in next(). When first_row_id is not available (e.g.,
+  ///       pre-V3 tables), NULL is returned.
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
@@ -101,5 +112,20 @@ class IcebergSplitReader : public SplitReader {
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
   BufferPtr deleteBitmap_;
+
+  // The child index of _last_updated_sequence_number in readerOutputType_.
+  // Used to locate the column in the output for null-value replacement.
+  std::optional<column_index_t> lastUpdatedSeqNumOutputIndex_;
+
+  // Data sequence number from the file's manifest entry, used to replace null
+  // values in _last_updated_sequence_number during reads.
+  std::optional<int64_t> dataSequenceNumber_;
+
+  // First row ID from the manifest entry, used to compute _row_id.
+  // When available (>= 0), _row_id = first_row_id + _pos for rows not in file.
+  std::optional<int64_t> firstRowId_;
+
+  // The child index of _row_id in readerOutputType_.
+  std::optional<column_index_t> rowIdOutputIndex_;
 };
 } // namespace facebook::velox::connector::hive::iceberg
