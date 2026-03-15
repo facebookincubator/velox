@@ -32,10 +32,10 @@ struct StringToMapFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
-    VELOX_USER_CHECK_EQ(
-        entryDelimiter.size(), 1, "entryDelimiter's size should be 1.");
-    VELOX_USER_CHECK_EQ(
-        keyValueDelimiter.size(), 1, "keyValueDelimiter's size should be 1.");
+    VELOX_USER_CHECK_GT(
+        entryDelimiter.size(), 0, "entryDelimiter must not be empty.");
+    VELOX_USER_CHECK_GT(
+        keyValueDelimiter.size(), 0, "keyValueDelimiter must not be empty.");
 
     callImpl(
         out,
@@ -65,7 +65,7 @@ struct StringToMapFunction {
           keyValueDelimiter,
           keys);
 
-      pos = nextEntryPos + 1;
+      pos = nextEntryPos + entryDelimiter.size();
       nextEntryPos = input.find(entryDelimiter, pos);
     }
 
@@ -91,7 +91,8 @@ struct StringToMapFunction {
     VELOX_USER_CHECK(
         keys.insert(key).second, "Duplicate keys are not allowed: '{}'.", key);
     const auto value = StringView(
-        entry.data() + delimiterPos + 1, entry.size() - delimiterPos - 1);
+        entry.data() + delimiterPos + keyValueDelimiter.size(),
+        entry.size() - delimiterPos - keyValueDelimiter.size());
 
     auto [keyWriter, valueWriter] = out.add_item();
     keyWriter.setNoCopy(StringView(key));
