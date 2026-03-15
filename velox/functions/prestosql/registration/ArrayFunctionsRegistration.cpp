@@ -450,12 +450,11 @@ void registerArrayFunctions(const std::string& prefix) {
       double,
       Map<int64_t, double>>({prefix + "l2_norm"});
 
-  // Register dot_product for integer arrays only.
-  // Float and double array versions already exist in
-  // MathematicalFunctionsRegistration.cpp (DotProductArray,
-  // DotProductFloatArray) with different semantics: they return NaN for empty
+  // Register dot_product for integer and float arrays.
+  // Double array version exists in MathematicalFunctionsRegistration.cpp
+  // (DotProductArray) with different semantics: it returns NaN for empty
   // arrays to maintain compatibility with cosine_similarity and other distance
-  // functions there. Integer versions here return 0 for empty arrays.
+  // functions there. Versions here return 0 for empty arrays.
   registerFunction<
       ParameterBinder<DotProductFunction, int8_t>,
       int64_t,
@@ -476,6 +475,11 @@ void registerArrayFunctions(const std::string& prefix) {
       int64_t,
       Array<int64_t>,
       Array<int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, float>,
+      float,
+      Array<float>,
+      Array<float>>({prefix + "dot_product"});
 
   // Register dot_product for maps with integer keys
   registerFunction<
