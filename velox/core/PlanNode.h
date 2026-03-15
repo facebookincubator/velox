@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "velox/common/Enums.h"
+#include "velox/common/rpc/RPCTypes.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -6193,6 +6194,126 @@ class PlanNodeVisitor {
     }
   }
 };
+
+/// Plan node for async RPC execution (e.g., LLM inference, embeddings).
+///
+/// Stores the function name, result type, argument columns, and streaming
+/// mode. The RPCNode does NOT evaluate argument expressions — a ProjectNode
+/// inserted before this node by the plan rewriter computes argument columns.
+///
+/// Architecture:
+///   SQL: SELECT rpc_function(col1, 'model_name') FROM table
+///            |
+///            v (Plan Rewriter)
+///     ProjectNode (__rpc_arg_0 = col1, __rpc_arg_1 = 'model_name')
+///           |
+///        RPCNode (argumentColumns = [__rpc_arg_0, __rpc_arg_1])
+///           |
+///       source[0]
+///           |
+///       TableScan
+class RPCNode : public PlanNode {
+ public:
+  /// @param id Unique identifier for this plan node.
+  /// @param source Data source (the only source).
+  /// @param functionName Name of the registered AsyncRPCFunction.
+  /// @param functionResultType Velox type of the RPC result column.
+  /// @param outputColumn Name of the output column for RPC responses.
+  /// @param outputType Explicit output type. Must contain outputColumn
+  ///        and any passthrough source columns needed by downstream.
+  ///        Specified explicitly (like AbstractJoinNode) to support column
+  ///        pruning.
+  /// @param argumentColumns Names of input columns containing pre-evaluated
+  ///        argument values. RPCOperator reads these columns in addInput().
+  /// @param argumentTypes Types of each argument (aligned with
+  ///        argumentColumns). Passed to AsyncRPCFunction::initialize().
+  /// @param constantInputs Constant argument values (aligned with
+  ///        argumentColumns). nullptr for non-constant args, single-element
+  ///        ConstantVectors for constant args. Passed to initialize().
+  /// @param streamingMode The streaming mode for RPC execution.
+  /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
+  ///        every N rows during addInput() instead of collecting all rows.
+  RPCNode(
+      const PlanNodeId& id,
+      PlanNodePtr source,
+      std::string functionName,
+      TypePtr functionResultType,
+      std::string outputColumn,
+      RowTypePtr outputType,
+      std::vector<std::string> argumentColumns,
+      std::vector<TypePtr> argumentTypes,
+      std::vector<VectorPtr> constantInputs,
+      rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
+      int32_t dispatchBatchSize = 0);
+
+  const PlanNodePtr& source() const {
+    return sources_[0];
+  }
+
+  const std::string& functionName() const {
+    return functionName_;
+  }
+
+  const TypePtr& rpcResultType() const {
+    return resultType_;
+  }
+
+  const std::string& outputColumn() const {
+    return outputColumn_;
+  }
+
+  const std::vector<std::string>& argumentColumns() const {
+    return argumentColumns_;
+  }
+
+  const std::vector<TypePtr>& argumentTypes() const {
+    return argumentTypes_;
+  }
+
+  const std::vector<VectorPtr>& constantInputs() const {
+    return constantInputs_;
+  }
+
+  rpc::RPCStreamingMode streamingMode() const {
+    return streamingMode_;
+  }
+
+  int32_t dispatchBatchSize() const {
+    return dispatchBatchSize_;
+  }
+
+  std::string_view name() const override {
+    return "RPC";
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  std::vector<PlanNodePtr> sources_;
+  std::string functionName_;
+  TypePtr resultType_;
+  std::string outputColumn_;
+  RowTypePtr outputType_;
+  std::vector<std::string> argumentColumns_;
+  std::vector<TypePtr> argumentTypes_;
+  std::vector<VectorPtr> constantInputs_;
+  rpc::RPCStreamingMode streamingMode_;
+  int32_t dispatchBatchSize_{0};
+};
+
+using RPCNodePtr = std::shared_ptr<RPCNode>;
 
 } // namespace facebook::velox::core
 
