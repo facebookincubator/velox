@@ -245,7 +245,7 @@ function LatestCommunityNews() {
   <p>Join us at Meta HQ in the Bay Area, April 29-30 for in-person VeloxCon.</p>
   <span className={styles.newsDate}>April 2026</span>
 </a>
-            
+
             <a href="https://velox-lib.io/blog/regex-hidden-traps" className={styles.newsTile} target="_blank" rel="noopener">
   <span className={styles.newsTag}>Blog</span>
   <h3>The hidden traps of regex in LIKE and split</h3>
