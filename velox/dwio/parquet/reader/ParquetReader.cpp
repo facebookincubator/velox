@@ -779,6 +779,11 @@ TypePtr ReaderBase::convertType(
       "Converted type {} is not allowed for requested type {}";
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
+  const auto isInteger = [](const TypePtr& type) {
+    return type->kind() == TypeKind::TINYINT ||
+        type->kind() == TypeKind::SMALLINT ||
+        type->kind() == TypeKind::INTEGER || type->kind() == TypeKind::BIGINT;
+  };
   if (schemaElement.__isset.converted_type) {
     switch (schemaElement.converted_type) {
       case thrift::ConvertedType::INT_8:
@@ -790,15 +795,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TINYINT ||
-                          type->kind() == TypeKind::SMALLINT ||
-                          type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInteger),
             kTypeMappingErrorFmtStr,
             "TINYINT",
             requestedType->toString());
@@ -813,14 +810,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::SMALLINT ||
-                          type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInteger),
             kTypeMappingErrorFmtStr,
             "SMALLINT",
             requestedType->toString());
@@ -835,13 +825,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInteger),
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString());
@@ -856,12 +840,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInteger),
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString());
@@ -1027,13 +1006,7 @@ TypePtr ReaderBase::convertType(
       case thrift::Type::type::INT32:
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInteger),
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString());
@@ -1057,12 +1030,7 @@ TypePtr ReaderBase::convertType(
         }
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInteger),
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString());
