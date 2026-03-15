@@ -81,7 +81,8 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
   /// Creates splits with equality delete files attached.
   std::vector<std::shared_ptr<ConnectorSplit>> makeSplits(
       const std::string& dataFilePath,
-      const std::vector<IcebergDeleteFile>& deleteFiles = {}) {
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      int64_t dataSequenceNumber = 0) {
     auto fileSize = getFileSize(dataFilePath);
     return {std::make_shared<HiveIcebergSplit>(
         kIcebergConnectorId,
@@ -94,7 +95,11 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
         std::unordered_map<std::string, std::string>{},
         nullptr,
         /*cacheable=*/true,
-        deleteFiles)};
+        deleteFiles,
+        std::unordered_map<std::string, std::string>{},
+        std::nullopt,
+        std::vector<IcebergDeleteFile>{},
+        dataSequenceNumber)};
   }
 
   /// Builds a table scan plan node with the given schema.
@@ -353,6 +358,225 @@ TEST_F(EqualityDeleteFileReaderTest, deleteOnSecondColumn) {
       {
           makeFlatVector<int64_t>({1, 3, 4}),
           makeFlatVector<std::string>({"A", "A", "C"}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies that equality deletes apply when the delete file has a higher
+/// sequence number than the data file (per the Iceberg V2+ spec).
+TEST_F(EqualityDeleteFileReaderTest, sequenceNumberDeleteApplies) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  auto deleteData = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({2, 4}),
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  // Delete file has sequence number 5, data file has sequence number 3.
+  // Since deleteSeq (5) > dataSeq (3), the delete should apply.
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{1},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/5);
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/3);
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  // Rows with id=2 and id=4 are deleted.
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 3, 5}),
+          makeFlatVector<std::string>({"a", "c", "e"}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies that equality deletes are skipped when the delete file has a
+/// lower or equal sequence number compared to the data file.
+TEST_F(EqualityDeleteFileReaderTest, sequenceNumberDeleteSkipped) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  auto deleteData = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  // Delete file has sequence number 2, data file has sequence number 5.
+  // Since deleteSeq (2) <= dataSeq (5), the delete should be skipped.
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      3,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{1},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/2);
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/5);
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  // All rows survive because the delete file is skipped.
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies that when either sequence number is 0 (unassigned/legacy V1),
+/// the delete file is always applied (filtering is disabled).
+TEST_F(EqualityDeleteFileReaderTest, sequenceNumberZeroAlwaysApplies) {
+  auto rowType = ROW({"id"}, {BIGINT()});
+
+  auto baseData = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  auto deleteData = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({2}),
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  // Delete file has sequence number 0 (legacy), data file has sequence 10.
+  // Since deleteSeq is 0, filtering is disabled and the delete applies.
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{1},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0);
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/10);
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  // Row id=2 is deleted because sequence number filtering is disabled.
+  auto expected = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({1, 3}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies that when multiple delete files have different sequence numbers,
+/// only those with higher sequence numbers than the data file are applied.
+TEST_F(EqualityDeleteFileReaderTest, mixedSequenceNumbers) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  // First delete file: seqNum=10 (higher than data seqNum=5) → applied.
+  auto deleteData1 = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({2}),
+      });
+  auto eqDeleteFile1 = writeEqDeleteFile({deleteData1});
+  IcebergDeleteFile icebergDeleteFile1(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile1->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile1->getPath()),
+      /*equalityFieldIds=*/{1},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/10);
+
+  // Second delete file: seqNum=3 (lower than data seqNum=5) → skipped.
+  auto deleteData2 = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({4}),
+      });
+  auto eqDeleteFile2 = writeEqDeleteFile({deleteData2});
+  IcebergDeleteFile icebergDeleteFile2(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile2->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile2->getPath()),
+      /*equalityFieldIds=*/{1},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/3);
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      {icebergDeleteFile1, icebergDeleteFile2},
+      /*dataSequenceNumber=*/5);
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  // Only id=2 is deleted (from delete file 1 with seqNum=10).
+  // id=4 survives because delete file 2 (seqNum=3) is skipped.
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "c", "d", "e"}),
       });
 
   assertEqualResults({expected}, {result});

@@ -120,6 +120,16 @@ void IcebergSplitReader::prepareSplit(
       }
     } else if (deleteFile.content == FileContent::kEqualityDeletes) {
       if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
+        // Per the Iceberg spec (V2+), an equality delete file should only
+        // apply to data files whose data sequence number is strictly less
+        // than the delete file's data sequence number. A sequence number of
+        // 0 means "unassigned" (legacy V1 tables) and disables filtering.
+        if (deleteFile.dataSequenceNumber > 0 &&
+            icebergSplit->dataSequenceNumber > 0 &&
+            deleteFile.dataSequenceNumber <= icebergSplit->dataSequenceNumber) {
+          continue;
+        }
+
         // Resolve equalityFieldIds to column names and types. In Iceberg,
         // field IDs for top-level columns are assigned sequentially starting
         // from 1, matching the column order in the table schema.
