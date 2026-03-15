@@ -24,6 +24,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/testutil/TestValue.h"
 
@@ -483,6 +484,300 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
     while (pool_->usedBytes() > 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+  }
+}
+
+TEST_F(DirectBufferedInputTest, preloadCalledTwice) {
+  std::string content(1024, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadTwice");
+  StringIdLease groupId(ids, "preloadTwiceGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  input.preload();
+  ASSERT_TRUE(input.preloaded());
+  VELOX_ASSERT_THROW(input.preload(), "preload() called more than once");
+}
+
+TEST_F(DirectBufferedInputTest, preloadAfterEnqueue) {
+  std::string content(1024, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadAfterEnqueue");
+  StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  input.enqueue({0, 100}, nullptr);
+  VELOX_ASSERT_THROW(
+      input.preload(), "preload() must be called before enqueue()");
+}
+
+TEST_F(DirectBufferedInputTest, preloadedDataWithoutPreload) {
+  std::string content(1024, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadedDataNoPreload");
+  StringIdLease groupId(ids, "preloadedDataNoPreloadGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  VELOX_ASSERT_THROW(
+      input.preloadedData(0, 100), "preloadedData() called without preload");
+}
+
+TEST_F(DirectBufferedInputTest, preloadedDataOffsetOutOfRange) {
+  std::string content(1024, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadedDataOOR");
+  StringIdLease groupId(ids, "preloadedDataOORGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  input.preload();
+  VELOX_ASSERT_THROW(
+      input.preloadedData(1024, 100), "Offset exceeds preloaded size");
+}
+
+TEST_F(DirectBufferedInputTest, preload) {
+  struct TestParam {
+    uint64_t fileSize;
+    std::string debugString() const {
+      return fmt::format("fileSize {}", fileSize);
+    }
+  };
+  std::vector<TestParam> testSettings = {
+      // Tiny file (below kTinySize).
+      {DirectBufferedInput::kTinySize - 100},
+      // Non-tiny file (above kTinySize).
+      {DirectBufferedInput::kTinySize + 1000},
+      // Larger file.
+      {1 << 20},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::string content;
+    content.resize(testData.fileSize);
+    for (uint64_t i = 0; i < testData.fileSize; ++i) {
+      content[i] = static_cast<char>('a' + (i % 26));
+    }
+    auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setLoadQuantum(1 << 20);
+
+    auto& ids = fileIds();
+    StringIdLease fileId(ids, fmt::format("preloadTest_{}", testData.fileSize));
+    StringIdLease groupId(
+        ids, fmt::format("preloadGroup_{}", testData.fileSize));
+
+    DirectBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        tracker_,
+        std::move(groupId),
+        ioStatistics_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    ASSERT_EQ(readFile->numReads(), 0);
+    EXPECT_FALSE(input.preloaded());
+
+    input.preload();
+
+    EXPECT_TRUE(input.preloaded());
+
+    ASSERT_EQ(readFile->numReads(), 1);
+
+    // Enqueue sub-region streams and read from preloaded data.
+    const uint64_t regionSize =
+        std::min<uint64_t>(testData.fileSize / 2, testData.fileSize);
+    auto stream1 = input.enqueue(common::Region{0, regionSize}, nullptr);
+    ASSERT_NE(stream1, nullptr);
+
+    auto next1 = getNext(*stream1);
+    ASSERT_TRUE(next1.has_value());
+    EXPECT_EQ(next1.value(), content.substr(0, regionSize));
+
+    if (testData.fileSize > regionSize) {
+      auto stream2 = input.enqueue(
+          common::Region{regionSize, testData.fileSize - regionSize}, nullptr);
+      ASSERT_NE(stream2, nullptr);
+
+      auto next2 = getNext(*stream2);
+      ASSERT_TRUE(next2.has_value());
+      EXPECT_EQ(
+          next2.value(),
+          content.substr(regionSize, testData.fileSize - regionSize));
+    }
+
+    // No additional file reads after preload.
+    ASSERT_EQ(readFile->numReads(), 1);
+  }
+}
+
+TEST_F(DirectBufferedInputTest, preloadedData) {
+  struct TestParam {
+    uint64_t fileSize;
+    uint64_t offset;
+    uint64_t length;
+    // Expected size of the returned range. For tiny files, this equals
+    // min(length, fileSize - offset). For large files, it may be smaller
+    // due to non-contiguous allocation run boundaries.
+    bool expectTinyPath;
+    std::string debugString() const {
+      return fmt::format(
+          "fileSize {}, offset {}, length {}, expectTinyPath {}",
+          fileSize,
+          offset,
+          length,
+          expectTinyPath);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      // Tiny file: read from beginning.
+      {1000, 0, 500, true},
+      // Tiny file: read from middle.
+      {1000, 400, 200, true},
+      // Tiny file: length exceeds remaining bytes.
+      {1000, 800, 500, true},
+      // Tiny file: length zero.
+      {1000, 0, 0, true},
+      // Tiny file: read last byte.
+      {1000, 999, 100, true},
+      // Tiny file: read entire file.
+      {1000, 0, 1000, true},
+      // Large file: read from beginning.
+      {1 << 20, 0, 4096, false},
+      // Large file: read from middle.
+      {1 << 20, 100'000, 4096, false},
+      // Large file: length exceeds remaining bytes.
+      {1 << 20, (1 << 20) - 100, 4096, false},
+      // Large file: length zero.
+      {1 << 20, 0, 0, false},
+      // Large file: read last byte.
+      {1 << 20, (1 << 20) - 1, 100, false},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::string content;
+    content.resize(testData.fileSize);
+    for (uint64_t i = 0; i < testData.fileSize; ++i) {
+      content[i] = static_cast<char>('a' + (i % 26));
+    }
+    auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+    io::ReaderOptions readerOptions(pool_.get());
+    auto& ids = fileIds();
+    StringIdLease fileId(
+        ids,
+        fmt::format(
+            "preloadedData_{}_{}_{}",
+            testData.fileSize,
+            testData.offset,
+            testData.length));
+    StringIdLease groupId(
+        ids,
+        fmt::format(
+            "preloadedDataGroup_{}_{}_{}",
+            testData.fileSize,
+            testData.offset,
+            testData.length));
+
+    DirectBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        tracker_,
+        std::move(groupId),
+        ioStatistics_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    ASSERT_EQ(readFile->numReads(), 0);
+    input.preload();
+    ASSERT_EQ(readFile->numReads(), 1);
+
+    const auto range = input.preloadedData(testData.offset, testData.length);
+
+    // No additional file reads — preloadedData serves from memory.
+    ASSERT_EQ(readFile->numReads(), 1);
+
+    const auto expectedAvailable = std::min<uint64_t>(
+        testData.length, testData.fileSize - testData.offset);
+
+    if (testData.length == 0) {
+      EXPECT_EQ(range.size(), 0);
+      continue;
+    }
+
+    // For tiny files, the data is contiguous so we get all available bytes.
+    // For large files, we may get fewer bytes due to allocation run boundaries.
+    EXPECT_GT(range.size(), 0);
+    EXPECT_LE(range.size(), expectedAvailable);
+    if (testData.expectTinyPath) {
+      EXPECT_EQ(range.size(), expectedAvailable);
+    }
+
+    // Verify data content matches original file.
+    EXPECT_EQ(
+        std::string_view(range.data(), range.size()),
+        std::string_view(content.data() + testData.offset, range.size()));
   }
 }
 

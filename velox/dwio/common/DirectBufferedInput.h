@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/Range.h>
 
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileGroupStats.h"
@@ -160,8 +161,10 @@ class DirectBufferedInput : public BufferedInput {
       velox::common::Region region,
       const StreamIdentifier* sid) override;
 
-  bool supportSyncLoad() const override {
-    return false;
+  void preload() override;
+
+  bool preloaded() const override {
+    return preloadData_.has_value();
   }
 
   void load(const LogType /*unused*/) override;
@@ -196,6 +199,12 @@ class DirectBufferedInput : public BufferedInput {
   memory::MemoryPool* pool() const {
     return pool_;
   }
+
+  /// Returns the contiguous byte range of preloaded data at 'offset' in the
+  /// file, up to 'length' bytes. Caller must call preload() first and ensure
+  /// 'offset' < file size.
+  folly::Range<const char*> preloadedData(uint64_t offset, uint64_t length)
+      const;
 
   /// Returns the CoalescedLoad that contains the correlated loads for
   /// 'stream' or nullptr if none. Returns nullptr on all but first
@@ -306,6 +315,16 @@ class DirectBufferedInput : public BufferedInput {
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
+
+  // Preloaded file data read in a single IO by preload(). Exactly one of
+  // 'tinyData' or 'data' is populated: 'tinyData' when the file size <=
+  // kTinySize, 'data' (non-contiguous allocation) otherwise.
+  struct PreloadData {
+    memory::Allocation data;
+    std::string tinyData;
+    uint64_t size;
+  };
+  std::optional<PreloadData> preloadData_;
 };
 
 } // namespace facebook::velox::dwio::common

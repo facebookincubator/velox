@@ -20,6 +20,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
@@ -1008,6 +1009,394 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
   EXPECT_NE(
       std::string_view(ranges[0].data(), ranges[0].size()),
       std::string_view(differentData));
+}
+
+TEST_F(CachedBufferedInputTest, preloadCalledTwice) {
+  std::string content(1024, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadTwice");
+  StringIdLease groupId(ids, "preloadTwiceGroup");
+
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  input.preload();
+  ASSERT_TRUE(input.preloaded());
+  VELOX_ASSERT_THROW(input.preload(), "preload() called more than once");
+}
+
+TEST_F(CachedBufferedInputTest, preloadAfterEnqueue) {
+  std::string content(1024, 'x');
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadAfterEnqueue");
+  StringIdLease groupId(ids, "preloadAfterEnqueueGroup");
+
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  input.enqueue({0, 100}, nullptr);
+  VELOX_ASSERT_THROW(
+      input.preload(), "preload() must be called before enqueue()");
+}
+
+TEST_F(CachedBufferedInputTest, preloadedStreamSkipsEviction) {
+  // When cacheable_=false, non-preloaded streams mark cache entries as
+  // immediately evictable on destruction (via clearCachePin and
+  // makeCacheEvictable). Preloaded streams must skip both because the
+  // preloaded cache entry is shared across all streams.
+  constexpr int32_t kContentSize = 1 << 20;
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setCacheable(false);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadEvictionTest");
+  StringIdLease groupId(ids, "preloadEvictionGroup");
+
+  CachedBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      cache_.get(),
+      tracker_,
+      std::move(groupId),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  ASSERT_EQ(readFile->numReads(), 0);
+
+  input.preload();
+  ASSERT_TRUE(input.preloaded());
+  ASSERT_EQ(readFile->numReads(), 1);
+
+  auto statsBefore = cache_->refreshStats();
+  ASSERT_GT(statsBefore.sharedPinnedBytes, 0);
+
+  // Create a stream, read from it, and destroy it.
+  {
+    auto stream = input.enqueue(common::Region{0, 100}, nullptr);
+    auto next = getNext(*stream);
+    ASSERT_TRUE(next.has_value());
+    EXPECT_EQ(next.value(), content.substr(0, 100));
+  }
+
+  // The preloaded cache entry must still be pinned and accessible after stream
+  // destruction, even with cacheable_=false.
+  auto statsAfter = cache_->refreshStats();
+  EXPECT_GT(statsAfter.sharedPinnedBytes, 0);
+
+  // A new stream should still be able to read from the preloaded entry.
+  auto stream2 = input.enqueue(common::Region{0, 100}, nullptr);
+  auto next2 = getNext(*stream2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), content.substr(0, 100));
+
+  // No additional file reads — all served from preloaded cache.
+  ASSERT_EQ(readFile->numReads(), 1);
+}
+
+TEST_F(CachedBufferedInputTest, preloadRespectsNotCacheable) {
+  // When cacheable_=false, the preloaded cache entry should be made evictable
+  // (lastUse=0, numUses=0) when CachedBufferedInput is destroyed.
+  constexpr int32_t kContentSize = 1 << 20;
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setCacheable(false);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadNotCacheableTest");
+  StringIdLease groupId(ids, "preloadNotCacheableGroup");
+  const auto fileNumId = fileId.id();
+
+  {
+    CachedBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        cache_.get(),
+        tracker_,
+        std::move(groupId),
+        ioStatistics_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    input.preload();
+    ASSERT_TRUE(input.preloaded());
+
+    auto stats = cache_->refreshStats();
+    ASSERT_GT(stats.sharedPinnedBytes, 0);
+  }
+
+  // After CachedBufferedInput destruction with cacheable_=false, the preloaded
+  // entry should be marked as immediately evictable via makeEvictable().
+  cache::RawFileCacheKey key{fileNumId, 0};
+  EXPECT_TRUE(cache_->testingIsEvictable(key));
+}
+
+TEST_F(CachedBufferedInputTest, preloadRespectsCacheable) {
+  // When cacheable_=true (default), the preloaded cache entry should not be
+  // marked as immediately evictable after CachedBufferedInput is destroyed.
+  constexpr int32_t kContentSize = 1 << 20;
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setCacheable(true);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "preloadCacheableTest");
+  StringIdLease groupId(ids, "preloadCacheableGroup");
+  const auto fileNumId = fileId.id();
+
+  {
+    CachedBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        cache_.get(),
+        tracker_,
+        std::move(groupId),
+        ioStatistics_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    input.preload();
+    ASSERT_TRUE(input.preloaded());
+  }
+
+  // After CachedBufferedInput destruction with cacheable_=true, the cache
+  // entry should NOT be marked as immediately evictable.
+  cache::RawFileCacheKey key{fileNumId, 0};
+  EXPECT_FALSE(cache_->testingIsEvictable(key));
+}
+
+TEST_F(CachedBufferedInputTest, preload) {
+  struct TestParam {
+    uint64_t fileSize;
+    std::string debugString() const {
+      return fmt::format("fileSize {}", fileSize);
+    }
+  };
+  std::vector<TestParam> testSettings = {
+      // Small file (tinyData path in cache entry).
+      {100},
+      // File at tinyData boundary.
+      {AsyncDataCacheEntry::kTinyDataSize},
+      // Larger file (allocation path).
+      {1 << 20},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    std::string content;
+    content.resize(testData.fileSize);
+    for (uint64_t i = 0; i < testData.fileSize; ++i) {
+      content[i] = static_cast<char>('a' + (i % 26));
+    }
+    auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setLoadQuantum(1 << 20);
+
+    auto& ids = fileIds();
+    StringIdLease fileId(ids, fmt::format("preloadTest_{}", testData.fileSize));
+    StringIdLease groupId(
+        ids, fmt::format("preloadGroup_{}", testData.fileSize));
+
+    CachedBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        cache_.get(),
+        tracker_,
+        std::move(groupId),
+        ioStatistics_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    ASSERT_EQ(readFile->numReads(), 0);
+    EXPECT_FALSE(input.preloaded());
+
+    auto statsBefore = cache_->refreshStats();
+    const auto readCountBefore = ioStatistics_->read().count();
+    const auto readSumBefore = ioStatistics_->read().sum();
+    const auto rawBytesBefore = ioStatistics_->rawBytesRead();
+
+    input.preload();
+
+    EXPECT_TRUE(input.preloaded());
+
+    const auto readsAfterPreload = readFile->numReads();
+    ASSERT_GT(readsAfterPreload, 0);
+
+    // Cache should have one new entry for the whole file.
+    auto statsAfter = cache_->refreshStats();
+    EXPECT_EQ(statsAfter.numEntries, statsBefore.numEntries + 1);
+    // preloadPin_ holds a shared pin.
+    EXPECT_GT(statsAfter.sharedPinnedBytes, 0);
+    // IO stats: one storage read of fileSize bytes.
+    EXPECT_EQ(ioStatistics_->read().count(), readCountBefore + 1);
+    EXPECT_EQ(ioStatistics_->read().sum(), readSumBefore + testData.fileSize);
+    EXPECT_EQ(
+        ioStatistics_->rawBytesRead(), rawBytesBefore + testData.fileSize);
+
+    // Enqueue sub-region streams and read from the preloaded cache entry.
+    const uint64_t regionSize =
+        std::min<uint64_t>(testData.fileSize / 2, testData.fileSize);
+    auto stream1 = input.enqueue(common::Region{0, regionSize}, nullptr);
+    ASSERT_NE(stream1, nullptr);
+
+    auto next1 = getNext(*stream1);
+    ASSERT_TRUE(next1.has_value());
+    EXPECT_EQ(next1.value(), content.substr(0, regionSize));
+
+    if (testData.fileSize > regionSize) {
+      auto stream2 = input.enqueue(
+          common::Region{regionSize, testData.fileSize - regionSize}, nullptr);
+      ASSERT_NE(stream2, nullptr);
+
+      auto next2 = getNext(*stream2);
+      ASSERT_TRUE(next2.has_value());
+      EXPECT_EQ(
+          next2.value(),
+          content.substr(regionSize, testData.fileSize - regionSize));
+    }
+
+    // No additional file reads after preload.
+    ASSERT_EQ(readFile->numReads(), readsAfterPreload);
+  }
+}
+
+TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  const std::string fileName = "preloadSharingTest";
+  StringIdLease fileId1(ids, fileName);
+  StringIdLease groupId1(ids, "preloadSharingGroup1");
+
+  CachedBufferedInput input1(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId1),
+      cache_.get(),
+      tracker_,
+      std::move(groupId1),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  ASSERT_EQ(readFile->numReads(), 0);
+
+  // First preload reads from storage.
+  input1.preload();
+  EXPECT_TRUE(input1.preloaded());
+  ASSERT_EQ(readFile->numReads(), 1);
+
+  auto stats1 = cache_->refreshStats();
+  auto readCount1 = ioStatistics_->read().count();
+
+  // Second CachedBufferedInput with the same file should hit the cache.
+  StringIdLease fileId2(ids, fileName);
+  StringIdLease groupId2(ids, "preloadSharingGroup2");
+
+  CachedBufferedInput input2(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId2),
+      cache_.get(),
+      tracker_,
+      std::move(groupId2),
+      ioStatistics_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  input2.preload();
+  EXPECT_TRUE(input2.preloaded());
+
+  // No additional file read — second preload hits the cache.
+  ASSERT_EQ(readFile->numReads(), 1);
+
+  // No additional cache entry should be created.
+  auto stats2 = cache_->refreshStats();
+  EXPECT_EQ(stats2.numEntries, stats1.numEntries);
+
+  // No additional storage read should happen (cache hit).
+  EXPECT_EQ(ioStatistics_->read().count(), readCount1);
+
+  // Both inputs should still be able to read data.
+  auto stream1 = input1.enqueue(common::Region{0, 100}, nullptr);
+  auto next1 = getNext(*stream1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), content.substr(0, 100));
+
+  auto stream2 = input2.enqueue(common::Region{0, 100}, nullptr);
+  auto next2 = getNext(*stream2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), content.substr(0, 100));
+
+  // No additional file reads — all served from cache.
+  ASSERT_EQ(readFile->numReads(), 1);
 }
 
 TEST_F(CachedBufferedInputTest, prefetchScope) {

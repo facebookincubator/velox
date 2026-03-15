@@ -145,7 +145,10 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   auto overreadBytes = getTableScanRuntimeStats(task).at("overreadBytes").sum;
   ASSERT_GE(rawInputBytes, 500);
   ASSERT_EQ(overreadBytes, 13);
-  ASSERT_EQ(
+  // With preloading, storageReadBytes equals file size (single IO for the whole
+  // file) which can be less than rawInputBytes + overreadBytes (logical sum of
+  // individual stream reads).
+  ASSERT_LE(
       getTableScanRuntimeStats(task).at("storageReadBytes").sum,
       rawInputBytes + overreadBytes);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);

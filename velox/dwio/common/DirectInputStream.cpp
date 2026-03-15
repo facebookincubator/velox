@@ -160,6 +160,18 @@ void DirectInputStream::loadSync() {
 
 void DirectInputStream::loadPosition() {
   VELOX_CHECK_LT(offsetInRegion_, region_.length);
+
+  // Fast path: serve from preloaded whole-file data.
+  if (bufferedInput_->preloaded()) {
+    const auto range = bufferedInput_->preloadedData(
+        region_.offset + offsetInRegion_, region_.length - offsetInRegion_);
+    run_ = reinterpret_cast<uint8_t*>(const_cast<char*>(range.data()));
+    runSize_ = range.size();
+    offsetInRun_ = 0;
+    offsetOfRun_ = 0;
+    return;
+  }
+
   if (!loaded_) {
     loaded_ = true;
     auto load = bufferedInput_->coalescedLoad(this);

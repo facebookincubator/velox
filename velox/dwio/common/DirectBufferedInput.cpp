@@ -254,6 +254,78 @@ void DirectBufferedInput::reset() {
   requests_.clear();
 }
 
+namespace {
+void appendRanges(
+    const memory::Allocation& allocation,
+    size_t length,
+    std::vector<folly::Range<char*>>& buffers) {
+  VELOX_CHECK_LE(
+      length,
+      memory::AllocationTraits::pageBytes(allocation.numPages()),
+      "Length exceeds allocation size");
+  buffers.reserve(buffers.size() + allocation.numRuns());
+  uint64_t offsetInRuns = 0;
+  for (int i = 0; i < allocation.numRuns(); ++i) {
+    VELOX_CHECK_GE(length, offsetInRuns);
+    auto run = allocation.runAt(i);
+    const uint64_t bytes = memory::AllocationTraits::pageBytes(run.numPages());
+    const uint64_t readSize = std::min(bytes, length - offsetInRuns);
+    buffers.emplace_back(run.data<char>(), readSize);
+    offsetInRuns += readSize;
+    if (offsetInRuns >= length) {
+      break;
+    }
+  }
+}
+} // namespace
+
+void DirectBufferedInput::preload() {
+  VELOX_CHECK(!preloadData_.has_value(), "preload() called more than once");
+  VELOX_CHECK(requests_.empty(), "preload() must be called before enqueue()");
+  preloadData_.emplace();
+  preloadData_->size = fileSize_;
+  uint64_t storageReadUs{0};
+  {
+    MicrosecondTimer timer(&storageReadUs);
+    if (fileSize_ <= kTinySize) {
+      preloadData_->tinyData.resize(fileSize_);
+      input_->read(preloadData_->tinyData.data(), fileSize_, 0, LogType::FILE);
+    } else {
+      const auto numPages = memory::AllocationTraits::numPages(fileSize_);
+      pool_->allocateNonContiguous(numPages, preloadData_->data);
+      std::vector<folly::Range<char*>> buffers;
+      appendRanges(preloadData_->data, fileSize_, buffers);
+      input_->read(buffers, 0, LogType::FILE);
+    }
+  }
+  ioStatistics_->read().increment(fileSize_);
+  ioStatistics_->incRawBytesRead(fileSize_);
+  ioStatistics_->queryThreadIoLatencyUs().increment(storageReadUs);
+  ioStatistics_->storageReadLatencyUs().increment(storageReadUs);
+  ioStatistics_->incTotalScanTime(storageReadUs * 1'000);
+}
+
+folly::Range<const char*> DirectBufferedInput::preloadedData(
+    uint64_t offset,
+    uint64_t length) const {
+  VELOX_CHECK(
+      preloadData_.has_value(), "preloadedData() called without preload");
+  VELOX_CHECK_LT(offset, preloadData_->size, "Offset exceeds preloaded size");
+  const auto available =
+      std::min<uint64_t>(length, preloadData_->size - offset);
+  if (preloadData_->data.numPages() == 0) {
+    return {preloadData_->tinyData.data() + offset, available};
+  }
+  int32_t runIndex;
+  int32_t offsetInRun;
+  preloadData_->data.findRun(offset, &runIndex, &offsetInRun);
+  const auto run = preloadData_->data.runAt(runIndex);
+  const auto runBytes = memory::AllocationTraits::pageBytes(run.numPages());
+  const auto contiguousBytes =
+      std::min<uint64_t>(available, runBytes - offsetInRun);
+  return {run.data<const char>() + offsetInRun, contiguousBytes};
+}
+
 std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
     uint64_t offset,
     uint64_t length,
@@ -270,22 +342,6 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
       0,
       options_.loadQuantum());
 }
-
-namespace {
-void appendRanges(
-    memory::Allocation& allocation,
-    size_t length,
-    std::vector<folly::Range<char*>>& buffers) {
-  uint64_t offsetInRuns = 0;
-  for (int i = 0; i < allocation.numRuns(); ++i) {
-    auto run = allocation.runAt(i);
-    const uint64_t bytes = memory::AllocationTraits::pageBytes(run.numPages());
-    const uint64_t readSize = std::min(bytes, length - offsetInRuns);
-    buffers.push_back(folly::Range<char*>(run.data<char>(), readSize));
-    offsetInRuns += readSize;
-  }
-}
-} // namespace
 
 std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   std::vector<folly::Range<char*>> buffers;
