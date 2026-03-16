@@ -1884,10 +1884,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerUnaryOp({prefix + "abs"}, cudf::unary_operator::ABS);
   registerUnaryOp({prefix + "negate"}, cudf::unary_operator::NEGATE);
   registerUnaryOp({prefix + "floor"}, cudf::unary_operator::FLOOR);
-
-  // @TODO (seves 1/28/26)
-  // uncomment this once DecimalCeilFunction exists
-  // registerUnaryOp({prefix + "ceil"}, cudf::unary_operator::CEIL);
+  registerUnaryOp({prefix + "ceil"}, cudf::unary_operator::CEIL);
 
   // @TODO (seves 1/28/26)
   // truncate
