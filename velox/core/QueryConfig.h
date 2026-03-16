@@ -368,6 +368,10 @@ class QueryConfig {
   static constexpr const char* kRowNumberSpillEnabled =
       "row_number_spill_enabled";
 
+  /// MarkDistinct spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kMarkDistinctSpillEnabled =
+      "mark_distinct_spill_enabled";
+
   /// TopNRowNumber spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
@@ -560,6 +564,11 @@ class QueryConfig {
   /// filter) and push down to upstream operators.
   static constexpr const char* kHashProbeDynamicFilterPushdownEnabled =
       "hash_probe_dynamic_filter_pushdown_enabled";
+
+  /// Whether hash probe can generate dynamic filter for string types and
+  /// push down to upstream operators.
+  static constexpr const char* kHashProbeStringDynamicFilterPushdownEnabled =
+      "hash_probe_string_dynamic_filter_pushdown_enabled";
 
   /// The maximum byte size of Bloom filter that can be generated from hash
   /// probe.  When set to 0, no Bloom filter will be generated.  To achieve
@@ -1180,6 +1189,10 @@ class QueryConfig {
     return get<bool>(kRowNumberSpillEnabled, true);
   }
 
+  bool markDistinctSpillEnabled() const {
+    return get<bool>(kMarkDistinctSpillEnabled, true);
+  }
+
   bool topNRowNumberSpillEnabled() const {
     return get<bool>(kTopNRowNumberSpillEnabled, true);
   }
@@ -1379,6 +1392,10 @@ class QueryConfig {
 
   bool hashProbeDynamicFilterPushdownEnabled() const {
     return get<bool>(kHashProbeDynamicFilterPushdownEnabled, true);
+  }
+
+  bool hashProbeStringDynamicFilterPushdownEnabled() const {
+    return get<bool>(kHashProbeStringDynamicFilterPushdownEnabled, false);
   }
 
   uint64_t hashProbeBloomFilterPushdownMaxSize() const {

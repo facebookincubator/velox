@@ -61,6 +61,15 @@ class UniqueValue {
     return data_;
   }
 
+  std::string asString() const {
+    if (size_ <= sizeof(int64_t)) {
+      // String is stored inline in data_.
+      return std::string{reinterpret_cast<const char*>(&data_), size_};
+    }
+    // String is stored as a pointer in data_.
+    return std::string{reinterpret_cast<const char*>(data_), size_};
+  }
+
   void setData(int64_t data) {
     data_ = data;
   }

@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <queue>
 
 #include <vector>
@@ -187,20 +188,23 @@ class NumericHistogram {
 
   // Initialize a priority queue with Entries for each value and weight
   std::priority_queue<Entry*, std::vector<Entry*>, Entry::Compare> initQueue(
-      std::vector<Entry*>& allocatedEntries) {
+      std::vector<std::unique_ptr<Entry>>& allocatedEntries) {
     VELOX_CHECK_GE(values_.size(), nextIndex_);
     VELOX_CHECK_GE(weights_.size(), nextIndex_);
 
     std::priority_queue<Entry*, std::vector<Entry*>, Entry::Compare> queue;
-    Entry* right = new Entry(
+    auto right = std::make_unique<Entry>(
         nextIndex_ - 1, values_[nextIndex_ - 1], weights_[nextIndex_ - 1]);
-    allocatedEntries.push_back(right);
-    queue.push(right);
+    auto* rightPtr = right.get();
+    queue.push(rightPtr);
+    allocatedEntries.push_back(std::move(right));
     for (int i = nextIndex_ - 2; i >= 0; i--) {
-      Entry* current = new Entry(i, values_[i], weights_[i], right);
-      queue.push(current);
-      allocatedEntries.push_back(current);
-      right = current;
+      auto current =
+          std::make_unique<Entry>(i, values_[i], weights_[i], rightPtr);
+      auto* currentPtr = current.get();
+      queue.push(currentPtr);
+      allocatedEntries.push_back(std::move(current));
+      rightPtr = currentPtr;
     }
 
     return queue;
@@ -212,7 +216,7 @@ class NumericHistogram {
       return;
     }
 
-    std::vector<Entry*> allocatedEntries;
+    std::vector<std::unique_ptr<Entry>> allocatedEntries;
     auto queue = initQueue(allocatedEntries);
 
     // Merge and reduce entries in queue until the count is equal to targetCount
@@ -243,11 +247,11 @@ class NumericHistogram {
                          right->value_ * right->weight_) /
           newWeight;
 
-      Entry* merged =
-          new Entry(current->id_, newValue, newWeight, right->right_);
-
-      allocatedEntries.push_back(merged);
-      queue.push(merged);
+      auto merged = std::make_unique<Entry>(
+          current->id_, newValue, newWeight, right->right_);
+      auto* mergedPtr = merged.get();
+      queue.push(mergedPtr);
+      allocatedEntries.push_back(std::move(merged));
 
       // Update left's penalty
       Entry* left = current->left_;
@@ -255,10 +259,10 @@ class NumericHistogram {
         VELOX_CHECK(left->valid_, "Left entry is not valid");
 
         left->invalidate();
-        Entry* newLeft = new Entry(
-            left->id_, left->value_, left->weight_, merged, left->left_);
-        allocatedEntries.push_back(newLeft);
-        queue.push(newLeft);
+        auto newLeft = std::make_unique<Entry>(
+            left->id_, left->value_, left->weight_, mergedPtr, left->left_);
+        queue.push(newLeft.get());
+        allocatedEntries.push_back(std::move(newLeft));
       }
     }
     // Re populate values_ and weights_ with the reduced queue
@@ -274,9 +278,6 @@ class NumericHistogram {
     }
 
     sortValuesAndWeights();
-    for (Entry* entry : allocatedEntries) {
-      delete entry;
-    }
   }
   // Following Java Standard:
   // https://docs.oracle.com/javase/7/docs/api/java/lang/Double.html#compare(double,%20double)
@@ -302,6 +303,9 @@ class NumericHistogram {
 
   // Merge same buckets in place and update nextIndex_
   void mergeSameBuckets() {
+    if (nextIndex_ <= 1) {
+      return;
+    }
     sortValuesAndWeights();
     VELOX_CHECK_GE(values_.size(), nextIndex_);
     VELOX_CHECK_GE(weights_.size(), nextIndex_);
@@ -519,14 +523,14 @@ void registerNumericHistogramAggregate(
             argTypes.size(), 3, "{} takes at most three arguments", name);
         if (argTypes[0]->kind() != TypeKind::BIGINT) {
           VELOX_USER_FAIL(
-              "Aggregation {}: Buckets must be bigint {}, but is {}",
+              "Aggregation {}: Buckets must be bigint, but is {}",
               name,
               argTypes[0]->kindName());
         }
         if (argTypes[1]->kind() != TypeKind::REAL &&
             argTypes[1]->kind() != TypeKind::DOUBLE) {
           VELOX_USER_FAIL(
-              "Aggregation {}: Value must be REAL or DOUBLE {}, but is {}",
+              "Aggregation {}: Value must be REAL or DOUBLE, but is {}",
               name,
               argTypes[1]->kindName());
         }
@@ -542,16 +546,16 @@ void registerNumericHistogramAggregate(
                   step, argTypes, resultType);
 
             default:
-              VELOX_USER_FAIL("Unknown input type for {} aggregation {}", name);
+              VELOX_USER_FAIL("Unknown input type for aggregation {}", name);
           }
         } else {
           // argTypes.size() == 3
           if (argTypes[2]->kind() != TypeKind::REAL &&
               argTypes[2]->kind() != TypeKind::DOUBLE) {
             VELOX_USER_FAIL(
-                "Aggregation {}: Weight must be REAL or DOUBLE {}, but is {}",
+                "Aggregation {}: Weight must be REAL or DOUBLE, but is {}",
                 name,
-                argTypes[1]->kindName());
+                argTypes[2]->kindName());
           }
           switch (argTypes[1]->kind()) {
             case TypeKind::REAL:
@@ -583,7 +587,7 @@ void registerNumericHistogramAggregate(
                       "Unknown weight type for aggregation {}", name);
               }
             default:
-              VELOX_USER_FAIL("Unknown input type for {} aggregation {}", name);
+              VELOX_USER_FAIL("Unknown input type for aggregation {}", name);
           }
         }
       },

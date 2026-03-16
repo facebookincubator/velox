@@ -447,7 +447,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
   compareOutputs(
       ::testing::UnitTest::GetInstance()->current_test_info()->name(),
       printPlanWithStats(*writePlan, task->taskStats()),
-      {{R"(-- TableWrite\[1\]\[.+InsertTableHandle .+)"},
+      {{R"(-- TableWrite\[1\]\[test-hive, c0, c1, c2, c3, c4, c5\] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY)"},
        {"   Output: .+, Physical written output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
        {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"}});
@@ -456,7 +456,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
       ::testing::UnitTest::GetInstance()->current_test_info()->name(),
       printPlanWithStats(*writePlan, task->taskStats(), true),
       {
-          {R"(-- TableWrite\[1\]\[.+InsertTableHandle .+)"},
+          {R"(-- TableWrite\[1\]\[test-hive, c0, c1, c2, c3, c4, c5\] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY)"},
           {"   Output: .+, Physical written output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
           {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
           {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},

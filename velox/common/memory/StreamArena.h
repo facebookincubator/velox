@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <memory>
+#include <vector>
+
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox {
@@ -30,20 +34,18 @@ class StreamArena {
 
   virtual ~StreamArena() = default;
 
-  /// Sets range to the request 'bytes' of writable memory owned by
-  /// 'this'.  We allocate non-contiguous memory to store range bytes
-  /// if requested 'bytes' is equal or less than the largest class
-  /// page size. Otherwise, we allocate from contiguous
-  /// memory. 'range' is set to point to the allocated memory. If
-  /// 'lastRange' is non-nullptr, it is the last range of the stream
-  /// to which we are adding the new range. 'lastRange' is nullptr if
-  /// adding the first range to a stream. The memory is stays owned by
-  /// 'this' in all cases. Used by HashStringAllocator when extending
-  /// a multipart entry. The previously last part has its last 8 bytes
-  /// moved to the next part and gets a pointer to the next part as
-  /// its last 8 bytes. When extending, we need to update the entry so
-  /// that the next pointer is not seen when reading the content and
-  /// is also not counted in the payload size of the multipart entry.
+  /// Sets range to the request 'bytes' of writable memory owned by 'this'. We
+  /// allocate non-contiguous memory to store range bytes if requested 'bytes'
+  /// is equal or less than the largest class page size. Otherwise, we allocate
+  /// from contiguous memory. 'range' is set to point to the allocated memory.
+  /// If 'lastRange' is non-nullptr, it is the last range of the stream to which
+  /// we are adding the new range. 'lastRange' is nullptr if adding the first
+  /// range to a stream. The memory is stays owned by 'this' in all cases. Used
+  /// by HashStringAllocator when extending a multipart entry. The previously
+  /// last part has its last 8 bytes moved to the next part and gets a pointer
+  /// to the next part as its last 8 bytes. When extending, we need to update
+  /// the entry so that the next pointer is not seen when reading the content
+  /// and is also not counted in the payload size of the multipart entry.
   ///
   /// NOTE: The method does not guarantee returned 'range' has size of 'bytes',
   /// it is caller's responsibility to check.
@@ -63,13 +65,13 @@ class StreamArena {
   virtual void clear();
 
   memory::MachinePageCount testingAllocationQuantum() const {
-    return allocationQuantum_;
+    return kAllocationQuantum;
   }
 
  private:
-  memory::MemoryPool* const pool_;
+  static constexpr memory::MachinePageCount kAllocationQuantum{2};
 
-  const memory::MachinePageCount allocationQuantum_{2};
+  memory::MemoryPool* const pool_;
 
   // All non-contiguous allocations.
   std::vector<std::unique_ptr<memory::Allocation>> allocations_;

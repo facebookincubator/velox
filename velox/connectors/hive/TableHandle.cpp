@@ -113,7 +113,8 @@ HiveTableHandle::HiveTableHandle(
     std::vector<std::string> indexColumns,
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
-    double sampleRate)
+    double sampleRate,
+    std::string dbName)
     : ConnectorTableHandle(std::move(connectorId)),
       tableName_(tableName),
       subfieldFilters_(std::move(subfieldFilters)),
@@ -122,7 +123,8 @@ HiveTableHandle::HiveTableHandle(
       dataColumns_(dataColumns),
       indexColumns_(std::move(indexColumns)),
       tableParameters_(tableParameters),
-      filterColumnHandles_(std::move(filterColumnHandles)) {
+      filterColumnHandles_(std::move(filterColumnHandles)),
+      dbName_(std::move(dbName)) {
   VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
 }
@@ -250,6 +252,10 @@ folly::dynamic HiveTableHandle::serialize() const {
     obj["indexColumns"] = indexColumns;
   }
 
+  if (!dbName_.empty()) {
+    obj["dbName"] = dbName_;
+  }
+
   return obj;
 }
 
@@ -307,6 +313,11 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     }
   }
 
+  std::string dbName;
+  if (auto it = obj.find("dbName"); it != obj.items().end()) {
+    dbName = it->second.asString();
+  }
+
   return std::make_shared<const HiveTableHandle>(
       connectorId,
       tableName,
@@ -316,7 +327,8 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       std::move(indexColumns),
       tableParameters,
       std::move(filterColumnHandles),
-      sampleRate);
+      sampleRate,
+      std::move(dbName));
 }
 
 void HiveTableHandle::registerSerDe() {
