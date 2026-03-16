@@ -285,102 +285,29 @@ jobs:
           path: /tmp/signatures
           key: function-signatures-${{ github.sha }}
 
-      - name: Upload presto fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: presto
-          path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      - name: Strip fuzzer binaries
+        run: |
+          mkdir -p /tmp/fuzzer-binaries
+          strip -o /tmp/fuzzer-binaries/velox_expression_fuzzer_test _build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/spark_expression_fuzzer_test _build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/spark_aggregation_fuzzer_test _build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/velox_aggregation_fuzzer_test _build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/velox_join_fuzzer _build/debug/velox/exec/fuzzer/velox_join_fuzzer
+          strip -o /tmp/fuzzer-binaries/velox_exchange_fuzzer _build/debug/velox/exec/fuzzer/velox_exchange_fuzzer
+          strip -o /tmp/fuzzer-binaries/velox_window_fuzzer_test _build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/velox_cache_fuzzer _build/debug/velox/exec/fuzzer/velox_cache_fuzzer
+          strip -o /tmp/fuzzer-binaries/velox_table_evolution_fuzzer_test _build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/velox_memory_arbitration_fuzzer _build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
+          strip -o /tmp/fuzzer-binaries/velox_row_number_fuzzer _build/debug/velox/exec/fuzzer/velox_row_number_fuzzer
+          strip -o /tmp/fuzzer-binaries/velox_topn_row_number_fuzzer _build/debug/velox/exec/fuzzer/velox_topn_row_number_fuzzer
+          strip -o /tmp/fuzzer-binaries/velox_writer_fuzzer_test _build/debug/velox/functions/prestosql/fuzzer/velox_writer_fuzzer_test
+          strip -o /tmp/fuzzer-binaries/velox_spatial_join_fuzzer _build/debug/velox/exec/fuzzer/velox_spatial_join_fuzzer
 
-      - name: Upload spark expression fuzzer
+      - name: Upload fuzzer binaries
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: spark_expression_fuzzer
-          path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload spark aggregation fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: spark_aggregation_fuzzer
-          path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload aggregation fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: aggregation
-          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload join fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: join
-          path: velox/_build/debug/velox/exec/fuzzer/velox_join_fuzzer
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload exchange fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: exchange
-          path: velox/_build/debug//velox/exec/fuzzer/velox_exchange_fuzzer
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload window fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: window
-          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload cache fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: cache_fuzzer
-          path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload table evolution fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: table_evolution_fuzzer
-          path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload memory arbitration fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: memory_arbitration_fuzzer
-          path: velox/_build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload row number fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: row_number
-          path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload topn row number fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: topn_row_number
-          path: velox/_build/debug//velox/exec/fuzzer/velox_topn_row_number_fuzzer
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload writer fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: writer
-          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_writer_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
-
-      - name: Upload spatial join fuzzer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: spatial_join_fuzzer
-          path: velox/_build/debug/velox/exec/fuzzer/velox_spatial_join_fuzzer
+          name: fuzzer-binaries
+          path: /tmp/fuzzer-binaries/
           retention-days: ${{ env.RETENTION }}
 
   presto-fuzzer-run:
@@ -419,10 +346,10 @@ jobs:
 
           echo "DURATION=$duration" >> $GITHUB_ENV
 
-      - name: Download presto fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: presto
+          name: fuzzer-binaries
 
       - name: Run Presto Fuzzer
         run: |
@@ -470,10 +397,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download Presto expression fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: presto
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -538,10 +465,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download presto expression fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: presto
+          name: fuzzer-binaries
 
       - name: Download Signatures
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -594,10 +521,10 @@ jobs:
     timeout-minutes: 60
     steps:
 
-      - name: Download spark aggregation fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: spark_aggregation_fuzzer
+          name: fuzzer-binaries
 
       - name: Run Spark Aggregate Fuzzer
         run: |
@@ -637,10 +564,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download spark expression fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: spark_expression_fuzzer
+          name: fuzzer-binaries
 
       - name: Download Signatures
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -685,10 +612,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download spark expression fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: spark_expression_fuzzer
+          name: fuzzer-binaries
 
       - name: Run Spark Expression Fuzzer
         run: |
@@ -734,10 +661,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download join fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: join
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -793,10 +720,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download exchange fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: exchange
+          name: fuzzer-binaries
 
       - name: Run exchange Fuzzer
         run: |
@@ -835,10 +762,10 @@ jobs:
 
     steps:
 
-      - name: Download row number fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: row_number
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -897,10 +824,10 @@ jobs:
 
     steps:
 
-      - name: Download topn row number fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: topn_row_number
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -958,10 +885,10 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
     steps:
 
-      - name: Download cache fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: cache_fuzzer
+          name: fuzzer-binaries
 
       - name: Run Cache Fuzzer
         run: |
@@ -992,10 +919,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download table evolution fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: table_evolution_fuzzer
+          name: fuzzer-binaries
 
       - name: Run Table Evolution Fuzzer
         run: |
@@ -1026,10 +953,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download memory arbitration fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: memory_arbitration_fuzzer
+          name: fuzzer-binaries
 
       - name: Run Memory Arbitration Fuzzer
         run: |
@@ -1063,10 +990,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download aggregation fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: aggregation
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1127,10 +1054,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download presto expression fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: presto
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1216,10 +1143,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download aggregation fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: aggregation
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1314,10 +1241,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download window fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: window
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1378,10 +1305,10 @@ jobs:
       LINUX_DISTRO: centos
     steps:
 
-      - name: Download writer fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: writer
+          name: fuzzer-binaries
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1442,10 +1369,10 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: Download spatial join fuzzer
+      - name: Download fuzzer binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: spatial_join_fuzzer
+          name: fuzzer-binaries
 
       - name: Run Spatial Join Fuzzer
         run: |
