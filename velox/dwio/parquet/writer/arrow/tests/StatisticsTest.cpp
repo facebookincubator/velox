@@ -2139,6 +2139,38 @@ TEST(IcebergStatistics, unboundedUpperBound) {
   }
 }
 
+TEST(IcebergStatistics, maxValueWithNulls) {
+  const NodePtr node = PrimitiveNode::make(
+      "decimal_col",
+      Repetition::kOptional,
+      LogicalType::decimal(7, 2),
+      Type::kInt32);
+  ColumnDescriptor descr(node, 1, 1);
+
+  auto stats = makeStatistics<Int32Type>(&descr);
+
+  std::vector<int32_t> values = {19900, 20000};
+  stats->update(values.data(), values.size(), 1);
+
+  ASSERT_TRUE(stats->hasMinMax());
+  EXPECT_EQ(stats->min(), 19900);
+  EXPECT_EQ(stats->max(), 20000);
+
+  const auto maxValue = stats->MaxValue();
+  EXPECT_FALSE(maxValue.empty()) << "MaxValue() should not be empty";
+
+  int32_t decodedMax = ::arrow::bit_util::FromBigEndian(
+      *reinterpret_cast<const int32_t*>(maxValue.data()));
+  EXPECT_EQ(decodedMax, 20000) << "MaxValue() should return 20000";
+
+  const auto minValue = stats->MinValue();
+  EXPECT_FALSE(minValue.empty()) << "MinValue() should not be empty";
+
+  int32_t decodedMin = ::arrow::bit_util::FromBigEndian(
+      *reinterpret_cast<const int32_t*>(minValue.data()));
+  EXPECT_EQ(decodedMin, 19900) << "MinValue() should return 19900";
+    }
+
 TEST(StatisticsComparison, withInt64) {
   NodePtr Node =
       PrimitiveNode::make("int_col", Repetition::kRequired, Type::kInt64);
