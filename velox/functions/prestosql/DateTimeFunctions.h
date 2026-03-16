@@ -602,6 +602,7 @@ class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VectorPtr& timeVector = args[0]->type()->isTime() ? args[0] : args[1];
+    VELOX_DCHECK(timeVector->type()->equivalent(*TIME()));
 
     // Constant vector case
     // If time input is constant, create constant result - no iteration!

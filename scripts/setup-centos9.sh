@@ -56,7 +56,8 @@ function install_build_prerequisites {
     dnf config-manager --set-enabled crb
     dnf update -y
   fi
-  dnf_install autoconf automake ccache clang gcc-toolset-12 gcc-toolset-14 git libtool \
+  dnf_install autoconf automake ccache clang compiler-rt \
+    gcc-toolset-12 gcc-toolset-14 git libtool \
     llvm ninja-build python3-pip python3-devel wget which
 
   install_uv
