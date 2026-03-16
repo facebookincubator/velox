@@ -14,11 +14,11 @@
 
 velox_install_library_headers()
 
-velox_add_library(velox_rpc_types RPCTypes.h)
+velox_add_library(velox_rpc_types INTERFACE RPCTypes.h)
 
-velox_add_library(velox_rpc_client IRPCClient.h)
+velox_add_library(velox_rpc_client INTERFACE IRPCClient.h)
 
-velox_link_libraries(velox_rpc_client velox_rpc_types Folly::folly)
+velox_link_libraries(velox_rpc_client INTERFACE velox_rpc_types Folly::folly)
 
 velox_add_library(velox_mock_rpc_client clients/MockRPCClient.cpp)
 

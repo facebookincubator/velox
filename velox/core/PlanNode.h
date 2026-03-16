@@ -206,6 +206,14 @@ class PlanNode : public ISerializable {
     return false;
   }
 
+  /// Returns true if this plan node requires single-threaded execution
+  /// (maxDrivers = 1). For example, ValuesNode, final OrderByNode, final
+  /// LimitNode, MergeExchangeNode, LocalMergeNode, and
+  /// LocalPartitionNode(Gather) all require single-threaded execution.
+  virtual bool requiresSingleThread() const {
+    return false;
+  }
+
   /// Returns true if this plan node operator supports task barrier processing.
   /// To support barrier processing, the operator must be able to drain its
   /// buffered output when it receives the drain signal at split boundary. Not
@@ -391,6 +399,10 @@ class ValuesNode : public PlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
+  bool requiresSingleThread() const override {
+    return !parallelizable_;
+  }
+
   const std::vector<RowVectorPtr>& values() const {
     return values_;
   }
@@ -492,6 +504,10 @@ class ArrowStreamNode : public PlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  bool requiresSingleThread() const override {
+    return true;
+  }
 
   const std::shared_ptr<ArrowArrayStream>& arrowStream() const {
     return arrowStream_;
@@ -1713,6 +1729,11 @@ class TableWriteNode : public PlanNode {
     return columnStatsSpec_;
   }
 
+  bool requiresSingleThread() const override {
+    return !insertTableHandle_->connectorInsertTableHandle()
+                ->supportsMultiThreading();
+  }
+
   bool canSpill(const QueryConfig& queryConfig) const override {
     return queryConfig.writerSpillEnabled();
   }
@@ -1844,6 +1865,10 @@ class TableWriteMergeNode : public PlanNode {
   /// Optional spec for column statistics collection.
   const std::optional<ColumnStatsSpec>& columnStatsSpec() const {
     return columnStatsSpec_;
+  }
+
+  bool requiresSingleThread() const override {
+    return true;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -2351,6 +2376,10 @@ class MergeExchangeNode : public ExchangeNode {
     return sortingOrders_;
   }
 
+  bool requiresSingleThread() const override {
+    return true;
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
@@ -2448,6 +2477,10 @@ class LocalMergeNode : public PlanNode {
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
+
+  bool requiresSingleThread() const override {
+    return true;
+  }
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
@@ -2658,6 +2691,10 @@ class LocalPartitionNode : public PlanNode {
   /// Returns true if this is for table writer scaling.
   bool scaleWriter() const {
     return scaleWriter_;
+  }
+
+  bool requiresSingleThread() const override {
+    return type_ == Type::kGather;
   }
 
   bool supportsBarrier() const override {
@@ -3433,6 +3470,10 @@ class HashJoinNode : public AbstractJoinNode {
         queryConfig.joinSpillEnabled();
   }
 
+  bool requiresSingleThread() const override {
+    return isRightSemiProjectJoin() && nullAware_;
+  }
+
   bool isNullAware() const {
     return nullAware_;
   }
@@ -3506,6 +3547,10 @@ class MergeJoinNode : public AbstractJoinNode {
           outputType_.value());
     }
   };
+
+  bool requiresSingleThread() const override {
+    return true;
+  }
 
   std::string_view name() const override {
     return "MergeJoin";
@@ -4084,6 +4129,10 @@ class OrderByNode : public PlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
+  bool requiresSingleThread() const override {
+    return !isPartial_;
+  }
+
   // True if this node only sorts a portion of the final result. If it is
   // true, a local merge or merge exchange is required to merge the sorted
   // runs.
@@ -4431,6 +4480,10 @@ class TopNNode : public PlanNode {
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
+  bool requiresSingleThread() const override {
+    return !isPartial_;
+  }
+
   int32_t count() const {
     return count_;
   }
@@ -4564,6 +4617,10 @@ class LimitNode : public PlanNode {
 
   int64_t count() const {
     return count_;
+  }
+
+  bool requiresSingleThread() const override {
+    return !isPartial_;
   }
 
   bool isPartial() const {
@@ -5841,6 +5898,10 @@ class MixedUnionNode : public PlanNode {
       return 0;
     }
     return batchSizesPerSource_[sourceIndex];
+  }
+
+  bool requiresSingleThread() const override {
+    return true;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
