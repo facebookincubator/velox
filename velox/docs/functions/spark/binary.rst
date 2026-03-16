@@ -2,6 +2,25 @@
 Binary Functions
 ================
 
+.. spark:function:: aes_encrypt(input, key, mode, padding, iv, aad) -> varbinary
+
+    Encrypts ``input`` using AES with the given ``key``. ``mode`` can be
+    ``ECB``, ``CBC``, or ``GCM``. ``padding`` can be ``PKCS``,
+    ``NONE``, or ``DEFAULT``. ``iv`` is the initialization vector.
+    ``aad`` is additional authenticated data (GCM only).
+    Key must be 16, 24, or 32 bytes (AES-128/192/256).
+    The output is ``[IV || ciphertext]`` for CBC/GCM modes.
+
+    .. warning::
+       Never reuse the same IV with the same key in GCM mode. IV reuse
+       completely breaks GCM's authentication guarantees.
+
+.. spark:function:: aes_decrypt(input, key, mode, padding, iv, aad) -> varbinary
+
+    Decrypts ``input`` using AES with the given ``key``. Parameters match
+    :spark:func:`aes_encrypt`. Expects input format ``[IV || ciphertext]``
+    for CBC/GCM modes. For GCM, verifies the authentication tag.
+
 .. spark:function:: crc32(binary) -> bigint
 
     Computes the crc32 checksum of ``binary``.
