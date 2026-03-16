@@ -122,6 +122,107 @@ TEST(CompressionOptionsTest, testCompressionOptions) {
       dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS);
 }
 
+// Test that prepareDictionary rejects FIXED_LEN_BYTE_ARRAY dictionary pages
+// where the Parquet type length exceeds the Velox type length.  This guards
+// against heap buffer overflow from malicious Parquet files that have a patched
+// precision (e.g. decimal128 with typeLength=16 but precision lowered to make
+// Velox choose int64_t with cppSizeInBytes=8).
+TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
+  // Simulate the exploit: Parquet FIXED_LEN_BYTE_ARRAY with typeLength=16
+  // but Velox sees SHORT_DECIMAL (precision=10) which is int64_t (8 bytes).
+  // Without the check, prepareDictionary would allocate numValues*8 bytes
+  // but memcpy numValues*16 bytes, causing a heap overflow.
+  constexpr int32_t kNumDictValues = 4;
+  constexpr int32_t kParquetTypeLength = 16;
+  constexpr int32_t kDictPageSize = kNumDictValues * kParquetTypeLength;
+
+  // Create a DICTIONARY_PAGE header.
+  thrift::PageHeader dictHeader;
+  dictHeader.__set_type(thrift::PageType::DICTIONARY_PAGE);
+  dictHeader.__set_uncompressed_page_size(kDictPageSize);
+  dictHeader.__set_compressed_page_size(kDictPageSize);
+  thrift::DictionaryPageHeader dictPageHeader;
+  dictPageHeader.__set_num_values(kNumDictValues);
+  dictPageHeader.__set_encoding(thrift::Encoding::PLAIN);
+  dictHeader.__set_dictionary_page_header(dictPageHeader);
+
+  auto transport = std::make_shared<apache::thrift::transport::TMemoryBuffer>();
+  apache::thrift::protocol::TCompactProtocolT<
+      apache::thrift::transport::TMemoryBuffer>
+      protocol(transport);
+  dictHeader.write(&protocol);
+  std::string dictHeaderBytes = transport->getBufferAsString();
+
+  // Dictionary page data (content doesn't matter, check fires before read).
+  std::string dictPageData(kDictPageSize, '\0');
+
+  // Create a DATA_PAGE header so seekToPage can find a data page after the
+  // dictionary page.
+  constexpr int32_t kDataPageSize = 8;
+  thrift::PageHeader dataHeader;
+  dataHeader.__set_type(thrift::PageType::DATA_PAGE);
+  dataHeader.__set_uncompressed_page_size(kDataPageSize);
+  dataHeader.__set_compressed_page_size(kDataPageSize);
+  thrift::DataPageHeader dataPageHeader;
+  dataPageHeader.__set_num_values(1);
+  dataPageHeader.__set_encoding(thrift::Encoding::RLE_DICTIONARY);
+  dataPageHeader.__set_definition_level_encoding(thrift::Encoding::RLE);
+  dataPageHeader.__set_repetition_level_encoding(thrift::Encoding::RLE);
+  dataHeader.__set_data_page_header(dataPageHeader);
+
+  auto transport2 =
+      std::make_shared<apache::thrift::transport::TMemoryBuffer>();
+  apache::thrift::protocol::TCompactProtocolT<
+      apache::thrift::transport::TMemoryBuffer>
+      protocol2(transport2);
+  dataHeader.write(&protocol2);
+  std::string dataHeaderBytes = transport2->getBufferAsString();
+
+  std::string dataPageData(kDataPageSize, '\0');
+
+  // Combine: dict header + dict data + data header + data data.
+  std::string fullData =
+      dictHeaderBytes + dictPageData + dataHeaderBytes + dataPageData;
+
+  auto inputStream = std::make_unique<SeekableArrayInputStream>(
+      fullData.data(), fullData.size());
+
+  // Construct ParquetTypeWithId: SHORT_DECIMAL (precision=10, cppSizeInBytes=8)
+  // with parquetType=FIXED_LEN_BYTE_ARRAY and typeLength=16.
+  auto fileType = std::make_shared<const ParquetTypeWithId>(
+      DECIMAL(10, 2),
+      std::vector<std::unique_ptr<dwio::common::TypeWithId>>{},
+      /*id=*/0,
+      /*maxId=*/0,
+      /*column=*/0,
+      "test_col",
+      thrift::Type::FIXED_LEN_BYTE_ARRAY,
+      std::nullopt,
+      std::nullopt,
+      /*maxRepeat=*/0,
+      /*maxDefine=*/1,
+      /*isOptional=*/true,
+      /*isRepeated=*/false,
+      /*precision=*/10,
+      /*scale=*/2,
+      /*typeLength=*/kParquetTypeLength);
+
+  dwio::common::ColumnReaderStatistics stats;
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      fileType,
+      common::CompressionKind::CompressionKind_NONE,
+      fullData.size(),
+      stats,
+      nullptr);
+
+  // skip(1) triggers seekToPage() -> prepareDictionary().
+  // The VELOX_CHECK_LE should fire because numParquetBytes (4*16=64) >
+  // numVeloxBytes (4*8=32).
+  VELOX_ASSERT_THROW(pageReader->skip(1), "");
+}
+
 namespace {
 
 // Helper to serialize a PageHeader using Thrift compact protocol.
