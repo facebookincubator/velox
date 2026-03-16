@@ -1190,7 +1190,7 @@ class QueryConfig {
   }
 
   bool markDistinctSpillEnabled() const {
-    return get<bool>(kMarkDistinctSpillEnabled, true);
+    return get<bool>(kMarkDistinctSpillEnabled, false);
   }
 
   bool topNRowNumberSpillEnabled() const {
