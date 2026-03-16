@@ -2132,4 +2132,214 @@ TEST_F(HiveIcebergTest, positionalDeleteSequenceNumberZeroDisablesFilter) {
   AssertQueryBuilder(plan).split(split).assertResults({expected});
 }
 
+// Sequence number filtering tests for positional updates (Diff 3).
+// Per the Iceberg spec, positional update files follow the same sequence number
+// conflict resolution as positional deletes.
+
+TEST_F(HiveIcebergTest, positionalUpdateSequenceNumberApplied) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  // Write base data file: c0 = [0, 1, 2, 3, 4].
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  // Write update file: update positions 1, 3 with c0 = 100, 300.
+  auto updateFilePath = TempFilePath::create();
+  auto baseFilePath = dataFilePath->getPath();
+  writeToFile(
+      updateFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name, "c0"},
+          {
+              makeFlatVector<std::string>(
+                  2, [&](vector_size_t) { return baseFilePath; }),
+              makeFlatVector<int64_t>({1, 3}),
+              makeFlatVector<int64_t>({100, 300}),
+          })});
+
+  // Update file seqNum=10 > data seqNum=5 → update should be applied.
+  IcebergDeleteFile updateFile(
+      FileContent::kPositionalUpdates,
+      updateFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getTestFileSize(updateFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/10);
+
+  auto file = filesystems::getFileSystem(baseFilePath, nullptr)
+                  ->openFileForRead(baseFilePath);
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      baseFilePath,
+      dwio::common::FileFormat::DWRF,
+      0,
+      file->size(),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      true,
+      std::vector<IcebergDeleteFile>{},
+      std::unordered_map<std::string, std::string>{},
+      std::nullopt,
+      std::vector<IcebergDeleteFile>{updateFile},
+      /*dataSequenceNumber=*/5);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // Update applied: pos 1→100, pos 3→300. Result: [0, 100, 2, 300, 4].
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 100, 2, 300, 4})});
+  AssertQueryBuilder(plan).split(split).assertResults({expected});
+}
+
+TEST_F(HiveIcebergTest, positionalUpdateSequenceNumberSkipped) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  auto updateFilePath = TempFilePath::create();
+  auto baseFilePath = dataFilePath->getPath();
+  writeToFile(
+      updateFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name, "c0"},
+          {
+              makeFlatVector<std::string>(
+                  2, [&](vector_size_t) { return baseFilePath; }),
+              makeFlatVector<int64_t>({1, 3}),
+              makeFlatVector<int64_t>({100, 300}),
+          })});
+
+  // Update file seqNum=5 <= data seqNum=10 → update should be skipped.
+  IcebergDeleteFile updateFile(
+      FileContent::kPositionalUpdates,
+      updateFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getTestFileSize(updateFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/5);
+
+  auto file = filesystems::getFileSystem(baseFilePath, nullptr)
+                  ->openFileForRead(baseFilePath);
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      baseFilePath,
+      dwio::common::FileFormat::DWRF,
+      0,
+      file->size(),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      true,
+      std::vector<IcebergDeleteFile>{},
+      std::unordered_map<std::string, std::string>{},
+      std::nullopt,
+      std::vector<IcebergDeleteFile>{updateFile},
+      /*dataSequenceNumber=*/10);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // Update skipped → all rows unchanged: [0, 1, 2, 3, 4].
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
+  AssertQueryBuilder(plan).split(split).assertResults({expected});
+}
+
+TEST_F(HiveIcebergTest, positionalUpdateSequenceNumberZeroDisablesFilter) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  auto updateFilePath = TempFilePath::create();
+  auto baseFilePath = dataFilePath->getPath();
+  writeToFile(
+      updateFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name, "c0"},
+          {
+              makeFlatVector<std::string>(
+                  2, [&](vector_size_t) { return baseFilePath; }),
+              makeFlatVector<int64_t>({1, 3}),
+              makeFlatVector<int64_t>({100, 300}),
+          })});
+
+  // Update file seqNum=0 (unassigned/V1 legacy) → always applied.
+  IcebergDeleteFile updateFile(
+      FileContent::kPositionalUpdates,
+      updateFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getTestFileSize(updateFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/0);
+
+  auto file = filesystems::getFileSystem(baseFilePath, nullptr)
+                  ->openFileForRead(baseFilePath);
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      baseFilePath,
+      dwio::common::FileFormat::DWRF,
+      0,
+      file->size(),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      true,
+      std::vector<IcebergDeleteFile>{},
+      std::unordered_map<std::string, std::string>{},
+      std::nullopt,
+      std::vector<IcebergDeleteFile>{updateFile},
+      /*dataSequenceNumber=*/100);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // SeqNum=0 disables filtering → update applied: [0, 100, 2, 300, 4].
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 100, 2, 300, 4})});
+  AssertQueryBuilder(plan).split(split).assertResults({expected});
+}
+
 } // namespace facebook::velox::connector::hive::iceberg

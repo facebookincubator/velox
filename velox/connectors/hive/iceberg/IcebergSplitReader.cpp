@@ -90,8 +90,7 @@ void IcebergSplitReader::prepareSplit(
         // than the delete file's data sequence number.
         if (deleteFile.dataSequenceNumber > 0 &&
             icebergSplit->dataSequenceNumber > 0 &&
-            deleteFile.dataSequenceNumber <=
-                icebergSplit->dataSequenceNumber) {
+            deleteFile.dataSequenceNumber <= icebergSplit->dataSequenceNumber) {
           continue;
         }
 
@@ -184,8 +183,7 @@ void IcebergSplitReader::prepareSplit(
         // sequence number conflict resolution as positional deletes.
         if (deleteFile.dataSequenceNumber > 0 &&
             icebergSplit->dataSequenceNumber > 0 &&
-            deleteFile.dataSequenceNumber <=
-                icebergSplit->dataSequenceNumber) {
+            deleteFile.dataSequenceNumber <= icebergSplit->dataSequenceNumber) {
           continue;
         }
 
@@ -220,6 +218,16 @@ void IcebergSplitReader::prepareSplit(
         "Expected positional update file but got content type: {}",
         static_cast<int>(updateFile.content));
     if (updateFile.recordCount > 0) {
+      // Per the Iceberg spec, positional update files follow the same
+      // sequence number conflict resolution as positional deletes. An
+      // update file should only apply to data files whose data sequence
+      // number is strictly less than the update file's data sequence number.
+      if (updateFile.dataSequenceNumber > 0 &&
+          icebergSplit->dataSequenceNumber > 0 &&
+          updateFile.dataSequenceNumber <= icebergSplit->dataSequenceNumber) {
+        continue;
+      }
+
       positionalUpdateFileReaders_.push_back(
           std::make_unique<PositionalUpdateFileReader>(
               updateFile,
