@@ -33,6 +33,12 @@ enum class FileContent {
   /// where updates are full-row replacements. Standard Iceberg achieves
   /// updates via delete + insert; this is a positional overlay alternative.
   kPositionalUpdates,
+  /// Iceberg V3 deletion vector. A serialized roaring bitmap of deleted row
+  /// positions stored as a blob inside a Puffin file. More compact than V2
+  /// positional delete files and avoids sorted merge of multiple delete files.
+  /// The coordinator extracts the blob offset and length from the Puffin
+  /// footer and provides them via IcebergDeleteFile fields.
+  kDeletionVector,
 };
 
 struct IcebergDeleteFile {
