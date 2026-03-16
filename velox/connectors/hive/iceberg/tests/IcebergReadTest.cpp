@@ -1925,4 +1925,211 @@ TEST_F(HiveIcebergTest, positionalUpdateWithDeletesLargeDataset) {
   AssertQueryBuilder(plan).split(split).assertResults({expected});
 }
 
+// Sequence number filtering tests for positional deletes (Diff 2).
+// Per the Iceberg V2+ spec, a positional delete file should only apply to
+// data files whose dataSequenceNumber is strictly less than the delete file's.
+
+TEST_F(HiveIcebergTest, positionalDeleteSequenceNumberApplied) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  // Write base data file: c0 = [0, 1, 2, 3, 4].
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  // Write positional delete file targeting positions 1 and 3.
+  auto deleteFilePath = TempFilePath::create();
+  auto baseFilePath = dataFilePath->getPath();
+  writeToFile(
+      deleteFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name},
+          {
+              makeFlatVector<std::string>(
+                  2, [&](vector_size_t) { return baseFilePath; }),
+              makeFlatVector<int64_t>({1, 3}),
+          })});
+
+  // Delete file seqNum=10 > data seqNum=5 → delete should be applied.
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getTestFileSize(deleteFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/10);
+
+  auto file = filesystems::getFileSystem(baseFilePath, nullptr)
+                  ->openFileForRead(baseFilePath);
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      baseFilePath,
+      dwio::common::FileFormat::DWRF,
+      0,
+      file->size(),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      true,
+      std::vector<IcebergDeleteFile>{deleteFile},
+      std::unordered_map<std::string, std::string>{},
+      std::nullopt,
+      std::vector<IcebergDeleteFile>{},
+      /*dataSequenceNumber=*/5);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // Positions 1 and 3 deleted → remaining: [0, 2, 4].
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 2, 4})});
+  AssertQueryBuilder(plan).split(split).assertResults({expected});
+}
+
+TEST_F(HiveIcebergTest, positionalDeleteSequenceNumberSkipped) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  auto deleteFilePath = TempFilePath::create();
+  auto baseFilePath = dataFilePath->getPath();
+  writeToFile(
+      deleteFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name},
+          {
+              makeFlatVector<std::string>(
+                  2, [&](vector_size_t) { return baseFilePath; }),
+              makeFlatVector<int64_t>({1, 3}),
+          })});
+
+  // Delete file seqNum=5 <= data seqNum=10 → delete should be skipped.
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getTestFileSize(deleteFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/5);
+
+  auto file = filesystems::getFileSystem(baseFilePath, nullptr)
+                  ->openFileForRead(baseFilePath);
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      baseFilePath,
+      dwio::common::FileFormat::DWRF,
+      0,
+      file->size(),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      true,
+      std::vector<IcebergDeleteFile>{deleteFile},
+      std::unordered_map<std::string, std::string>{},
+      std::nullopt,
+      std::vector<IcebergDeleteFile>{},
+      /*dataSequenceNumber=*/10);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // Delete skipped → all rows survive: [0, 1, 2, 3, 4].
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
+  AssertQueryBuilder(plan).split(split).assertResults({expected});
+}
+
+TEST_F(HiveIcebergTest, positionalDeleteSequenceNumberZeroDisablesFilter) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  auto deleteFilePath = TempFilePath::create();
+  auto baseFilePath = dataFilePath->getPath();
+  writeToFile(
+      deleteFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name},
+          {
+              makeFlatVector<std::string>(
+                  2, [&](vector_size_t) { return baseFilePath; }),
+              makeFlatVector<int64_t>({1, 3}),
+          })});
+
+  // Delete file seqNum=0 (unassigned/V1 legacy) → always applied regardless.
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getTestFileSize(deleteFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/0);
+
+  auto file = filesystems::getFileSystem(baseFilePath, nullptr)
+                  ->openFileForRead(baseFilePath);
+  auto split = std::make_shared<HiveIcebergSplit>(
+      kIcebergConnectorId,
+      baseFilePath,
+      dwio::common::FileFormat::DWRF,
+      0,
+      file->size(),
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      true,
+      std::vector<IcebergDeleteFile>{deleteFile},
+      std::unordered_map<std::string, std::string>{},
+      std::nullopt,
+      std::vector<IcebergDeleteFile>{},
+      /*dataSequenceNumber=*/100);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // SeqNum=0 disables filtering → delete applied: [0, 2, 4].
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 2, 4})});
+  AssertQueryBuilder(plan).split(split).assertResults({expected});
+}
+
 } // namespace facebook::velox::connector::hive::iceberg
