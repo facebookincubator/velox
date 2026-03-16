@@ -3559,4 +3559,74 @@ DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
   }
 }
 
+// Verifies that blocked wait time is recorded even when an operator is
+// terminated while blocked.
+DEBUG_ONLY_TEST_F(TaskTest, blockedWaitTimeOnAbort) {
+  // Test that blocked time is recorded even when a task is aborted while
+  // an operator is blocked.
+  //
+  // We use a simple table scan that blocks waiting for splits. By starting
+  // the task without adding splits, the scan operator will block on
+  // kWaitForSplit. We then abort the task while blocked and verify that
+  // the blocked time is recorded via closeByTask().
+  constexpr int kBlockTimeMs = 100;
+
+  // Build a simple plan with a table scan.
+  core::PlanNodeId scanNodeId;
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .capturePlanNodeId(scanNodeId)
+                  .planFragment();
+
+  auto task = Task::create(
+      "blockedWaitTimeOnAbort",
+      plan,
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel);
+
+  task->start(1, 1);
+
+  // Wait for the driver to become blocked waiting for splits.
+  auto startTime = std::chrono::steady_clock::now();
+  while (BlockingState::numBlockedDrivers() == 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::steady_clock::now() - startTime)
+                       .count();
+    if (elapsed > 5) {
+      task->requestAbort().wait();
+      GTEST_SKIP() << "Operator did not block in time";
+    }
+  }
+
+  // Let some time pass while blocked to have measurable blocked time.
+  std::this_thread::sleep_for(std::chrono::milliseconds(kBlockTimeMs));
+
+  // Abort the task while the operator is still blocked waiting for splits.
+  task->requestAbort().wait();
+
+  // Wait for the task to be fully aborted.
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+
+  // Verify that blocked wait time was recorded despite the abort.
+  const auto stats = task->taskStats().pipelineStats;
+  ASSERT_FALSE(stats.empty());
+  ASSERT_FALSE(stats[0].operatorStats.empty());
+
+  // Find operator stats with blocked time recorded.
+  bool foundBlockedTime = false;
+  for (const auto& opStats : stats[0].operatorStats) {
+    if (opStats.blockedWallNanos > 0) {
+      foundBlockedTime = true;
+      // Verify the blocked time is at least what we waited (with tolerance).
+      EXPECT_GE(opStats.blockedWallNanos, (kBlockTimeMs - 30) * 1'000'000)
+          << "Blocked time should be at least " << (kBlockTimeMs - 30) << "ms";
+      break;
+    }
+  }
+  EXPECT_TRUE(foundBlockedTime)
+      << "Operator should have recorded blocked time despite task abort";
+}
+
 } // namespace facebook::velox::exec::test

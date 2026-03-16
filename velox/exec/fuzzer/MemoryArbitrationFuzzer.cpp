@@ -24,8 +24,8 @@
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h" // @manual
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"

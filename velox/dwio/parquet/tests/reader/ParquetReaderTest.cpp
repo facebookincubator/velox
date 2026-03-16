@@ -1792,6 +1792,127 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
+TEST_F(ParquetReaderTest, columnStatistics) {
+  auto data = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5}),
+          makeFlatVector<std::string>({"aaa", "bbb", "ccc", "ddd", "eee"}),
+      });
+
+  auto* sink = write(data);
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOptions);
+  const auto& schema = reader->typeWithId();
+
+  // Root ROW type — no stats for non-leaf.
+  EXPECT_EQ(reader->columnStatistics(schema->id()), nullptr);
+
+  // Out of range.
+  EXPECT_EQ(reader->columnStatistics(schema->maxId() + 1), nullptr);
+
+  // BIGINT column.
+  {
+    auto stats = reader->columnStatistics(schema->childByName("a")->id());
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getNumberOfValues(), 5);
+    EXPECT_FALSE(stats->hasNull().value());
+    auto* intStats =
+        dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+    ASSERT_NE(intStats, nullptr);
+    EXPECT_EQ(intStats->getMinimum(), 1);
+    EXPECT_EQ(intStats->getMaximum(), 5);
+  }
+
+  // DOUBLE column.
+  {
+    auto stats = reader->columnStatistics(schema->childByName("b")->id());
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getNumberOfValues(), 5);
+    EXPECT_FALSE(stats->hasNull().value());
+    auto* doubleStats =
+        dynamic_cast<dwio::common::DoubleColumnStatistics*>(stats.get());
+    ASSERT_NE(doubleStats, nullptr);
+    EXPECT_EQ(doubleStats->getMinimum(), 1.1);
+    EXPECT_EQ(doubleStats->getMaximum(), 5.5);
+  }
+
+  // VARCHAR column.
+  {
+    auto stats = reader->columnStatistics(schema->childByName("c")->id());
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getNumberOfValues(), 5);
+    EXPECT_FALSE(stats->hasNull().value());
+    auto* stringStats =
+        dynamic_cast<dwio::common::StringColumnStatistics*>(stats.get());
+    ASSERT_NE(stringStats, nullptr);
+    EXPECT_EQ(stringStats->getMinimum(), "aaa");
+    EXPECT_EQ(stringStats->getMaximum(), "eee");
+  }
+}
+
+TEST_F(ParquetReaderTest, columnStatisticsWithNulls) {
+  auto data = makeRowVector(
+      {"a"},
+      {
+          makeNullableFlatVector<int64_t>(
+              {1, std::nullopt, 3, std::nullopt, 5}),
+      });
+
+  auto* sink = write(data);
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOptions);
+  const auto& schema = reader->typeWithId();
+
+  auto stats = reader->columnStatistics(schema->childByName("a")->id());
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getNumberOfValues(), 3);
+  EXPECT_TRUE(stats->hasNull().value());
+  auto* intStats =
+      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+  ASSERT_NE(intStats, nullptr);
+  EXPECT_EQ(intStats->getMinimum(), 1);
+  EXPECT_EQ(intStats->getMaximum(), 5);
+}
+
+TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
+  // Use a small flush size to force multiple row groups.
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<parquet::LambdaFlushPolicy>(
+        /*rowsInRowGroup=*/5,
+        /*bytesInRowGroup=*/1'024 * 1'024,
+        []() { return false; });
+  };
+
+  auto data = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50, 1, 2, 3, 4, 5}),
+      });
+
+  auto* sink = write(data, writerOptions);
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sink, readerOptions);
+
+  // Verify we have multiple row groups.
+  ASSERT_GT(reader->fileMetaData().numRowGroups(), 1);
+
+  const auto& schema = reader->typeWithId();
+  auto stats = reader->columnStatistics(schema->childByName("a")->id());
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getNumberOfValues(), 10);
+  EXPECT_FALSE(stats->hasNull().value());
+  auto* intStats =
+      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+  ASSERT_NE(intStats, nullptr);
+  // Global min/max across all row groups.
+  EXPECT_EQ(intStats->getMinimum(), 1);
+  EXPECT_EQ(intStats->getMaximum(), 50);
+}
+
 // Comprehensive test matrix covering all combinations:
 // - Nulls: No nulls, With nulls
 // - Dictionary: Enabled, Disabled

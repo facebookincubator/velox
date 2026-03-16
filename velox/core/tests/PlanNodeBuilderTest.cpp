@@ -17,6 +17,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/core/PlanNode.h"
+#include "velox/core/TableWriteTraits.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/tests/utils/AggregationResolver.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -358,7 +359,6 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
   const PlanNodeId id = "table_write_node_id";
   const RowTypePtr columns = ROW({"c0"}, {INTEGER()});
   const std::vector<std::string> columnNames{"c0"};
-  const RowTypePtr outputType = ROW({"c1"}, {BIGINT()});
   const bool hasPartitioningScheme = true;
   const auto commitStrategy = connector::CommitStrategy::kNoCommit;
 
@@ -367,6 +367,7 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
       std::vector<std::string>{},
       AggregationNode::Step::kPartial,
       std::vector<std::string>{"sum(c0)"});
+  const auto outputType = TableWriteTraits::outputType(statsSpec);
 
   const auto insertTableHandle =
       std::make_shared<InsertTableHandle>("connector_id", nullptr);
@@ -378,7 +379,7 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
     EXPECT_EQ(node->insertTableHandle(), insertTableHandle);
     EXPECT_TRUE(node->hasColumnStatsSpec());
     EXPECT_EQ(node->hasPartitioningScheme(), hasPartitioningScheme);
-    EXPECT_EQ(node->outputType(), outputType);
+    EXPECT_TRUE(node->outputType()->equivalent(*outputType));
     EXPECT_EQ(node->commitStrategy(), commitStrategy);
     EXPECT_EQ(node->sources(), std::vector<PlanNodePtr>{source_});
   };
@@ -402,19 +403,19 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
 
 TEST_F(PlanNodeBuilderTest, tableWriteMergeNode) {
   const PlanNodeId id = "table_write_merge_node_id";
-  const RowTypePtr outputType = ROW({"c0"}, {BIGINT()});
 
   const auto statsSpec = createStatsSpec(
-      outputType,
+      source_->outputType(),
       std::vector<std::string>{},
       AggregationNode::Step::kIntermediate,
       std::vector<std::string>{"sum(c0)"},
       {{BIGINT()}});
+  const auto outputType = TableWriteTraits::outputType(statsSpec);
 
   const auto verify =
       [&](const std::shared_ptr<const TableWriteMergeNode>& node) {
         EXPECT_EQ(node->id(), id);
-        EXPECT_EQ(node->outputType(), outputType);
+        EXPECT_TRUE(node->outputType()->equivalent(*outputType));
         EXPECT_TRUE(node->hasColumnStatsSpec());
         EXPECT_EQ(node->sources()[0], source_);
       };

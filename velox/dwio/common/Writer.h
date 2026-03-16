@@ -20,6 +20,7 @@
 #include <string>
 
 #include "velox/common/base/Portability.h"
+#include "velox/dwio/common/FileMetadata.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::dwio::common {
@@ -69,10 +70,16 @@ class Writer {
   /// NOTE: this must be called before close().
   virtual bool finish() = 0;
 
-  /// Invokes closes the writer. Data can no longer be written.
+  /// Closes the writer. Data can no longer be written. Returns format-specific
+  /// file metadata collected during write operations. The returned pointer can
+  /// be null if no metadata is available, such as for an empty data file.
   ///
   /// NOTE: this must be called after the last finish() which returns true.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   virtual void close() = 0;
+#else
+  virtual std::unique_ptr<FileMetadata> close() = 0;
+#endif
 
   /// Aborts the writing by closing the writer and dropping everything.
   /// Data can no longer be written.
