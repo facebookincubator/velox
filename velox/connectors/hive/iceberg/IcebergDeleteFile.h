@@ -27,6 +27,12 @@ enum class FileContent {
   kData,
   kPositionalDeletes,
   kEqualityDeletes,
+  /// Velox extension (not part of the Iceberg V2 spec). Carries full-row
+  /// updates keyed by (file_path, pos) for merge-on-read. The update file
+  /// contains all output columns, following the standard Iceberg MoR pattern
+  /// where updates are full-row replacements. Standard Iceberg achieves
+  /// updates via delete + insert; this is a positional overlay alternative.
+  kPositionalUpdates,
 };
 
 struct IcebergDeleteFile {
