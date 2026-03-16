@@ -70,7 +70,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     std::vector<IcebergDeleteFile> deletes,
     const std::unordered_map<std::string, std::string>& infoColumns,
     std::optional<FileProperties> properties,
-    std::vector<IcebergDeleteFile> updates)
+    std::vector<IcebergDeleteFile> updates,
+    int64_t dataSequenceNumber)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -89,5 +90,6 @@ HiveIcebergSplit::HiveIcebergSplit(
           std::nullopt,
           std::nullopt),
       deleteFiles(std::move(deletes)),
+      dataSequenceNumber(dataSequenceNumber),
       updateFiles(std::move(updates)) {}
 } // namespace facebook::velox::connector::hive::iceberg
