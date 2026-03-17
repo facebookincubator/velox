@@ -456,6 +456,12 @@ class QueryConfig {
   static constexpr const char* kHashJoinSpillFileCreateConfig =
       "hash_join_spill_file_create_config";
 
+  /// Config used to create row number spill files. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kRowNumberSpillFileCreateConfig =
+      "row_number_spill_file_create_config";
+
   /// Default offset spill start partition bit.
   /// 'kSpillNumPartitionBits' together to
   /// calculate the spilling partition number for join spill or aggregation
@@ -1267,6 +1273,10 @@ class QueryConfig {
 
   std::string hashJoinSpillFileCreateConfig() const {
     return get<std::string>(kHashJoinSpillFileCreateConfig, "");
+  }
+
+  std::string rowNumberSpillFileCreateConfig() const {
+    return get<std::string>(kRowNumberSpillFileCreateConfig, "");
   }
 
   int32_t minSpillableReservationPct() const {
