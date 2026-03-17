@@ -915,13 +915,27 @@ class RowWriter {
     copyFromImpl(inputs, std::index_sequence_for<T...>{});
   }
 
- private:
-  // Make sure user do not use those.
-  RowWriter() = default;
-
+  // Allow copying so that RowWriter is usable in template contexts where
+  // copy-constructibility of VectorWriter children is required (e.g., nested
+  // Row types stored in std::tuple inside other RowWriters). Without this,
+  // SimpleAggregateAdapter cannot instantiate extractValues for output types
+  // containing nested ROW(VARBINARY).
+  //
+  // Note: Copying a RowWriter creates an alias — both copies share the same
+  // underlying vectors. Callers should use the reference returned by
+  // VectorWriter::current() rather than copying in normal usage.
   RowWriter(const RowWriter&) = default;
 
   RowWriter& operator=(const RowWriter&) = default;
+
+  RowWriter(RowWriter&&) = default;
+
+  RowWriter& operator=(RowWriter&&) = default;
+
+ private:
+  // Prevent uninitialized construction — RowWriter must be created through
+  // VectorWriter<Row<T...>> which manages initialization and lifecycle.
+  RowWriter() = default;
 
   void initialize() {
     initializeImpl(std::index_sequence_for<T...>());
