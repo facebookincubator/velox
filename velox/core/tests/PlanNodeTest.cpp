@@ -16,6 +16,7 @@
 #include "velox/core/PlanNode.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -585,4 +586,152 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
   }
 }
+TEST_F(PlanNodeTest, rpcNodeSerdePerRowMode) {
+  Type::registerSerDe();
+  core::PlanNode::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  // Create a ValuesNode as the source with a "prompt" column.
+  auto sourceData =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+  auto valuesNode = std::make_shared<core::ValuesNode>(
+      "values-1", std::vector<RowVectorPtr>{sourceData});
+
+  auto rpcNode = std::make_shared<core::RPCNode>(
+      "rpc-1",
+      valuesNode,
+      "test_function",
+      VARCHAR(),
+      "response",
+      ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}),
+      std::vector<std::string>{"prompt"},
+      std::vector<TypePtr>{VARCHAR()},
+      std::vector<VectorPtr>{nullptr},
+      rpc::RPCStreamingMode::kPerRow,
+      0);
+
+  // Serialize and deserialize.
+  const auto serialized = rpcNode->serialize();
+  auto copy =
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get());
+
+  // Compare detailed string representation.
+  ASSERT_EQ(rpcNode->toString(true, true), copy->toString(true, true));
+
+  // Verify deserialized fields.
+  auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
+  ASSERT_NE(copyRpc, nullptr);
+  EXPECT_EQ(copyRpc->functionName(), "test_function");
+  EXPECT_EQ(copyRpc->outputColumn(), "response");
+  EXPECT_EQ(copyRpc->streamingMode(), rpc::RPCStreamingMode::kPerRow);
+  EXPECT_EQ(copyRpc->dispatchBatchSize(), 0);
+  EXPECT_EQ(*copyRpc->rpcResultType(), *VARCHAR());
+  EXPECT_EQ(copyRpc->argumentColumns().size(), 1);
+  EXPECT_EQ(copyRpc->argumentColumns()[0], "prompt");
+  EXPECT_EQ(copyRpc->argumentTypes().size(), 1);
+  EXPECT_EQ(*copyRpc->argumentTypes()[0], *VARCHAR());
+}
+
+TEST_F(PlanNodeTest, rpcNodeSerdeBatchMode) {
+  Type::registerSerDe();
+  core::PlanNode::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  auto sourceData = makeRowVector(
+      {"prompt", "model"},
+      {makeFlatVector<StringView>({"hello"}),
+       makeFlatVector<StringView>({"llama"})});
+  auto valuesNode = std::make_shared<core::ValuesNode>(
+      "values-1", std::vector<RowVectorPtr>{sourceData});
+
+  auto rpcNode = std::make_shared<core::RPCNode>(
+      "rpc-2",
+      valuesNode,
+      "batch_function",
+      VARCHAR(),
+      "result",
+      ROW({"prompt", "model", "result"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+      std::vector<std::string>{"prompt", "model"},
+      std::vector<TypePtr>{VARCHAR(), VARCHAR()},
+      std::vector<VectorPtr>{nullptr, nullptr},
+      rpc::RPCStreamingMode::kBatch,
+      50);
+
+  const auto serialized = rpcNode->serialize();
+  auto copy =
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get());
+
+  ASSERT_EQ(rpcNode->toString(true, true), copy->toString(true, true));
+
+  auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
+  ASSERT_NE(copyRpc, nullptr);
+  EXPECT_EQ(copyRpc->functionName(), "batch_function");
+  EXPECT_EQ(copyRpc->outputColumn(), "result");
+  EXPECT_EQ(copyRpc->streamingMode(), rpc::RPCStreamingMode::kBatch);
+  EXPECT_EQ(copyRpc->dispatchBatchSize(), 50);
+  EXPECT_EQ(copyRpc->argumentColumns().size(), 2);
+  EXPECT_EQ(copyRpc->argumentColumns()[0], "prompt");
+  EXPECT_EQ(copyRpc->argumentColumns()[1], "model");
+}
+
+TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
+  Type::registerSerDe();
+  core::PlanNode::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  auto sourceData =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+  auto valuesNode = std::make_shared<core::ValuesNode>(
+      "values-1", std::vector<RowVectorPtr>{sourceData});
+
+  // Create constant vectors for model and system_prompt arguments.
+  auto modelConstant = makeConstant("llama3", 1);
+  auto systemPromptConstant = makeConstant("You are helpful.", 1);
+
+  auto rpcNode = std::make_shared<core::RPCNode>(
+      "rpc-3",
+      valuesNode,
+      "test_function",
+      VARCHAR(),
+      "response",
+      ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}),
+      std::vector<std::string>{"prompt", "model", "system_prompt"},
+      std::vector<TypePtr>{VARCHAR(), VARCHAR(), VARCHAR()},
+      std::vector<VectorPtr>{nullptr, modelConstant, systemPromptConstant});
+
+  // Verify constants before serde.
+  ASSERT_EQ(rpcNode->constantInputs().size(), 3);
+  EXPECT_EQ(rpcNode->constantInputs()[0], nullptr);
+  EXPECT_NE(rpcNode->constantInputs()[1], nullptr);
+  EXPECT_NE(rpcNode->constantInputs()[2], nullptr);
+
+  // Serialize and deserialize.
+  const auto serialized = rpcNode->serialize();
+  auto copy =
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get());
+
+  auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
+  ASSERT_NE(copyRpc, nullptr);
+  EXPECT_EQ(copyRpc->functionName(), "test_function");
+  EXPECT_EQ(copyRpc->argumentColumns().size(), 3);
+
+  // Verify constants survive the round-trip.
+  ASSERT_EQ(copyRpc->constantInputs().size(), 3);
+  EXPECT_EQ(copyRpc->constantInputs()[0], nullptr);
+  ASSERT_NE(copyRpc->constantInputs()[1], nullptr);
+  ASSERT_NE(copyRpc->constantInputs()[2], nullptr);
+
+  // Verify constant values.
+  auto modelVec = copyRpc->constantInputs()[1];
+  EXPECT_TRUE(modelVec->isConstantEncoding());
+  EXPECT_EQ(
+      modelVec->as<ConstantVector<StringView>>()->valueAt(0).str(), "llama3");
+
+  auto promptVec = copyRpc->constantInputs()[2];
+  EXPECT_TRUE(promptVec->isConstantEncoding());
+  EXPECT_EQ(
+      promptVec->as<ConstantVector<StringView>>()->valueAt(0).str(),
+      "You are helpful.");
+}
+
 } // namespace

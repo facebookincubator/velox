@@ -552,17 +552,35 @@ void Writer::newRowGroup(int32_t numRows) {
   PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
 }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 void Writer::close() {
   flush();
-
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
     arrowContext_->writer.reset();
   }
   PARQUET_THROW_NOT_OK(stream_->Close());
-
   arrowContext_->stagingChunks.clear();
 }
+#else
+std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
+  flush();
+
+  std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
+  if (arrowContext_->writer) {
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
+    parquetFileMetadata = std::make_unique<ParquetFileMetadata>(
+        arrowContext_->writer->metadata());
+    arrowContext_->writer.reset();
+  }
+
+  PARQUET_THROW_NOT_OK(stream_->Close());
+
+  arrowContext_->stagingChunks.clear();
+
+  return parquetFileMetadata;
+}
+#endif
 
 void Writer::abort() {
   stream_->abort();

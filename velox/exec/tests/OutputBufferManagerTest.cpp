@@ -40,6 +40,10 @@ struct TestParam {
       : outputKind(_outputKind), serdeKind(_serdeKind) {}
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << fmt::format("{}_{}", param.outputKind, param.serdeKind);
+}
+
 class OutputBufferManagerTest : public testing::Test {
  protected:
   OutputBufferManagerTest() : serdeKind_("Presto") {

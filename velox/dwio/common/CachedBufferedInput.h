@@ -115,14 +115,19 @@ class CachedBufferedInput : public BufferedInput {
     for (auto& load : coalescedLoads_) {
       load->cancel();
     }
+    if (!options_.cacheable() && !preloadPin_.empty()) {
+      preloadPin_.checkedEntry()->makeEvictable();
+    }
   }
 
   std::unique_ptr<SeekableInputStream> enqueue(
       velox::common::Region region,
       const StreamIdentifier* sid) override;
 
-  bool supportSyncLoad() const override {
-    return false;
+  void preload() override;
+
+  bool preloaded() const override {
+    return !preloadPin_.empty();
   }
 
   void load(const LogType /*unused*/) override;
@@ -262,6 +267,10 @@ class CachedBufferedInput : public BufferedInput {
 
   // All distinct coalesced loads.
   std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
+
+  // Holds the whole-file cache entry alive for the lifetime of this input.
+  // Set by preload(), used by CacheInputStream to serve sub-region reads.
+  cache::CachePin preloadPin_;
 };
 
 } // namespace facebook::velox::dwio::common

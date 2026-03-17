@@ -160,7 +160,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
   bool isSupportedFromType(const TypePtr& other) const override {
     switch (other->kind()) {
       case TypeKind::BIGINT:
-        return other->isTime();
+        return other->equivalent(*TIME());
       case TypeKind::VARCHAR:
         return true;
       default:
@@ -171,7 +171,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
   bool isSupportedToType(const TypePtr& other) const override {
     switch (other->kind()) {
       case TypeKind::BIGINT:
-        return other->isTime();
+        return other->equivalent(*TIME());
       case TypeKind::VARCHAR:
         return true;
       default:
@@ -193,7 +193,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
       return;
     }
 
-    if (input.type()->isTime()) {
+    if (input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
       const auto* sessionTimeZone = getTimeZoneFromConfig(config);
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
@@ -246,7 +246,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
 
     switch (resultType->kind()) {
       case TypeKind::BIGINT:
-        if (resultType->isTime()) {
+        if (resultType->equivalent(*TIME())) {
           castToTime(input, context, rows, *result);
           return;
         }

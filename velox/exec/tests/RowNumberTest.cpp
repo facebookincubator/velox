@@ -575,4 +575,41 @@ TEST_F(RowNumberTest, spillWithYield) {
   }
 }
 
+DEBUG_ONLY_TEST_F(RowNumberTest, rowNumberSpillFileCreateConfig) {
+  auto vectors = createVectors(8, rowType_, fuzzerOpts_);
+  createDuckDbTable(vectors);
+
+  auto tempDirectory = TempDirectoryPath::create();
+
+  std::atomic_bool rowNumberConfigVerified{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::isBlocked",
+      std::function<void(exec::Operator*)>([&](exec::Operator* op) {
+        const auto* spillConfig = op->testingSpillConfig();
+        if (spillConfig == nullptr) {
+          return;
+        }
+        const auto& opType = op->operatorType();
+        if (opType == "RowNumber") {
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_row_number_config")
+              << "Operator: " << opType;
+          rowNumberConfigVerified = true;
+        }
+      }));
+
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(tempDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kRowNumberSpillEnabled, true)
+      .config(core::QueryConfig::kSpillFileCreateConfig, "test_default_config")
+      .config(
+          core::QueryConfig::kRowNumberSpillFileCreateConfig,
+          "test_row_number_config")
+      .plan(PlanBuilder().values(vectors).rowNumber({"c0"}).planNode())
+      .assertResults("SELECT *, row_number() over (partition by c0) FROM tmp");
+
+  ASSERT_TRUE(rowNumberConfigVerified.load());
+}
+
 } // namespace facebook::velox::exec::test

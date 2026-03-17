@@ -155,7 +155,26 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
     encodeTestWithSortOrder(inputs, sortingKeys, velox::core::kAscNullsFirst);
     encodeTestWithSortOrder(inputs, sortingKeys, velox::core::kAscNullsLast);
     encodeTestWithSortOrder(inputs, sortingKeys, velox::core::kDescNullsFirst);
-    encodeTestWithSortOrder(inputs, sortingKeys, velox::core::kDescNullsFirst);
+    encodeTestWithSortOrder(inputs, sortingKeys, velox::core::kDescNullsLast);
+  }
+
+  // Helper functions to create single-row RowVectors for index bound tests.
+  velox::RowVectorPtr makeIntRow(int32_t v) {
+    return makeRowVector({makeFlatVector<int32_t>({v})});
+  }
+
+  velox::RowVectorPtr makeIntRow(int32_t v1, int32_t v2) {
+    return makeRowVector(
+        {makeFlatVector<int32_t>({v1}), makeFlatVector<int32_t>({v2})});
+  }
+
+  velox::RowVectorPtr makeBigIntRow(int64_t v) {
+    return makeRowVector({makeFlatVector<int64_t>({v})});
+  }
+
+  velox::RowVectorPtr makeBigIntRow(int64_t v1, int64_t v2) {
+    return makeRowVector(
+        {makeFlatVector<int64_t>({v1}), makeFlatVector<int64_t>({v2})});
   }
 
   struct EncodeIndexBoundsTestCase {
@@ -243,12 +262,13 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
                 bound.inclusive ? ">=" : ">",
                 folly::join(", ", values)));
       } else {
-        parts.push_back("lower=null");
+        parts.emplace_back("lower=null");
       }
 
       if (upperBound.has_value()) {
         const auto& bound = upperBound.value();
         std::vector<std::string> values;
+        values.reserve(bound.bound->childrenSize());
         for (size_t i = 0; i < bound.bound->childrenSize(); ++i) {
           values.push_back(vectorToString(bound.bound->childAt(i)));
         }
@@ -258,31 +278,33 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
                 bound.inclusive ? "<=" : "<",
                 folly::join(", ", values)));
       } else {
-        parts.push_back("upper=null");
+        parts.emplace_back("upper=null");
       }
 
       if (expectedLowerBound.has_value()) {
         const auto& bound = expectedLowerBound.value();
         std::vector<std::string> values;
+        values.reserve(bound->childrenSize());
         for (size_t i = 0; i < bound->childrenSize(); ++i) {
           values.push_back(vectorToString(bound->childAt(i)));
         }
         parts.push_back(
             fmt::format("expected_lower=[{}]", folly::join(", ", values)));
       } else {
-        parts.push_back("expected_lower=null");
+        parts.emplace_back("expected_lower=null");
       }
 
       if (expectedUpperBound.has_value()) {
         const auto& bound = expectedUpperBound.value();
         std::vector<std::string> values;
+        values.reserve(bound->childrenSize());
         for (size_t i = 0; i < bound->childrenSize(); ++i) {
           values.push_back(vectorToString(bound->childAt(i)));
         }
         parts.push_back(
             fmt::format("expected_upper=[{}]", folly::join(", ", values)));
       } else {
-        parts.push_back("expected_upper=null");
+        parts.emplace_back("expected_upper=null");
       }
 
       return folly::join(", ", parts);
@@ -360,17 +382,20 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
   // Helper method to create test cases for all sort orders with sort
   // order-specific expected values
   std::vector<EncodeIndexBoundsTestCase> createIndexBoundEncodeTestCases(
-      std::vector<std::string> indexColumns,
-      std::optional<IndexBound> lowerBound,
-      std::optional<IndexBound> upperBound,
-      std::optional<velox::RowVectorPtr> ascNullsFirstExpectedLowerBound,
-      std::optional<velox::RowVectorPtr> ascNullsFirstExpectedUpperBound,
-      std::optional<velox::RowVectorPtr> ascNullsLastExpectedLowerBound,
-      std::optional<velox::RowVectorPtr> ascNullsLastExpectedUpperBound,
-      std::optional<velox::RowVectorPtr> descNullsFirstExpectedLowerBound,
-      std::optional<velox::RowVectorPtr> descNullsFirstExpectedUpperBound,
-      std::optional<velox::RowVectorPtr> descNullsLastExpectedLowerBound,
-      std::optional<velox::RowVectorPtr> descNullsLastExpectedUpperBound) {
+      const std::vector<std::string>& indexColumns,
+      const std::optional<IndexBound>& lowerBound,
+      const std::optional<IndexBound>& upperBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsFirstExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsFirstExpectedUpperBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsLastExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsLastExpectedUpperBound,
+      const std::optional<velox::RowVectorPtr>&
+          descNullsFirstExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>&
+          descNullsFirstExpectedUpperBound,
+      const std::optional<velox::RowVectorPtr>& descNullsLastExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>&
+          descNullsLastExpectedUpperBound) {
     const std::vector<velox::core::SortOrder> sortOrders = {
         velox::core::kAscNullsFirst,
         velox::core::kAscNullsLast,
@@ -410,6 +435,39 @@ class KeyEncoderTest : public velox::exec::test::OperatorTestBase {
     }
 
     return testCases;
+  }
+
+  void runIndexBoundTests(
+      const std::vector<std::string>& indexColumns,
+      const std::optional<IndexBound>& lowerBound,
+      const std::optional<IndexBound>& upperBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsFirstExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsFirstExpectedUpperBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsLastExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>& ascNullsLastExpectedUpperBound,
+      const std::optional<velox::RowVectorPtr>&
+          descNullsFirstExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>&
+          descNullsFirstExpectedUpperBound,
+      const std::optional<velox::RowVectorPtr>& descNullsLastExpectedLowerBound,
+      const std::optional<velox::RowVectorPtr>&
+          descNullsLastExpectedUpperBound) {
+    auto testCases = createIndexBoundEncodeTestCases(
+        indexColumns,
+        lowerBound,
+        upperBound,
+        ascNullsFirstExpectedLowerBound,
+        ascNullsFirstExpectedUpperBound,
+        ascNullsLastExpectedLowerBound,
+        ascNullsLastExpectedUpperBound,
+        descNullsFirstExpectedLowerBound,
+        descNullsFirstExpectedUpperBound,
+        descNullsLastExpectedLowerBound,
+        descNullsLastExpectedUpperBound);
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.debugString());
+      testIndexBounds(testCase);
+    }
   }
 };
 } // namespace
@@ -782,7 +840,7 @@ TEST_F(KeyEncoderTest, longTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(std::to_string(column[row].value()));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -1132,7 +1190,7 @@ TEST_F(KeyEncoderTest, integerTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(std::to_string(column[row].value()));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -1448,7 +1506,7 @@ TEST_F(KeyEncoderTest, shortTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(std::to_string(column[row].value()));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -1754,7 +1812,7 @@ TEST_F(KeyEncoderTest, byteTypeWithNulls) {
             rowValues.push_back(
                 std::to_string(static_cast<int>(column[row].value())));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -2004,7 +2062,7 @@ TEST_F(KeyEncoderTest, doubleTypeWithoutNulls) {
       // Edge values with infinity
       {{{-std::numeric_limits<double>::infinity(),
          std::numeric_limits<double>::lowest(),
-         std::numeric_limits<double>::min(),
+         std::numeric_limits<double>::lowest(),
          0.0,
          std::numeric_limits<double>::max(),
          std::numeric_limits<double>::infinity()},
@@ -2032,12 +2090,12 @@ TEST_F(KeyEncoderTest, doubleTypeWithoutNulls) {
         {std::numeric_limits<double>::max(),
          std::numeric_limits<double>::max()}}},
       // Min positive values
-      {{{std::numeric_limits<double>::min(),
-         std::numeric_limits<double>::min()},
-        {std::numeric_limits<double>::min(),
-         std::numeric_limits<double>::min()},
-        {std::numeric_limits<double>::min(),
-         std::numeric_limits<double>::min()}}},
+      {{{std::numeric_limits<double>::lowest(),
+         std::numeric_limits<double>::lowest()},
+        {std::numeric_limits<double>::lowest(),
+         std::numeric_limits<double>::lowest()},
+        {std::numeric_limits<double>::lowest(),
+         std::numeric_limits<double>::lowest()}}},
       // Lowest values (most negative)
       {{{std::numeric_limits<double>::lowest(),
          std::numeric_limits<double>::lowest()},
@@ -2050,7 +2108,7 @@ TEST_F(KeyEncoderTest, doubleTypeWithoutNulls) {
          std::numeric_limits<double>::lowest(),
          std::numeric_limits<double>::max(),
          std::numeric_limits<double>::infinity()},
-        {std::numeric_limits<double>::min(), 0.0, 1.0, 2.0},
+        {std::numeric_limits<double>::lowest(), 0.0, 1.0, 2.0},
         {-1.0, -2.0, -3.0, -4.0}}},
       // Very small and very large values
       {{{-1e308, -1e100, -1e-308, 0.0, 1e-308, 1e100, 1e308},
@@ -2095,7 +2153,7 @@ TEST_F(KeyEncoderTest, doubleTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(std::to_string(column[row].value()));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -2345,7 +2403,7 @@ TEST_F(KeyEncoderTest, floatTypeWithoutNulls) {
       // Edge values with infinity
       {{{-std::numeric_limits<float>::infinity(),
          std::numeric_limits<float>::lowest(),
-         std::numeric_limits<float>::min(),
+         std::numeric_limits<float>::lowest(),
          0.0f,
          std::numeric_limits<float>::max(),
          std::numeric_limits<float>::infinity()},
@@ -2371,10 +2429,12 @@ TEST_F(KeyEncoderTest, floatTypeWithoutNulls) {
         {std::numeric_limits<float>::max(),
          std::numeric_limits<float>::max()}}},
       // Min positive values
-      {{{std::numeric_limits<float>::min(), std::numeric_limits<float>::min()},
-        {std::numeric_limits<float>::min(), std::numeric_limits<float>::min()},
-        {std::numeric_limits<float>::min(),
-         std::numeric_limits<float>::min()}}},
+      {{{std::numeric_limits<float>::lowest(),
+         std::numeric_limits<float>::lowest()},
+        {std::numeric_limits<float>::lowest(),
+         std::numeric_limits<float>::lowest()},
+        {std::numeric_limits<float>::lowest(),
+         std::numeric_limits<float>::lowest()}}},
       // Lowest values (most negative)
       {{{std::numeric_limits<float>::lowest(),
          std::numeric_limits<float>::lowest()},
@@ -2387,7 +2447,7 @@ TEST_F(KeyEncoderTest, floatTypeWithoutNulls) {
          std::numeric_limits<float>::lowest(),
          std::numeric_limits<float>::max(),
          std::numeric_limits<float>::infinity()},
-        {std::numeric_limits<float>::min(), 0.0f, 1.0f, 2.0f},
+        {std::numeric_limits<float>::lowest(), 0.0f, 1.0f, 2.0f},
         {-1.0f, -2.0f, -3.0f, -4.0f}}},
       // Very small and very large values
       {{{-1e38f, -1e10f, -1e-38f, 0.0f, 1e-38f, 1e10f, 1e38f},
@@ -2434,7 +2494,7 @@ TEST_F(KeyEncoderTest, floatTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(std::to_string(column[row].value()));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -2645,7 +2705,7 @@ TEST_F(KeyEncoderTest, booleanTypeWithoutNulls) {
         std::vector<std::string> rowValues;
         rowValues.reserve(columnValues.size());
         for (const auto& column : columnValues) {
-          rowValues.push_back(column[row] ? "true" : "false");
+          rowValues.emplace_back(column[row] ? "true" : "false");
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
       }
@@ -2701,9 +2761,9 @@ TEST_F(KeyEncoderTest, booleanTypeWithNulls) {
         rowValues.reserve(columnValues.size());
         for (const auto& column : columnValues) {
           if (column[row].has_value()) {
-            rowValues.push_back(column[row].value() ? "true" : "false");
+            rowValues.emplace_back(column[row].value() ? "true" : "false");
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -2899,7 +2959,7 @@ TEST_F(KeyEncoderTest, stringTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(fmt::format("'{}'", column[row].value()));
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -3270,7 +3330,7 @@ TEST_F(KeyEncoderTest, timestampTypeWithNulls) {
           if (column[row].has_value()) {
             rowValues.push_back(column[row].value().toString());
           } else {
-            rowValues.push_back("null");
+            rowValues.emplace_back("null");
           }
         }
         rows.push_back(fmt::format("{{{}}}", fmt::join(rowValues, ", ")));
@@ -3787,893 +3847,549 @@ TEST_F(KeyEncoderTest, encodeFuzz) {
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({10})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeBigIntRow(10), .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100), .inclusive = true},
+        makeBigIntRow(10), // ASC_NULLS_FIRST lower
+        makeBigIntRow(101), // ASC_NULLS_FIRST upper
+        makeBigIntRow(10), // ASC_NULLS_LAST lower
+        makeBigIntRow(101), // ASC_NULLS_LAST upper
+        makeBigIntRow(10), // DESC_NULLS_FIRST lower
+        makeBigIntRow(99), // DESC_NULLS_FIRST upper
+        makeBigIntRow(10), // DESC_NULLS_LAST lower
+        makeBigIntRow(99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({10})}),
-            .inclusive = false},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-            .inclusive = false},
-        makeRowVector({makeFlatVector<int64_t>({11})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({11})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int64_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector({makeFlatVector<int64_t>({9})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({9})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeBigIntRow(10), .inclusive = false},
+        IndexBound{.bound = makeBigIntRow(100), .inclusive = false},
+        makeBigIntRow(11), // ASC_NULLS_FIRST lower
+        makeBigIntRow(100), // ASC_NULLS_FIRST upper
+        makeBigIntRow(11), // ASC_NULLS_LAST lower
+        makeBigIntRow(100), // ASC_NULLS_LAST upper
+        makeBigIntRow(9), // DESC_NULLS_FIRST lower
+        makeBigIntRow(100), // DESC_NULLS_FIRST upper
+        makeBigIntRow(9), // DESC_NULLS_LAST lower
+        makeBigIntRow(100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({10})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-            .inclusive = false},
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int64_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeBigIntRow(10), .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100), .inclusive = false},
+        makeBigIntRow(10), // ASC_NULLS_FIRST lower
+        makeBigIntRow(100), // ASC_NULLS_FIRST upper
+        makeBigIntRow(10), // ASC_NULLS_LAST lower
+        makeBigIntRow(100), // ASC_NULLS_LAST upper
+        makeBigIntRow(10), // DESC_NULLS_FIRST lower
+        makeBigIntRow(100), // DESC_NULLS_FIRST upper
+        makeBigIntRow(10), // DESC_NULLS_LAST lower
+        makeBigIntRow(100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({10})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(10), .inclusive = true},
         std::nullopt,
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(10), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(10), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(10), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(10), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100), .inclusive = true},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(101), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(101), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(99), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 6: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = true},
+        makeBigIntRow(10, 20), // ASC_NULLS_FIRST lower
+        makeBigIntRow(100, 101), // ASC_NULLS_FIRST upper
+        makeBigIntRow(10, 20), // ASC_NULLS_LAST lower
+        makeBigIntRow(100, 101), // ASC_NULLS_LAST upper
+        makeBigIntRow(10, 20), // DESC_NULLS_FIRST lower
+        makeBigIntRow(100, 99), // DESC_NULLS_FIRST upper
+        makeBigIntRow(10, 20), // DESC_NULLS_LAST lower
+        makeBigIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 7-1: Upper bound at max value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int64_t>(
                 {std::numeric_limits<int64_t>::max()})}),
             .inclusive = true},
-        makeRowVector({makeFlatVector<int64_t>({0})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(0), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper (overflow)
-        makeRowVector({makeFlatVector<int64_t>({0})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(0), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper (overflow)
-        makeRowVector({makeFlatVector<int64_t>({0})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(0), // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<int64_t>(
             {std::numeric_limits<int64_t>::max() -
              1})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({0})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(0), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int64_t>(
             {std::numeric_limits<int64_t>::max() -
              1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7-2: Upper bound at max value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int64_t>(
                 {std::numeric_limits<int64_t>::min()})}),
             .inclusive = true},
-        makeRowVector({makeFlatVector<int64_t>({0})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(0), // ASC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<int64_t>(
             {std::numeric_limits<int64_t>::min() +
              1})}), // ASC_NULLS_FIRST upper (overflow)
-        makeRowVector({makeFlatVector<int64_t>({0})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(0), // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int64_t>(
             {std::numeric_limits<int64_t>::min() +
              1})}), // ASC_NULLS_LAST upper (overflow)
-        makeRowVector({makeFlatVector<int64_t>({0})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(0), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({0})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(0), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({10})}),
-            .inclusive = false},
+        IndexBound{.bound = makeBigIntRow(10), .inclusive = false},
         std::nullopt,
-        makeRowVector({makeFlatVector<int64_t>({11})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(11), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({11})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(11), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector({makeFlatVector<int64_t>({9})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(9), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({9})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(9), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-            .inclusive = false},
+        IndexBound{.bound = makeBigIntRow(100), .inclusive = false},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(100), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int64_t>({100})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(100), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(100), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 10: Multi-column, both exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = false},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = false},
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({21})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({21})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({19})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({19})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = false},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = false},
+        makeBigIntRow(10, 21), // ASC_NULLS_FIRST lower
+        makeBigIntRow(100, 100), // ASC_NULLS_FIRST upper
+        makeBigIntRow(10, 21), // ASC_NULLS_LAST lower
+        makeBigIntRow(100, 100), // ASC_NULLS_LAST upper
+        makeBigIntRow(10, 19), // DESC_NULLS_FIRST lower
+        makeBigIntRow(100, 100), // DESC_NULLS_FIRST upper
+        makeBigIntRow(10, 19), // DESC_NULLS_LAST lower
+        makeBigIntRow(100, 100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 11: Multi-column, lower inclusive upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = false},
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = false},
+        makeBigIntRow(10, 20), // ASC_NULLS_FIRST lower
+        makeBigIntRow(100, 100), // ASC_NULLS_FIRST upper
+        makeBigIntRow(10, 20), // ASC_NULLS_LAST lower
+        makeBigIntRow(100, 100), // ASC_NULLS_LAST upper
+        makeBigIntRow(10, 20), // DESC_NULLS_FIRST lower
+        makeBigIntRow(100, 100), // DESC_NULLS_FIRST upper
+        makeBigIntRow(10, 20), // DESC_NULLS_LAST lower
+        makeBigIntRow(100, 100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 12: Multi-column, only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = true},
         std::nullopt,
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(10, 20), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(10, 20), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(10, 20), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(10, 20), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 13: Multi-column, only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = true},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(100, 101), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(100, 101), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(100, 99), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 14-1: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(0, 0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int64_t>({1}),
                  makeFlatVector<int64_t>(
                      {std::numeric_limits<int64_t>::max()})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(0, 0), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({2}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(0, 0), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({2}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(0, 0), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({1}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max() -
                   1})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(0, 0), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({1}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-2: Multi-column at max values
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(0, 0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int64_t>({1}),
                  makeFlatVector<int64_t>(
                      {std::numeric_limits<int64_t>::min()})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(0, 0), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({1}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::min() +
                   1})}), // ASC_NULLS_FIRST
                          // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(0, 0), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({1}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::min() + 1})}), // ASC_NULLS_LAST
                                                                // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(0, 0), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(0, 0), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({0}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-3: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(0, 0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()}),
                  makeFlatVector<int64_t>(
                      {std::numeric_limits<int64_t>::max()})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(0, 0), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper (overflow)
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(0, 0), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper (overflow)
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(0, 0), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max() -
                   1})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({0}),
-             makeFlatVector<int64_t>({0})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(0, 0), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 15: Multi-column, only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = false},
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = false},
         std::nullopt,
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({21})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(10, 21), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({21})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(10, 21), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({19})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(10, 19), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({19})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(10, 19), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 16: Multi-column, only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = false},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = false},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(100, 100), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(100, 100), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(100, 100), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(100, 100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 17: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int64_t>({std::nullopt})}),
             .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100), .inclusive = true},
         makeRowVector({makeNullableFlatVector<int64_t>(
             {std::nullopt})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(101), // ASC_NULLS_FIRST upper
         makeRowVector({makeNullableFlatVector<int64_t>(
             {std::nullopt})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(101), // ASC_NULLS_LAST upper
         makeRowVector({makeNullableFlatVector<int64_t>(
             {std::nullopt})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(99), // DESC_NULLS_FIRST upper
         makeRowVector({makeNullableFlatVector<int64_t>(
             {std::nullopt})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 18: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int64_t>({10})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(10), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int64_t>({std::nullopt})}),
             .inclusive = true},
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(10), // ASC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int64_t>(
             {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(10), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(10), // DESC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int64_t>(
             {std::numeric_limits<int64_t>::max()})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int64_t>({10})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(10), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 19: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int64_t>({std::nullopt}),
                  makeFlatVector<int64_t>({20})}),
             .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = true},
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({20})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(100, 101), // ASC_NULLS_FIRST upper
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(100, 101), // ASC_NULLS_LAST upper
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(100, 99), // DESC_NULLS_FIRST upper
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 20: Multi-column with null in second column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int64_t>({10}),
                  makeNullableFlatVector<int64_t>({std::nullopt})}),
             .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({100}),
-                 makeFlatVector<int64_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(100, 100), .inclusive = true},
         makeRowVector(
             {makeFlatVector<int64_t>({10}),
              makeNullableFlatVector<int64_t>(
                  {std::nullopt})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
+        makeBigIntRow(100, 101), // ASC_NULLS_FIRST upper
         makeRowVector(
             {makeFlatVector<int64_t>({10}),
              makeNullableFlatVector<int64_t>(
                  {std::nullopt})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
+        makeBigIntRow(100, 101), // ASC_NULLS_LAST upper
         makeRowVector(
             {makeFlatVector<int64_t>({10}),
              makeNullableFlatVector<int64_t>(
                  {std::nullopt})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
+        makeBigIntRow(100, 99), // DESC_NULLS_FIRST upper
         makeRowVector(
             {makeFlatVector<int64_t>({10}),
              makeNullableFlatVector<int64_t>(
                  {std::nullopt})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int64_t>({100}),
-             makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeBigIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 21: Multi-column with null in first column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int64_t>({std::nullopt}),
                  makeFlatVector<int64_t>({100})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(10, 20), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({101})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(10, 20), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({101})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(10, 20), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({99})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(10, 20), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeNullableFlatVector<int64_t>({std::nullopt}),
              makeFlatVector<int64_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 22: Multi-column with null in second column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({20})}),
-            .inclusive = true},
+        IndexBound{.bound = makeBigIntRow(10, 20), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int64_t>({100}),
                  makeNullableFlatVector<int64_t>({std::nullopt})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_FIRST lower
+        makeBigIntRow(10, 20), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({100}),
              makeNullableFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // ASC_NULLS_LAST lower
+        makeBigIntRow(10, 20), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({101}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_FIRST lower
+        makeBigIntRow(10, 20), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int64_t>({100}),
              makeNullableFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int64_t>({10}),
-             makeFlatVector<int64_t>({20})}), // DESC_NULLS_LAST lower
+        makeBigIntRow(10, 20), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int64_t>({99}),
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 23: Both bounds with nulls in different columns
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -4717,10 +4433,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
              makeFlatVector<int64_t>(
                  {std::numeric_limits<int64_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test lower bound bump failures
@@ -4730,8 +4442,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
     EncodeIndexBoundsTestCase testCase;
     testCase.indexColumns = {"c0"};
     testCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})}),
+        .bound = makeBigIntRow(std::numeric_limits<int64_t>::max()),
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kAscNullsFirst;
@@ -4761,9 +4472,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
     EncodeIndexBoundsTestCase testCase;
     testCase.indexColumns = {"c0", "c1"};
     testCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()}),
-             makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})}),
+        .bound = makeBigIntRow(
+            std::numeric_limits<int64_t>::max(),
+            std::numeric_limits<int64_t>::max()),
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kAscNullsLast;
@@ -4792,894 +4503,550 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBigIntType) {
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({10})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeIntRow(10), .inclusive = true},
+        IndexBound{.bound = makeIntRow(100), .inclusive = true},
+        makeIntRow(10), // ASC_NULLS_FIRST lower
+        makeIntRow(101), // ASC_NULLS_FIRST upper
+        makeIntRow(10), // ASC_NULLS_LAST lower
+        makeIntRow(101), // ASC_NULLS_LAST upper
+        makeIntRow(10), // DESC_NULLS_FIRST lower
+        makeIntRow(99), // DESC_NULLS_FIRST upper
+        makeIntRow(10), // DESC_NULLS_LAST lower
+        makeIntRow(99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({10})}),
-            .inclusive = false},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({100})}),
-            .inclusive = false},
-        makeRowVector({makeFlatVector<int32_t>({11})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({11})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int32_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector({makeFlatVector<int32_t>({9})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({9})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeIntRow(10), .inclusive = false},
+        IndexBound{.bound = makeIntRow(100), .inclusive = false},
+        makeIntRow(11), // ASC_NULLS_FIRST lower
+        makeIntRow(100), // ASC_NULLS_FIRST upper
+        makeIntRow(11), // ASC_NULLS_LAST lower
+        makeIntRow(100), // ASC_NULLS_LAST upper
+        makeIntRow(9), // DESC_NULLS_FIRST lower
+        makeIntRow(100), // DESC_NULLS_FIRST upper
+        makeIntRow(9), // DESC_NULLS_LAST lower
+        makeIntRow(100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({10})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({100})}),
-            .inclusive = false},
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int32_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeIntRow(10), .inclusive = true},
+        IndexBound{.bound = makeIntRow(100), .inclusive = false},
+        makeIntRow(10), // ASC_NULLS_FIRST lower
+        makeIntRow(100), // ASC_NULLS_FIRST upper
+        makeIntRow(10), // ASC_NULLS_LAST lower
+        makeIntRow(100), // ASC_NULLS_LAST upper
+        makeIntRow(10), // DESC_NULLS_FIRST lower
+        makeIntRow(100), // DESC_NULLS_FIRST upper
+        makeIntRow(10), // DESC_NULLS_LAST lower
+        makeIntRow(100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({10})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(10), .inclusive = true},
         std::nullopt,
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_FIRST lower
+        makeIntRow(10), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_LAST lower
+        makeIntRow(10), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10})}), // DESC_NULLS_FIRST lower
+        makeIntRow(10), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // DESC_NULLS_LAST lower
+        makeIntRow(10), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(100), .inclusive = true},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
+        makeIntRow(101), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
+        makeIntRow(101), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
+        makeIntRow(99), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 6: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = true},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = true},
+        makeIntRow(10, 20), // ASC_NULLS_FIRST lower
+        makeIntRow(100, 101), // ASC_NULLS_FIRST upper
+        makeIntRow(10, 20), // ASC_NULLS_LAST lower
+        makeIntRow(100, 101), // ASC_NULLS_LAST upper
+        makeIntRow(10, 20), // DESC_NULLS_FIRST lower
+        makeIntRow(100, 99), // DESC_NULLS_FIRST upper
+        makeIntRow(10, 20), // DESC_NULLS_LAST lower
+        makeIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 7-1: Upper bound at max value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int32_t>(
                 {std::numeric_limits<int32_t>::max()})}),
             .inclusive = true},
-        makeRowVector({makeFlatVector<int32_t>({0})}), // ASC_NULLS_FIRST lower
+        makeIntRow(0), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper (overflow)
-        makeRowVector({makeFlatVector<int32_t>({0})}), // ASC_NULLS_LAST lower
+        makeIntRow(0), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper (overflow)
-        makeRowVector({makeFlatVector<int32_t>({0})}), // DESC_NULLS_FIRST lower
+        makeIntRow(0), // DESC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<int32_t>(
             {std::numeric_limits<int32_t>::max() -
              1})}), // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({0})}), // DESC_NULLS_LAST lower
+        makeIntRow(0), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int32_t>(
             {std::numeric_limits<int32_t>::max() -
              1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7-2: Upper bound at min value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int32_t>(
                 {std::numeric_limits<int32_t>::min()})}),
             .inclusive = true},
-        makeRowVector({makeFlatVector<int32_t>({0})}), // ASC_NULLS_FIRST lower
+        makeIntRow(0), // ASC_NULLS_FIRST lower
         makeRowVector({makeFlatVector<int32_t>(
             {std::numeric_limits<int32_t>::min() +
              1})}), // ASC_NULLS_FIRST upper (overflow)
-        makeRowVector({makeFlatVector<int32_t>({0})}), // ASC_NULLS_LAST lower
+        makeIntRow(0), // ASC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int32_t>(
             {std::numeric_limits<int32_t>::min() +
              1})}), // ASC_NULLS_LAST upper (overflow)
-        makeRowVector({makeFlatVector<int32_t>({0})}), // DESC_NULLS_FIRST lower
+        makeIntRow(0), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({0})}), // DESC_NULLS_LAST lower
+        makeIntRow(0), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({10})}),
-            .inclusive = false},
+        IndexBound{.bound = makeIntRow(10), .inclusive = false},
         std::nullopt,
-        makeRowVector({makeFlatVector<int32_t>({11})}), // ASC_NULLS_FIRST lower
+        makeIntRow(11), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({11})}), // ASC_NULLS_LAST lower
+        makeIntRow(11), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector({makeFlatVector<int32_t>({9})}), // DESC_NULLS_FIRST lower
+        makeIntRow(9), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({9})}), // DESC_NULLS_LAST lower
+        makeIntRow(9), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({100})}),
-            .inclusive = false},
+        IndexBound{.bound = makeIntRow(100), .inclusive = false},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})}), // ASC_NULLS_FIRST upper
+        makeIntRow(100), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int32_t>({100})}), // ASC_NULLS_LAST upper
+        makeIntRow(100), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})}), // DESC_NULLS_FIRST upper
+        makeIntRow(100), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 10: Multi-column, both exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = false},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = false},
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({21})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({21})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({19})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({19})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = false},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = false},
+        makeIntRow(10, 21), // ASC_NULLS_FIRST lower
+        makeIntRow(100, 100), // ASC_NULLS_FIRST upper
+        makeIntRow(10, 21), // ASC_NULLS_LAST lower
+        makeIntRow(100, 100), // ASC_NULLS_LAST upper
+        makeIntRow(10, 19), // DESC_NULLS_FIRST lower
+        makeIntRow(100, 100), // DESC_NULLS_FIRST upper
+        makeIntRow(10, 19), // DESC_NULLS_LAST lower
+        makeIntRow(100, 100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 11: Multi-column, lower inclusive upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = false},
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = true},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = false},
+        makeIntRow(10, 20), // ASC_NULLS_FIRST lower
+        makeIntRow(100, 100), // ASC_NULLS_FIRST upper
+        makeIntRow(10, 20), // ASC_NULLS_LAST lower
+        makeIntRow(100, 100), // ASC_NULLS_LAST upper
+        makeIntRow(10, 20), // DESC_NULLS_FIRST lower
+        makeIntRow(100, 100), // DESC_NULLS_FIRST upper
+        makeIntRow(10, 20), // DESC_NULLS_LAST lower
+        makeIntRow(100, 100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 12: Multi-column, only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = true},
         std::nullopt,
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_FIRST lower
+        makeIntRow(10, 20), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
+        makeIntRow(10, 20), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
+        makeIntRow(10, 20), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
+        makeIntRow(10, 20), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 13: Multi-column, only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = true},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
+        makeIntRow(100, 101), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
+        makeIntRow(100, 101), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
+        makeIntRow(100, 99), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 14-1: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({0}), makeFlatVector<int32_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(0, 0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int32_t>({1}),
                  makeFlatVector<int32_t>(
                      {std::numeric_limits<int32_t>::max()})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // ASC_NULLS_FIRST lower
+        makeIntRow(0, 0), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({2}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // ASC_NULLS_LAST lower
+        makeIntRow(0, 0), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({2}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // DESC_NULLS_FIRST lower
+        makeIntRow(0, 0), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({1}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max() -
                   1})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // DESC_NULLS_LAST lower
+        makeIntRow(0, 0), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({1}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-2: Multi-column at min values
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({0}), makeFlatVector<int32_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(0, 0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int32_t>({1}),
                  makeFlatVector<int32_t>(
                      {std::numeric_limits<int32_t>::min()})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // ASC_NULLS_FIRST lower
+        makeIntRow(0, 0), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({1}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::min() +
                   1})}), // ASC_NULLS_FIRST
                          // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // ASC_NULLS_LAST lower
+        makeIntRow(0, 0), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({1}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::min() + 1})}), // ASC_NULLS_LAST
                                                                // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // DESC_NULLS_FIRST lower
+        makeIntRow(0, 0), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // DESC_NULLS_LAST lower
+        makeIntRow(0, 0), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({0}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-3: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({0}), makeFlatVector<int32_t>({0})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(0, 0), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
                  makeFlatVector<int32_t>(
                      {std::numeric_limits<int32_t>::max()})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // ASC_NULLS_FIRST lower
+        makeIntRow(0, 0), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper (overflow)
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // ASC_NULLS_LAST lower
+        makeIntRow(0, 0), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper (overflow)
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // DESC_NULLS_FIRST lower
+        makeIntRow(0, 0), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max() -
                   1})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({0}),
-             makeFlatVector<int32_t>({0})}), // DESC_NULLS_LAST lower
+        makeIntRow(0, 0), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 15: Multi-column, only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = false},
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = false},
         std::nullopt,
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({21})}), // ASC_NULLS_FIRST lower
+        makeIntRow(10, 21), // ASC_NULLS_FIRST lower
         std::nullopt, // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({21})}), // ASC_NULLS_LAST lower
+        makeIntRow(10, 21), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({19})}), // DESC_NULLS_FIRST lower
+        makeIntRow(10, 19), // DESC_NULLS_FIRST lower
         std::nullopt, // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({19})}), // DESC_NULLS_LAST lower
+        makeIntRow(10, 19), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 16: Multi-column, only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = false},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = false},
         std::nullopt, // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // ASC_NULLS_FIRST upper
+        makeIntRow(100, 100), // ASC_NULLS_FIRST upper
         std::nullopt, // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // ASC_NULLS_LAST upper
+        makeIntRow(100, 100), // ASC_NULLS_LAST upper
         std::nullopt, // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})}), // DESC_NULLS_FIRST upper
+        makeIntRow(100, 100), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(100, 100)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 17: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int32_t>({std::nullopt})}),
             .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(100), .inclusive = true},
         makeRowVector({makeNullableFlatVector<int32_t>(
             {std::nullopt})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
+        makeIntRow(101), // ASC_NULLS_FIRST upper
         makeRowVector({makeNullableFlatVector<int32_t>(
             {std::nullopt})}), // ASC_NULLS_LAST lower
-        makeRowVector({makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
+        makeIntRow(101), // ASC_NULLS_LAST upper
         makeRowVector({makeNullableFlatVector<int32_t>(
             {std::nullopt})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
+        makeIntRow(99), // DESC_NULLS_FIRST upper
         makeRowVector({makeNullableFlatVector<int32_t>(
             {std::nullopt})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 18: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
-        IndexBound{
-            .bound = makeRowVector({makeFlatVector<int32_t>({10})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(10), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int32_t>({std::nullopt})}),
             .inclusive = true},
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_FIRST lower
+        makeIntRow(10), // ASC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int32_t>(
             {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_FIRST upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // ASC_NULLS_LAST lower
+        makeIntRow(10), // ASC_NULLS_LAST lower
         std::nullopt, // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10})}), // DESC_NULLS_FIRST lower
+        makeIntRow(10), // DESC_NULLS_FIRST lower
         makeRowVector({makeNullableFlatVector<int32_t>(
             {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
                                                       // upper
-        makeRowVector({makeFlatVector<int32_t>({10})}), // DESC_NULLS_LAST lower
+        makeIntRow(10), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 19: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int32_t>({std::nullopt}),
                  makeFlatVector<int32_t>({20})}),
             .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = true},
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({20})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
+        makeIntRow(100, 101), // ASC_NULLS_FIRST upper
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
+        makeIntRow(100, 101), // ASC_NULLS_LAST upper
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
+        makeIntRow(100, 99), // DESC_NULLS_FIRST upper
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 20: Multi-column with null in second column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int32_t>({10}),
                  makeNullableFlatVector<int32_t>({std::nullopt})}),
             .inclusive = true},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({100}),
-                 makeFlatVector<int32_t>({100})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(100, 100), .inclusive = true},
         makeRowVector(
             {makeFlatVector<int32_t>({10}),
              makeNullableFlatVector<int32_t>(
                  {std::nullopt})}), // ASC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
+        makeIntRow(100, 101), // ASC_NULLS_FIRST upper
         makeRowVector(
             {makeFlatVector<int32_t>({10}),
              makeNullableFlatVector<int32_t>(
                  {std::nullopt})}), // ASC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
+        makeIntRow(100, 101), // ASC_NULLS_LAST upper
         makeRowVector(
             {makeFlatVector<int32_t>({10}),
              makeNullableFlatVector<int32_t>(
                  {std::nullopt})}), // DESC_NULLS_FIRST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
+        makeIntRow(100, 99), // DESC_NULLS_FIRST upper
         makeRowVector(
             {makeFlatVector<int32_t>({10}),
              makeNullableFlatVector<int32_t>(
                  {std::nullopt})}), // DESC_NULLS_LAST lower
-        makeRowVector(
-            {makeFlatVector<int32_t>({100}),
-             makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
+        makeIntRow(100, 99)); // DESC_NULLS_LAST upper
   }
 
   // Test Case 21: Multi-column with null in first column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeNullableFlatVector<int32_t>({std::nullopt}),
                  makeFlatVector<int32_t>({100})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_FIRST lower
+        makeIntRow(10, 20), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({101})}), // ASC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
+        makeIntRow(10, 20), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({101})}), // ASC_NULLS_LAST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
+        makeIntRow(10, 20), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({99})}), // DESC_NULLS_FIRST upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
+        makeIntRow(10, 20), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeNullableFlatVector<int32_t>({std::nullopt}),
              makeFlatVector<int32_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 22: Multi-column with null in second column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
-        IndexBound{
-            .bound = makeRowVector(
-                {makeFlatVector<int32_t>({10}), makeFlatVector<int32_t>({20})}),
-            .inclusive = true},
+        IndexBound{.bound = makeIntRow(10, 20), .inclusive = true},
         IndexBound{
             .bound = makeRowVector(
                 {makeFlatVector<int32_t>({100}),
                  makeNullableFlatVector<int32_t>({std::nullopt})}),
             .inclusive = true},
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_FIRST lower
+        makeIntRow(10, 20), // ASC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({100}),
              makeNullableFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // ASC_NULLS_LAST lower
+        makeIntRow(10, 20), // ASC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({101}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::min()})}), // ASC_NULLS_LAST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_FIRST lower
+        makeIntRow(10, 20), // DESC_NULLS_FIRST lower
         makeRowVector(
             {makeFlatVector<int32_t>({100}),
              makeNullableFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max()})}), // DESC_NULLS_FIRST
                                                            // upper
-        makeRowVector(
-            {makeFlatVector<int32_t>({10}),
-             makeFlatVector<int32_t>({20})}), // DESC_NULLS_LAST lower
+        makeIntRow(10, 20), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int32_t>({99}),
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 23: Both bounds with nulls in different columns
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -5723,10 +5090,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
              makeFlatVector<int32_t>(
                  {std::numeric_limits<int32_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test lower bound bump failures
@@ -5736,8 +5099,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
     EncodeIndexBoundsTestCase testCase;
     testCase.indexColumns = {"c0"};
     testCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()})}),
+        .bound = makeIntRow(std::numeric_limits<int32_t>::max()),
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kAscNullsFirst;
@@ -5767,9 +5129,9 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
     EncodeIndexBoundsTestCase testCase;
     testCase.indexColumns = {"c0", "c1"};
     testCase.lowerBound = IndexBound{
-        .bound = makeRowVector(
-            {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
-             makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()})}),
+        .bound = makeIntRow(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max()),
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kAscNullsLast;
@@ -5798,7 +5160,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithIntegerType) {
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({10})}),
@@ -5818,15 +5180,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector({makeFlatVector<int16_t>({10})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({10})}),
@@ -5845,15 +5203,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector({makeFlatVector<int16_t>({9})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({10})}),
@@ -5873,15 +5227,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector({makeFlatVector<int16_t>({10})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({10})}),
@@ -5896,15 +5246,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int16_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -5921,15 +5267,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         std::nullopt, // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 6: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -5964,15 +5306,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7-1: Upper bound at max value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({0})}),
@@ -5993,15 +5331,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector({makeFlatVector<int16_t>(
             {std::numeric_limits<int16_t>::max() -
              1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7-2: Upper bound at min value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({0})}),
@@ -6022,15 +5356,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int16_t>({0})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({10})}),
@@ -6044,15 +5374,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int16_t>({9})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -6069,15 +5395,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         std::nullopt, // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 10: Multi-column, both exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6112,15 +5434,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 11: Multi-column, lower inclusive upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6155,15 +5473,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 12: Multi-column, only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6186,15 +5500,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
             {makeFlatVector<int16_t>({10}),
              makeFlatVector<int16_t>({20})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 13: Multi-column, only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
         IndexBound{
@@ -6218,15 +5528,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-1: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6270,15 +5576,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>(
                  {std::numeric_limits<int16_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-2: Multi-column at min values
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6323,15 +5625,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>(
                  {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-3: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6367,15 +5665,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>(
                  {std::numeric_limits<int16_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 15: Multi-column, only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6398,15 +5692,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
             {makeFlatVector<int16_t>({10}),
              makeFlatVector<int16_t>({19})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 16: Multi-column, only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
         IndexBound{
@@ -6430,15 +5720,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 17: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector(
@@ -6462,15 +5748,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
             {std::nullopt})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 18: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int16_t>({10})}),
@@ -6491,15 +5773,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
                                                       // upper
         makeRowVector({makeFlatVector<int16_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 19: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6535,15 +5813,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 20: Multi-column with null in second column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6583,15 +5857,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeFlatVector<int16_t>({100}),
              makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 21: Multi-column with null in first column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6626,15 +5896,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
         makeRowVector(
             {makeNullableFlatVector<int16_t>({std::nullopt}),
              makeFlatVector<int16_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 22: Multi-column with null in second column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6677,15 +5943,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>(
                  {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 23: Both bounds with nulls in different columns
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6729,10 +5991,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
              makeFlatVector<int16_t>(
                  {std::numeric_limits<int16_t>::max()})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test lower bound bump failures
@@ -6804,7 +6062,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithSmallIntType) {
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({5})}),
@@ -6820,15 +6078,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeFlatVector<int8_t>({49})}), // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int8_t>({5})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int8_t>({49})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({5})}),
@@ -6844,15 +6098,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeFlatVector<int8_t>({50})}), // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int8_t>({4})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int8_t>({50})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({5})}),
@@ -6868,15 +6118,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeFlatVector<int8_t>({50})}), // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int8_t>({5})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int8_t>({50})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({5})}),
@@ -6890,15 +6136,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int8_t>({5})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -6912,15 +6154,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeFlatVector<int8_t>({49})}), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int8_t>({49})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 6: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -6954,15 +6192,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7-1: Upper bound at max value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({0})}),
@@ -6983,15 +6217,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeFlatVector<int8_t>(
             {std::numeric_limits<int8_t>::max() -
              1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7-2: Upper bound at min value (overflow case)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({0})}),
@@ -7012,15 +6242,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int8_t>({0})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({5})}),
@@ -7034,15 +6260,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<int8_t>({4})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -7056,15 +6278,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeFlatVector<int8_t>({50})}), // DESC_NULLS_FIRST upper
         std::nullopt, // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int8_t>({50})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 10: Multi-column, both exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7098,15 +6316,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 11: Multi-column, lower inclusive upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7140,15 +6354,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 12: Multi-column, only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7171,15 +6381,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
             {makeFlatVector<int8_t>({5}),
              makeFlatVector<int8_t>({10})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 13: Multi-column, only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
         IndexBound{
@@ -7202,15 +6408,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-1: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7253,15 +6455,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>(
                  {std::numeric_limits<int8_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-2: Multi-column at min values
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7304,15 +6502,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>(
                  {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
                                                            // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14-3: Multi-column at max values (overflow)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7347,15 +6541,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>(
                  {std::numeric_limits<int8_t>::max() -
                   1})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 15: Multi-column, only lower bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7378,15 +6568,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
             {makeFlatVector<int8_t>({5}),
              makeFlatVector<int8_t>({9})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 16: Multi-column, only upper bound, exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         std::nullopt,
         IndexBound{
@@ -7409,15 +6595,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({100})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 17: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound =
@@ -7438,15 +6620,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector({makeNullableFlatVector<int8_t>(
             {std::nullopt})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<int8_t>({49})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 18: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<int8_t>({5})}),
@@ -7467,15 +6645,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
                                                      // upper
         makeRowVector({makeFlatVector<int8_t>({5})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 19: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7510,15 +6684,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 20: Multi-column with null in second column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7557,15 +6727,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeFlatVector<int8_t>({50}),
              makeFlatVector<int8_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 21: Multi-column with null in first column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7600,15 +6766,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
         makeRowVector(
             {makeNullableFlatVector<int8_t>({std::nullopt}),
              makeFlatVector<int8_t>({99})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 22: Multi-column with null in second column of upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7651,15 +6813,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>(
                  {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
                                                            // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 23: Both bounds with nulls in different columns
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7703,10 +6861,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
              makeFlatVector<int8_t>(
                  {std::numeric_limits<int8_t>::max()})})); // DESC_NULLS_LAST
                                                            // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test lower bound bump failures
@@ -7778,7 +6932,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTinyIntType) {
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
   // Test Case 1: Both bounds inclusive (false to true)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<bool>({false})}),
@@ -7798,15 +6952,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         makeRowVector({makeFlatVector<bool>({false})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 2: Upper bound exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<bool>({false})}),
@@ -7823,15 +6973,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         makeRowVector({makeFlatVector<bool>({true})}), // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<bool>({false})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<bool>({true})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Only lower bound (false)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<bool>({false})}),
@@ -7846,15 +6992,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         std::nullopt, // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<bool>({false})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 4: Only upper bound (true)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -7870,15 +7012,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         std::nullopt, // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound =
@@ -7901,15 +7039,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
             {std::nullopt})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 6: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<bool>({false})}),
@@ -7929,15 +7063,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
             {makeNullableFlatVector<bool>({true})}), // DESC_NULLS_FIRST upper
         makeRowVector({makeFlatVector<bool>({false})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7: Multi-column, both inclusive (bool + bool)
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -7967,15 +7097,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         makeRowVector(
             {makeFlatVector<bool>({true}),
              makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8006,10 +7132,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         makeRowVector(
             {makeFlatVector<bool>({true}),
              makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Lower bound bump failure - exclusive bound at max value
@@ -8078,7 +7200,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
   // incrementing - when c1 is true, the increment should carry over to c0,
   // resulting in (true, false).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8114,10 +7236,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
         makeRowVector(
             {makeFlatVector<bool>({false}),
              makeFlatVector<bool>({false})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 14: Multi-column point lookup where the lower (second) column
@@ -8125,7 +7243,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
   // decrementing - when c1 is false, the decrement should carry over to c0,
   // resulting in (false, true).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8161,17 +7279,13 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithBoolType) {
             {makeFlatVector<bool>({false}),
              makeFlatVector<bool>({true})})); // DESC_NULLS_LAST upper
                                               // (carry-over)
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<float>({10.5f})}),
@@ -8202,15 +7316,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             100.5f,
             -std::numeric_limits<float>::infinity())})})); // DESC_NULLS_LAST
                                                            // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<float>({10.5f})}),
@@ -8242,15 +7352,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
                                                           // lower
         makeRowVector(
             {makeFlatVector<float>({100.5f})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<float>({10.5f})}),
@@ -8273,15 +7379,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             {makeFlatVector<float>({10.5f})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<float>({100.5f})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<float>({10.5f})}),
@@ -8298,15 +7400,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
         makeRowVector(
             {makeFlatVector<float>({10.5f})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -8332,15 +7430,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             100.5f,
             -std::numeric_limits<float>::infinity())})})); // DESC_NULLS_LAST
                                                            // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 6: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8390,15 +7484,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
                  -std::numeric_limits<
                      float>::infinity())})})); // DESC_NULLS_LAST
                                                // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound =
@@ -8431,15 +7521,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
             100.5f,
             -std::numeric_limits<float>::infinity())})})); // DESC_NULLS_LAST
                                                            // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<float>({10.5f})}),
@@ -8463,15 +7549,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
         makeRowVector(
             {makeFlatVector<float>({10.5f})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8521,15 +7603,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
                  -std::numeric_limits<
                      float>::infinity())})})); // DESC_NULLS_LAST
                                                // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 10: Multi-column with null in second column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8583,10 +7661,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
                  -std::numeric_limits<
                      float>::infinity())})})); // DESC_NULLS_LAST
                                                // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 11: Lower bound bump failure - exclusive bound at positive
@@ -8658,7 +7732,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
   // incrementing - when c1 is at +infinity, the increment should carry over
   // to c0, resulting in (nextafter(c0, +inf), -inf).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8720,10 +7794,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
                  -std::numeric_limits<
                      float>::infinity())})})); // DESC_NULLS_LAST
                                                // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 16: Multi-column point lookup where the lower (second) column
@@ -8731,7 +7801,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
   // decrementing - when c1 is at -infinity, the decrement should carry over
   // to c0, resulting in (nextafter(c0, -inf), +inf).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -8791,17 +7861,13 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithRealType) {
                  float>::infinity()})})); // DESC_NULLS_LAST
                                           // upper
                                           // (carry-over)
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<double>({10.5})}),
@@ -8832,15 +7898,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
             100.5,
             -std::numeric_limits<double>::infinity())})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<double>({10.5})}),
@@ -8872,15 +7934,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
                                                            // lower
         makeRowVector(
             {makeFlatVector<double>({100.5})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<double>({10.5})}),
@@ -8903,15 +7961,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
             {makeFlatVector<double>({10.5})}), // DESC_NULLS_LAST lower
         makeRowVector(
             {makeFlatVector<double>({100.5})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<double>({10.5})}),
@@ -8928,15 +7982,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
         makeRowVector(
             {makeFlatVector<double>({10.5})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -8962,15 +8012,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
             100.5,
             -std::numeric_limits<double>::infinity())})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 6: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9021,15 +8067,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
                  -std::numeric_limits<
                      double>::infinity())})})); // DESC_NULLS_LAST
                                                 // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound =
@@ -9062,15 +8104,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
             100.5,
             -std::numeric_limits<double>::infinity())})})); // DESC_NULLS_LAST
                                                             // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Single column with null in upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<double>({10.5})}),
@@ -9095,15 +8133,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
             {makeFlatVector<double>({10.5})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST
                        // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 9: Multi-column with null in first column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9154,15 +8188,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
                  -std::numeric_limits<
                      double>::infinity())})})); // DESC_NULLS_LAST
                                                 // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 10: Multi-column with null in second column of lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9217,10 +8247,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
                  -std::numeric_limits<
                      double>::infinity())})})); // DESC_NULLS_LAST
                                                 // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 11: Lower bound bump failure - exclusive bound at positive
@@ -9294,7 +8320,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
   // incrementing - when c1 is at +infinity, the increment should carry over
   // to c0, resulting in (nextafter(c0, +inf), -inf).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9356,10 +8382,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
                  -std::numeric_limits<
                      double>::infinity())})})); // DESC_NULLS_LAST
                                                 // upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 16: Multi-column point lookup where the lower (second) column
@@ -9367,7 +8389,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
   // decrementing - when c1 is at -infinity, the decrement should carry over
   // to c0, resulting in (nextafter(c0, -inf), +inf).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9428,17 +8450,13 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithDoubleType) {
                  double>::infinity()})})); // DESC_NULLS_LAST
                                            // upper
                                            // (carry-over)
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 }
 
 TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
   // Test Case 1: Both bounds inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<velox::Timestamp>(
@@ -9464,15 +8482,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
             {velox::Timestamp(10, 100)})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<velox::Timestamp>(
             {velox::Timestamp(100, 199)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 2: Both bounds exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<velox::Timestamp>(
@@ -9498,15 +8512,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
             {velox::Timestamp(10, 99)})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<velox::Timestamp>(
             {velox::Timestamp(100, 200)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Lower inclusive, upper exclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<velox::Timestamp>(
@@ -9532,15 +8542,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
             {velox::Timestamp(10, 100)})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<velox::Timestamp>(
             {velox::Timestamp(100, 200)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 4: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<velox::Timestamp>(
@@ -9559,15 +8565,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
         makeRowVector({makeFlatVector<velox::Timestamp>(
             {velox::Timestamp(10, 100)})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 5: Only upper bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         std::nullopt,
         IndexBound{
@@ -9586,15 +8588,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
         std::nullopt, // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<velox::Timestamp>(
             {velox::Timestamp(100, 199)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 6: Single column with null in lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector(
@@ -9620,15 +8618,11 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
             {std::nullopt})}), // DESC_NULLS_LAST lower
         makeRowVector({makeFlatVector<velox::Timestamp>(
             {velox::Timestamp(100, 199)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 7: Multi-column, both inclusive
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9674,10 +8668,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
             {makeFlatVector<velox::Timestamp>({velox::Timestamp(100, 300)}),
              makeFlatVector<velox::Timestamp>(
                  {velox::Timestamp(200, 399)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 8: Lower bound bump failure - exclusive bound at max value
@@ -9749,7 +8739,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
   // incrementing - when c1 is at Timestamp::max(), the increment should carry
   // over to c0, resulting in (c0+1nanos, Timestamp::min()).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9805,10 +8795,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
              makeFlatVector<velox::Timestamp>({velox::Timestamp(
                  velox::Timestamp::kMaxSeconds,
                  velox::Timestamp::kMaxNanos - 1)})})); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 13: Multi-column point lookup where the lower (second) column
@@ -9816,7 +8802,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
   // decrementing - when c1 is at Timestamp::min(), the decrement should carry
   // over to c0, resulting in (c0-1nanos, Timestamp::max()).
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0", "c1"},
         IndexBound{
             .bound = makeRowVector(
@@ -9867,10 +8853,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithTimestampType) {
                  velox::Timestamp::kMaxSeconds,
                  velox::Timestamp::kMaxNanos)})})); // DESC_NULLS_LAST upper
                                                     // (carry-over)
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 }
 
@@ -9956,7 +8938,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
 
   // Test Case 2: Only lower bound
   {
-    auto testCases = createIndexBoundEncodeTestCases(
+    runIndexBoundTests(
         {"c0"},
         IndexBound{
             .bound = makeRowVector({makeFlatVector<std::string>({"apple"})}),
@@ -9974,10 +8956,6 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithStringType) {
         makeRowVector(
             {makeFlatVector<std::string>({"apple"})}), // DESC_NULLS_LAST lower
         std::nullopt); // DESC_NULLS_LAST upper
-    for (const auto& testCase : testCases) {
-      SCOPED_TRACE(testCase.debugString());
-      testIndexBounds(testCase);
-    }
   }
 
   // Test Case 3: Only upper bound (inclusive)
@@ -10859,8 +9837,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsNullIncrementThrows) {
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kAscNullsFirst;
-    testCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::min()})});
+    testCase.expectedLowerBound =
+        makeBigIntRow(std::numeric_limits<int64_t>::min());
     testCase.expectedUpperBound = std::nullopt;
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
@@ -10877,8 +9855,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsNullIncrementThrows) {
         .inclusive = false};
     testCase.upperBound = std::nullopt;
     testCase.sortOrder = velox::core::kDescNullsFirst;
-    testCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})});
+    testCase.expectedLowerBound =
+        makeBigIntRow(std::numeric_limits<int64_t>::max());
     testCase.expectedUpperBound = std::nullopt;
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
@@ -10933,9 +9911,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsNullIncrementThrows) {
     testCase.sortOrder = velox::core::kAscNullsLast;
     // NULL is at end in NULLS_LAST, so it overflows and carries to c0
     // c0 increments from 5 to 6, c1 resets to MIN_VALUE
-    testCase.expectedLowerBound = makeRowVector(
-        {makeFlatVector<int64_t>({6}),
-         makeFlatVector<int64_t>({std::numeric_limits<int64_t>::min()})});
+    testCase.expectedLowerBound =
+        makeBigIntRow(6, std::numeric_limits<int64_t>::min());
     testCase.expectedUpperBound = std::nullopt;
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
@@ -10959,9 +9936,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsNullIncrementThrows) {
     // c0 decrements from 5 to 4, c1 resets to MAX_VALUE (which is min in DESC
     // order)
     testCase.expectedLowerBound = std::nullopt;
-    testCase.expectedUpperBound = makeRowVector(
-        {makeFlatVector<int64_t>({4}),
-         makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()})});
+    testCase.expectedUpperBound =
+        makeBigIntRow(4, std::numeric_limits<int64_t>::max());
     SCOPED_TRACE(testCase.debugString());
     testIndexBounds(testCase);
   }
@@ -11477,8 +10453,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                 .bound = makeRowVector({makeConstant<int64_t>(100, 1)}),
                 .inclusive = true}),
         .sortOrder = velox::core::kAscNullsFirst,
-        .expectedLowerBound = makeRowVector({makeFlatVector<int64_t>({10})}),
-        .expectedUpperBound = makeRowVector({makeFlatVector<int64_t>({101})}),
+        .expectedLowerBound = makeBigIntRow(10),
+        .expectedUpperBound = makeBigIntRow(101),
     });
 
     // Test Case 2: DictionaryVector for both bounds
@@ -11496,8 +10472,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                     nullptr, makeIndices({2}), 1, baseBigint)}),
                 .inclusive = false}),
         .sortOrder = velox::core::kAscNullsFirst,
-        .expectedLowerBound = makeRowVector({makeFlatVector<int64_t>({100})}),
-        .expectedUpperBound = makeRowVector({makeFlatVector<int64_t>({120})}),
+        .expectedLowerBound = makeBigIntRow(100),
+        .expectedUpperBound = makeBigIntRow(120),
     });
 
     // Test Case 3: Multiple rows with ConstantVector
@@ -11513,8 +10489,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                 .inclusive = true}),
         .sortOrder = velox::core::kAscNullsFirst,
         .expectedNumResults = 3,
-        .expectedLowerBound = makeRowVector({makeFlatVector<int64_t>({43})}),
-        .expectedUpperBound = makeRowVector({makeFlatVector<int64_t>({101})}),
+        .expectedLowerBound = makeBigIntRow(43),
+        .expectedUpperBound = makeBigIntRow(101),
     });
 
     // Test Case 4: Mixed encoding - ConstantVector lower, FlatVector upper
@@ -11525,12 +10501,10 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
             IndexBound{
                 .bound = makeRowVector({makeConstant<int64_t>(5, 1)}),
                 .inclusive = true},
-            IndexBound{
-                .bound = makeRowVector({makeFlatVector<int64_t>({50})}),
-                .inclusive = true}),
+            IndexBound{.bound = makeBigIntRow(50), .inclusive = true}),
         .sortOrder = velox::core::kAscNullsFirst,
-        .expectedLowerBound = makeRowVector({makeFlatVector<int64_t>({5})}),
-        .expectedUpperBound = makeRowVector({makeFlatVector<int64_t>({51})}),
+        .expectedLowerBound = makeBigIntRow(5),
+        .expectedUpperBound = makeBigIntRow(51),
     });
 
     // Test Case 5: Null ConstantVector with exclusive lower bound (should
@@ -11543,9 +10517,7 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                 .bound = makeRowVector(
                     {makeConstant<int64_t>(std::nullopt, 1, BIGINT())}),
                 .inclusive = false},
-            IndexBound{
-                .bound = makeRowVector({makeFlatVector<int64_t>({100})}),
-                .inclusive = true}),
+            IndexBound{.bound = makeBigIntRow(100), .inclusive = true}),
         .sortOrder = velox::core::kAscNullsLast,
         .expectThrow = true,
         .expectedErrorMsg = "Failed to bump up lower bound",
@@ -11575,8 +10547,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                 .bound = makeRowVector({makeConstant<int32_t>(100, 1)}),
                 .inclusive = true}),
         .sortOrder = velox::core::kAscNullsFirst,
-        .expectedLowerBound = makeRowVector({makeFlatVector<int32_t>({10})}),
-        .expectedUpperBound = makeRowVector({makeFlatVector<int32_t>({101})}),
+        .expectedLowerBound = makeIntRow(10),
+        .expectedUpperBound = makeIntRow(101),
     });
 
     auto baseInt = makeFlatVector<int32_t>({50, 100, 120});
@@ -11593,8 +10565,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                     nullptr, makeIndices({2}), 1, baseInt)}),
                 .inclusive = false}),
         .sortOrder = velox::core::kAscNullsFirst,
-        .expectedLowerBound = makeRowVector({makeFlatVector<int32_t>({100})}),
-        .expectedUpperBound = makeRowVector({makeFlatVector<int32_t>({120})}),
+        .expectedLowerBound = makeIntRow(100),
+        .expectedUpperBound = makeIntRow(120),
     });
 
     for (const auto& testCase : testCases) {
@@ -11867,10 +10839,8 @@ TEST_F(KeyEncoderTest, encodeIndexBoundsWithNonFlatEncoding) {
                      makeConstant<int64_t>(200, 1)}),
                 .inclusive = true}),
         .sortOrder = velox::core::kAscNullsFirst,
-        .expectedLowerBound = makeRowVector(
-            {makeFlatVector<int64_t>({10}), makeFlatVector<int64_t>({100})}),
-        .expectedUpperBound = makeRowVector(
-            {makeFlatVector<int64_t>({30}), makeFlatVector<int64_t>({201})}),
+        .expectedLowerBound = makeBigIntRow(10, 100),
+        .expectedUpperBound = makeBigIntRow(30, 201),
     });
 
     for (const auto& testCase : testCases) {
