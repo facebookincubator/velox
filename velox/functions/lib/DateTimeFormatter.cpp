@@ -1820,7 +1820,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 }
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format) {
+    const std::string_view& format,
+    bool useWeekYearForY) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -1875,7 +1876,13 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
           builder.appendCenturyOfEra(count);
           break;
         case 'Y':
-          builder.appendYearOfEra(count);
+          if (useWeekYearForY) {
+            // Spark/Joda: 'Y' = ISO week-year.
+            builder.appendWeekYear(count);
+          } else {
+            // Presto: 'Y' = year-of-era (calendar year).
+            builder.appendYearOfEra(count);
+          }
           break;
         case 'x':
           builder.appendWeekYear(count);
@@ -1955,7 +1962,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
-    bool lenient) {
+    bool lenient,
+    bool useWeekYearForY) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -2070,7 +2078,13 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
           builder.appendYear(count);
           break;
         case 'Y':
-          builder.appendYearOfEra(count);
+          if (useWeekYearForY) {
+            // Spark/Joda: 'Y' = ISO week-year.
+            builder.appendWeekYear(count);
+          } else {
+            // Presto: 'Y' = year-of-era (calendar year).
+            builder.appendYearOfEra(count);
+          }
           break;
         case 'z':
           builder.appendTimeZone(count);

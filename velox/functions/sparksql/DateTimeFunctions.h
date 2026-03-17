@@ -32,12 +32,19 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
     DateTimeFormatterType type) {
   switch (type) {
     case DateTimeFormatterType::STRICT_SIMPLE:
-      return buildSimpleDateTimeFormatter(format, /*lenient=*/false);
+      return buildSimpleDateTimeFormatter(
+          format,
+          /*lenient=*/false,
+          /*useWeekYearForY=*/true);
     case DateTimeFormatterType::LENIENT_SIMPLE:
-      return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
+      return buildSimpleDateTimeFormatter(
+          format,
+          /*lenient=*/true,
+          /*useWeekYearForY=*/true);
     default:
       return buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+          std::string_view(format.data(), format.size()),
+          /*useWeekYearForY=*/true);
   }
 }
 

@@ -242,12 +242,18 @@ class DateTimeFormatter {
 Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format);
 
+/// useWeekYearForY If true, 'Y' is parsed as ISO week-year (Spark/Joda
+/// semantics). If false, 'Y' is parsed as year-of-era (Presto/calendar).
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format);
+    const std::string_view& format,
+    bool useWeekYearForY = false);
 
+/// useWeekYearForY If true, 'Y' is parsed as ISO week-year (Spark/Joda
+/// semantics). If false, 'Y' is parsed as year-of-era (Presto/calendar).
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
-    bool lenient);
+    bool lenient,
+    bool useWeekYearForY = false);
 
 } // namespace facebook::velox::functions
 

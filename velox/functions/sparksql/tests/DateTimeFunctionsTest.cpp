@@ -305,7 +305,7 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
   };
 
   EXPECT_EQ(0, unixTimestamp("1970-01-01", "yyyy-MM-dd"));
-  EXPECT_EQ(-31536000, unixTimestamp("1969", "YYYY"));
+  EXPECT_EQ(-31536000, unixTimestamp("1969", "yyyy"));
   EXPECT_EQ(86400, unixTimestamp("1970-01-02", "yyyy-MM-dd"));
   EXPECT_EQ(86410, unixTimestamp("1970-01-02 00:00:10", "yyyy-MM-dd HH:mm:ss"));
 
@@ -1028,6 +1028,10 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   EXPECT_EQ(fromUnixTime(0, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 08:00:00");
   EXPECT_EQ(fromUnixTime(120, "yyyy-MM-dd HH:mm"), "1970-01-01 08:02");
   EXPECT_EQ(fromUnixTime(-59, "yyyy-MM-dd HH:mm:ss"), "1970-01-01 07:59:01");
+  // In Joda/Spark, YYYY is ISO week-year. 1767024027 is 2025-12-30 00:00:27
+  // that date belongs to ISO week-year 2026.
+  EXPECT_EQ(
+      fromUnixTime(1767024027, "YYYY-MM-dd HH:mm:ss"), "2026-12-30 00:00:27");
   EXPECT_EQ(
       fromUnixTime(getUnixTime("2014-07-21 16:00:00"), "yyyy-MM-dd"),
       "2014-07-22");
