@@ -23,6 +23,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
@@ -625,6 +626,45 @@ TEST_F(BufferedInputTest, resetAfterPartialStreamsConsumed) {
   const auto next4 = getNext(*ret4);
   ASSERT_TRUE(next4.has_value());
   EXPECT_EQ(next4.value(), "dddeee");
+}
+
+TEST_F(BufferedInputTest, preload) {
+  std::string content = "hello world, this is preload test data!";
+  auto readFile =
+      std::make_shared<facebook::velox::tests::utils::CountingReadFile>(
+          content);
+
+  BufferedInput input(
+      readFile,
+      *pool_,
+      MetricsLog::voidLog(),
+      nullptr,
+      nullptr,
+      10,
+      /* wsVRLoad = */ false);
+
+  ASSERT_EQ(readFile->numReads(), 0);
+  EXPECT_FALSE(input.preloaded());
+
+  input.preload();
+  EXPECT_TRUE(input.preloaded());
+
+  const auto readsAfterPreload = readFile->numReads();
+  ASSERT_GT(readsAfterPreload, 0);
+
+  // After preload, sub-region reads should be served from preloaded data.
+  auto stream1 = input.read(0, 5, LogType::FILE);
+  auto next1 = getNext(*stream1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), "hello");
+
+  auto stream2 = input.read(6, 5, LogType::FILE);
+  auto next2 = getNext(*stream2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), "world");
+
+  // No additional file reads after preload.
+  ASSERT_EQ(readFile->numReads(), readsAfterPreload);
 }
 
 class CustomDirectBufferedInput

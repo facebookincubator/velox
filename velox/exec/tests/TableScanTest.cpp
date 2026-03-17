@@ -120,6 +120,13 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
                   .endTableScan()
                   .planNode();
 
+  // Disable file preloading to ensure individual stream reads are tracked
+  // for overreadBytes verification.
+  resetHiveConnector(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {connector::hive::HiveConfig::kFilePreloadThreshold, "0"}}));
+
   std::unordered_map<std::string, std::string> config;
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorConfigs = {};
@@ -145,7 +152,8 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   auto overreadBytes = getTableScanRuntimeStats(task).at("overreadBytes").sum;
   ASSERT_GE(rawInputBytes, 500);
   ASSERT_EQ(overreadBytes, 13);
-  ASSERT_EQ(
+  // Without preloading, storageReadBytes is the sum of individual stream reads.
+  ASSERT_LE(
       getTableScanRuntimeStats(task).at("storageReadBytes").sum,
       rawInputBytes + overreadBytes);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);

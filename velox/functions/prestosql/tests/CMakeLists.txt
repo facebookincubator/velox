@@ -43,6 +43,7 @@ add_executable(
   ArrayPositionTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
+  ArraySplitIntoChunksTest.cpp
   ArraySortTest.cpp
   ArraySubsetTest.cpp
   L2NormTest.cpp
@@ -51,6 +52,8 @@ add_executable(
   ArraySumTest.cpp
   ArrayTrimTest.cpp
   ArrayUnionTest.cpp
+  DotProductTest.cpp
+  DotProductFuzzerTest.cpp
   ArgTypesGeneratorTest.cpp
   BinaryFunctionsTest.cpp
   BingTileCastTest.cpp

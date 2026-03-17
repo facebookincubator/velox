@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "velox/common/Enums.h"
+#include "velox/common/rpc/RPCTypes.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -4666,6 +4667,12 @@ class UnnestNode : public PlanNode {
   /// output row has non-empty unnested value. If not present, marker column is
   /// not provided and the unnest operator also skips producing output rows
   /// with empty unnest value.
+  /// @param splitOutput Optional flag to control whether it should output 1
+  /// batch for each input batch, or split output batches if they are too large.
+  /// If true, output is split into batches according to Operator's
+  /// outputBatchRows logic. If false, output is not split and output batches
+  /// match input batches 1:1. If not set, defaults to the value of the
+  /// unnest_split_output config in the QueryConfig.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
@@ -4673,6 +4680,16 @@ class UnnestNode : public PlanNode {
       std::vector<std::string> unnestNames,
       std::optional<std::string> ordinalityName,
       std::optional<std::string> markerName,
+      const PlanNodePtr& source);
+
+  UnnestNode(
+      const PlanNodeId& id,
+      std::vector<FieldAccessTypedExprPtr> replicateVariables,
+      std::vector<FieldAccessTypedExprPtr> unnestVariables,
+      std::vector<std::string> unnestNames,
+      std::optional<std::string> ordinalityName,
+      std::optional<std::string> markerName,
+      std::optional<bool> splitOutput,
       const PlanNodePtr& source);
 
   class Builder {
@@ -4685,6 +4702,7 @@ class UnnestNode : public PlanNode {
       unnestVariables_ = other.unnestVariables();
       unnestNames_ = other.unnestNames_;
       ordinalityName_ = other.ordinalityName_;
+      splitOutput_ = other.splitOutput_;
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -4726,6 +4744,11 @@ class UnnestNode : public PlanNode {
       return *this;
     }
 
+    Builder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
     std::shared_ptr<UnnestNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "UnnestNode id is not set");
       VELOX_USER_CHECK(
@@ -4745,6 +4768,7 @@ class UnnestNode : public PlanNode {
           unnestNames_.value(),
           ordinalityName_,
           markerName_,
+          splitOutput_,
           source_.value());
     }
 
@@ -4756,6 +4780,7 @@ class UnnestNode : public PlanNode {
     std::optional<std::string> ordinalityName_;
     std::optional<std::string> markerName_;
     std::optional<PlanNodePtr> source_;
+    std::optional<bool> splitOutput_;
   };
 
   bool supportsBarrier() const override {
@@ -4804,6 +4829,10 @@ class UnnestNode : public PlanNode {
     return markerName_.has_value();
   }
 
+  const std::optional<bool>& splitOutput() const {
+    return splitOutput_;
+  }
+
   std::string_view name() const override {
     return "Unnest";
   }
@@ -4820,6 +4849,7 @@ class UnnestNode : public PlanNode {
   const std::vector<std::string> unnestNames_;
   const std::optional<std::string> ordinalityName_;
   const std::optional<std::string> markerName_;
+  const std::optional<bool> splitOutput_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
 };
@@ -5577,6 +5607,137 @@ class EnforceDistinctNode : public PlanNode {
 
 using EnforceDistinctNodePtr = std::shared_ptr<const EnforceDistinctNode>;
 
+/// The MarkSorted operator marks rows where the sort key changes.
+/// The result is put in a new markerName column alongside the original input.
+/// The first row is always marked true. Subsequent rows are marked true if
+/// they compare as sorted relative to the previous row based on sortingKeys
+/// and sortingOrders.
+/// @param markerName Name of the output marker channel.
+/// @param sortingKeys Keys to check for sorted order.
+/// @param sortingOrders Sort orders (ascending/descending, nulls first/last).
+class MarkSortedNode : public PlanNode {
+ public:
+  MarkSortedNode(
+      PlanNodeId id,
+      std::string markerName,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      PlanNodePtr source);
+
+  class Builder {
+   public:
+    Builder() = default;
+
+    explicit Builder(const MarkSortedNode& other) {
+      id_ = other.id();
+      markerName_ = other.markerName();
+      sortingKeys_ = other.sortingKeys();
+      sortingOrders_ = other.sortingOrders();
+      VELOX_CHECK_EQ(other.sources().size(), 1);
+      source_ = other.sources()[0];
+    }
+
+    Builder& id(PlanNodeId id) {
+      id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& markerName(std::string markerName) {
+      markerName_ = std::move(markerName);
+      return *this;
+    }
+
+    Builder& sortingKeys(std::vector<FieldAccessTypedExprPtr> sortingKeys) {
+      sortingKeys_ = std::move(sortingKeys);
+      return *this;
+    }
+
+    Builder& sortingOrders(std::vector<SortOrder> sortingOrders) {
+      sortingOrders_ = std::move(sortingOrders);
+      return *this;
+    }
+
+    Builder& source(PlanNodePtr source) {
+      source_ = std::move(source);
+      return *this;
+    }
+
+    std::shared_ptr<MarkSortedNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "MarkSortedNode id is not set");
+      VELOX_USER_CHECK(
+          markerName_.has_value(), "MarkSortedNode markerName is not set");
+      VELOX_USER_CHECK(
+          sortingKeys_.has_value(), "MarkSortedNode sortingKeys is not set");
+      VELOX_USER_CHECK(
+          sortingOrders_.has_value(),
+          "MarkSortedNode sortingOrders is not set");
+      VELOX_USER_CHECK(source_.has_value(), "MarkSortedNode source is not set");
+
+      return std::make_shared<MarkSortedNode>(
+          id_.value(),
+          markerName_.value(),
+          sortingKeys_.value(),
+          sortingOrders_.value(),
+          source_.value());
+    }
+
+   private:
+    std::optional<PlanNodeId> id_;
+    std::optional<std::string> markerName_;
+    std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
+    std::optional<std::vector<SortOrder>> sortingOrders_;
+    std::optional<PlanNodePtr> source_;
+  };
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  /// The outputType is the concatenation of the input columns and marker
+  /// column.
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "MarkSorted";
+  }
+
+  const std::string& markerName() const {
+    return markerName_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::string markerName_;
+
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
+
+  const std::vector<SortOrder> sortingOrders_;
+
+  const std::vector<PlanNodePtr> sources_;
+
+  const RowTypePtr outputType_;
+};
+
+using MarkSortedNodePtr = std::shared_ptr<const MarkSortedNode>;
+
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
@@ -5987,6 +6148,9 @@ class PlanNodeVisitor {
       const EnforceDistinctNode& node,
       PlanNodeVisitorContext& ctx) const = 0;
 
+  virtual void visit(const MarkSortedNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
   virtual void visit(const MergeExchangeNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
@@ -6059,6 +6223,126 @@ class PlanNodeVisitor {
     }
   }
 };
+
+/// Plan node for async RPC execution (e.g., LLM inference, embeddings).
+///
+/// Stores the function name, result type, argument columns, and streaming
+/// mode. The RPCNode does NOT evaluate argument expressions — a ProjectNode
+/// inserted before this node by the plan rewriter computes argument columns.
+///
+/// Architecture:
+///   SQL: SELECT rpc_function(col1, 'model_name') FROM table
+///            |
+///            v (Plan Rewriter)
+///     ProjectNode (__rpc_arg_0 = col1, __rpc_arg_1 = 'model_name')
+///           |
+///        RPCNode (argumentColumns = [__rpc_arg_0, __rpc_arg_1])
+///           |
+///       source[0]
+///           |
+///       TableScan
+class RPCNode : public PlanNode {
+ public:
+  /// @param id Unique identifier for this plan node.
+  /// @param source Data source (the only source).
+  /// @param functionName Name of the registered AsyncRPCFunction.
+  /// @param functionResultType Velox type of the RPC result column.
+  /// @param outputColumn Name of the output column for RPC responses.
+  /// @param outputType Explicit output type. Must contain outputColumn
+  ///        and any passthrough source columns needed by downstream.
+  ///        Specified explicitly (like AbstractJoinNode) to support column
+  ///        pruning.
+  /// @param argumentColumns Names of input columns containing pre-evaluated
+  ///        argument values. RPCOperator reads these columns in addInput().
+  /// @param argumentTypes Types of each argument (aligned with
+  ///        argumentColumns). Passed to AsyncRPCFunction::initialize().
+  /// @param constantInputs Constant argument values (aligned with
+  ///        argumentColumns). nullptr for non-constant args, single-element
+  ///        ConstantVectors for constant args. Passed to initialize().
+  /// @param streamingMode The streaming mode for RPC execution.
+  /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
+  ///        every N rows during addInput() instead of collecting all rows.
+  RPCNode(
+      const PlanNodeId& id,
+      PlanNodePtr source,
+      std::string functionName,
+      TypePtr functionResultType,
+      std::string outputColumn,
+      RowTypePtr outputType,
+      std::vector<std::string> argumentColumns,
+      std::vector<TypePtr> argumentTypes,
+      std::vector<VectorPtr> constantInputs,
+      rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
+      int32_t dispatchBatchSize = 0);
+
+  const PlanNodePtr& source() const {
+    return sources_[0];
+  }
+
+  const std::string& functionName() const {
+    return functionName_;
+  }
+
+  const TypePtr& rpcResultType() const {
+    return resultType_;
+  }
+
+  const std::string& outputColumn() const {
+    return outputColumn_;
+  }
+
+  const std::vector<std::string>& argumentColumns() const {
+    return argumentColumns_;
+  }
+
+  const std::vector<TypePtr>& argumentTypes() const {
+    return argumentTypes_;
+  }
+
+  const std::vector<VectorPtr>& constantInputs() const {
+    return constantInputs_;
+  }
+
+  rpc::RPCStreamingMode streamingMode() const {
+    return streamingMode_;
+  }
+
+  int32_t dispatchBatchSize() const {
+    return dispatchBatchSize_;
+  }
+
+  std::string_view name() const override {
+    return "RPC";
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  std::vector<PlanNodePtr> sources_;
+  std::string functionName_;
+  TypePtr resultType_;
+  std::string outputColumn_;
+  RowTypePtr outputType_;
+  std::vector<std::string> argumentColumns_;
+  std::vector<TypePtr> argumentTypes_;
+  std::vector<VectorPtr> constantInputs_;
+  rpc::RPCStreamingMode streamingMode_;
+  int32_t dispatchBatchSize_{0};
+};
+
+using RPCNodePtr = std::shared_ptr<RPCNode>;
 
 } // namespace facebook::velox::core
 

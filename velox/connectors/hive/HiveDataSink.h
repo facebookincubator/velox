@@ -717,13 +717,12 @@ class HiveDataSink : public DataSink {
   // Sets up compression, schema, and other writer configuration based on the
   // insert table handle and connector settings.
   // The no-argument overload uses the last writer's info (for appendWriter).
-  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions()
-      const;
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions() const;
 
   // Creates WriterOptions for a specific writer index. Use this overload
   // during writer rotation to ensure the correct writer's memory pool and
   // nonReclaimableSection are used.
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+  virtual std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
       size_t writerIndex) const;
 
   // Returns the Hive partition directory name for the given partition ID.
@@ -771,14 +770,14 @@ class HiveDataSink : public DataSink {
   /// Rotates the writer at the given index to a new file. This is called when
   /// the current file exceeds maxTargetFileBytes_. The old writer is closed
   /// and a new writer is created for the same partition/bucket.
-  void rotateWriter(size_t index);
+  virtual void rotateWriter(size_t index);
 
   /// Finalizes the current file for the writer at the given index.
   /// Captures file stats and adds the file info to writtenFiles.
   /// Called by rotateWriter() and closeInternal().
   void finalizeWriterFile(size_t index);
 
-  void closeInternal();
+  virtual void closeInternal();
 
   // IMPORTANT NOTE: these are passed to writers as raw pointers. HiveDataSink
   // owns the lifetime of these objects, and therefore must destroy them last.
