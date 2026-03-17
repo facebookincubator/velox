@@ -22,6 +22,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -66,7 +67,8 @@ IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec)
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    std::shared_ptr<ColumnHandleMap> columnHandles)
     : FileSplitReader(
           icebergSplit,
           tableHandle,
@@ -83,7 +85,8 @@ IcebergSplitReader::IcebergSplitReader(
       icebergSplit_(icebergSplit),
       baseReadOffset_(0),
       splitOffset_(0),
-      deleteBitmap_(nullptr) {}
+      deleteBitmap_(nullptr),
+      columnHandles_(std::move(columnHandles)) {}
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
@@ -465,6 +468,9 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
   std::vector<TypePtr> columnTypes = fileType->children();
   auto& childrenSpecs = scanSpec_->children();
   const auto& splitInfoColumns = icebergSplit_->infoColumns;
+  const bool readTimestampAsLocalTime =
+      fileConfig_->readTimestampPartitionValueAsLocalTime(
+          connectorQueryCtx_->sessionProperties());
   // Iceberg table stores all column's data in data file.
   for (const auto& childSpec : childrenSpecs) {
     const std::string& fieldName = childSpec->fieldName();
@@ -475,8 +481,7 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()),
+          readTimestampAsLocalTime,
           false);
       childSpec->setConstantValue(constant);
     } else {
@@ -498,16 +503,19 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
         columnTypes[*fileTypeIdx] = outputType;
       } else if (!fileTypeIdx.has_value()) {
         // Handle columns missing from the data file in three scenarios:
-        // 1. Schema evolution: Column was added after the data file was
-        //    written and doesn't exist in older data files.
-        // 2. Partition columns from a Hive-migrated table where partition
+        // 1. Partition columns from a Hive-migrated table where partition
         //    column values are stored in partition metadata rather than in
         //    the data file itself.
-        // 3. Equality-delete partition columns not in the user's projection:
+        // 2. Schema evolution with default values (Iceberg V3): Column was
+        //    added with an initial-default value. Use the default instead of
+        //    NULL.
+        // 3. Schema evolution: Column was added after the data file was
+        //    written and doesn't exist in older data files.
+        // 4. Equality-delete partition columns not in the user's projection:
         //    'configureEqualityDeleteColumns' has already pre-installed the
         //    partition value as a constant, so this branch leaves it alone.
         if (childSpec->isConstant()) {
-          // Constant already set (case 3, or set on a previous prepareSplit
+          // Constant already set (case 4, or set on a previous prepareSplit
           // call for the same scanSpec). Nothing to do.
           continue;
         }
@@ -515,11 +523,46 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
         if (partitionIt != fileSplit_->partitionKeys.end()) {
           setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
         } else {
-          childSpec->setConstantValue(
-              BaseVector::createNullConstant(
-                  tableSchema->findChild(fieldName),
-                  1,
-                  connectorQueryCtx_->memoryPool()));
+          // Check if column has an initial-default value (Iceberg V3)
+          bool hasDefaultValue = false;
+          // The columnHandles_ map is keyed by output name (which may be an
+          // alias). We need to find the column handle where the handle's name()
+          // matches fieldName. fieldName is the table column name from
+          // readerOutputType_.
+          for (const auto& [outputName, handle] : *columnHandles_) {
+            if (handle->name() == fieldName) {
+              auto icebergColumnHandle =
+                  std::dynamic_pointer_cast<const IcebergColumnHandle>(handle);
+              if (icebergColumnHandle &&
+                  icebergColumnHandle->initialDefaultValue().has_value()) {
+                // Use initial-default value for schema evolution.
+                auto columnType = tableSchema->findChild(fieldName);
+                VELOX_CHECK_NOT_NULL(
+                    columnType,
+                    "Column '{}' not found in table schema",
+                    fieldName);
+                auto constant = newConstantFromString(
+                    columnType,
+                    icebergColumnHandle->initialDefaultValue().value(),
+                    connectorQueryCtx_->memoryPool(),
+                    readTimestampAsLocalTime,
+                    false);
+                childSpec->setConstantValue(constant);
+                hasDefaultValue = true;
+                break;
+              }
+            }
+          }
+
+          // Fall back to NULL if no default value
+          if (!hasDefaultValue) {
+            auto columnType = tableSchema->findChild(fieldName);
+            VELOX_CHECK_NOT_NULL(
+                columnType, "Column '{}' not found in table schema", fieldName);
+            childSpec->setConstantValue(
+                BaseVector::createNullConstant(
+                    columnType, 1, connectorQueryCtx_->memoryPool()));
+          }
         }
       }
     }

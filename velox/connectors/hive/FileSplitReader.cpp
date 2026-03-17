@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -51,6 +52,19 @@ VectorPtr newConstantFromStringImpl(
         pool, 1, false, type, std::move(days));
   }
 
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      T decimalValue = 0;
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      auto status = DecimalUtil::castFromString(
+          StringView(value.value()), precision, scale, decimalValue);
+      if (!status.ok()) {
+        VELOX_USER_FAIL(status.message());
+      }
+      return std::make_shared<ConstantVector<T>>(
+          pool, 1, false, type, std::move(decimalValue));
+    }
+  }
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
         pool, 1, false, type, StringView(value.value()));
