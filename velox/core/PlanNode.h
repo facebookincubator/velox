@@ -4667,6 +4667,12 @@ class UnnestNode : public PlanNode {
   /// output row has non-empty unnested value. If not present, marker column is
   /// not provided and the unnest operator also skips producing output rows
   /// with empty unnest value.
+  /// @param splitOutput Optional flag to control whether it should output 1
+  /// batch for each input batch, or split output batches if they are too large.
+  /// If true, output is split into batches according to Operator's
+  /// outputBatchRows logic. If false, output is not split and output batches
+  /// match input batches 1:1. If not set, defaults to the value of the
+  /// unnest_split_output config in the QueryConfig.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
@@ -4674,6 +4680,16 @@ class UnnestNode : public PlanNode {
       std::vector<std::string> unnestNames,
       std::optional<std::string> ordinalityName,
       std::optional<std::string> markerName,
+      const PlanNodePtr& source);
+
+  UnnestNode(
+      const PlanNodeId& id,
+      std::vector<FieldAccessTypedExprPtr> replicateVariables,
+      std::vector<FieldAccessTypedExprPtr> unnestVariables,
+      std::vector<std::string> unnestNames,
+      std::optional<std::string> ordinalityName,
+      std::optional<std::string> markerName,
+      std::optional<bool> splitOutput,
       const PlanNodePtr& source);
 
   class Builder {
@@ -4686,6 +4702,7 @@ class UnnestNode : public PlanNode {
       unnestVariables_ = other.unnestVariables();
       unnestNames_ = other.unnestNames_;
       ordinalityName_ = other.ordinalityName_;
+      splitOutput_ = other.splitOutput_;
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -4727,6 +4744,11 @@ class UnnestNode : public PlanNode {
       return *this;
     }
 
+    Builder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
     std::shared_ptr<UnnestNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "UnnestNode id is not set");
       VELOX_USER_CHECK(
@@ -4746,6 +4768,7 @@ class UnnestNode : public PlanNode {
           unnestNames_.value(),
           ordinalityName_,
           markerName_,
+          splitOutput_,
           source_.value());
     }
 
@@ -4757,6 +4780,7 @@ class UnnestNode : public PlanNode {
     std::optional<std::string> ordinalityName_;
     std::optional<std::string> markerName_;
     std::optional<PlanNodePtr> source_;
+    std::optional<bool> splitOutput_;
   };
 
   bool supportsBarrier() const override {
@@ -4805,6 +4829,10 @@ class UnnestNode : public PlanNode {
     return markerName_.has_value();
   }
 
+  const std::optional<bool>& splitOutput() const {
+    return splitOutput_;
+  }
+
   std::string_view name() const override {
     return "Unnest";
   }
@@ -4821,6 +4849,7 @@ class UnnestNode : public PlanNode {
   const std::vector<std::string> unnestNames_;
   const std::optional<std::string> ordinalityName_;
   const std::optional<std::string> markerName_;
+  const std::optional<bool> splitOutput_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
 };

@@ -18,5 +18,9 @@ velox_add_library(velox_async_rpc_function INTERFACE AsyncRPCFunction.h)
 
 velox_link_libraries(
   velox_async_rpc_function
-  INTERFACE velox_rpc_client velox_rpc_types velox_core velox_type velox_vector
+  INTERFACE velox_rpc_types velox_core velox_type velox_vector Folly::folly
 )
+
+velox_add_library(velox_async_rpc_function_registry AsyncRPCFunctionRegistry.cpp)
+
+velox_link_libraries(velox_async_rpc_function_registry velox_async_rpc_function velox_common_base)
