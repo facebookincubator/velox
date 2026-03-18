@@ -881,7 +881,8 @@ AggregationInputChannels buildAggregationInputChannels(
         if (inputRowSchema->size() == 0) {
           checkZeroColumnGlobalCountStarSupport(
               isCountStarAggregate(aggregate));
-          // Zero-column global count(*) is a special case handle in the aggregator.
+          // Zero-column global count(*) is a special case handle in the
+          // aggregator.
           aggInputs.push_back(selectFallbackChannel);
         } else {
           // Keep count(*) using a real input when a column exists and use a
