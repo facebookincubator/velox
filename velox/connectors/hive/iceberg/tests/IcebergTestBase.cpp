@@ -132,6 +132,13 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
   return vectors;
 }
 
+void IcebergTestBase::setConnectorSessionProperty(
+    const std::string& key,
+    const std::string& value) {
+  VELOX_CHECK_NOT_NULL(connectorSessionProperties_);
+  connectorSessionProperties_->set(key, value);
+}
+
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
     const RowTypePtr& rowType,
     const std::vector<PartitionField>& partitionFields) {

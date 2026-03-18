@@ -128,6 +128,17 @@ class GroupingSet {
   /// Returns true if spilling has triggered on this grouping set.
   bool hasSpilled() const;
 
+  /// Performs lightweight memory compaction across all aggregates before
+  /// spilling. Iterates over all groups and calls Aggregate::compact() on each
+  /// aggregate function. Returns the total number of bytes freed.
+  uint64_t compact();
+
+  /// Returns true if any aggregate function supports lightweight memory
+  /// compaction.
+  bool hasCompactableAggregates() const {
+    return hasCompactableAggregates_;
+  }
+
   /// Returns the hashtable stats.
   HashTableStats hashTableStats() const {
     return table_ ? table_->stats() : HashTableStats{};
@@ -136,6 +147,12 @@ class GroupingSet {
   /// Return the number of rows kept in memory.
   int64_t numRows() const {
     return table_ ? table_->rows()->numRows() : 0;
+  }
+
+  /// Returns the underlying hash table, or nullptr if it has not been created
+  /// yet.
+  BaseHashTable* table() const {
+    return table_.get();
   }
 
   /// Frees hash tables and other state when giving up partial aggregation as
@@ -324,6 +341,9 @@ class GroupingSet {
   AggregationMasks masks_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;
   std::vector<std::unique_ptr<DistinctAggregations>> distinctAggregations_;
+
+  // Boolean indicating whether any aggregate supports compact().
+  bool hasCompactableAggregates_{false};
 
   uint64_t numInputRows_ = 0;
 

@@ -52,6 +52,17 @@ Array Functions
         SELECT array_distinct(ARRAY [1, 2, 1]); -- [1, 2]
         SELECT array_distinct(ARRAY [1, NULL, NULL]); -- [1, NULL]
 
+.. function:: array_split_into_chunks(array(T), sz) -> array(array(T))
+
+    Returns an array of arrays splitting the input array into chunks of given
+    length. The last chunk will be shorter than the chunk length if the array's
+    length is not an integer multiple of the chunk length. Ignores null inputs,
+    but not elements. ::
+
+        SELECT array_split_into_chunks(ARRAY [1, 2, 3, 4, 5], 2); -- [[1, 2], [3, 4], [5]]
+        SELECT array_split_into_chunks(ARRAY [1, 2, 3], 5); -- [[1, 2, 3]]
+        SELECT array_split_into_chunks(ARRAY ['a', 'b', 'c'], 2); -- [['a', 'b'], ['c']]
+
 .. function:: array_duplicates(array(E)) -> array(E)
 
     Returns a set of elements that occur more than once in array.
@@ -314,6 +325,32 @@ Array Functions
         SELECT contains(ARRAY[ARRAY[2, 3]], ARRAY[2, null]); -- failed: contains does not support arrays with elements that are null or contain null
         SELECT contains(ARRAY[ARRAY[2, null]], ARRAY[2, 1]); -- failed: contains does not support arrays with elements that are null or contain null
 
+.. function:: dot_product(array(T), array(T)) -> bigint/double
+
+    Computes the dot product of two arrays. The dot product is the sum of element-wise
+    products of corresponding elements. Both arrays must have the same length.
+    If either array is null, returns null. If arrays have different lengths, throws an error.
+    Null elements in arrays are treated as zero.
+    Returns bigint for integer arrays, double for floating-point arrays.
+    For empty integer arrays, returns 0. For empty floating-point arrays, returns NaN. ::
+
+          SELECT dot_product(ARRAY[1, 2, 3], ARRAY[4, 5, 6]); -- 32 (1*4 + 2*5 + 3*6)
+          SELECT dot_product(ARRAY[1.0, 2.0], ARRAY[3.0, 4.0]); -- 11.0 (1.0*3.0 + 2.0*4.0)
+          SELECT dot_product(ARRAY[1, NULL, 3], ARRAY[4, 5, 6]); -- 22 (1*4 + 0*5 + 3*6)
+          SELECT dot_product(ARRAY[], ARRAY[]); -- 0 for integer arrays, NaN for floating-point arrays
+          SELECT dot_product(NULL, ARRAY[1, 2, 3]); -- NULL
+
+.. function:: dot_product(map(K, V), map(K, V)) -> bigint/double
+
+    Computes the dot product of two maps. For maps, the dot product is computed by
+    multiplying values with matching keys and summing the results. Keys present in only
+    one map contribute zero to the result. If either map is null, returns null.
+    Null values in maps are treated as zero.
+    Returns bigint for integer value maps, double for floating-point value maps. ::
+
+          SELECT dot_product(MAP(ARRAY[1, 2], ARRAY[10, 20]), MAP(ARRAY[1, 2], ARRAY[3, 4])); -- 110 (10*3 + 20*4)
+          SELECT dot_product(MAP(ARRAY['a', 'b'], ARRAY[1.0, 2.0]), MAP(ARRAY['a', 'c'], ARRAY[3.0, 4.0])); -- 3.0 (only 'a' matches)
+
 .. function:: element_at(array(E), index) -> E
 
     Returns element of ``array`` at given ``index``.
@@ -457,6 +494,18 @@ Array Functions
         SELECT transform(ARRAY [5, NULL, 6], x -> COALESCE(x, 0) + 1); -- [6, 1, 7]
         SELECT transform(ARRAY ['x', 'abc', 'z'], x -> x || '0'); -- ['x0', 'abc0', 'z0']
         SELECT transform(ARRAY [ARRAY [1, NULL, 2], ARRAY[3, NULL]], a -> filter(a, x -> x IS NOT NULL)); -- [[1, 2], [3]]
+
+.. function:: transform_with_index(array(T), function(T,bigint,U)) -> array(U)
+
+    Returns an array that is the result of applying ``function`` to each element of ``array``.
+    The lambda function receives both the element and its 1-based index as arguments.
+    This is useful for transformations that need to know the position of each element::
+
+        SELECT transform_with_index(ARRAY [], (x, i) -> x + i); -- []
+        SELECT transform_with_index(ARRAY [5, 6, 7], (x, i) -> x * i); -- [5, 12, 21]
+        SELECT transform_with_index(ARRAY ['a', 'b', 'c'], (x, i) -> concat(x, cast(i as varchar))); -- ['a1', 'b2', 'c3']
+        SELECT transform_with_index(ARRAY [10, 20, 30], (x, i) -> i); -- [1, 2, 3]
+        SELECT transform_with_index(ARRAY [1, 2, 3], (x, i) -> if(i % 2 = 1, x, x * 2)); -- [1, 4, 3]
 
 .. function:: trim_array(x, n) -> array
 

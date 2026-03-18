@@ -344,6 +344,12 @@ void SplitReader::createReader(
 
   auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
   fileProperties.fileReadOps = fileReadOps;
+  if (!hiveTableHandle_->dbName().empty()) {
+    fileProperties.fileReadOps[kDbNameKey] = hiveTableHandle_->dbName();
+  }
+  if (!hiveTableHandle_->tableName().empty()) {
+    fileProperties.fileReadOps[kTableNameKey] = hiveTableHandle_->tableName();
+  }
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(

@@ -510,20 +510,29 @@ TEST_F(OrderByTest, spill) {
   ASSERT_GT(planStats.spilledInputBytes, 0);
   ASSERT_EQ(planStats.spilledPartitions, 1);
   ASSERT_GT(planStats.spilledFiles, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillRuns].count, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillFillTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillSortTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillExtractVectorTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillSerializationTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillFlushTime].sum, 0);
+  ASSERT_GT(planStats.customStats[std::string(Operator::kSpillRuns)].count, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillFillTime)].sum, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillSortTime)].sum, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillExtractVectorTime)].sum,
+      0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillSerializationTime)].sum,
+      0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillFlushTime)].sum, 0);
   ASSERT_EQ(
-      planStats.customStats[Operator::kSpillSerializationTime].count,
-      planStats.customStats[Operator::kSpillFlushTime].count);
-  ASSERT_GT(planStats.customStats[Operator::kSpillWrites].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillWriteTime].sum, 0);
+      planStats.customStats[std::string(Operator::kSpillSerializationTime)]
+          .count,
+      planStats.customStats[std::string(Operator::kSpillFlushTime)].count);
+  ASSERT_GT(planStats.customStats[std::string(Operator::kSpillWrites)].sum, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillWriteTime)].sum, 0);
   ASSERT_EQ(
-      planStats.customStats[Operator::kSpillWrites].count,
-      planStats.customStats[Operator::kSpillWriteTime].count);
+      planStats.customStats[std::string(Operator::kSpillWrites)].count,
+      planStats.customStats[std::string(Operator::kSpillWriteTime)].count);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 

@@ -455,7 +455,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {
   const auto& stats = taskStats.at(traceNodeId_);
   auto opStats = toOperatorStats(task->taskStats());
   ASSERT_GT(
-      opStats.at("HashBuild").runtimeStats[Operator::kSpillWrites].sum, 0);
+      opStats.at("HashBuild")
+          .runtimeStats[std::string(Operator::kSpillWrites)]
+          .sum,
+      0);
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_GT(stats.spilledFiles, 0);
@@ -537,7 +540,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashProbeSpill) {
   const auto& stats = taskStats.at(traceNodeId_);
   auto opStats = toOperatorStats(task->taskStats());
   ASSERT_GT(
-      opStats.at("HashProbe").runtimeStats[Operator::kSpillWrites].sum, 0);
+      opStats.at("HashProbe")
+          .runtimeStats[std::string(Operator::kSpillWrites)]
+          .sum,
+      0);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);

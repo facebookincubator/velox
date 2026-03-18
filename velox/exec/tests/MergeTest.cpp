@@ -403,9 +403,13 @@ class MergeTest : public OperatorTestBase {
       ASSERT_EQ(planStats.spilledFiles, 0);
       ASSERT_EQ(planStats.spilledRows, 0);
       ASSERT_EQ(
-          planStats.customStats.count(Merge::kSpilledSourceReadWallNanos), 0);
+          planStats.customStats.count(
+              std::string(Merge::kSpilledSourceReadWallNanos)),
+          0);
       ASSERT_GE(
-          planStats.customStats.count(Merge::kStreamingSourceReadWallNanos), 0);
+          planStats.customStats.count(
+              std::string(Merge::kStreamingSourceReadWallNanos)),
+          0);
     } else {
       const auto expectedFiles =
           (inputVectors.size() + numMaxMergeSources - 1) / numMaxMergeSources;
@@ -415,9 +419,13 @@ class MergeTest : public OperatorTestBase {
       ASSERT_EQ(planStats.spilledFiles, expectedFiles);
       ASSERT_EQ(planStats.spilledRows, expectedSpillRows);
       ASSERT_GE(
-          planStats.customStats.count(Merge::kSpilledSourceReadWallNanos), 0);
+          planStats.customStats.count(
+              std::string(Merge::kSpilledSourceReadWallNanos)),
+          0);
       ASSERT_GE(
-          planStats.customStats.count(Merge::kStreamingSourceReadWallNanos), 0);
+          planStats.customStats.count(
+              std::string(Merge::kStreamingSourceReadWallNanos)),
+          0);
     }
     ASSERT_EQ(
         planStats.outputRows,

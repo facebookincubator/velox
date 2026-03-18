@@ -139,6 +139,12 @@ class MemoryManager {
     /// NOTE: this only applies for MallocAllocator.
     uint32_t allocationSizeThresholdWithReservation{1 << 20};
 
+    /// If true, MallocAllocator uses malloc for contiguous allocations instead
+    /// of mmap/munmap.
+    ///
+    /// NOTE: this only applies for MallocAllocator.
+    bool mallocContiguousEnabled{false};
+
     /// ================== 'MemoryArbitrator' settings =================
 
     /// Memory capacity available for query/task memory pools. This capacity

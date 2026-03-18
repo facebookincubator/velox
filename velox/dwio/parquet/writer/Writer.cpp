@@ -552,16 +552,22 @@ void Writer::newRowGroup(int32_t numRows) {
   PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
 }
 
-void Writer::close() {
+std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   flush();
 
+  std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
+    parquetFileMetadata = std::make_unique<ParquetFileMetadata>(
+        arrowContext_->writer->metadata());
     arrowContext_->writer.reset();
   }
+
   PARQUET_THROW_NOT_OK(stream_->Close());
 
   arrowContext_->stagingChunks.clear();
+
+  return parquetFileMetadata;
 }
 
 void Writer::abort() {
@@ -701,6 +707,28 @@ void WriterOptions::processConfigs(
   if (!createdBy) {
     createdBy =
         getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
+  }
+
+  // Parquet only updates ioStats_->rawBytesWritten() when a row group is
+  // flushed. With the default flush policy (1M rows / 128MB), small
+  // maxTargetFileBytes_ would never trigger rotation because rawBytesWritten()
+  // stays at 0 while data is buffered. To honor maxTargetFileBytes_, cap the
+  // row group byte threshold so we flush earlier and rawBytesWritten() grows
+  // during writes.
+  auto maxTargetFileSize =
+      getParquetPageSize(session, kParquetSessionMaxTargetFileSize).has_value()
+      ? getParquetPageSize(session, kParquetSessionMaxTargetFileSize)
+      : getParquetPageSize(connectorConfig, kParquetConnectorMaxTargetFileSize);
+  if (maxTargetFileSize.has_value()) {
+    if (!flushPolicyFactory) {
+      auto bytesInRowGroup = std::min<int64_t>(
+          DefaultFlushPolicy::kDefaultBytesInRowGroup,
+          maxTargetFileSize.value());
+      flushPolicyFactory = [bytesInRowGroup]() {
+        return std::make_unique<DefaultFlushPolicy>(
+            DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
+      };
+    }
   }
 }
 

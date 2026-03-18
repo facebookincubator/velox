@@ -76,21 +76,17 @@ BlockingReason Destination::advance(
   }
 
   // Serialize
-  if (current_ == nullptr) {
-    current_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
-    const auto rowType = asRowType(output->type());
-    current_->createStreamTree(rowType, rowsInCurrent_, serdeOptions_);
-  }
+  createVectorStreamGroup(output);
 
   const auto rows = folly::Range(&rows_[firstRow], rowIdx_ - firstRow);
-  if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
+  if (serde_->kind() == "CompactRow") {
     VELOX_CHECK_NOT_NULL(outputCompactRow);
     current_->append(*outputCompactRow, rows, sizes);
-  } else if (serde_->kind() == VectorSerde::Kind::kUnsafeRow) {
+  } else if (serde_->kind() == "UnsafeRow") {
     VELOX_CHECK_NOT_NULL(outputUnsafeRow);
     current_->append(*outputUnsafeRow, rows, sizes);
   } else {
-    VELOX_CHECK_EQ(serde_->kind(), VectorSerde::Kind::kPresto);
+    VELOX_CHECK_EQ(serde_->kind(), "Presto");
     current_->append(output, rows, scratch);
   }
 
@@ -102,6 +98,26 @@ BlockingReason Destination::advance(
     return flush(bufferManager, bufferReleaseFn, future);
   }
   return BlockingReason::kNotBlocked;
+}
+
+void Destination::createVectorStreamGroup(const RowVectorPtr& output) {
+  if (current_ == nullptr || needsStreamTreeRecreation_) {
+    if (current_ == nullptr) {
+      current_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
+    }
+    const auto rowType = asRowType(output->type());
+    current_->createStreamTree(rowType, rowsInCurrent_, serdeOptions_);
+    needsStreamTreeRecreation_ = false;
+  }
+}
+
+void Destination::clearVectorStreamGroup() {
+  current_->clear();
+  // Signal that createStreamTree() must be called before the next append
+  // to properly reinitialize the serializer with a fresh stream tree.
+  // This fixes a crash where the serializer was in an invalid state after
+  // clear() due to stale references to freed StreamArena memory.
+  needsStreamTreeRecreation_ = true;
 }
 
 BlockingReason Destination::flush(
@@ -122,7 +138,20 @@ BlockingReason Destination::flush(
   const int64_t flushedRows = rowsInCurrent_;
 
   current_->flush(&stream);
-  current_->clear();
+
+  // Accumulate stats from the current serializer BEFORE clear() to preserve
+  // compression metrics across flushes.
+  const auto currentStats = current_->runtimeStats();
+  for (const auto& [name, counter] : currentStats) {
+    auto it = accumulatedStats_.find(name);
+    if (it != accumulatedStats_.end()) {
+      it->second.value += counter.value;
+    } else {
+      accumulatedStats_.emplace(name, counter);
+    }
+  }
+
+  clearVectorStreamGroup();
 
   const int64_t flushedBytes = stream.tellp();
 
@@ -145,11 +174,18 @@ BlockingReason Destination::flush(
 
 void Destination::updateStats(Operator* op) {
   VELOX_CHECK(finished_);
+  auto lockedStats = op->stats().wlock();
+
+  // First add accumulated stats from previous serialization cycles.
+  for (const auto& [name, counter] : accumulatedStats_) {
+    lockedStats->addRuntimeStat(name, counter);
+  }
+
+  // Then add stats from the current serializer (if any).
   if (current_) {
     const auto serializerStats = current_->runtimeStats();
-    auto lockedStats = op->stats().wlock();
-    for (auto& pair : serializerStats) {
-      lockedStats->addRuntimeStat(pair.first, pair.second);
+    for (const auto& [name, counter] : serializerStats) {
+      lockedStats->addRuntimeStat(name, counter);
     }
   }
 }
@@ -238,9 +274,9 @@ void PartitionedOutput::initializeInput(RowVectorPtr input) {
     output_->childAt(i)->loadedVector();
   }
 
-  if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
+  if (serde_->kind() == "CompactRow") {
     outputCompactRow_ = std::make_unique<row::CompactRow>(output_);
-  } else if (serde_->kind() == VectorSerde::Kind::kUnsafeRow) {
+  } else if (serde_->kind() == "UnsafeRow") {
     outputUnsafeRow_ = std::make_unique<row::UnsafeRowFast>(output_);
   }
 }
@@ -283,16 +319,16 @@ void PartitionedOutput::estimateRowSizes() {
   raw_vector<vector_size_t> storage(pool());
   const auto numbers = iota(numInput, storage);
   const auto rows = folly::Range(numbers, numInput);
-  if (serde_->kind() == VectorSerde::Kind::kCompactRow) {
+  if (serde_->kind() == "CompactRow") {
     VELOX_CHECK_NOT_NULL(outputCompactRow_);
     serde_->estimateSerializedSize(
         outputCompactRow_.get(), rows, sizePointers_.data());
-  } else if (serde_->kind() == VectorSerde::Kind::kUnsafeRow) {
+  } else if (serde_->kind() == "UnsafeRow") {
     VELOX_CHECK_NOT_NULL(outputUnsafeRow_);
     serde_->estimateSerializedSize(
         outputUnsafeRow_.get(), rows, sizePointers_.data());
   } else {
-    VELOX_CHECK_EQ(serde_->kind(), VectorSerde::Kind::kPresto);
+    VELOX_CHECK_EQ(serde_->kind(), "Presto");
     serde_->estimateSerializedSize(
         output_.get(), rows, sizePointers_.data(), scratch_);
   }
@@ -475,7 +511,8 @@ void PartitionedOutput::close() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serde_->kind())));
+        RuntimeCounter(
+            static_cast<int64_t>(VectorSerde::kindByName(serde_->kind()))));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));

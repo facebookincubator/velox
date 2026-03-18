@@ -141,7 +141,6 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
         "hive_table",
         ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
         indexColumns,
-        /*filterPushdownEnabled=*/true,
         {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
 
     EXPECT_EQ(tableHandle->supportsIndexLookup(), withIndexColumns);

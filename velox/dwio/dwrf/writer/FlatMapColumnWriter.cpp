@@ -61,7 +61,7 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
       valueType_{*type.childAt(1)},
       maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
       collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
-  auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+  auto options = StatisticsBuilder::optionsFromConfig(context.getConfigs());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
           dynamic_cast<typename TypeInfo<K>::StatisticsBuilder*>(

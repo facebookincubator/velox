@@ -25,6 +25,7 @@
 
 #include <gtest/gtest.h>
 #include <optional>
+#include <unordered_set>
 #include "velox/type/CppToType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -663,6 +664,18 @@ class VectorTestBase {
     return vectorMaker_.mapVector(offsets, keyVector, valueVector, nulls);
   }
 
+  // Creates a MapVector with explicit offsets and sizes, allowing
+  // non-consecutive or out-of-order layouts in the underlying key/value arrays.
+  MapVectorPtr makeMapVector(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      const VectorPtr& keyVector,
+      const VectorPtr& valueVector,
+      const std::vector<vector_size_t>& nulls = {}) {
+    return vectorMaker_.mapVector(
+        offsets, sizes, keyVector, valueVector, nulls);
+  }
+
   MapVectorPtr makeAllNullMapVector(
       vector_size_t size,
       const TypePtr& keyType,
@@ -756,15 +769,24 @@ class VectorTestBase {
   //      {{{1, std::nullopt}},
   //       {{2, {{4, 5, std::nullopt}}}},
   //       {{std::nullopt, {{7, 8, 9}}}}});
+  //
+  // Null map rows are supported via the nullRows parameter:
+  //    createMapOfArraysVector<int64_t, int64_t>(
+  //      {{{1, {{1, 2}}}}, {}, {{3, {{7, 8, 9}}}}},
+  //      {1}); // row 1 is null
   template <typename K, typename V>
   VectorPtr createMapOfArraysVector(
       std::vector<std::map<
           std::optional<K>,
-          std::optional<std::vector<std::optional<V>>>>> maps) {
+          std::optional<std::vector<std::optional<V>>>>> maps,
+      std::unordered_set<vector_size_t> nullRows = {}) {
     std::vector<std::optional<K>> keys;
     std::vector<std::optional<std::vector<std::optional<V>>>> values;
-    for (auto& map : maps) {
-      for (const auto& [key, value] : map) {
+    for (vector_size_t i = 0; i < maps.size(); i++) {
+      if (nullRows.count(i)) {
+        continue;
+      }
+      for (const auto& [key, value] : maps[i]) {
         keys.push_back(key);
         values.push_back(value);
       }
@@ -780,17 +802,30 @@ class VectorTestBase {
     auto rawOffsets = offsets->template asMutable<vector_size_t>();
     auto rawSizes = sizes->template asMutable<vector_size_t>();
 
+    BufferPtr nulls = nullptr;
+    uint64_t* rawNulls = nullptr;
     vector_size_t offset = 0;
+
+    if (nullRows.size() > 0) {
+      nulls = allocateNulls(size, pool_.get());
+      rawNulls = nulls->asMutable<uint64_t>();
+    }
+
     for (vector_size_t i = 0; i < size; i++) {
-      rawSizes[i] = maps[i].size();
+      if (nullRows.count(i)) {
+        rawSizes[i] = 0;
+        bits::setNull(rawNulls, i, true);
+      } else {
+        rawSizes[i] = maps[i].size();
+      }
       rawOffsets[i] = offset;
-      offset += maps[i].size();
+      offset += rawSizes[i];
     }
 
     return std::make_shared<MapVector>(
         pool_.get(),
         MAP(CppToType<K>::create(), ARRAY(CppToType<V>::create())),
-        nullptr,
+        nulls,
         size,
         offsets,
         sizes,
@@ -849,17 +884,17 @@ class VectorTestBase {
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
 };
 
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
  public:
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
-    stats_.emplace_back(name, value);
+    stats_.emplace_back(std::string(name), value);
   }
 
   const std::vector<std::pair<std::string, RuntimeCounter>>& stats() const {

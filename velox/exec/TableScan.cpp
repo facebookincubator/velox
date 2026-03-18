@@ -93,6 +93,8 @@ TableScan::TableScan(
       connector_(connector::getConnector(tableHandle_->connectorId())),
       getOutputTimeLimitMs_(
           driverCtx_->queryConfig().tableScanGetOutputTimeLimitMs()),
+      outputBatchRowsOverride_(
+          driverCtx_->queryConfig().tableScanOutputBatchRowsOverride()),
       scaledController_(driverCtx_->task->getScaledScanControllerLocked(
           driverCtx_->splitGroupId,
           planNodeId())) {
@@ -499,6 +501,9 @@ void TableScan::addDynamicFilterLocked(
 }
 
 int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
+  if (outputBatchRowsOverride_ > 0) {
+    return outputBatchRowsOverride_;
+  }
   int64_t estimatedRowSize = connector::DataSource::kUnknownRowSize;
   if (currentEstimatedRowSize != connector::DataSource::kUnknownRowSize) {
     // Use current file estimate.

@@ -17,6 +17,7 @@
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/FileIndexReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/exec/OperatorUtils.h"
@@ -179,8 +180,8 @@ core::FieldAccessTypedExprPtr renameFieldAccess(
   return std::make_shared<core::FieldAccessTypedExpr>(field->type(), newName);
 }
 
-// Converts a join condition's key name from input column name to table column
-// name. Returns a new condition with the converted key name.
+// Converts an index lookup condition's key name from input column name to table
+// column name. Returns a new condition with the converted key name.
 core::IndexLookupConditionPtr convertConditionKeyName(
     const core::IndexLookupConditionPtr& condition,
     const connector::ColumnHandleMap& assignments) {
@@ -222,19 +223,20 @@ BufferPtr filterIndices(
 }
 } // namespace
 
+/// Iterates over results from a SplitIndexReader and applies HiveIndexSource's
+/// format-agnostic orchestration: remaining filter evaluation and output
+/// projection.
 class HiveLookupIterator : public IndexSource::ResultIterator {
  public:
   HiveLookupIterator(
       std::shared_ptr<HiveIndexSource> indexSource,
-      HiveIndexReader* indexReader,
+      SplitIndexReader* indexReader,
       IndexSource::Request request,
-      vector_size_t maxRowsPerRequest)
+      SplitIndexReader::Options options)
       : indexSource_(std::move(indexSource)),
         indexReader_(indexReader),
         request_(std::move(request)),
-        maxRowsPerRequest_(maxRowsPerRequest) {}
-
-  ~HiveLookupIterator() override = default;
+        options_(options) {}
 
   bool hasNext() override {
     return state_ != State::kEnd;
@@ -247,10 +249,9 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
       return nullptr;
     }
 
-    // Set the request on first call.
+    // Initialize lookup on first call.
     if (state_ == State::kInit) {
-      indexReader_->startLookup(
-          request_, {.maxRowsPerRequest = maxRowsPerRequest_});
+      indexReader_->startLookup(request_, options_);
       setState(State::kRead);
     }
 
@@ -365,9 +366,9 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
 
   const std::shared_ptr<HiveIndexSource> indexSource_;
   // Raw pointer to index reader for lookup operations.
-  HiveIndexReader* const indexReader_;
+  SplitIndexReader* const indexReader_;
   const IndexSource::Request request_;
-  const vector_size_t maxRowsPerRequest_;
+  const SplitIndexReader::Options options_;
 
   State state_{State::kInit};
   // Cached empty result for reuse when no rows pass the remaining filter.
@@ -376,7 +377,7 @@ class HiveLookupIterator : public IndexSource::ResultIterator {
 
 HiveIndexSource::HiveIndexSource(
     const RowTypePtr& requestType,
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const RowTypePtr& outputType,
     HiveTableHandlePtr tableHandle,
     const ColumnHandleMap& columnHandles,
@@ -397,49 +398,53 @@ HiveIndexSource::HiveIndexSource(
       executor_(executor),
       ioStatistics_(std::make_shared<io::IoStatistics>()),
       ioStats_(std::make_shared<IoStats>()) {
-  init(columnHandles, joinConditions);
+  init(columnHandles, indexLookupConditions);
 }
 
-void HiveIndexSource::initJoinConditions(
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+void HiveIndexSource::initIndexLookupConditions(
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const ColumnHandleMap& assignments) {
   const auto& indexColumns = tableHandle_->indexColumns();
   const auto& dataColumns = tableHandle_->dataColumns();
 
-  // Build a map from join condition key name to condition for quick lookup.
-  // The key name in IndexLookupCondition references input column name, we need
-  // to convert it to the table column name using assignments.
+  // Build a map from index lookup condition key name to condition for quick
+  // lookup. The key name in IndexLookupCondition references input column name,
+  // we need to convert it to the table column name using assignments.
   folly::F14FastMap<std::string, core::IndexLookupConditionPtr>
-      joinConditionMap;
-  for (const auto& condition : joinConditions) {
+      indexLookupConditionMap;
+  for (const auto& condition : indexLookupConditions) {
     auto convertedCondition = convertConditionKeyName(condition, assignments);
     const auto& columnName = convertedCondition->key->name();
     VELOX_USER_CHECK(
-        joinConditionMap.emplace(columnName, std::move(convertedCondition))
+        indexLookupConditionMap
+            .emplace(columnName, std::move(convertedCondition))
             .second,
-        "Duplicate join key found in joinConditions: {}",
+        "Duplicate lookup key found in indexLookupConditions: {}",
         columnName);
   }
 
-  joinConditions_.reserve(indexColumns.size());
-  size_t numValidJoinConditions{0};
-  // Process index columns in order, converting filters to join conditions
-  // where possible. A range filter/condition stops further processing.
+  indexLookupConditions_.reserve(indexColumns.size());
+  size_t numValidIndexLookupConditions{0};
+  // Process index columns in order, converting filters to index lookup
+  // conditions where possible. A range filter/condition stops further
+  // processing.
   for (const auto& indexColumn : indexColumns) {
     const common::Subfield subfield(indexColumn);
     const auto filterIt = filters_.find(subfield);
     const bool hasFilter = filterIt != filters_.end();
-    const auto conditionIt = joinConditionMap.find(indexColumn);
-    const bool hasJoinCondition = conditionIt != joinConditionMap.end();
+    const auto conditionIt = indexLookupConditionMap.find(indexColumn);
+    const bool hasIndexLookupCondition =
+        conditionIt != indexLookupConditionMap.end();
 
-    // Cannot have both a filter and a join condition on the same column.
+    // Cannot have both a filter and an index lookup condition on the same
+    // column.
     VELOX_CHECK(
-        !(hasFilter && hasJoinCondition),
-        "Cannot have both filter and join condition on index column {}",
+        !(hasFilter && hasIndexLookupCondition),
+        "Cannot have both filter and index lookup condition on index column {}",
         indexColumn);
 
-    if (!hasFilter && !hasJoinCondition) {
-      // No filter or join condition on this column - stop processing.
+    if (!hasFilter && !hasIndexLookupCondition) {
+      // No filter or index lookup condition on this column - stop processing.
       break;
     }
 
@@ -450,12 +455,12 @@ void HiveIndexSource::initJoinConditions(
         "Index column {} not found in data columns",
         indexColumn);
 
-    if (hasJoinCondition) {
-      // Use the existing join condition as-is.
+    if (hasIndexLookupCondition) {
+      // Use the existing index lookup condition as-is.
       const auto& condition = conditionIt->second;
-      joinConditions_.push_back(condition);
+      indexLookupConditions_.push_back(condition);
       VELOX_CHECK(!condition->isFilter());
-      ++numValidJoinConditions;
+      ++numValidIndexLookupConditions;
 
       // Check if this is a range condition (Between) - stops further
       // processing.
@@ -466,7 +471,7 @@ void HiveIndexSource::initJoinConditions(
       continue;
     }
 
-    // Has filter - try to convert to join condition.
+    // Has filter - try to convert to index lookup condition.
     VELOX_CHECK(hasFilter);
     const auto& columnType = dataColumns->childAt(*typeIdx);
     const auto* filter = filterIt->second.get();
@@ -475,7 +480,7 @@ void HiveIndexSource::initJoinConditions(
     if (pointValue.has_value()) {
       auto condition = createEqualConditionWithConstant(
           indexColumn, columnType, pointValue.value());
-      joinConditions_.push_back(condition);
+      indexLookupConditions_.push_back(condition);
       // Remove converted filter from filters_ map.
       filters_.erase(filterIt);
       continue;
@@ -486,7 +491,7 @@ void HiveIndexSource::initJoinConditions(
     if (rangeBounds.has_value()) {
       auto condition = createBetweenConditionWithConstants(
           indexColumn, columnType, rangeBounds->first, rangeBounds->second);
-      joinConditions_.push_back(condition);
+      indexLookupConditions_.push_back(condition);
       // Remove converted filter from filters_ map.
       filters_.erase(filterIt);
       // Range condition stops further processing.
@@ -499,9 +504,9 @@ void HiveIndexSource::initJoinConditions(
   }
 
   VELOX_CHECK_EQ(
-      numValidJoinConditions,
-      joinConditions.size(),
-      "Not all join conditions were processed");
+      numValidIndexLookupConditions,
+      indexLookupConditions.size(),
+      "Not all index lookup conditions were processed");
 }
 
 void HiveIndexSource::initRemainingFilter(
@@ -562,7 +567,7 @@ void HiveIndexSource::initRemainingFilter(
 
 void HiveIndexSource::init(
     const ColumnHandleMap& assignments,
-    const std::vector<core::IndexLookupConditionPtr>& joinConditions) {
+    const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions) {
   VELOX_CHECK_NOT_NULL(tableHandle_);
 
   folly::F14FastMap<std::string_view, const HiveColumnHandle*> columnHandles;
@@ -619,7 +624,7 @@ void HiveIndexSource::init(
 
   initRemainingFilter(readColumnNames, readColumnTypes);
 
-  initJoinConditions(joinConditions, assignments);
+  initIndexLookupConditions(indexLookupConditions, assignments);
 
   readerOutputType_ =
       ROW(std::move(readColumnNames), std::move(readColumnTypes));
@@ -639,33 +644,78 @@ void HiveIndexSource::init(
 
 void HiveIndexSource::addSplits(
     std::vector<std::shared_ptr<ConnectorSplit>> splits) {
-  VELOX_CHECK_NULL(
-      indexReader_, "addSplits can only be called once for HiveIndexSource");
-  std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits;
-  hiveSplits.reserve(splits.size());
+  VELOX_CHECK(
+      readers_.empty(),
+      "addSplits can only be called once for HiveIndexSource");
+
+  // Group splits by file format.
+  std::unordered_map<
+      dwio::common::FileFormat,
+      std::vector<std::shared_ptr<const HiveConnectorSplit>>>
+      splitsByFormat;
   for (auto& split : splits) {
     auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split);
-    VELOX_CHECK_EQ(
-        hiveSplit->fileFormat,
-        dwio::common::FileFormat::NIMBLE,
-        "HiveIndexSource only supports Nimble file format");
-    hiveSplits.push_back(hiveSplit);
+    auto format = hiveSplit->fileFormat;
+    splitsByFormat[format].push_back(std::move(hiveSplit));
   }
-  createHiveIndexReader(std::move(hiveSplits));
+
+  auto* registry = IndexReaderFactoryRegistry::getInstance();
+  for (auto& [format, formatSplits] : splitsByFormat) {
+    const auto* factory = registry->getFactory(format);
+    if (factory != nullptr) {
+      createCustomIndexReader(*factory, std::move(formatSplits));
+    } else {
+      // Fall back to built-in FileIndexReader.
+      VELOX_CHECK_EQ(
+          format,
+          dwio::common::FileFormat::NIMBLE,
+          "No IndexReaderFactory registered for format: {}",
+          dwio::common::toString(format));
+      // Create one reader per split. FileIndexReader currently supports a
+      // single file.
+      for (auto& nimbleSplit : formatSplits) {
+        createFileIndexReader({std::move(nimbleSplit)});
+      }
+    }
+  }
+
+  VELOX_CHECK(!readers_.empty(), "No index readers created from splits");
 }
 
 std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
     const Request& request) {
-  VELOX_CHECK_NOT_NULL(indexReader_, "No index reader available for lookup");
+  VELOX_CHECK(!readers_.empty(), "No index readers available for lookup");
+  VELOX_CHECK_EQ(
+      readers_.size(),
+      1,
+      "Multi-reader lookup not yet supported. "
+      "Partition routing will be added in a follow-up.");
+
   return std::make_shared<HiveLookupIterator>(
-      shared_from_this(), indexReader_.get(), request, maxRowsPerIndexRequest_);
+      shared_from_this(),
+      readers_[0].get(),
+      request,
+      SplitIndexReader::Options{
+          .maxRowsPerRequest =
+              static_cast<vector_size_t>(maxRowsPerIndexRequest_)});
 }
 
 std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
   std::unordered_map<std::string, RuntimeMetric> stats;
   if (remainingFilterTimeNs_ != 0) {
-    stats[Connector::kTotalRemainingFilterTime] =
+    stats[std::string(Connector::kTotalRemainingFilterTime)] =
         RuntimeMetric(remainingFilterTimeNs_, RuntimeCounter::Unit::kNanos);
+  }
+  // Merge stats from all readers.
+  for (auto& reader : readers_) {
+    for (auto& [key, metric] : reader->runtimeStats()) {
+      auto it = stats.find(key);
+      if (it != stats.end()) {
+        it->second.merge(metric);
+      } else {
+        stats.emplace(key, metric);
+      }
+    }
   }
   return stats;
 }
@@ -725,22 +775,36 @@ RowVectorPtr HiveIndexSource::projectOutput(
       pool_, outputType_, BufferPtr(nullptr), numRows, outputColumns);
 }
 
-void HiveIndexSource::createHiveIndexReader(
+void HiveIndexSource::createCustomIndexReader(
+    const IndexReaderFactory& factory,
     std::vector<std::shared_ptr<const HiveConnectorSplit>> splits) {
   VELOX_CHECK(!splits.empty(), "No splits available");
-  indexReader_ = std::make_unique<HiveIndexReader>(
-      std::move(splits),
-      tableHandle_,
-      connectorQueryCtx_,
-      hiveConfig_,
-      scanSpec_,
-      joinConditions_,
-      requestType_,
-      readerOutputType_,
-      ioStatistics_,
-      ioStats_,
-      fileHandleFactory_,
-      executor_);
+  auto reader = factory(splits, tableHandle_, connectorQueryCtx_);
+  VELOX_CHECK_NOT_NULL(
+      reader,
+      "IndexReaderFactory returned null for format: {}",
+      dwio::common::toString(splits[0]->fileFormat));
+  readers_.push_back(std::move(reader));
+}
+
+void HiveIndexSource::createFileIndexReader(
+    std::vector<std::shared_ptr<const HiveConnectorSplit>> splits) {
+  VELOX_CHECK(!splits.empty(), "No splits available");
+  readers_.push_back(
+      std::make_unique<FileIndexReader>(
+          std::move(splits),
+          tableHandle_,
+          connectorQueryCtx_,
+          hiveConfig_,
+          scanSpec_,
+          indexLookupConditions_,
+          requestType_,
+          readerOutputType_,
+          ioStatistics_,
+          ioStats_,
+          fileHandleFactory_,
+          executor_,
+          maxRowsPerIndexRequest_));
 }
 
 } // namespace facebook::velox::connector::hive

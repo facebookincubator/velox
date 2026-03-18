@@ -340,15 +340,19 @@ void Exchange::close() {
   columnarPageIdx_ = 0;
 
   if (exchangeClient_) {
-    recordExchangeClientStats();
+    // Close the client before recording stats so that stats are captured
+    // from the final state. ExchangeClient::close() caches final stats
+    // before clearing sources.
     exchangeClient_->close();
+    recordExchangeClientStats();
   }
   exchangeClient_ = nullptr;
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         Operator::kShuffleSerdeKind,
-        RuntimeCounter(static_cast<int64_t>(serdeKind_)));
+        RuntimeCounter(
+            static_cast<int64_t>(VectorSerde::kindByName(serdeKind_))));
     lockedStats->addRuntimeStat(
         Operator::kShuffleCompressionKind,
         RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
@@ -367,7 +371,8 @@ void Exchange::recordExchangeClientStats() {
     lockedStats->runtimeStats.insert({name, value});
   }
 
-  const auto iter = exchangeClientStats.find(Operator::kBackgroundCpuTimeNanos);
+  const auto iter =
+      exchangeClientStats.find(std::string(Operator::kBackgroundCpuTimeNanos));
   if (iter != exchangeClientStats.end()) {
     const CpuWallTiming backgroundTiming{
         static_cast<uint64_t>(iter->second.count),

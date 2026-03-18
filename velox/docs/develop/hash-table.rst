@@ -30,7 +30,7 @@ These are referred to as padding.
     :align: center
 
 A hash table is never full. There are always some empty slots. Velox allows the hash table to fill up to
-:raw-html:`<text style="font-size:1.2em;background-color:none">⅞</text>` of capacity before resizing.
+:raw-html:`<text style="font-size:1.2em;background-color:none">0.7</text>` of capacity before resizing.
 On resize the hash table’s capacity doubles.
 
 Individual buckets may be completely empty, partially filled or full. Buckets are filled left to right.
@@ -117,7 +117,7 @@ the hash table is never full and there are enough gaps in the form of empty slot
 Resizing
 --------
 
-If the hash table fills up beyond :raw-html:`<text style="font-size:1.2em;background-color:none">⅞</text>`
+If the hash table fills up beyond :raw-html:`<text style="font-size:1.2em;background-color:none">0.7</text>`
 of capacity, it needs to be resized. Each resize doubles the capacity.
 A new hash table is allocated and all existing entries inserted using the “Inserting an entry” process.
 Since we know that all entries are unique, the “Inserting an entry” process can be simplified to

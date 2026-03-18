@@ -219,7 +219,7 @@ class HashProbe : public Operator {
   // that pass the filter in 'filterPassedRows'. Used in null-aware join
   // processing.
   void applyFilterOnTableRowsForNullAwareJoin(
-      const SelectivityVector& rows,
+      SelectivityVector& rows,
       SelectivityVector& filterPassedRows,
       std::function<int32_t(char**, int32_t)> iterator);
 

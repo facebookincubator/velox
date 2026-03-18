@@ -135,11 +135,6 @@ class HiveConfig {
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
 
-  /// The size in bytes to be fetched with Meta data together, used when the
-  /// data after meta data will be used later. Optimization to decrease small IO
-  /// request
-  static constexpr const char* kFooterEstimatedSize = "footer-estimated-size";
-
   /// The threshold of file size in bytes when the whole file is fetched with
   /// meta data together. Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
@@ -214,6 +209,13 @@ class HiveConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
   static constexpr const char* kIndexEnabledSession = "index_enabled";
 
+  /// Whether to collect per-column timing stats (decode/decompress CPU time).
+  /// Disabled by default to avoid overhead (~100ns per operation).
+  static constexpr const char* kReaderCollectColumnStats =
+      "hive.reader.collect-column-stats";
+  static constexpr const char* kReaderCollectColumnStatsSession =
+      "hive.reader.collect_column_stats";
+
   /// Maximum number of output rows to return per index lookup request.
   /// The limit is applied to the actual output rows after filtering.
   /// 0 means no limit (default).
@@ -221,6 +223,32 @@ class HiveConfig {
       "hive.max-rows-per-index-request";
   static constexpr const char* kMaxRowsPerIndexRequestSession =
       "hive.max_rows_per_index_request";
+
+  /// Whether to cache file metadata (footer, stripes, index) in the
+  /// process-wide AsyncDataCache. When enabled, the first reader performs a
+  /// speculative tail read and populates the cache; subsequent readers on the
+  /// same file hit the cache for zero-IO metadata init.
+  static constexpr const char* kFileMetadataCacheEnabled =
+      "file-metadata-cache-enabled";
+  static constexpr const char* kFileMetadataCacheEnabledSession =
+      "file_metadata_cache_enabled";
+
+  /// Speculative tail-read size in bytes when opening files. Controls how many
+  /// bytes are read from the end of the file to load the footer and nearby
+  /// metadata in a single IO operation. Format-specific configs with different
+  /// defaults: ORC/Parquet default to 256KB, Nimble defaults to 8MB.
+  static constexpr const char* kOrcFooterSpeculativeIoSize =
+      "hive.orc.footer-speculative-io-size";
+  static constexpr const char* kOrcFooterSpeculativeIoSizeSession =
+      "orc_footer_speculative_io_size";
+  static constexpr const char* kParquetFooterSpeculativeIoSize =
+      "hive.parquet.footer-speculative-io-size";
+  static constexpr const char* kParquetFooterSpeculativeIoSizeSession =
+      "parquet_footer_speculative_io_size";
+  static constexpr const char* kNimbleFooterSpeculativeIoSize =
+      "hive.nimble.footer-speculative-io-size";
+  static constexpr const char* kNimbleFooterSpeculativeIoSizeSession =
+      "nimble_footer_speculative_io_size";
 
   static constexpr const char* kUser = "user";
   static constexpr const char* kSource = "source";
@@ -287,8 +315,6 @@ class HiveConfig {
 
   uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
 
-  uint64_t footerEstimatedSize() const;
-
   uint64_t filePreloadThreshold() const;
 
   // Returns the timestamp unit used when reading timestamps from files.
@@ -310,9 +336,24 @@ class HiveConfig {
   /// Whether to use the cluster index for filter-based row pruning.
   bool indexEnabled(const config::ConfigBase* session) const;
 
+  /// Whether to collect per-column timing stats (decode/decompress CPU time).
+  /// Disabled by default to avoid overhead (~100ns per operation).
+  bool readerCollectColumnStats(const config::ConfigBase* session) const;
+
   /// Returns the maximum number of rows to read per index lookup request.
   /// 0 means no limit (default).
   uint32_t maxRowsPerIndexRequest(const config::ConfigBase* session) const;
+
+  /// Whether to cache file metadata in the process-wide AsyncDataCache.
+  bool fileMetadataCacheEnabled(const config::ConfigBase* session) const;
+
+  /// Returns the speculative tail read size in bytes for footer.
+  /// ORC/Parquet default to 256KB, Nimble defaults to 8MB. 0 means adaptive.
+  uint64_t orcFooterSpeculativeIoSize(const config::ConfigBase* session) const;
+  uint64_t parquetFooterSpeculativeIoSize(
+      const config::ConfigBase* session) const;
+  uint64_t nimbleFooterSpeculativeIoSize(
+      const config::ConfigBase* session) const;
 
   /// User of the query. Used for storage logging.
   std::string user(const config::ConfigBase* session) const;

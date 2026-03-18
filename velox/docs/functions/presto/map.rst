@@ -192,6 +192,24 @@ Map Functions
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- {'b' -> 3, 'a' -> 2}
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- {'b' -> 3, 'c' -> NULL}
 
+.. function:: map_trim_values(map(K, array(V)), n) -> map(K, array(V))
+
+    Trims the value arrays in a map to a specified maximum size.
+    This function is useful for optimizing memory usage and performance for large feature maps
+    where the value arrays may grow unbounded.
+
+    Returns a map where each value array is trimmed to at most n elements.
+    If n is negative, returns the original map unchanged.
+    If n is 0, returns a map where all values are empty arrays.
+    If a value array has fewer than n elements, it is left unchanged.
+    Null elements in the arrays are preserved in the output. ::
+
+        SELECT map_trim_values(MAP(ARRAY['a', 'b'], ARRAY[ARRAY[1, 2, 3], ARRAY[4, 5, 6, 7]]), 2); -- {a -> [1, 2], b -> [4, 5]}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, 2]]), 5); -- {a -> [1, 2]}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, NULL, 3]]), 2); -- {a -> [1, NULL]}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, 2, 3]]), 0); -- {a -> []}
+        SELECT map_trim_values(MAP(ARRAY['a'], ARRAY[ARRAY[1, 2, 3]]), -1); -- {a -> [1, 2, 3]}
+
 .. function:: map_keys_by_top_n_values(map(K,V), n) -> array(K)
 
     Returns an array of the top N keys from a map. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.

@@ -80,7 +80,7 @@ jobs:
     needs: get-changes
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 8-core-ubuntu-22.04
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -138,7 +138,7 @@ jobs:
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=12 MAX_LINK_JOBS=12
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 14
@@ -186,16 +186,14 @@ jobs:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
         working-directory: _build/release
         run: |
-          # Can be removed after images are rebuild
-          if [ -f "/opt/miniforge/etc/profile.d/conda.sh" ]; then
-            source "/opt/miniforge/etc/profile.d/conda.sh"
-            conda activate adapters
+          source /setup-classpath.sh
+          # Remove next lines after new image contains the mockito jar.
+          MOCKITO_JAR="/usr/local/hadoop/share/hadoop/mapreduce/mockito-core-2.23.4.jar"
+          if [ ! -f "$MOCKITO_JAR" ]; then
+            wget https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar -O "$MOCKITO_JAR"
           fi
-          # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
-          wget https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar -O /usr/local/hadoop/share/hadoop/mapreduce/mockito-core-2.23.4.jar
-
-          export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
-          ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error
+          ulimit -n 65536
+          ctest -j 24 --timeout 900 --label-exclude cuda_driver --output-on-failure --no-tests=error
 
       # Clang-tidy needs a complete build because some files are only generated during the build
       # that clang tidy will not find and report errors otherwise.
@@ -222,10 +220,11 @@ jobs:
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
 
   ubuntu-debug:
-    runs-on: 16-core-ubuntu
+    runs-on: 32-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: Ubuntu debug with resolve_dependency
+    name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
@@ -234,6 +233,34 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          path: velox
+          persist-credentials: false
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Install Dependencies
+        env:
+          VELOX_BUILD_SHARED: "ON"
+          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            mkdir /tmp/build
+            cd /tmp/build
+
+            USE_CLANG=false bash /setup-ubuntu.sh
+
+            cd /
+            rm -rf /tmp/build # cleanup to avoid issues with disk space
+          fi
 
       - name: Get Ccache Stash
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
@@ -246,42 +273,39 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
-        with:
-          path: velox
-          persist-credentials: false
-
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps
-
       - name: Clear CCache Statistics
         run: |
           ccache -sz
 
       - name: Make Debug Build
         env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
+          VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
+          # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
+          # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
+          # exported config references gflags_static which BUNDLED gflags provides.
+          gflags_SOURCE: BUNDLED
+          # Keep system glog (container's glog is built against the same gflags
+          # version). Without this, BUNDLED gflags cascades to BUNDLED glog
+          # which conflicts with system glog loaded transitively.
+          glog_SOURCE: SYSTEM
+          VELOX_GFLAGS_URL: file:///velox/deps-sources/gflags-v2.2.2.tar.gz
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
+            "-DVELOX_BUILD_SHARED=ON"
             "-DVELOX_ENABLE_BENCHMARKS=ON"
             "-DVELOX_ENABLE_EXAMPLES=ON"
             "-DVELOX_ENABLE_ARROW=ON"
             "-DVELOX_ENABLE_GEO=ON"
             "-DVELOX_ENABLE_PARQUET=ON"
             "-DVELOX_MONO_LIBRARY=ON"
-            "-DVELOX_BUILD_SHARED=ON"
           )
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
           else
-            # Faiss (link issue when using Clang) is excluded for Clang compilation
-            # and need to be added back when using GCC.
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_FAISS=ON")
-            # Investigate issues with remote function service: Issue #13897
             EXTRA_CMAKE_FLAGS+=("-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON")
           fi
           make debug
@@ -297,10 +321,11 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
+          ulimit -n 65536
+          cd _build/debug && ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error
 
   fedora-debug:
-    runs-on: 16-core-ubuntu
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:fedora
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
@@ -364,7 +389,7 @@ jobs:
           fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
-          MAKEFLAGS: NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3
+          MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
           EXTRA_CMAKE_FLAGS: >-
             -DVELOX_ENABLE_PARQUET=ON
             -DARROW_THRIFT_USE_SHARED=ON

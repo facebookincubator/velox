@@ -16,10 +16,13 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -47,6 +50,8 @@ HashAggregation::HashAggregation(
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      memoryCompactionEnabled_(
+          driverCtx->queryConfig().aggregationMemoryCompactionReclaimEnabled()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       abandonPartialAggregationMinRows_(
@@ -121,6 +126,8 @@ void HashAggregation::initialize() {
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),
       spillStats_.get());
+
+  hasCompactableAggregates_ = groupingSet_->hasCompactableAggregates();
 
   aggregationNode_.reset();
 }
@@ -468,6 +475,28 @@ void HashAggregation::reclaim(
   }
 
   updateEstimatedOutputRowSize();
+
+  // Try lightweight compaction first before spilling.
+  if (memoryCompactionEnabled_) {
+    uint64_t compactedBytes{0};
+    if (hasCompactableAggregates_) {
+      compactedBytes = groupingSet_->compact();
+    }
+    TestValue::adjust(
+        "facebook::velox::exec::HashAggregation::reclaim::compact",
+        &compactedBytes);
+    if (compactedBytes > 0) {
+      stats.reclaimedBytes += compactedBytes;
+      pool()->release();
+      if (compactedBytes >= targetBytes) {
+        return;
+      }
+    }
+  }
+
+  if (!canSpill()) {
+    return;
+  }
 
   if (noMoreInput_) {
     if (groupingSet_->hasSpilled()) {

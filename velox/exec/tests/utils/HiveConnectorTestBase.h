@@ -135,13 +135,11 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
       const std::vector<std::string>& indexColumns = {},
-      bool filterPushdownEnabled = true,
       const std::unordered_map<std::string, std::string>& tableParameters =
           {}) {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
         tableName,
-        filterPushdownEnabled,
         std::move(subfieldFilters),
         remainingFilter,
         dataColumns,

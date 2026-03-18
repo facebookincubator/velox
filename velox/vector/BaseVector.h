@@ -752,10 +752,14 @@ class BaseVector {
   /// BaseVector::create builds from type, without reference to encodings. This
   /// will still flatten other encodings (e.g. dictionary, constant and lazy),
   /// only preserving flat map as FlatMapVector.
-  static VectorPtr createEmptyLike(
+  template <typename T = BaseVector>
+  static std::shared_ptr<T> createEmptyLike(
       const BaseVector* source,
       vector_size_t size,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool) {
+    return std::static_pointer_cast<T>(
+        createEmptyLikeInternal(source, size, pool));
+  }
 
   /// Set 'nulls' to be the nulls buffer of this vector. This API should not be
   /// used on ConstantVector.
@@ -1048,6 +1052,11 @@ class BaseVector {
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
+
+  static VectorPtr createEmptyLikeInternal(
+      const BaseVector* source,
+      vector_size_t size,
+      memory::MemoryPool* pool);
 
   friend class LazyVector;
 

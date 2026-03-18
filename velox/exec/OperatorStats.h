@@ -103,6 +103,8 @@ struct OperatorStats {
       "runningGetOutputWallNanos";
   static constexpr std::string_view kRunningFinishWallNanos =
       "runningFinishWallNanos";
+  static constexpr std::string_view kRunningIsBlockedWallNanos =
+      "runningIsBlockedWallNanos";
 
   /// Initial ordinal position in the operator's pipeline.
   int32_t operatorId = 0;
@@ -234,7 +236,7 @@ struct OperatorStats {
     outputVectors += 1;
   }
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value);
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value);
   void add(const OperatorStats& other);
   void clear();
 };

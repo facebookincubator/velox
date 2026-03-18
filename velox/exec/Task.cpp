@@ -138,6 +138,8 @@ void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
       RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
   op.runtimeStats[std::string(OperatorStats::kRunningFinishWallNanos)] =
       RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats[std::string(OperatorStats::kRunningIsBlockedWallNanos)] =
+      RuntimeMetric(op.isBlockedTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
 void buildSplitStates(
@@ -2503,6 +2505,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     exchangeClients.swap(exchangeClients_);
 
     barrierPromises.swap(barrierFinishPromises_);
+    // Clear the barrier flag to ensure underBarrier() returns false after task
+    // termination.
+    barrierRequested_ = false;
   }
 
   taskCompletionNotifier.notify();

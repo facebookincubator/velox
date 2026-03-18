@@ -19,32 +19,33 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace facebook::velox::exec::trace {
 
 /// Defines the shared constants used by query trace implementation.
 struct TraceTraits {
-  static inline const std::string kPlanNodeKey = "planNode";
-  static inline const std::string kQueryConfigKey = "queryConfig";
-  static inline const std::string kConnectorPropertiesKey =
+  static constexpr std::string_view kPlanNodeKey = "planNode";
+  static constexpr std::string_view kQueryConfigKey = "queryConfig";
+  static constexpr std::string_view kConnectorPropertiesKey =
       "connectorProperties";
 
-  static inline const std::string kTaskMetaFileName = "task_trace_meta.json";
+  static constexpr std::string_view kTaskMetaFileName = "task_trace_meta.json";
 };
 
 struct OperatorTraceTraits {
-  static inline const std::string kSummaryFileName = "op_trace_summary.json";
-  static inline const std::string kInputFileName = "op_input_trace.data";
-  static inline const std::string kSplitFileName = "op_split_trace.split";
+  static constexpr std::string_view kSummaryFileName = "op_trace_summary.json";
+  static constexpr std::string_view kInputFileName = "op_input_trace.data";
+  static constexpr std::string_view kSplitFileName = "op_split_trace.split";
 
   /// Keys for operator trace summary file.
-  static inline const std::string kOpTypeKey = "opType";
-  static inline const std::string kPeakMemoryKey = "peakMemory";
-  static inline const std::string kInputRowsKey = "inputRows";
-  static inline const std::string kInputBytesKey = "inputBytes";
-  static inline const std::string kRawInputRowsKey = "rawInputRows";
-  static inline const std::string kRawInputBytesKey = "rawInputBytes";
-  static inline const std::string kNumSplitsKey = "numSplits";
+  static constexpr std::string_view kOpTypeKey = "opType";
+  static constexpr std::string_view kPeakMemoryKey = "peakMemory";
+  static constexpr std::string_view kInputRowsKey = "inputRows";
+  static constexpr std::string_view kInputBytesKey = "inputBytes";
+  static constexpr std::string_view kRawInputRowsKey = "rawInputRows";
+  static constexpr std::string_view kRawInputBytesKey = "rawInputBytes";
+  static constexpr std::string_view kNumSplitsKey = "numSplits";
 };
 
 /// Contains the summary of an operator trace.

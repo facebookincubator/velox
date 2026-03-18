@@ -165,21 +165,20 @@ class HiveTableHandle : public ConnectorTableHandle {
   HiveTableHandle(
       std::string connectorId,
       const std::string& tableName,
-      bool filterPushdownEnabled,
       common::SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr,
       std::vector<std::string> indexColumns = {},
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
-      double sampleRate = 1.0);
+      double sampleRate = 1.0,
+      std::string dbName = "");
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
   HiveTableHandle(
       std::string connectorId,
       const std::string& tableName,
-      bool filterPushdownEnabled,
       common::SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns,
@@ -201,10 +200,6 @@ class HiveTableHandle : public ConnectorTableHandle {
 
   bool needsIndexSplit() const override {
     return true;
-  }
-
-  [[deprecated]] bool isFilterPushdownEnabled() const {
-    return filterPushdownEnabled_;
   }
 
   /// Single field filters that can be applied efficiently during file reading.
@@ -255,6 +250,12 @@ class HiveTableHandle : public ConnectorTableHandle {
     return filterColumnHandles_;
   }
 
+  /// Database or namespace name for this table. Used to pass per-table identity
+  /// through the Velox pipeline for token dispatch.
+  const std::string& dbName() const {
+    return dbName_;
+  }
+
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -267,7 +268,6 @@ class HiveTableHandle : public ConnectorTableHandle {
 
  private:
   const std::string tableName_;
-  const bool filterPushdownEnabled_;
   const common::SubfieldFilters subfieldFilters_;
   const core::TypedExprPtr remainingFilter_;
   const double sampleRate_;
@@ -275,6 +275,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   const std::vector<std::string> indexColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
+  const std::string dbName_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;

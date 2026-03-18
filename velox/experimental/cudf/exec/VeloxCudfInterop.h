@@ -33,19 +33,22 @@ namespace with_arrow {
 std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string namePrefix,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     const std::vector<std::string>& columnNames,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace with_arrow
 

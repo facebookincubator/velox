@@ -8,6 +8,14 @@ The result may exceed maximum allowed precision of 38.
 
 Second stage caps precision at 38 and either reduces the scale or not depending on allow-precision-loss flag.
 
+The allow-precision-loss flag applies to both regular and checked (ANSI mode) arithmetic functions.
+In Spark, there are no separate checked expression classes. The same expression (e.g., ``Add``)
+handles both ANSI and non-ANSI behavior, controlled by an ``EvalMode`` flag. In Velox, the checked
+variants are registered as separate functions (e.g., ``checked_add``, ``checked_subtract``)
+to support the TRY evaluation mode (e.g., ``try(checked_add(...))`` returns NULL on overflow).
+
+Regular functions return NULL on overflow, while checked functions throw an error.
+
 For example, addition of decimal(38, 7) and decimal(10, 0) requires precision of 39 and scale of 7.
 Since precision exceeds 38 it needs to be capped. When allow-precision-loss, precision is capped at 38 and scale is reduced by 1 to 6.
 When allow-precision-loss is false, precision is capped at 38 as well, but scale is kept at 7.
@@ -124,6 +132,39 @@ Returns NULL when the actual result cannot be represented with the calculated de
 Arithmetic Functions
 --------------------
 
+.. spark:function:: add(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of adding ``x`` and ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows.
+    Corresponds to Spark's operator ``+`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1.1 as DECIMAL(3, 1)) + CAST(2.2 as DECIMAL(3, 1)); -- 3.3
+        SELECT CAST('99999999999999999999999999999999999999' as DECIMAL(38, 0)) + CAST(1 as DECIMAL(38, 0)); -- NULL
+
+.. spark:function:: checked_add(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of adding ``x`` and ``y``. The result type is determined
+    by the precision and scale computation rules described above.
+    Throws an error when the result overflows.
+    Corresponds to Spark's operator ``+`` with ``spark.sql.ansi.enabled`` set to true.
+
+.. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+
+    Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
+    Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
+    Division by zero or overflow results in an error.
+    Does not have ``allow-precision-loss`` variants because ``IntegralDivide`` always returns
+    ``LongType`` (result scale is 0), so precision loss is not applicable.
+    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
+
+.. spark:function:: checked_subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
+
+    Returns the result of subtracting ``y`` from ``x``. The result type is determined
+    by the precision and scale computation rules described above.
+    Throws an error when the result overflows.
+    Corresponds to Spark's operator ``-`` with ``spark.sql.ansi.enabled`` set to true.
+
 .. spark:function:: div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
 
     Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
@@ -136,12 +177,15 @@ Arithmetic Functions
         SELECT CAST(1 as DECIMAL(20, 3)) div CAST(0 as DECIMAL(20, 3)); -- NULL
         SELECT CAST(99999999999999999999999999999999999 as DECIMAL(38, 1)) div CAST(0.001 as DECIMAL(7, 4)); -- 687399551400672280 // Result is truncated to int64_t.
 
-.. spark:function:: checked_div(x: decimal(p1, s1), y: decimal(p2, s2)) -> bigint
+.. spark:function:: subtract(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p3, s3)
 
-    Performs integer division and returns the bigint result of dividing ``x`` by ``y``, truncating toward zero.
-    Truncation occurs if the result is within the result precision but exceeds the BIGINT range.
-    Division by zero or overflow results in an error.
-    Corresponds to Spark's operator ``div`` with ``spark.sql.ansi.enabled`` set to true.
+    Returns the result of subtracting ``y`` from ``x``. The result type is determined
+    by the precision and scale computation rules described above.
+    Returns NULL when the result overflows.
+    Corresponds to Spark's operator ``-`` with ``spark.sql.ansi.enabled`` set to false.  ::
+
+        SELECT CAST(1.1 as DECIMAL(3, 1)) - CAST(2.2 as DECIMAL(3, 1)); -- -1.1
+        SELECT CAST('-99999999999999999999999999999999999999' as DECIMAL(38, 0)) - CAST(1 as DECIMAL(38, 0)); -- NULL
 
 Decimal Functions
 -----------------

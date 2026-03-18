@@ -2,6 +2,19 @@
 Miscellaneous Functions
 =======================
 
+.. spark:function:: assert_not_null(value) -> value
+
+    Returns the input ``value`` if it is not null. Throws an error if
+    ``value`` is null. Used to enforce NOT NULL column constraints during
+    table inserts.
+
+.. spark:function:: assert_not_null(value, errMsg) -> value
+   :noindex:
+
+    A version of ``assert_not_null`` that uses a custom error message.
+    ``errMsg`` is a constant VARCHAR specifying the error message to throw
+    when ``value`` is null.
+
 .. spark:function:: at_least_n_non_nulls(n, value1, value2, ..., valueN) -> bool
 
     Returns true if there are at least ``n`` non-null and non-NaN values,

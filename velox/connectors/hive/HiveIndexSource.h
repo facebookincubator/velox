@@ -21,7 +21,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveIndexReader.h"
+#include "velox/connectors/hive/IndexReader.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/common/ScanSpec.h"
@@ -33,18 +33,18 @@ namespace facebook::velox::connector::hive {
 
 class HiveConfig;
 
-/// HiveIndexSource provides index lookup for Hive tables.
-/// Currently supports Nimble file format with TabletIndex for efficient
-/// key-based stripe lookups to enable IndexLookupJoin.
+/// Provides index lookup for Hive-metastore-backed tables.
 ///
-/// NOTE: This is a scaffold implementation that assumes a single Nimble file.
-/// The user may need to optimize and extend this for production use cases.
+/// Owns format-agnostic orchestration: remaining filter evaluation, output
+/// projection, and (in future) partition routing. Delegates format-specific
+/// reads to either the built-in FileIndexReader (for Nimble) or external
+/// SplitIndexReader implementations registered via IndexReaderFactoryRegistry.
 class HiveIndexSource : public IndexSource,
                         public std::enable_shared_from_this<HiveIndexSource> {
  public:
   HiveIndexSource(
       const RowTypePtr& requestType,
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const RowTypePtr& outputType,
       HiveTableHandlePtr tableHandle,
       const ColumnHandleMap& columnHandles,
@@ -66,10 +66,6 @@ class HiveIndexSource : public IndexSource,
 
   memory::MemoryPool* pool() const {
     return pool_;
-  }
-
-  uint32_t maxRowsPerIndexRequest() const {
-    return maxRowsPerIndexRequest_;
   }
 
   const RowTypePtr& outputType() const {
@@ -98,13 +94,13 @@ class HiveIndexSource : public IndexSource,
 
   void init(
       const ColumnHandleMap& assignments,
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions);
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions);
 
-  // Validates and initializes join conditions:
+  // Validates and initializes index lookup conditions:
   // - Converts filter conditions (with constant values) to filters_.
-  // - Non-filter conditions are stored in joinConditions_.
-  void initJoinConditions(
-      const std::vector<core::IndexLookupConditionPtr>& joinConditions,
+  // - Non-filter conditions are stored in indexLookupConditions_.
+  void initIndexLookupConditions(
+      const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const ColumnHandleMap& assignments);
 
   // Initializes the remaining filter:
@@ -116,8 +112,13 @@ class HiveIndexSource : public IndexSource,
       std::vector<std::string>& readColumnNames,
       std::vector<TypePtr>& readColumnTypes);
 
-  // Creates HiveIndexReader for the splits.
-  void createHiveIndexReader(
+  // Creates a SplitIndexReader using a registered IndexReaderFactory.
+  void createCustomIndexReader(
+      const IndexReaderFactory& factory,
+      std::vector<std::shared_ptr<const HiveConnectorSplit>> splits);
+
+  // Creates FileIndexReader for the splits.
+  void createFileIndexReader(
       std::vector<std::shared_ptr<const HiveConnectorSplit>> splits);
 
   FileHandleFactory* const fileHandleFactory_;
@@ -132,13 +133,13 @@ class HiveIndexSource : public IndexSource,
   const RowTypePtr outputType_;
   folly::Executor* const executor_;
 
-  // All join conditions including equal join keys converted to
-  // EqualIndexLookupConditions and original non-filter join conditions.
-  // This is passed to HiveIndexReader.
-  std::vector<core::IndexLookupConditionPtr> joinConditions_;
+  // All index lookup conditions including equal lookup keys converted to
+  // EqualIndexLookupConditions and original non-filter index lookup conditions.
+  // This is passed to FileIndexReader.
+  std::vector<core::IndexLookupConditionPtr> indexLookupConditions_;
 
   // Filters for pushdown. Includes subfield filters from table handle and
-  // filters converted from constant join conditions.
+  // filters converted from constant index lookup conditions.
   common::SubfieldFilters filters_;
 
   // Remaining filter expression set after filter pushdown.
@@ -168,8 +169,10 @@ class HiveIndexSource : public IndexSource,
   std::shared_ptr<common::ScanSpec> scanSpec_;
   // Output type for the index reader.
   RowTypePtr readerOutputType_;
-  /// Index reader created by addSplits().
-  std::unique_ptr<HiveIndexReader> indexReader_;
+  /// All index readers (both built-in and external). FileIndexReader
+  /// (Nimble) and external readers both implement SplitIndexReader.
+  /// Created by addSplits().
+  std::vector<std::unique_ptr<SplitIndexReader>> readers_;
 
   // Cached empty output vector.
   RowVectorPtr emptyOutput_;

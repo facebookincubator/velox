@@ -16,16 +16,21 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
+#include <fmt/core.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/FileIds.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
 
 using namespace facebook::velox::dwio::common;
+namespace cache = facebook::velox::cache;
+using facebook::velox::StringIdLease;
 using facebook::velox::common::Region;
 using namespace facebook::velox::memory;
 using namespace ::testing;
@@ -150,6 +155,128 @@ class BufferedInputTest : public testing::Test {
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
+
+TEST_F(BufferedInputTest, hasCache) {
+  auto readFile =
+      std::make_shared<facebook::velox::InMemoryReadFile>(std::string("test"));
+  BufferedInput input(readFile, *pool_);
+  // Base BufferedInput does not have cache.
+  EXPECT_FALSE(input.hasCache());
+
+  // Cache APIs throw when there is no backing cache.
+  VELOX_ASSERT_THROW(
+      input.cacheRegion(0, 4, std::string_view("test")),
+      "cacheRegion requires a backing cache");
+  VELOX_ASSERT_THROW(
+      input.findCachedRegion(0), "findCachedRegion requires a backing cache");
+}
+
+TEST_F(BufferedInputTest, cachedRegion) {
+  auto dataCache = cache::AsyncDataCache::create(memoryManager()->allocator());
+
+  // Empty pin throws.
+  VELOX_ASSERT_THROW(
+      CachedRegion(cache::CachePin{}),
+      "CachedRegion requires a non-empty cache pin");
+
+  // Exclusive pin throws.
+  auto& ids = facebook::velox::fileIds();
+  {
+    StringIdLease fileId(ids, "exclusiveTestFile");
+    cache::RawFileCacheKey key{fileId.id(), 0};
+    auto pin = dataCache->findOrCreate(key, 100, nullptr);
+    ASSERT_FALSE(pin.empty());
+    ASSERT_TRUE(pin.checkedEntry()->isExclusive());
+    VELOX_ASSERT_THROW(
+        CachedRegion(std::move(pin)),
+        "CachedRegion requires a shared (non-exclusive) cache pin");
+  }
+
+  struct TestParam {
+    uint64_t entrySize;
+    bool expectTinyData;
+
+    std::string debugString() const {
+      return fmt::format(
+          "entrySize {}, expectTinyData {}", entrySize, expectTinyData);
+    }
+  };
+  std::vector<TestParam> testSettings = {
+      // Small entry uses tinyData (single contiguous range).
+      {100, true},
+      // Entry just below tinyData boundary still uses tinyData.
+      {cache::AsyncDataCacheEntry::kTinyDataSize - 1, true},
+      // Entry at tinyData boundary uses allocation.
+      {cache::AsyncDataCacheEntry::kTinyDataSize, false},
+      // One page allocation (single run).
+      {AllocationTraits::kPageSize, false},
+      // Large allocation (possibly multiple runs).
+      {128 << 10, false},
+  };
+
+  for (size_t i = 0; i < testSettings.size(); ++i) {
+    const auto& testData = testSettings[i];
+    SCOPED_TRACE(testData.debugString());
+
+    const auto entrySize = testData.entrySize;
+    std::string expected(entrySize, '\0');
+    for (uint64_t j = 0; j < entrySize; ++j) {
+      expected[j] = static_cast<char>('a' + (j % 26));
+    }
+
+    StringIdLease fileId(ids, fmt::format("cachedRegionTestFile_{}", i));
+    cache::RawFileCacheKey key{fileId.id(), 0};
+    auto pin = dataCache->findOrCreate(key, entrySize, nullptr);
+    ASSERT_FALSE(pin.empty());
+    auto* entry = pin.checkedEntry();
+    ASSERT_TRUE(entry->isExclusive());
+
+    // Populate the entry with test data.
+    if (testData.expectTinyData) {
+      ASSERT_NE(entry->tinyData(), nullptr);
+      memcpy(entry->tinyData(), expected.data(), entrySize);
+    } else {
+      auto& allocation = entry->data();
+      ASSERT_GT(allocation.numRuns(), 0);
+      uint64_t offset = 0;
+      for (int i = 0; i < allocation.numRuns() && offset < entrySize; ++i) {
+        auto run = allocation.runAt(i);
+        const uint64_t bytes = run.numPages() * AllocationTraits::kPageSize;
+        const uint64_t copySize = std::min(bytes, entrySize - offset);
+        memcpy(run.data<char>(), expected.data() + offset, copySize);
+        offset += copySize;
+      }
+    }
+    entry->setExclusiveToShared();
+
+    CachedRegion region(std::move(pin));
+    EXPECT_EQ(region.size(), entrySize);
+    ASSERT_FALSE(region.ranges().empty());
+
+    if (testData.expectTinyData) {
+      EXPECT_EQ(region.ranges().size(), 1);
+    }
+
+    // Verify content through ranges.
+    uint64_t verified = 0;
+    for (const auto& range : region.ranges()) {
+      EXPECT_EQ(
+          std::string_view(range.data(), range.size()),
+          std::string_view(expected.data() + verified, range.size()));
+      verified += range.size();
+    }
+    EXPECT_EQ(verified, entrySize);
+
+    // Verify toIOBuf produces identical content.
+    auto iobuf = region.toIOBuf();
+    EXPECT_EQ(iobuf.computeChainDataLength(), entrySize);
+    iobuf.coalesce();
+    EXPECT_EQ(
+        std::string_view(
+            reinterpret_cast<const char*>(iobuf.data()), iobuf.length()),
+        expected);
+  }
+}
 
 TEST_F(BufferedInputTest, zeroLengthStream) {
   auto readFile =
@@ -499,6 +626,45 @@ TEST_F(BufferedInputTest, resetAfterPartialStreamsConsumed) {
   const auto next4 = getNext(*ret4);
   ASSERT_TRUE(next4.has_value());
   EXPECT_EQ(next4.value(), "dddeee");
+}
+
+TEST_F(BufferedInputTest, preload) {
+  std::string content = "hello world, this is preload test data!";
+  auto readFile =
+      std::make_shared<facebook::velox::tests::utils::CountingReadFile>(
+          content);
+
+  BufferedInput input(
+      readFile,
+      *pool_,
+      MetricsLog::voidLog(),
+      nullptr,
+      nullptr,
+      10,
+      /* wsVRLoad = */ false);
+
+  ASSERT_EQ(readFile->numReads(), 0);
+  EXPECT_FALSE(input.preloaded());
+
+  input.preload();
+  EXPECT_TRUE(input.preloaded());
+
+  const auto readsAfterPreload = readFile->numReads();
+  ASSERT_GT(readsAfterPreload, 0);
+
+  // After preload, sub-region reads should be served from preloaded data.
+  auto stream1 = input.read(0, 5, LogType::FILE);
+  auto next1 = getNext(*stream1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), "hello");
+
+  auto stream2 = input.read(6, 5, LogType::FILE);
+  auto next2 = getNext(*stream2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), "world");
+
+  // No additional file reads after preload.
+  ASSERT_EQ(readFile->numReads(), readsAfterPreload);
 }
 
 class CustomDirectBufferedInput

@@ -204,6 +204,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARBINARY(),
       TIMESTAMP(),
       TIMESTAMP_WITH_TIME_ZONE(),
+      IPADDRESS(),
   };
   return kScalarTypes;
 }
@@ -212,6 +213,12 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
   if (type->isDate() || type->isIntervalDayTime() || type->isUnknown() ||
       isGeometryType(type)) {
+    return false;
+  }
+
+  // Block IPADDRESS in containers due to Presto's Int128ArrayBlock
+  // not supporting compareTo().
+  if (containsIPAddress(type)) {
     return false;
   }
 
@@ -320,7 +327,7 @@ bool PrestoQueryRunner::isConstantExprSupported(
     // same timezone as Velox. Interval type cannot be used as the type of
     // constant literals in Presto SQL.
     auto& type = expr->type();
-    return type->isPrimitiveType() && !type->isTimestamp() &&
+    return type->isPrimitiveType() && !type->isTimestamp() && !type->isTime() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
         !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
@@ -362,7 +369,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
       usesTypeName(signature, "p4hyperloglog") ||
-      usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
 }

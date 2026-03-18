@@ -28,6 +28,11 @@ struct IcebergMetadataColumn {
   std::shared_ptr<const Type> type;
   std::string doc;
 
+  // Position delete file's metadata column ID, see
+  // https://iceberg.apache.org/spec/#position-delete-files.
+  static constexpr int32_t kPosId = 2'147'483'545;
+  static constexpr int32_t kFilePathId = 2'147'483'546;
+
   IcebergMetadataColumn(
       int _id,
       const std::string& _name,
@@ -37,7 +42,7 @@ struct IcebergMetadataColumn {
 
   static std::shared_ptr<IcebergMetadataColumn> icebergDeleteFilePathColumn() {
     return std::make_shared<IcebergMetadataColumn>(
-        2147483546,
+        kFilePathId,
         "file_path",
         VARCHAR(),
         "Path of a file in which a deleted row is stored");
@@ -45,7 +50,7 @@ struct IcebergMetadataColumn {
 
   static std::shared_ptr<IcebergMetadataColumn> icebergDeletePosColumn() {
     return std::make_shared<IcebergMetadataColumn>(
-        2147483545,
+        kPosId,
         "pos",
         BIGINT(),
         "Ordinal position of a deleted row in the data file");

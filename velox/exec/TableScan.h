@@ -147,6 +147,8 @@ class TableScan : public SourceOperator {
   // limit'.
   const size_t getOutputTimeLimitMs_{0};
 
+  const uint32_t outputBatchRowsOverride_;
+
   // If set, used for scan scale processing. It is shared by all the scan
   // operators instantiated from the same table scan node.
   const std::shared_ptr<ScaledScanController> scaledController_;

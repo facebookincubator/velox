@@ -14,142 +14,24 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
-#include <cudf/utilities/default_stream.hpp>
-#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
-#include <cudf/utilities/prefetch.hpp>
 
-#include <rmm/mr/arena_memory_resource.hpp>
-#include <rmm/mr/cuda_async_managed_memory_resource.hpp>
-#include <rmm/mr/cuda_async_memory_resource.hpp>
-#include <rmm/mr/cuda_memory_resource.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
-#include <rmm/mr/managed_memory_resource.hpp>
-#include <rmm/mr/owning_wrapper.hpp>
-#include <rmm/mr/pool_memory_resource.hpp>
-#include <rmm/mr/prefetch_resource_adaptor.hpp>
-
-#include <common/base/Exceptions.h>
-
-#include <cstdlib>
 #include <limits>
-#include <memory>
-#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
-namespace {
-/// \brief Makes a cuda resource
-[[nodiscard]] auto makeCudaMr() {
-  return std::make_shared<rmm::mr::cuda_memory_resource>();
-}
-
-/// \brief Makes a pool<cuda> resource
-[[nodiscard]] auto makePoolMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      makeCudaMr(), rmm::percent_of_free_device_memory(percent));
-}
-
-/// \brief Makes an async resource
-[[nodiscard]] auto makeAsyncMr() {
-  return std::make_shared<rmm::mr::cuda_async_memory_resource>();
-}
-
-/// \brief Makes a managed resource
-[[nodiscard]] auto makeManagedMr() {
-  return std::make_shared<rmm::mr::managed_memory_resource>();
-}
-
-/// \brief Makes a prefetch<managed> resource
-[[nodiscard]] auto makePrefetchManagedMr() {
-  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
-      makeManagedMr());
-}
-
-/// \brief Makes an arena<cuda> resource
-[[nodiscard]] auto makeArenaMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::arena_memory_resource>(
-      makeCudaMr(), rmm::percent_of_free_device_memory(percent));
-}
-
-/// \brief Makes a pool<managed> resource
-[[nodiscard]] auto makeManagedPoolMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      makeManagedMr(), rmm::percent_of_free_device_memory(percent));
-}
-
-/// \brief Makes a prefetch<pool<managed>> resource
-[[nodiscard]] auto makePrefetchManagedPoolMr(int percent) {
-  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
-      makeManagedPoolMr(percent));
-}
-
-/// \brief Makes a managed_async resource (experimental, requires CUDA 13+)
-[[nodiscard]] auto makeManagedAsyncMr() {
-  return std::make_shared<rmm::mr::cuda_async_managed_memory_resource>();
-}
-
-/// \brief Makes a prefetch<managed_async> resource (experimental, requires CUDA
-/// 13+)
-[[nodiscard]] auto makePrefetchManagedAsyncMr() {
-  return rmm::mr::make_owning_wrapper<rmm::mr::prefetch_resource_adaptor>(
-      makeManagedAsyncMr());
-}
-
-void enablePrefetching() {
-  cudf::prefetch::enable();
-}
-
-} // namespace
-
-std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
-    std::string_view mode,
-    int percent) {
-  if (mode == "cuda")
-    return makeCudaMr();
-  if (mode == "pool")
-    return makePoolMr(percent);
-  if (mode == "async")
-    return makeAsyncMr();
-  if (mode == "arena")
-    return makeArenaMr(percent);
-  if (mode == "managed")
-    return makeManagedMr();
-  if (mode == "managed_pool")
-    return makeManagedPoolMr(percent);
-  if (mode == "managed_async")
-    return makeManagedAsyncMr();
-  if (mode == "prefetch_managed") {
-    enablePrefetching();
-    return makePrefetchManagedMr();
-  }
-  if (mode == "prefetch_managed_pool") {
-    enablePrefetching();
-    return makePrefetchManagedPoolMr(percent);
-  }
-  if (mode == "prefetch_managed_async") {
-    enablePrefetching();
-    return makePrefetchManagedAsyncMr();
-  }
-  VELOX_FAIL(
-      "Unknown memory resource mode: " + std::string(mode) +
-      "\nExpecting: cuda, pool, async, arena, managed, prefetch_managed, " +
-      "managed_pool, prefetch_managed_pool, managed_async, prefetch_managed_async");
-}
-
-cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
-  return cudf::detail::global_cuda_stream_pool();
-};
-
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   // Check for empty vector
   VELOX_CHECK_GT(tables.size(), 0);
 
@@ -163,8 +45,7 @@ std::unique_ptr<cudf::table> concatenateTables(
       tables.end(),
       std::back_inserter(tableViews),
       [&](const auto& tbl) { return tbl->view(); });
-  return cudf::concatenate(
-      tableViews, stream, cudf::get_current_device_resource_ref());
+  return cudf::concatenate(tableViews, stream, mr);
 }
 
 std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
@@ -193,7 +74,8 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   // Check for empty vector
   if (tables.size() == 0) {
     return makeEmptyTable(tableType);
@@ -213,20 +95,25 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  if (tables.size() == 1) {
-    return tables[0]->release();
-  }
+  // Even for a single input table we must concatenate (copy) rather than
+  // release in-place: the output is owned by `stream` but the input buffer was
+  // allocated on a different stream, so releasing it would bind deallocation to
+  // the wrong stream.
+  auto output = cudf::concatenate(tableViews, stream, mr);
 
-  auto output = cudf::concatenate(
-      tableViews, stream, cudf::get_current_device_resource_ref());
-  stream.synchronize();
+  // Order input deallocations after the concatenate read.
+  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
+  for (auto& s : inputStreams) {
+    cudf::detail::join_streams(outputStreams, s);
+  }
   return output;
 }
 
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::table>> concatTables;
   // Check for empty vector
   if (tables.size() == 0) {
@@ -248,14 +135,11 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   cudf::detail::join_streams(inputStreams, stream);
 
-  if (tables.size() == 1) {
-    concatTables.push_back(tables[0]->release());
-    return concatTables;
-  }
-
   std::vector<std::unique_ptr<cudf::table>> outputTables;
-  auto const maxRows =
-      static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+  const auto& cudfConfig = CudfConfig::getInstance();
+  auto const maxRows = cudfConfig.batchSizeMaxThreshold
+      ? static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value())
+      : static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
   size_t startpos = 0;
   size_t runningRows = 0;
   for (size_t i = 0; i < tableViews.size(); ++i) {
@@ -268,7 +152,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
               std::vector<cudf::table_view>(
                   tableViews.begin() + startpos, tableViews.begin() + i),
               stream,
-              cudf::get_current_device_resource_ref()));
+              mr));
       startpos = i;
       runningRows = 0;
     }
@@ -281,15 +165,29 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             std::vector<cudf::table_view>(
                 tableViews.begin() + startpos, tableViews.end()),
             stream,
-            cudf::get_current_device_resource_ref()));
+            mr));
   }
-  stream.synchronize();
+  // Order input deallocations after the concatenate reads.
+  auto const outputStreams = std::vector<rmm::cuda_stream_view>{stream};
+  for (auto& s : inputStreams) {
+    cudf::detail::join_streams(outputStreams, s);
+  }
   return outputTables;
+}
+
+void streamsWaitForStream(
+    CudaEvent& event,
+    const std::vector<rmm::cuda_stream_view>& streams,
+    rmm::cuda_stream_view stream) {
+  event.recordFrom(stream);
+  for (const auto& strm : streams) {
+    event.waitOn(strm);
+  }
 }
 
 CudaEvent::CudaEvent(unsigned int flags) {
   cudaEvent_t ev{};
-  cudaEventCreateWithFlags(&ev, flags);
+  CUDF_CUDA_TRY(cudaEventCreateWithFlags(&ev, flags));
   event_ = ev;
 }
 
@@ -305,12 +203,12 @@ CudaEvent::CudaEvent(CudaEvent&& other) noexcept : event_(other.event_) {
 }
 
 const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
-  cudaEventRecord(event_, stream.value());
+  CUDF_CUDA_TRY(cudaEventRecord(event_, stream.value()));
   return *this;
 }
 
 const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
-  cudaStreamWaitEvent(stream.value(), event_, 0);
+  CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
   return *this;
 }
 

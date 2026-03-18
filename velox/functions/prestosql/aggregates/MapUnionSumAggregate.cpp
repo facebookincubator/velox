@@ -534,6 +534,9 @@ void registerMapUnionSumAggregate(
           case TypeKind::BIGINT:
             return createMapUnionSumAggregate<int64_t>(
                 valueTypeKind, resultType);
+          case TypeKind::HUGEINT:
+            return createMapUnionSumAggregate<int128_t>(
+                valueTypeKind, resultType);
           case TypeKind::REAL:
             return createMapUnionSumAggregate<float>(valueTypeKind, resultType);
           case TypeKind::DOUBLE:
