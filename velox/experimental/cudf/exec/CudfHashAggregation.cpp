@@ -69,12 +69,16 @@ bool isCountStarAggregate(const core::AggregationNode::Aggregate& aggregate) {
 bool isSupportedZeroColumnAggregation(
     const core::AggregationNode& aggregationNode) {
   // The only supported aggregation shape in that case is global count(*).
-  return aggregationNode.groupingKeys().empty() && // GROUP BY not supported with count(*) on zero columns.
+  return aggregationNode.groupingKeys()
+             .empty() && // GROUP BY not supported with count(*) on zero
+                         // columns.
       !aggregationNode.aggregates().empty() &&
       std::all_of(
-          aggregationNode.aggregates().begin(),
-          aggregationNode.aggregates().end(),
-          [](const auto& aggregate) { return isCountStarAggregate(aggregate); });
+             aggregationNode.aggregates().begin(),
+             aggregationNode.aggregates().end(),
+             [](const auto& aggregate) {
+               return isCountStarAggregate(aggregate);
+             });
 }
 
 bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
@@ -193,7 +197,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       int64_t count;
       if (isZeroColumnCountStar()) { // Matches count(*) with zero columns.
         count = hasInputColumns ? input.num_rows() : inputRowCount_;
-      } else if (countsAllRows()) { // Matches count(*) with one or more columns.
+      } else if (countsAllRows()) { // Matches count(*) with one or more
+                                    // columns.
         VELOX_CHECK(
             hasInputColumns,
             "Zero-column global aggregation only supports count(*)");
@@ -866,8 +871,7 @@ AggregationInputChannels buildAggregationInputChannels(
         // Constants are carried out-of-band in result.constants. Keep a real
         // selected channel so later table_view::select() never sees
         // kConstantChannel.
-        aggInputs.push_back(
-            selectFallbackChannel);
+        aggInputs.push_back(selectFallbackChannel);
       } else {
         VELOX_NYI("Constants and lambdas not yet supported");
       }
@@ -891,10 +895,7 @@ AggregationInputChannels buildAggregationInputChannels(
           // synthetic (non-null) constant {1} to maintain count semantics.
           aggInputs.push_back(selectFallbackChannel);
           result.constants[i] = BaseVector::createConstant(
-              BIGINT(),
-              Variant(int64_t{1}),
-              1,
-              operatorCtx.pool());
+              BIGINT(), Variant(int64_t{1}), 1, operatorCtx.pool());
         }
       } else {
         aggInputs.push_back(selectFallbackChannel);
@@ -2100,16 +2101,16 @@ bool canAggregationBeEvaluatedByCudf(
     return false;
   }
 
-  if (isCountFunctionName(call.name())) { // Inclusive of cases such as count(1).
+  if (isCountFunctionName(
+          call.name())) { // Inclusive of cases such as count(1).
     for (const auto& arg : call.inputs()) {
       auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
       if (constant && constant->isNull()) {
         return false;
       }
     }
-  } else if (
-      hasOnlyConstantArguments(
-          call)) { // Catches all-constant cases such as sum(1), min(2), etc.
+  } else if (hasOnlyConstantArguments(call)) { // Catches all-constant cases
+                                               // such as sum(1), min(2), etc.
     return false;
   }
 

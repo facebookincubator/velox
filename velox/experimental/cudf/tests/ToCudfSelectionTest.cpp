@@ -359,15 +359,12 @@ TEST_F(ToCudfSelectionTest, nonCountConstantAggregationFallsBack) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .aggregation(
-                      {},
-                      {"sum(1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {}, {"sum(1)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .config("cudf.enabled", true)
@@ -385,17 +382,14 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountStarUsesCudf) {
   });
   createDuckDbTable({data});
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .filter("c0 > 0")
-                  .project({})
-                  .aggregation(
-                      {},
-                      {"count(*)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c0 > 0")
+          .project({})
+          .aggregation(
+              {}, {"count(*)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .config("cudf.enabled", true)
@@ -413,17 +407,14 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountConstantFallsBack) {
   });
   createDuckDbTable({data});
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .filter("c0 > 0")
-                  .project({})
-                  .aggregation(
-                      {},
-                      {"count(1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .filter("c0 > 0")
+          .project({})
+          .aggregation(
+              {}, {"count(1)"}, {}, core::AggregationNode::Step::kSingle, false)
+          .planNode();
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .config("cudf.enabled", true)
