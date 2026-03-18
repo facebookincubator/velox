@@ -88,7 +88,7 @@ class PrestoVectorSerde : public VectorSerde {
     bool preserveEncodings{false};
   };
 
-  PrestoVectorSerde() : VectorSerde(kSerdeKind) {}
+  PrestoVectorSerde() = default;
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
@@ -195,8 +195,9 @@ class PrestoVectorSerde : public VectorSerde {
   /// default serde is already registered.
   static void registerVectorSerde();
 
-  /// Registers this serde in the named serde registry under kSerdeKind.
-  /// Throws if a serde with the same name is already registered.
+  /// Registers this serde in the named serde registry under kSerdeKind
+  /// (same name returned by name()). Throws if a serde with the same name
+  /// is already registered.
   static void registerNamedVectorSerde();
 
   /// Registers this serde in the named serde registry under kSerdeKind only

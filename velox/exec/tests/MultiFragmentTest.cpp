@@ -379,10 +379,10 @@ TEST_P(MultiFragmentTest, aggregationSingleKey) {
   ASSERT_EQ(serdeKindRuntimsStats.count, 4);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
   ASSERT_EQ(
       serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
 
   for (const auto& finalTask : finalTasks) {
     auto finalPlanStats = toPlanStats(finalTask->taskStats());
@@ -392,10 +392,12 @@ TEST_P(MultiFragmentTest, aggregationSingleKey) {
     ASSERT_EQ(serdeKindRuntimsStats.count, 1);
     ASSERT_EQ(
         serdeKindRuntimsStats.min,
-        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+        static_cast<int64_t>(
+            Operator::shuffleSerdeStatsValue(GetParam().serdeKind)));
     ASSERT_EQ(
         serdeKindRuntimsStats.max,
-        static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+        static_cast<int64_t>(
+            Operator::shuffleSerdeStatsValue(GetParam().serdeKind)));
   }
 }
 
@@ -683,10 +685,10 @@ TEST_P(MultiFragmentTest, mergeExchange) {
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
   ASSERT_EQ(
       serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
 }
 
 // Test reordering and dropping columns in PartitionedOutput operator.
@@ -1002,10 +1004,10 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
   ASSERT_EQ(
       serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
 }
 
 TEST_P(MultiFragmentTest, noHashPartitionSkew) {
@@ -2222,10 +2224,10 @@ TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
   ASSERT_EQ(
       serdeKindRuntimsStats.max,
-      static_cast<int64_t>(VectorSerde::kindByName(GetParam().serdeKind)));
+      Operator::shuffleSerdeStatsValue(GetParam().serdeKind));
 }
 
 // This test is to reproduce the race condition between task terminate and no
