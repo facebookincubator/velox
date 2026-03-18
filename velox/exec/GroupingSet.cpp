@@ -276,7 +276,7 @@ void GroupingSet::addInputForActiveRows(
     const RowVectorPtr& input,
     bool mayPushdown) {
   VELOX_CHECK(!isGlobal_);
-  if (!table_) {
+  if (table_ == nullptr) {
     createHashTable();
   }
   ensureInputFits(input);

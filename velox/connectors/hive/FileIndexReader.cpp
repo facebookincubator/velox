@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/HiveIndexReader.h"
+#include "velox/connectors/hive/FileIndexReader.h"
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
@@ -35,7 +35,7 @@ std::shared_ptr<const HiveConnectorSplit> getSingleSplit(
   VELOX_CHECK_EQ(
       hiveSplits.size(),
       1,
-      "HiveIndexReader currently only supports a single split");
+      "FileIndexReader currently only supports a single split");
   return hiveSplits[0];
 }
 
@@ -81,7 +81,7 @@ void processBetweenBound(
 
 } // namespace
 
-HiveIndexReader::HiveIndexReader(
+FileIndexReader::FileIndexReader(
     const std::vector<std::shared_ptr<const HiveConnectorSplit>>& hiveSplits,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -93,9 +93,9 @@ HiveIndexReader::HiveIndexReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* fileHandleFactory,
-    folly::Executor* ioExecutor)
-    : hiveSplit_{getSingleSplit(hiveSplits)},
-      tableHandle_{hiveTableHandle},
+    folly::Executor* ioExecutor,
+    uint32_t maxRowsPerRequest)
+    : tableHandle_{hiveTableHandle},
       connectorQueryCtx_{connectorQueryCtx},
       hiveConfig_{hiveConfig},
       fileHandleFactory_{fileHandleFactory},
@@ -106,13 +106,15 @@ HiveIndexReader::HiveIndexReader(
       ioExecutor_{ioExecutor},
       pool_{connectorQueryCtx->memoryPool()},
       scanSpec_{scanSpec},
+      indexLookupConditions_{indexLookupConditions},
+      maxRowsPerRequest_{maxRowsPerRequest},
+      hiveSplit_{getSingleSplit(hiveSplits)},
       fileReader_{createFileReader()},
-      indexReader_{createIndexReader()},
-      indexLookupConditions_{indexLookupConditions} {
+      indexReader_{createIndexReader()} {
   parseIndexLookupConditions();
 }
 
-void HiveIndexReader::parseIndexLookupConditions() {
+void FileIndexReader::parseIndexLookupConditions() {
   VELOX_CHECK(
       !indexLookupConditions_.empty(),
       "Index lookup conditions cannot be empty");
@@ -251,7 +253,7 @@ void HiveIndexReader::parseIndexLookupConditions() {
       ROW(std::move(indexColumnNames), std::move(indexColumnTypes));
 }
 
-std::unique_ptr<dwio::common::Reader> HiveIndexReader::createFileReader() {
+std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NOT_NULL(hiveSplit_);
 
   dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
@@ -286,12 +288,12 @@ std::unique_ptr<dwio::common::Reader> HiveIndexReader::createFileReader() {
 }
 
 std::unique_ptr<dwio::common::IndexReader>
-HiveIndexReader::createIndexReader() {
+FileIndexReader::createIndexReader() {
   VELOX_CHECK_NOT_NULL(fileReader_);
   VELOX_CHECK_EQ(
       hiveSplit_->fileFormat,
       dwio::common::FileFormat::NIMBLE,
-      "HiveIndexReader only supports Nimble file format");
+      "FileIndexReader only supports Nimble file format");
 
   dwio::common::RowReaderOptions rowReaderOpts;
   configureRowReaderOptions(
@@ -305,13 +307,13 @@ HiveIndexReader::createIndexReader() {
       ioExecutor_,
       rowReaderOpts);
   rowReaderOpts.setIndexEnabled(true);
-  // Disable eager first stripe load since HiveIndexReader loads stripes
+  // Disable eager first stripe load since FileIndexReader loads stripes
   // on-demand based on index lookup results.
   rowReaderOpts.setEagerFirstStripeLoad(false);
   return fileReader_->createIndexReader(rowReaderOpts);
 }
 
-void HiveIndexReader::startLookup(
+void FileIndexReader::startLookup(
     const Request& request,
     const Options& options) {
   VELOX_CHECK(
@@ -320,12 +322,16 @@ void HiveIndexReader::startLookup(
   VELOX_CHECK_NOT_NULL(request.input);
   VELOX_CHECK(requestType_->equivalent(*request.input->type()));
 
-  // Build index bounds from request and pass to the index reader.
+  // Use caller-provided maxRowsPerRequest if set, otherwise fall back to
+  // the construction-time default.
+  const auto maxRows = options.maxRowsPerRequest != 0
+      ? options.maxRowsPerRequest
+      : static_cast<vector_size_t>(maxRowsPerRequest_);
   auto indexBounds = buildRequestIndexBounds(request.input);
-  indexReader_->startLookup(indexBounds, options);
+  indexReader_->startLookup(indexBounds, {.maxRowsPerRequest = maxRows});
 }
 
-serializer::IndexBounds HiveIndexReader::buildRequestIndexBounds(
+serializer::IndexBounds FileIndexReader::buildRequestIndexBounds(
     const RowVectorPtr& request) {
   VELOX_CHECK_NOT_NULL(request);
   VELOX_CHECK_NOT_NULL(indexBoundType_);
@@ -405,18 +411,24 @@ serializer::IndexBounds HiveIndexReader::buildRequestIndexBounds(
   return bounds;
 }
 
-bool HiveIndexReader::hasNext() const {
+bool FileIndexReader::hasNext() {
   return indexReader_->hasNext();
 }
 
-std::unique_ptr<HiveIndexReader::Result> HiveIndexReader::next(
+std::unique_ptr<FileIndexReader::Result> FileIndexReader::next(
     vector_size_t maxOutputRows) {
   return indexReader_->next(maxOutputRows);
 }
 
-std::string HiveIndexReader::toString() const {
+std::unordered_map<std::string, RuntimeMetric> FileIndexReader::runtimeStats() {
+  // TODO: Populate with format-specific stats in a follow-up.
+  // File-based IO stats are tracked externally via IoStatistics.
+  return {};
+}
+
+std::string FileIndexReader::toString() const {
   return fmt::format(
-      "HiveIndexReader: hiveSplit_{} scanSpec_{} requestType_{} outputType_{}",
+      "FileIndexReader: split={} scanSpec={} requestType={} outputType={}",
       hiveSplit_->toString(),
       scanSpec_->toString(),
       requestType_->toString(),

@@ -1864,6 +1864,71 @@ TEST_P(AsyncDataCacheTest, fuzz) {
             << stats.numEvict << " evicts";
 }
 
+TEST_P(AsyncDataCacheTest, dataRanges) {
+  constexpr uint64_t kRamBytes = 64UL << 20;
+  initializeCache(kRamBytes);
+
+  struct TestParam {
+    int32_t size;
+    std::string debugString() const {
+      return fmt::format("size {}", size);
+    }
+  };
+
+  std::vector<TestParam> testSettings = {
+      // Tiny entry (< kTinyDataSize).
+      {AsyncDataCacheEntry::kTinyDataSize - 1},
+      // Allocation-backed entry (>= kTinyDataSize).
+      {AsyncDataCacheEntry::kTinyDataSize * 4},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto pin = newEntry(testData.size, testData.size);
+    ASSERT_FALSE(pin.empty());
+    auto* entry = pin.checkedEntry();
+    ASSERT_TRUE(entry->isExclusive());
+
+    auto ranges = entry->dataRanges(testData.size);
+    ASSERT_FALSE(ranges.empty());
+
+    // Verify total bytes across all ranges covers the entry size.
+    uint64_t totalBytes = 0;
+    for (const auto& range : ranges) {
+      ASSERT_GT(range.size(), 0);
+      totalBytes += range.size();
+    }
+    ASSERT_EQ(totalBytes, testData.size);
+
+    // Verify ranges are writable by writing a pattern and reading it back.
+    uint8_t pattern = 0;
+    for (auto& range : ranges) {
+      ::memset(range.data(), pattern, range.size());
+      ++pattern;
+    }
+    pattern = 0;
+    for (const auto& range : ranges) {
+      for (size_t i = 0; i < range.size(); ++i) {
+        ASSERT_EQ(static_cast<uint8_t>(range.data()[i]), pattern);
+      }
+      ++pattern;
+    }
+
+    if (testData.size < AsyncDataCacheEntry::kTinyDataSize) {
+      // Tiny entry: single range backed by tinyData.
+      ASSERT_EQ(ranges.size(), 1);
+      ASSERT_NE(entry->tinyData(), nullptr);
+      ASSERT_EQ(ranges[0].data(), entry->tinyData());
+    } else {
+      // Allocation-backed: one range per run.
+      ASSERT_EQ(ranges.size(), entry->data().numRuns());
+    }
+
+    entry->setExclusiveToShared();
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AsyncDataCacheTest,
     AsyncDataCacheTest,

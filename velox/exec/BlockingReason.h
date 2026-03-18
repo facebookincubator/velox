@@ -55,6 +55,9 @@ enum class BlockingReason {
   /// Used by IndexLookupJoin operator, indicating that it was blocked by the
   /// async index lookup.
   kWaitForIndexLookup,
+  /// Used by RPC operators, indicating that the operator is blocked waiting
+  /// for an async RPC response (e.g., LLM inference, embedding lookups).
+  kWaitForRPC,
 };
 
 VELOX_DECLARE_ENUM_NAME(BlockingReason);

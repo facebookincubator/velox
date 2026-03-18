@@ -294,6 +294,7 @@ const char* exportArrowFormatStr(
       return "i"; // int32
     case TypeKind::BIGINT:
       if (type->isTime()) {
+        VELOX_DCHECK(type->equivalent(*TIME()));
         // TIME is stored as milliseconds since midnight in Velox.
         // Export as Arrow time32 with milliseconds unit.
         return "ttm";
@@ -728,12 +729,16 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // - Velox's Timestamp representation (2x 64bit values) does not have an
   // equivalent in Arrow.
   // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
+  bool isTime = type->isTime();
+  if (isTime) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
+  }
   if (options.useDecimalTypeWidth) {
     // Short decimal is zero-copy.
-    return !type->isTimestamp() && !type->isTime();
+    return !type->isTimestamp() && !isTime;
   }
   // Short decimal requires conversion.
-  return !type->isShortDecimal() && !type->isTimestamp() && !type->isTime();
+  return !type->isShortDecimal() && !type->isTimestamp() && !isTime;
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
@@ -744,6 +749,7 @@ size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
   } else if (type->isTimestamp()) {
     return sizeof(int64_t);
   } else if (type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     // TIME is exported as Arrow time32 (int32_t).
     return sizeof(int32_t);
   }
@@ -778,6 +784,7 @@ void exportValues(
   if (type->kind() == TypeKind::TIMESTAMP) {
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
   } else if (type->kind() == TypeKind::BIGINT && type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     gatherFromTimeBuffer(vec, rows, *values);
   } else {
     gatherFromBuffer(*type, *vec.values(), rows, options, *values);
@@ -1297,8 +1304,6 @@ int32_t parseDecimalBitWidthOrDefault(const std::string_view format) {
 }
 
 TypePtr parseDecimalFormat(const std::string_view format) {
-  const std::string_view invalidFormatMsg =
-      "Unable to convert '{}' ArrowSchema decimal format to Velox decimal";
   try {
     std::string_view::size_type sz;
 
@@ -1309,7 +1314,9 @@ TypePtr parseDecimalFormat(const std::string_view format) {
         format.size() == firstCommaIdx + 1 ||
         (secondCommaIdx != std::string_view::npos &&
          format.size() == secondCommaIdx + 1)) {
-      VELOX_USER_FAIL(invalidFormatMsg, format);
+      VELOX_USER_FAIL(
+          "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
+          format);
     }
 
     // Parse "d:".
@@ -1331,7 +1338,9 @@ TypePtr parseDecimalFormat(const std::string_view format) {
     // Otherwise return type depends on precision.
     return DECIMAL(precision, scale);
   } catch (std::invalid_argument&) {
-    VELOX_USER_FAIL(invalidFormatMsg, format);
+    VELOX_USER_FAIL(
+        "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
+        format);
   }
 }
 
@@ -2254,6 +2263,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.length,
         arrowArray.null_count);
   } else if (type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
     auto timeUnit = getTimeUnit(arrowSchema);
     bool isTime32 =
         (timeUnit == TimeUnit::kSecond || timeUnit == TimeUnit::kMilli);

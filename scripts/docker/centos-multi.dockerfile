@@ -47,6 +47,11 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
     VELOX_ARROW_CMAKE_PATCH=/cmake-compatibility.patch
 
+# Ensure libraries installed to INSTALL_PREFIX are found at runtime (e.g.
+# thrift1 needs libgflags.so.2.2 when folly links gflags statically but
+# other tools still use shared gflags).
+ENV LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:${INSTALL_PREFIX}/lib64"
+
 # Some CMake configs contain the hard coded prefix '/deps', we need to replace that with
 # the future location to avoid build errors in the base-image
 RUN bash /setup-centos9.sh && \

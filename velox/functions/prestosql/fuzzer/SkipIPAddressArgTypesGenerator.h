@@ -21,12 +21,12 @@
 
 namespace facebook::velox::exec::test {
 
-/// Custom argument type generator for distinct_from function that blocks
-/// types containing IPADDRESS in container positions (array elements, map
-/// keys, map values) which fail in Presto due to missing compareTo()
-/// implementation in Int128ArrayBlock.
+/// Blocks types containing IPADDRESS in container positions (array elements,
+/// map keys, map values) which fail in Presto due to missing compareTo()
+/// implementation in Int128ArrayBlock. Used for functions that perform
+/// element-level comparison (e.g., array_union, array_sort, contains).
 /// See: https://github.com/prestodb/presto/issues/26836
-class DistinctFromArgTypesGenerator : public fuzzer::ArgTypesGenerator {
+class SkipIPAddressArgTypesGenerator : public fuzzer::ArgTypesGenerator {
  public:
   std::vector<TypePtr> generateArgs(
       const exec::FunctionSignature& signature,

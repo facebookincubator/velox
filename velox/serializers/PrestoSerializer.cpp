@@ -266,7 +266,16 @@ void PrestoVectorSerde::registerVectorSerde() {
 void PrestoVectorSerde::registerNamedVectorSerde() {
   detail::initBitsToMapOnce();
   velox::registerNamedVectorSerde(
-      "Presto", std::make_unique<PrestoVectorSerde>());
+      kSerdeKind, std::make_unique<PrestoVectorSerde>());
+}
+
+// static
+void PrestoVectorSerde::tryRegisterNamedVectorSerde() {
+  if (!velox::isRegisteredNamedVectorSerde(kSerdeKind)) {
+    detail::initBitsToMapOnce();
+    velox::registerNamedVectorSerde(
+        kSerdeKind, std::make_unique<PrestoVectorSerde>());
+  }
 }
 
 /* static */ Status PrestoVectorSerde::lex(
