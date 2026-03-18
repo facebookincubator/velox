@@ -75,8 +75,8 @@ bool isCompatible(
        isCompatibleFunc(requestedType->asArray().elementType()));
 }
 
-/// Checks if a decimal type has enough integer precision to hold all values
-/// of the given Parquet physical int type.
+// Checks if a decimal type has enough integer precision to hold all values
+// of the given Parquet physical int type.
 bool hasEnoughDecimalPrecision(
     const TypePtr& type,
     int32_t minIntegerDigits) {
@@ -87,30 +87,46 @@ bool hasEnoughDecimalPrecision(
   return (precision - scale) >= minIntegerDigits;
 }
 
-/// Checks if a type is compatible with an INT32 physical type for widening.
-/// INT_8, INT_16, and INT_32 are all stored as Parquet INT32, so they share
-/// the same compatibility rule. For decimal targets, Spark requires
-/// precision-scale >= 10. For non-decimal, Spark supports widening to
-/// TINYINT through BIGINT and DOUBLE (not FLOAT, which has only ~7
-/// significant digits vs INT32's 10).
-///
-/// Including TINYINT and SMALLINT as valid targets means that narrowing
-/// conversions like INT_32 -> TINYINT or INT_16 -> TINYINT are also accepted.
-/// This matches Spark behavior: since all three share the same physical type,
-/// the reader simply truncates the value with silent overflow on out-of-range
-/// inputs.
-bool isInt32Compatible(const TypePtr& type) {
+// Checks if a type is compatible with an INT32 physical type.
+// INT_8, INT_16, and INT_32 are all stored as Parquet INT32.
+// 'minTypeKind' is the smallest Velox type that matches the file's
+// converted type annotation (TINYINT for INT_8, SMALLINT for INT_16,
+// INTEGER for INT_32 or unannotated INT32).
+// For decimal targets, requires precision - scale >= 10.
+// When 'allowNarrowing' is true, any integer type is accepted and the
+// value is silently truncated on overflow. When false, only same-size
+// or wider types are allowed.
+bool isInt32Compatible(
+    const TypePtr& type,
+    TypeKind minTypeKind,
+    bool allowNarrowing) {
+  static_assert(
+      TypeKind::TINYINT < TypeKind::SMALLINT &&
+          TypeKind::SMALLINT < TypeKind::INTEGER &&
+          TypeKind::INTEGER < TypeKind::BIGINT,
+      "TypeKind enum ordering mismatch");
+
   if (type->isDecimal()) {
     return hasEnoughDecimalPrecision(type, 10);
   }
-  return type->kind() == TypeKind::TINYINT ||
-      type->kind() == TypeKind::SMALLINT || type->kind() == TypeKind::INTEGER ||
-      type->kind() == TypeKind::BIGINT || type->kind() == TypeKind::DOUBLE;
+
+  auto kind = type->kind();
+  switch (kind) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      return allowNarrowing || kind >= minTypeKind;
+    case TypeKind::DOUBLE:
+      return true;
+    default:
+      return false;
+  }
 }
 
-/// Checks whether the given type is compatible with a Parquet INT64 source.
-/// Accepts BIGINT identity mapping and Decimal targets with sufficient
-/// precision (precision - scale >= 20, covering the full INT64 range).
+// Checks whether the given type is compatible with a Parquet INT64 source.
+// Accepts BIGINT identity mapping and Decimal targets with sufficient
+// precision (precision - scale >= 20, covering the full INT64 range).
 bool isInt64Compatible(const TypePtr& type) {
   if (type->isDecimal()) {
     return hasEnoughDecimalPrecision(type, 20);
@@ -823,6 +839,7 @@ TypePtr ReaderBase::convertType(
 
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
+  const bool allowNarrowing = options_.allowInt32Narrowing();
 
   if (schemaElement.__isset.converted_type) {
     switch (schemaElement.converted_type) {
@@ -835,7 +852,13 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(requestedType, isRepeated, isInt32Compatible),
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::TINYINT, allowNarrowing);
+                    }),
             kTypeMappingErrorFmtStr,
             "TINYINT",
             requestedType->toString());
@@ -850,7 +873,13 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(requestedType, isRepeated, isInt32Compatible),
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::SMALLINT, allowNarrowing);
+                    }),
             kTypeMappingErrorFmtStr,
             "SMALLINT",
             requestedType->toString());
@@ -865,7 +894,13 @@ TypePtr ReaderBase::convertType(
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(requestedType, isRepeated, isInt32Compatible),
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::INTEGER, allowNarrowing);
+                    }),
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString());
@@ -1044,7 +1079,13 @@ TypePtr ReaderBase::convertType(
       case thrift::Type::type::INT32:
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(requestedType, isRepeated, isInt32Compatible),
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::INTEGER, allowNarrowing);
+                    }),
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString());

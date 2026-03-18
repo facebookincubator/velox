@@ -616,6 +616,8 @@ void configureReaderOptions(
     case dwio::common::FileFormat::PARQUET: {
       useColumnNamesForColumnMapping =
           hiveConfig->isParquetUseColumnNames(sessionProperties);
+      readerOptions.setAllowInt32Narrowing(
+          hiveConfig->allowInt32Narrowing(sessionProperties));
       break;
     }
     default:

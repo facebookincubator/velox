@@ -70,10 +70,12 @@ class ParquetReaderTest : public ParquetTestBase {
   /// intermediate ParquetReader is consumed during construction.
   std::unique_ptr<dwio::common::RowReader> createWideningRowReader(
       const RowVectorPtr& writeData,
-      const RowTypePtr& readSchema) {
+      const RowTypePtr& readSchema,
+      bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
     dwio::common::ReaderOptions readerOptions{leafPool_.get()};
     readerOptions.setFileSchema(readSchema);
+    readerOptions.setAllowInt32Narrowing(allowInt32Narrowing);
     auto reader = createReaderInMemory(*sink, readerOptions);
     auto rowReaderOpts = getReaderOpts(readSchema);
     rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
@@ -87,6 +89,18 @@ class ParquetReaderTest : public ParquetTestBase {
       const RowTypePtr& readSchema,
       const RowVectorPtr& expected) {
     auto rowReader = createWideningRowReader(writeData, readSchema);
+    assertReadWithReaderAndExpected(
+        readSchema, *rowReader, expected, *leafPool_);
+  }
+
+  /// Writes Parquet data and reads it back with a narrower schema
+  /// (allowInt32Narrowing enabled), then verifies the result.
+  void assertNarrowingReads(
+      const RowVectorPtr& writeData,
+      const RowTypePtr& readSchema,
+      const RowVectorPtr& expected) {
+    auto rowReader = createWideningRowReader(
+        writeData, readSchema, /*allowInt32Narrowing=*/true);
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, expected, *leafPool_);
   }
@@ -2489,14 +2503,14 @@ TEST_F(ParquetReaderTest, intToSmallintNarrowing) {
       makeRowVector({makeFlatVector<int32_t>({0, 1, -1, 100, -100})});
   auto expected =
       makeRowVector({makeFlatVector<int16_t>({0, 1, -1, 100, -100})});
-  assertWideningReads(writeData, ROW({"col"}, {SMALLINT()}), expected);
+  assertNarrowingReads(writeData, ROW({"col"}, {SMALLINT()}), expected);
 }
 
 TEST_F(ParquetReaderTest, smallintToTinyintNarrowing) {
   auto writeData =
       makeRowVector({makeFlatVector<int16_t>({0, 1, -1, 42, -42})});
   auto expected = makeRowVector({makeFlatVector<int8_t>({0, 1, -1, 42, -42})});
-  assertWideningReads(writeData, ROW({"col"}, {TINYINT()}), expected);
+  assertNarrowingReads(writeData, ROW({"col"}, {TINYINT()}), expected);
 }
 
 TEST_F(ParquetReaderTest, shortToIntegerWidening) {
@@ -2519,14 +2533,14 @@ TEST_F(ParquetReaderTest, intToBigintWidening) {
 TEST_F(ParquetReaderTest, intToSmallintOverflow) {
   auto writeData = makeRowVector({makeFlatVector<int32_t>({32'768})});
   auto expected = makeRowVector({makeFlatVector<int16_t>({-32'768})});
-  assertWideningReads(writeData, ROW({"col"}, {SMALLINT()}), expected);
+  assertNarrowingReads(writeData, ROW({"col"}, {SMALLINT()}), expected);
 }
 
 // INT16 -> TINYINT overflow: 128 truncates to -128.
 TEST_F(ParquetReaderTest, smallintToTinyintOverflow) {
   auto writeData = makeRowVector({makeFlatVector<int16_t>({128})});
   auto expected = makeRowVector({makeFlatVector<int8_t>({-128})});
-  assertWideningReads(writeData, ROW({"col"}, {TINYINT()}), expected);
+  assertNarrowingReads(writeData, ROW({"col"}, {TINYINT()}), expected);
 }
 
 // INT32 -> DOUBLE works because sizeof(int32_t)=4 != sizeof(double)=8,
@@ -2948,4 +2962,137 @@ TEST_F(ParquetReaderTest, typeWideningRejectionDecimalScaleViolation) {
       makeRowVector({makeFlatVector<int128_t>({1111}, DECIMAL(20, 5))}),
       ROW({"col"}, {DECIMAL(22, 8)}),
       "DECIMAL(20, 5)");
+}
+
+// Verify allowInt32Narrowing flag on ReaderOptions.
+TEST_F(ParquetReaderTest, allowInt32Narrowing) {
+  // Write INT32 data with values that exercise truncation edge cases.
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int32_t>(
+          {0,
+           127,
+           128,
+           255,
+           256,
+           32767,
+           32768,
+           65535,
+           -1,
+           -128,
+           -129,
+           std::numeric_limits<int32_t>::min(),
+           std::numeric_limits<int32_t>::max()})});
+  auto* sink = write(data);
+
+  // Default: flag is false.
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  ASSERT_FALSE(readerOptions.allowInt32Narrowing());
+
+  // INT32->TINYINT narrowing rejected by default.
+  readerOptions.setFileSchema(ROW({"c1"}, {TINYINT()}));
+  VELOX_ASSERT_THROW(
+      createReaderInMemory(*sink, readerOptions),
+      "is not allowed for requested type");
+
+  // INT32->SMALLINT narrowing rejected by default.
+  readerOptions.setFileSchema(ROW({"c1"}, {SMALLINT()}));
+  VELOX_ASSERT_THROW(
+      createReaderInMemory(*sink, readerOptions),
+      "is not allowed for requested type");
+
+  // Annotated type-matching always works without the flag.
+  // INT_8 -> TINYINT: write as TINYINT (produces INT_8 annotation), read back.
+  {
+    auto readSchema = ROW({"c1"}, {TINYINT()});
+    auto tinyData =
+        makeRowVector({"c1"}, {makeFlatVector<int8_t>({-128, -1, 0, 1, 127})});
+    auto* tinySink = write(tinyData);
+    readerOptions.setFileSchema(readSchema);
+    auto reader = createReaderInMemory(*tinySink, readerOptions);
+    auto rowReaderOpts = getReaderOpts(readSchema);
+    rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    assertReadWithReaderAndExpected(
+        readSchema, *rowReader, tinyData, *leafPool_);
+  }
+
+  // INT_16 -> SMALLINT: write as SMALLINT (produces INT_16 annotation), read
+  // back.
+  {
+    auto readSchema = ROW({"c1"}, {SMALLINT()});
+    auto smallData = makeRowVector(
+        {"c1"}, {makeFlatVector<int16_t>({-32768, -1, 0, 1, 32767})});
+    auto* smallSink = write(smallData);
+    readerOptions.setFileSchema(readSchema);
+    auto reader = createReaderInMemory(*smallSink, readerOptions);
+    auto rowReaderOpts = getReaderOpts(readSchema);
+    rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    assertReadWithReaderAndExpected(
+        readSchema, *rowReader, smallData, *leafPool_);
+  }
+
+  // With flag enabled, narrowing is allowed with silent truncation.
+  readerOptions.setAllowInt32Narrowing(true);
+
+  // INT32->TINYINT: values are truncated via static_cast<int8_t>.
+  {
+    auto readSchema = ROW({"c1"}, {TINYINT()});
+    readerOptions.setFileSchema(readSchema);
+    auto reader = createReaderInMemory(*sink, readerOptions);
+
+    auto rowReaderOpts = getReaderOpts(readSchema);
+    rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    auto expected = makeRowVector(
+        {"c1"},
+        {makeFlatVector<int8_t>(
+            {static_cast<int8_t>(0),
+             static_cast<int8_t>(127),
+             static_cast<int8_t>(128), // -128
+             static_cast<int8_t>(255), // -1
+             static_cast<int8_t>(256), // 0
+             static_cast<int8_t>(32767), // -1
+             static_cast<int8_t>(32768), // 0
+             static_cast<int8_t>(65535), // -1
+             static_cast<int8_t>(-1), // -1
+             static_cast<int8_t>(-128), // -128
+             static_cast<int8_t>(-129), // 127
+             static_cast<int8_t>(std::numeric_limits<int32_t>::min()),
+             static_cast<int8_t>(std::numeric_limits<int32_t>::max())})});
+    assertReadWithReaderAndExpected(
+        readSchema, *rowReader, expected, *leafPool_);
+  }
+
+  // INT32->SMALLINT: values are truncated via static_cast<int16_t>.
+  {
+    auto readSchema = ROW({"c1"}, {SMALLINT()});
+    readerOptions.setFileSchema(readSchema);
+    auto reader = createReaderInMemory(*sink, readerOptions);
+
+    auto rowReaderOpts = getReaderOpts(readSchema);
+    rowReaderOpts.setScanSpec(makeScanSpec(readSchema));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    auto expected = makeRowVector(
+        {"c1"},
+        {makeFlatVector<int16_t>(
+            {static_cast<int16_t>(0),
+             static_cast<int16_t>(127),
+             static_cast<int16_t>(128),
+             static_cast<int16_t>(255),
+             static_cast<int16_t>(256),
+             static_cast<int16_t>(32767),
+             static_cast<int16_t>(32768), // -32768
+             static_cast<int16_t>(65535), // -1
+             static_cast<int16_t>(-1), // -1
+             static_cast<int16_t>(-128), // -128
+             static_cast<int16_t>(-129), // -129
+             static_cast<int16_t>(std::numeric_limits<int32_t>::min()),
+             static_cast<int16_t>(std::numeric_limits<int32_t>::max())})});
+    assertReadWithReaderAndExpected(
+        readSchema, *rowReader, expected, *leafPool_);
+  }
 }
