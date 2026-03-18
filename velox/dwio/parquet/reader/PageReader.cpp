@@ -232,18 +232,42 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
       pageHeader.compressed_page_size,
       pageHeader.uncompressed_page_size);
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
+  auto remainingBytes = pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
+    VELOX_CHECK_GE(
+        remainingBytes,
+        sizeof(int32_t),
+        "Insufficient bytes for repetition level length (corrupt data page?)");
     uint32_t repeatLength = readField<int32_t>(pageData_);
+    remainingBytes -= sizeof(int32_t);
+    VELOX_CHECK_LE(
+        repeatLength,
+        remainingBytes,
+        "Repetition level length {} exceeds remaining page size {} (corrupt data page?)",
+        repeatLength,
+        remainingBytes);
     repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
         ::arrow::bit_util::NumRequiredBits(maxRepeat_));
 
     pageData_ += repeatLength;
+    remainingBytes -= repeatLength;
   }
 
   if (maxDefine_ > 0) {
+    VELOX_CHECK_GE(
+        remainingBytes,
+        sizeof(uint32_t),
+        "Insufficient bytes for definition level length (corrupt data page?)");
     auto defineLength = readField<uint32_t>(pageData_);
+    remainingBytes -= sizeof(uint32_t);
+    VELOX_CHECK_LE(
+        defineLength,
+        remainingBytes,
+        "Definition level length {} exceeds remaining page size {} (corrupt data page?)",
+        defineLength,
+        remainingBytes);
     if (maxDefine_ == 1) {
       defineDecoder_ = std::make_unique<RleBpDecoder>(
           pageData_,
@@ -288,6 +312,13 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
       pageHeader.data_page_header_v2.repetition_levels_byte_length;
 
   auto bytes = pageHeader.compressed_page_size;
+  VELOX_CHECK_LE(
+      static_cast<uint64_t>(repeatLength) + defineLength,
+      bytes,
+      "Repetition and definition level lengths ({} + {}) exceed compressed page size {} (corrupt data page?)",
+      repeatLength,
+      defineLength,
+      bytes);
   pageData_ = readBytes(bytes, pageBuffer_);
 
   if (repeatLength) {
@@ -362,7 +393,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      if (type_->type()->isShortDecimal() &&
+      if ((type_->type()->isShortDecimal() || type_->type()->isTime()) &&
           parquetType == thrift::Type::INT32) {
         auto veloxTypeLength = type_->type()->cppSizeInBytes();
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
@@ -390,7 +421,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
         }
         stats_.pageLoadTimeNs.increment(readUs * 1'000);
       }
-      if (type_->type()->isShortDecimal() &&
+      if ((type_->type()->isShortDecimal() || type_->type()->isTime()) &&
           parquetType == thrift::Type::INT32) {
         auto values = dictionary_.values->asMutable<int64_t>();
         auto parquetValues = dictionary_.values->asMutable<int32_t>();
@@ -477,6 +508,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       auto numParquetBytes = dictionary_.numValues * parquetTypeLength;
       auto veloxTypeLength = type_->type()->cppSizeInBytes();
       auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+      VELOX_CHECK_LE(numParquetBytes, numVeloxBytes);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto data = dictionary_.values->asMutable<char>();
       // Read the data bytes.

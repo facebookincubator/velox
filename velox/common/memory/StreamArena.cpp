@@ -62,7 +62,7 @@ void StreamArena::newRange(
   VELOX_DCHECK_LE(currentOffset_, run.numBytes());
   if (currentOffset_ == run.numBytes()) {
     ++currentRun_;
-    ++currentOffset_ = 0;
+    currentOffset_ = 0;
   }
 }
 

@@ -24,8 +24,8 @@
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h" // @manual
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -1083,8 +1083,13 @@ void MemoryArbitrationFuzzer::go() {
   size_t iteration = 0;
 
   while (!isDone(iteration, startTime)) {
+    LOG(INFO) << "==============================> Started iteration "
+              << iteration << " (seed: " << currentSeed_ << ")";
     verify();
     stats_.rlock()->print();
+
+    LOG(INFO) << "==============================> Done with iteration "
+              << iteration;
 
     reSeed();
     ++iteration;

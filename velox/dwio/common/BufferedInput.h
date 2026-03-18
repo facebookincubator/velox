@@ -116,9 +116,19 @@ class BufferedInput {
       velox::common::Region region,
       const StreamIdentifier* sid = nullptr);
 
-  /// Returns true if load synchronously.
-  virtual bool supportSyncLoad() const {
-    return true;
+  /// Preloads the entire file into memory for fast sub-region access.
+  /// Each subclass stores the preloaded data in its own native format.
+  /// For small files (<= filePreloadThreshold), this eliminates separate
+  /// footer and stripe data reads.
+  virtual void preload() {
+    enqueue({0, input_->getLength()});
+    load(LogType::FILE);
+    preloaded_ = true;
+  }
+
+  /// Returns true if the file has been preloaded.
+  virtual bool preloaded() const {
+    return preloaded_;
   }
 
   /// load all regions to be read in an optimized way (IO efficiency)
@@ -334,6 +344,7 @@ class BufferedInput {
       velox::common::Region& first,
       const velox::common::Region& second);
 
+  bool preloaded_{false};
   uint64_t maxMergeDistance_;
   std::optional<bool> wsVRLoad_;
   std::unique_ptr<memory::AllocationPool> allocPool_;
