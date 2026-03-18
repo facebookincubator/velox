@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/SpillStats.h"
+#include <folly/Benchmark.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -42,6 +43,7 @@ TEST(SpillStatsTest, spillStats) {
   stats1.spillReads = 10;
   stats1.spillReadTimeNanos = 100;
   stats1.spillDeserializationTimeNanos = 100;
+  stats1.spillCpuTimeNanos = 100;
   ASSERT_FALSE(stats1.empty());
   SpillStats stats2;
   stats2.spillRuns = 100;
@@ -62,6 +64,7 @@ TEST(SpillStatsTest, spillStats) {
   stats2.spillReads = 10;
   stats2.spillReadTimeNanos = 100;
   stats2.spillDeserializationTimeNanos = 100;
+  stats2.spillCpuTimeNanos = 100;
   ASSERT_TRUE(stats1 != stats2);
   ASSERT_FALSE(stats1 == stats2);
 
@@ -85,6 +88,7 @@ TEST(SpillStatsTest, spillStats) {
   ASSERT_EQ(delta.spillReads, 0);
   ASSERT_EQ(delta.spillReadTimeNanos, 0);
   ASSERT_EQ(delta.spillDeserializationTimeNanos, 0);
+  ASSERT_EQ(delta.spillCpuTimeNanos, 0);
   delta = stats1 - stats2;
   ASSERT_EQ(delta.spilledInputBytes, 0);
   ASSERT_EQ(delta.spilledBytes, 0);
@@ -103,6 +107,7 @@ TEST(SpillStatsTest, spillStats) {
   ASSERT_EQ(delta.spillReads, 0);
   ASSERT_EQ(delta.spillReadTimeNanos, 0);
   ASSERT_EQ(delta.spillDeserializationTimeNanos, 0);
+  ASSERT_EQ(delta.spillCpuTimeNanos, 0);
   stats1.spilledInputBytes = 2060;
   stats1.spilledBytes = 1030;
   stats1.spillReadBytes = 4096;
@@ -119,7 +124,7 @@ TEST(SpillStatsTest, spillStats) {
       "spillSerializationTimeNanos[1.03us] spillWrites[1028] spillFlushTimeNanos[1.03us] "
       "spillWriteTimeNanos[1.03us] maxSpillExceededLimitCount[4] "
       "spillReadBytes[2.00KB] spillReads[10] spillReadTimeNanos[100ns] "
-      "spillReadDeserializationTimeNanos[100ns]");
+      "spillReadDeserializationTimeNanos[100ns] spillCpuTimeNanos[100ns]");
   ASSERT_EQ(
       fmt::format("{}", stats2),
       "spillRuns[100] spilledInputBytes[2.00KB] spilledBytes[1.00KB] "
@@ -129,5 +134,33 @@ TEST(SpillStatsTest, spillStats) {
       "spillFlushTimeNanos[1.03us] spillWriteTimeNanos[1.03us] "
       "maxSpillExceededLimitCount[4] "
       "spillReadBytes[2.00KB] spillReads[10] spillReadTimeNanos[100ns] "
-      "spillReadDeserializationTimeNanos[100ns]");
+      "spillReadDeserializationTimeNanos[100ns] spillCpuTimeNanos[100ns]");
+}
+
+TEST(SpillStatsTest, backgroundCpuTimer) {
+  SpillStats stats;
+  ASSERT_EQ(stats.spillCpuTimeNanos.load(), 0);
+
+  // Burn some CPU inside the timer scope.
+  {
+    SpillBackgroundCpuTimer timer(&stats);
+    uint64_t sum = 0;
+    for (int i = 0; i < 1'000'000; ++i) {
+      sum += i;
+    }
+    folly::doNotOptimizeAway(sum);
+  }
+
+  ASSERT_GT(stats.spillCpuTimeNanos.load(), 0);
+
+  const auto firstMeasurement = stats.spillCpuTimeNanos.load();
+  {
+    SpillBackgroundCpuTimer timer(&stats);
+    uint64_t sum = 0;
+    for (int i = 0; i < 1'000'000; ++i) {
+      sum += i;
+    }
+    folly::doNotOptimizeAway(sum);
+  }
+  ASSERT_GT(stats.spillCpuTimeNanos.load(), firstMeasurement);
 }

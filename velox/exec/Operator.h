@@ -185,6 +185,9 @@ class Operator : public BaseRuntimeStatWriter {
   static constexpr std::string_view kSpillReadTime{"spillReadWallNanos"};
   static constexpr std::string_view kSpillDeserializationTime{
       "spillDeserializationWallNanos"};
+  /// CPU time consumed on spill executor threads (background, non-driver).
+  static constexpr std::string_view kSpillBackgroundCpuTime{
+      "spillBackgroundCpuTimeNanos"};
 
   /// The vector serde kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.

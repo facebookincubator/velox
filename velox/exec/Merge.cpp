@@ -701,7 +701,8 @@ void SpillMerger::readFromSpillFileStream(
 void SpillMerger::scheduleAsyncSpillFileStreamReads() {
   VELOX_CHECK_EQ(batchStreams_.size(), sources_.size());
   for (auto i = 0; i < batchStreams_.size(); ++i) {
-    executor_->add([&, streamIdx = i]() {
+    executor_->add([&, streamIdx = i, stats = spillStats_]() {
+      SpillBackgroundCpuTimer timer(stats.get());
       readFromSpillFileStream(std::weak_ptr(shared_from_this()), streamIdx);
     });
   }

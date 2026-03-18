@@ -476,6 +476,25 @@ void Operator::recordSpillStats() {
         statName, RuntimeCounter(statValue.sum, statValue.unit));
   }
 
+  // Record spill background CPU time as a runtime stat only when the config
+  // is enabled. This is NOT added to backgroundTiming to avoid inflating
+  // per-operator finishCpu and per-driver kDriverCpuTime. Instead,
+  // PrestoTask.cpp extracts this stat and adds it to totalCpuTimeInNanos.
+  if (operatorCtx_->task()
+          ->queryCtx()
+          ->queryConfig()
+          .trackSpillBackgroundCpuTime()) {
+    const auto spillCpuTime =
+        spillStats_->spillCpuTimeNanos.load(std::memory_order_relaxed);
+    if (spillCpuTime != 0) {
+      lockedStats->addRuntimeStat(
+          kSpillBackgroundCpuTime,
+          RuntimeCounter{
+              static_cast<int64_t>(spillCpuTime),
+              RuntimeCounter::Unit::kNanos});
+    }
+  }
+
   spillStats_->reset();
 }
 

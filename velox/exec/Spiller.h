@@ -49,6 +49,11 @@ class SpillerBase {
 
   exec::SpillStats stats() const;
 
+  /// Returns the raw pointer to the spill stats for direct atomic updates.
+  exec::SpillStats* spillStatsPtr() const {
+    return spillStats_;
+  }
+
   std::string toString() const;
 
  protected:
@@ -134,7 +139,9 @@ class SpillerBase {
         SpillPartitionId _partitionId,
         int32_t _numWritten,
         std::exception_ptr _error)
-        : partitionId(_partitionId), rowsWritten(_numWritten), error(_error) {}
+        : partitionId(_partitionId),
+          rowsWritten(_numWritten),
+          error(std::move(_error)) {}
   };
 
   RowContainer* const container_{nullptr};
