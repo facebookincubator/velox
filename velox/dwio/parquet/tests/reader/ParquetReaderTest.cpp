@@ -102,6 +102,53 @@ TEST_F(ParquetReaderTest, parseSample) {
       sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, parseParquetV2DeltaLengthByteArray) {
+  // parquet_v2_delta_length_byte_array.parquet holds three columns in
+  // physical order (email, name, id) but we read with table schema
+  // order (id, name, email) using use-column-names=true.
+  // 10 rows in a single row group, ids 11-20.
+
+  // The parquet_v2_delta_length_byte_array.parquet's email and name columns
+  // are DELTA_LENGTH_BYTE_ARRAY encoded, this tests if it is read
+  // successfully.
+  const std::string sample(getExampleFilePath("parquet_v2_delta_length_byte_array.parquet"));
+
+  auto usersSchema = ROW({"id", "name", "email"}, {BIGINT(), VARCHAR(), VARCHAR()});
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setFileColumnNamesReadAsLowerCase(true);
+  readerOptions.setUseColumnNamesForColumnMapping(true);
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 10ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 3ULL);
+
+  auto rowReaderOpts = getReaderOpts(usersSchema);
+  auto scanSpec = makeScanSpec(usersSchema);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>(10, [](auto row) { return row + 11; }),
+      makeFlatVector<std::string>(10, [](auto row) -> std::string {
+        static const std::vector<std::string> names = {
+            "Alice_1", "Bob_1", "Charlie_1", "David_1", "Eve_1",
+            "Frank_1", "Grace_1", "Hannah_1", "Ivan_1", "Julia_1"};
+        return names[row];
+      }),
+      makeFlatVector<std::string>(10, [](auto row) -> std::string {
+        static const std::vector<std::string> emails = {
+            "alice@example.com", "bob@example.com", "charlie@example.com",
+            "david@example.com", "eve@example.com", "frank@example.com",
+            "grace@example.com", "hannah@example.com", "ivan@example.com",
+            "julia@example.com"};
+        return emails[row];
+      }),
+  });
+
+  assertReadWithReaderAndExpected(usersSchema, *rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   // parse_empty_nested_list.parquet holds 1,000 rows of the following data:
   //

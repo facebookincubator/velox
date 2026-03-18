@@ -1309,8 +1309,9 @@ class ParquetRowReader::Impl {
     uint64_t rowNumber = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
-      auto fileOffset =
-          (rowGroups_[i].__isset.file_offset && rowGroups_[i].file_offset != 0)
+      // file_offset may be set but 0 by some writers (e.g. Snowflake Parquet V2 writer),
+      // in which case we fall through to the column page offsets.
+      auto fileOffset = (rowGroups_[i].__isset.file_offset && rowGroups_[i].file_offset > 0)
           ? rowGroups_[i].file_offset
           : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
           ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
