@@ -61,6 +61,9 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
       valueType_{*type.childAt(1)},
       maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
       collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
+  if constexpr (std::is_same_v<KeyType, StringView>) {
+    stringKeys_.reserve(maxKeyCount_);
+  }
   auto options = StatisticsBuilder::optionsFromConfig(context.getConfigs());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
@@ -174,6 +177,7 @@ void FlatMapColumnWriter<K>::reset() {
   BaseColumnWriter::reset();
   clearNodes();
   valueWriters_.clear();
+  stringKeys_.clear();
   rowsInStrides_.clear();
   rowsInCurrentStride_ = 0;
   totalRows_ = 0;
@@ -210,6 +214,16 @@ ValueWriter& FlatMapColumnWriter<K>::getValueWriter(
   }
 
   auto keyInfo = getKeyInfo(key);
+
+  // For non-inline StringView keys (>12 chars), store an owned copy of the
+  // string data to prevent dangling pointers when input batches are released
+  // between writes. Inline StringViews are self-contained and safe as-is.
+  if constexpr (std::is_same_v<KeyType, StringView>) {
+    if (!key.isInline()) {
+      stringKeys_.emplace_back(key.data(), key.size());
+      key = StringView(stringKeys_.back());
+    }
+  }
 
   it = valueWriters_
            .emplace(
