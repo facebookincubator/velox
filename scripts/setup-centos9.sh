@@ -87,7 +87,7 @@ function install_gflags {
   dnf remove -y gflags
   wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
   cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
-  echo "/usr/local/lib64" > /etc/ld.so.conf.d/local-lib64.conf && ldconfig
+  echo "/usr/local/lib64" >/etc/ld.so.conf.d/local-lib64.conf && ldconfig
 }
 
 function install_faiss_deps {
