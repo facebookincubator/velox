@@ -457,10 +457,7 @@ TEST_F(AggregationTest, avgPartialFinalGlobal) {
   assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 }
 
-// @TODO dm/se
-// Re-enable this test once we support COUNT(*) in global aggregation.
-// See issue #16492
-TEST_F(AggregationTest, DISABLED_countStarGlobal) {
+TEST_F(AggregationTest, countStarGlobal) {
   auto vectors = makeVectors(rowType_, 10, 100);
 
   createDuckDbTable(vectors);
