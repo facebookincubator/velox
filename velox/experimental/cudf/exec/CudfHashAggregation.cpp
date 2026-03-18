@@ -81,6 +81,11 @@ bool isSupportedZeroColumnAggregation(
              });
 }
 
+void checkZeroColumnGlobalCountStarSupport(bool supported) {
+  VELOX_CHECK(
+      supported, "Zero-column global aggregation only supports count(*)");
+}
+
 bool hasOnlyConstantArguments(const core::CallTypedExpr& call) {
   return !call.inputs().empty() &&
       std::all_of(
@@ -199,14 +204,10 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         count = hasInputColumns ? input.num_rows() : inputRowCount_;
       } else if (countsAllRows()) { // Matches count(*) with one or more
                                     // columns.
-        VELOX_CHECK(
-            hasInputColumns,
-            "Zero-column global aggregation only supports count(*)");
+        checkZeroColumnGlobalCountStarSupport(hasInputColumns);
         count = input.num_rows();
       } else { // Matches count(<column>) case.
-        VELOX_CHECK(
-            hasInputColumns,
-            "Zero-column global aggregation only supports count(*)");
+        checkZeroColumnGlobalCountStarSupport(hasInputColumns);
         auto inputCol = input.column(inputIndex);
         count = inputCol.size() - inputCol.null_count();
       }
@@ -884,9 +885,8 @@ AggregationInputChannels buildAggregationInputChannels(
     if (aggInputs.empty()) {
       if (isCountFunctionName(aggregate.call->name())) {
         if (inputRowSchema->size() == 0) {
-          VELOX_CHECK(
-              isCountStarAggregate(aggregate),
-              "Zero-column global aggregation only supports count(*)");
+          checkZeroColumnGlobalCountStarSupport(
+              isCountStarAggregate(aggregate));
           // Zero-column global count(*) bypasses channel selection in
           // getOutput() and keeps kConstantChannel semantics on the aggregator.
           aggInputs.push_back(selectFallbackChannel);
