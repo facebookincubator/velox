@@ -869,26 +869,19 @@ AggregationInputChannels buildAggregationInputChannels(
           auto constant =
               dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
         result.constants[i] = constant->toConstantVector(operatorCtx.pool());
-        // Constants are carried out-of-band in result.constants. Keep a real
-        // selected channel so later table_view::select() never sees
-        // kConstantChannel.
         aggInputs.push_back(selectFallbackChannel);
       } else {
         VELOX_NYI("Constants and lambdas not yet supported");
       }
     }
-    // The loop on aggregate.call->inputs() mirrors
-    // AggregateInfo.cpp::toAggregateInfo(). We do support the narrow count
-    // constant-input cases above, but cudf_velox still only supports
-    // aggregates that map to a single input channel.
+
     VELOX_CHECK(aggInputs.size() <= 1);
     if (aggInputs.empty()) {
       if (isCountFunctionName(aggregate.call->name())) {
         if (inputRowSchema->size() == 0) {
           checkZeroColumnGlobalCountStarSupport(
               isCountStarAggregate(aggregate));
-          // Zero-column global count(*) bypasses channel selection in
-          // getOutput() and keeps kConstantChannel semantics on the aggregator.
+          // Zero-column global count(*) is a special case handle in the aggregator.
           aggInputs.push_back(selectFallbackChannel);
         } else {
           // Keep count(*) using a real input when a column exists and use a
