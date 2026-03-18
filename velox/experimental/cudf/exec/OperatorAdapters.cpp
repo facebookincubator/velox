@@ -28,7 +28,6 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/core/Expressions.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/FilterProject.h"
@@ -221,42 +220,6 @@ class AggregationAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
     if (!aggregationPlanNode) {
       return false;
-    }
-
-    if (aggregationPlanNode->sources()[0]->outputType()->size() == 0) {
-      // Zero-column input is only supported for global
-      // count(*)/count(constant).
-      if (!aggregationPlanNode->groupingKeys().empty()) {
-        return false;
-      }
-      if (aggregationPlanNode->aggregates().empty()) {
-        return false;
-      }
-      auto const prefix =
-          cudf_velox::CudfConfig::getInstance().functionNamePrefix;
-      auto isCountAllAggregate =
-          [&](const core::AggregationNode::Aggregate& aggregate) {
-            auto name = aggregate.call->name();
-            if (!prefix.empty() && name.rfind(prefix, 0) == 0) {
-              name = name.substr(prefix.size());
-            }
-            if (!name.starts_with("count")) {
-              return false;
-            }
-            for (const auto& input : aggregate.call->inputs()) {
-              auto constant =
-                  dynamic_cast<const core::ConstantTypedExpr*>(input.get());
-              if (!constant || constant->isNull()) {
-                return false;
-              }
-            }
-            return true;
-          };
-      for (const auto& aggregate : aggregationPlanNode->aggregates()) {
-        if (!isCountAllAggregate(aggregate)) {
-          return false;
-        }
-      }
     }
 
     return canBeEvaluatedByCudf(

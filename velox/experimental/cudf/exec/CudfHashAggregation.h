@@ -53,6 +53,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
         std::vector<cudf::groupby::aggregation_result>& results,
         rmm::cuda_stream_view stream) = 0;
 
+    virtual void setInputRowCount(vector_size_t /*inputRowCount*/) {}
+
    protected:
     Aggregator(
         core::AggregationNode::Step step,
@@ -134,13 +136,10 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // Distinct means it's a count distinct on the groupby keys, without any
   // aggregations
   const bool isDistinct_;
-  // Global count(*) with no input columns. Track row counts separately.
-  bool countAllGlobalNoInput_{false};
-  int64_t countAllRows_{0};
 
   // Maximum memory usage for partial aggregation.
   const int64_t maxPartialAggregationMemoryUsage_;
-  // Number of rows received in the input so far.
+  // Number of input rows accumulated since the last output or flush.
   int64_t numInputRows_ = 0;
 
   bool finished_ = false;

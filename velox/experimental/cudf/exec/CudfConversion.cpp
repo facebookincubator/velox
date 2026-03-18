@@ -206,6 +206,17 @@ RowVectorPtr CudfToVelox::getOutput() {
     return nullptr;
   }
 
+  if (outputType_->size() == 0) {
+    // cuDF zero-column tables do not have a row count, so keep
+    // the (logical) size in the CudfVector when converting back to Velox.
+    // This is a special case required to make certain `count` operators work,
+    // specifically to prevent this output from being dropped downstream.
+    auto size = inputs_.front()->size();
+    inputs_.pop_front();
+    finished_ = noMoreInput_ && inputs_.empty();
+    return BaseVector::create<RowVector>(outputType_, size, pool());
+  }
+
   // Get the target batch size
   const auto targetBatchSize = outputBatchRows(averageRowSize());
   auto stream = inputs_.front()->stream();
