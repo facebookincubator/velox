@@ -412,7 +412,14 @@ ExpressionVerifier::verify(
 
     VLOG(1) << "Starting reference eval execution.";
 
-    if (referenceQueryRunner_ != nullptr) {
+    // If exception from Spark reference query runner is expected, we
+    // don't execute the reference query runner as Spark's exception cannot be
+    // caught.
+    bool expectSparkReferenceException = exceptionCommonPtr &&
+        referenceQueryRunner_ &&
+        referenceQueryRunner_->runnerType() ==
+            ReferenceQueryRunner::RunnerType::kSparkQueryRunner;
+    if (referenceQueryRunner_ != nullptr && !expectSparkReferenceException) {
       VLOG(1) << "Execute with reference DB.";
       auto inputRowVector = reduceToSelectedRows(rowVector, rows);
       auto projectionPlan =
