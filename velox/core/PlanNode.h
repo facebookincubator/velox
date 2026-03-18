@@ -2181,11 +2181,6 @@ class ExchangeNode : public PlanNode {
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
       : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {}
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  ExchangeNode(const PlanNodeId& id, RowTypePtr type, VectorSerde::Kind kind)
-      : ExchangeNode(id, std::move(type), VectorSerde::kindName(kind)) {}
-#endif
-
   class Builder {
    public:
     Builder() = default;
@@ -2210,13 +2205,6 @@ class ExchangeNode : public PlanNode {
       serdeKind_ = std::move(serdeKind);
       return *this;
     }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    Builder& serdeKind(VectorSerde::Kind kind) {
-      serdeKind_ = VectorSerde::kindName(kind);
-      return *this;
-    }
-#endif
 
     std::shared_ptr<ExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "ExchangeNode id is not set");
@@ -2282,21 +2270,6 @@ class MergeExchangeNode : public ExchangeNode {
       const std::vector<SortOrder>& sortingOrders,
       std::string serdeKind);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  MergeExchangeNode(
-      const PlanNodeId& id,
-      const RowTypePtr& type,
-      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-      const std::vector<SortOrder>& sortingOrders,
-      VectorSerde::Kind kind)
-      : MergeExchangeNode(
-            id,
-            type,
-            sortingKeys,
-            sortingOrders,
-            VectorSerde::kindName(kind)) {}
-#endif
-
   class Builder {
    public:
     Builder() = default;
@@ -2333,13 +2306,6 @@ class MergeExchangeNode : public ExchangeNode {
       serdeKind_ = std::move(serdeKind);
       return *this;
     }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    Builder& serdeKind(VectorSerde::Kind kind) {
-      serdeKind_ = VectorSerde::kindName(kind);
-      return *this;
-    }
-#endif
 
     std::shared_ptr<MergeExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MergeExchangeNode id is not set");
@@ -2761,29 +2727,6 @@ class PartitionedOutputNode : public PlanNode {
       std::string serdeKind,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PartitionedOutputNode(
-      const PlanNodeId& id,
-      Kind kind,
-      const std::vector<TypedExprPtr>& keys,
-      int numPartitions,
-      bool replicateNullsAndAny,
-      PartitionFunctionSpecPtr partitionFunctionSpec,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source)
-      : PartitionedOutputNode(
-            id,
-            kind,
-            keys,
-            numPartitions,
-            replicateNullsAndAny,
-            std::move(partitionFunctionSpec),
-            std::move(outputType),
-            VectorSerde::kindName(serdeKind),
-            std::move(source)) {}
-#endif
-
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
@@ -2791,61 +2734,17 @@ class PartitionedOutputNode : public PlanNode {
       std::string serdeKind,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<PartitionedOutputNode> broadcast(
-      const PlanNodeId& id,
-      int numPartitions,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source) {
-    return broadcast(
-        id,
-        numPartitions,
-        std::move(outputType),
-        VectorSerde::kindName(serdeKind),
-        std::move(source));
-  }
-#endif
-
   static std::shared_ptr<PartitionedOutputNode> arbitrary(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<PartitionedOutputNode> arbitrary(
-      const PlanNodeId& id,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source) {
-    return arbitrary(
-        id,
-        std::move(outputType),
-        VectorSerde::kindName(serdeKind),
-        std::move(source));
-  }
-#endif
-
   static std::shared_ptr<PartitionedOutputNode> single(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
       PlanNodePtr source);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::shared_ptr<PartitionedOutputNode> single(
-      const PlanNodeId& id,
-      RowTypePtr outputType,
-      VectorSerde::Kind serdeKind,
-      PlanNodePtr source) {
-    return single(
-        id,
-        std::move(outputType),
-        VectorSerde::kindName(serdeKind),
-        std::move(source));
-  }
-#endif
 
   class Builder {
    public:
@@ -2903,13 +2802,6 @@ class PartitionedOutputNode : public PlanNode {
       serdeKind_ = std::move(serdeKind);
       return *this;
     }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    Builder& serdeKind(VectorSerde::Kind kind) {
-      serdeKind_ = VectorSerde::kindName(kind);
-      return *this;
-    }
-#endif
 
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
