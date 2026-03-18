@@ -96,27 +96,28 @@ uint64_t hashValueDispatch(
     const DecodedVector& decoded,
     vector_size_t row,
     const TypePtr& type) {
+  using T = typename TypeTraits<kind>::NativeType;
   if constexpr (kind == TypeKind::TINYINT) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        static_cast<int32_t>(decoded.valueAt<int8_t>(row)), kXxHash64Seed);
+        static_cast<int32_t>(decoded.valueAt<T>(row)), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::SMALLINT) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        static_cast<int32_t>(decoded.valueAt<int16_t>(row)), kXxHash64Seed);
+        static_cast<int32_t>(decoded.valueAt<T>(row)), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::INTEGER) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
-        decoded.valueAt<int32_t>(row), kXxHash64Seed);
+        decoded.valueAt<T>(row), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::BIGINT) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
-        decoded.valueAt<int64_t>(row), kXxHash64Seed);
+        decoded.valueAt<T>(row), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::REAL) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashFloat(
-        decoded.valueAt<float>(row), kXxHash64Seed);
+        decoded.valueAt<T>(row), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::DOUBLE) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashDouble(
-        decoded.valueAt<double>(row), kXxHash64Seed);
+        decoded.valueAt<T>(row), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::TIMESTAMP) {
     return ::facebook::velox::functions::sparksql::XxHash64::hashTimestamp(
-        decoded.valueAt<Timestamp>(row), kXxHash64Seed);
+        decoded.valueAt<T>(row), kXxHash64Seed);
   } else {
     VELOX_UNSUPPORTED(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
@@ -171,8 +172,8 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     }
 
     decodedValues_.decode(*args[0], rows);
-    const auto mayHaveNulls = decodedValues_.mayHaveNulls();
-    auto updateRow = [&](auto row, char* group) {
+
+    auto updateRow = [&](vector_size_t row, char* group) {
       const double inputValue = toDouble(decodedValues_, row, inputType_);
       if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
         return;
@@ -189,15 +190,15 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       clearNull(group);
     };
 
-    if (mayHaveNulls) {
-      rows.applyToSelected([&](auto row) {
-        if (decodedValues_.isNullAt(row)) {
-          return;
+    if (decodedValues_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t row) {
+        if (!decodedValues_.isNullAt(row)) {
+          updateRow(row, groups[row]);
         }
-        updateRow(row, groups[row]);
       });
     } else {
-      rows.applyToSelected([&](auto row) { updateRow(row, groups[row]); });
+      rows.applyToSelected(
+          [&](vector_size_t row) { updateRow(row, groups[row]); });
     }
   }
 
@@ -215,10 +216,10 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
     }
 
     decodedValues_.decode(*args[0], rows);
-    const auto mayHaveNulls = decodedValues_.mayHaveNulls();
     auto tracker = trackRowSize(group);
     auto* accumulator = value<Accumulator>(group);
-    auto updateRow = [&](auto row) {
+
+    auto updateRow = [&](vector_size_t row) {
       const double inputValue = toDouble(decodedValues_, row, inputType_);
       if (inputValue < endpointsMin_ || inputValue > endpointsMax_) {
         return;
@@ -232,15 +233,14 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
       clearNull(group);
     };
 
-    if (mayHaveNulls) {
-      rows.applyToSelected([&](auto row) {
-        if (decodedValues_.isNullAt(row)) {
-          return;
+    if (decodedValues_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t row) {
+        if (!decodedValues_.isNullAt(row)) {
+          updateRow(row);
         }
-        updateRow(row);
       });
     } else {
-      rows.applyToSelected([&](auto row) { updateRow(row); });
+      rows.applyToSelected([&](vector_size_t row) { updateRow(row); });
     }
   }
 
@@ -400,13 +400,13 @@ class ApproxCountDistinctForIntervalsAggregate : public exec::Aggregate {
         writer.commitNull();
         continue;
       }
-      auto rowWriter = writer.current();
-      auto endpointsWriter = rowWriter.template get_writer_at<0>();
+      auto& rowWriter = writer.current();
+      auto& endpointsWriter = rowWriter.template get_writer_at<0>();
       for (double endpoint : endpoints_) {
         endpointsWriter.add_item() = endpoint;
       }
 
-      auto hllsWriter = rowWriter.template get_writer_at<1>();
+      auto& hllsWriter = rowWriter.template get_writer_at<1>();
       auto* accumulator = value<Accumulator>(groups[i]);
       ensureEmptyHll();
       for (int32_t interval = 0; interval < intervalCount_; ++interval) {
