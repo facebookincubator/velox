@@ -25,18 +25,13 @@ template <typename T>
 struct BloomFilterMightContainFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig&,
-      const arg_type<Varbinary>* serialized,
-      const arg_type<int64_t>*) {
-    if (serialized != nullptr) {
-      bloomFilterView_ = std::make_unique<BloomFilterView>(serialized->data());
+  FOLLY_ALWAYS_INLINE void call(
+      bool& result,
+      const arg_type<Varbinary>& serialized,
+      const int64_t& input) {
+    if (!bloomFilterView_) {
+      bloomFilterView_ = std::make_unique<BloomFilterView>(serialized.data());
     }
-  }
-
-  FOLLY_ALWAYS_INLINE void
-  call(bool& result, const arg_type<Varbinary>&, const int64_t& input) {
     result = bloomFilterView_->mayContain(folly::hasher<int64_t>()(input));
   }
 

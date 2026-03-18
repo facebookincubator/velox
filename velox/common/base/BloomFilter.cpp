@@ -57,9 +57,13 @@ void BloomFilterBase::set(
 BloomFilterView::BloomFilterView(const char* serializedBloom) {
   common::InputByteStream stream(serializedBloom);
   version_ = stream.read<int8_t>();
-  VELOX_USER_CHECK_EQ(kBloomFilterV1, version_);
+  VELOX_CHECK_EQ(
+      kBloomFilterV1,
+      version_,
+      "Unsupported BloomFilter version: {}",
+      version_);
   size_ = stream.read<int32_t>();
-  VELOX_USER_CHECK_GT(size_, 0);
+  VELOX_CHECK_GT(size_, 0, "Invalid BloomFilter size: {}", size_);
   bitsData_ =
       reinterpret_cast<const uint64_t*>(serializedBloom + stream.offset());
 }
