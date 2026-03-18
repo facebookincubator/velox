@@ -48,3 +48,16 @@ velox_link_libraries(
 velox_add_library(velox_rpc_plan_node_translator RPCPlanNodeTranslator.cpp)
 
 velox_link_libraries(velox_rpc_plan_node_translator velox_rpc_operator velox_exec)
+
+if(${VELOX_BUILD_TESTING})
+  velox_add_library(velox_demo_rpc_function tests/DemoRPCFunction.cpp)
+
+  velox_link_libraries(
+    velox_demo_rpc_function
+    velox_mock_rpc_client
+    velox_expression_functions
+    velox_async_rpc_function
+  )
+
+  add_subdirectory(tests)
+endif()

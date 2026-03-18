@@ -69,7 +69,7 @@ AsyncRPCFunctionRegistry::registeredFunctions() {
   return result;
 }
 
-void AsyncRPCFunctionRegistry::clear() {
+void AsyncRPCFunctionRegistry::testingClear() {
   std::lock_guard<std::mutex> lock(mutex());
   factories().clear();
 }
